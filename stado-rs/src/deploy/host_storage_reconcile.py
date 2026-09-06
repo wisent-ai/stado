@@ -620,6 +620,18 @@ if phase == "preflight":
     }, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
 
+def conflict_winner_from_fence(fence):
+    roots = fence.get("roots") or {}
+    prior_primary = roots.get("prior_primary")
+    if (fence.get("schema") != "stado.storage-root-fence.v5"
+            or fence.get("transaction") != tx
+            or roots.get("primary") != primary
+            or roots.get("backup") != backup
+            or prior_primary not in (primary, backup)):
+        fail("storage conflict winner is invalid")
+    return "primary" if prior_primary == primary else "backup"
+
+
 def validate_effective_lifecycle(root, expected):
     actual = []
     for directory, dirs, files in os.walk(root):
@@ -633,10 +645,14 @@ def validate_effective_lifecycle(root, expected):
         fail("effective lifecycle snapshot namespace differs from its qualified A/B union")
 
 
-def checkpoint_effective_lifecycle(primary_objects, backup_objects):
+def checkpoint_effective_lifecycle(primary_objects, backup_objects, conflict_winner):
     selected = {}
-    for source_root, objects in (
-            (primary_snapshot, primary_objects), (backup_snapshot, backup_objects)):
+    sources = (
+        ((backup_snapshot, backup_objects), (primary_snapshot, primary_objects))
+        if conflict_winner == "primary"
+        else ((primary_snapshot, primary_objects), (backup_snapshot, backup_objects))
+    )
+    for source_root, objects in sources:
         for item in objects:
             relative = item["path"]
             if relative.startswith(lifecycle_root):
@@ -701,7 +717,9 @@ def load_checkpoint_evidence(receipt):
             or evidence.get("schema") != "stado.storage-root-checkpoint-evidence.v1"
             or evidence.get("transaction") != tx
             or evidence.get("source") != backup
-            or evidence.get("destination") != primary):
+            or evidence.get("destination") != primary
+            or evidence.get("conflict_winner") not in ("primary", "backup")
+            or receipt.get("conflict_winner") != evidence.get("conflict_winner")):
         fail("checkpoint evidence belongs to another reconciliation")
     primary_objects = evidence.get("primary_objects")
     backup_objects = evidence.get("backup_objects")
@@ -717,7 +735,8 @@ def load_checkpoint_evidence(receipt):
             or receipt.get("backup_physical_files") != len(backup_physical.get("files", []))
             or receipt.get("primary_physical_files") != len(primary_physical.get("files", []))):
         fail("checkpoint receipt counts differ from immutable checkpoint evidence")
-    return backup_objects, primary_objects, backup_physical, primary_physical
+    return (backup_objects, primary_objects, backup_physical, primary_physical,
+            evidence["conflict_winner"])
 
 
 if phase == "checkpoint":
@@ -736,12 +755,16 @@ if phase == "checkpoint":
         fail("durable lifecycle fence is incomplete")
     if any(item.get("status") != "stopped" for item in fence.get("writers", [])):
         fail("durable lifecycle fence does not stop every recorded writer")
+    fence_conflict_winner = conflict_winner_from_fence(fence)
+    conflict_winner = fence_conflict_winner
     receipt = load_receipt() if os.path.exists(receipt_path) else None
     if receipt is not None and receipt.get("status") in (
         "checkpoint_ready", "applying", "data_committed_pending_activation",
         "activation_effects_armed", "rollback_effects_armed",
         "activated_pending_lifecycle", "complete"
     ):
+        if receipt.get("conflict_winner") != fence_conflict_winner:
+            fail("checkpoint conflict winner differs from the durable lifecycle fence")
         emit(receipt)
         raise SystemExit(0)
     if receipt is not None and receipt.get("status") != "checkpointing":
@@ -754,6 +777,7 @@ if phase == "checkpoint":
             "transaction": tx,
             "source": backup,
             "destination": primary,
+            "conflict_winner": conflict_winner,
             "backup_objects": backup_objects,
             "primary_objects": primary_objects,
             "backup_physical": backup_physical,
@@ -776,6 +800,7 @@ if phase == "checkpoint":
             "checkpoint_started_at": time.time(),
             "writer_fence": fence,
             "checkpoint_evidence": checkpoint_evidence_reference,
+            "conflict_winner": conflict_winner,
             "backup_objects": len(backup_objects),
             "primary_objects": len(primary_objects),
             "backup_physical_files": len(backup_physical.get("files", [])),
@@ -786,8 +811,10 @@ if phase == "checkpoint":
         }
         atomic_json(receipt_path, receipt)
     else:
-        backup_objects, primary_objects, backup_physical, primary_physical = (
+        backup_objects, primary_objects, backup_physical, primary_physical, conflict_winner = (
             load_checkpoint_evidence(receipt))
+        if conflict_winner != fence_conflict_winner:
+            fail("checkpoint conflict winner differs from the durable lifecycle fence")
         backup_paths = object_paths(backup)
         primary_paths = object_paths(primary)
         if [item.get("path") for item in backup_objects] != backup_paths:
@@ -804,7 +831,7 @@ if phase == "checkpoint":
     validate_physical_checkpoint(primary, primary_physical, "primary after checkpoint")
     validate_complete_inventory(backup, backup_objects, "backup qualified namespace after checkpoint")
     validate_complete_inventory(primary, primary_objects, "primary qualified namespace after checkpoint")
-    checkpoint_effective_lifecycle(primary_objects, backup_objects)
+    checkpoint_effective_lifecycle(primary_objects, backup_objects, conflict_winner)
     receipt["status"] = "checkpoint_ready"
     receipt["checkpointed_at"] = time.time()
     atomic_json(receipt_path, receipt)
@@ -815,7 +842,7 @@ receipt = load_receipt()
 if receipt.get("status") == "complete" and phase != "finalize":
     emit(receipt)
     raise SystemExit(0)
-backup_objects, primary_objects, backup_physical, primary_physical = (
+backup_objects, primary_objects, backup_physical, primary_physical, conflict_winner = (
     load_checkpoint_evidence(receipt))
 validate_complete_inventory(backup_snapshot, backup_objects, "backup checkpoint")
 validate_complete_inventory(primary_snapshot, primary_objects, "primary checkpoint")
@@ -856,21 +883,98 @@ if phase == "record-lifecycle-decisions":
     raise SystemExit(0)
 
 
+
+
+def require_pinned_conflict_winner(fence):
+    if conflict_winner_from_fence(fence) != conflict_winner:
+        fail("pinned conflict winner differs from the durable lifecycle fence")
+
+
 def prove_live_additive_union(label):
     backup_by_path = {item["path"]: item for item in backup_objects}
     primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_wins = conflict_winner == "primary"
     expected_paths = set(primary_by_path) | set(backup_by_path)
     validate_complete_inventory(backup, backup_objects, "live B " + label)
     if set(object_paths(primary)) != expected_paths:
         fail("primary namespace does not equal the additive checkpoint union " + label)
     for relative in sorted(expected_paths):
-        expected = backup_by_path.get(relative) or primary_by_path[relative]
+        expected = ((primary_by_path.get(relative) if primary_wins else None)
+                    or backup_by_path.get(relative) or primary_by_path[relative])
         if regular_identity(os.path.join(primary, relative)) != expected["body"]:
             fail("primary body differs from additive checkpoint " + label + ": " + relative)
         if regular_identity(metadata_path(primary, relative)) != expected["metadata"]:
             fail("primary metadata differs from additive checkpoint " + label + ": " + relative)
     return backup_by_path, primary_by_path, expected_paths
 
+
+
+def restore_primary_checkpoint():
+    backup_by_path = {item["path"]: item for item in backup_objects}
+    primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_files = {
+        item["path"]: item for item in primary_physical.get("files", [])
+    }
+    for relative in sorted(set(primary_by_path) | set(backup_by_path)):
+        before = primary_by_path.get(relative)
+        incoming = backup_by_path.get(relative)
+        applied = (before if conflict_winner == "primary" and before is not None
+                   else incoming or before)
+        destination = os.path.join(primary, relative)
+        current = regular_identity(destination)
+        before_body = before["body"] if before is not None else None
+        applied_body = applied["body"] if applied is not None else None
+        if current not in (before_body, applied_body):
+            fail("primary body changed outside rollback: " + relative)
+        if current != before_body:
+            if before is None:
+                os.unlink(destination)
+                fsync_dir(os.path.dirname(destination))
+            else:
+                clone_file(os.path.join(primary_snapshot, relative), destination)
+                original = primary_files.get(relative)
+                if original is None:
+                    fail("primary physical checkpoint omitted body: " + relative)
+                os.chmod(destination, original["mode"])
+                fsync_dir(os.path.dirname(destination))
+        destination_metadata = metadata_path(primary, relative)
+        current_metadata = regular_identity(destination_metadata)
+        before_metadata = before["metadata"] if before is not None else None
+        applied_metadata = applied["metadata"] if applied is not None else None
+        if current_metadata not in (before_metadata, applied_metadata):
+            fail("primary metadata changed outside rollback: " + relative)
+        if current_metadata != before_metadata:
+            if before_metadata is None:
+                os.unlink(destination_metadata)
+                fsync_dir(os.path.dirname(destination_metadata))
+            else:
+                clone_file(
+                    metadata_path(primary_snapshot, relative),
+                    destination_metadata,
+                )
+                metadata_relative = os.path.relpath(destination_metadata, primary)
+                original = primary_files.get(metadata_relative)
+                if original is None:
+                    fail("primary physical checkpoint omitted metadata: " + relative)
+                os.chmod(destination_metadata, original["mode"])
+                fsync_dir(os.path.dirname(destination_metadata))
+    original_directories = set(primary_physical.get("directories", []))
+    current_directories = set(physical_inventory(primary).get("directories", []))
+    extra_directories = current_directories - original_directories
+    for relative in sorted(
+            extra_directories,
+            key=lambda path: (path.count(os.sep), len(path)),
+            reverse=True):
+        path = os.path.join(primary, relative)
+        try:
+            os.rmdir(path)
+        except OSError as error:
+            fail("transaction-created directory cannot be rolled back: "
+                 + path + ": " + str(error))
+        fsync_dir(os.path.dirname(path))
+    validate_complete_inventory(primary, primary_objects, "live A after rollback")
+    if physical_inventory(primary) != primary_physical:
+        fail("live physical A differs from its exact rollback checkpoint")
 
 
 if phase == "arm-activation":
@@ -884,6 +988,7 @@ if phase == "arm-activation":
             fence = json.load(handle)
     except Exception as error:
         fail("activation fence cannot be rechecked: " + str(error))
+    require_pinned_conflict_winner(fence)
     if (fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))):
@@ -907,15 +1012,15 @@ if phase == "arm-rollback":
             fence = json.load(handle)
     except Exception as error:
         fail("rollback fence cannot be rechecked: " + str(error))
+    require_pinned_conflict_winner(fence)
     if (fence.get("status") != "fenced"
             or not fence.get("queue", {}).get("drained")
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))):
         fail("rollback effects require every writer to remain stopped")
+    restore_primary_checkpoint()
     validate_complete_inventory(backup, backup_objects, "live B before rollback")
     validate_physical_checkpoint(backup, backup_physical, "live physical B before rollback")
-    if (fence.get("roots") or {}).get("prior_primary") == primary:
-        validate_complete_inventory(primary, primary_objects, "live A before rollback")
-        validate_physical_checkpoint(primary, primary_physical, "live physical A before rollback")
+    receipt["primary_checkpoint_restored_at"] = time.time()
     receipt["status"] = "rollback_effects_armed"
     receipt["rollback_effect_boundary_at"] = time.time()
     atomic_json(receipt_path, receipt)
@@ -936,6 +1041,7 @@ if phase == "apply":
             fence = json.load(handle)
     except Exception as error:
         fail("durable lifecycle fence cannot be rechecked: " + str(error))
+    require_pinned_conflict_winner(fence)
     if (fence.get("status") != "fenced" or not fence.get("queue", {}).get("drained")
             or any(item.get("status") != "stopped" for item in fence.get("writers", []))
             or fence.get("rechecked_at", 0) < receipt.get("checkpointed_at", 0)):
@@ -954,10 +1060,11 @@ if phase == "apply":
     blockers = [item for item in decisions
                 if item.get("kind") == "block_unclassified_live"]
     if blockers:
-        fail("A-only lifecycle state blocks activation: " +
+        fail("newly authoritative lifecycle state blocks activation: " +
              ", ".join(item.get("path", "?") for item in blockers))
     backup_by_path = {item["path"]: item for item in backup_objects}
     primary_by_path = {item["path"]: item for item in primary_objects}
+    primary_wins = conflict_winner == "primary"
     validate_complete_inventory(backup, backup_objects, "live B after checkpoint")
     current_paths = set(object_paths(primary))
     expected_paths = set(primary_by_path) | set(backup_by_path)
@@ -971,46 +1078,51 @@ if phase == "apply":
         current_meta = regular_identity(metadata_path(primary, relative))
         before = primary_by_path.get(relative)
         incoming = backup_by_path.get(relative)
-        allowed_bodies = [item["body"] for item in (before, incoming) if item is not None]
-        allowed_metadata = [item["metadata"] for item in (before, incoming) if item is not None]
-        if before is None:
-            allowed_bodies.append(None)
-            allowed_metadata.append(None)
+        if primary_wins and before is not None:
+            allowed_bodies = [before["body"]]
+            allowed_metadata = [before["metadata"]]
+        else:
+            allowed_bodies = [item["body"] for item in (before, incoming) if item is not None]
+            allowed_metadata = [item["metadata"] for item in (before, incoming) if item is not None]
+            if before is None:
+                allowed_bodies.append(None)
+                allowed_metadata.append(None)
         if current_body not in allowed_bodies or current_meta not in allowed_metadata:
             fail("primary object drifted after its checkpoint: " + relative)
     receipt["status"] = "applying"
     atomic_json(receipt_path, receipt)
     for item in backup_objects:
         relative = item["path"]
-        source = os.path.join(backup_snapshot, relative)
         destination = os.path.join(primary, relative)
         current = regular_identity(destination)
         before = primary_by_path.get(relative)
-        before_body = before["body"] if before is not None else None
-        if current != item["body"]:
+        desired = before if primary_wins and before is not None else item
+        if current != desired["body"]:
+            before_body = before["body"] if before is not None else None
             if current != before_body:
                 fail("primary body changed outside the transaction: " + relative)
-            clone_file(source, destination)
-        source_meta = metadata_path(backup_snapshot, relative)
+            clone_file(os.path.join(backup_snapshot, relative), destination)
         destination_meta = metadata_path(primary, relative)
         current_meta = regular_identity(destination_meta)
-        before_meta = before["metadata"] if before is not None else None
-        if current_meta != item["metadata"]:
+        if current_meta != desired["metadata"]:
+            before_meta = before["metadata"] if before is not None else None
             if current_meta != before_meta:
                 fail("primary metadata changed outside the transaction: " + relative)
-            if item["metadata"] is None:
-                os.unlink(destination_meta)
-                fsync_dir(os.path.dirname(destination_meta))
+            if desired["metadata"] is None:
+                if os.path.exists(destination_meta):
+                    os.unlink(destination_meta)
+                    fsync_dir(os.path.dirname(destination_meta))
             else:
-                clone_file(source_meta, destination_meta)
-        if regular_identity(destination) != item["body"]:
+                clone_file(metadata_path(backup_snapshot, relative), destination_meta)
+        if regular_identity(destination) != desired["body"]:
             fail("destination body did not verify: " + relative)
-        if regular_identity(destination_meta) != item["metadata"]:
+        if regular_identity(destination_meta) != desired["metadata"]:
             fail("destination metadata did not verify: " + relative)
     prove_live_additive_union("after apply")
     receipt["status"] = "data_committed_pending_activation"
     receipt["data_committed_at"] = time.time()
-    receipt["verified_objects"] = len(backup_objects)
+    receipt["verified_objects"] = len(expected_paths)
+    receipt["conflict_winner"] = conflict_winner
     receipt["primary_only_preserved"] = True
     receipt["backup_objects_not_written"] = True
     atomic_json(receipt_path, receipt)

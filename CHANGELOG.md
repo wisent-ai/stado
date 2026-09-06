@@ -1,12 +1,16 @@
 # Changelog
 
-## 0.16.34
+## 0.16.35
 
 - **Primary authority:** a successful missing-object answer remains authoritative for releases as well as mutable objects. GET and stat no longer copy bytes from the backup or return a backup body after the primary refused a repair; ordinary failover remains limited to failed primary reads.
 - **Publication retention:** release-store cleanup requires a completed or reconciled pipeline run for the exact reserved source revision. Missing completion evidence, an unreadable source claim, and an untracked installer publication retain the version with separate diagnostic reasons. A failed run alone does not authorize deleting its output.
 - **Desktop cleanup diagnostics:** the Disk screen decodes every reported cleaner instead of dropping all but two names, and displays each cleaner's exact skipped reasons and counts.
 - **Immutable reservations:** reclaiming eligible release payloads retains both version and platform source-revision records, so cleanup cannot free a used version for a different commit.
 - **Migration:** no stored schemas change. Tag-only releases remain retained because their publisher does not supply the pipeline completion evidence required for deletion; the janitor reports that limitation instead of deleting an active upload.
+
+## 0.16.34
+
+- **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured, and still refuse a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple. The object API's checkpointed current route now pins one conflict winner through the data union, effective lifecycle snapshot, direction-dependent newly-authoritative lifecycle classification, post-commit correlation, receipt, and rollback. An A-serving route preserves A conflicts and imports only B-only objects; a B-serving route preserves the original B-winning union. Pre-commit rollback exactly and resumably restores A's physical checkpoint, including transaction-created imports and directories.
 
 ## 0.16.33
 
