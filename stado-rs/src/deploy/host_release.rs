@@ -806,7 +806,7 @@ $(/usr/bin/tar -tzf "$archive_path")
 EOF
 if [ "$member_count" -ne 1 ]; then
   /bin/rm -f "$archive_path" "$incoming"
-  say layout archive_member_missing_or_duplicated
+  say layout "archive_member_count_${member_count}_expected_${member}_in_${archive_name}"
   exit 1
 fi
 if ! /usr/bin/tar -xOzf "$archive_path" "$member" > "$incoming"; then
@@ -1172,7 +1172,7 @@ $(/usr/bin/tar -tzf "$archive_path")
 EOF
 if [ "$member_count" -ne 1 ]; then
   /bin/rm -f "$archive_path"
-  say layout archive_member_missing_or_duplicated
+  say layout "archive_member_count_${member_count}_expected_${member}_in_${archive_name}"
   exit 1
 fi
 if ! /usr/bin/tar -xOzf "$archive_path" "$member" > "$payload_path"; then
@@ -2644,10 +2644,7 @@ async fn pipeline_catalog_identity(
         sha256: manifest.artifact_sha256,
         archive_name,
         member: if manifest.binary.is_empty() {
-            match &product.install {
-                Install::Program { .. } => format!("bin/{}", product.name),
-                Install::Tree { .. } => product.source.member.clone(),
-            }
+            product.source.member.clone()
         } else {
             manifest.binary
         },
