@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repository = resolve(crate, '..');
 const compilationBudgetMs = 70 * 60 * 1000;
-const executionBudgetMs = 10 * 60 * 1000;
 const killGraceMs = 2 * 1000;
 const processOutputEncoding = 'utf8';
 const testArgs = ['--ignored', '--nocapture', '--test-threads=1'];
@@ -280,6 +279,7 @@ export async function runRecordedRustJourney({
   tests,
   productionMutations,
   contracts,
+  executionBudgetMs = 10 * 60 * 1000,
 }) {
   const artifacts = process.env.PROBIERZ_ARTIFACTS;
   const mediaManifest = process.env.PROBIERZ_MEDIA_MANIFEST;

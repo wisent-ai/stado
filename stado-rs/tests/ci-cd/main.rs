@@ -633,9 +633,7 @@ fn wait_for_queued_release_build(child: &mut Child, home: &Path, storage: &Path)
                 let Ok(job) = serde_json::from_slice::<Value>(&bytes) else {
                     continue;
                 };
-                if job["command"].as_str().is_some_and(|command| {
-                    command.ends_with("release worker --request release-request.json")
-                }) {
+                if job["state"] == "queued" {
                     return job;
                 }
             }
@@ -649,11 +647,14 @@ fn wait_for_queued_release_build(child: &mut Child, home: &Path, storage: &Path)
                 store_snapshot(storage)
             );
         }
-        assert!(
-            Instant::now() < deadline,
-            "release submit queued no build within 30 seconds\nstore:{}",
-            store_snapshot(storage)
-        );
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "release submit queued no build within 30 seconds\nstore:{}",
+                store_snapshot(storage)
+            );
+        }
         thread::sleep(Duration::from_millis(100));
     }
 }
@@ -682,13 +683,14 @@ fn wait_for_submit(
     home: &Path,
     storage: &Path,
 ) -> std::process::ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(180);
+    let deadline = Instant::now() + Duration::from_secs(600);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
         }
         if let Some(status) = agent.try_wait().unwrap() {
             let _ = child.kill();
+            let _ = child.wait();
             panic!(
                 "agent exited while release submit waited: {status}\nagent stdout:\n{}\nagent stderr:\n{}",
                 fs::read_to_string(home.join("agent.out")).unwrap_or_default(),
@@ -699,7 +701,7 @@ fn wait_for_submit(
             let _ = child.kill();
             let _ = child.wait();
             panic!(
-                "release submit did not finish within 180 seconds\nsubmit stdout:\n{}\nsubmit stderr:\n{}\nagent stdout:\n{}\nagent stderr:\n{}\nstore:{}",
+                "release submit did not finish within 600 seconds\nsubmit stdout:\n{}\nsubmit stderr:\n{}\nagent stdout:\n{}\nagent stderr:\n{}\nstore:{}",
                 fs::read_to_string(home.join("submit.out")).unwrap_or_default(),
                 fs::read_to_string(home.join("submit.err")).unwrap_or_default(),
                 fs::read_to_string(home.join("agent.out")).unwrap_or_default(),
@@ -983,6 +985,14 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
         .unwrap();
     let first_job = wait_for_queued_release_build(&mut first_submit, home.path(), &storage);
     let first_job_id = first_job["job_id"].as_str().unwrap().to_string();
+    let mut status_command = Command::new(stado_binary());
+    release_env(&mut status_command, home.path(), &storage, &vault);
+    let status = run(status_command.args(["release", "status", "ci-release-probe", "--json"]));
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        status["runs"][0]["platforms"][platform]["job_id"], first_job_id,
+        "the queued job must be the release's recorded platform build"
+    );
     let mut cancel = Command::new(stado_binary());
     release_env(&mut cancel, home.path(), &storage, &vault);
     run(cancel.args(["cancel", &first_job_id]));

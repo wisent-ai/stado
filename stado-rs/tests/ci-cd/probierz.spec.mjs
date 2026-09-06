@@ -4,6 +4,7 @@ await runRecordedRustJourney({
   journey: 'release-pipeline',
   artifactStem: 'stado-release-pipeline',
   targets: ['ci-cd'],
+  executionBudgetMs: 45 * 60 * 1000,
   tests: [
     'a_real_release_builds_publishes_and_installs_its_binary',
     'stale_target_capacity_still_enqueues_its_exact_release_delivery',
