@@ -3130,6 +3130,52 @@ stado_loaded_identity() {
     *) loaded_arguments_valid=no; loaded_argv='' ;;
   esac
 }
+# Whether the process launchd or systemd reports under this unit executes the
+# declared program. Sets `running` and `serves`.
+#
+# `comm` is the image the kernel runs, and for a program that is a launcher it
+# is the launcher's exec target: `bin/start-web` execs node, so every web unit
+# reports `node` and equality with the program fails for all of them. On
+# 2026-09-05 that refused the reload of two running sites with `pid 6678
+# executes [node]; expected [.../current/darwin-arm/bin/start-web]` and
+# restarted every healthy web unit on each ensure pass, because the idle check
+# read the same `no`. A launcher's process still runs the product: its image,
+# an argument, or its working directory lies under the product root that the
+# `current` link belongs to. That is the evidence accepted here, and it is one
+# rule for the idle check and the post-reload verification, so one process
+# cannot be `already_correct` before a reload and a verification failure after
+# it. A program outside a `current` tree keeps the exact comparison: the
+# control-plane job that went on executing the shared global binary its plist
+# no longer named is the case that comparison exists for.
+stado_process_serves() {
+  running=''
+  serves=no
+  [ -n \"$1\" ] || return 0
+  running=$(/bin/ps -p \"$1\" -o comm= 2>/dev/null)
+  case \"$running\" in
+    \"$program\") serves=yes; return 0 ;;
+  esac
+  case \"$program\" in
+    */current/*) ;;
+    *) return 0 ;;
+  esac
+  product_root=\"${program%%/current/*}/\"
+  case \"$running\" in
+    \"$product_root\"*) serves=yes; return 0 ;;
+  esac
+  command=$(/bin/ps -p \"$1\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+  case \" $command\" in
+    *\" $product_root\"*|*\"=$product_root\"*) serves=yes; return 0 ;;
+  esac
+  if [ \"$os\" = Darwin ]; then
+    cwd=$(/usr/sbin/lsof -a -p \"$1\" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -n 1)
+  else
+    cwd=$(/usr/bin/readlink \"/proc/$1/cwd\" 2>/dev/null)
+  fi
+  case \"$cwd/\" in
+    \"$product_root\"*) serves=yes ;;
+  esac
+}
 bail() {
   if [ -n \"$staged\" ]; then /bin/rm -f \"$staged\" \"$staged.rendered\"; fi
   say 'ensure_failed' \"$1\"
@@ -3177,21 +3223,7 @@ declared_argv=$(printf '%s' \"$declared_argv\" | /usr/bin/tr -s ' ' | /usr/bin/s
 # The program the live process is executing, not the one the unit names: a
 # unit pointing at a `current` link and a process that outlived the relink
 # have the same declaration and different code.
-running=''
-if [ -n \"$pid\" ]; then running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null); fi
-serves=no
-case \"$running\" in
-  \"$program\") serves=yes ;;
-esac
-if [ \"$serves\" = no ]; then
-  case \"$program\" in
-    */current/*)
-      case \"$running\" in
-        \"${program%%/current/*}/\"*) serves=yes ;;
-      esac
-      ;;
-  esac
-fi
+stado_process_serves \"$pid\"
 # Compare the whole desired unit, including its environment, on both init
 # systems. A loaded launchd definition can outlive a removed plist, but the
 # desired declaration is still complete enough to render and safely reload it.
@@ -3357,8 +3389,8 @@ if [ \"$reload_needed\" = yes ]; then
     elif [ \"$loaded_program\" != \"$program\" ] || [ \"$loaded_argv\" != \"$argv\" ]; then
       verification_failure=\"launchctl retained program [$loaded_program] argv [$loaded_argv]; expected program [$program] argv [$argv]\"
     else
-      running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
-      if [ \"$running\" != \"$program\" ]; then
+      stado_process_serves \"$pid\"
+      if [ \"$serves\" != yes ]; then
         verification_failure=\"$domain/$unit pid $pid executes [$running]; expected [$program]\"
       fi
     fi
