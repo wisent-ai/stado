@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -57,7 +57,9 @@ struct DashboardFixture {
     skarbiec_current: String,
     skarbiec_declared: String,
     address: SocketAddr,
-    _vault: Option<SkarbiecFixture>,
+    vault: Option<SkarbiecFixture>,
+    verifier_mint: Option<Value>,
+    verifier_capabilities: Option<String>,
     dashboard: Child,
 }
 
@@ -83,6 +85,7 @@ impl DashboardFixture {
         ] {
             fs::create_dir_all(directory).expect("isolated fixture directory");
         }
+        let verifier_token = home.join(".stado/registry-api-verifier-grant");
         let port = unused_loopback_port();
         let address = SocketAddr::from(([127, 0, 0, 1], port));
         fs::write(
@@ -139,8 +142,8 @@ impl DashboardFixture {
         )
         .expect("isolated registry");
 
-        let vault = if clients.is_empty() {
-            None
+        let (vault, verifier_mint, verifier_capabilities) = if clients.is_empty() {
+            (None, None, None)
         } else {
             let items = clients
                 .iter()
@@ -162,13 +165,33 @@ impl DashboardFixture {
                 .map(|client| format!("read:{}#token", client.item()))
                 .collect::<Vec<_>>()
                 .join(",");
-            Some(SkarbiecFixture::start(
+            let mut receipt = None;
+            let vault = SkarbiecFixture::start_without_grant(
                 &skarbiec_home,
                 &items,
-                "stado-registry-api-verifier",
-                &capabilities,
-                "registry-api-verifier-grant",
-            ))
+                &verifier_token,
+                |gnupg_home, vault_file| {
+                    let minted = mint_verifier(
+                        &home,
+                        &storage,
+                        &config,
+                        gnupg_home,
+                        vault_file,
+                        &capabilities,
+                        "registry-api-verifier-grant",
+                    );
+                    assert!(
+                        minted.status.success(),
+                        "built Stado failed to provision the verifier bearer: {}",
+                        String::from_utf8_lossy(&minted.stderr)
+                    );
+                    receipt = Some(
+                        serde_json::from_slice(&minted.stdout)
+                            .expect("verifier bearer receipt from built Stado is JSON"),
+                    );
+                },
+            );
+            (Some(vault), receipt, Some(capabilities))
         };
 
         let client_document = clients
@@ -235,7 +258,9 @@ impl DashboardFixture {
             skarbiec_current,
             skarbiec_declared,
             address,
-            _vault: vault,
+            vault,
+            verifier_mint,
+            verifier_capabilities,
             dashboard,
         };
         fixture.wait_until_ready();
@@ -309,9 +334,67 @@ impl DashboardFixture {
         }
     }
 
+    fn mint_verifier(&self, token_file_name: &str) -> Output {
+        mint_verifier(
+            &self.home,
+            &self.storage,
+            &self.config,
+            self.vault
+                .as_ref()
+                .expect("authenticated fixture has a real Skarbiec vault")
+                .gnupg_home(),
+            self.vault
+                .as_ref()
+                .expect("authenticated fixture has a real Skarbiec vault")
+                .vault_file(),
+            self.verifier_capabilities
+                .as_deref()
+                .expect("authenticated fixture has verifier capabilities"),
+            token_file_name,
+        )
+    }
+
     fn endpoint(&self) -> String {
         format!("http://{}", self.address)
     }
+}
+
+fn mint_verifier(
+    home: &Path,
+    storage: &Path,
+    config: &Path,
+    gnupg_home: &Path,
+    vault_file: &Path,
+    capabilities: &str,
+    token_file_name: &str,
+) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_stado"))
+        .args([
+            "host",
+            "vault-token-mint",
+            HOST,
+            "stado-registry-api-verifier",
+            "--capabilities",
+            capabilities,
+            "--audience",
+            "skarbiec",
+            "--token-file-name",
+            token_file_name,
+            "--json",
+        ])
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", PATH_ENV)
+        .env("TMPDIR", home.join("tmp"))
+        .env("STADO_CONFIG", config)
+        .env("WC_STORAGE_BACKEND", "local")
+        .env("WC_LOCAL_STORAGE_PATH", storage)
+        .env("WC_STADO_STORAGE_NAMESPACE", "service-convergence")
+        .env("SKARBIEC_VAULT_FILE", vault_file)
+        .env("GNUPGHOME", gnupg_home)
+        .stdin(Stdio::null())
+        .output()
+        .expect("built Stado verifier provisioning command runs")
 }
 
 fn binary_version(binary: &Path, home: &Path) -> String {
@@ -356,6 +439,7 @@ impl Drop for DashboardFixture {
     fn drop(&mut self) {
         let _ = self.dashboard.kill();
         let _ = self.dashboard.wait();
+        drop(self.vault.take());
     }
 }
 
@@ -422,7 +506,7 @@ fn skarbiec_generated_bearer() -> String {
 }
 
 fn digest(path: &Path) -> String {
-    hex::encode(Sha256::digest(fs::read(path).expect("read protected file")))
+    hex::encode(Sha256::digest(fs::read(path).expect("read fixture file")))
 }
 
 fn binary_rows(report: &Value) -> BTreeMap<&str, &Value> {
@@ -468,6 +552,158 @@ fn authenticated_services_api_converges_real_same_host_state() {
     let protected_baseline = digest(&fixture.protected);
     let stado_baseline = digest(&fixture.stado);
     let skarbiec_baseline = digest(&fixture.skarbiec);
+    let verifier_token = fixture
+        .vault
+        .as_ref()
+        .expect("authenticated fixture has a real Skarbiec vault")
+        .token
+        .clone();
+    let verifier_token_json = verifier_token
+        .to_str()
+        .expect("isolated verifier token path is UTF-8");
+    let first_mint = fixture
+        .verifier_mint
+        .as_ref()
+        .expect("fixture retains the first built-Stado mint receipt");
+    assert_eq!(first_mint["target"], HOST);
+    assert_eq!(first_mint["status"], "token_minted");
+    assert_eq!(
+        first_mint["skarbiec"]["token_file"],
+        verifier_token_json
+    );
+    assert!(
+        first_mint["skarbiec"].get("token").is_none(),
+        "file-backed mint included a token field in JSON"
+    );
+    let first_bearer = fs::read(&verifier_token).expect("read persisted verifier bearer");
+    let first_bearer_text = std::str::from_utf8(&first_bearer)
+        .expect("persisted verifier bearer is UTF-8")
+        .trim();
+    assert!(!first_bearer_text.is_empty(), "persisted verifier bearer is empty");
+    assert!(
+        !first_mint.to_string().contains(first_bearer_text),
+        "file-backed mint included bearer bytes in JSON"
+    );
+    assert_eq!(
+        fs::metadata(&verifier_token)
+            .expect("persisted verifier bearer metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600,
+        "persisted verifier bearer is not owner-only"
+    );
+
+    let repeated = fixture.mint_verifier("registry-api-verifier-grant");
+    assert!(
+        repeated.status.success(),
+        "built Stado failed to reuse the verifier bearer: {}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    let repeated_receipt: Value = serde_json::from_slice(&repeated.stdout)
+        .expect("repeated verifier bearer receipt from built Stado is JSON");
+    assert_eq!(repeated_receipt["target"], HOST);
+    assert_eq!(repeated_receipt["status"], "token_minted");
+    assert_eq!(
+        repeated_receipt["skarbiec"]["token_file"],
+        verifier_token_json
+    );
+    assert!(
+        repeated_receipt["skarbiec"].get("token").is_none(),
+        "repeated file-backed mint included a token field in JSON"
+    );
+    assert!(
+        !String::from_utf8_lossy(&repeated.stdout).contains(first_bearer_text),
+        "repeated file-backed mint included bearer bytes in JSON"
+    );
+    assert!(
+        fs::read(&verifier_token).expect("re-read persisted verifier bearer") == first_bearer,
+        "repeated provisioning lost or rotated the persisted verifier bearer"
+    );
+    assert_eq!(
+        fs::metadata(&verifier_token)
+            .expect("reused verifier bearer metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600,
+        "reused verifier bearer is not owner-only"
+    );
+
+    let vault_after_reuse = digest(
+        fixture
+            .vault
+            .as_ref()
+            .expect("authenticated fixture has a real Skarbiec vault")
+            .vault_file(),
+    );
+    let symlink_token = fixture.home.join(".stado/refuse-symlink-grant");
+    std::os::unix::fs::symlink(&fixture.protected, &symlink_token)
+        .expect("create isolated token-file symlink");
+    let symlink_refusal = fixture.mint_verifier("refuse-symlink-grant");
+    assert!(
+        !symlink_refusal.status.success(),
+        "built Stado accepted a token-file symlink"
+    );
+    let symlink_diagnosis = String::from_utf8_lossy(&symlink_refusal.stderr);
+    assert!(
+        symlink_diagnosis.contains("token file must not be a symlink"),
+        "unexpected symlink refusal: {symlink_diagnosis}"
+    );
+    assert_eq!(digest(&fixture.protected), protected_baseline);
+    assert_eq!(
+        digest(
+            fixture
+                .vault
+                .as_ref()
+                .expect("authenticated fixture has a real Skarbiec vault")
+                .vault_file()
+        ),
+        vault_after_reuse,
+        "symlink refusal changed the real vault"
+    );
+    println!(
+        "captured target-local symlink refusal: {}",
+        symlink_diagnosis.trim()
+    );
+
+    let empty_token = fixture.home.join(".stado/refuse-empty-grant");
+    fs::write(&empty_token, b"").expect("create isolated empty token file");
+    fs::set_permissions(&empty_token, fs::Permissions::from_mode(0o600))
+        .expect("protect isolated empty token file");
+    let empty_refusal = fixture.mint_verifier("refuse-empty-grant");
+    assert!(
+        !empty_refusal.status.success(),
+        "built Stado accepted an empty token file"
+    );
+    let empty_diagnosis = String::from_utf8_lossy(&empty_refusal.stderr);
+    assert!(
+        empty_diagnosis.contains("token file must be a nonempty regular file"),
+        "unexpected empty-file refusal: {empty_diagnosis}"
+    );
+    assert_eq!(
+        fs::metadata(&empty_token)
+            .expect("empty refusal file remains")
+            .len(),
+        0,
+        "empty-file refusal replaced the protected path"
+    );
+    assert_eq!(digest(&fixture.protected), protected_baseline);
+    assert_eq!(
+        digest(
+            fixture
+                .vault
+                .as_ref()
+                .expect("authenticated fixture has a real Skarbiec vault")
+                .vault_file()
+        ),
+        vault_after_reuse,
+        "empty-file refusal changed the real vault"
+    );
+    println!(
+        "captured target-local empty-file refusal: {}",
+        empty_diagnosis.trim()
+    );
     let selected = format!("/api/service/converge?target={HOST}&binary=stado");
     let host_wide = format!("/api/service/converge?target={HOST}");
 
@@ -542,11 +778,18 @@ fn authenticated_services_api_converges_real_same_host_state() {
     assert_eq!(digest(&fixture.skarbiec), skarbiec_baseline);
 
     let current = fixture.request("GET", &selected, Some(&read_bearer), "");
-    assert_eq!(current.status, 200, "selected GET: {}", current.body);
+    assert_eq!(
+        current.status, 200,
+        "persisted verifier grant could not authorize the real Skarbiec read: {}",
+        current.body
+    );
     assert_eq!(
         current.body["exit_code"], 0,
         "selected GET: {}",
         current.body
+    );
+    println!(
+        "verified persistent verifier bearer through built Stado and real Skarbiec: create, byte-identical reuse, mode 0600, effective read, symlink refusal, empty-file refusal"
     );
     assert_eq!(current.body["report"]["target"], HOST);
     assert_eq!(current.body["report"]["applied"], false);

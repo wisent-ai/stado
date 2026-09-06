@@ -99,6 +99,7 @@ impl SkarbiecItem {
 
 pub struct SkarbiecFixture {
     gnupg: tempfile::TempDir,
+    vault: PathBuf,
     pub token: PathBuf,
     port: u16,
     server: Child,
@@ -112,6 +113,44 @@ impl SkarbiecFixture {
         capabilities: &str,
         token_name: &str,
     ) -> Self {
+        let token = home.join(token_name);
+        Self::start_inner(
+            home,
+            items,
+            token,
+            Some((consumer, capabilities)),
+            |_, _| {},
+        )
+    }
+
+    pub fn start_without_grant<F>(
+        home: &Path,
+        items: &[SkarbiecItem],
+        token: &Path,
+        provision: F,
+    ) -> Self
+    where
+        F: FnOnce(&Path, &Path),
+    {
+        Self::start_inner(
+            home,
+            items,
+            token.to_path_buf(),
+            None,
+            provision,
+        )
+    }
+
+    fn start_inner<F>(
+        home: &Path,
+        items: &[SkarbiecItem],
+        token: PathBuf,
+        grant: Option<(&str, &str)>,
+        provision: F,
+    ) -> Self
+    where
+        F: FnOnce(&Path, &Path),
+    {
         let binary = real_skarbiec_binary();
         let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/work");
         fs::create_dir_all(&scratch).unwrap();
@@ -121,7 +160,6 @@ impl SkarbiecFixture {
             .unwrap();
         fs::set_permissions(gnupg.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let vault = home.join("skarbiec.json");
-        let token = home.join(token_name);
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -174,18 +212,21 @@ impl SkarbiecFixture {
                 String::from_utf8_lossy(&seeded.stderr)
             );
         }
-        let minted = command(
-            &["token-mint", consumer, "--capabilities", capabilities],
-            None,
-        );
-        assert!(
-            minted.status.success(),
-            "real Skarbiec grant failed: {}",
-            String::from_utf8_lossy(&minted.stderr)
-        );
-        let grant: Value = serde_json::from_slice(&minted.stdout).unwrap();
-        fs::write(&token, grant["token"].as_str().unwrap()).unwrap();
-        fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
+        if let Some((consumer, capabilities)) = grant {
+            let minted = command(
+                &["token-mint", consumer, "--capabilities", capabilities],
+                None,
+            );
+            assert!(
+                minted.status.success(),
+                "real Skarbiec grant failed: {}",
+                String::from_utf8_lossy(&minted.stderr)
+            );
+            let grant: Value = serde_json::from_slice(&minted.stdout).unwrap();
+            fs::write(&token, grant["token"].as_str().unwrap()).unwrap();
+            fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        provision(gnupg.path(), &vault);
 
         let stdout = File::create(home.join("skarbiec.out")).unwrap();
         let stderr = File::create(home.join("skarbiec.err")).unwrap();
@@ -204,6 +245,7 @@ impl SkarbiecFixture {
             .unwrap();
         let mut fixture = Self {
             gnupg,
+            vault,
             token,
             port,
             server,
@@ -225,6 +267,14 @@ impl SkarbiecFixture {
 
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    pub fn gnupg_home(&self) -> &Path {
+        self.gnupg.path()
+    }
+
+    pub fn vault_file(&self) -> &Path {
+        &self.vault
     }
 }
 

@@ -92,6 +92,9 @@ await writeFile(tracePath, `${JSON.stringify({
   tests: [test],
   productionMutations: 'none: real Stado, storage, registry, grants, binaries and listener are isolated below the source target directory; the real Skarbiec download cache is checksum-pinned runner state',
   contracts: [
+    'built Stado provisions the target-local verifier bearer through real Skarbiec without requiring or returning a JSON token',
+    'repeated verifier provisioning preserves the exact owner-only bearer bytes and the resulting grant authorizes a real server-side item read',
+    'symlink and empty existing bearer paths retain the source-grounded refusal and change neither the vault nor protected fixture state',
     'nonlocal GET and POST authenticate independently through action-scoped existing-registry-client grants stored in real Skarbiec',
     'malformed, unknown and unauthorized requests are refused without opening a host mutation',
     'host-wide and selected-binary reports use the real local hostname and Stado same-host execution rather than SSH',
@@ -118,5 +121,8 @@ if (result.error) {
 assert.equal(result.stderr.includes('FAILED'), false, result.stderr);
 assert.match(result.stdout, new RegExp(`${test} \\.\\.\\.`));
 assert.match(result.stdout, /verified authenticated nonlocal Services API on (darwin-arm64|linux-amd64)/);
+assert.match(result.stdout, /verified persistent verifier bearer through built Stado and real Skarbiec/);
+assert.ok(result.stdout.includes('token file must not be a symlink'));
+assert.ok(result.stdout.includes('token file must be a nonempty regular file'));
 assert.ok(result.stdout.includes('test result: ok. 1 passed; 0 failed'));
 process.stdout.write(result.stdout);
