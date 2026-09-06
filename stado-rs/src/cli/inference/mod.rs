@@ -195,6 +195,16 @@ pub enum RouteCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Per alias, what the registry declares and what the gateway host is
+    /// actually serving. Exits non-zero when the two disagree; `--repair`
+    /// stages and commits the declaration onto the host.
+    Show {
+        /// Send the declared table to the gateway host instead of only reporting.
+        #[arg(long)]
+        repair: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
@@ -259,6 +269,9 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                     json,
                 },
         } => routes::remove(&alias, &expected, json).await,
+        InferenceCommands::Route {
+            command: RouteCommands::Show { repair, json },
+        } => routes::show(repair, json).await,
         InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
         InferenceCommands::Release {
             host,
