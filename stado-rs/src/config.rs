@@ -1939,10 +1939,10 @@ pub const REGISTRY_API_VERIFIER_CONSUMER: &str = "stado-registry-api-verifier";
 ///
 /// `policy-read`, `cleanup-read`, and `converge-read` answer questions;
 /// `policy-write` rewrites one target's whitelisted policy fields,
-/// `cleanup-run` asks the local janitor for a pass, and `converge-apply` may
-/// deliver every declared binary on one canonical host. Read and apply
-/// convergence grants are separate because viewing host drift is not authority
-/// to replace host software or restart its units.
+/// `cleanup-run` asks the local janitor for a pass, `registry-import` additively
+/// adopts a complete registry-v2 document, and `converge-apply` may deliver every
+/// declared binary on one canonical host. Reading does not authorize mutation;
+/// each independent operation requires its own grant.
 pub const REGISTRY_API_ACTIONS: &[&str] = &[
     "cleanup-read",
     "cleanup-run",
@@ -1950,6 +1950,7 @@ pub const REGISTRY_API_ACTIONS: &[&str] = &[
     "converge-read",
     "policy-read",
     "policy-write",
+    "registry-import",
 ];
 
 /// One client authorized against the registry-policy boundary.

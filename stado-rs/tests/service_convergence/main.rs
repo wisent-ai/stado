@@ -567,10 +567,7 @@ fn authenticated_services_api_converges_real_same_host_state() {
         .expect("fixture retains the first built-Stado mint receipt");
     assert_eq!(first_mint["target"], HOST);
     assert_eq!(first_mint["status"], "token_minted");
-    assert_eq!(
-        first_mint["skarbiec"]["token_file"],
-        verifier_token_json
-    );
+    assert_eq!(first_mint["skarbiec"]["token_file"], verifier_token_json);
     assert!(
         first_mint["skarbiec"].get("token").is_none(),
         "file-backed mint included a token field in JSON"
@@ -579,7 +576,10 @@ fn authenticated_services_api_converges_real_same_host_state() {
     let first_bearer_text = std::str::from_utf8(&first_bearer)
         .expect("persisted verifier bearer is UTF-8")
         .trim();
-    assert!(!first_bearer_text.is_empty(), "persisted verifier bearer is empty");
+    assert!(
+        !first_bearer_text.is_empty(),
+        "persisted verifier bearer is empty"
+    );
     assert!(
         !first_mint.to_string().contains(first_bearer_text),
         "file-backed mint included bearer bytes in JSON"

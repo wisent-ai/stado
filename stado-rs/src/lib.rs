@@ -41,6 +41,7 @@ pub mod provenance;
 pub mod providers;
 pub mod queue;
 pub mod rate_limit;
+pub mod registry_import;
 pub mod release;
 pub mod release_agent;
 pub mod release_cause;

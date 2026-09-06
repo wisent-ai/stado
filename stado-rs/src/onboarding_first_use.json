@@ -2,11 +2,11 @@
   "schema_version": 1,
   "product_id": "stado-cli",
   "journey_id": "first-use",
-  "journey_version": "2026-09-03.1",
+  "journey_version": "2026-09-05.1",
   "entry_screen_id": "control-plane-map",
-  "first_success_fact": "product_catalog_listed",
-  "published_at": "2026-09-03T00:00:00Z",
-  "source_revision": "stado-cli-first-use-2026-09-03.1",
+  "first_success_fact": "registry_configuration_accepted",
+  "published_at": "2026-09-05T00:00:00Z",
+  "source_revision": "stado-cli-first-use-2026-09-05.1",
   "screens": [
     {
       "screen_id": "control-plane-map",
@@ -17,54 +17,56 @@
       "actions": ["continue"],
       "transitions": [
         {
-          "next_screen_id": "read-before-change",
+          "next_screen_id": "adopt-existing-registry",
           "reason_code": "control_plane_mapped",
           "priority": 10
         }
       ],
       "presentation": {
-        "title": "See the whole control plane from one command tree",
-        "body": "Stado is the operator entry point for the Wisent fleet: jobs and queues, hosts and services, releases, storage, credentials, and product installations all have their own command groups. Start with read commands such as status, list, show, catalog, and overview; commands that change the fleet say what they act on and expose their required target or apply flag."
+        "title": "Start with the fleet you already have",
+        "body": "Stado's canonical registry is the declaration shared by the CLI, Desktop, coordinator, and workers. If you already have a Stado registry-v2 JSON export, adopt it instead of recreating its hosts and fleets. Import reads no host, runs no workload, installs nothing, and changes no service."
       }
     },
     {
-      "screen_id": "read-before-change",
-      "screen_kind": "explanation",
-      "title_key": "stado_cli.first_use.read.title",
-      "body_key": "stado_cli.first_use.read.body",
-      "required": true,
-      "actions": ["continue"],
+      "screen_id": "adopt-existing-registry",
+      "screen_kind": "seed",
+      "title_key": "stado_cli.first_use.import.title",
+      "body_key": "stado_cli.first_use.import.body",
+      "required": false,
+      "actions": ["import_registry", "skip"],
       "transitions": [
         {
-          "next_screen_id": "list-product-catalog",
-          "reason_code": "read_path_understood",
+          "next_screen_id": "registry-accepted",
+          "reason_code": "registry_source_chosen",
           "priority": 10
         }
       ],
       "presentation": {
-        "title": "Inspect real state before changing it",
-        "body": "Use stado --help to discover the command tree, then ask a command group for its own help. Read-only commands return the same fleet and catalogue records that mutating operations use, so an inspection is not a demo or a separate sample configuration. This walkthrough never changes a host, service, product installation, or secret."
+        "title": "Choose an existing registry-v2 JSON file",
+        "body": "The import validates the complete source before reading the destination, adds destination-missing named targets and fleets, preserves destination-only state, and refuses every differing record or value. Repeating the same import reports those records unchanged. Omit this optional action to keep an empty, usable local registry.",
+        "command": "stado onboarding --import-registry PATH [--json]",
+        "result": "The exact imported and unchanged host and fleet names, conflicts or validation rejection, and the accepted canonical generation"
       }
     },
     {
-      "screen_id": "list-product-catalog",
+      "screen_id": "registry-accepted",
       "screen_kind": "first_success",
-      "title_key": "stado_cli.first_use.catalog.title",
-      "body_key": "stado_cli.first_use.catalog.body",
+      "title_key": "stado_cli.first_use.accepted.title",
+      "body_key": "stado_cli.first_use.accepted.body",
       "required": true,
       "completion_evidence": {
         "kind": "fact",
-        "fact": "product_catalog_listed",
+        "fact": "registry_configuration_accepted",
         "operator": "eq",
         "value": true
       },
-      "actions": ["list_product_catalog"],
+      "actions": ["import_registry"],
       "transitions": [],
       "presentation": {
-        "title": "List the real Wisent product catalogue",
-        "body": "Run stado product catalog to read the catalogue used by Stado's product lifecycle commands. It prints the products and their installable surfaces without installing, updating, removing, or contacting a host. The journey completes only after that real command succeeds; merely viewing this screen does not record success.",
-        "command": "stado product catalog",
-        "result": "The canonical Wisent products and each product's installable surfaces"
+        "title": "Accept the registry into canonical storage",
+        "body": "Run the import command with your file. The journey completes only after the registry operation compare-and-swaps the merged document and reads the accepted generation back. A rejected source or conflict leaves the canonical registry byte-for-byte unchanged.",
+        "command": "stado registry import PATH [--json]",
+        "result": "A stado.registry-import-receipt.v1 receipt with state imported or unchanged"
       }
     }
   ],

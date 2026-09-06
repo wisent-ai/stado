@@ -143,9 +143,7 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
             if json {
                 args.push("--json".to_string());
             }
-            invoke(args).await?;
-            super::onboarding::record_product_catalog_listed();
-            Ok(())
+            invoke(args).await
         }
         ProductCommands::Install(value) => invoke(mutation_args("install", value)).await,
         ProductCommands::Status(value) => invoke(mutation_args("status", value)).await,

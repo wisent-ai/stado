@@ -116,6 +116,33 @@ actor StadoCLI {
         }
     }
 
+    /// Run a command whose successful stdout is intentionally plain text.
+    ///
+    /// This is reserved for explicit reveal/copy flows such as
+    /// `host vault-token-mint --raw-token`. Unlike `json`, a non-zero exit can
+    /// never be a decodable state, so the CLI's refusal is thrown immediately.
+    nonisolated func text(
+        arguments: [String],
+        timeoutSeconds: Int = 120
+    ) async throws -> String {
+        let executable = try await executableURL()
+        let completion = try await Self.capture(
+            executable: executable,
+            arguments: arguments,
+            timeoutSeconds: timeoutSeconds
+        )
+        if let refusal = completion.refusal { throw refusal }
+        let value = String(data: completion.output, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !value.isEmpty else {
+            throw StadoCLIError.failed(
+                exitCode: 0,
+                message: "\(Self.commandLine(arguments)) succeeded but returned no value."
+            )
+        }
+        return value
+    }
+
     /// What one invocation produced: exact stdout and stderr, and the sentence
     /// it refused with when it exited non-zero.
     ///

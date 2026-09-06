@@ -4,6 +4,7 @@ import WisentDesignSystem
 struct SettingsView: View {
     @ObservedObject var deploymentStore: DeploymentStore
     @ObservedObject var operationsStore: OperationsStore
+    @ObservedObject var fleetStore: FleetControlStore
     @ObservedObject var journey: StadoFirstUseJourney
     @State private var walkthrough: WisentMutationOutcome = .idle
     @State private var registryCredential = RegistryAPICredential.load()
@@ -58,6 +59,10 @@ struct SettingsView: View {
                 )
                 .font(WisentTypeScale.caption())
                 .foregroundStyle(WisentDesign.secondary)
+            }
+
+            Section("Existing registry") {
+                RegistryImportControl(store: fleetStore)
             }
 
             Section("First-run walkthrough") {

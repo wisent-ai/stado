@@ -7211,7 +7211,7 @@ async fn remote_skarbiec_json(
     target: &str,
     arguments: &[String],
 ) -> Result<(ComputeTarget, Value), CmdError> {
-    remote_skarbiec_json_at(target, arguments, None, None).await
+    remote_skarbiec_json_at(target, arguments, None, None, None).await
 }
 
 /// The mirror `skarbiec sync-pull` replaces the live vault from, relative to
@@ -7235,6 +7235,7 @@ async fn remote_skarbiec_json_at(
     target: &str,
     arguments: &[String],
     vault_relative: Option<&str>,
+    token_source: Option<(&str, &str)>,
     token_file_name: Option<&str>,
 ) -> Result<(ComputeTarget, Value), CmdError> {
     let command = arguments
@@ -7333,15 +7334,26 @@ fi
         tool_path.as_str(),
         gnupg_environment.as_str(),
         vault_environment.as_str(),
-        skarbiec.as_str(),
     ];
-    invocation.extend(arguments.iter().map(String::as_str));
-    if let Some(path) = &token_file {
-        invocation.extend(["--token-file", path.as_str()]);
-    }
-    let output = crate::deploy::host_channel::run_program(&resolved, &invocation, &runner)
+    let output = if let Some((item, field)) = token_source {
+        invocation.extend(["/usr/bin/python3", "-", skarbiec.as_str(), item, field]);
+        invocation.extend(arguments.iter().map(String::as_str));
+        crate::deploy::host_channel::run_program_with_stdin(
+            &resolved,
+            &invocation,
+            include_str!("../../../scripts/vault-token-from-item.py"),
+            &runner,
+        )
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    } else {
+        invocation.push(skarbiec.as_str());
+        invocation.extend(arguments.iter().map(String::as_str));
+        if let Some(path) = &token_file {
+            invocation.extend(["--token-file", path.as_str()]);
+        }
+        crate::deploy::host_channel::run_program(&resolved, &invocation, &runner).await
+    }
+    .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         let retained = token_file
             .as_ref()
@@ -7424,7 +7436,7 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     let list = vec![String::from("list")];
     let (resolved, live_report) = remote_skarbiec_json(target, &list).await?;
     let (_, mirror_report) =
-        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE), None).await?;
+        remote_skarbiec_json_at(target, &list, Some(SKARBIEC_MIRROR_RELATIVE), None, None).await?;
     let live = mirror_items(&live_report)?;
     let mirror = mirror_items(&mirror_report)?;
 
@@ -7574,10 +7586,11 @@ pub async fn sync_vault(target: &str, check: bool, json_output: bool) -> Result<
     Ok(())
 }
 
-/// Mint a least-privilege bearer inside TARGET's live Skarbiec vault.
+/// Mint a bounded bearer, or register an existing owner-vault field on TARGET.
 ///
-/// Metadata is the default output. `raw_token` is for a direct pipe into a
-/// secret store; `token_file_name` keeps the bearer on the target instead.
+/// Existing-bearer bytes stay on the target and never enter argv or the report.
+/// `raw_token` exposes only a newly generated bearer for a secret-store pipe;
+/// `token_file_name` instead persists and reuses it on the target.
 #[allow(clippy::too_many_arguments)]
 pub async fn vault_token_mint(
     target: &str,
@@ -7586,12 +7599,23 @@ pub async fn vault_token_mint(
     audience: &str,
     ttl_seconds: u64,
     replace_capabilities: bool,
+    token_item: Option<&str>,
+    token_field: &str,
     raw_token: bool,
     token_file_name: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
     vault_word("audience", audience)?;
+    if let Some(item) = token_item {
+        vault_word("token item", item)?;
+        vault_word("token field", token_field)?;
+        if raw_token {
+            return Err(CmdError::usage(
+                "--raw-token cannot be used with an existing --token-item",
+            ));
+        }
+    }
     if raw_token && json_output {
         return Err(CmdError::usage(
             "--raw-token and --json cannot be used together",
@@ -7599,6 +7623,11 @@ pub async fn vault_token_mint(
     }
     if let Some(name) = token_file_name {
         release_component("token file name", name)?;
+        if token_item.is_some() {
+            return Err(CmdError::usage(
+                "--token-item and --token-file-name cannot be used together",
+            ));
+        }
         if raw_token {
             return Err(CmdError::usage(
                 "--raw-token and --token-file-name cannot be used together",
@@ -7627,9 +7656,10 @@ pub async fn vault_token_mint(
     if replace_capabilities {
         arguments.push(String::from("--replace-capabilities"));
     }
+    let token_source = token_item.map(|item| (item, token_field));
     let (resolved, mut report) =
-        remote_skarbiec_json_at(target, &arguments, None, token_file_name).await?;
-    if token_file_name.is_none() {
+        remote_skarbiec_json_at(target, &arguments, None, token_source, token_file_name).await?;
+    if token_source.is_none() && token_file_name.is_none() {
         let token = report
             .get("token")
             .and_then(Value::as_str)
@@ -7649,17 +7679,23 @@ pub async fn vault_token_mint(
         object.remove("token");
     }
     if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "status": "token_minted",
-                "skarbiec": report,
-            }))?
-        );
+        let mut metadata = json!({
+            "target": resolved.name,
+            "status": if token_source.is_some() { "token_registered" } else { "token_minted" },
+            "skarbiec": report,
+        });
+        if let Some((item, field)) = token_source {
+            metadata["token_source"] = json!({ "item": item, "field": field });
+        }
+        println!("{}", serde_json::to_string_pretty(&metadata)?);
     } else {
+        let operation = if token_source.is_some() {
+            "registered"
+        } else {
+            "minted"
+        };
         println!(
-            "{}: token minted for {consumer} with audience {audience}",
+            "{}: token {operation} for {consumer} with audience {audience}",
             resolved.name
         );
         if let Some(path) = report.get("token_file").and_then(Value::as_str) {

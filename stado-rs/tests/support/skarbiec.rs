@@ -132,13 +132,7 @@ impl SkarbiecFixture {
     where
         F: FnOnce(&Path, &Path),
     {
-        Self::start_inner(
-            home,
-            items,
-            token.to_path_buf(),
-            None,
-            provision,
-        )
+        Self::start_inner(home, items, token.to_path_buf(), None, provision)
     }
 
     fn start_inner<F>(

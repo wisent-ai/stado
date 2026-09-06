@@ -14,9 +14,9 @@ use super::CmdError;
 
 const PRODUCT_ID: &str = "stado-cli";
 const JOURNEY_ID: &str = "first-use";
-const FIRST_SUCCESS_FACT: &str = "product_catalog_listed";
+const FIRST_SUCCESS_FACT: &str = "registry_configuration_accepted";
 const DEFINITION: &str = include_str!("../onboarding_first_use.json");
-const COMPLETED_MESSAGE: &str = "First-run journey already complete: product_catalog_listed was observed on an earlier run. Use `stado onboarding --reset` to show it again.";
+const COMPLETED_MESSAGE: &str = "First-run journey already complete: an existing registry configuration was accepted by the canonical store. Use `stado onboarding --reset` to show it again, or `stado registry import PATH` to adopt another non-conflicting registry.";
 
 fn definition() -> Result<Value, CmdError> {
     let definition: Value = serde_json::from_str(DEFINITION)?;
@@ -161,17 +161,22 @@ fn render(screen: &Value, index: usize, total: usize) {
     println!();
 }
 
-pub fn run(reset: bool) -> Result<(), CmdError> {
+pub async fn run(
+    reset: bool,
+    import_registry: Option<String>,
+    json_output: bool,
+) -> Result<(), CmdError> {
     let definition = definition()?;
     let screens = ordered_screens(&definition)?;
     let path = state_path()?;
     let existing = if reset { None } else { read_state(&path)? };
 
-    if existing
-        .as_ref()
-        .and_then(|state| state.get("status"))
-        .and_then(Value::as_str)
-        == Some("completed")
+    if import_registry.is_none()
+        && existing
+            .as_ref()
+            .and_then(|state| state.get("status"))
+            .and_then(Value::as_str)
+            == Some("completed")
     {
         println!("{COMPLETED_MESSAGE}");
         return Ok(());
@@ -193,37 +198,58 @@ pub fn run(reset: bool) -> Result<(), CmdError> {
     state["presented_screen_ids"] = json!(screen_ids);
     write_state(&path, &state)?;
 
+    if let Some(source) = import_registry {
+        return super::registry::import(source, json_output).await;
+    }
+
     for (index, screen) in screens.iter().enumerate() {
         render(screen, index, screens.len());
     }
     println!(
-        "First success is still open. Run the command on the final screen; completion is recorded only when it succeeds."
+        "First success is still open. Import an existing registry with the command on the final screen, or skip it and continue with an empty local registry."
     );
     Ok(())
 }
 
-/// Record the effect at the successful `stado product catalog` boundary.
-///
-/// This is deliberately best effort: onboarding bookkeeping must never turn a
-/// successful, read-only catalogue listing into a failed product command.
-pub fn record_product_catalog_listed() {
-    let _ = try_record_product_catalog_listed();
+/// Record the effect only after the canonical import operation has read back
+/// the accepted generation. A rejected source or semantic conflict never
+/// reaches this boundary.
+pub fn record_registry_import_accepted(receipt: &crate::registry_import::RegistryImportReceipt) {
+    if !receipt.accepted() {
+        return;
+    }
+    if let Err(error) = try_record_registry_import_accepted(receipt) {
+        eprintln!(
+            "registry import was accepted, but first-run evidence was not recorded: {}",
+            error
+                .message
+                .as_deref()
+                .unwrap_or("onboarding state unavailable")
+        );
+    }
 }
 
-fn try_record_product_catalog_listed() -> Result<(), CmdError> {
+fn try_record_registry_import_accepted(
+    receipt: &crate::registry_import::RegistryImportReceipt,
+) -> Result<(), CmdError> {
+    let definition = definition()?;
     let path = state_path()?;
-    let Some(mut state) = read_state(&path)? else {
-        return Ok(());
-    };
+    let mut state = read_state(&path)?.unwrap_or_else(|| new_state(&definition));
     if state.get("product_id").and_then(Value::as_str) != Some(PRODUCT_ID)
         || state.get("journey_id").and_then(Value::as_str) != Some(JOURNEY_ID)
-        || state.get("status").and_then(Value::as_str) != Some("in_progress")
     {
         return Ok(());
     }
 
     state["status"] = Value::String("completed".to_string());
-    state["evidence"] = json!({ (FIRST_SUCCESS_FACT): true });
+    state["evidence"] = json!({
+        (FIRST_SUCCESS_FACT): true,
+        "registry_import": {
+            "source_sha256": receipt.source_sha256.as_str(),
+            "generation": receipt.generation.as_deref(),
+            "state": receipt.state.as_str(),
+        },
+    });
     state["completed_at"] = Value::String(Utc::now().to_rfc3339());
     write_state(&path, &state)
 }
