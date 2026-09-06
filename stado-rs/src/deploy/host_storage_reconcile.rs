@@ -1763,13 +1763,9 @@ async fn print_settled_label(
     label: &str,
     runner: &Runner,
 ) -> Result<super::service_label_print::LabelState, DeployError> {
-    let mut state = super::service_label_print::print_label(
-        target,
-        label,
-        service::BootoutScope::Any,
-        runner,
-    )
-    .await?;
+    let mut state =
+        super::service_label_print::print_label(target, label, service::BootoutScope::Any, runner)
+            .await?;
     for _ in 0..2 {
         let complete = state.pid.is_none()
             || (state.process_started_at.is_some()
@@ -1791,7 +1787,6 @@ async fn print_settled_label(
     }
     Ok(state)
 }
-
 
 async fn prepare_lifecycle_fence(
     storage_target: &crate::targets::ComputeTarget,
@@ -1860,12 +1855,9 @@ async fn prepare_lifecycle_fence(
                     }));
                     continue;
                 }
-                let state = print_settled_label(
-                    &candidate.target,
-                    candidate.declared.unit_id(),
-                    runner,
-                )
-                .await?;
+                let state =
+                    print_settled_label(&candidate.target, candidate.declared.unit_id(), runner)
+                        .await?;
                 let command = state.runs().unwrap_or(&candidate.observed_command);
                 let mut role = service_role(candidate.declared.unit_id(), command).to_string();
                 if role == "other" {
