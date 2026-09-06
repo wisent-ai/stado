@@ -376,7 +376,7 @@ Use `stado storage stat <stado-uri> --json` as the smallest final check. `presen
 ### A publishing client's product declaration
 
 A client publishing one product may set `WC_RELEASE_API_PUBLISHERS` to that
-product's entry. This client behavior requires Stado 0.16.34 or newer:
+product's entry. This client behavior requires Stado 0.16.35 or newer:
 
 ```console
 WC_RELEASE_API_PUBLISHERS='{"wisent-backend":{"item":"wisent-backend-release-publisher","prefix":"wisent-backend/"}}' \
