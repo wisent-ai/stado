@@ -1252,6 +1252,18 @@ enum HostPrecheckRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Restart the runner in place and wait until it reports listening for
+    /// jobs.
+    ///
+    /// For a listener whose session to GitHub's broker was cut: the process
+    /// and the launchd state stay healthy, every job for its labels queues
+    /// forever, and `install` leaves a running service alone.
+    Restart {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove the runner, service definition and network boundary from TARGET.
     Remove {
         target: String,
@@ -3300,6 +3312,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 }
                 HostPrecheckRunnerCommands::Status { target, json } => {
                     precheck_runner::status(&target, json).await
+                }
+                HostPrecheckRunnerCommands::Restart { target, json } => {
+                    precheck_runner::restart(&target, json).await
                 }
                 HostPrecheckRunnerCommands::Remove { target, json } => {
                     precheck_runner::remove(&target, json).await

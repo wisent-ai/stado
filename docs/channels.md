@@ -485,6 +485,22 @@ Nothing is ever merged and no vault is ever created to resolve this: which items
 
 On 2026-09-05 `lukasz-macbook` held `~/.local/share/skarbiec/skarbiec.vault.json` with 660 items and `~/.stado/skarbiec.vault.json` with 626, both claiming owner `skarbiec-owner-charless-mini-20260804`, because the `skarbiec` CLI defaults to the first and Stado used to name the second. Twenty-two of the fleet's twenty-four declared release publishers were in both, two in only one. Every owner write on that machine was refused, so `stado host reconcile-release-verifier` could not extend the release verifier's grant, and `stado doctor --deployment-preflight` failed `object-auth` with seven publisher items missing — the fleet's release publication boundary, closed by a question nothing in the product asked out loud.
 
+## The pre-check runner
+
+`stado host precheck-runner status <target>` reports the isolated CI runner as separate facts, each with its own refusal: the launchd or systemd unit, the service account, the pf or nft egress boundary, the listener process **under this runner's root**, the Brama route the runner publishes, the Kronika agent identity and its signing secret's ownership, and the listener's own last logged event.
+
+| Field | Meaning |
+|---|---|
+| `brama_route.published` | the address in `routes/brama.url`, which is what the runner dials |
+| `brama_route.declared` | the `skarbiec`-style declaration for that host: the directory endpoint when it serves Brama, its own resolver adapter when it does not |
+| `brama_route.matches` | `false` exits non-zero **after** printing the rest of the report |
+| `listener` | the last `Listening for Jobs`, `Running job`, error or termination line in the runner's newest diagnostic log |
+| `runner listeners` | every `Runner.Listener` on the host with its owner and path, because one machine runs several |
+
+`stado host precheck-runner restart <target>` restarts the unit in place — `launchctl kickstart -k`, never unload-then-bootstrap — and waits for a `Listening for Jobs` line written **after** that restart. When none appears it terminates listener processes under that runner's root and restarts once more, then reports the log's last words. A whole-file match would accept the line the runner wrote when it first started, which is how the first version of this wait reported success on a listener that had not reconnected.
+
+Three defects on 2026-09-06 made this section necessary, and they were invisible in that order. The runner's `routes/brama.url` still named Brama's old port after the endpoint moved, so every Kronika documentation gate on that host answered `fetch failed` — in another repository's CI, with nothing on the fleet comparing the file to the declaration. `status` then failed with `No ALTQ support in kernel`, a pfctl warning from a log it happened to tail, because `set -e` alone decided the outcome. And its listener check matched any `Runner.Listener` on the machine, so it reported a healthy listener belonging to `jeden-desktop-release-runner` while the pre-check runner's own listener had been dead for an hour and every job for its labels queued.
+
 ## Failure ownership
 
 | Result | Meaning | Repair owner |
