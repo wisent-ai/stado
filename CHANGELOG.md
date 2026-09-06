@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.34
+
+- **Primary authority:** a successful missing-object answer remains authoritative for releases as well as mutable objects. GET and stat no longer copy bytes from the backup or return a backup body after the primary refused a repair; ordinary failover remains limited to failed primary reads.
+- **Publication retention:** release-store cleanup requires a completed or reconciled pipeline run for the exact reserved source revision. Missing completion evidence, an unreadable source claim, and an untracked installer publication retain the version with separate diagnostic reasons. A failed run alone does not authorize deleting its output.
+- **Immutable reservations:** reclaiming eligible release payloads retains both version and platform source-revision records, so cleanup cannot free a used version for a different commit.
+- **Migration:** no stored schemas change. Tag-only releases remain retained because their publisher does not supply the pipeline completion evidence required for deletion; the janitor reports that limitation instead of deleting an active upload.
+
 ## 0.16.33
 
 - **Authenticated convergence:** the typed GET and POST `/api/service/converge` routes share the CLI's implementation and return the complete report with its product exit code. Independent `converge-read` and `converge-apply` registry client actions prevent read permission from authorizing delivery.
