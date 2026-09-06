@@ -3,6 +3,7 @@
 #[cfg(unix)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::DeployError;
@@ -14,19 +15,24 @@ const ITEM_PREFIX: &str = "stado-ssh-";
 const PRIVATE_KEY_FIELD: &str = "private_key";
 const OWNER_KEY_FILE_ENV: &str = "STADO_HOST_SSH_KEY_FILE";
 
-/// Owner-only transient private key. Dropping it removes the file on every
-/// success and error path.
-pub struct KeyFile(PathBuf);
+/// Owner-only transient private key. The final handle removes the file on
+/// success, error, and cancellation.
+#[derive(Clone)]
+pub struct KeyFile(Arc<OwnedKeyFile>);
+
+struct OwnedKeyFile {
+    path: PathBuf,
+}
 
 impl KeyFile {
     pub fn path(&self) -> &Path {
-        &self.0
+        &self.0.path
     }
 }
 
-impl Drop for KeyFile {
+impl Drop for OwnedKeyFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -70,7 +76,7 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         let _ = std::fs::remove_file(&path);
         return Err(DeployError(error.to_string()));
     }
-    Ok(KeyFile(path))
+    Ok(KeyFile(Arc::new(OwnedKeyFile { path })))
 }
 
 #[cfg(not(unix))]
@@ -82,7 +88,7 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
     let path = std::env::temp_dir().join(format!("stado-host-key-{}-{nonce}", std::process::id()));
     std::fs::write(&path, format!("{private_key}\n"))
         .map_err(|error| DeployError(error.to_string()))?;
-    Ok(KeyFile(path))
+    Ok(KeyFile(Arc::new(OwnedKeyFile { path })))
 }
 fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
     let Some(raw) = std::env::var_os(OWNER_KEY_FILE_ENV).filter(|value| !value.is_empty()) else {
@@ -133,6 +139,9 @@ fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
 /// channel when that broker is unavailable. Private material never enters
 /// argv, stdout, logs, or registry data.
 pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
+    if let Some(key) = super::host_channel::session_key(target) {
+        return Ok(key);
+    }
     if let Some(key) = owner_key_override()? {
         return Ok(key);
     }

@@ -280,8 +280,10 @@ export async function runRecordedRustJourney({
   productionMutations,
   contracts,
   executionBudgetMs = defaultExecutionBudgetMs,
+  release = false,
+  testFilter = null,
 }) {
-  const testArgs = ['--ignored', '--nocapture', '--test-threads=1', '--exact', ...tests];
+  const testArgs = ['--ignored', '--nocapture', '--test-threads=1', '--exact'];
   const artifacts = process.env.PROBIERZ_ARTIFACTS;
   const mediaManifest = process.env.PROBIERZ_MEDIA_MANIFEST;
   if (!artifacts) throw new Error('PROBIERZ_ARTIFACTS is required');
@@ -307,6 +309,7 @@ export async function runRecordedRustJourney({
     const args = [
       'test', '--locked', '--no-run', '--message-format=json',
       ...targets.flatMap((target) => ['--test', target]),
+      ...(release ? ['--release'] : []),
     ];
     const result = await runProcess('cargo', args, {
       cwd: crate,
@@ -379,7 +382,8 @@ export async function runRecordedRustJourney({
         failures.push(`${target} was not executed`);
         continue;
       }
-      const result = await runProcess(testExecutable.snapshot.file, testArgs, {
+      const selectedTestArgs = [...testArgs, ...(testFilter ? [testFilter] : tests)];
+      const result = await runProcess(testExecutable.snapshot.file, selectedTestArgs, {
         cwd: crate,
         env: {
           ...process.env,
@@ -448,7 +452,7 @@ export async function runRecordedRustJourney({
       execution: {
         budgetMs: executionBudgetMs,
         durationMs: executionDurationMs,
-        args: testArgs,
+        args: testFilter ? [...testArgs, '--exact', testFilter] : testArgs,
         processes: executions,
       },
     },

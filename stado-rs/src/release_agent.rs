@@ -91,9 +91,8 @@ pub struct QuarantineRecord {
 impl QuarantineRecord {
     /// Record one refusal, naming its cause from the reason itself.
     ///
-    /// For the sites that never read a candidate log — a rollback, a rejected
-    /// rollback-compatibility declaration, a fetch that failed — the reason is
-    /// the whole of the available evidence.
+    /// For refusals before a process starts — a rejected rollback-compatibility
+    /// declaration or a fetch that failed — the reason is all available evidence.
     fn new(reason: String) -> Self {
         let classified = release_cause::classify(&reason);
         Self {
@@ -526,6 +525,36 @@ fn log_evidence(path: &Path, lines: usize, max_chars: usize) -> LogEvidence {
     }
 }
 
+/// Keep the same process evidence for startup, active and drain failures.
+/// The reason carries bounded tails; classification reads the full logs once.
+fn quarantine_with_logs(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+    record: &ProcessRecord,
+    why: &str,
+) -> QuarantineRecord {
+    let stderr = log_evidence(
+        &release_log_path(target, product, &record.version, "err"),
+        20,
+        1200,
+    );
+    let stdout = log_evidence(
+        &release_log_path(target, product, &record.version, "out"),
+        5,
+        400,
+    );
+    let reason = format!(
+        "{why}; stderr {}; stdout {}",
+        stderr.rendered, stdout.rendered
+    );
+    let classified = release_cause::classify(&format!(
+        "{why}\n{}\n{}",
+        stderr.body.trim_end(),
+        stdout.body.trim_end()
+    ));
+    QuarantineRecord::classified(reason, classified)
+}
+
 fn expand_home(value: &str, home: &str) -> String {
     value.replace("{home}", home)
 }
@@ -647,10 +676,6 @@ async fn not_ready_because(record: &ProcessRecord, path: &str) -> Option<String>
         Err(error) if error.is_connect() => Some(format!("{url} refused the connection")),
         Err(error) => Some(format!("{url} failed: {error}")),
     }
-}
-
-async fn ready(record: &ProcessRecord, path: &str) -> bool {
-    not_ready_because(record, path).await.is_none()
 }
 
 /// Wait for readiness, returning the last reason it was refused.
@@ -1748,12 +1773,16 @@ async fn rollback(
     readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
-    if let Some(record) = &failed {
-        state.quarantined.insert(
-            record.artifact_sha256.clone(),
-            QuarantineRecord::new(reason.clone()),
-        );
-    }
+    let reason = if let Some(record) = &failed {
+        let failure = quarantine_with_logs(target, &state.product, record, &reason);
+        let reason = failure.reason.clone();
+        state
+            .quarantined
+            .insert(record.artifact_sha256.clone(), failure);
+        reason
+    } else {
+        reason
+    };
     if let Some(previous) = state.previous.take() {
         let serving = target.blue_green_serving()?;
         let product = state.product.clone();
@@ -2163,10 +2192,10 @@ async fn reconcile_product(
         && state.previous.is_none();
     state.rollout_generation = desired.rollout_generation;
     if repeats_failed_rollout {
-        state.quarantined.insert(
-            artifact.artifact_sha256.clone(),
-            QuarantineRecord::new(state.detail.clone()),
-        );
+        state
+            .quarantined
+            .entry(artifact.artifact_sha256.clone())
+            .or_insert_with(|| QuarantineRecord::new(state.detail.clone()));
         state.phase = RolloutPhase::Quarantined;
         state.detail =
             "desired release digest is quarantined after its previous rollback".to_string();
@@ -2250,19 +2279,20 @@ async fn reconcile_product(
             state.cutover_at.get_or_insert_with(Utc::now);
             save_state(target, &mut state)?;
             tokio::time::sleep(Duration::from_secs(policy.strategy.drain_timeout_seconds)).await;
-            if !ready(&active, &serving.readiness_path).await {
+            if let Some(why) = not_ready_because(&active, &serving.readiness_path).await {
                 if policy.strategy.automatic_rollback {
                     rollback(
                         target,
                         &mut state,
-                        "candidate failed during drain".to_string(),
+                        format!("candidate failed during drain: {why}"),
                         policy.strategy.readiness_timeout_seconds,
                     )
                     .await?;
                 } else {
                     state.phase = RolloutPhase::Failed;
-                    state.detail =
-                        "candidate failed during drain; automatic rollback is disabled".to_string();
+                    state.detail = format!(
+                        "candidate failed during drain: {why}; automatic rollback is disabled"
+                    );
                     save_state(target, &mut state)?;
                 }
                 return Ok(state);
@@ -2376,43 +2406,19 @@ async fn reconcile_product(
     .await
     {
         terminate(&process);
-        let stderr = log_evidence(
-            &release_log_path(target, product, &manifest.version, "err"),
-            20,
-            1200,
+        let failure = quarantine_with_logs(
+            target,
+            product,
+            &process,
+            &format!(
+                "candidate did not become ready within {}s: {why}",
+                policy.strategy.readiness_timeout_seconds
+            ),
         );
-        let stdout = log_evidence(
-            &release_log_path(target, product, &manifest.version, "out"),
-            5,
-            400,
-        );
-        let reason = format!(
-            "candidate did not become ready within {}s: {why}; stderr {}; stdout {}",
-            policy.strategy.readiness_timeout_seconds, stderr.rendered, stdout.rendered
-        );
-        // Classified from every byte the candidate wrote, not from the bounded
-        // tail that went into the reason, so a name is never withheld because
-        // the quote was trimmed. On the live records the two happen to agree;
-        // that is luck about where those products put their decisive line, not
-        // a property worth depending on, and the whole log costs one read that
-        // has already happened.
-        //
-        // It does not manufacture a name where the product wrote none. The
-        // three candidates burned on 2026-09-01 (`brama` 0.2.49, 0.2.50 and
-        // 0.2.51) wrote no failure line anywhere in their logs -- they stop
-        // after `issuing runtime capabilities` and say nothing -- and they stay
-        // unclassified when the whole file is read. That is a gap in what the
-        // product reports about itself, and this classifier must not paper over
-        // it with the nearest-looking label.
-        let classified = release_cause::classify(&format!(
-            "{why}\n{}\n{}",
-            stderr.body.trim_end(),
-            stdout.body.trim_end()
-        ));
-        state.quarantined.insert(
-            process.artifact_sha256.clone(),
-            QuarantineRecord::classified(reason.clone(), classified),
-        );
+        let reason = failure.reason.clone();
+        state
+            .quarantined
+            .insert(process.artifact_sha256.clone(), failure);
         state.candidate = None;
         state.phase = RolloutPhase::Quarantined;
         state.detail = reason;
@@ -2462,19 +2468,19 @@ async fn reconcile_product(
         .active
         .clone()
         .ok_or_else(|| "routed release lost its active process record".to_string())?;
-    if !ready(&active, &serving.readiness_path).await {
+    if let Some(why) = not_ready_because(&active, &serving.readiness_path).await {
         if policy.strategy.automatic_rollback {
             rollback(
                 target,
                 &mut state,
-                "candidate failed during drain".to_string(),
+                format!("candidate failed during drain: {why}"),
                 policy.strategy.readiness_timeout_seconds,
             )
             .await?;
         } else {
             state.phase = RolloutPhase::Failed;
             state.detail =
-                "candidate failed during drain; automatic rollback is disabled".to_string();
+                format!("candidate failed during drain: {why}; automatic rollback is disabled");
             save_state(target, &mut state)?;
         }
         return Ok(state);
