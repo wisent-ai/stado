@@ -1,7 +1,7 @@
 //! `stado host exec TARGET -- CMD…` — run one APPROVED read-only command
 //! on a registry host through the shared ssh channel.
 //!
-//! NO Python original: item six of `docs/missing-commands.md`, whose
+//! NO Python original: item six of `stado.wisent.com/docs/missing-commands`, whose
 //! wording is the whole design — "with an allowlist, not free shell".
 //!
 //! This is not a remote shell and must never become one. `stado host exec`

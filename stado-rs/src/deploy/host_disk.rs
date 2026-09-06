@@ -1,7 +1,7 @@
 //! `stado host disk TARGET` — current disk usage of a registry host
 //! alongside the state of the registry cleanup policy that governs it.
 //!
-//! NO Python original: item four of `docs/missing-commands.md`. Shape and
+//! NO Python original: item four of `stado.wisent.com/docs/missing-commands`. Shape and
 //! rules come from [`crate::deploy::host_reboot`] via
 //! [`crate::deploy::host_channel`].
 //!

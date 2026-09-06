@@ -1,6 +1,6 @@
 //! The one ssh channel every read-only `stado host ...` command rides.
 //!
-//! NO Python original: `docs/missing-commands.md` items 2-6 (`host uptime`,
+//! NO Python original: `stado.wisent.com/docs/missing-commands` items 2-6 (`host uptime`,
 //! `host ping`, `host disk`, `host cleanup --dry-run`, `host exec`) were
 //! never written in Python — the Python CLI stops at `host recover`. The
 //! rules below are not new either; they are the shape

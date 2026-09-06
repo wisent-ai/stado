@@ -1,7 +1,7 @@
 //! `stado service ...` — the full service-management layer.
 //!
 //! NO Python original: the Python CLI stops at `host recover`, and that gap
-//! is the point. `docs/missing-commands.md` items seven through fourteen
+//! is the point. `stado.wisent.com/docs/missing-commands` items seven through fourteen
 //! were written after a wedged `com.wisent.weles-api` sat unmanaged on a
 //! mac mini: the unit existed on the host, Stado did not know about it, and
 //! there was no command to list it, restart it or adopt it.
