@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.33
+
+- **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured. Preparation still refuses a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple.
+
 ## 0.16.32
 
 - **Concurrent release recovery:** coordinators retain the first immutable worker request after checking its source, manifest, and inputs. Recovery preserves the saved builder and queue consumer; a new queue plan still follows normal admission.

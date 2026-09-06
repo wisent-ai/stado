@@ -1758,6 +1758,41 @@ async fn capture_fenced_preflight(
     write_fence(target, transaction, fence, runner).await
 }
 
+async fn print_settled_label(
+    target: &crate::targets::ComputeTarget,
+    label: &str,
+    runner: &Runner,
+) -> Result<super::service_label_print::LabelState, DeployError> {
+    let mut state = super::service_label_print::print_label(
+        target,
+        label,
+        service::BootoutScope::Any,
+        runner,
+    )
+    .await?;
+    for _ in 0..2 {
+        let complete = state.pid.is_none()
+            || (state.process_started_at.is_some()
+                && state.process_executable.is_some()
+                && state.process_device.is_some()
+                && state.process_inode.is_some()
+                && state.process_sha256.is_some());
+        if complete {
+            return Ok(state);
+        }
+        sleep(Duration::from_secs(1)).await;
+        state = super::service_label_print::print_label(
+            target,
+            label,
+            service::BootoutScope::Any,
+            runner,
+        )
+        .await?;
+    }
+    Ok(state)
+}
+
+
 async fn prepare_lifecycle_fence(
     storage_target: &crate::targets::ComputeTarget,
     transaction: &str,
@@ -1825,10 +1860,9 @@ async fn prepare_lifecycle_fence(
                     }));
                     continue;
                 }
-                let state = super::service_label_print::print_label(
+                let state = print_settled_label(
                     &candidate.target,
                     candidate.declared.unit_id(),
-                    service::BootoutScope::Any,
                     runner,
                 )
                 .await?;
