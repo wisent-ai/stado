@@ -987,8 +987,13 @@ async fn ensure_active_proxy(
     state: &mut HostReleaseState,
     readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
-    if !ready(active, &serving.readiness_path).await {
-        return Err("active release lost readiness".to_string());
+    // The probe's own sentence travels with the verdict. On 2026-09-06 the
+    // quarantine list on charless-mac-mini read `active release lost readiness`
+    // for two digests in a row, and nothing said whether the candidate answered
+    // 503, refused the connection, or took longer than the 3s the probe allows
+    // on a host running 242 jobs. Three different repairs, one word.
+    if let Some(why) = not_ready_because(active, &serving.readiness_path).await {
+        return Err(format!("active release lost readiness: {why}"));
     }
     // A legacy unit can be loaded again after cutover while the stable proxy
     // remains healthy. Reassert release ownership on every reconcile, not only
