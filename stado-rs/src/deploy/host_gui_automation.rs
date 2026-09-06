@@ -23,7 +23,7 @@ pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "2";
 pub const APPLE_CHALLENGE_HELPER: &str = "/usr/local/libexec/stado-apple-challenge-capture";
 const APPLE_CHALLENGE_HELPER_BUNDLE_ID: &str = "com.wisent.stado.apple-challenge-capture";
 const APPLE_CHALLENGE_HELPER_SOURCE: &str =
-    include_str!("../../scripts/capture-apple-challenge.swift");
+    include_str!("../host_payloads/capture-apple-challenge.swift");
 
 pub(crate) struct AppleChallengeSession {
     user: String,

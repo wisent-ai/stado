@@ -4917,6 +4917,161 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
     Ok(())
 }
 
+/// `stado host weles-api-runtime TARGET --revision <sha>` — move TARGET's
+/// managed Weles API runtime onto one exact revision, restart the unit that
+/// serves it, and report the revision now answering.
+///
+/// The runtime is a source build on the host: one clone under
+/// `$HOME/.stado/build-work/weles-api-managed`, checked out at an exact
+/// revision, built there, and served by `com.wisent.always-on.weles-api`.
+/// Nothing moved that clone when the repository moved, so on 2026-09-06 the
+/// host served a 2026-08-30 revision for a week: it asked Brama for the alias
+/// a merged fix had already replaced, and every browser task on the host died
+/// with `subscription_unavailable` while the host's own bearer was being
+/// served. The steps are named here, in this binary, and each one is a program
+/// this command runs on the target — there is no file for an operator to run
+/// by hand and no revision this command can be told about twice.
+pub async fn refresh_weles_api_runtime(target: &str, revision: &str) -> Result<(), CmdError> {
+    use crate::deploy::host_channel;
+
+    let revision = revision.trim();
+    if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CmdError::usage(
+            "the runtime revision must be one full 40-character git object name",
+        ));
+    }
+
+    let resolved = host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let refused = |step: &str, detail: String| {
+        CmdError::click(format!(
+            "{}: the runtime was NOT moved to {revision}: {step} refused: {detail}",
+            resolved.name
+        ))
+    };
+
+    let home = host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let work = format!("{home}/{WELES_API_WORK_DIR}");
+    let quoted_work = crate::deploy::shlex_quote(&work);
+    let path = crate::deploy::shlex_quote(WELES_API_BUILD_PATH);
+    let marker = format!("{work}/.weles-api-revision");
+
+    let cloned = host_channel::remote_test(&resolved, &format!("-d {quoted_work}/.git"), &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    // Each step is one command with its own refusal, so a build that stops
+    // says which half of the deployment happened.
+    let mut steps: Vec<(&str, String)> = Vec::new();
+    if !cloned {
+        steps.push((
+            "clone",
+            format!(
+                "PATH={path} git clone --filter=blob:none --no-checkout {} {quoted_work}",
+                crate::deploy::shlex_quote(WELES_SOURCE_REPOSITORY)
+            ),
+        ));
+    }
+    steps.push((
+        "fetch",
+        format!("PATH={path} git -C {quoted_work} fetch origin {revision}"),
+    ));
+    steps.push((
+        "checkout",
+        format!("PATH={path} git -C {quoted_work} checkout --detach --force {revision}"),
+    ));
+    steps.push((
+        "install",
+        format!("cd {quoted_work} && PATH={path} npm ci --ignore-scripts"),
+    ));
+    // node-pty ships its `spawn-helper` at 0644, and `posix_spawnp` cannot
+    // execute it: every trajectory that drives a CLI dies inside node-pty on a
+    // host where the CLI itself is fine. Nothing rebuilds it, so the bit is set
+    // here, on the copy this deployment installed.
+    steps.push((
+        "node-pty helper",
+        format!(
+            "PATH={path} chmod u=rwx,go=rx {quoted_work}/node_modules/node-pty/prebuilds/*/spawn-helper \
+             {quoted_work}/node_modules/node-pty/build/Release/spawn-helper 2>/dev/null || true"
+        ),
+    ));
+    steps.push((
+        "build",
+        format!("cd {quoted_work} && PATH={path} npm run build"),
+    ));
+    steps.push((
+        "record",
+        format!(
+            "PATH={path} printf '%s\\n' {} > {}",
+            crate::deploy::shlex_quote(revision),
+            crate::deploy::shlex_quote(&marker)
+        ),
+    ));
+
+    for (step, command) in steps {
+        let ran = host_channel::run_command(&resolved, &command, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !ran.ok() {
+            return Err(refused(
+                step,
+                host_channel::last_error_line(&ran, "no output"),
+            ));
+        }
+    }
+
+    // What the host wrote, not what the build said.
+    let recorded = host_channel::run_command(
+        &resolved,
+        &format!("cat {}", crate::deploy::shlex_quote(&marker)),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let observed = recorded.stdout.trim().to_string();
+    if observed != revision {
+        return Err(refused(
+            "readback",
+            format!(
+                "the host recorded {} in {marker}",
+                if observed.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    observed
+                }
+            ),
+        ));
+    }
+
+    // A built tree the running process has not loaded is not deployed. The
+    // restart goes through the managed path, so the unit's own audit record
+    // carries this change, and `weles doctor` on the host reads the revision
+    // recorded above.
+    crate::cli::service::restart(WELES_API_SERVICE, Some(&resolved.name), None, None, false)
+        .await?;
+    println!("{}: {WELES_API_SERVICE} now serves {revision}", resolved.name);
+    Ok(())
+}
+
+/// The launchd label the managed Weles API runs under.
+const WELES_API_SERVICE: &str = "com.wisent.always-on.weles-api";
+
+/// Where the managed runtime's own checkout lives, relative to its home.
+const WELES_API_WORK_DIR: &str = ".stado/build-work/weles-api-managed";
+
+/// The source the runtime is built from.
+const WELES_SOURCE_REPOSITORY: &str = "https://github.com/wisent-ai/weles.git";
+
+/// The interpreters this build needs, in the order the fleet's hosts install
+/// them: a login shell reached through the channel does not necessarily carry
+/// the Homebrew prefix that holds `node` and `npm`.
+const WELES_API_BUILD_PATH: &str =
+    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
 async fn transfer_secret(
     target: &str,
     name: &str,
@@ -8417,7 +8572,7 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
     let probes = target_health_probes(&resolved.name).await;
     let script = format!(
         "{probes}{}",
-        include_str!("../../../scripts/recover-skarbiec-audit-lock.sh")
+        include_str!("../host_payloads/recover-skarbiec-audit-lock.sh")
     );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
@@ -8498,7 +8653,7 @@ pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<
     let runner = crate::deploy::production_runner();
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
-        include_str!("../../../scripts/recover-skarbiec-crypto.sh"),
+        include_str!("../host_payloads/recover-skarbiec-crypto.sh"),
         std::time::Duration::from_secs(240),
         &runner,
     )
@@ -8538,7 +8693,7 @@ pub async fn recover_skarbiec_acquisition_state(
     let runner = crate::deploy::production_runner();
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
-        include_str!("../../../scripts/recover-skarbiec-acquisition-state.sh"),
+        include_str!("../host_payloads/recover-skarbiec-acquisition-state.sh"),
         std::time::Duration::from_secs(90),
         &runner,
     )

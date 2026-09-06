@@ -2256,6 +2256,16 @@ enum HostCommands {
         /// Local renderer to deliver and run.
         source: String,
     },
+    /// Move TARGET's managed Weles API runtime onto one exact revision, restart
+    /// the unit that serves it, and report the revision now answering. Refuses
+    /// unless the host records exactly that revision.
+    #[command(name = "weles-api-runtime")]
+    WelesApiRuntime {
+        target: String,
+        /// The full 40-character git object name the runtime must serve.
+        #[arg(long)]
+        revision: String,
+    },
     /// Report TARGET's stado-managed binaries, fixed Cargo-home metadata and
     /// bin membership, forward markers and loopback listeners, and whether
     /// each marker still matches a live listener.
@@ -3444,6 +3454,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::RenderSpisAdmissionTrust { target, source } => {
                 host::render_spis_admission_trust(&target, &source).await
+            }
+            HostCommands::WelesApiRuntime { target, revision } => {
+                host::refresh_weles_api_runtime(&target, &revision).await
             }
             HostCommands::RetagVaultItem {
                 target,
