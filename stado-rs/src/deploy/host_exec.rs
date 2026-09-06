@@ -1259,6 +1259,47 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               exactly this command, so an operator can re-check its verdict by hand",
     },
     ApprovedCommand {
+        argv: &[
+            "/usr/bin/log",
+            "show",
+            "--last",
+            "1h",
+            "--style",
+            "compact",
+            "--info",
+            "--debug",
+            "--no-pager",
+            "--process",
+            "Tailscale",
+            "--process",
+            "IPNExtension",
+            "--process",
+            "io.tailscale.ipn.macsys.network-extension",
+            "--process",
+            "tailscaled",
+        ],
+        why: "reads the last hour of retained macOS logs from Tailscale's application and \
+              daemon processes. Serve and Funnel status describe configuration, not why \
+              a connection failed. This fixed read neither enables logging nor starts \
+              probes, changes configuration, or restarts a process",
+    },
+    ApprovedCommand {
+        argv: &[
+            "/usr/bin/journalctl",
+            "--unit",
+            "tailscaled",
+            "--since",
+            "-1h",
+            "--no-pager",
+            "--output",
+            "short-iso",
+        ],
+        why: "reads the last hour of the Linux tailscaled unit's retained journal, including \
+              its original timestamps and failure messages. The unit, time window and \
+              output format are fixed; this read starts no network probe and changes \
+              neither the service nor its logging configuration",
+    },
+    ApprovedCommand {
         argv: &["/sbin/ifconfig", "-a"],
         why: "lists every network interface with its addresses and flags. `-a` only widens the \
               selection to interfaces that are not up, which is the whole point: the interface \
