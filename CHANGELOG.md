@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.32
+## 0.16.33
 
 - **Authenticated convergence:** the typed GET and POST `/api/service/converge` routes share the CLI's implementation and return the complete report with its product exit code. Independent `converge-read` and `converge-apply` registry client actions prevent read permission from authorizing delivery.
 - **Desktop receipts and credentials:** Services uses the typed API instead of launching the CLI, retains every JSON field after failed delivery and refresh, and does not cancel host work when its selected source changes. Settings binds the registry client token file to one endpoint; registry policy, inventory, cleanup and convergence no longer send a Wisent account token to that API.
@@ -9,8 +9,13 @@
 - **Run retention:** a completed transition with a linked but missing run manifest retains its terminal result, source and transition record and reports the missing manifest. A stale reaper still respects an intentionally removed manifest without recreating it.
 - **Recovery ownership:** the resident worker verifies its acquired lock descriptor on macOS and preserves that lock during confined noninteractive privileged snapshot reads. Resume reuses a staged release's recorded origin, supports path-only object API declarations, distinguishes a completed PID-less launchd unit from a starting worker, and refuses conflicting actions against an active owner.
 - **Native unit state:** autostart read-back accepts both boolean overrides and native `enabled`/`disabled` names. Cached launchd definitions are joined by native PID ownership rather than matching old arguments against a newly written plist.
-- **Migration and rollback:** no stored schemas change. Registry clients and their dedicated verifier grant must be configured explicitly. When rolling back to a server without convergence actions, remove those actions from its client mapping; otherwise that older server correctly refuses the unknown configuration. This release includes the 0.16.31 changes below.
+- **Migration and rollback:** no stored schemas change. Registry clients and their dedicated verifier grant must be configured explicitly. When rolling back to a server without convergence actions, remove those actions from its client mapping; otherwise that older server correctly refuses the unknown configuration. This release includes the 0.16.32 changes below; that coordinate remains bound to its original request-recovery source.
 - **Platforms:** the API and native delivery apply to `darwin-arm64` and `linux-amd64`; Stado Desktop is the macOS surface.
+
+## 0.16.32
+
+- **Concurrent release recovery:** coordinators retain the first immutable worker request after checking its source, manifest, and inputs. Recovery preserves the saved builder and queue consumer; a new queue plan still follows normal admission.
+- **Capacity and cleanup evidence:** the two Probierz journeys record compilation separately from execution, retain the exact compiled CLI and test executables, and refuse execution if the source changed during compilation.
 
 ## 0.16.31
 

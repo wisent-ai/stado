@@ -1268,14 +1268,27 @@ struct ReleaseProcess {
     version: String,
     port: Option<u16>,
     release_dir: PathBuf,
+    /// Whether this process was started by `spawn_release`: that path runs the
+    /// launcher through `env STADO_RELEASE_PRODUCT=<product> ...`, so the marker
+    /// sits in the argument vector of the group leader and of every child that
+    /// re-executes the same command line. A process running the release
+    /// binary without it was started by someone else.
+    agent_spawned: bool,
 }
 
 /// Every process running out of this product's `releases/` directory, including
 /// the immutable release directory named by its exact argument vector.
 ///
-/// These processes are all children of some run of this agent -- nothing else
-/// executes from that directory -- so any of them the state file does not name is
-/// a leak from a run that died between spawning and recording.
+/// Not every one of them is this agent's. `release_processes` used to say
+/// "nothing else executes from that directory", and that was false on the
+/// always-on Mac: the Weles worker starts `skarbiec capability-serve` out of
+/// the attested Skarbiec release directory on purpose, because a broker from
+/// any other path could belong to a different Skarbiec generation. The state
+/// file never names that process, so `sweep_leaked_processes` sent it SIGTERM
+/// on every pass -- 164 times in the log on 2026-09-05 -- and every Weles
+/// trajectory that redeemed a credential read `ECONNREFUSED` at the socket,
+/// including the Developer ID run that publishes desktop signing material.
+/// `agent_spawned` records which processes carry the agent's own launch marker.
 fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
     let output = match std::process::Command::new("/bin/ps")
         .args(["-eo", "pid=,pgid=,command="])
@@ -1322,12 +1335,16 @@ fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {
                 port = pair[1].parse().ok();
             }
         }
+        let agent_spawned = arguments
+            .iter()
+            .any(|argument| argument.starts_with("STADO_RELEASE_PRODUCT="));
         found.push(ReleaseProcess {
             pid,
             process_group,
             version,
             port,
             release_dir,
+            agent_spawned,
         });
     }
     found
@@ -1432,6 +1449,14 @@ async fn reconcile_stable_proxy(
 /// release system. The one process spared is whichever serves the proxy's current
 /// upstream: it carries traffic, and the normal cutover retires it by routing away
 /// first, after which the next pass sweeps it here.
+///
+/// A leak is a process this agent started. `spawn_release` marks every one of
+/// its launches with `STADO_RELEASE_PRODUCT=` in the argument vector and puts
+/// the launch in its own process group, so a leaked release is recognised by
+/// that marker on itself or on its group leader. A process running the
+/// release binary with neither -- another product's client, such as the Weles
+/// capability broker running the attested Skarbiec binary -- is not this
+/// agent's to stop; it is named in the log and left alone.
 fn sweep_leaked_processes(
     target: &ReleaseTargetPolicy,
     product: &str,
@@ -1449,8 +1474,22 @@ fn sweep_leaked_processes(
         known.push(pid);
     }
     let upstream = proxy_upstream_port(target, product);
-    for process in release_processes(install_root) {
+    let processes = release_processes(install_root);
+    let spawned_groups: Vec<i32> = processes
+        .iter()
+        .filter(|process| process.agent_spawned)
+        .map(|process| process.process_group)
+        .collect();
+    for process in &processes {
         if known.contains(&process.process_group) {
+            continue;
+        }
+        if !process.agent_spawned && !spawned_groups.contains(&process.process_group) {
+            eprintln!(
+                "{product} {} pid={} runs the release binary without this agent's launch \
+                 marker; it belongs to another product and is not swept",
+                process.version, process.pid
+            );
             continue;
         }
         if upstream.is_some() && process.port == upstream {

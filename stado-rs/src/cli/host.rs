@@ -11802,6 +11802,27 @@ pub async fn config_set(
     value: &str,
     reload_service: Option<&str>,
 ) -> Result<(), CmdError> {
+    let stdout = write_host_config(target, key, value).await?;
+    print!("{stdout}");
+    if let Some(service) = reload_service {
+        super::service::reconcile_after_config_change(service, target).await?;
+    }
+    Ok(())
+}
+
+/// The guarded write itself, returning the host's resolved configuration
+/// instead of printing it.
+///
+/// A caller that owns its own report cannot print this document: with
+/// `--json` a second one on the same stream makes the answer unparseable,
+/// which is exactly what `reconcile-agent-skarbiec --json` emitted before
+/// this split. The guards stay here so no writer can reach the host without
+/// them.
+pub(crate) async fn write_host_config(
+    target: &str,
+    key: &str,
+    value: &str,
+) -> Result<String, CmdError> {
     if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
         return Err(CmdError::click(
             "configuration key must be a non-empty dotted name",
@@ -11811,11 +11832,97 @@ pub async fn config_set(
     // closes the host's release publication boundary the moment the unit
     // reloads, and the cheapest place to say so is here.
     refuse_unminted_publisher(target, key, value).await?;
-    remote_config(target, RemoteConfigAction::Set { key, value }).await?;
+    let canonical = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let stdout = remote_config_output(
+        &canonical,
+        RemoteConfigAction::Set { key, value },
+        &crate::deploy::production_runner(),
+    )
+    .await?;
     warn_unbacked_object_namespace(target, key, value);
     warn_unbacked_verifier_item(target, key, value);
-    if let Some(service) = reload_service {
-        super::service::reconcile_after_config_change(service, target).await?;
+    Ok(stdout)
+}
+
+/// `stado host reconcile-agent-skarbiec TARGET [--json]` — make TARGET's
+/// `agent.skarbiec.url` the credential endpoint the service directory
+/// declares for that host.
+///
+/// The agent's broker address was a hand-written port in one host's config
+/// and nothing compared it with the fleet's own declaration. On 2026-09-05
+/// `lukasz-macbook` carried `http://127.0.0.1:19096`, which nothing on that
+/// machine has ever bound, while the directory declared
+/// `http://127.0.0.1:8787` for it. Three brokers were listening and none was
+/// the one named, so the agent claimed a `preferences` release job and then
+/// died resolving its `GITHUB_TOKEN` — a build failure whose cause was in a
+/// different product's configuration file.
+///
+/// Derived, never invented: the value comes from
+/// `service_directory.services.skarbiec.endpoints[<target>]`, and a host the
+/// directory gives no endpoint is refused rather than pointed at a guess.
+pub async fn reconcile_agent_skarbiec(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let document = super::registry::fetch_document().await?;
+    let canonical = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let declared = document
+        .pointer("/service_directory/services/skarbiec/endpoints")
+        .and_then(Value::as_object)
+        .and_then(|endpoints| endpoints.get(&canonical.name))
+        .and_then(|endpoint| endpoint.get("url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "the service directory declares no skarbiec endpoint for {}, so this host has \
+                 no credential broker of its own to name. Declare one with `stado service \
+                 directory endpoint skarbiec --target {} --url <url>`, or leave \
+                 agent.skarbiec.url unset so the agent reads through the configured store \
+                 client",
+                canonical.name, canonical.name
+            ))
+        })?
+        .to_string();
+
+    let runner = crate::deploy::production_runner();
+    let stdout = remote_config_output(&canonical, RemoteConfigAction::Show, &runner).await?;
+    let current = serde_json::from_str::<Value>(&stdout)
+        .ok()
+        .and_then(|config| {
+            config
+                .pointer("/resolved/agent_skarbiec_url")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+
+    let changed = current.trim() != declared;
+    if changed {
+        write_host_config(&canonical.name, "agent.skarbiec.url", &declared).await?;
+    }
+    let report = json!({
+        "target": canonical.name,
+        "declared": declared,
+        "previous": if current.trim().is_empty() { Value::Null } else { Value::from(current.trim()) },
+        "changed": changed,
+    });
+    if json_output {
+        print_json(&report);
+    } else if changed {
+        println!(
+            "{}: agent.skarbiec.url -> {declared} (was {})",
+            canonical.name,
+            if current.trim().is_empty() {
+                "unset"
+            } else {
+                current.trim()
+            }
+        );
+    } else {
+        println!("{}: agent.skarbiec.url already {declared}", canonical.name);
     }
     Ok(())
 }
