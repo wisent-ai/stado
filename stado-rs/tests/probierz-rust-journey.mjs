@@ -430,11 +430,13 @@ export async function runRecordedRustJourney({
 
   const tracePath = join(artifacts, `${artifactStem}.trace.json`);
   const trace = {
-    schemaVersion: 2,
+    schemaVersion: 1,
     kind: 'probierz-stado-cli-trace',
     journey,
     runId: process.env.PROBIERZ_RUN_ID || null,
     status: failures.length === 0 ? 'completed' : 'failed',
+    completedAt: new Date().toISOString(),
+    observation: { reply: combinedStdout },
     source,
     profileEnvironment,
     phases: {

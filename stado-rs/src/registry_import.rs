@@ -186,11 +186,10 @@ fn source_rejection(bytes: &[u8], reason: String) -> RegistryImportReceipt {
 
 /// Decode and validate the complete source without reading or mutating the
 /// canonical destination. Rejections therefore cannot leave a partial import.
-fn decode_source(bytes: &[u8]) -> Result<Value, RegistryImportReceipt> {
+fn decode_source(bytes: &[u8]) -> Result<Value, String> {
     let document: Value = serde_json::from_slice(bytes)
-        .map_err(|error| source_rejection(bytes, format!("source is not valid JSON: {error}")))?;
-    validate_document(&document)
-        .map_err(|error| source_rejection(bytes, format!("source registry is invalid: {error}")))?;
+        .map_err(|error| format!("source is not valid JSON: {error}"))?;
+    validate_document(&document).map_err(|error| format!("source registry is invalid: {error}"))?;
     Ok(document)
 }
 
@@ -385,7 +384,7 @@ async fn verify_write(
 pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, RegistryImportError> {
     let source = match decode_source(bytes) {
         Ok(source) => source,
-        Err(receipt) => return Ok(receipt),
+        Err(reason) => return Ok(source_rejection(bytes, reason)),
     };
     let source_sha256 = format!("{:x}", Sha256::digest(bytes));
     let store = RegistryStore::open().await?;
