@@ -408,6 +408,32 @@ fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
             )));
         }
     }
+    // One variable, one source. `--env NAME=value` writes into the unit's own
+    // environment and `--secret NAME=item#field` writes into the env file the
+    // launcher sources afterwards, so declaring both leaves the value decided
+    // by the order two different writers happen to run in, and the
+    // declaration says two things about one name. On 2026-09-06 the
+    // Preferences declaration carried `--env NEXT_PUBLIC_BASE_URL=https://...`
+    // and `--secret NEXT_PUBLIC_BASE_URL=NEXT_PUBLIC_BASE_URL#value` together
+    // and this command accepted it without a word. The database variable is
+    // the third writer of the same file and is checked against both.
+    for name in secrets.keys() {
+        if env.contains_key(name) {
+            return Err(CmdError::usage(format!(
+                "{name:?} is declared as both --env and --secret; one variable has one source. \
+                 Drop the --secret for a value that is public, or the --env for one that is not"
+            )));
+        }
+    }
+    if request.database.is_some() {
+        let variable = request.database_variable;
+        if env.contains_key(variable) || secrets.contains_key(variable) {
+            return Err(CmdError::usage(format!(
+                "--database-variable {variable:?} is also declared as --env or --secret; the \
+                 database plane and that declaration would write the same variable"
+            )));
+        }
+    }
     // A database is resolved for this product's own consumer, and a consumer
     // the declaration does not list is refused by the database plane. Saying
     // so here turns a deploy-time refusal into a declare-time one.
