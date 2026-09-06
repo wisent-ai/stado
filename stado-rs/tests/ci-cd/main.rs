@@ -19,6 +19,15 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+fn stado_binary() -> &'static Path {
+    static BINARY: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
+        std::env::var_os("STADO_TEST_BINARY")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into())
+            .into()
+    });
+    BINARY.as_path()
+}
+
 fn executable_file(path: &Path) -> bool {
     fs::metadata(path)
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
@@ -405,7 +414,7 @@ fn registry(
         "service_directory": {
             "authority": {
                 "target": "ci-runner",
-                "command": env!("CARGO_BIN_EXE_stado")
+                "command": stado_binary()
             },
             "generation": 1,
             "services": {
@@ -489,29 +498,6 @@ fn registry(
         serde_json::to_string_pretty(&document).unwrap(),
     )
     .unwrap();
-}
-
-fn wait_for_capacity(storage: &Path, home: &Path, agent: &mut Child) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let capacity = storage.join("capacity");
-        if fs::read_dir(&capacity)
-            .ok()
-            .and_then(|mut entries| entries.next())
-            .is_some()
-        {
-            return;
-        }
-        if let Some(status) = agent.try_wait().unwrap() {
-            panic!(
-                "agent exited before publishing capacity: {status}\nstdout:\n{}\nstderr:\n{}",
-                fs::read_to_string(home.join("agent.out")).unwrap_or_default(),
-                fs::read_to_string(home.join("agent.err")).unwrap_or_default()
-            );
-        }
-        assert!(Instant::now() < deadline, "agent published no capacity");
-        thread::sleep(Duration::from_millis(100));
-    }
 }
 
 fn wait_for_claimable_capacity(storage: &Path, home: &Path, agent: &mut Child) {
@@ -746,9 +732,9 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     let public = home.path().join("release-public");
     let worker_bin = home.path().join(".stado/bin/stado");
     fs::create_dir_all(worker_bin.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_stado"), &worker_bin).unwrap();
+    fs::copy(stado_binary(), &worker_bin).unwrap();
     fs::set_permissions(&worker_bin, fs::Permissions::from_mode(0o700)).unwrap();
-    run(Command::new(env!("CARGO_BIN_EXE_stado")).args([
+    run(Command::new(stado_binary()).args([
         "release",
         "keygen",
         "--private-key",
@@ -764,7 +750,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
-    let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut agent_command = Command::new(stado_binary());
     release_env(&mut agent_command, home.path(), &storage, &vault);
     let mut agent = agent_command
         .args(["agent", "--target", "ci-runner"])
@@ -772,10 +758,10 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
-    let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut submit = Command::new(stado_binary());
     release_env(&mut submit, home.path(), &storage, &vault);
     let mut submit = submit
         .args([
@@ -848,9 +834,9 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
     let public = home.path().join("release-public");
     let worker_bin = home.path().join(".stado/bin/stado");
     fs::create_dir_all(worker_bin.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_stado"), &worker_bin).unwrap();
+    fs::copy(stado_binary(), &worker_bin).unwrap();
     fs::set_permissions(&worker_bin, fs::Permissions::from_mode(0o700)).unwrap();
-    run(Command::new(env!("CARGO_BIN_EXE_stado")).args([
+    run(Command::new(stado_binary()).args([
         "release",
         "keygen",
         "--private-key",
@@ -872,7 +858,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
-    let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut agent_command = Command::new(stado_binary());
     release_env(&mut agent_command, home.path(), &storage, &vault);
     let mut agent = agent_command
         .args(["agent", "--target", "ci-runner"])
@@ -880,12 +866,12 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     seed_stale_capacity(&storage, consumer);
 
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
-    let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut submit = Command::new(stado_binary());
     release_env(&mut submit, home.path(), &storage, &vault);
     let mut submit = submit
         .args([
@@ -945,9 +931,9 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     let public = home.path().join("release-public");
     let worker_bin = home.path().join(".stado/bin/stado");
     fs::create_dir_all(worker_bin.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_stado"), &worker_bin).unwrap();
+    fs::copy(stado_binary(), &worker_bin).unwrap();
     fs::set_permissions(&worker_bin, fs::Permissions::from_mode(0o700)).unwrap();
-    run(Command::new(env!("CARGO_BIN_EXE_stado")).args([
+    run(Command::new(stado_binary()).args([
         "release",
         "keygen",
         "--private-key",
@@ -963,7 +949,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
-    let mut initial_agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut initial_agent_command = Command::new(stado_binary());
     release_env(&mut initial_agent_command, home.path(), &storage, &vault);
     let mut initial_agent = initial_agent_command
         .args(["agent", "--target", "ci-runner"])
@@ -977,7 +963,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
 
     let submit_out = File::create(home.path().join("submit-first.out")).unwrap();
     let submit_err = File::create(home.path().join("submit-first.err")).unwrap();
-    let mut first_submit_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut first_submit_command = Command::new(stado_binary());
     release_env(&mut first_submit_command, home.path(), &storage, &vault);
     let mut first_submit = first_submit_command
         .args([
@@ -997,7 +983,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
         .unwrap();
     let first_job = wait_for_queued_release_build(&mut first_submit, home.path(), &storage);
     let first_job_id = first_job["job_id"].as_str().unwrap().to_string();
-    let mut cancel = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut cancel = Command::new(stado_binary());
     release_env(&mut cancel, home.path(), &storage, &vault);
     run(cancel.args(["cancel", &first_job_id]));
 
@@ -1023,7 +1009,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
-    let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut agent_command = Command::new(stado_binary());
     release_env(&mut agent_command, home.path(), &storage, &vault);
     let mut agent = agent_command
         .args(["agent", "--target", "ci-runner"])
@@ -1035,7 +1021,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
 
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
-    let mut retry_submit_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut retry_submit_command = Command::new(stado_binary());
     release_env(&mut retry_submit_command, home.path(), &storage, &vault);
     let mut retry_submit = retry_submit_command
         .args([
