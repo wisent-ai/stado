@@ -3,6 +3,7 @@
 ## 0.16.33
 
 - **Cleanup during queue outages:** each agent tick observes every workload's local exit and releases its cleanup hold before reading remote policy or finalizing any slot. A slow upload or queue read for one finished job no longer keeps already-finished siblings' holds locked. Live workloads remain protected, and pending finalization records remain intact.
+- **Successful build recovery:** release resumption reads the original worker's durable build receipt before replacing a failed job. A passed build whose bootstrap upload failed is published from its retained, source-bound receipt and checksum-verified archive without compiling again; the job's failure history and cancellation behavior remain unchanged.
 
 ## 0.16.32
 

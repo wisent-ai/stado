@@ -1528,10 +1528,24 @@ async fn publish(
 ) -> Result<ReleaseArtifactRef, CmdError> {
     let rec = run.platforms[p].clone();
     let job = terminal(store, &rec.job_id).await?;
-    if !matches!(
+    let prefix = format!("status/{}/output/", rec.job_id);
+    let receipt_bytes = store.read_bytes(&format!("{prefix}receipt.json")).await?;
+    let receipt: Option<BuildReceipt> = receipt_bytes
+        .as_deref()
+        .map(serde_json::from_slice)
+        .transpose()?;
+    let successful_job = matches!(
         job.state.as_str(),
         job_state::COMPLETED | job_state::UPLOADED
-    ) {
+    );
+    // The bootstrap can fail an upload after the build succeeded. The native
+    // finalizer still persists its output before recording that job failure.
+    // Keep the failed job's history; publication verifies the receipt and bytes.
+    let successful_build = job.state == job_state::FAILED
+        && receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.status == StepStatus::Passed);
+    if !successful_job && !successful_build {
         let host = if job.pinned_host.is_empty() {
             "unpinned host"
         } else {
@@ -1544,16 +1558,13 @@ async fn publish(
             job_output_tail(store, &rec.job_id).await
         )));
     }
-    let prefix = format!("status/{}/output/", rec.job_id);
-    let rb = store
-        .read_bytes(&format!("{prefix}receipt.json"))
-        .await?
-        .ok_or_else(|| CmdError::click("release job omitted receipt"))?;
+    let (Some(rb), Some(r)) = (receipt_bytes, receipt) else {
+        return Err(CmdError::click("release job omitted receipt"));
+    };
     let archive = store
         .read_bytes(&format!("{prefix}release.tar.gz"))
         .await?
         .ok_or_else(|| CmdError::click("release job omitted archive"))?;
-    let r: BuildReceipt = serde_json::from_slice(&rb)?;
     let digest = release_control::sha256_bytes(&archive);
     if r.run_id != run.run_id
         || r.job_id != rec.job_id
@@ -1570,6 +1581,13 @@ async fn publish(
         return Err(CmdError::click(
             "release job returned mixed or invalid output",
         ));
+    }
+    if successful_build {
+        eprintln!(
+            "release job {} remains failed: {}; publishing its source-bound passing build receipt and verified archive without rebuilding",
+            rec.job_id,
+            job.error.as_deref().unwrap_or("unspecified worker failure")
+        );
     }
     // The runtime contract belongs to the platforms that stage it. A product
     // may now publish a platform that ships no binary at all — a web site
@@ -1859,7 +1877,22 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             // original job before deriving another build identity.
             let job_id = &run.platforms[p].job_id;
             let retry = match read_terminal_job(&store, job_id).await? {
-                Some(job) => matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED),
+                Some(job) if job.state == job_state::FAILED => {
+                    // A passed build must not be repeated because its wrapper
+                    // failed. `publish` checks every receipt binding and the
+                    // archive digest before accepting the retained output.
+                    match store
+                        .read_bytes(&format!("status/{job_id}/output/receipt.json"))
+                        .await?
+                    {
+                        Some(bytes) => {
+                            serde_json::from_slice::<BuildReceipt>(&bytes)?.status
+                                != StepStatus::Passed
+                        }
+                        None => true,
+                    }
+                }
+                Some(job) => job.state == job_state::CANCELLED,
                 None => {
                     if store.read_job("running", job_id).await?.is_none()
                         && store.read_job("queue", job_id).await?.is_none()
