@@ -2,7 +2,7 @@
 
 ## 0.16.31
 
-- **Release qualification:** format the integrated registry-import source so the unchanged native formatting gate accepts the release. Stado 0.16.30 remains bound to its original source; this correction uses a new immutable coordinate.
+- **Release qualification:** format the integrated registry-import source and use equivalent option predicates required by Clippy. The decoder returns only a rejection reason; the caller constructs the unchanged refusal receipt without carrying a large error through successful decoding. Stado 0.16.30 remains bound to its original source; this correction uses a new immutable coordinate.
 
 ## 0.16.30
 
