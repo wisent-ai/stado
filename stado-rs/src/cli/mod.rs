@@ -1860,6 +1860,16 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Make TARGET's `agent.skarbiec.url` the credential endpoint the service
+    /// directory declares for that host, so the queue agent reads workload
+    /// secrets through a broker that exists.
+    #[command(name = "reconcile-agent-skarbiec")]
+    ReconcileAgentSkarbiec {
+        target: String,
+        /// Emit the receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Recover an audit-lock stall in Skarbiec and its loaded local dependants.
     #[command(name = "recover-skarbiec-audit")]
     RecoverSkarbiecAudit {
@@ -3456,6 +3466,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::ReconcileServiceVerifier { target, json } => {
                 host::reconcile_service_verifier(&target, json).await
+            }
+            HostCommands::ReconcileAgentSkarbiec { target, json } => {
+                host::reconcile_agent_skarbiec(&target, json).await
             }
             HostCommands::RecoverSkarbiecAudit { target, json } => {
                 host::recover_skarbiec_audit(&target, json).await
