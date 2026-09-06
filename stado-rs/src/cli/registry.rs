@@ -2099,6 +2099,26 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     let mut findings: Vec<Finding> = Vec::new();
     let mut claimed: BTreeSet<String> = BTreeSet::new();
 
+    // A document the inference contract refuses is not a cosmetic fault: every
+    // resolver on the fleet validates the same way before it adopts a
+    // generation, so it keeps serving the last copy it accepted and hands
+    // consumers an address the fleet has since moved away from. On 2026-09-06 a
+    // route alias without a namespace ("wisent-backend") published that state:
+    // the always-on host's resolver froze eleven generations back, every chat
+    // took `connection refused` from a candidate port nothing served any more,
+    // and the only trace was one line in that resolver's log.
+    if let Err(error) = crate::inference::schema::validate(&document) {
+        findings.push(Finding::new(
+            "resolver-refuses-registry",
+            "registry",
+            format!(
+                "every resolver refuses this document and keeps serving the last \
+                 generation it accepted, so consumers resolve to addresses this \
+                 registry no longer declares: {error}"
+            ),
+        ));
+    }
+
     // What the fleet declares DELIVERED, which is what a missing version
     // declaration is measured against. Read from the document's own
     // `release_control` block and never from a unit on the host: a product
