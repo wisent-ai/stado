@@ -1,6 +1,26 @@
 # Changelog
 
+## 0.16.31
+
+- **Release qualification:** format the integrated registry-import source and use equivalent option predicates required by Clippy. The decoder returns only a rejection reason; the caller constructs the unchanged refusal receipt without carrying a large error through successful decoding. Stado 0.16.30 remains bound to its original source; this correction uses a new immutable coordinate.
+
+## 0.16.30
+
+- **Interrupted release requests:** resumption retains the saved platform builder, exact request bytes, staged input archives, and recorded queue consumer. An existing queue plan can be recovered without selecting a live builder or creating a replacement attempt. A request whose source, manifest, or inputs differ is refused rather than overwritten.
+
+## 0.16.29
+
+- **Frozen storage inventory:** storage-root reconciliation pauses and drains the queue, stops the other writers, and holds the local A/B write fence before enumerating files or comparing served bytes. In-flight object publication finishes before the hold; new writes return HTTP 503 with the owning transaction. A durable intent preserves the refusal across an interrupted owner.
+- **Observed handoff routes:** the object API reports the root and mirror actually constructed, and preparation requires its PID and mapped binary to match the declared staged release. HTTP byte identities use the physical inventory's `bytes` field. A differing B cannot replace an A authority, and rollback restores the captured primary/mirror rather than assuming B-only.
+- **Interrupted preparation:** after queue draining and lease acquisition, rollback can restore preparation before a checkpoint exists; its receipt explicitly records that no data-copy step ran. Same-transaction resumption retains that rollback direction. Expired placement leases are recovered through the canonical lease API only when no different active owner holds them.
+- **Desktop reconciliation:** the Hosts screen exposes all five phases with a retained transaction ID and exact command. Receipts preserve raw stdout, stderr, exit status and refusals; a resident launch acknowledgement is not displayed as completion. Separate sheets retain their own reviewed host and transaction.
+- **Checkpoint consistency:** the exclusive write fence replaces speculative snapshot retries. A disappearing file under that hold is reported rather than treated as stable data; complete physical checkpoints still retain every captured file and directory.
+
 ## 0.16.28
+
+- **Authority inventory:** a missing enumerated body is refused instead of recorded as an absent object. The live preflight retries transient missing-file reads, and served HTTP identities use the same `bytes` field as the physical inventory.
+
+## 0.16.27
 
 - **Release resumption:** publication errors no longer create replacement builds for jobs that are queued, running, completed, or uploaded. Resumption reads the original job and reuses its output; only a recorded failed or cancelled job gets another attempt. Missing or unreadable job state is reported without scheduling a replacement.
 - **macOS GitHub runners:** managed installation preserves upstream signatures and restores damaged apphosts from a checksum-verified official archive. `service repair-runner-runtime` repairs an adopted `runsvc.sh` service in place without changing its registration or restarting its unit; an intact runtime is left untouched.

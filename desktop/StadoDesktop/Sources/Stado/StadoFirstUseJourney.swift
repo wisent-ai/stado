@@ -12,7 +12,7 @@ final class StadoFirstUseJourney: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private var client: JourneyClient?
-    private let evidenceRevision = "stado-first-use-2026-08-04"
+    private let evidenceRevision = "stado-first-use-2026-09-05"
 
     var isAtConsole: Bool { currentScreen?.screenKind == "first_success" || status == .completed }
     var isCompleted: Bool { status == .completed }
@@ -118,16 +118,30 @@ final class StadoFirstUseJourney: ObservableObject {
         }
     }
 
-    func completeIfObserved(completedJobCount: Int) async {
-        guard completedJobCount > 0, !isCompleted, let client else { return }
+    func completeRegistryImport(_ receipt: RegistryImportReceipt) async {
+        guard receipt.accepted, !isCompleted, let client else { return }
+        var evidence: [String: JSONValue] = [
+            "registry_configuration_accepted": .boolean(true),
+            "registry_import_source_sha256": .string(receipt.sourceSHA256),
+        ]
+        if let generation = receipt.generation {
+            evidence["registry_generation"] = .string(generation)
+        }
         do {
+            if currentScreen?.screenKind != "first_success" {
+                _ = try await client.advance(
+                    evidence: evidence,
+                    evidenceRevision: evidenceRevision
+                )
+                await refresh()
+            }
             let completed = try await client.complete(
-                evidence: ["authorized_job_completed": .boolean(true)],
+                evidence: evidence,
                 evidenceRevision: evidenceRevision
             )
             if completed { await refresh() }
         } catch {
-            errorMessage = "Stado could not record the observed job completion. \(error.localizedDescription)"
+            errorMessage = "Stado accepted the registry, but could not record onboarding completion. \(error.localizedDescription)"
         }
     }
 
@@ -170,20 +184,31 @@ struct StadoFirstUseRoot: View {
                     firstRunNotice: journey.isCompleted ? nil : firstRunNotice
                 )
             } else {
-                StadoOnboardingView(journey: journey)
+                StadoOnboardingView(journey: journey, fleetStore: fleetStore)
             }
         }
         .task {
             await auth.start()
+            await deploymentStore.load(identity: auth.identity)
+            configureRegistryImportSource()
         }
         .task {
             await journey.start()
-            await journey.completeIfObserved(
-                completedJobCount: operationsStore.snapshot?.completedRecent.count ?? 0
-            )
         }
-        .onChange(of: operationsStore.snapshot?.completedRecent.count ?? 0) { _, count in
-            Task { await journey.completeIfObserved(completedJobCount: count) }
+        .onChange(of: auth.session?.accessToken) { _, _ in
+            configureRegistryImportSource()
+        }
+        .onChange(of: deploymentStore.selectedDeploymentID) { _, _ in
+            configureRegistryImportSource()
+        }
+    }
+
+    private func configureRegistryImportSource() {
+        fleetStore.configureAuthorization(token: auth.session?.accessToken)
+        if let deployment = deploymentStore.selectedDeployment {
+            fleetStore.configureEndpoint(deployment.endpoint)
+        } else {
+            fleetStore.configureEndpoint(operationsStore.dashboardURLString)
         }
     }
 
@@ -202,6 +227,7 @@ struct StadoFirstUseRoot: View {
 
 private struct StadoOnboardingView: View {
     @ObservedObject var journey: StadoFirstUseJourney
+    @ObservedObject var fleetStore: FleetControlStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x8) {
@@ -214,18 +240,32 @@ private struct StadoOnboardingView: View {
                 symbol: "server.rack"
             )
             Spacer(minLength: 0)
-            HStack(spacing: WisentDesign.Space.x3) {
-                WisentActionButton(
-                    action: WisentAction("Skip explanation", kind: .plain) {
-                        Task { await journey.skipExplanation() }
-                    }
-                )
-                Spacer(minLength: 0)
-                WisentActionButton(
-                    action: WisentAction("Continue", kind: .primary) {
-                        Task { await journey.advance() }
-                    }
-                )
+            if journey.currentScreen?.screenId == "existing_registry" {
+                RegistryImportControl(store: fleetStore) { receipt in
+                    await journey.completeRegistryImport(receipt)
+                }
+                HStack {
+                    WisentActionButton(
+                        action: WisentAction("Skip for now", kind: .plain) {
+                            Task { await journey.skipExplanation() }
+                        }
+                    )
+                    Spacer(minLength: 0)
+                }
+            } else {
+                HStack(spacing: WisentDesign.Space.x3) {
+                    WisentActionButton(
+                        action: WisentAction("Skip explanation", kind: .plain) {
+                            Task { await journey.skipExplanation() }
+                        }
+                    )
+                    Spacer(minLength: 0)
+                    WisentActionButton(
+                        action: WisentAction("Continue", kind: .primary) {
+                            Task { await journey.advance() }
+                        }
+                    )
+                }
             }
         }
         .padding(WisentDesign.Space.x10)

@@ -270,46 +270,6 @@ impl From<crate::providers::ProviderError> for CmdError {
     }
 }
 
-const ONBOARDING: &str = "\
-Stado — one queue for every machine.
-
-Stado needs three things:
-- state storage for the queue and results,
-- at least one compute provider,
-- a running worker that can claim jobs.
-
-Fastest path: local mode. `stado config init` creates:
-- provider: local
-- queue storage: ~/.stado/local-storage
-- backup storage: ~/.stado/local-backup
-
-No cloud account or credentials are required for local mode.
-The worker host must already have the shell, runtime, and GPU driver required by the workload.
-
-1. Create the local configuration:
-   stado config init
-
-2. Check the installation:
-   stado config validate
-   stado doctor --fix-hints
-
-3. Start the local control plane:
-   stado local-control-plane
-
-Submit your first job (retain --run-id to recover the same job after a retry):
-   stado submit --run-id onboarding-hello \"printf 'hello from Stado\\n'\"
-
-Already configured? Run:
-   stado overview
-
-More commands:
-   stado --help
-";
-
-fn print_onboarding() {
-    print!("{ONBOARDING}");
-}
-
 #[derive(Parser)]
 #[command(
     // Not bare `version`: that prints CARGO_PKG_VERSION alone, and one
@@ -330,11 +290,17 @@ enum Commands {
     #[command(name = "package-root", hide = true)]
     PackageRoot,
 
-    /// Show the CLI first-use walkthrough.
+    /// Show the CLI first-use walkthrough or import an existing registry-v2 file.
     Onboarding {
         /// Discard recorded progress and evidence, then show the walkthrough again.
         #[arg(long)]
         reset: bool,
+        /// Additively adopt this registry-v2 JSON file into the canonical registry.
+        #[arg(long = "import-registry")]
+        import_registry: Option<String>,
+        /// Emit the typed import receipt. Requires --import-registry.
+        #[arg(long, requires = "import_registry")]
+        json: bool,
     },
 
     /// List Stado capability families, variants, providers and active selections.
@@ -1112,6 +1078,14 @@ pub(crate) enum CostCommands {
 enum RegistryCommands {
     /// Validate a local registry-v2 JSON document.
     Validate { path: Option<String> },
+    /// Additively adopt an existing registry-v2 JSON document.
+    Import {
+        /// Existing Stado registry-v2 JSON file.
+        path: String,
+        /// Emit a `stado.registry-import-receipt.v1` object.
+        #[arg(long)]
+        json: bool,
+    },
     /// Upload local registry.json to the canonical registry object.
     ///
     /// With --if-generation the write is conditional on the generation the
@@ -1819,7 +1793,7 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Mint one bounded Skarbiec bearer on TARGET's live vault.
+    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
     #[command(name = "vault-token-mint")]
     VaultTokenMint {
         target: String,
@@ -1836,8 +1810,14 @@ enum HostCommands {
         /// Replace an existing consumer's capability set.
         #[arg(long)]
         replace_capabilities: bool,
-        /// Print only the bearer, for piping directly into a secret store.
+        /// Reuse this owner-vault item's bearer instead of generating one.
         #[arg(long)]
+        token_item: Option<String>,
+        /// Field in --token-item; defaults to token.
+        #[arg(long, requires = "token_item")]
+        token_field: Option<String>,
+        /// Print only a newly generated bearer, for piping into a secret store.
+        #[arg(long, conflicts_with = "token_item")]
         raw_token: bool,
         /// Emit nonsecret bearer metadata as JSON.
         #[arg(long)]
@@ -2940,8 +2920,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         )));
     }
     let Some(command) = cli.command else {
-        print_onboarding();
-        return Ok(());
+        return onboarding::run(false, None, false).await;
     };
     match command {
         Commands::PackageRoot => {
@@ -2951,7 +2930,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             println!("{}", crate::data_dir().display());
             Ok(())
         }
-        Commands::Onboarding { reset } => onboarding::run(reset),
+        Commands::Onboarding {
+            reset,
+            import_registry,
+            json,
+        } => onboarding::run(reset, import_registry, json).await,
         Commands::Capabilities { capability, json } => {
             capabilities::run(capability.as_deref(), json)
         }
@@ -3049,6 +3032,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => control_plane::cloud(bind, port, interval).await,
         Commands::Registry(sub) => match sub {
             RegistryCommands::Validate { path } => registry::validate(path),
+            RegistryCommands::Import { path, json } => registry::import(path, json).await,
             RegistryCommands::Push {
                 path,
                 if_generation,
@@ -3455,6 +3439,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 audience,
                 ttl_seconds,
                 replace_capabilities,
+                token_item,
+                token_field,
                 raw_token,
                 json,
             } => {
@@ -3465,6 +3451,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     &audience,
                     ttl_seconds,
                     replace_capabilities,
+                    token_item.as_deref(),
+                    token_field.as_deref().unwrap_or("token"),
                     raw_token,
                     json,
                 )

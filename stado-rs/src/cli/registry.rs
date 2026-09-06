@@ -206,6 +206,100 @@ pub fn validate(path: Option<String>) -> Result<(), CmdError> {
     println!("valid registry: {}", source.display());
     Ok(())
 }
+fn import_names(values: &[String]) -> String {
+    if values.is_empty() {
+        "(none)".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn render_import_receipt(receipt: &crate::registry_import::RegistryImportReceipt) {
+    println!(
+        "registry import: {}{}",
+        receipt.state,
+        receipt
+            .generation
+            .as_deref()
+            .map(|generation| format!(" (generation {generation})"))
+            .unwrap_or_default()
+    );
+    println!(
+        "  imported hosts: {}",
+        import_names(&receipt.imported_targets)
+    );
+    println!(
+        "  unchanged hosts: {}",
+        import_names(&receipt.unchanged_targets)
+    );
+    println!(
+        "  imported fleets: {}",
+        import_names(&receipt.imported_fleets)
+    );
+    println!(
+        "  unchanged fleets: {}",
+        import_names(&receipt.unchanged_fleets)
+    );
+    println!(
+        "  imported sections: {}",
+        import_names(&receipt.imported_sections)
+    );
+    for conflict in &receipt.conflicts {
+        println!("  conflict: {}: {}", conflict.path, conflict.reason);
+    }
+    for rejection in &receipt.rejected {
+        println!("  rejected: {rejection}");
+    }
+}
+
+/// Additively adopt an existing registry-v2 file into the canonical registry.
+///
+/// Both this command and `POST /api/registry/import` call
+/// [`crate::registry_import::import_bytes`]. The operation validates the whole
+/// source before opening the destination, preserves every destination-only
+/// field, refuses differing records, and verifies the conditional write before
+/// returning an accepted receipt.
+pub async fn import(path: String, json_output: bool) -> Result<(), CmdError> {
+    let source = PathBuf::from(&path);
+    let bytes = std::fs::read(&source).map_err(|error| {
+        CmdError::click(format!(
+            "cannot read registry import {}: {error}",
+            source.display()
+        ))
+    })?;
+    let receipt = crate::registry_import::import_bytes(&bytes)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&receipt)?);
+    } else {
+        render_import_receipt(&receipt);
+    }
+    if receipt.accepted() {
+        super::onboarding::record_registry_import_accepted(&receipt);
+        return Ok(());
+    }
+    let detail = receipt
+        .rejected
+        .first()
+        .cloned()
+        .or_else(|| {
+            receipt
+                .conflicts
+                .first()
+                .map(|conflict| format!("{}: {}", conflict.path, conflict.reason))
+        })
+        .unwrap_or_else(|| "the source was not accepted".to_string());
+    Err(CmdError {
+        message: Some(format!("registry import {}: {detail}", receipt.state)),
+        code: if receipt.state == "conflict" {
+            REGISTRY_CONFLICT_EXIT
+        } else {
+            super::CLICK_ERROR_CODE
+        },
+        ..CmdError::default()
+    })
+}
 
 /// Top-level keys the outgoing document would delete from the object that is
 /// already there.

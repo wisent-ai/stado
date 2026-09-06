@@ -11,11 +11,13 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
+use nix::libc;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
@@ -27,9 +29,178 @@ pub struct LocalBackend {
     root: PathBuf,
     locks: PathBuf,
     metadata: PathBuf,
+    write_fence: Option<WriteFencePaths>,
+}
+
+#[derive(Debug)]
+struct WriteFencePaths {
+    lock: PathBuf,
+    intent: PathBuf,
+}
+
+impl WriteFencePaths {
+    fn for_root(root: &Path) -> Option<Self> {
+        let pair = root.ancestors().find(|path| {
+            matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("local-storage" | "local-backup")
+            ) && path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == ".stado")
+        })?;
+        let recovery = pair.parent()?.join("recovery");
+        Some(Self {
+            lock: recovery.join("storage-root-writes.lock"),
+            intent: recovery.join("storage-root-write-fence.json"),
+        })
+    }
+
+    fn open_lock(&self) -> Result<File, StorageError> {
+        if let Some(parent) = self.lock.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| local_io("create write-fence directory", parent, error))?;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.lock)
+            .map_err(|error| local_io("open write-fence lock", &self.lock, error))?;
+        if !file.metadata()?.is_file() {
+            return Err(StorageError::Other(format!(
+                "local storage write-fence lock is not a regular file: {}",
+                self.lock.display()
+            )));
+        }
+        Ok(file)
+    }
+
+    fn read_intent(&self) -> Result<Option<serde_json::Value>, StorageError> {
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.intent)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(local_io("read write-fence intent", &self.intent, error)),
+        };
+        if !file.metadata()?.is_file() {
+            return Err(StorageError::Other(format!(
+                "local storage write-fence intent is not a regular file: {}",
+                self.intent.display()
+            )));
+        }
+        let intent: serde_json::Value = serde_json::from_reader(file)?;
+        if intent.get("schema").and_then(serde_json::Value::as_str)
+            != Some(LocalBackend::WRITE_FENCE_PROTOCOL)
+            || intent
+                .get("transaction")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(str::is_empty)
+        {
+            return Err(StorageError::Other(format!(
+                "local storage write-fence intent is invalid: {}",
+                self.intent.display()
+            )));
+        }
+        Ok(Some(intent))
+    }
+
+    fn refused(&self, intent: Option<&serde_json::Value>) -> StorageError {
+        let owner = intent
+            .and_then(|value| value.get("transaction"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("an active storage handoff");
+        std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!(
+                "local storage writes are fenced by {owner}; inspect the recorded storage-root-reconcile transaction"
+            ),
+        )
+        .into()
+    }
+
+    fn mutation_guard(&self) -> Result<File, StorageError> {
+        let file = self.open_lock()?;
+        match fs2::FileExt::try_lock_shared(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(self.refused(self.read_intent()?.as_ref()));
+            }
+            Err(error) => return Err(local_io("acquire shared write fence", &self.lock, error)),
+        }
+        // The durable intent also refuses writes after an interrupted owner
+        // has lost its descriptor. An in-flight writer holding this shared
+        // lock must finish before the owner can acquire its exclusive hold.
+        if let Some(intent) = self.read_intent()? {
+            return Err(self.refused(Some(&intent)));
+        }
+        Ok(file)
+    }
 }
 
 impl LocalBackend {
+    pub(crate) const WRITE_FENCE_PROTOCOL: &'static str = "stado.storage-root-write-fence.v1";
+
+    pub(crate) fn write_fence_paths(root: &Path) -> Option<(PathBuf, PathBuf)> {
+        WriteFencePaths::for_root(root).map(|paths| (paths.lock, paths.intent))
+    }
+
+    pub(crate) fn write_guard_for_root(root: &Path) -> Result<Option<File>, StorageError> {
+        WriteFencePaths::for_root(root)
+            .map(|paths| paths.mutation_guard())
+            .transpose()
+    }
+
+    pub(crate) fn open_write_fence_lock(root: &Path) -> Result<File, StorageError> {
+        WriteFencePaths::for_root(root)
+            .ok_or_else(|| {
+                StorageError::Other(format!(
+                    "local storage root is outside the A/B handoff scope: {}",
+                    root.display()
+                ))
+            })?
+            .open_lock()
+    }
+
+    pub(crate) fn resolved_root(root: &str) -> Result<PathBuf, StorageError> {
+        let expanded = crate::config_file::expand_tilde(root);
+        let absolute = if expanded.is_absolute() {
+            expanded
+        } else {
+            std::env::current_dir()?.join(expanded)
+        };
+        Ok(normalize(&absolute))
+    }
+
+    pub(crate) fn write_fence_state(root: &Path) -> Result<serde_json::Value, StorageError> {
+        let root = Self::resolved_root(root.to_str().ok_or_else(|| {
+            StorageError::Other("local storage root is not valid UTF-8".to_string())
+        })?)?;
+        let Some(paths) = WriteFencePaths::for_root(&root) else {
+            return Ok(serde_json::json!({"protocol": null, "intent": null}));
+        };
+        Ok(serde_json::json!({
+            "protocol": Self::WRITE_FENCE_PROTOCOL,
+            "root": root,
+            "lock": paths.lock,
+            "intent_path": paths.intent,
+            "intent": paths.read_intent()?,
+        }))
+    }
+
+    fn mutation_guard(&self) -> Result<Option<File>, StorageError> {
+        self.write_fence
+            .as_ref()
+            .map(WriteFencePaths::mutation_guard)
+            .transpose()
+    }
+
     /// Root the backend at `root`, creating it when missing.
     pub fn new(root: &str) -> Result<Self, StorageError> {
         if root.is_empty() {
@@ -37,26 +208,24 @@ impl LocalBackend {
                 "WC_LOCAL_STORAGE_PATH is required for local storage".into(),
             ));
         }
-        let expanded = crate::config_file::expand_tilde(root);
-        // Python `Path(root).expanduser().resolve()`: anchor relative paths
-        // at the cwd and normalize. Unlike Python resolve() this does NOT
-        // follow symlinks — lexical normalization only (non-strict resolve
-        // semantics for paths that may not exist yet).
-        let absolute = if expanded.is_absolute() {
-            expanded
-        } else {
-            std::env::current_dir()?.join(expanded)
-        };
-        let root = normalize(&absolute);
-        fs::create_dir_all(&root)?;
+        let root = Self::resolved_root(root)?;
+        let write_fence = WriteFencePaths::for_root(&root);
         let locks = root.join(".locks");
         let metadata = root.join(".metadata");
-        fs::create_dir_all(&locks)?;
-        fs::create_dir_all(&metadata)?;
+        if !root.is_dir() || !locks.is_dir() || !metadata.is_dir() {
+            let _write_guard = write_fence
+                .as_ref()
+                .map(WriteFencePaths::mutation_guard)
+                .transpose()?;
+            fs::create_dir_all(&root)?;
+            fs::create_dir_all(&locks)?;
+            fs::create_dir_all(&metadata)?;
+        }
         Ok(Self {
             root,
             locks,
             metadata,
+            write_fence,
         })
     }
 
@@ -65,6 +234,7 @@ impl LocalBackend {
     /// validator cannot turn an absent internal directory into evidence.
     pub(crate) fn open_existing(root: &Path) -> Result<Self, StorageError> {
         let root = normalize(root);
+        let write_fence = WriteFencePaths::for_root(&root);
         if !root.is_dir() || root.is_symlink() {
             return Err(StorageError::Other(format!(
                 "immutable local snapshot is absent or unsafe: {}",
@@ -83,6 +253,7 @@ impl LocalBackend {
             root,
             locks,
             metadata,
+            write_fence,
         })
     }
 
@@ -133,6 +304,7 @@ impl LocalBackend {
     /// The temporary file is created 0600 by `tempfile`, matching what the previous
     /// explicit mode requested.
     fn create_if_absent(&self, path: &str, data: &[u8]) -> Result<bool, StorageError> {
+        let _write_guard = self.mutation_guard()?;
         let target = self.path(path)?;
         let parent = target.parent().ok_or_else(|| {
             StorageError::Other(format!("no parent directory for {}", target.display()))
@@ -163,6 +335,7 @@ impl LocalBackend {
     /// Write via tempfile in the target directory + fsync + rename, so a
     /// concurrent reader never observes a partial blob.
     fn atomic_write(&self, target: &Path, data: &[u8]) -> Result<(), StorageError> {
+        let _write_guard = self.mutation_guard()?;
         let parent = target.parent().ok_or_else(|| {
             StorageError::Other(format!("no parent directory for {}", target.display()))
         })?;
@@ -388,6 +561,7 @@ impl BlobBackend for LocalBackend {
     }
 
     async fn delete(&self, path: &str) -> Result<(), StorageError> {
+        let _write_guard = self.mutation_guard()?;
         remove_missing_ok(&self.path(path)?)?;
         remove_missing_ok(&self.metadata_path(path))
     }
@@ -464,9 +638,6 @@ impl BlobBackend for LocalBackend {
             return Ok(());
         }
         let metadata_path = self.metadata_path(path);
-        if let Some(parent) = metadata_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         // Tolerate a missing or corrupt sidecar by starting from empty.
         let mut current: BTreeMap<String, String> = fs::read_to_string(&metadata_path)
             .ok()
