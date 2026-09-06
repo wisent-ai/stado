@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Release request diagnostics:** storage HTTP failures preserve the original cause chain when displayed by the CLI, recorded by a release run, or returned through the native Desktop command API. Connection errors no longer stop at `error sending request`; storage operations, schemas, and retry loops are unchanged.
+
 ## 0.16.40
 
 - **Storage reconciliation API:** authenticated GET and POST `/api/host/storage-root-reconcile` share the CLI's durable transaction implementation and return its complete report, exit code and refusal. Independent `storage-reconcile-read` and `storage-reconcile-apply` actions separate status reads from mutations; malformed requests retain precise refusals.

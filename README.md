@@ -469,6 +469,12 @@ JSON envelope with `schema_version`, `ok`, and exactly one of `result` or
 The [CLI reference](https://stado.wisent.com/docs/cli) defines the noninteractive command and error
 contract.
 
+Storage request failures retain the underlying HTTP error chain, including the
+actual connection, TLS, or timeout cause when the HTTP client supplies it. Release
+commands, saved release failures, and the native Desktop command API receive the
+same complete message rather than only `error sending request`. See
+[release diagnostics](https://stado.wisent.com/docs/builds#request-failure-diagnostics).
+
 ### MCP
 
 `stado-mcp` is a read-only stdio JSON-RPC server for AI agents. Mutations stay
