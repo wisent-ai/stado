@@ -191,9 +191,10 @@ pub enum ServiceCommands {
     /// Ask the host init system what it holds under one named unit.
     ///
     /// This reader does not enumerate. The operator names the launchd label or
-    /// systemd unit, so it can inspect a loaded unit whose file is gone. Only
-    /// fixed process, path, restart and trigger fields are returned; service
-    /// environments are never read.
+    /// systemd unit, so it can inspect a loaded unit whose file is gone. Fixed
+    /// process, path, restart and trigger fields plus the five explicitly
+    /// non-secret storage-routing variables are returned; no other service
+    /// environment is read.
     #[command(name = "label-print")]
     LabelPrint {
         /// launchd label or systemd unit, as the host knows it.
