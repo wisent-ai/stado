@@ -105,6 +105,32 @@ const DISK_USAGE_SECTION: &str = r#"/bin/df -Pk / 2>/dev/null | while IFS= read 
 done
 "#;
 
+/// Free memory and swap — the `memory` field.
+///
+/// A host out of memory and a host out of disk fail differently and are
+/// repaired differently, and until 2026-09-06 this fleet could read only one
+/// of the two. `stado host precheck-runner install charless-mac-mini` failed
+/// four times with `Failed to create CoreCLR, HRESULT: 0x8007000C` while
+/// `host disk` reported 5.7 GiB free and `host health` reported memory, load
+/// and swap as null; the machine was in fact holding 638 MiB of free RAM with
+/// 4.7 GiB of its 6 GiB swap file in use. Two fixed, read-only readers answer
+/// it, and a host missing either reports what it has.
+const MEMORY_SECTION: &str = r#"if [ -x /usr/bin/vm_stat ]; then
+  page_size=$(/usr/bin/vm_stat 2>/dev/null | /usr/bin/sed -n 's/.*page size of \([0-9]*\) bytes.*/\1/p')
+  free_pages=$(/usr/bin/vm_stat 2>/dev/null | /usr/bin/sed -n 's/^Pages free: *\([0-9]*\)\..*/\1/p')
+  if [ -n "$page_size" ] && [ -n "$free_pages" ]; then
+    printf 'STADO_MEMORY\tfree_kb\t%s\n' "$(( free_pages * page_size / 1024 ))"
+  fi
+fi
+if [ -x /usr/sbin/sysctl ]; then
+  /usr/sbin/sysctl vm.swapusage 2>/dev/null | while IFS= read -r row; do
+    case "$row" in
+      vm.swapusage:*) printf 'STADO_MEMORY\tswap\t%s\n' "${row#vm.swapusage: }" ;;
+    esac
+  done
+fi
+"#;
+
 /// The janitor's state file — the `state` field, which carries
 /// `last_success_at` and `low_bytes`. Read by both scopes: it is where
 /// `cleanup_success_age_seconds` and `disk_cleanup_stalled` come from.
@@ -218,6 +244,7 @@ pub fn remote_script() -> String {
 pub fn remote_script_for(scope: DiskScope) -> String {
     let mut script = String::from("set -u\n");
     script.push_str(DISK_USAGE_SECTION);
+    script.push_str(MEMORY_SECTION);
     script.push_str(CLEANUP_STATE_SECTION);
     if scope == DiskScope::Full {
         script.push_str(CLEANUP_LOCK_SECTION);
@@ -385,6 +412,15 @@ pub struct LockHolder {
     pub command: String,
 }
 
+/// What the host has left of its memory, as its own kernel reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryReading {
+    /// Free pages in kibibytes. `None` when the host has no `vm_stat`.
+    pub free_kb: Option<String>,
+    /// The swap file's own line: total, used and free.
+    pub swap: Option<String>,
+}
+
 /// Everything one host answered.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiskReading {
@@ -398,6 +434,7 @@ pub struct DiskReading {
     pub lock_holders: Vec<LockHolder>,
     pub lock_read: bool,
     pub lock_path: Option<String>,
+    pub memory: MemoryReading,
 }
 
 /// Fold the marker lines of stdout into a reading.
@@ -432,6 +469,12 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             }
             // Printed whether or not anything held it, so "nobody is holding
             // the lock" is distinguishable from "this host could not be asked".
+            ["STADO_MEMORY", "free_kb", value] => {
+                reading.memory.free_kb = Some((*value).to_string());
+            }
+            ["STADO_MEMORY", "swap", value] => {
+                reading.memory.swap = Some((*value).to_string());
+            }
             ["STADO_CLEANUP_LOCK_END", path] => {
                 reading.lock_read = true;
                 reading.lock_path = Some((*path).to_string());
@@ -550,6 +593,15 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
                 "capacity": usage.capacity,
                 "mounted_on": usage.mounted_on,
             })
+        }),
+    );
+    // Beside the disk, because a host that cannot allocate and a host that
+    // cannot write fail in the same commands and are repaired differently.
+    report.insert(
+        "memory".to_string(),
+        json!({
+            "free_kb": reading.memory.free_kb,
+            "swap": reading.memory.swap,
         }),
     );
     // The registry policy verbatim — same struct the janitor resolves, so
