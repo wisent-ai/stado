@@ -47,7 +47,7 @@ if [ \"$os\" = Darwin ]; then
     if [ \"$read_code\" -ne 0 ]; then
       read_detail=$(printf '%s\\n' \"$block\" |
         /usr/bin/awk 'NR == 1 { gsub(/[\\t\\r]/, \" \"); print substr($0, 1, 300); exit }')
-      case \"$read_detail\" in
+      case \"$block\" in
         *'Could not find service'*) continue ;;
       esac
       if [ -z \"$read_detail\" ]; then read_detail='launchctl print failed without detail'; fi
