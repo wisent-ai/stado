@@ -1309,14 +1309,21 @@ async fn correlate_served_store(
     port: u16,
     preflight: &Value,
     primary_after_commit: bool,
+    conflict_winner: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
+    if !matches!(conflict_winner, "primary" | "backup") {
+        return Err(DeployError(
+            "served-store correlation conflict winner is invalid".to_string(),
+        ));
+    }
     let payload = serde_json::to_vec(&json!({
         "primary": preflight.get("primary_qualified"),
         "backup": preflight.get("backup_qualified"),
         "primary_physical": preflight.get("primary_physical"),
         "backup_physical": preflight.get("backup_physical"),
         "primary_after_commit": primary_after_commit,
+        "conflict_winner": conflict_winner,
     }))
     .map_err(|error| DeployError(format!("cannot encode served-store inventory: {error}")))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
@@ -1349,7 +1356,11 @@ primary_before = identities('primary')
 backup = identities('backup')
 primary = dict(primary_before)
 if payload.get('primary_after_commit'):
-    primary.update(backup)
+    if payload.get('conflict_winner') == 'primary':
+        primary = dict(backup)
+        primary.update(primary_before)
+    else:
+        primary.update(backup)
 served = {{}}
 for key in keys:
     uri = 'stado://probierz/' + key
@@ -1666,6 +1677,13 @@ async fn capture_fenced_preflight(
         .iter()
         .find(|writer| writer.role == "object-api")
         .ok_or_else(|| DeployError("fence omitted its object API".to_string()))?;
+    let roots = fence.roots.as_ref().unwrap();
+    let prior_root = if roots.prior_primary == roots.primary {
+        "A"
+    } else {
+        "B"
+    };
+    let conflict_winner = if prior_root == "A" { "primary" } else { "backup" };
     let correlation = correlate_served_store(
         target,
         writer
@@ -1673,6 +1691,7 @@ async fn capture_fenced_preflight(
             .ok_or_else(|| DeployError("object API port is absent".to_string()))?,
         &preflight,
         false,
+        conflict_winner,
         runner,
     )
     .await?;
@@ -1680,12 +1699,6 @@ async fn capture_fenced_preflight(
         .get("object_authority")
         .and_then(Value::as_str)
         .ok_or_else(|| DeployError("fenced API proof omitted its authority".to_string()))?;
-    let roots = fence.roots.as_ref().unwrap();
-    let prior_root = if roots.prior_primary == roots.primary {
-        "A"
-    } else {
-        "B"
-    };
     if !matches!(authority, "identical") && authority != prior_root {
         return Err(DeployError(
             "fenced API bytes disagree with its constructed storage root".to_string(),
@@ -2817,6 +2830,28 @@ async fn activate_lifecycle_fence(
     let roots = fence.roots.clone().ok_or_else(|| {
         DeployError("lifecycle fence omitted its observed storage roots".to_string())
     })?;
+    let route_conflict_winner = if roots.prior_primary == roots.primary {
+        "primary"
+    } else {
+        "backup"
+    };
+    let conflict_winner = if rollback {
+        route_conflict_winner.to_string()
+    } else {
+        let receipt = read_transaction_receipt(transaction)?;
+        let pinned = receipt
+            .get("conflict_winner")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                DeployError("checkpoint receipt omitted its conflict winner".to_string())
+            })?;
+        if pinned != route_conflict_winner {
+            return Err(DeployError(
+                "checkpoint conflict winner differs from the captured storage route".to_string(),
+            ));
+        }
+        pinned.to_string()
+    };
     let final_status = if rollback { "rolled_back" } else { "activated" };
     let admissible = if rollback {
         matches!(
@@ -3049,7 +3084,15 @@ async fn activate_lifecycle_fence(
                 )));
             }
             let mut correlation = if let Some(preflight) = preflight.as_ref() {
-                correlate_served_store(storage_target, port, preflight, !rollback, runner).await?
+                correlate_served_store(
+                    storage_target,
+                    port,
+                    preflight,
+                    !rollback,
+                    &conflict_winner,
+                    runner,
+                )
+                .await?
             } else {
                 json!({
                     "endpoint": format!("http://127.0.0.1:{port}"),
@@ -3243,6 +3286,16 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
             "checkpoint evidence belongs to another reconciliation".to_string(),
         ));
     }
+    let conflict_winner = checkpoint
+        .get("conflict_winner")
+        .and_then(Value::as_str)
+        .filter(|winner| matches!(*winner, "primary" | "backup"))
+        .ok_or_else(|| DeployError("checkpoint evidence omitted its conflict winner".to_string()))?;
+    if receipt.get("conflict_winner").and_then(Value::as_str) != Some(conflict_winner) {
+        return Err(DeployError(
+            "checkpoint receipt and evidence disagree on the conflict winner".to_string(),
+        ));
+    }
     let backup_paths = checkpoint
         .get("backup_objects")
         .and_then(Value::as_array)
@@ -3250,16 +3303,21 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let primary_only = checkpoint
+    let primary_paths = checkpoint
         .get("primary_objects")
         .and_then(Value::as_array)
         .ok_or_else(|| DeployError("checkpoint evidence omitted primary objects".to_string()))?
         .iter()
         .filter_map(|item| item.get("path").and_then(Value::as_str))
-        .filter(|path| !backup_paths.contains(path))
-        .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
+    let newly_authoritative = if conflict_winner == "primary" {
+        backup_paths.difference(&primary_paths)
+    } else {
+        primary_paths.difference(&backup_paths)
+    }
+    .filter_map(|path| path.strip_prefix("ecosystem/probierz/"))
+    .map(str::to_string)
+    .collect::<Vec<_>>();
     let snapshot = transaction_directory(transaction)?.join("effective-lifecycle.checkpoint");
     if receipt
         .get("effective_lifecycle_checkpoint")
@@ -3278,7 +3336,7 @@ async fn typed_lifecycle_decisions(transaction: &str) -> Result<Vec<Value>, Depl
         std::sync::Arc::new(backend),
         "immutable-local-snapshot",
     );
-    crate::monitor::reap::classify_reconciliation_snapshot(&store, &primary_only)
+    crate::monitor::reap::classify_reconciliation_snapshot(&store, &newly_authoritative)
         .await
         .map_err(|error| DeployError(format!("typed lifecycle snapshot refused: {error}")))
 }
