@@ -15,10 +15,14 @@ async fn render(
     repositories: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
+    // One repository name scopes the host's own runner to that repository;
+    // the publisher's list is a different thing (which repositories may
+    // schedule on it), so only the first is a scope.
+    let scope = repositories.first().map(String::as_str);
     let report = match (publisher, action) {
-        (false, "install") => crate::deploy::host_precheck_runner::install(target).await,
+        (false, "install") => crate::deploy::host_precheck_runner::install(target, scope).await,
         (false, "status") => crate::deploy::host_precheck_runner::status(target).await,
-        (false, "remove") => crate::deploy::host_precheck_runner::remove(target).await,
+        (false, "remove") => crate::deploy::host_precheck_runner::remove(target, scope).await,
         (false, "restart") => crate::deploy::host_precheck_runner::restart(target).await,
         (true, "install") => {
             crate::deploy::host_precheck_runner::install_publisher(target, repositories).await
@@ -41,7 +45,7 @@ async fn render(
         cell(report.get("runner_kind")),
         action,
         cell(report.get("platform")),
-        cell(report.get("runner_group"))
+        cell(report.get("runner_scope"))
     );
     let stdout = report.get("stdout").and_then(Value::as_str).unwrap_or("");
     if !stdout.is_empty() {
@@ -140,9 +144,9 @@ pub async fn restart(target: &str, json: bool) -> Result<(), CmdError> {
     render(target, "restart", false, &[], json).await
 }
 
-/// Install or reconcile the isolated GitHub pre-check runner on TARGET.
-pub async fn install(target: &str, json: bool) -> Result<(), CmdError> {
-    render(target, "install", false, &[], json).await
+/// Install or reconcile the host's one GitHub runner on TARGET.
+pub async fn install(target: &str, repository: Option<&str>, json: bool) -> Result<(), CmdError> {
+    render(target, "install", false, &scope_args(repository), json).await
 }
 
 /// Read the installed pre-check runner service, identity and network boundary.
@@ -150,9 +154,13 @@ pub async fn status(target: &str, json: bool) -> Result<(), CmdError> {
     render(target, "status", false, &[], json).await
 }
 
-/// Deregister and remove the isolated GitHub pre-check runner from TARGET.
-pub async fn remove(target: &str, json: bool) -> Result<(), CmdError> {
-    render(target, "remove", false, &[], json).await
+/// Deregister and remove the host's GitHub runner from TARGET.
+pub async fn remove(target: &str, repository: Option<&str>, json: bool) -> Result<(), CmdError> {
+    render(target, "remove", false, &scope_args(repository), json).await
+}
+
+fn scope_args(repository: Option<&str>) -> Vec<String> {
+    repository.map(str::to_string).into_iter().collect()
 }
 
 /// Install or reconcile the organization-wide desktop publisher on TARGET.
