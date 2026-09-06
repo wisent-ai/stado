@@ -400,11 +400,25 @@ pub fn validate(document: &Value) -> Result<(), String> {
         }
     }
     for (alias, destination) in &registry.routes {
-        if alias.split_once('/').is_none() || destination.trim().is_empty() {
-            return Err(
-                "registry.inference.routes: aliases and destinations must be non-empty routes"
-                    .to_string(),
-            );
+        // An alias is a name a consumer asks for, not a path: requiring a
+        // slash in it made one legal product alias unpublishable. Brama's
+        // compiled contract names its own client's chat alias `wisent-backend`,
+        // with no second segment, and on 2026-09-06 publishing it froze every
+        // resolver on the fleet — each refuses a document it cannot validate,
+        // keeps serving the generation it last accepted and hands consumers an
+        // address the registry has since moved away from, which took product
+        // chat down for hours. What must hold is that the name is safe to route
+        // on: non-empty segments of the same character set every other
+        // reference here uses.
+        let segments_safe = !alias.is_empty()
+            && alias
+                .split('/')
+                .all(|segment| !segment.is_empty() && safe_reference(segment, ""));
+        if !segments_safe || destination.trim().is_empty() {
+            return Err(format!(
+                "registry.inference.routes.{alias}: an alias is one or more safe \
+                 slash-separated names and a destination must not be empty"
+            ));
         }
         if !destination.contains('/')
             && !gateway_selector(destination)
