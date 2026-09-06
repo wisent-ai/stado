@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.35
+
+- **Native label evidence:** exact system-label inspection now uses the existing noninteractive privileged launchd reader. A refused or failed domain read retains its exit code and error instead of being reported as proof that the label is unloaded.
+
 ## 0.16.34
 
 - **Storage authority preparation:** boundedly reread a loaded writer whose launch wrapper changes executable while its mapped-inode identity is captured, and still refuse a runnable writer unless one observation has its complete PID, start time, executable, device, inode, and SHA-256 tuple. The object API's checkpointed current route now pins one conflict winner through the data union, effective lifecycle snapshot, direction-dependent newly-authoritative lifecycle classification, post-commit correlation, receipt, and rollback. An A-serving route preserves A conflicts and imports only B-only objects; a B-serving route preserves the original B-winning union. Pre-commit rollback exactly and resumably restores A's physical checkpoint, including transaction-created imports and directories.
