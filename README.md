@@ -517,8 +517,9 @@ product operations and render their retained results. Where Desktop uses an
 authenticated dashboard API, including service convergence and storage-root
 reconciliation, the API and CLI call the same product implementation; provider
 APIs and credential values do not get a second implementation in the app.
-Build and install it with
-`desktop/StadoDesktop/scripts/build-app.sh`. The screenshots below are live
+Build it with `swift build --package-path desktop/StadoDesktop`; signing and
+publication of the app go through the desktop publisher documented at
+https://stado.wisent.com/docs/publisher. The screenshots below are live
 reads of the Wisent fleet.
 
 The deployment registry is the remote human organization HTTP surface in this
