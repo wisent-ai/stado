@@ -36,28 +36,9 @@ fn persisted_registry(storage: &Path) -> String {
 
 const EMPTY_REGISTRY: &str = r#"{"schema_version":2,"targets":[],"coordinators":[]}"#;
 
-const REGISTRY_WITH_OFFLINE_HOST: &str = r#"{
-  "schema_version": 2,
-  "targets": [{
-    "name": "runner-fixture",
-    "kind": "local",
-    "release_platform": "darwin-arm64",
-    "hostnames": ["runner-fixture.invalid"]
-  }],
-  "coordinators": []
-}"#;
+const REGISTRY_WITH_OFFLINE_HOST: &str = r#"{"schema_version":2,"targets":[{"name":"runner-fixture","kind":"local","release_platform":"darwin-arm64","hostnames":["runner-fixture.invalid"]}],"coordinators":[]}"#;
 
-const REGISTRY_WITH_NONLOCAL_TARGET: &str = r#"{
-  "schema_version": 2,
-  "targets": [{
-    "name": "runner-cloud",
-    "kind": "gcp",
-    "release_platform": "linux-amd64",
-    "ssh": "runner-cloud.invalid",
-    "hostnames": ["runner-cloud.invalid"]
-  }],
-  "coordinators": []
-}"#;
+const REGISTRY_WITH_NONLOCAL_TARGET: &str = r#"{"schema_version":2,"targets":[{"name":"runner-cloud","kind":"gcp","release_platform":"linux-amd64","ssh":"runner-cloud.invalid","hostnames":["runner-cloud.invalid"]}],"coordinators":[]}"#;
 
 #[test]
 fn list_reads_every_profile_from_the_compiled_declaration() {
@@ -283,6 +264,24 @@ fn repository_scope_is_carried_into_the_exact_installer_program() {
         program.contains("repository:wisent-ai/example"),
         "host registration record does not carry the actual repository scope"
     );
+}
+
+#[test]
+fn the_model_review_route_request_carries_the_alias_and_its_one_route() {
+    let request = stado::deploy::host_precheck_runner::model_review_route_request();
+    let body = request.as_object().expect("admin-route body object");
+    assert_eq!(
+        body.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["alias", "primary"],
+        "the body carries the alias and its primary route and nothing else. The key \
+         for the ordered alternates is deliberately absent: Brama's AdminRouteUpdate \
+         declares that field with serde(default) over Vec<String>, so an absent key \
+         and an explicit empty list reach update_admin_route as the same empty \
+         vector. A third key here is Stado sending what that omission no longer \
+         covers: {request}"
+    );
+    assert_eq!(body["alias"], "wisent-backend/evaluation");
+    assert_eq!(body["primary"], "best");
 }
 
 #[test]
