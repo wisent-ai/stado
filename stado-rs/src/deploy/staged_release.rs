@@ -128,8 +128,8 @@ pub fn expand_home(path: &str, home: &str) -> Result<String, DeployError> {
     };
     if expanded.contains('$') {
         return Err(DeployError(format!(
-            "the deployment env file declares path {path:?}, which cannot be resolved without \
-             running a shell; replace it with $HOME, ${{HOME}}, ~, or an absolute path"
+            "the deployment env file declares path {path:?}, which this cannot resolve without \
+             running a shell over it; replace it with $HOME, ${{HOME}}, ~, or an absolute path"
         )));
     }
     Ok(expanded)
@@ -145,7 +145,8 @@ pub fn digest_verdict(declared: &str, observed: &str) -> Result<(), DeployError>
     }
     Err(DeployError(format!(
         "the staged archive hashes to {observed}, but the deployment env file declares \
-         {declared}; stage the declared archive or update the deployment env declaration"
+         {declared}; refusing to activate an archive the host has not agreed to run - stage \
+         the declared archive or update the deployment env declaration"
     )))
 }
 

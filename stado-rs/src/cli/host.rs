@@ -3260,7 +3260,7 @@ async fn register_acquisition_scopes(
             "PATH={} SKARBIEC_VAULT_FILE={} {} token-register-acquisitions {} \
              --workload-public-key-file {} --replace-capabilities >/dev/null",
             crate::deploy::shlex_quote(&openssl_search_path),
-            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(vault),
             crate::deploy::shlex_quote(&bin),
             crate::deploy::shlex_quote(&catalog),
             crate::deploy::shlex_quote(&public_key),

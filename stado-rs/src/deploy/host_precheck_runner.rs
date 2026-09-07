@@ -2231,7 +2231,7 @@ async fn install_profile(
         &profile.name,
         &target.name,
         platform.name(),
-        match scope {
+        match &scope {
             RunnerScope::Organization => None,
             RunnerScope::Repository(repository) => Some(repository.as_str()),
         },
