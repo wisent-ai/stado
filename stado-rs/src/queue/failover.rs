@@ -14,7 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::{BlobBackend, BlobInfo, StorageError, VersionedText};
+use super::{BlobBackend, BlobInfo, StorageError, VersionedText, UPLOAD_PART_MARKER};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReadMode {
     Failover,
@@ -44,6 +44,44 @@ impl ReadFailoverBackend {
         eprintln!(
             "[storage-replica] primary committed but backup {operation} failed for {path}: {error}"
         );
+    }
+
+    /// Whether a key the primary reports absent may be answered from the
+    /// mirror and written back.
+    ///
+    /// Only an immutable published release object qualifies. A release object
+    /// is written once and never changes, so a mirror copy of it cannot be
+    /// stale — which is the whole reason `PrimaryOnly` exists, and the reason
+    /// it can be relaxed exactly here and nowhere else. Two keys that live
+    /// under the same prefix and still do not qualify: an upload part, because
+    /// resurrecting one makes an abandoned upload look resumable, and any
+    /// mutable key such as queue state, where a replica IS allowed to be
+    /// behind and serving it would answer with an old world.
+    fn heals_from_mirror(path: &str) -> bool {
+        if path.contains(UPLOAD_PART_MARKER) {
+            return false;
+        }
+        path.split('/').any(|segment| segment == "releases")
+    }
+
+    /// Serve an immutable object the primary is missing from the mirror, and
+    /// write it back so the next read — and every stat — is answered by the
+    /// authority itself.
+    ///
+    /// A heal that cannot be written is still served: the caller asked for
+    /// bytes that exist, and a replica the primary cannot accept is a
+    /// separate defect, reported rather than turned into a false absence.
+    async fn mirrored_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        if !Self::heals_from_mirror(path) {
+            return Ok(None);
+        }
+        let Some(content) = self.backup.download_bytes(path).await? else {
+            return Ok(None);
+        };
+        if let Err(error) = self.primary.upload_bytes(path, &content).await {
+            Self::report_replica_error("heal", path, &error);
+        }
+        Ok(Some(content))
     }
 }
 
@@ -81,7 +119,13 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_text(&self, path: &str) -> Result<Option<String>, StorageError> {
         match self.primary.download_text(path).await {
-            answer @ Ok(_) => answer,
+            Ok(Some(text)) => Ok(Some(text)),
+            Ok(None) => match self.mirrored_bytes(path).await? {
+                Some(content) => String::from_utf8(content).map(Some).map_err(|error| {
+                    StorageError::Other(format!("{path}: mirrored copy is not text: {error}"))
+                }),
+                None => Ok(None),
+            },
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_text(path).await,
         }
@@ -89,7 +133,8 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.primary.download_bytes(path).await {
-            answer @ Ok(_) => answer,
+            Ok(Some(content)) => Ok(Some(content)),
+            Ok(None) => self.mirrored_bytes(path).await,
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_bytes(path).await,
         }
@@ -97,7 +142,21 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.primary.download_release(uri).await {
-            answer @ Ok(_) => answer,
+            Ok(Some(content)) => Ok(Some(content)),
+            // A release URI is immutable by definition, so the mirror can
+            // answer it; the heal writes through the primary's own addressing.
+            Ok(None) => match self.backup.download_release(uri).await? {
+                Some(content) => {
+                    let path = self
+                        .primary
+                        .blob_path(&crate::object_store::ObjectRef::parse(uri)?);
+                    if let Err(error) = self.primary.upload_bytes(&path, &content).await {
+                        Self::report_replica_error("heal", &path, &error);
+                    }
+                    Ok(Some(content))
+                }
+                None => Ok(None),
+            },
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_release(uri).await,
         }
@@ -105,7 +164,14 @@ impl BlobBackend for ReadFailoverBackend {
 
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         match self.primary.download_to_filename(path, dest).await {
-            answer @ Ok(_) => answer,
+            Ok(true) => Ok(true),
+            Ok(false) => match self.mirrored_bytes(path).await? {
+                Some(content) => {
+                    std::fs::write(dest, &content)?;
+                    Ok(true)
+                }
+                None => Ok(false),
+            },
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.download_to_filename(path, dest).await,
         }
@@ -178,10 +244,22 @@ impl BlobBackend for ReadFailoverBackend {
         Ok(())
     }
 
+    /// Stat answers what a read would serve, which for an immutable object
+    /// the primary is missing means asking the mirror as well. A stat that
+    /// reports absent for bytes the next read hands over is an instrument
+    /// disagreeing with the thing it measures.
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
         let exact = |blobs: Vec<BlobInfo>| blobs.into_iter().any(|blob| blob.name == path);
         match self.primary.list_blobs_with_meta(path).await {
-            Ok(blobs) => Ok(exact(blobs)),
+            Ok(blobs) => {
+                if exact(blobs) {
+                    Ok(true)
+                } else if Self::heals_from_mirror(path) {
+                    self.backup.exists(path).await
+                } else {
+                    Ok(false)
+                }
+            }
             Err(error) if self.read_mode == ReadMode::PrimaryOnly => Err(error),
             Err(_) => self.backup.list_blobs_with_meta(path).await.map(exact),
         }

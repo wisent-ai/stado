@@ -698,8 +698,12 @@ mod tests {
 
     #[test]
     fn the_remote_program_asks_only_for_named_scalars() {
-        assert!(LABEL_PRINT_SCRIPT.contains("key == \\\"pid\\\""));
-        assert!(LABEL_PRINT_SCRIPT.contains("/bin/launchctl print"));
+        assert!(LABEL_PRINT_SCRIPT.contains("key == \"pid\""));
+        // The reader is launchctl and the only verb it is given is `print`.
+        // The path is chosen per domain into `$launch`, so the program never
+        // spells the binary and the verb next to each other.
+        assert!(LABEL_PRINT_SCRIPT.contains("/bin/launchctl"));
+        assert!(LABEL_PRINT_SCRIPT.contains("$launch print"));
         // Read-only: nothing in this program may act on the job.
         for verb in [
             "bootout",
