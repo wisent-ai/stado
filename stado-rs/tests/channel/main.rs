@@ -189,3 +189,134 @@ fn public_release_channel_serves_a_verified_executable_native_release() {
         released_stado.display(),
     );
 }
+
+/// The same binary against an isolated store, so a write is a real compare-and-swap.
+fn isolated(home: &Path, store: &Path, args: &[&str]) -> Output {
+    let executable = Path::new(env!("CARGO_BIN_EXE_stado"));
+    let output = Command::new(executable)
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", std::env::var("PATH").expect("PATH exists"))
+        .env("STADO_CONFIG", home.join("nonexistent-config.json"))
+        .env("WC_STORAGE_BACKEND", "local")
+        .env("WC_LOCAL_STORAGE_PATH", store)
+        .args(args)
+        .output()
+        .expect("the built stado binary starts");
+    retain_command(home, executable, args, &output);
+    output
+}
+
+/// One target whose control route is a NAME, so a derived origin is catchable.
+fn one_target() -> Value {
+    json!({
+        "schema_version": stado::targets::REGISTRY_SCHEMA_VERSION,
+        "coordinators": [],
+        "targets": [{"name": "macbook-fake", "kind": "local",
+            "ssh": "operator@edge.example.com", "release_platform": "darwin-arm64",
+            "hostnames": ["macbook-fake.local"]}],
+    })
+}
+
+fn write_document(path: PathBuf, document: &Value) -> PathBuf {
+    fs::write(&path, serde_json::to_vec_pretty(document).expect("json")).expect("write");
+    path
+}
+
+fn seeded() -> (PathBuf, PathBuf) {
+    let evidence = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.wisent-output/channel");
+    fs::create_dir_all(&evidence).expect("create retained evidence root");
+    let work = tempfile::Builder::new()
+        .prefix("public-origin-")
+        .tempdir_in(evidence)
+        .expect("create retained public origin journey")
+        .keep();
+    eprintln!("public origin evidence: {}", work.display());
+    let (home, store) = (work.join("home"), work.join("store"));
+    fs::create_dir_all(&home).expect("temporary HOME exists");
+    fs::create_dir_all(&store).expect("isolated canonical store exists");
+    let document = write_document(work.join("registry.json"), &one_target());
+    let seed = ["registry", "push", document.to_str().expect("UTF-8 path")];
+    successful(isolated(&home, &store, &seed), "registry push");
+    (home, store)
+}
+
+/// A public origin whose hostname no public resolver can answer is refused
+/// before it is written, and the document is untouched afterwards. On
+/// 2026-09-07 the durable release origin was NXDOMAIN at `ts.net`'s own
+/// authoritative nameserver and nothing in the product refused it.
+#[test]
+fn declaring_a_public_origin_with_no_public_record_is_refused_and_writes_nothing() {
+    let (home, store) = seeded();
+    // RFC 2606 reserves `.invalid`, so this name can never resolve.
+    let refused = isolated(
+        &home,
+        &store,
+        &[
+            "web",
+            "origin",
+            "declare",
+            "release-object",
+            "--hostname",
+            "release-origin-does-not-exist.invalid",
+            "--target",
+            "macbook-fake",
+            "--upstream",
+            "http://127.0.0.1:8765",
+            "--path",
+            "/api/release/object",
+            "--json",
+        ],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let complaint = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        complaint.contains(
+            "refusing to declare public origin \"release-object\": \
+             release-origin-does-not-exist.invalid has no public A or AAAA \
+             record, so no public edge could fetch it; publish the name first, \
+             then declare it"
+        ),
+        "the refusal must name the origin, the hostname and the repair: {complaint}"
+    );
+    let listed = successful(
+        isolated(&home, &store, &["web", "origin", "list", "--json"]),
+        "web origin list",
+    );
+    let rows: Value = serde_json::from_slice(&listed).expect("list emits JSON");
+    assert_eq!(
+        rows,
+        json!([]),
+        "a refused declaration leaves no row behind"
+    );
+}
+
+/// `/docs/channels`: a host-control route and a public download origin are
+/// separate choices, and a release client does not derive one from the other.
+/// A document naming the same host for both is refused by validation.
+#[test]
+fn a_public_origin_on_a_host_control_destination_is_refused_by_validation() {
+    let (home, store) = seeded();
+    let mut document = one_target();
+    document["public_origins"] = json!([{
+        "name": "release-object", "hostname": "edge.example.com",
+        "target": "macbook-fake", "publication": "tailscale-funnel",
+        "upstream": "http://127.0.0.1:8765", "paths": ["/api/release/object"],
+    }]);
+    let path = write_document(home.join("derived.json"), &document);
+    let refused = isolated(
+        &home,
+        &store,
+        &["registry", "validate", path.to_str().expect("UTF-8 path")],
+    );
+    assert!(!refused.status.success());
+    let complaint = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        complaint.contains(
+            "edge.example.com is a declared host-control destination; a public \
+             origin is a separate choice from the route Stado reaches the host \
+             on and must not be derived from it"
+        ),
+        "validation must name the derivation it refuses: {complaint}"
+    );
+}

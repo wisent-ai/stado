@@ -40,6 +40,7 @@ pub mod placement;
 pub mod profiles;
 pub mod provenance;
 pub mod providers;
+pub mod public_origin;
 pub mod queue;
 pub mod rate_limit;
 pub mod registry_import;
