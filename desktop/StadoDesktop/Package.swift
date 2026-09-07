@@ -37,7 +37,6 @@ let package = Package(
             name: "FleetTests",
             dependencies: ["Stado"],
             path: "tests/fleet",
-            exclude: ["HostsDynamicCapacity.probierz.mjs"]
         ),
         .testTarget(
             name: "LinkTests",
@@ -54,7 +53,6 @@ let package = Package(
                 .product(name: "WisentDesignSystem", package: "wisent-components"),
             ],
             path: "tests/service",
-            exclude: ["ServicesConvergence.probierz.mjs"]
         ),
         .testTarget(
             name: "ProductTests",
