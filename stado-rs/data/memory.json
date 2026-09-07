@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "memory_repairs": [
+    {
+      "name": "restart_unit",
+      "description": "Restart a unit the registry names for this host when that unit has no live process, which is the state a process that could not allocate leaves behind."
+    },
+    {
+      "name": "reap_recovery",
+      "description": "Run a host-recovery program this release already ships, by name, and record what that program decided; recover-skarbiec-crypto reaps stale GnuPG daemons."
+    },
+    {
+      "name": "graphical_session",
+      "description": "End a named process of the logged-in graphical session, and only when the declaration also carries allow_graphical_session."
+    }
+  ]
+}

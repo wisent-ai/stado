@@ -24,9 +24,14 @@ struct CleanupReport: Codable, Sendable {
     let activeJobCount: Int
     let lastSuccessAt: String?
     let errors: [String]
+    /// The memory pass's own report, published beside the disk keys by a
+    /// Stado that runs one. Absent from an older dashboard, which is a
+    /// dashboard whose hosts publish no memory reading at all.
+    let memoryReclaim: MemoryReclaimReport?
 
     enum CodingKeys: String, CodingKey {
         case version, mode, outcome, cleaners, caps, errors
+        case memoryReclaim = "memory_reclaim"
         case checkIntervalSeconds = "check_interval_seconds"
         case startedAt = "started_at"
         case durationMs = "duration_ms"

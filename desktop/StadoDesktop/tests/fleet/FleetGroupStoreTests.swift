@@ -28,6 +28,10 @@ final class FleetGroupStoreTests: XCTestCase {
 
     func testARefusedDeleteArrivesInTheCLIsOwnSentence() async throws {
         let refusal = "fleet 'build' still has 1 member(s): w1; reassign them first"
+        // A refused write is still followed by a read, and both requests
+        // reach this one stub, so the argv is recorded and the FIRST call is
+        // the one this test is about.
+        let calls = RecordedCalls()
         let store = FleetGroupStore(
             client: FleetControlClient(session: Self.stubbedSession { request in
                 XCTAssertEqual(request.url?.path, "/api/operator/run")
@@ -36,13 +40,15 @@ final class FleetGroupStoreTests: XCTestCase {
                     (JSONSerialization.jsonObject(with: body) as? [String: Any])?["args"]
                         as? [String]
                 )
-                XCTAssertEqual(args, ["fleet", "delete", "build"])
+                calls.record(args)
                 return Self.bridge(ok: false, stderr: "Error: \(refusal)")
             })
         )
         store.configureEndpoint("http://127.0.0.1:8765")
 
         await store.delete(name: "build")
+
+        XCTAssertEqual(calls.first, ["fleet", "delete", "build"])
 
         guard case let .failed(message) = store.mutation else {
             return XCTFail("a refused delete must fail the mutation, got \(store.mutation)")
@@ -136,4 +142,22 @@ private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {}
+}
+
+/// Every argv one stubbed session was asked for, in order.
+private final class RecordedCalls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [[String]] = []
+
+    func record(_ arguments: [String]) {
+        lock.lock()
+        calls.append(arguments)
+        lock.unlock()
+    }
+
+    var first: [String]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls.first
+    }
 }

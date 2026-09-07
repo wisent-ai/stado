@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use super::CmdError;
 use crate::providers::local::disk_cleanup;
+use crate::providers::local::host_memory;
 
 /// `disk-cleanup` command body (Python `disk_cleanup`).
 pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Result<(), CmdError> {
@@ -66,6 +67,19 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
             .await
         };
         println!("{}", disk_cleanup::canonical_json(&report));
+        // The host's second declared janitor pass, on the same writer and in
+        // the same loop. `targets[].disk_cleanup` and
+        // `targets[].memory_reclaim` are two declarations executed by the same
+        // two writers — this unit on its timer, and the queue agent's janitor
+        // task on every tick — so that neither needs an autonomy mode change
+        // or an operator gesture to reach a host.
+        let memory = host_memory::run_memory_pass_once(
+            i64::default(),
+            host_memory::MemoryWriter::Cli,
+            &mut |_message| {},
+        )
+        .await;
+        println!("{}", disk_cleanup::canonical_json(&memory));
         if !watch {
             return Ok(());
         }
