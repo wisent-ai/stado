@@ -2,15 +2,13 @@
 //! `stado` binary.
 //!
 //! Every test drives `CARGO_BIN_EXE_stado` against an isolated registry
-//! (`WC_STORAGE_BACKEND=local` + `WC_LOCAL_STORAGE_PATH=<TempDir>`), so the
-//! operator's canonical registry is never written. Each declared route is
-//! added through `registry host path set`, so the document under test is the
-//! one the product wrote, not a hand-built fixture.
+//! (`WC_STORAGE_BACKEND=local` + `WC_LOCAL_STORAGE_PATH=<TempDir>`), and each
+//! route is added through `registry host path set`, so the document under
+//! test is the one the product wrote and the canonical registry is untouched.
 //!
 //! What is defended: a receipt used to publish only the declared routes and
-//! never said which one carried the command, so a host whose preferred route
-//! was dead was indistinguishable from a healthy one. `used_connection` is
-//! that missing fact.
+//! never which one carried the command, so a host whose preferred route was
+//! dead read like a healthy one. `used_connection` is that missing fact.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -18,16 +16,16 @@ use std::process::{Command, Output};
 use serde_json::{json, Value};
 use stado::targets::REGISTRY_SCHEMA_VERSION;
 
-/// The registry target whose real journey is exercised. Supplied explicitly:
-/// a test that picked a fleet host by itself would send real ssh traffic at
-/// whatever the developer's registry happens to hold.
+/// The host whose real journey is exercised. Supplied explicitly: a test that
+/// chose a fleet host itself would send ssh traffic at whatever the
+/// developer's registry happens to hold.
 const HOST_VARIABLE: &str = "STADO_CONNECTION_PROVIDER_HOST";
 
 /// RFC 2606 reserves `.invalid`, so the preferred path cannot resolve and the
-/// second declared route is the only one left. Nothing on the host changes.
+/// second declared route is the only one left. The host is not touched.
 const UNROUTABLE_SUFFIX: &str = ".invalid";
 
-/// Name of the second declared route these tests add.
+/// The second declared route these tests add.
 const SECOND_PATH: &str = "journey-alternate";
 
 fn stado(storage: &Path, isolated_config: bool, args: &[&str]) -> Output {
@@ -83,6 +81,31 @@ fn this_hostname() -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// One `registry host path set`, in the shape all four call sites need: a
+/// route name, its destination, an optional rank, and the typed receipt.
+fn declare_path(
+    storage: &Path,
+    isolated_config: bool,
+    host: &str,
+    path: &str,
+    destination: &str,
+    rank: Option<&str>,
+) -> Output {
+    let mut args = vec!["registry", "host", "path", "set", host, path, "--ssh"];
+    args.push(destination);
+    if let Some(rank) = rank {
+        args.extend(["--priority", rank]);
+    }
+    args.push("--json");
+    stado(storage, isolated_config, &args)
+}
+
+/// The one approved read these tests run on a host.
+fn exec_uptime(storage: &Path, isolated_config: bool, host: &str) -> Output {
+    let args = ["host", "exec", "--json", host, "--", "uptime"];
+    stado(storage, isolated_config, &args)
+}
+
 /// A target on this machine runs its command through the local channel, and
 /// the receipt says so instead of naming the preferred declared path -- which
 /// would be an invention, because no declared path was used.
@@ -101,21 +124,14 @@ fn a_command_on_this_machine_reports_the_local_channel() {
         "coordinators": [],
     }));
 
-    let output = stado(
-        directory.path(),
-        true,
-        &["host", "exec", "--json", "journey-local", "--", "uptime"],
-    );
+    let output = exec_uptime(directory.path(), true, "journey-local");
     let receipt = document(&output);
     assert_eq!(receipt["schema"], "stado.host-exec-receipt.v1");
     assert_eq!(receipt["status"], "ok", "stderr: {}", stderr(&output));
     assert_eq!(receipt["used_connection"]["kind"], "local");
     assert_eq!(receipt["used_connection"]["name"], "local");
-    assert_eq!(
-        receipt["used_connection"]["destination"],
-        Value::Null,
-        "a local channel has no ssh destination to report"
-    );
+    // A local channel has no ssh destination to report.
+    assert_eq!(receipt["used_connection"]["destination"], Value::Null);
     assert_eq!(receipt["ssh"], Value::Null);
     assert!(
         receipt["stdout"].as_str().unwrap().contains("load average"),
@@ -145,42 +161,20 @@ fn a_duplicate_route_is_a_typed_refusal_that_changes_nothing() {
     }));
     let storage = directory.path();
 
-    let added = stado(
+    let added = declare_path(
         storage,
         true,
-        &[
-            "registry",
-            "host",
-            "path",
-            "set",
-            "journey-host",
-            SECOND_PATH,
-            "--ssh",
-            "operator@journey-host.local",
-            "--priority",
-            "1",
-            "--json",
-        ],
+        "journey-host",
+        SECOND_PATH,
+        "operator@journey-host.local",
+        Some("1"),
     );
     assert!(added.status.success(), "got: {}", stderr(&added));
     assert_eq!(document(&added)["changed"], true);
     let before = std::fs::read(storage.join("registry.json")).unwrap();
 
-    let refused = stado(
-        storage,
-        true,
-        &[
-            "registry",
-            "host",
-            "path",
-            "set",
-            "journey-host",
-            "third",
-            "--ssh",
-            "operator@journey-preferred.example",
-            "--json",
-        ],
-    );
+    let identity = "operator@journey-preferred.example";
+    let refused = declare_path(storage, true, "journey-host", "third", identity, None);
     assert_eq!(refused.status.code(), Some(1));
     let failure = document(&refused);
     assert_eq!(failure["status"], "error");
@@ -250,12 +244,8 @@ fn a_dead_preferred_path_hands_over_and_the_receipt_names_the_route() {
         .args(["registry", "pull"])
         .output()
         .expect("stado registry pull runs");
-    assert!(
-        pulled.status.success(),
-        "could not read the canonical registry: {}",
-        String::from_utf8_lossy(&pulled.stderr)
-    );
-    let canonical: Value = serde_json::from_slice(&pulled.stdout).expect("the registry is JSON");
+    let canonical: Value = serde_json::from_slice(&pulled.stdout)
+        .unwrap_or_else(|_| panic!("registry pull: {}", stderr(&pulled)));
     let target = canonical["targets"]
         .as_array()
         .expect("registry.targets is an array")
@@ -267,10 +257,7 @@ fn a_dead_preferred_path_hands_over_and_the_receipt_names_the_route() {
         .as_str()
         .unwrap_or_else(|| panic!("{host} declares no ssh destination"))
         .to_string();
-    let account = reachable
-        .split_once('@')
-        .map(|(account, _)| account.to_string())
-        .unwrap_or_default();
+    let (account, _) = reachable.split_once('@').expect("an ssh destination");
 
     let directory = seed(&json!({
         "schema_version": canonical["schema_version"],
@@ -281,54 +268,12 @@ fn a_dead_preferred_path_hands_over_and_the_receipt_names_the_route() {
 
     // Preferred path first, so the real destination is never declared twice.
     let unroutable = format!("{account}@{host}{UNROUTABLE_SUFFIX}");
-    let preferred = stado(
-        storage,
-        false,
-        &[
-            "registry",
-            "host",
-            "path",
-            "set",
-            &host,
-            "primary",
-            "--ssh",
-            &unroutable,
-            "--json",
-        ],
-    );
-    assert!(
-        preferred.status.success(),
-        "could not make the preferred path unroutable: {}",
-        stderr(&preferred)
-    );
-    let second = stado(
-        storage,
-        false,
-        &[
-            "registry",
-            "host",
-            "path",
-            "set",
-            &host,
-            SECOND_PATH,
-            "--ssh",
-            &reachable,
-            "--priority",
-            "1",
-            "--json",
-        ],
-    );
-    assert!(
-        second.status.success(),
-        "could not declare the reachable route: {}",
-        stderr(&second)
-    );
+    let preferred = declare_path(storage, false, &host, "primary", &unroutable, None);
+    assert!(preferred.status.success(), "{}", stderr(&preferred));
+    let second = declare_path(storage, false, &host, SECOND_PATH, &reachable, Some("1"));
+    assert!(second.status.success(), "{}", stderr(&second));
 
-    let output = stado(
-        storage,
-        false,
-        &["host", "exec", "--json", &host, "--", "uptime"],
-    );
+    let output = exec_uptime(storage, false, &host);
     let receipt = document(&output);
     assert_eq!(receipt["status"], "ok", "stderr: {}", stderr(&output));
     assert_eq!(receipt["ssh"], unroutable.as_str());
