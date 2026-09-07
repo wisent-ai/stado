@@ -81,6 +81,9 @@ struct HostsView: View {
 
     @State private var connectionPathsTarget: HostConnectionPathsTarget?
     @State private var reconciliationTarget: StorageReconciliationTarget?
+    /// The registration scope typed for the selected host's runner. Empty
+    /// means the organization, which is what the CLI's absent flag means.
+    @State private var runnerRepository = ""
     var body: some View {
         WisentScreen(
             title: "Hosts",
@@ -499,6 +502,7 @@ struct HostsView: View {
                 linkSection(for: host)
                 appleChallengeSection(for: host)
                 cargoInventorySection(for: host)
+                runnerSection(for: host)
                 if host.status != .live {
                     WisentAlertPanel(
                         tone: tone(for: host.status),
@@ -652,6 +656,97 @@ struct HostsView: View {
                             detail: error
                         )
                     }
+                }
+            }
+        }
+    }
+
+    /// The host's own GitHub runner, with the same lifecycle the CLI has.
+    ///
+    /// Every field the report carries is shown, including the two that used to
+    /// exist only in a terminal: which GitHub door the registration went
+    /// through (`organization:<org>` needs the organization's
+    /// self-hosted-runner permission, `repository:<org>/<name>` needs admin on
+    /// that repository) and whether a job is holding this machine's single job
+    /// slot right now.
+    @ViewBuilder
+    private func runnerSection(for host: WorkerNode) -> some View {
+        let target = host.targetName ?? host.displayName
+        let report = fleetStore.runnerHost == target ? fleetStore.runnerReport : nil
+        WisentSectionBox(
+            title: "GitHub runner",
+            detail: "One runner per host, taking one job at a time. A repository name registers it against that repository instead of the organization."
+        ) {
+            WisentField(
+                label: "Read-only command",
+                value: StadoCLI.commandLine(
+                    FleetControlStore.hostRunnerArguments(action: "status", host: target, repository: nil)
+                )
+            )
+            WisentField(label: "Registration scope", value: report?.runnerScope ?? "Not read")
+            WisentField(label: "Labels", value: report?.runnerLabels ?? "Not read")
+            WisentField(label: "Host job slot", value: report?.hostJobSlot ?? "Not read")
+            WisentActionButton(
+                action: WisentAction(
+                    "Read runner",
+                    symbol: "arrow.clockwise",
+                    isEnabled: !fleetStore.runnerMutation.isWorking
+                ) {
+                    Task { await fleetStore.readHostRunner(host: target) }
+                }
+            )
+            TextField("Repository (optional)", text: $runnerRepository)
+                .textFieldStyle(.roundedBorder)
+                .font(WisentTypeScale.body())
+            WisentField(
+                label: "Command",
+                value: StadoCLI.commandLine(
+                    FleetControlStore.hostRunnerArguments(
+                        action: "install",
+                        host: target,
+                        repository: runnerRepository
+                    )
+                )
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Install or reconcile",
+                    symbol: "square.and.arrow.down",
+                    isEnabled: !fleetStore.runnerMutation.isWorking
+                ) {
+                    Task {
+                        await fleetStore.installHostRunner(host: target, repository: runnerRepository)
+                    }
+                }
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Restart in place",
+                    symbol: "arrow.triangle.2.circlepath",
+                    isEnabled: !fleetStore.runnerMutation.isWorking
+                ) {
+                    Task { await fleetStore.restartHostRunner(host: target) }
+                }
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Remove",
+                    symbol: "trash",
+                    isEnabled: !fleetStore.runnerMutation.isWorking
+                ) {
+                    Task {
+                        await fleetStore.removeHostRunner(host: target, repository: runnerRepository)
+                    }
+                }
+            )
+            if let report {
+                let stderr = report.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stderr.isEmpty {
+                    WisentAlertPanel(
+                        tone: .warning,
+                        title: "The host reported this while answering",
+                        detail: stderr
+                    )
                 }
             }
         }

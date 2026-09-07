@@ -161,11 +161,78 @@ fn replace(template: &str, pairs: &[(&str, String)]) -> String {
         })
 }
 
+/// Render a template for one profile.
+///
+/// The slug is the runner's identity on the host — its account, root, unit
+/// label and firewall table all carry it — and the kind is the word a refusal
+/// uses. They are substituted separately and the kind only through its own
+/// marker: rewriting every `precheck` in the text renamed the identity too,
+/// so on 2026-09-06 `status` looked for `com.wisent.stado-fleet-runner` on a
+/// host running `com.wisent.stado-precheck-runner` and reported the installed
+/// runner as missing.
 fn profile_template(template: &str, profile: RunnerProfile) -> String {
     template
         .replace("stado-precheck", profile.slug)
         .replace("stado_precheck", &profile.slug.replace('-', "_"))
-        .replace("precheck", profile.kind)
+        .replace("__RUNNER_KIND__", profile.kind)
+}
+
+/// Where each platform keeps the host's job markers. Fixed, root-created
+/// directories with the sticky bit, one marker file per runner account.
+pub const LINUX_JOBS_DIR: &str = "/opt/wisent/.stado-runner-jobs";
+pub const MACOS_JOBS_DIR: &str = "/Users/Shared/.stado-runner-jobs";
+
+/// One job at a time on this host, across every runner registered on it.
+///
+/// GitHub gives each runner its own concurrency of one and coordinates nothing
+/// between runners, so a machine carrying five of them builds five
+/// repositories at once. On 2026-09-06 `charless-mac-mini` did exactly that:
+/// free disk fell from 10.6 to 4.9 GiB in twenty minutes, one `git` alone held
+/// 1021 MiB resident, free memory reached 597 MiB with 4.7 of 6 GiB of swap in
+/// use, and every .NET runner on the box then failed to start with
+/// `Failed to create CoreCLR, HRESULT: 0x8007000C`. Nothing GitHub offers
+/// bounds that from the host's side.
+///
+/// The runner runs this before a job's first step
+/// (`ACTIONS_RUNNER_HOOK_JOB_STARTED`) and `clean-work.sh` after its last, so
+/// a marker written here and removed there spans exactly one job. A waiting
+/// runner holds nothing: it waits for the marker to be free, and a marker
+/// whose process no longer exists is a crash rather than a running job.
+///
+/// One text for both platforms and for the test that drives it, because a
+/// second copy of a concurrency rule is the copy that gets it wrong.
+const JOB_GATE: &str = r#"#!/bin/sh
+set -eu
+jobs_dir=${STADO_RUNNER_JOBS_DIR:-__JOBS_DIR__}
+mine="$jobs_dir/$(id -un).job"
+mkdir -p "$jobs_dir" 2>/dev/null || true
+chmod 1777 "$jobs_dir" 2>/dev/null || true
+deadline=$(( $(date +%s) + ${STADO_RUNNER_JOB_WAIT_SECONDS:-3600} ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  held=""
+  for marker in "$jobs_dir"/*.job; do
+    [ -f "$marker" ] || continue
+    [ "$marker" = "$mine" ] && continue
+    pid=$(head -n 1 "$marker" 2>/dev/null || true)
+    case "$pid" in
+      ''|*[!0-9]*) rm -f "$marker" 2>/dev/null || true; continue ;;
+    esac
+    if kill -0 "$pid" 2>/dev/null; then held="$marker"; break; fi
+    rm -f "$marker" 2>/dev/null || true
+  done
+  [ -n "$held" ] || break
+  printf 'stado: waiting for the job holding this host (%s)\n' "$(basename "$held")"
+  sleep "${STADO_RUNNER_JOB_POLL_SECONDS:-10}"
+done
+printf '%s\n' "${STADO_RUNNER_JOB_PID:-$PPID}" > "$mine"
+"#;
+
+/// The gate as it is installed on a host, or as a test runs it.
+///
+/// `STADO_RUNNER_JOBS_DIR` overrides the compiled directory so a test can
+/// drive the exact program a host runs without touching the host's markers.
+pub fn job_gate_program(jobs_dir: &str) -> String {
+    JOB_GATE.replace("__JOBS_DIR__", jobs_dir)
 }
 
 fn linux_installer(
@@ -194,6 +261,7 @@ fn linux_installer(
             ("__REGISTRATION_URL__", scope.registration_url()),
             ("__RUNNER_SCOPE__", super::shlex_quote(&scope.label())),
             ("__BLOCKED_IPV4__", shell_list(BLOCKED_IPV4_NETWORKS)),
+            ("__JOB_GATE__", job_gate_program(LINUX_JOBS_DIR)),
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
             (
                 "__KRONIKA_AGENT_ID__",
@@ -240,6 +308,7 @@ fn macos_installer(
                 super::shlex_quote(PROBIERZ_AGENT_ID),
             ),
             ("__BRAMA_PORT__", brama_port.to_string()),
+            ("__JOB_GATE__", job_gate_program(MACOS_JOBS_DIR)),
             (
                 "__BLOCKED_NETWORKS__",
                 BLOCKED_IPV4_NETWORKS
@@ -1704,10 +1773,15 @@ fn report(
         "runner_kind": profile.kind,
         "runner_group": profile.group,
         "runner_labels": profile.labels,
-        // Read from the host's own registration record where there is one, so
-        // the answer is what the runner did, not what this declaration wants.
-        "runner_scope": registered_scope(&output.stdout)
-            .unwrap_or_else(|| RunnerScope::Organization.label()),
+        // Read from the host's own registration record. A runner installed by
+        // a build that did not record its scope reports `unrecorded` rather
+        // than the declaration's own default: claiming the organization for a
+        // runner nobody registered there is exactly the unread declaration
+        // this fleet keeps paying for.
+        "runner_scope": registered_scope(&output.stdout).unwrap_or_else(|| "unrecorded".to_string()),
+        // Which runner holds the host's one job slot, straight from the gate's
+        // own markers: `none`, or `<account> pid=<n>`, or `<account> stale`.
+        "host_job_slot": host_job_slot(&output.stdout),
         "action": action,
         "status": if output.ok() { "completed" } else { "failed" },
         "exit_code": output.code,
@@ -1724,6 +1798,21 @@ fn registered_scope(stdout: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| line.starts_with("organization:") || line.starts_with("repository:"))
         .map(str::to_string)
+}
+
+/// The `host job slot:` line every status script prints — which runner holds
+/// the host's one job, if any.
+///
+/// A host carrying several runners can run several jobs at once, and nothing
+/// GitHub offers bounds that from the host's side; the gate installed beside
+/// each runner does, and this is how an operator sees it working rather than
+/// inferring it from a machine that stopped falling over.
+fn host_job_slot(stdout: &str) -> String {
+    stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("host job slot: "))
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 /// The consumer identity the runner presents to Brama. It is the same name the
@@ -2368,9 +2457,22 @@ cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
 find /opt/wisent/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 ! -name '_*' -exec rm -rf -- {} +
+rm -f /opt/wisent/.stado-runner-jobs/$(id -un).job 2>/dev/null || true
 HOOK
 root install -o root -g root -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
+
+# One job at a time on this host, across every runner registered on it. The
+# program is `job_gate_program`, so the shell that runs on a host and the
+# shell a test drives are the same text.
+gate=$(mktemp "$staging/gate.XXXXXX")
+cat > "$gate" <<'GATE'
+__JOB_GATE__
+GATE
+root install -o root -g root -m 0755 "$gate" "$runner_root/job-gate.sh"
+root mkdir -p /opt/wisent/.stado-runner-jobs
+root chmod 1777 /opt/wisent/.stado-runner-jobs
+rm -f "$gate"
 
 rules=$(mktemp "$staging/rules.XXXXXX")
 cat > "$rules" <<RULES
@@ -2412,6 +2514,7 @@ ExecStartPre=$runner_root/clean-work.sh
 ExecStart=$runner_root/bin/runsvc.sh
 Restart=always
 RestartSec=5
+Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/job-gate.sh
 Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh
 NoNewPrivileges=true
 PrivateTmp=true
@@ -2425,7 +2528,7 @@ ProtectControlGroups=true
 ProtectClock=true
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup
+ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup /opt/wisent/.stado-runner-jobs
 
 [Install]
 WantedBy=multi-user.target
@@ -2447,6 +2550,18 @@ else
 fi
 root systemctl is-active --quiet wisent-stado-precheck-runner.service
 root touch "$runner_root/.service-reconciled"
+# What this host now carries, read back from its own record rather than from
+# the declaration that asked for it: an install that skipped registration used
+# to report the scope it would have used.
+root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true
+job_holder=none
+for marker in /opt/wisent/.stado-runner-jobs/*.job; do
+  [ -f "$marker" ] || continue
+  pid=$(root head -n 1 "$marker" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
+done
+printf 'host job slot: %s\n' "$job_holder"
 printf 'runner service: active\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
@@ -2623,9 +2738,20 @@ cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
 find /Users/Shared/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 ! -name '_*' -exec rm -rf -- {} +
+rm -f /Users/Shared/.stado-runner-jobs/$(id -un).job 2>/dev/null || true
 HOOK
 root install -o root -g wheel -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
+
+# One job at a time on this host, across every runner registered on it. The
+# program is `job_gate_program`, so the shell a host runs and the shell a test
+# drives are the same text.
+gate=$(mktemp "$staging/gate.XXXXXX")
+cat > "$gate" <<'GATE'
+__JOB_GATE__
+GATE
+root install -o root -g wheel -m 0755 "$gate" "$runner_root/job-gate.sh"
+rm -f "$gate"
 
 anchor=$(mktemp "$staging/anchor.XXXXXX")
 cat > "$anchor" <<RULES
@@ -2646,7 +2772,7 @@ cat > "$launcher" <<LAUNCHER
 set -eu
 /sbin/pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-precheck
 /sbin/pfctl -E >/dev/null 2>&1 || true
-exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root TMPDIR=$runner_root/.tmp DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
+exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root TMPDIR=$runner_root/.tmp DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/job-gate.sh ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
 LAUNCHER
 if [ ! -f "$runner_root/start-runner.sh" ] || ! root cmp -s "$launcher" "$runner_root/start-runner.sh"; then
   service_changed=1
@@ -2691,6 +2817,16 @@ fi
 root launchctl enable system/com.wisent.stado-precheck-runner
 root launchctl print system/com.wisent.stado-precheck-runner | grep -F 'state = running' >/dev/null
 root touch "$runner_root/.service-reconciled"
+# The same read-back the linux installer prints, for the same reason.
+root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true
+job_holder=none
+for marker in /Users/Shared/.stado-runner-jobs/*.job; do
+  [ -f "$marker" ] || continue
+  pid=$(root head -n 1 "$marker" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
+done
+printf 'host job slot: %s\n' "$job_holder"
 printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
@@ -2736,7 +2872,17 @@ secret_meta=$(root stat -c '%U %G %a' /opt/wisent/stado-precheck-runner/.stado/k
 # organization-admin token, so the scope is read from the record the installer
 # wrote beside the runner.
 scope=$(root sed -n '3p' /opt/wisent/stado-precheck-runner/.stado/registered-runner 2>/dev/null || true)
-printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "${scope:-organization:wisent-ai}"
+# Which runner holds the host's single job slot, if any. A marker whose worker
+# is gone is a crash and not a slot, so the reader says so rather than naming
+# a holder that no longer exists.
+job_holder=none
+for marker in /opt/wisent/.stado-runner-jobs/*.job; do
+  [ -f "$marker" ] || continue
+  pid=$(root head -n 1 "$marker" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
+done
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nhost job slot: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$job_holder" "${scope:-organization:wisent-ai}"
 "#;
 
 /// Each check states its own refusal, because the caller reports the last
@@ -2748,7 +2894,7 @@ printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\n%s
 const MACOS_STATUS: &str = r#"set -uo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/Users/Shared/stado-precheck-runner
-fail() { printf 'precheck runner: %s\n' "$1" >&2; exit 1; }
+fail() { printf '__RUNNER_KIND__ runner: %s\n' "$1" >&2; exit 1; }
 if ! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
   root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
   root tail -n 80 "$runner_root/_diag/launchd.stderr.log" >&2 || true
@@ -2841,7 +2987,14 @@ fi
 listeners=$(/bin/ps -Ao user=,comm= |
   /usr/bin/awk '$2 ~ /Runner\.Listener$/ { printf "%s %s; ", $1, $2 }')
 scope=$(root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true)
-printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}" "${scope:-organization:wisent-ai}"
+job_holder=none
+for marker in /Users/Shared/.stado-runner-jobs/*.job; do
+  [ -f "$marker" ] || continue
+  pid=$(root head -n 1 "$marker" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
+done
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\nhost job slot: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}" "$job_holder" "${scope:-organization:wisent-ai}"
 "#;
 
 /// Restart the runner in place and wait until it says it is listening again.
@@ -2860,7 +3013,7 @@ printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nli
 const MACOS_RESTART: &str = r#"set -uo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/Users/Shared/stado-precheck-runner
-fail() { printf 'precheck runner: %s\n' "$1" >&2; exit 1; }
+fail() { printf '__RUNNER_KIND__ runner: %s\n' "$1" >&2; exit 1; }
 newest_log_path() {
   root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1"
 }
@@ -2945,7 +3098,7 @@ fail "the runner did not report listening after its stale listener was reclaimed
 const LINUX_RESTART: &str = r#"set -uo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/opt/wisent/stado-precheck-runner
-fail() { printf 'precheck runner: %s\n' "$1" >&2; exit 1; }
+fail() { printf '__RUNNER_KIND__ runner: %s\n' "$1" >&2; exit 1; }
 newest_before=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
 bytes_before=0
 if [ -n "$newest_before" ]; then

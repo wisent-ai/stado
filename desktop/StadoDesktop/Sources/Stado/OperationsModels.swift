@@ -2285,3 +2285,50 @@ enum HostLinkVerdict: Hashable, Sendable {
 struct ServiceRunnerRuntimeReport: Decodable, Sendable {
     let stdout: String
 }
+
+/// One `stado host precheck-runner …` lifecycle report.
+///
+/// The CLI answers this for `install`, `status`, `restart` and `remove`, and
+/// Desktop shows the same fields rather than a subset: the scope says which
+/// GitHub door the registration went through, and `hostJobSlot` says whether a
+/// job is holding this machine right now — the two facts an operator needs
+/// before touching a runner, and the two that used to exist only in a terminal.
+struct HostRunnerReport: Decodable, Sendable {
+    let target: String?
+    let platform: String?
+    let runnerKind: String?
+    let runnerLabels: String?
+    let runnerScope: String?
+    let hostJobSlot: String?
+    let status: String?
+    let exitCode: Int?
+    let stdout: String
+    let stderr: String
+
+    enum CodingKeys: String, CodingKey {
+        case target
+        case platform
+        case runnerKind = "runner_kind"
+        case runnerLabels = "runner_labels"
+        case runnerScope = "runner_scope"
+        case hostJobSlot = "host_job_slot"
+        case status
+        case exitCode = "exit_code"
+        case stdout
+        case stderr
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        target = try values.decodeIfPresent(String.self, forKey: .target)
+        platform = try values.decodeIfPresent(String.self, forKey: .platform)
+        runnerKind = try values.decodeIfPresent(String.self, forKey: .runnerKind)
+        runnerLabels = try values.decodeIfPresent(String.self, forKey: .runnerLabels)
+        runnerScope = try values.decodeIfPresent(String.self, forKey: .runnerScope)
+        hostJobSlot = try values.decodeIfPresent(String.self, forKey: .hostJobSlot)
+        status = try values.decodeIfPresent(String.self, forKey: .status)
+        exitCode = try values.decodeIfPresent(Int.self, forKey: .exitCode)
+        stdout = try values.decodeIfPresent(String.self, forKey: .stdout) ?? ""
+        stderr = try values.decodeIfPresent(String.self, forKey: .stderr) ?? ""
+    }
+}

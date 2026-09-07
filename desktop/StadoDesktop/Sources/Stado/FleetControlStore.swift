@@ -16,6 +16,13 @@ final class FleetControlStore: ObservableObject {
     @Published private(set) var appleChallengeMutation: WisentMutationOutcome = .idle
     @Published private(set) var registryImport: RegistryImportReceipt?
     @Published private(set) var registryImportMutation: WisentMutationOutcome = .idle
+    /// The host whose GitHub runner was last addressed, its report, and the
+    /// outcome of that call. Separate from the general `mutation` because a
+    /// runner install takes minutes and an operator reading it should not have
+    /// it replaced by an unrelated action's receipt.
+    @Published private(set) var runnerHost: String?
+    @Published private(set) var runnerReport: HostRunnerReport?
+    @Published private(set) var runnerMutation: WisentMutationOutcome = .idle
 
     private let client: FleetControlClient
     private var addressString = ""
@@ -203,6 +210,108 @@ final class FleetControlStore: ObservableObject {
 
     nonisolated static func appleChallengeStatusArguments(host: String) -> [String] {
         ["host", "gui-automation", "status", host, "--json"]
+    }
+
+    /// The host's own GitHub runner, addressed exactly as the CLI does.
+    ///
+    /// `repository` is the registration scope, not a filter: with a name the
+    /// runner registers against that repository — the door the fleet's
+    /// credential can open — and without one it registers organization-wide,
+    /// which needs the organization's self-hosted-runner permission.
+    nonisolated static func hostRunnerArguments(
+        action: String,
+        host: String,
+        repository: String?
+    ) -> [String] {
+        var arguments = ["host", "precheck-runner", action, host]
+        let scope = repository?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !scope.isEmpty {
+            arguments.append(contentsOf: ["--repository", scope])
+        }
+        arguments.append("--json")
+        return arguments
+    }
+
+    func readHostRunner(host: String) async {
+        await runHostRunner(action: "status", host: host, repository: nil)
+    }
+
+    func installHostRunner(host: String, repository: String?) async {
+        await runHostRunner(action: "install", host: host, repository: repository)
+    }
+
+    func restartHostRunner(host: String) async {
+        await runHostRunner(action: "restart", host: host, repository: nil)
+    }
+
+    func removeHostRunner(host: String, repository: String?) async {
+        await runHostRunner(action: "remove", host: host, repository: repository)
+    }
+
+    private func runHostRunner(action: String, host: String, repository: String?) async {
+        guard !runnerMutation.isWorking else { return }
+        runnerHost = host
+        guard let address else {
+            runnerMutation = .failed(
+                "No Stado endpoint is configured, so the runner operation was not attempted."
+            )
+            return
+        }
+        let generation = requestGeneration
+        runnerMutation = .working("Running host precheck-runner \(action) on \(host)")
+        do {
+            let result = try await client.run(
+                arguments: Self.hostRunnerArguments(
+                    action: action,
+                    host: host,
+                    repository: repository
+                ),
+                confirmsMutation: action != "status",
+                at: address,
+                authorizationToken: authorizationToken,
+                timeoutSeconds: 1_200
+            )
+            guard requestGeneration == generation else { return }
+            let report: HostRunnerReport
+            do {
+                report = try JSONDecoder().decode(
+                    HostRunnerReport.self,
+                    from: Data(result.standardOutput.utf8)
+                )
+            } catch {
+                runnerMutation = .failed(result.ok
+                    ? "Stado returned an invalid runner report: \(error.localizedDescription)"
+                    : result.message)
+                return
+            }
+            runnerReport = report
+            // A runner whose Brama route disagrees with the fleet exits
+            // non-zero AFTER printing its report, so a non-ok result still
+            // carries the fields an operator needs to read.
+            runnerMutation = result.ok
+                ? .succeeded(Self.runnerSummary(report))
+                : .failed(result.message)
+        } catch {
+            guard requestGeneration == generation else { return }
+            runnerMutation = .failed(Self.describe(error))
+        }
+    }
+
+    /// What the operator reads back: what the runner answers for, which GitHub
+    /// door it registered through, and whether a job holds the host now.
+    nonisolated static func runnerSummary(_ report: HostRunnerReport) -> String {
+        [
+            report.runnerScope.map { "scope \($0)" },
+            report.runnerLabels.map { "labels \($0)" },
+            report.hostJobSlot.map { "host job slot \($0)" },
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
+    }
+
+    func clearRunnerMutation() {
+        guard !runnerMutation.isWorking else { return }
+        runnerMutation = .idle
     }
 
     func readAppleChallenge(host: String) async {
