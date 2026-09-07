@@ -76,6 +76,107 @@ pub enum ReleaseCommands {
     /// anything is published into it.
     #[command(name = "claim-coordinate")]
     ClaimCoordinate(ReleaseClaimCoordinateArgs),
+    /// Set or remove a host's exact managed binary version declaration.
+    #[command(name = "declare-version")]
+    DeclareVersion(ReleaseDeclareVersionArgs),
+    /// Verify and promote one published version into a host declaration.
+    #[command(name = "promote-version")]
+    PromoteVersion(ReleasePromoteVersionArgs),
+    /// Activate one host's already-staged release with its own installer.
+    #[command(name = "activate-staged")]
+    ActivateStaged(ReleaseActivateStagedArgs),
+    /// Run the native release journeys on one declared host platform.
+    #[command(name = "verify-platform")]
+    VerifyPlatform(ReleaseVerifyPlatformArgs),
+    /// Read or converge the versions a host declares.
+    #[command(name = "host-state")]
+    HostState(ReleaseHostStateArgs),
+    /// Attest the source and bytes of the release artifacts a host carries.
+    Provenance(ReleaseProvenanceArgs),
+}
+
+/// Set or remove one managed-version declaration for a registry host.
+#[derive(Args)]
+pub struct ReleaseDeclareVersionArgs {
+    /// Registry target whose declaration is changed.
+    #[arg(long)]
+    host: String,
+    #[arg(long)]
+    binary: String,
+    /// Exact version to declare.
+    #[arg(long, required_unless_present = "unset", conflicts_with = "unset")]
+    version: Option<String>,
+    /// Remove this binary's declaration instead of setting a version.
+    #[arg(long, conflicts_with = "version")]
+    unset: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Promote one published version into one host's declared desired state.
+#[derive(Args)]
+pub struct ReleasePromoteVersionArgs {
+    /// Registry target whose declaration is promoted.
+    #[arg(long)]
+    host: String,
+    #[arg(long)]
+    binary: String,
+    #[arg(long)]
+    version: String,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Activate a release already staged on a host.
+#[derive(Args)]
+pub struct ReleaseActivateStagedArgs {
+    #[arg(long)]
+    host: String,
+    #[arg(long, default_value = "weles-worker")]
+    product: String,
+    #[arg(long, default_value = "$HOME/.config/weles/worker.env")]
+    env_file: String,
+    #[arg(long, default_value_t = 8788)]
+    port: u16,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Verify the declared platform by running the native release journeys.
+#[derive(Args)]
+pub struct ReleaseVerifyPlatformArgs {
+    #[arg(long)]
+    host: String,
+    #[arg(long)]
+    repo: String,
+    #[arg(long = "ref")]
+    revision: String,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Report or converge one host against `targets[].managed_versions`.
+#[derive(Args)]
+pub struct ReleaseHostStateArgs {
+    #[arg(long)]
+    host: String,
+    /// Limit the report to one declared binary.
+    #[arg(long)]
+    binary: Option<String>,
+    /// Deliver host-behind versions; refuses to downgrade a host-ahead binary.
+    #[arg(long)]
+    apply: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Report the release provenance of every managed artifact on one host.
+#[derive(Args)]
+pub struct ReleaseProvenanceArgs {
+    #[arg(long)]
+    host: String,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -1964,6 +2065,51 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::InstallLocal(args) => install_local(&args).await,
         ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
+        ReleaseCommands::DeclareVersion(args) => {
+            crate::cli::host::declare_version(
+                &args.host,
+                &args.binary,
+                args.version.as_deref(),
+                args.unset,
+                args.json,
+            )
+            .await
+        }
+        ReleaseCommands::PromoteVersion(args) => {
+            crate::cli::host::promote_version(&args.host, &args.binary, &args.version, args.json)
+                .await
+        }
+        ReleaseCommands::ActivateStaged(args) => {
+            crate::cli::host::activate_staged_release(
+                &args.host,
+                &args.product,
+                &args.env_file,
+                args.port,
+                args.json,
+            )
+            .await
+        }
+        ReleaseCommands::VerifyPlatform(args) => {
+            crate::cli::host::verify_release_platform(
+                &args.host,
+                &args.repo,
+                &args.revision,
+                args.json,
+            )
+            .await
+        }
+        ReleaseCommands::HostState(args) => {
+            crate::cli::service_converge::converge(
+                &args.host,
+                args.binary.as_deref(),
+                args.apply,
+                args.json,
+            )
+            .await
+        }
+        ReleaseCommands::Provenance(args) => {
+            crate::cli::host::provenance(&args.host, args.json).await
+        }
     }
 }
 

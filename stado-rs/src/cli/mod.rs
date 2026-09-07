@@ -1938,17 +1938,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Run Stado's native build and signed release journeys on TARGET.
-    #[command(name = "verify-release-platform")]
-    VerifyReleasePlatform {
-        target: String,
-        #[arg(long)]
-        repo: String,
-        #[arg(long = "ref")]
-        revision: String,
-        #[arg(long)]
-        json: bool,
-    },
     /// Classify HOST's local replica against the store it mirrors, object by
     /// object, and optionally reclaim the twins.
     ///
@@ -2069,31 +2058,6 @@ enum HostCommands {
         #[arg(long)]
         local_port: u16,
         /// Emit the forwarding report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Set or remove the exact version TARGET must run for one managed binary.
-    #[command(name = "declare-version")]
-    DeclareVersion {
-        target: String,
-        #[arg(long)]
-        binary: String,
-        /// Exact version to declare.
-        #[arg(long, required_unless_present = "unset", conflicts_with = "unset")]
-        version: Option<String>,
-        /// Remove this binary's declaration instead of setting a version.
-        #[arg(long, conflicts_with = "version")]
-        unset: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Promote one exact published version to every registry target.
-    #[command(name = "promote-version")]
-    PromoteVersion {
-        #[arg(long)]
-        binary: String,
-        #[arg(long)]
-        version: String,
         #[arg(long)]
         json: bool,
     },
@@ -2293,25 +2257,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Report every program TARGET actually runs with its version, digest and
-    /// whether it came out of a release; omit TARGET to read what every host
-    /// has already reported. A host that has never reported is a failure
-    /// wherever the report is judged, never a pass.
-    Software {
-        target: Option<String>,
-        /// Emit the report and its findings as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Report which commit produced each artifact TARGET carries, and whether
-    /// that commit is reachable from origin/main. An artifact with no manifest
-    /// is reported unprovenanced, never omitted.
-    Provenance {
-        target: String,
-        /// Emit the manifests and their reachability as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// What TARGET's Weles worker is doing: its staged and installed releases,
     /// whether its worker API answers, and its newest recorded runs with each
     /// run's own verdict. Counts and timestamps only; recordings stay on the
@@ -2475,37 +2420,6 @@ enum HostCommands {
     ///
     /// The request is held open for the run, so this reports what the run
     /// produced rather than a queue receipt.
-    /// Activate a release already staged on TARGET by running THAT release's
-    /// own installer, once.
-    ///
-    /// A managed host installs its own releases with the installer inside its
-    /// active release. When that copy is broken the host cannot install the
-    /// release that repairs it - the repair is staged, verified and
-    /// unreachable, and every delivery after it piles up behind the same
-    /// unparseable script. This runs the staged copy instead. Same env file,
-    /// same digest contract, same script; only which copy executes differs.
-    ///
-    /// Refuses if the staged archive does not hash to the digest the
-    /// deployment env file declares, and refuses to run an installer that does
-    /// not parse. Reports the API's state either side, and fails if a port
-    /// that was answering before is silent after.
-    #[command(name = "activate-staged-release")]
-    ActivateStagedRelease {
-        /// Registry host holding the staged release.
-        target: String,
-        /// Product whose coordinate the env file declares, e.g. weles-worker.
-        #[arg(long, default_value = "weles-worker")]
-        product: String,
-        /// Deployment env file naming the release coordinate.
-        #[arg(long, default_value = "$HOME/.config/weles/worker.env")]
-        env_file: String,
-        /// Loopback port whose liveness is checked either side of the run.
-        #[arg(long, default_value_t = 8788)]
-        port: u16,
-        /// Emit the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     #[command(name = "weles-browser-task")]
     WelesBrowserTask {
         target: String,
@@ -2679,23 +2593,6 @@ enum HostCommands {
         /// long-lived processes observe the retraction immediately.
         #[arg(long)]
         reload_service: Option<String>,
-    },
-    /// Deliver one registry-declared managed binary to TARGET.
-    Release {
-        target: String,
-        #[arg(long)]
-        binary: String,
-        #[arg(long)]
-        version: String,
-        /// Report the plan without mutation.
-        #[arg(long)]
-        dry_run: bool,
-        /// Reinstall the exact immutable bytes even when the host reports the
-        /// same semantic version; used to replace an unmanaged same-version file.
-        #[arg(long)]
-        reinstall: bool,
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -3568,12 +3465,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 lines,
                 json,
             } => host::unit_log(&target, &unit, lines, json).await,
-            HostCommands::VerifyReleasePlatform {
-                target,
-                repo,
-                revision,
-                json,
-            } => host::verify_release_platform(&target, &repo, &revision, json).await,
             HostCommands::BackupAudit {
                 target,
                 objects,
@@ -3645,18 +3536,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 resume,
             } => coding::connect_jeden(&workspace, target.as_deref(), resume.as_deref()).await,
-            HostCommands::DeclareVersion {
-                target,
-                binary,
-                version,
-                unset,
-                json,
-            } => host::declare_version(&target, &binary, version.as_deref(), unset, json).await,
-            HostCommands::PromoteVersion {
-                binary,
-                version,
-                json,
-            } => host::promote_version(&binary, &version, json).await,
             HostCommands::Reconcile {
                 target,
                 apply,
@@ -3664,8 +3543,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::reconcile(target, apply, json).await,
             HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
-            HostCommands::Software { target, json } => host::software(target, json).await,
-            HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
             HostCommands::WelesActivity { target, json } => {
                 host::weles_activity(&target, json).await
             }
@@ -3721,13 +3598,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 })
                 .await
             }
-            HostCommands::ActivateStagedRelease {
-                target,
-                product,
-                env_file,
-                port,
-                json,
-            } => host::activate_staged_release(&target, &product, &env_file, port, json).await,
             HostCommands::WelesBrowserTask {
                 target,
                 url,
@@ -3794,14 +3664,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 key,
                 reload_service,
             } => host::config_unset(&target, &key, reload_service.as_deref()).await,
-            HostCommands::Release {
-                target,
-                binary,
-                version,
-                dry_run,
-                reinstall,
-                json,
-            } => host::release(&target, &binary, &version, dry_run, reinstall, json).await,
         },
         Commands::Bootstrap {
             target,

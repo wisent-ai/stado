@@ -3228,8 +3228,8 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
     Ok(())
 }
 
-/// `stado host declare-version TARGET --binary B --version V` — say what a
-/// host must run. `--unset` removes that one declaration.
+/// `stado release declare-version --host TARGET --binary B --version V` says
+/// what a host must run. `--unset` removes that declaration.
 ///
 /// `managed_versions` is the declaration every version verdict is measured
 /// against, and nothing wrote it: `host inventory` compared each host's
@@ -3259,8 +3259,10 @@ pub async fn declare_version(
         }
         (Some(version), false) => {
             let version = version.trim();
-            if version.is_empty() {
-                return Err(CmdError::usage("--version must name an exact version"));
+            if !crate::deploy::host_release::is_exact_semver(version) {
+                return Err(CmdError::usage(
+                    "--version must name an exact semantic version such as 0.5.1",
+                ));
             }
             Some(version)
         }
@@ -3277,14 +3279,24 @@ pub async fn declare_version(
             let object = candidate.as_object_mut()?;
             (object.get("name").and_then(Value::as_str) == Some(target)).then_some(object)
         })
-        .ok_or_else(|| CmdError::click(format!("registry declares no target {target:?}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{target} is missing from registry.targets; add the host declaration before \
+                 declaring a managed version"
+            ))
+        })?;
 
     if let Some(version) = version {
         let versions = entry
             .entry("managed_versions".to_string())
             .or_insert_with(|| Value::Object(serde_json::Map::new()))
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{target} declares managed_versions as a non-object; replace \
+                     targets[].managed_versions with an object"
+                ))
+            })?;
         versions.insert(binary.name.to_string(), json!(version));
         let generation = super::registry::push_document_if(&document, &expected_generation).await?;
         if json {
@@ -3304,7 +3316,12 @@ pub async fn declare_version(
         None => false,
         Some(versions) => versions
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{target} declares managed_versions as a non-object; replace \
+                     targets[].managed_versions with an object"
+                ))
+            })?
             .remove(&binary.name)
             .is_some(),
     };
@@ -3328,10 +3345,11 @@ pub async fn declare_version(
     Ok(())
 }
 
-/// Promote one published version into fleet desired state in one fenced
-/// registry write. Every platform manifest must already exist and identify
-/// the canonical coordinate before `managed_versions` moves.
+/// Promote one published version into one host's desired state in one fenced
+/// registry write. The platform manifest must already exist and identify the
+/// canonical coordinate before `managed_versions` moves.
 pub async fn promote_version(
+    target_name: &str,
     binary: &str,
     version: &str,
     json_output: bool,
@@ -3372,10 +3390,15 @@ pub async fn promote_version(
             Ok((name.to_string(), platform.to_string()))
         })
         .collect::<Result<_, CmdError>>()?;
+    let target_specs: Vec<(String, String)> = target_specs
+        .into_iter()
+        .filter(|(name, _)| name == target_name)
+        .collect();
     if target_specs.is_empty() {
-        return Err(CmdError::click(
-            "registry has no targets; refusing an empty desired-state promotion",
-        ));
+        return Err(CmdError::click(format!(
+            "{target_name} is missing from registry.targets; add the host declaration before \
+             promoting a release"
+        )));
     }
 
     // Resolve every legacy omission before mutating the in-memory document.
@@ -3459,6 +3482,9 @@ pub async fn promote_version(
             .and_then(Value::as_str)
             .ok_or_else(|| CmdError::click("registry target has no name"))?
             .to_string();
+        if name != target_name {
+            continue;
+        }
         let observed = observed_platforms.get(&name).ok_or_else(|| {
             CmdError::click(format!(
                 "target {name:?} was not inventoried before promotion"
@@ -3483,6 +3509,7 @@ pub async fn promote_version(
     if json_output {
         print_json(&json!({
             "binary": managed.name,
+            "host": target_name,
             "version": version,
             "targets": target_specs.iter().map(|(name, _)| name).collect::<Vec<_>>(),
             "platforms": platforms,
@@ -3506,8 +3533,8 @@ pub async fn promote_version(
 ///
 /// Without `--apply` nothing changes: an operator must be able to see drift
 /// without a machine moving under them. With it, every host that is BEHIND
-/// its declaration is delivered through the ordinary `host release` path,
-/// which verifies the digest before it repoints anything.
+/// its declaration is delivered through the release host-state path, which
+/// verifies the manifest digest before repointing anything.
 ///
 /// Only `behind` is delivered. A host running something NEWER than the
 /// declaration is a stale declaration, not a stale host, and quietly
@@ -4101,119 +4128,6 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
             vaults.len(),
             sidecars.len()
         );
-    }
-    report_outcome(&report, expected)
-}
-
-/// `stado host release TARGET --binary NAME --version X.Y.Z` — put one
-/// registry-declared managed binary onto TARGET.
-///
-/// The write counterpart of `host inventory`: that command says a host is
-/// behind its declared version, this one closes the gap, and it refuses to
-/// do anything the declaration does not already say. `--binary` selects a
-/// compile-time entry and never becomes a path; `--version` is an exact
-/// immutable coordinate that has to equal what the registry declares.
-pub async fn release(
-    target: &str,
-    binary: &str,
-    version: &str,
-    dry_run: bool,
-    reinstall: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    use crate::deploy::host_release;
-
-    let runner = crate::deploy::production_runner();
-    let report = host_release::release_host(target, binary, version, dry_run, reinstall, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    // Three outcomes are success, and conflating them would be the lie this
-    // command exists to avoid: a delivery, a host that already ran the
-    // requested version, and a dry run that mutated nothing.
-    let expected = match report.get("status").and_then(Value::as_str) {
-        Some(host_release::ALREADY_ACTIVE_STATUS) => host_release::ALREADY_ACTIVE_STATUS,
-        Some(host_release::PLANNED_STATUS) if dry_run => host_release::PLANNED_STATUS,
-        _ => host_release::RELEASED_STATUS,
-    };
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-
-    println!("target:   {}", cell(report.get("target")));
-    println!(
-        "binary:   {} {} ({})",
-        cell(report.get("binary")),
-        cell(report.get("version")),
-        cell(report.get("platform"))
-    );
-    println!("declared: {}", cell(report.get("declared_version")));
-    println!("artifact: {}", cell(report.get("release_uri")));
-    println!(
-        "sha256:   {} (release manifest)",
-        cell(report.get("sha256"))
-    );
-    println!(
-        "installed: {} ({})",
-        cell(report.get("active_version")),
-        cell(report.get("active_state"))
-    );
-    println!("unit:     {}", cell(report.get("unit")));
-
-    let steps = report
-        .get("steps")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    super::table::print(
-        &["STEP", "STATE", "DETAIL"],
-        &steps
-            .iter()
-            .map(|step| {
-                vec![
-                    cell(step.get("step")),
-                    cell(step.get("state")),
-                    cell(step.get("detail")),
-                ]
-            })
-            .collect::<Vec<Vec<String>>>(),
-    );
-
-    match report.get("status").and_then(Value::as_str) {
-        Some(host_release::ALREADY_ACTIVE_STATUS) => println!(
-            "\nalready active: {} is the running version, so nothing was fetched, \
-             staged, activated or restarted",
-            cell(report.get("version"))
-        ),
-        Some(host_release::PLANNED_STATUS) => {
-            // Named one by one, because the value of a dry run is the order.
-            println!("\nplanned, nothing was mutated on the host:");
-            for step in report
-                .get("planned_steps")
-                .and_then(Value::as_array)
-                .unwrap_or(&Vec::new())
-            {
-                println!("  {}", cell(Some(step)));
-            }
-        }
-        Some(host_release::RELEASED_STATUS) => println!(
-            "\nreleased: {} now runs {} {}",
-            cell(report.get("target")),
-            cell(report.get("binary")),
-            cell(report.get("version"))
-        ),
-        _ => {
-            // The question an operator asks after a failure is what is
-            // running now, and the answer is almost always "the same thing
-            // as before". Say so rather than making them re-run inventory.
-            if report.get("active_version_unchanged") == Some(&Value::Bool(true)) {
-                println!(
-                    "\nnothing was activated: {} still runs {}",
-                    cell(report.get("target")),
-                    cell(report.get("active_version"))
-                );
-            }
-        }
     }
     report_outcome(&report, expected)
 }
@@ -11649,8 +11563,8 @@ struct CarriedArtifact {
     age_seconds: Option<i64>,
 }
 
-/// `stado host provenance TARGET [--json]` — what TARGET carries, and who
-/// produced it.
+/// `stado release provenance --host TARGET [--json]` — what TARGET carries,
+/// and who produced it.
 ///
 /// The command that did not exist on 2026-08-11, when the only record of what
 /// was running the control plane was a version string the repository had never
@@ -11877,175 +11791,6 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         );
     }
     Ok(())
-}
-
-/// The release-control binaries rolled out to one target, as concrete paths the
-/// reporter can hash.
-///
-/// A rollout product lives under its own install root — brama is
-/// `/Users/charles/.stado/services/brama/bin/brama` — so it appears in neither
-/// `$HOME/.stado/bin` nor any `managed_versions` entry, and a report that did not
-/// name it could say nothing at all about the one binary
-/// `stado release status` is about.
-fn release_product_programs(
-    document: &Value,
-    host: &str,
-) -> Vec<crate::host_software::ProductBinary> {
-    let Ok(Some(control)) = crate::release_control::control(document) else {
-        return Vec::new();
-    };
-    control
-        .products
-        .values()
-        .filter(|policy| policy.targets.contains_key(host))
-        .map(|policy| {
-            let path = format!(
-                "{}/{}",
-                policy.install_root.trim_end_matches('/'),
-                policy.binary.trim_start_matches('/')
-            );
-            crate::host_software::ProductBinary {
-                name: path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&policy.binary)
-                    .to_string(),
-                path,
-                desired: policy
-                    .desired
-                    .as_ref()
-                    .map(|desired| desired.version.clone()),
-            }
-        })
-        .collect()
-}
-
-/// `stado host software [TARGET] [--json]` — what a host actually runs, and
-/// which of it came out of a release.
-///
-/// Naming a TARGET takes the report: one round trip over the audited channel,
-/// and the answer is persisted as an observation before it is printed, so
-/// `stado release status` can judge every rollout without opening an ssh
-/// connection per target. Omitting TARGET reads what is already on file for
-/// every host, ages included — a host that has never reported is absent from
-/// that list and is reported as `never` by every gate that asks about it, which
-/// is the state that used to print as `unreported` beside a zero exit.
-///
-/// The failure of the read is recorded too. Leaving the previous report in place
-/// after a refused connection would let an hour-old answer keep reading as
-/// current, which is the exact shape of the outage
-/// [`crate::observations`] exists to make visible.
-pub async fn software(target: Option<String>, json: bool) -> Result<(), CmdError> {
-    let Some(target) = target else {
-        let hosts = crate::host_software::reported_hosts(&crate::observations::load());
-        return print_reports(&hosts, json).await;
-    };
-    let resolved = crate::deploy::host_channel::canonical_target(&target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let document = super::registry::fetch_document().await?;
-    let products = release_product_programs(&document, &resolved.name);
-    let programs: Vec<String> = products
-        .iter()
-        .map(|product| product.path.clone())
-        .collect();
-    let runner = crate::deploy::production_runner();
-    match crate::host_software::gather(&resolved, &programs, &runner).await {
-        Ok((rows, scripts)) => {
-            crate::host_software::record(&resolved.name, &rows, scripts)
-                .map_err(|error| CmdError::click(error.to_string()))?;
-        }
-        Err(error) => {
-            // Recorded, then reported. An operator who is told the read failed
-            // and finds yesterday's report still on file has been told two
-            // different things by one command.
-            if let Err(write) = crate::host_software::record_refusal(&resolved.name, &error.0) {
-                eprintln!("warning: could not record the failed software read: {write}");
-            }
-            return Err(CmdError::click(format!(
-                "{target}: cannot read what software it runs: {}",
-                error.0
-            )));
-        }
-    }
-    print_reports(&[resolved.name], json).await
-}
-
-/// Every named host's newest report, with the disagreements the fleet has
-/// against it.
-async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
-    let records = crate::observations::load();
-    // The remote registry, because the declaration being checked is the fleet's
-    // and not whatever a local copy last said. One fetch for every row: the
-    // question "what does this host declare" is asked once per host and the
-    // answer is one document.
-    let registry = super::registry::read_registry().await.ok();
-    let mut payload: Vec<Value> = Vec::new();
-    let mut failures = usize::default();
-    for host in hosts {
-        let report = crate::host_software::load_in(&records, host);
-        let declared = registry
-            .as_ref()
-            .and_then(|registry| registry.targets.iter().find(|entry| &entry.name == host))
-            .map(|entry| entry.managed_versions.clone())
-            .unwrap_or_default();
-        let finding = crate::host_software::judge(&report, &declared, None);
-        if finding.failed {
-            failures = failures.saturating_add(1);
-        }
-        if json {
-            let mut object = report.json();
-            finding.merge_into(&mut object);
-            payload.push(object);
-            continue;
-        }
-        println!("{host}: {} [{}]", report.summary(), report.age());
-        if !report.refusal().is_empty() {
-            println!("  the last read did not complete: {}", report.refusal());
-        }
-        let rows: Vec<Vec<String>> = report
-            .rows
-            .iter()
-            .map(|row| {
-                vec![
-                    row.provenance.clone(),
-                    row.name.clone(),
-                    row.version.clone(),
-                    row.sha256.chars().take(12).collect(),
-                    row.path.clone(),
-                ]
-            })
-            .collect();
-        if !rows.is_empty() {
-            super::table::print(&["PROVENANCE", "NAME", "VERSION", "SHA256", "PATH"], &rows);
-        }
-        for sentence in &finding.sentences {
-            println!("  ! {sentence}");
-        }
-    }
-    if json {
-        print_json(&json!({"hosts": payload}));
-    } else if hosts.is_empty() {
-        println!(
-            "no host has reported its software: run `stado host software TARGET` for each \
-             registry target, because a host that never says what it runs is not a host anything \
-             here can vouch for"
-        );
-    }
-    if failures == usize::default() {
-        return Ok(());
-    }
-    // This command reports and it also gates, for the same reason
-    // `stado release status` now does: printing a host that cannot be shown to
-    // run what the fleet declares, and then exiting zero, is the shape of the
-    // failure the whole report exists to end. Every sentence is already beside
-    // the host it belongs to, so nothing is said twice.
-    eprintln!(
-        "{failures} of {} host(s) cannot be shown to be running what the fleet declares for \
-         them; each is named above",
-        hosts.len()
-    );
-    Err(CmdError::silent(super::CLICK_ERROR_CODE))
 }
 
 /// Read the effective configuration on a fleet host using the same installed
@@ -12611,8 +12356,8 @@ cargo test --locked --test ci-cd a_cancelled_release_build_is_retried_under_a_ne
     Ok(())
 }
 
-/// `stado host activate-staged-release TARGET --product P` — run the staged
-/// release's OWN installer, once, on a host whose installed one cannot.
+/// `stado release activate-staged --host TARGET --product P` runs the staged
+/// release's OWN installer once when the installed one cannot.
 ///
 /// The host installs its own releases by running the installer that ships
 /// inside the active release. When that copy is broken the host cannot install
@@ -12641,7 +12386,8 @@ pub async fn activate_staged_release(
         .map_err(click)?;
     if !fetched.ok() {
         return Err(CmdError::click(format!(
-            "{}: could not read {env_file}: {}",
+            "{} declares staged release coordinates in {env_file}, but that file could not be \
+             read ({}); restore the deployment env file before activating",
             resolved.name, fetched.report.file_state
         )));
     }
@@ -12660,7 +12406,8 @@ pub async fn activate_staged_release(
     let platform = platform.stdout.trim().to_string();
     if platform == "unknown" {
         return Err(CmdError::click(format!(
-            "{}: could not name this host's release platform",
+            "{} reports no supported staged-release platform; add this OS/architecture to the \
+             release platform declaration before activating",
             resolved.name
         )));
     }
@@ -12686,7 +12433,8 @@ pub async fn activate_staged_release(
     .map_err(click)?;
     let Some(observed) = staged_release::parse_shasum(&hashed.stdout) else {
         return Err(CmdError::click(format!(
-            "{}: no staged archive at {archive} to activate",
+            "{} declares a staged release but {archive} is missing; stage the declared archive \
+             before activating it",
             resolved.name
         )));
     };

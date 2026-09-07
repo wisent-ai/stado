@@ -1,5 +1,5 @@
-//! `stado host release TARGET --binary NAME --version X.Y.Z` — put one
-//! declared, managed binary onto one registry host.
+//! Release delivery for `stado release host-state --host TARGET --apply` — put
+//! declared, managed binaries onto one registry host.
 //!
 //! NO Python original, and no Rust original either: `ARCHITECTURE.md` says
 //! outright that "no system in the pack currently owns 'get this build onto
@@ -82,9 +82,9 @@
 //!   auto-deploy stages a worker and two browsers together because they are
 //!   one runtime; two independently versioned CLIs are not;
 //! - it does not roll back. There is nothing to roll back from: a failure
-//!   happens before activation, so the previous version is still the active
-//!   one. A rollback is `host release` naming the previous version, which is
-//!   why the versioned staging tree is kept rather than pruned;
+//!   happens before activation, so the previous version remains active. A
+//!   rollback changes `targets[].managed_versions` and applies host state,
+//!   which is why the versioned staging tree is kept rather than pruned;
 //! - it does not restart a unit it invented. A product declares every owning
 //!   unit: a label alone has to be FOUND in the registry's own declared
 //!   service set ([`service::declared_services`]) before it is touched, while
@@ -2490,11 +2490,10 @@ pub(crate) async fn missing_release_objects(
 ///
 /// A manifest is not enough on its own, which is why
 /// [`missing_release_objects`] runs here too. The manifest is written early in
-/// a publish, so it exists for versions whose binaries do not, and both
-/// `stado host promote-version` and `stado host release` reach a coordinate
-/// through this one function. Refusing here is what stops an incomplete
-/// immutable version from being promoted into desired state or delivered to a
-/// host at all.
+/// a publish, so it exists for versions whose binaries do not. Promotion and
+/// host-state delivery both reach a coordinate through this one function.
+/// Refusing here stops an incomplete immutable version from becoming desired
+/// state or being delivered to a host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CatalogIdentity {
     source_commit: String,
@@ -2564,11 +2563,10 @@ async fn pipeline_catalog_identity(
     // from 99e03396 — three merges later, carrying #250, #255 and #256. Create-
     // only puts mean neither could overwrite the other, so the coordinate holds
     // two builds, and this function preferred the signed one without ever
-    // reading the sidecar beside it. `host release` then reported
+    // reading the sidecar beside it. Release delivery then reported
     // `released: charless-mac-mini now runs stado 0.13.27` while installing the
-    // older build, and `service converge` confirmed `in-sync` — every reading
-    // true about itself and none of them about the version an operator asked
-    // for.
+    // older build, and host-state confirmed `in-sync` — every reading true
+    // about itself and none of them about the version an operator asked for.
     //
     // A version number that means two different builds is not deliverable, and
     // the doctrine for that is already written in `catalog_identity` below:
@@ -2861,9 +2859,9 @@ pub(crate) async fn catalog_identity(
 }
 
 /// A loopback release origin on a remote host is trusted only when
-/// `host forward-local` recorded that exact endpoint there. The marker is not
-/// proof that the tunnel is still alive—the subsequent fetch proves that—but
-/// it is proof that loopback HTTP names an encrypted Stado-managed channel
+/// `stado route open` recorded that exact directory route endpoint there. The
+/// marker is not proof that the tunnel is still alive—the subsequent fetch
+/// proves that—but it proves loopback HTTP names an encrypted Stado-managed
 /// rather than an undeclared clear-text transport.
 async fn has_managed_loopback_forward(
     target: &ComputeTarget,
