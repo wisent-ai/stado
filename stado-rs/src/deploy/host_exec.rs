@@ -79,6 +79,33 @@ const RESOLVED_EXECUTABLE_MARKER: &str = "STADO_RESOLVED_EXECUTABLE\t";
 /// the call that happens to exercise it, whereas one struct cannot drift
 /// from itself. Field names, and the omission of the conditional ones,
 /// reproduce the map this replaced, so the printed document is unchanged.
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostExecConnection {
+    kind: String,
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    destination: Option<String>,
+}
+
+impl From<host_channel::UsedConnection<'_>> for HostExecConnection {
+    fn from(connection: host_channel::UsedConnection<'_>) -> Self {
+        match connection {
+            host_channel::UsedConnection::Local => Self {
+                kind: "local".into(),
+                name: "local".into(),
+                destination: None,
+            },
+            host_channel::UsedConnection::Ssh(connection) => Self {
+                kind: "ssh".into(),
+                name: connection.name.into(),
+                destination: Some(connection.destination.into()),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HostExecReceipt {
@@ -86,6 +113,8 @@ struct HostExecReceipt {
     target: String,
     ssh: Option<String>,
     ssh_fallbacks: Vec<crate::targets::SshConnectionPath>,
+    /// The local channel or exact declared SSH route that carried the command.
+    used_connection: HostExecConnection,
     command: String,
     argv: Vec<String>,
     /// Only for an entry installed at more than one path: `argv[0]` is then
@@ -1947,10 +1976,10 @@ pub async fn exec_host(
     };
     // `mut`: a multi-candidate run reports which path it execed on stderr, and
     // that marker line is consumed out of the operator-visible stderr below.
-    let mut output = match (approved.argv.split_first(), account) {
+    let (mut output, used_connection) = match (approved.argv.split_first(), account) {
         (Some((_, arguments)), Some(account)) => {
             let script = account_script(account, arguments);
-            host_channel::run_script_with_timeout(
+            host_channel::run_script_with_timeout_and_connection(
                 &target,
                 &script,
                 Duration::from_secs(account.timeout_seconds),
@@ -1959,21 +1988,42 @@ pub async fn exec_host(
             .await?
         }
         (Some(_), None) if approved.argv == PROBIERZ_RUN_ROOT_CREATE => {
-            host_channel::run_script(&target, &probierz_run_root_script(), runner).await?
+            host_channel::run_script_with_timeout_and_connection(
+                &target,
+                &probierz_run_root_script(),
+                host_channel::remote_timeout(),
+                runner,
+            )
+            .await?
         }
         // A read whose fixed paths are relative to the managed account's home
         // stands in that home first. One candidate, one absolute program, so
         // nothing below has a marker to look for.
         (Some(_), None) if home_rooted(approved.argv) => {
             let script = home_rooted_script(approved.argv);
-            host_channel::run_script(&target, &script, runner).await?
+            host_channel::run_script_with_timeout_and_connection(
+                &target,
+                &script,
+                host_channel::remote_timeout(),
+                runner,
+            )
+            .await?
         }
         (Some((_, arguments)), None) if candidates.len() > usize::from(true) => {
             let script = candidate_script(candidates, arguments);
-            host_channel::run_script(&target, &script, runner).await?
+            host_channel::run_script_with_timeout_and_connection(
+                &target,
+                &script,
+                host_channel::remote_timeout(),
+                runner,
+            )
+            .await?
         }
-        _ => host_channel::run_program(&target, approved.argv, runner).await?,
+        _ => host_channel::run_program_with_connection(&target, approved.argv, runner).await?,
     };
+    // Owned immediately: the route borrows the target it was selected from,
+    // and the receipt below moves that target's own fields.
+    let used_connection = HostExecConnection::from(used_connection);
     // Which path the host actually execed. Only the multi-candidate script
     // reports it: the account script resolves `$program` in the remote shell
     // and prints no marker, so that path has nothing to report here and
@@ -2004,6 +2054,7 @@ pub async fn exec_host(
         target: target.name,
         ssh: target.ssh,
         ssh_fallbacks: target.ssh_fallbacks,
+        used_connection,
         command: approved.display(),
         argv: approved
             .argv

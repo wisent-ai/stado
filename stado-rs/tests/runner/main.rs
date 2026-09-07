@@ -263,10 +263,12 @@ fn fleet_report_keeps_listener_and_job_slot_typed_for_each_profile() {
 #[test]
 fn repository_scope_is_carried_into_the_exact_installer_program() {
     let program = stado::deploy::host_precheck_runner::installer_program(
-        "precheck",
-        "runner-fixture",
-        "darwin-arm64",
-        Some("example"),
+        &stado::deploy::host_precheck_runner::InstallerRequest {
+            profile_name: "precheck",
+            target_name: "runner-fixture",
+            platform_name: "darwin-arm64",
+            repository: Some("example"),
+        },
         "registration-token",
         "http://127.0.0.1:18080",
         18_080,

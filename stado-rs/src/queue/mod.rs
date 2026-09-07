@@ -56,6 +56,12 @@ use chrono::{DateTime, Utc};
 
 /// Canonical queue/storage layout contract recorded in release manifests.
 pub const STORAGE_LAYOUT_VERSION: u16 = true as u16;
+
+/// The suffix `put` stages a large body under: `<key>.__stado_upload/<upload
+/// id>/<index>`. A part is not an object, and the difference decides whether a
+/// key may be listed, composed, or served — so the marker is declared once
+/// here rather than spelled again at each reader.
+pub const UPLOAD_PART_MARKER: &str = ".__stado_upload/";
 pub use azure_blob::AzureBlobBackend;
 pub use gcs::GcsBackend;
 pub use local_file::LocalBackend;

@@ -777,8 +777,9 @@ async fn validate_for_write(document: &Value) -> Result<Option<String>, CmdError
             .and_then(|blob| serde_json::from_str::<Value>(&blob.content).ok()),
         Err(_) => None,
     };
-    crate::targets::validate_registry_for_write(document, current.as_ref())
-        .map_err(|exc| CmdError::click(exc.to_string()))
+    crate::targets::validate_registry_for_write(document, current.as_ref()).map_err(|exc| {
+        CmdError::click(exc.to_string()).stating(crate::failure::FailureCode::Refused)
+    })
 }
 
 /// Say out loud that a pre-existing fault was carried past, so a scoped write

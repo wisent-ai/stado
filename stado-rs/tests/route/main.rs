@@ -1,6 +1,5 @@
 //! Routing capability tests against the real local storage and filesystem paths.
 
-use std::path::Path;
 use std::process::{Command, Output};
 
 fn this_host() -> String {

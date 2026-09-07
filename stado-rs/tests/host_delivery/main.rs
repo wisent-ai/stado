@@ -146,13 +146,10 @@ fn a_selected_uncommitted_tree_is_replaced_with_modes_and_symlinks_preserved() {
         b"selected\n"
     );
     assert!(!delivered.join("ignored.txt").exists());
-    assert_eq!(
-        fs::symlink_metadata(delivered.join("current"))
-            .unwrap()
-            .file_type()
-            .is_symlink(),
-        true
-    );
+    assert!(fs::symlink_metadata(delivered.join("current"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
     assert_eq!(
         fs::metadata(delivered.join("run.sh"))
             .unwrap()

@@ -1686,20 +1686,35 @@ fn scope_for_profile(
     ))
 }
 
+/// What one registration names: the declared profile, the host it installs
+/// on, the platform whose installer is rendered, and the repository whose
+/// scope GitHub is asked for. These four travel together because a scope is
+/// only meaningful against the profile that declares it accepts one, and
+/// because a rendered installer is reviewable only as the whole set.
+pub struct InstallerRequest<'a> {
+    pub profile_name: &'a str,
+    pub target_name: &'a str,
+    pub platform_name: &'a str,
+    pub repository: Option<&'a str>,
+}
+
 /// Render the exact installer program the host channel will execute.
 ///
 /// Keeping this boundary pure makes registration scope reviewable without a
 /// live host while the production path still supplies short-lived credentials.
 pub fn installer_program(
-    profile_name: &str,
-    target_name: &str,
-    platform_name: &str,
-    repository: Option<&str>,
+    request: &InstallerRequest<'_>,
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
     restart_registered: bool,
 ) -> Result<String, DeployError> {
+    let &InstallerRequest {
+        profile_name,
+        target_name,
+        platform_name,
+        repository,
+    } = request;
     let profile = runner_profile(profile_name)?;
     let scope = scope_for_profile(profile, repository)?;
     let platform = Platform::for_name(platform_name, target_name)?;
@@ -2228,12 +2243,14 @@ async fn install_profile(
         && profile.needs_publisher_bootstrap()
         && !github_runner_is_online(&runner_name).await?;
     let script = installer_program(
-        &profile.name,
-        &target.name,
-        platform.name(),
-        match &scope {
-            RunnerScope::Organization => None,
-            RunnerScope::Repository(repository) => Some(repository.as_str()),
+        &InstallerRequest {
+            profile_name: &profile.name,
+            target_name: &target.name,
+            platform_name: platform.name(),
+            repository: match &scope {
+                RunnerScope::Organization => None,
+                RunnerScope::Repository(repository) => Some(repository.as_str()),
+            },
         },
         &token,
         &brama_url,
