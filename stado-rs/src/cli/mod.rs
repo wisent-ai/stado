@@ -1303,9 +1303,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Manage the GUI-automation enablement of TARGET.
-    #[command(name = "gui-automation", subcommand)]
-    GuiAutomation(HostGuiAutomationCommands),
     /// Report TARGET's uptime, load averages and logged-in users.
     Uptime {
         target: String,
@@ -1556,42 +1553,6 @@ enum HostCommands {
         /// long-lived processes observe the retraction immediately.
         #[arg(long)]
         reload_service: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum HostGuiAutomationCommands {
-    /// Report autologin, remote management, TCC, CuaDriver, and the signed
-    /// Apple challenge helper for the registry-bound GUI user.
-    Status {
-        target: String,
-        /// Return the complete observed host state as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Configure the persistent GUI login, CuaDriver, the Apple challenge
-    /// helper, runtime, and Accessibility grants.
-    Enable { target: String },
-    /// Reconcile the signed Apple challenge helper and grant it and the
-    /// installed CuaDriver Accessibility for the registry-bound GUI user.
-    #[command(name = "grant-accessibility")]
-    GrantAccessibility {
-        target: String,
-        /// Prepare only the Apple challenge helper; leave CuaDriver, its
-        /// Accessibility grants, and its runtime unchanged.
-        #[arg(long)]
-        apple_only: bool,
-        /// Return the complete preparation report, including partial work on failure.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Revert the enablement: autologin, kcpassword, remote management,
-    /// the driver's accessibility grant, and the installed artifacts.
-    Disable {
-        target: String,
-        /// Bundle id whose accessibility grant is revoked; omitted leaves TCC alone.
-        #[arg(long)]
-        bundle: Option<String>,
     },
 }
 
@@ -2049,20 +2010,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 watts,
                 json,
             } => host::gpu_power_limit(&target, watts, json).await,
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target, json }) => {
-                host::gui_automation_status(&target, json).await
-            }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
-                host::gui_automation_enable(&target).await
-            }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
-                target,
-                apple_only,
-                json,
-            }) => host::gui_automation_grant_accessibility(&target, apple_only, json).await,
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
-                host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
-            }
             HostCommands::Uptime { target, json } => host::uptime(&target, json).await,
             HostCommands::Ping { target, json } => host::ping(&target, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
