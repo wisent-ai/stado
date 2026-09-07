@@ -549,6 +549,10 @@ struct HostsView: View {
                     )
                 }
                 tailscaleLogSection(for: host)
+                HostReleaseSection(
+                    store: store.hostReleaseStore,
+                    host: host.targetName ?? host.displayName
+                )
 
                 appleChallengeSection(for: host)
                 cargoInventorySection(for: host)

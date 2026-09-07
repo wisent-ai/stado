@@ -61,6 +61,7 @@ final class OperationsStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var dashboardURLString: String
+    @Published private(set) var hostReleaseStore = HostReleaseStore()
 
     private let defaults: UserDefaults
     private let client: OperationsClient
