@@ -285,6 +285,10 @@ pub(crate) fn validate_registry_body(
     // report it through the existing `build-refuses-registry` finding rather
     // than act on the part it understood.
     crate::release_unit_image::validate_registry_contract(data).map_err(RegistryValidationError)?;
+    // The public-origin block is judged here for the same reason: an origin
+    // nothing outside the tailnet can resolve reached the public release
+    // route through an untyped deployment variable, and no reader refused it.
+    crate::public_origin::validate_registry_contract(data).map_err(RegistryValidationError)?;
 
     if include_inference {
         crate::inference::schema::validate(data).map_err(RegistryValidationError)?;

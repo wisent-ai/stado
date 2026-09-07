@@ -197,9 +197,21 @@ pub(super) async fn get_policy() -> Response {
         .and_then(Value::as_array)
         .map(|entries| entries.iter().filter_map(project_target).collect())
         .unwrap_or_default();
+    // The public-origin declarations are a top-level block, and Desktop
+    // renders them beside the report `stado web origin status` produces. An
+    // absent key is an empty list: a fleet may publish nothing publicly, and
+    // that is a different statement from a projection that dropped the key.
+    let public_origins = match document.get(crate::public_origin::POLICY_KEY) {
+        Some(declared) => declared.clone(),
+        None => Value::Array(Vec::new()),
+    };
     send_json(
         http_status("200"),
-        &json!({"generation": current.version, "targets": targets}),
+        &json!({
+            "generation": current.version,
+            "targets": targets,
+            "public_origins": public_origins,
+        }),
     )
 }
 /// `POST /api/registry/import`

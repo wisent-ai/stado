@@ -25,6 +25,11 @@ struct WebStatusView: View {
     @ObservedObject var store: FleetControlStore
     @Environment(\.dismiss) private var dismiss
     @State private var product = ""
+    /// Public origins are a separate boundary from the web edge: one is the
+    /// origin a release client fetches object bytes from, the other is the
+    /// edge that terminates a product's hostname. They are read here
+    /// together because `/docs/channels` puts both reports on this screen.
+    @StateObject private var origins = PublicOriginStore()
 
     var body: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
@@ -113,6 +118,12 @@ struct WebStatusView: View {
                             .font(WisentTypeScale.caption())
                             .foregroundStyle(WisentDesign.secondary)
                     }
+                    Divider()
+                    PublicOriginsSection(
+                        store: origins,
+                        declarations: store.policy?.publicOrigins ?? [],
+                        generation: store.policy?.generation
+                    )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -120,6 +131,10 @@ struct WebStatusView: View {
                 Spacer()
                 WisentActionButton(action: WisentAction("Close") { dismiss() })
             }
+        }
+        .task {
+            origins.configureEndpoint(store.address?.baseURL.absoluteString)
+            await origins.read()
         }
         .padding(WisentDesign.Space.x6)
         .frame(minWidth: 760, minHeight: 540)

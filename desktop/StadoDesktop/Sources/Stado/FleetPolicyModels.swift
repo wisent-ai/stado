@@ -9,9 +9,14 @@ import Foundation
 struct FleetPolicy: Decodable, Sendable {
     let generation: String
     let targets: [FleetPolicyTarget]
+    /// The document's own `public_origins`, which belong to the deployment
+    /// rather than to one target: a public origin names the target that
+    /// serves it, and a target may serve none.
+    let publicOrigins: [FleetPublicOrigin]
 
     enum CodingKeys: String, CodingKey {
         case generation, targets
+        case publicOrigins = "public_origins"
     }
 
     init(from decoder: Decoder) throws {
@@ -22,6 +27,10 @@ struct FleetPolicy: Decodable, Sendable {
             generation = try values.decodeIfPresent(String.self, forKey: .generation) ?? "Unavailable"
         }
         targets = try values.decodeIfPresent([FleetPolicyTarget].self, forKey: .targets) ?? []
+        publicOrigins = try values.decodeIfPresent(
+            [FleetPublicOrigin].self,
+            forKey: .publicOrigins
+        ) ?? []
     }
 }
 

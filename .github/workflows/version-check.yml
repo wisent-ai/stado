@@ -271,25 +271,45 @@ jobs:
               return f"stado://releases/stado/{version}/{release_platform}"
           
           
-          def manifest_for(stado: Path, version: str, release_platform: str, root: Path) -> tuple[dict[str, str], str]:
-              uri = f"{release_base(version, release_platform)}/release-manifest-{release_platform}.json"
-              destination = root / f"manifest-{release_platform}.json"
+          def manifest_for(stado: Path, version: str, release_platform: str, root: Path) -> tuple[dict[str, object], str]:
+              # The SIGNED manifest, and deliberately not `release-manifest-<platform>.json`.
+              #
+              # Two publishers write this prefix and their name sets are disjoint
+              # (`release_control.rs`, above `RELEASE_REVISION_NAME`): the tag train writes
+              # the executables, `SHA256SUMS`, `stado-v<version>-<platform>.tar.gz` and
+              # `release-manifest-<platform>.json`, while the signed pipeline writes
+              # `release.tar.gz`, `qualification.json`, `release.sig` and `release.json`.
+              # `/docs/primitives/release` names only the second set, in that order, and
+              # says `release.json` is written last and is the commit marker required
+              # delivery jobs consume. This gate was reading the OTHER producer's sidecar,
+              # so a coordinate the release pipeline had published completely still looked
+              # absent to it: on 2026-09-07 `stado/0.16.42/linux-amd64/release.json` was
+              # present with its 30,456,605-byte archive, and
+              # `release-manifest-linux-amd64.json` did not exist at all.
+              uri = f"{release_base(version, release_platform)}/release.json"
+              destination = root / f"release-{release_platform}.json"
               get(stado, uri, destination)
               try:
                   value = json.loads(destination.read_text(encoding="utf-8"))
               except json.JSONDecodeError as error:
                   raise SystemExit(f"release channel returned invalid JSON for {uri}") from error
-              fields = {"platform", "product", "sha256", "source_commit", "version"}
-              if not isinstance(value, dict) or set(value) != fields:
-                  raise SystemExit(f"release manifest has unexpected fields: {uri}")
+              # A required subset, not an exact set. The signed manifest binds twenty
+              # fields today and the compatibility matrix makes additive optional fields
+              # compatible, so equality here would refuse the next release for growing.
+              required = {"artifact_bytes", "artifact_sha256", "platform", "product", "source_revision", "version"}
+              if not isinstance(value, dict) or not required.issubset(value):
+                  raise SystemExit(f"signed release manifest is missing required fields: {uri}")
               if (value["product"], value["version"], value["platform"]) != ("stado", version, release_platform):
                   raise SystemExit(f"release manifest identity mismatch: {uri}")
-              digest = value["sha256"]
-              commit = value["source_commit"]
+              digest = value["artifact_sha256"]
+              commit = value["source_revision"]
+              size = value["artifact_bytes"]
               if not isinstance(digest, str) or len(digest) != 64 or not HEX.fullmatch(digest):
                   raise SystemExit(f"release manifest digest is invalid: {uri}")
+              if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+                  raise SystemExit(f"release manifest artifact size is invalid: {uri}")
               if not isinstance(commit, str) or len(commit) not in {40, 64} or not HEX.fullmatch(commit):
-                  raise SystemExit(f"release manifest source commit is invalid: {uri}")
+                  raise SystemExit(f"release manifest source revision is invalid: {uri}")
               return value, uri
           
           
@@ -305,12 +325,19 @@ jobs:
           
           def surface_from_release(stado: Path, version: str, release_platform: str, root: Path) -> dict[str, object]:
               manifest, manifest_uri = manifest_for(stado, version, release_platform, root)
-              archive_uri = f"{release_base(version, release_platform)}/stado-v{version}-{release_platform}.tar.gz"
+              # `release.tar.gz`, the archive the signed manifest attests, at the same
+              # coordinate. Both the digest and the byte count are compared: a payload
+              # that lost a chunk decodes into something shorter and perfectly valid, so
+              # a length alone can never prove a transfer and neither can a digest alone
+              # prove the object is the whole one the manifest bound.
+              archive_uri = f"{release_base(version, release_platform)}/release.tar.gz"
               archive = root / "release.tar.gz"
               get(stado, archive_uri, archive)
-              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-              if digest != manifest["sha256"]:
+              payload = archive.read_bytes()
+              if hashlib.sha256(payload).hexdigest() != manifest["artifact_sha256"]:
                   raise SystemExit(f"release archive differs from its manifest: {archive_uri}")
+              if len(payload) != manifest["artifact_bytes"]:
+                  raise SystemExit(f"release archive is not the size its manifest binds: {archive_uri}")
               extracted = root / "release"
               extracted.mkdir()
               safe_extract(archive, extracted)
@@ -324,7 +351,7 @@ jobs:
                   raise SystemExit(f"release binary advertised an invalid command surface: {archive_uri}")
               return {
                   "version": version,
-                  "source": f"{manifest_uri} published from {manifest['source_commit']}",
+                  "source": f"{manifest_uri} published from {manifest['source_revision']}",
                   "surface": commands,
               }
           
@@ -349,7 +376,7 @@ jobs:
                   states = {
                       candidate: state(
                           stado,
-                          f"{release_base(version, candidate)}/release-manifest-{candidate}.json",
+                          f"{release_base(version, candidate)}/release.json",
                       )
                       for candidate in required_platforms
                   }
@@ -378,7 +405,7 @@ jobs:
                   archives = {
                       candidate: state(
                           stado,
-                          f"{release_base(version, candidate)}/stado-v{version}-{candidate}.tar.gz",
+                          f"{release_base(version, candidate)}/release.tar.gz",
                       )
                       for candidate in required_platforms
                   }
@@ -412,9 +439,9 @@ jobs:
                           candidate: manifest_for(stado, version, candidate, root)[0]
                           for candidate in required_platforms
                       }
-                      commits = {manifest["source_commit"] for manifest in manifests.values()}
+                      commits = {manifest["source_revision"] for manifest in manifests.values()}
                       if len(commits) != 1:
-                          raise SystemExit(f"release platforms for {version} name different source commits")
+                          raise SystemExit(f"release platforms for {version} name different source revisions")
                       baseline = surface_from_release(stado, version, release_platform, root)
                   output.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
                   return f"stado:{version}"
@@ -590,7 +617,7 @@ jobs:
             exit 0
           fi
           case "$marker" in
-            stado://releases/stado/*/release-manifest-*.json) ;;
+            stado://releases/stado/*/release.json) ;;
             *)
               echo "::error::unknown baseline marker in $baseline: $marker." \
                 "Generate it from the channel: python3 "$script_dir/baseline.py" --best --stado STADO --output BASELINE"
@@ -728,7 +755,7 @@ jobs:
             "$work/candidate.json" > "$work/added.json"
           jq '.source = "handwritten by someone in a hurry"' "$BASELINE" \
             > "$work/prose.json"
-          jq '.source = "stado://releases/stado/9.9.9/nowhere-noarch/release-manifest-nowhere-noarch.json published from 0000000000000000000000000000000000000000"' \
+          jq '.source = "stado://releases/stado/9.9.9/nowhere-noarch/release.json published from 0000000000000000000000000000000000000000"' \
             "$BASELINE" > "$work/absent-object.json"
           
           # Case 3 needs a baseline that already carries this tree's surface at the version this
