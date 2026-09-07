@@ -1,8 +1,7 @@
-//! Real publisher-runner and Developer ID journeys.
+//! Real declared publisher-profile and Developer ID journeys.
 //!
-//! These tests intentionally require a dedicated macOS Stado target, a disposable
-//! GitHub repository, Weles, Skarbiec, and an Account Holder credential. They do
-//! not substitute local fixtures for any part of the release path.
+//! These tests require a dedicated macOS target and disposable repository;
+//! no part of the release path is substituted with a local fixture.
 use std::process::{Command, Output};
 
 fn required(name: &str) -> String {
@@ -34,10 +33,11 @@ fn publisher_runner_install_reconciles_an_existing_runner_without_org_admin_acce
     let repository = required("STADO_PUBLISHER_TEST_REPOSITORY");
 
     let installed = success(&run(&[
-        "host",
-        "publisher-runner",
+        "runner",
         "install",
         &target,
+        "--profile",
+        "publisher",
         "--repository",
         &repository,
         "--json",
@@ -51,10 +51,11 @@ fn publisher_runner_install_reconciles_an_existing_runner_without_org_admin_acce
         .contains("runner service: running"));
 
     let status = success(&run(&[
-        "host",
-        "publisher-runner",
+        "runner",
         "status",
         &target,
+        "--profile",
+        "publisher",
         "--json",
     ]));
     assert_eq!(status["status"], "completed");
@@ -63,22 +64,21 @@ fn publisher_runner_install_reconciles_an_existing_runner_without_org_admin_acce
 
 #[test]
 #[ignore = "Probierz supplies Account Holder 2FA consent on the dedicated macOS host"]
-fn developer_id_issues_once_reuses_the_bundle_and_grants_repository_signing() {
+fn publisher_install_issues_once_reuses_the_bundle_and_grants_repository_signing() {
     let target = required("STADO_PUBLISHER_TEST_TARGET");
     let repository = required("STADO_PUBLISHER_TEST_REPOSITORY");
-    let account_item = required("STADO_PUBLISHER_TEST_ACCOUNT_ITEM");
 
-    let issued = success(&run(&[
-        "host",
-        "publisher-runner",
-        "developer-id",
+    let installed = success(&run(&[
+        "runner",
+        "install",
         &target,
-        "--account-item",
-        &account_item,
+        "--profile",
+        "publisher",
         "--repository",
         &repository,
         "--json",
     ]));
+    let issued = &installed["repository_bootstrap"]["developer_id"];
     assert!(matches!(
         issued["status"].as_str(),
         Some("issued" | "reused")
@@ -89,17 +89,17 @@ fn developer_id_issues_once_reuses_the_bundle_and_grants_repository_signing() {
         .starts_with("Developer ID Application:"));
     assert_eq!(issued["repositories"][0], repository);
 
-    let reused = success(&run(&[
-        "host",
-        "publisher-runner",
-        "developer-id",
+    let installed = success(&run(&[
+        "runner",
+        "install",
         &target,
-        "--account-item",
-        &account_item,
+        "--profile",
+        "publisher",
         "--repository",
         &repository,
         "--json",
     ]));
+    let reused = &installed["repository_bootstrap"]["developer_id"];
     assert_eq!(reused["status"], "reused");
     assert_eq!(reused["identity"], issued["identity"]);
 

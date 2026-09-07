@@ -9,7 +9,6 @@ const crate = resolve(repo, 'stado-rs');
 for (const name of [
   'STADO_PUBLISHER_TEST_TARGET',
   'STADO_PUBLISHER_TEST_REPOSITORY',
-  'STADO_PUBLISHER_TEST_ACCOUNT_ITEM',
 ]) {
   assert.ok(process.env[name], `${name} must name the dedicated publisher fixture`);
 }
@@ -19,7 +18,7 @@ let stderr;
 try {
   ({ stdout, stderr } = await exec('cargo', [
     'test', '--test', 'publisher',
-    'developer_id_issues_once_reuses_the_bundle_and_grants_repository_signing',
+    'publisher_install_issues_once_reuses_the_bundle_and_grants_repository_signing',
     '--', '--ignored', '--nocapture', '--test-threads=1',
   ], {
     cwd: crate,
@@ -33,6 +32,6 @@ try {
 }
 
 assert.equal(stderr.includes('FAILED'), false, stderr);
-assert.match(stdout, /developer_id_issues_once_reuses_the_bundle_and_grants_repository_signing \.\.\. ok/);
+assert.match(stdout, /publisher_install_issues_once_reuses_the_bundle_and_grants_repository_signing \.\.\. ok/);
 assert.ok(stdout.includes('test result: ok. 1 passed; 0 failed'));
 process.stdout.write(stdout);

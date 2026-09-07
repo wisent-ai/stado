@@ -405,18 +405,14 @@ final class FleetControlStore: ObservableObject {
         ["host", "gui-automation", "status", host, "--json"]
     }
 
-    /// The host's own GitHub runner, addressed exactly as the CLI does.
-    ///
-    /// `repository` is the registration scope, not a filter: with a name the
-    /// runner registers against that repository — the door the fleet's
-    /// credential can open — and without one it registers organization-wide,
-    /// which needs the organization's self-hosted-runner permission.
+    /// One declared GitHub runner profile, addressed exactly as the CLI does.
     nonisolated static func hostRunnerArguments(
         action: String,
         host: String,
+        profile: String,
         repository: String?
     ) -> [String] {
-        var arguments = ["host", "precheck-runner", action, host]
+        var arguments = ["runner", action, host, "--profile", profile]
         let scope = repository?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !scope.isEmpty {
             arguments.append(contentsOf: ["--repository", scope])
@@ -425,23 +421,23 @@ final class FleetControlStore: ObservableObject {
         return arguments
     }
 
-    func readHostRunner(host: String) async {
-        await runHostRunner(action: "status", host: host, repository: nil)
+    func readHostRunner(host: String, profile: String) async {
+        await runHostRunner(action: "status", host: host, profile: profile, repository: nil)
     }
 
-    func installHostRunner(host: String, repository: String?) async {
-        await runHostRunner(action: "install", host: host, repository: repository)
+    func installHostRunner(host: String, profile: String, repository: String?) async {
+        await runHostRunner(action: "install", host: host, profile: profile, repository: repository)
     }
 
-    func restartHostRunner(host: String) async {
-        await runHostRunner(action: "restart", host: host, repository: nil)
+    func restartHostRunner(host: String, profile: String) async {
+        await runHostRunner(action: "restart", host: host, profile: profile, repository: nil)
     }
 
-    func removeHostRunner(host: String, repository: String?) async {
-        await runHostRunner(action: "remove", host: host, repository: repository)
+    func removeHostRunner(host: String, profile: String, repository: String?) async {
+        await runHostRunner(action: "remove", host: host, profile: profile, repository: repository)
     }
 
-    private func runHostRunner(action: String, host: String, repository: String?) async {
+    private func runHostRunner(action: String, host: String, profile: String, repository: String?) async {
         guard !runnerMutation.isWorking else { return }
         runnerHost = host
         guard let address else {
@@ -451,12 +447,13 @@ final class FleetControlStore: ObservableObject {
             return
         }
         let generation = requestGeneration
-        runnerMutation = .working("Running host precheck-runner \(action) on \(host)")
+        runnerMutation = .working("Running runner \(action) for \(profile) on \(host)")
         do {
             let result = try await client.run(
                 arguments: Self.hostRunnerArguments(
                     action: action,
                     host: host,
+                    profile: profile,
                     repository: repository
                 ),
                 confirmsMutation: action != "status",
@@ -490,16 +487,20 @@ final class FleetControlStore: ObservableObject {
         }
     }
 
-    /// What the operator reads back: what the runner answers for, which GitHub
-    /// door it registered through, and whether a job holds the host now.
+    /// What the operator reads back: profile, actual GitHub scope, listener,
+    /// labels, and the host-wide single job slot.
     nonisolated static func runnerSummary(_ report: HostRunnerReport) -> String {
-        [
-            report.runnerScope.map { "scope \($0)" },
-            report.runnerLabels.map { "labels \($0)" },
-            report.hostJobSlot.map { "host job slot \($0)" },
-        ]
-        .compactMap { $0 }
-        .joined(separator: " · ")
+        var fields = ["profile \(report.profile)"]
+        if let scope = report.runnerScope {
+            fields.append("scope \(scope)")
+        }
+        let listener = report.listener.connected.map {
+            $0 ? "connected" : "disconnected"
+        } ?? report.listener.state
+        fields.append("listener \(listener)")
+        fields.append("labels \(report.runnerLabels)")
+        fields.append("host job slot \(report.hostJobSlot)")
+        return fields.joined(separator: " · ")
     }
 
     func clearRunnerMutation() {

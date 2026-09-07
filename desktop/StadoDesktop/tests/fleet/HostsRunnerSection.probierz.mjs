@@ -6,10 +6,8 @@
 // GitHub door the registration went through, and whether a job is holding this
 // machine's one job slot.
 //
-// The gap this closes: `host precheck-runner` gained `--repository` and a host
-// job gate on 2026-09-06 and Desktop had neither, so an operator could read a
-// host's disk, services, gates and Apple readiness on this screen and had to
-// leave it for the one lifecycle that had just changed.
+// The declared `runner` capability carries repository scope, listener state,
+// and the host-wide job slot into the same inspector as the rest of the host.
 import assert from 'node:assert/strict';
 
 export function runHostsRunnerSectionJourney({
@@ -48,13 +46,15 @@ export function runHostsRunnerSectionJourney({
     // that shows an action without naming its command hides which host state
     // it is about to change.
     assert.ok(
-      loaded.tree.includes('host precheck-runner status'),
+      loaded.tree.includes('runner status') && loaded.tree.includes('--profile precheck'),
       `the runner section names no read-only command; tree: ${loaded.tree.slice(-2000)}`,
     );
 
     // Before anything is read, every field says so rather than inventing a
     // scope: a runner nobody asked about is not an organization-wide runner.
     assertField(loaded, 'Registration scope', { pattern: /^(Not read|organization:|repository:|unrecorded)/ });
+    assertField(loaded, 'Profile', { pattern: /^(precheck|publisher)$/ });
+    assertField(loaded, 'Listener');
     assertField(loaded, 'Host job slot', { pattern: /^(Not read|none|unknown|[\w.-]+ (pid=\d+|stale))$/ });
     assertField(loaded, 'Labels');
 

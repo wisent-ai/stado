@@ -45,7 +45,6 @@ pub mod mail;
 pub mod onboarding;
 pub mod overview;
 pub mod placement;
-pub mod precheck_runner;
 pub mod product;
 pub mod profiles_cmd;
 pub mod queue;
@@ -61,6 +60,7 @@ pub mod repair;
 pub mod resolver;
 pub mod resources;
 pub mod results;
+pub mod runner;
 pub mod schedule;
 pub mod secrets;
 pub mod seed_freshness;
@@ -642,6 +642,9 @@ enum Commands {
     Workload(workload::WorkloadCommands),
     /// Inspect and apply the ordered repair steps services declare.
     Repair(repair::RepairArgs),
+    /// Operate declared GitHub runner profiles across registry hosts.
+    #[command(subcommand)]
+    Runner(runner::RunnerCommands),
 }
 
 #[derive(Subcommand)]
@@ -1243,134 +1246,6 @@ enum RegistryHostPathCommands {
 }
 
 #[derive(Subcommand)]
-enum HostPrecheckRunnerCommands {
-    /// Install or reconcile the host's runner on TARGET.
-    Install {
-        target: String,
-        /// Register against this repository instead of the organization.
-        /// Organization-wide registration needs the organization's
-        /// self-hosted-runner permission on the fleet's GitHub credential; a
-        /// repository name needs only admin on that one repository, which is
-        /// what the fleet's own credential has.
-        #[arg(long)]
-        repository: Option<String>,
-        /// Emit the lifecycle report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Read the installed runner service, identity and network boundary.
-    Status {
-        target: String,
-        /// Emit the lifecycle report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Restart the runner in place and wait until it reports listening for
-    /// jobs.
-    ///
-    /// For a listener whose session to GitHub's broker was cut: the process
-    /// and the launchd state stay healthy, every job for its labels queues
-    /// forever, and `install` leaves a running service alone.
-    Restart {
-        target: String,
-        /// Emit the lifecycle report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Remove the runner, service definition and network boundary from TARGET.
-    Remove {
-        target: String,
-        /// The repository this runner was registered against, when it was not
-        /// registered organization-wide. A repository-scoped runner cannot be
-        /// removed through the organization endpoint.
-        #[arg(long)]
-        repository: Option<String>,
-        /// Emit the lifecycle report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Ensure one repository may schedule jobs on the managed runner group.
-    RepositoryAdd {
-        /// Repository name inside the wisent-ai organization.
-        repository: String,
-        /// Existing selected-repository runner group. Defaults to stado-precheck.
-        #[arg(long)]
-        runner_group: Option<String>,
-        /// Emit the reconciliation report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Mint a dedicated Brama review bearer and install it as a repository secret.
-    ModelReviewAdd {
-        target: String,
-        /// Repository name inside the wisent-ai organization.
-        repository: String,
-        /// Emit the reconciliation report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum HostPublisherRunnerCommands {
-    /// Install or reconcile the desktop publisher and grant its release secrets.
-    Install {
-        target: String,
-        /// Repository that receives the shared release secrets. Repeat as needed;
-        /// omit when reconciling only the installed runner.
-        #[arg(long = "repository")]
-        repositories: Vec<String>,
-        /// Emit the lifecycle report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Grant one desktop repository the shared release secrets.
-    RepositoryAdd {
-        /// Repository name inside the wisent-ai organization.
-        repository: String,
-        /// Emit the reconciliation report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Create repository signing material and publish its required release secrets.
-    Bootstrap {
-        /// Repository name inside the wisent-ai organization.
-        repository: String,
-        /// Emit the bootstrap report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Issue or reuse the shared Developer ID certificate and grant it to repositories.
-    DeveloperId {
-        /// Registry host that runs the Account Holder Weles trajectory.
-        target: String,
-        /// Skarbiec item containing the Apple Account Holder credentials.
-        #[arg(long)]
-        account_item: String,
-        /// Desktop repository that receives signing secrets. Repeat as needed.
-        #[arg(long = "repository", required = true)]
-        repositories: Vec<String>,
-        /// Emit the bootstrap report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Read the installed runner service, identity and network boundary.
-    Status {
-        target: String,
-        /// Emit the lifecycle report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Remove the runner, service definition and network boundary from TARGET.
-    Remove {
-        target: String,
-        /// Emit the lifecycle report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum HostCommands {
     /// Show the latest Stado health beacon and log tail for TARGET.
     Health {
@@ -1428,12 +1303,9 @@ enum HostCommands {
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),
-    /// Manage the isolated GitHub pre-check runner on a registry host.
-    #[command(name = "precheck-runner", subcommand)]
-    PrecheckRunner(HostPrecheckRunnerCommands),
-    /// Manage the organization-wide GitHub desktop publisher on a registry host.
-    #[command(name = "publisher-runner", subcommand)]
-    PublisherRunner(HostPublisherRunnerCommands),
+    /// Point TARGET's Weles recordings store at PATH.
+    #[command(name = "weles-recordings-dir")]
+    WelesRecordingsDir { target: String, path: String },
     /// Read or set TARGET's disk-cleanup policy in the canonical registry.
     ///
     /// Without a mutating flag this prints the policy in force. With one it
@@ -2624,70 +2496,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 reason,
                 json,
             } => host::reclaim(&target, apply, reason.as_deref(), json).await,
-            HostCommands::PrecheckRunner(command) => match command {
-                HostPrecheckRunnerCommands::Install {
-                    target,
-                    repository,
-                    json,
-                } => precheck_runner::install(&target, repository.as_deref(), json).await,
-                HostPrecheckRunnerCommands::Status { target, json } => {
-                    precheck_runner::status(&target, json).await
-                }
-                HostPrecheckRunnerCommands::Restart { target, json } => {
-                    precheck_runner::restart(&target, json).await
-                }
-                HostPrecheckRunnerCommands::Remove {
-                    target,
-                    repository,
-                    json,
-                } => precheck_runner::remove(&target, repository.as_deref(), json).await,
-                HostPrecheckRunnerCommands::RepositoryAdd {
-                    repository,
-                    runner_group,
-                    json,
-                } => {
-                    precheck_runner::repository_add(&repository, runner_group.as_deref(), json)
-                        .await
-                }
-                HostPrecheckRunnerCommands::ModelReviewAdd {
-                    target,
-                    repository,
-                    json,
-                } => precheck_runner::model_review_add(&target, &repository, json).await,
-            },
-            HostCommands::PublisherRunner(command) => match command {
-                HostPublisherRunnerCommands::Install {
-                    target,
-                    repositories,
-                    json,
-                } => precheck_runner::install_publisher(&target, &repositories, json).await,
-                HostPublisherRunnerCommands::RepositoryAdd { repository, json } => {
-                    precheck_runner::publisher_repository_add(&repository, json).await
-                }
-                HostPublisherRunnerCommands::Bootstrap { repository, json } => {
-                    precheck_runner::bootstrap_publisher_repository(&repository, json).await
-                }
-                HostPublisherRunnerCommands::DeveloperId {
-                    target,
-                    account_item,
-                    repositories,
-                    json,
-                } => {
-                    precheck_runner::bootstrap_developer_id(
-                        &target,
-                        &account_item,
-                        &repositories,
-                        json,
-                    )
-                    .await
-                }
-                HostPublisherRunnerCommands::Status { target, json } => {
-                    precheck_runner::status_publisher(&target, json).await
-                }
-                HostPublisherRunnerCommands::Remove { target, json } => {
-                    precheck_runner::remove_publisher(&target, json).await
-                }
-            },
             HostCommands::RemoveFile { target, path, json } => {
                 host::remove_file(&target, &path, json).await
             }
@@ -2880,6 +2688,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Doctor(args) => doctor::dispatch(args).await,
         Commands::Workload(command) => workload::dispatch(command).await,
         Commands::Repair(args) => repair::dispatch(args).await,
+        Commands::Runner(sub) => runner::run(sub).await,
     }
 }
 
