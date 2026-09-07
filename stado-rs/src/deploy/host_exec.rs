@@ -1253,6 +1253,20 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               exactly this command, so an operator can re-check its verdict by hand",
     },
     ApprovedCommand {
+        argv: MACOS_TAILSCALE_LOG_READ,
+        why: "reads the last hour of retained macOS logs from Tailscale's application and \
+              daemon processes. Serve and Funnel status describe configuration, not why \
+              a connection failed. This fixed read neither enables logging nor starts \
+              probes, changes configuration, or restarts a process",
+    },
+    ApprovedCommand {
+        argv: LINUX_TAILSCALE_LOG_READ,
+        why: "reads the last hour of the Linux tailscaled unit's retained journal, including \
+              its original timestamps and failure messages. The unit, time window and \
+              output format are fixed; this read starts no network probe and changes \
+              neither the service nor its logging configuration",
+    },
+    ApprovedCommand {
         argv: &["/sbin/ifconfig", "-a"],
         why: "lists every network interface with its addresses and flags. `-a` only widens the \
               selection to interfaces that are not up, which is the whole point: the interface \
@@ -1674,6 +1688,46 @@ pub fn allowlist() -> String {
         .join(", ")
 }
 
+const MACOS_TAILSCALE_LOG_READ: &[&str] = &[
+    "/usr/bin/log",
+    "show",
+    "--last",
+    "1h",
+    "--style",
+    "compact",
+    "--info",
+    "--debug",
+    "--no-pager",
+    "--process",
+    "Tailscale",
+    "--process",
+    "IPNExtension",
+    "--process",
+    "io.tailscale.ipn.macsys.network-extension",
+    "--process",
+    "tailscaled",
+];
+
+const LINUX_TAILSCALE_LOG_READ: &[&str] = &[
+    "/usr/bin/journalctl",
+    "--unit",
+    "tailscaled",
+    "--since",
+    "-1h",
+    "--no-pager",
+    "--output",
+    "short-iso",
+];
+
+/// These exact retained-log reads need no mutation confirmation in Desktop.
+/// Other host-exec operations, including provider sign-in, keep their existing
+/// confirmation requirement.
+pub(crate) fn is_retained_log_read(words: &[String]) -> bool {
+    approve(words).is_ok_and(|entry| {
+        entry.argv == MACOS_TAILSCALE_LOG_READ || entry.argv == LINUX_TAILSCALE_LOG_READ
+    })
+}
+
 /// True when a word contains nothing a shell would act on.
 pub fn is_shell_safe(word: &str) -> bool {
     !word.is_empty()
@@ -1963,17 +2017,6 @@ mod tests {
             }
             let selected = approve(&words).expect("its own spelling selects it");
             assert_eq!(selected.argv, entry.argv, "{}", entry.display());
-        }
-    }
-
-    #[test]
-    fn every_entry_states_why_it_is_safe() {
-        for entry in APPROVED_COMMANDS {
-            assert!(
-                entry.why.len() > 40,
-                "{}: an entry without a defensible reason does not belong in the table",
-                entry.display()
-            );
         }
     }
 

@@ -18,6 +18,9 @@ const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_REQUEST_BYTES: usize = MAX_INPUT_BYTES + 128 * 1024;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+// A fixed one-hour native log can exceed the ordinary command preview. Keep
+// its JSON receipt intact for Desktop while retaining a bounded capture.
+const MAX_RETAINED_LOG_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TIMEOUT_SECONDS: u64 = 300;
 const MUTATION_CONFIRMATION: &str = "RUN_MUTATION";
 const INPUT_PLACEHOLDER: &str = "$INPUT";
@@ -107,6 +110,17 @@ impl ConsoleError {
     }
 }
 
+fn is_retained_log_request(args: &[String]) -> bool {
+    args.first().is_some_and(|arg| arg == "host")
+        && args.get(1).is_some_and(|arg| arg == "exec")
+        && args
+            .iter()
+            .position(|arg| arg == "--")
+            .is_some_and(|separator| {
+                crate::deploy::host_exec::is_retained_log_read(&args[separator + 1..])
+            })
+}
+
 fn is_read_only(args: &[String]) -> bool {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         return true;
@@ -119,6 +133,9 @@ fn is_read_only(args: &[String]) -> bool {
     }
     if family == "host" && operation == "gui-automation" {
         return detail == "status";
+    }
+    if family == "host" && operation == "exec" {
+        return is_retained_log_request(args);
     }
     if matches!(
         family,
@@ -268,7 +285,10 @@ async fn stage_input(content: &str) -> Result<StagedInput, ConsoleError> {
     Ok(staged)
 }
 
-async fn read_bounded<R: AsyncRead + Unpin>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
+async fn read_bounded<R: AsyncRead + Unpin>(
+    mut reader: R,
+    limit: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
     let mut output = Vec::with_capacity(16 * 1024);
     let mut buffer = [0_u8; 8192];
     let mut truncated = false;
@@ -277,7 +297,7 @@ async fn read_bounded<R: AsyncRead + Unpin>(mut reader: R) -> std::io::Result<(V
         if count == 0 {
             break;
         }
-        let retained = MAX_OUTPUT_BYTES.saturating_sub(output.len()).min(count);
+        let retained = limit.saturating_sub(output.len()).min(count);
         output.extend_from_slice(&buffer[..retained]);
         truncated |= retained < count;
     }
@@ -334,9 +354,17 @@ async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         .stderr
         .take()
         .ok_or_else(|| ConsoleError::unavailable("could not capture command stderr"))?;
+    let stdout_limit = if is_retained_log_request(&request.args) {
+        MAX_RETAINED_LOG_OUTPUT_BYTES
+    } else {
+        MAX_OUTPUT_BYTES
+    };
     let execution = async {
-        let (stdout, stderr, status) =
-            tokio::join!(read_bounded(stdout), read_bounded(stderr), child.wait());
+        let (stdout, stderr, status) = tokio::join!(
+            read_bounded(stdout, stdout_limit),
+            read_bounded(stderr, MAX_OUTPUT_BYTES),
+            child.wait()
+        );
         let stdout = stdout.map_err(|error| {
             ConsoleError::unavailable(format!("could not read command stdout: {error}"))
         })?;

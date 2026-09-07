@@ -2113,6 +2113,20 @@ enum HostCommands {
 
     /// Run one approved command on TARGET (allowlist, not a shell). Every
     /// entry is read-only except the declared provider sign-in repairs.
+    ///
+    /// Retained Tailscale logs are available without changing logging settings,
+    /// restarting a service, or opening a test network connection.
+    ///
+    /// macOS: log show --last 1h --style compact --info --debug --no-pager
+    /// --process Tailscale --process IPNExtension
+    /// --process io.tailscale.ipn.macsys.network-extension --process tailscaled
+    ///
+    /// Linux: journalctl --unit tailscaled --since -1h --no-pager --output short-iso
+    ///
+    /// These commands retain the native timestamps and messages. Empty output
+    /// does not establish that Funnel works. Missing tools and access refusals
+    /// remain command failures. Changed arguments or an extra process, path, or
+    /// time window are refused before the host is contacted.
     Exec {
         target: String,
         /// Emit the report as JSON instead of the host's raw output.

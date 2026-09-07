@@ -323,6 +323,85 @@ struct OperatorCommandResult: Decodable, Sendable {
         return "The command exited with code \(exitCode) and printed nothing."
     }
 }
+/// The operator-selected native retained-log source. The registry projection
+/// does not currently publish a host operating system, so Desktop requires
+/// this explicit choice rather than deriving one from a hostname or capacity.
+enum HostTailscaleLogSource: String, CaseIterable, Hashable, Identifiable, Sendable {
+    case macOS
+    case linux
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .macOS: "macOS unified log"
+        case .linux: "Linux journal"
+        }
+    }
+
+    /// Fixed allowlisted argv passed after `stado host exec TARGET --json --`.
+    var command: [String] {
+        switch self {
+        case .macOS:
+            [
+                "log", "show", "--last", "1h", "--style", "compact",
+                "--info", "--debug", "--no-pager",
+                "--process", "Tailscale",
+                "--process", "IPNExtension",
+                "--process", "io.tailscale.ipn.macsys.network-extension",
+                "--process", "tailscaled",
+            ]
+        case .linux:
+            [
+                "journalctl", "--unit", "tailscaled", "--since", "-1h",
+                "--no-pager", "--output", "short-iso",
+            ]
+        }
+    }
+    /// The allowlist resolves the operator spelling above to its fixed native
+    /// executable path, and the host-exec receipt reports that resolved argv.
+    var receiptArguments: [String] {
+        let executable = self == .macOS ? "/usr/bin/log" : "/usr/bin/journalctl"
+        return [executable] + Array(command.dropFirst())
+    }
+}
+
+/// The exact inner receipt printed by `stado host exec TARGET --json`.
+///
+/// Connection details are intentionally not duplicated here. Swift's decoder
+/// ignores those receipt fields while retaining the host identity, fixed argv,
+/// both raw streams, process status, and the remote's own failure sentence.
+struct HostTailscaleLogReceipt: Decodable, Sendable {
+    let schema: String
+    let target: String
+    let command: String
+    let arguments: [String]
+    let standardOutput: String
+    let standardError: String
+    let exitCode: Int
+    let status: String
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case schema, target, command, status, error
+        case arguments = "argv"
+        case standardOutput = "stdout"
+        case standardError = "stderr"
+        case exitCode = "exit_code"
+    }
+}
+
+/// One explicit retained-log attempt, bound to the selected registry host and
+/// source even when the API or receipt refuses before any log text is returned.
+struct HostTailscaleLogAttempt: Sendable {
+    let requestedHost: String
+    let source: HostTailscaleLogSource
+    let arguments: [String]
+    let completedAt: Date
+    let result: OperatorCommandResult?
+    let receipt: HostTailscaleLogReceipt?
+    let failure: String?
+}
 
 enum FleetControlError: LocalizedError, Sendable {
     /// The dashboard's own sentence, carried through with its status.
