@@ -73,22 +73,23 @@ fn list_reads_every_profile_from_the_compiled_declaration() {
         document["profiles"][0]["unit_label"],
         "stado-precheck-runner"
     );
-    assert_eq!(document["profiles"][1]["name"], "publisher");
+    assert_eq!(document["profiles"][1]["name"], "repository-precheck");
+    assert_eq!(document["profiles"][2]["name"], "publisher");
     assert_eq!(
-        document["profiles"][1]["secrets"][0], "GITHUB_TOKEN",
+        document["profiles"][2]["secrets"][0], "GITHUB_TOKEN",
         "the declaration carries the secrets instead of a profile-specific command"
     );
     assert_eq!(
-        document["profiles"][1]["installers"]["linux-amd64"],
+        document["profiles"][2]["installers"]["linux-amd64"],
         "publisher-systemd"
     );
     assert_eq!(
-        document["profiles"][1]["labels"],
+        document["profiles"][2]["labels"],
         serde_json::json!(["stado", "stado-publisher"])
     );
-    assert_eq!(document["profiles"][1]["github_runner_group"], "Default");
+    assert_eq!(document["profiles"][2]["github_runner_group"], "Default");
     assert_eq!(
-        document["profiles"][1]["unit_label"],
+        document["profiles"][2]["unit_label"],
         "stado-publisher-runner"
     );
     assert_eq!(document["profiles"][1]["accepts_repository_scope"], true);
@@ -218,7 +219,7 @@ fn fleet_report_keeps_listener_and_job_slot_typed_for_each_profile() {
     let profiles = document["hosts"][0]["profiles"]
         .as_array()
         .expect("host profile reports");
-    assert_eq!(profiles.len(), 2);
+    assert_eq!(profiles.len(), 3);
     for profile in profiles {
         assert!(
             profile["listener"].get("connected").is_some(),

@@ -5,15 +5,25 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use super::credentials::admin_credential;
 use super::scope::RunnerScope;
 use crate::deploy::DeployError;
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
-pub const GITHUB_CREDENTIAL_ITEM: &str = "GITHUB_TOKEN";
 
+/// The identity this lifecycle acts as, resolved through the route declared in
+/// `stado-rs/data/github-identity.json` rather than named here.
+///
+/// It was named here: `GITHUB_CREDENTIAL_ITEM` was the literal `"GITHUB_TOKEN"`,
+/// so replacing the identity meant editing this file and shipping a release.
+/// On 2026-09-07 that cost a day — the item held an OAuth token carrying
+/// `read:org` where `GET /orgs/wisent-ai/actions/runner-groups` answers only
+/// `admin:org` — and there was nowhere to point Stado at another credential.
+/// `stado runner credential` reports which coordinate the route reaches and
+/// whether GitHub accepts it.
 pub(crate) async fn github_credential() -> Result<String, DeployError> {
-    admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
+    crate::github_identity::credential()
+        .await
+        .map_err(DeployError)
 }
 
 pub(crate) async fn github_runner_token(
@@ -43,18 +53,22 @@ pub(crate) async fn github_runner_token(
         let remedy = if status == reqwest::StatusCode::FORBIDDEN
             || status == reqwest::StatusCode::UNAUTHORIZED
         {
+            let route = crate::github_identity::declared()
+                .map(|identity| identity.credential_route.clone())
+                .unwrap_or_else(|error| error);
             match scope {
                 RunnerScope::Organization => format!(
-                    ". Stado read this credential from Skarbiec item {GITHUB_CREDENTIAL_ITEM:?} \
-                     field \"value\"; that identity may not manage {GITHUB_ORGANIZATION} runners, \
-                     which is what an organization-wide runner needs. Either store a credential \
-                     with the organization's self-hosted-runner write permission in that item, or \
-                     register this host against one repository with --repository <NAME>, which \
-                     the same credential is allowed to do"
+                    ". Stado read this credential through its declared Skarbiec route \
+                     {route:?}; that identity may not manage {GITHUB_ORGANIZATION} runners, \
+                     which is what an organization-wide runner needs. Either point that route \
+                     at a credential with the organization's self-hosted-runner write \
+                     permission, which `stado runner credential` reports on, or register this \
+                     host against one repository with --repository <NAME>, which the same \
+                     credential is allowed to do"
                 ),
                 RunnerScope::Repository(repository) => format!(
-                    ". Stado read this credential from Skarbiec item {GITHUB_CREDENTIAL_ITEM:?} \
-                     field \"value\"; that identity is not an administrator of \
+                    ". Stado read this credential through its declared Skarbiec route \
+                     {route:?}; that identity is not an administrator of \
                      {GITHUB_ORGANIZATION}/{repository}, so it cannot register a runner there"
                 ),
             }

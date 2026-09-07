@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::brama::{brama_skarbiec_context, BramaSkarbiecContext};
+use super::brama::{brama_identity_host, brama_skarbiec_context, BramaSkarbiecContext};
 use super::declaration::runner_target;
 use super::github::{
     github_credential, repository_name, set_repository_secret, GITHUB_ORGANIZATION,
@@ -220,15 +220,26 @@ pub async fn reconcile_model_review_secret(
 ) -> Result<Value, DeployError> {
     let repository = repository_name(repository)?;
     let target = runner_target(target_name).await?;
-    let context = brama_skarbiec_context(&target).await?;
-    reconcile_brama_introspection_grant(&target, &context).await?;
-    let primary_route = reconcile_model_review_route(&target, &context).await?;
+    // Beside Brama, not beside the runner. The Brama-owned Skarbiec vault, its
+    // capability-routes table and its GnuPG home exist only on the host Brama
+    // runs on, so every command built from that context has to run there. This
+    // read used to be pointed at the runner's own host, which is exactly the
+    // failure `brama_identity_host` was added to prevent and which its own doc
+    // comment quotes: registering a repository-scoped runner on
+    // ubuntu-server-rtx-pro-6000 answered `cannot read Brama's Skarbiec path
+    // declarations: /usr/bin/grep: /root/.config/brama/service.env: No such
+    // file or directory`, because Brama does not run there. `install_profile`
+    // resolved the same identity correctly; only this path did not.
+    let identity = brama_identity_host(&target).await?;
+    let context = brama_skarbiec_context(&identity).await?;
+    reconcile_brama_introspection_grant(&identity, &context).await?;
+    let primary_route = reconcile_model_review_route(&identity, &context).await?;
     let github_token = github_credential().await?;
     let client_id = model_review_client_id(repository);
     let capability = format!("call:brama#{MODEL_REVIEW_ALIAS}");
     let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
     let minted = host_channel::run_program(
-        &target,
+        &identity,
         &[
             "/usr/bin/env",
             &context.vault,
@@ -252,7 +263,7 @@ pub async fn reconcile_model_review_secret(
     if !minted.ok() {
         return Err(DeployError(format!(
             "{}: model review bearer mint failed: {}",
-            target.name,
+            identity.name,
             command_failure(&minted, "Skarbiec token mint failed")
         )));
     }

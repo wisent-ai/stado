@@ -205,7 +205,7 @@ pub async fn install_declared(
     } else {
         None
     };
-    let model_review = if profile.needs_kronika() {
+    let model_review = if profile.needs_model_review() {
         match repository {
             Some(repository) => Some(reconcile_model_review_secret(target_name, repository).await?),
             None => None,
