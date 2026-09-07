@@ -1259,41 +1259,14 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               exactly this command, so an operator can re-check its verdict by hand",
     },
     ApprovedCommand {
-        argv: &[
-            "/usr/bin/log",
-            "show",
-            "--last",
-            "1h",
-            "--style",
-            "compact",
-            "--info",
-            "--debug",
-            "--no-pager",
-            "--process",
-            "Tailscale",
-            "--process",
-            "IPNExtension",
-            "--process",
-            "io.tailscale.ipn.macsys.network-extension",
-            "--process",
-            "tailscaled",
-        ],
+        argv: MACOS_TAILSCALE_LOG_READ,
         why: "reads the last hour of retained macOS logs from Tailscale's application and \
               daemon processes. Serve and Funnel status describe configuration, not why \
               a connection failed. This fixed read neither enables logging nor starts \
               probes, changes configuration, or restarts a process",
     },
     ApprovedCommand {
-        argv: &[
-            "/usr/bin/journalctl",
-            "--unit",
-            "tailscaled",
-            "--since",
-            "-1h",
-            "--no-pager",
-            "--output",
-            "short-iso",
-        ],
+        argv: LINUX_TAILSCALE_LOG_READ,
         why: "reads the last hour of the Linux tailscaled unit's retained journal, including \
               its original timestamps and failure messages. The unit, time window and \
               output format are fixed; this read starts no network probe and changes \
@@ -1719,6 +1692,46 @@ pub fn allowlist() -> String {
         .map(ApprovedCommand::display)
         .collect::<Vec<String>>()
         .join(", ")
+}
+
+const MACOS_TAILSCALE_LOG_READ: &[&str] = &[
+    "/usr/bin/log",
+    "show",
+    "--last",
+    "1h",
+    "--style",
+    "compact",
+    "--info",
+    "--debug",
+    "--no-pager",
+    "--process",
+    "Tailscale",
+    "--process",
+    "IPNExtension",
+    "--process",
+    "io.tailscale.ipn.macsys.network-extension",
+    "--process",
+    "tailscaled",
+];
+
+const LINUX_TAILSCALE_LOG_READ: &[&str] = &[
+    "/usr/bin/journalctl",
+    "--unit",
+    "tailscaled",
+    "--since",
+    "-1h",
+    "--no-pager",
+    "--output",
+    "short-iso",
+];
+
+/// These exact retained-log reads need no mutation confirmation in Desktop.
+/// Other host-exec operations, including provider sign-in, keep their existing
+/// confirmation requirement.
+pub(crate) fn is_retained_log_read(words: &[String]) -> bool {
+    approve(words).is_ok_and(|entry| {
+        entry.argv == MACOS_TAILSCALE_LOG_READ || entry.argv == LINUX_TAILSCALE_LOG_READ
+    })
 }
 
 /// True when a word contains nothing a shell would act on.

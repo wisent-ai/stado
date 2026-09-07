@@ -91,6 +91,10 @@ name = "channel"
 path = "tests/channel/main.rs"
 
 [[test]]
+name = "host_exec"
+path = "tests/host_exec/main.rs"
+
+[[test]]
 name = "apple_challenge"
 path = "tests/apple_challenge/main.rs"
 

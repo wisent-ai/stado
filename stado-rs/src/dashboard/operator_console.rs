@@ -120,6 +120,14 @@ fn is_read_only(args: &[String]) -> bool {
     if family == "host" && operation == "gui-automation" {
         return detail == "status";
     }
+    if family == "host" && operation == "exec" {
+        return args
+            .iter()
+            .position(|arg| arg == "--")
+            .is_some_and(|separator| {
+                crate::deploy::host_exec::is_retained_log_read(&args[separator + 1..])
+            });
+    }
     if matches!(
         family,
         "capabilities"
