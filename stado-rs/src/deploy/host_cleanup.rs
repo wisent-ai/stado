@@ -16,7 +16,7 @@
 //! So the preview runs where the files are. The remote program locates the
 //! host's own stado binary through
 //! [`crate::deploy::host_recovery::WC_CANDIDATES`] — the same discovery
-//! list `host recover` uses to run the real cleanup — and invokes
+//! list the declared host repair uses to run the real cleanup — and invokes
 //! `disk-cleanup --once --dry-run`, which is
 //! [`crate::providers::local::disk_cleanup::preview_cleanup_once`]: the
 //! janitor's own planning phase with an `enforce` policy pinned down to its

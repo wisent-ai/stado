@@ -8,9 +8,9 @@
 //! - [`local_install`] — `stado bootstrap --local`: per-user launchd /
 //!   systemd --user install on the current machine for the agent /
 //!   coordinator / disk-cleanup / failure-fixer / watchdog kinds.
-//! - [`host_recovery`] — `stado host recover`: fixed, narrow SSH recovery
-//!   program for managed macOS hosts, with the tab-delimited `STADO_*`
-//!   marker protocol ported byte-exactly.
+//! - [`host_recovery`] — the `stado repair stado --step host` implementation:
+//!   a fixed, narrow SSH recovery program for managed macOS hosts, with the
+//!   tab-delimited `STADO_*` marker protocol ported byte-exactly.
 //! - [`host_users`] — `stado host user create`: account creation on
 //!   registry hosts over SSH; the password travels only on SSH stdin.
 //!
@@ -106,7 +106,6 @@ pub mod host_precheck_runner;
 pub mod host_reboot;
 pub mod host_reclaim;
 pub mod host_recovery;
-pub mod host_recovery_release;
 pub mod host_release;
 pub mod host_resolver_key;
 pub mod host_run;

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Reconcile Skarbiec's short-lived acquisition state after a service-user cutover.
-# Invoked by `stado host recover-skarbiec-acquisition-state`.
+# Invoked by the declared `skarbiec/acquisition-state` repair step.
 set -eu
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH

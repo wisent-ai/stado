@@ -18,6 +18,18 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+use serde::Serialize;
+
+/// One repair the service declares. The catalog owns the operator-facing
+/// incident description and proof; the typed repair table owns executable
+/// code, and the capability refuses unless the two sets match exactly.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CatalogRepair {
+    pub name: String,
+    pub summary: String,
+    pub mutating: bool,
+    pub proof: String,
+}
 
 /// One preconfigured Wisent service. Its product name and stable init-system
 /// identity address the same program, arguments, and required environment.
@@ -40,6 +52,10 @@ pub struct CatalogService {
     /// vault sits untouched beside it.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Ordered repairs this service supports. A new service operation is a
+    /// declaration row here, never another CLI verb.
+    #[serde(default)]
+    pub repair: Vec<CatalogRepair>,
 }
 
 #[derive(Deserialize)]

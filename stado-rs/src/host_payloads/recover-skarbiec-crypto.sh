@@ -1,6 +1,6 @@
 #!/bin/sh
 # Recover Skarbiec when stale per-user GnuPG daemons hold the keybox lock.
-# Invoked by `stado host recover-skarbiec-crypto`.
+# Invoked by the declared `skarbiec/crypto` repair step.
 set -eu
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH

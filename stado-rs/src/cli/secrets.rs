@@ -76,7 +76,7 @@ pub enum SecretsCommands {
     /// and until this command existed nothing said which — the answer lived
     /// in a discovery rule and one environment variable, and it surfaced only
     /// as a refusal from whatever command hit it. On 2026-09-05 that was
-    /// `stado host reconcile-release-verifier`, after two vaults on this
+    /// `stado repair stado --step release-verifier`, after two vaults on this
     /// machine had been claiming one owner for long enough to close the
     /// fleet's release publication boundary.
     ///

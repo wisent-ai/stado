@@ -36,9 +36,9 @@
 //!   [`add_service`] / [`remove_service`] edit, and what
 //!   `stado registry doctor` diffs against live host state.
 //! - `recovery` — the fixed list `host_recovery::MANAGED_AGENTS` that every
-//!   `stado host recover` pass restarts. Those units are genuinely managed,
-//!   so they are listed, but they are managed by that fixed program and not
-//!   by the registry document, so they can be neither adopted nor retired.
+//!   declared `stado` host repair pass restarts. Those units are genuinely
+//!   managed, so they are listed, but they are managed by that fixed program
+//!   and not by the registry document, so they can be neither adopted nor retired.
 //!
 //! Unit rendering for [`deploy_service`] is not reimplemented here: it goes
 //! through `deploy/local_install.rs::InstallPlan`, the same renderer
@@ -1693,7 +1693,7 @@ impl RemoteReport {
             "detail": self.detail,
             "exit_code": self.exit_code,
         });
-        // One object, the same one `host recover` prints, wherever a domain is
+        // One object, the same one the declared host repair reports, wherever a domain is
         // named at all: the name alone was what an operator had to act on, and
         // `user/501` alone does not say that it is a fallback or what the
         // fallback costs.
@@ -4210,8 +4210,8 @@ pub async fn inspect_system_daemon(
 /// neither is assumed. Without them the command refuses and names the one
 /// privileged command that works, because ending a process nothing will
 /// respawn is how a degraded control plane becomes a dead one. That refusal
-/// used to be the only answer here, and it sent the operator to
-/// `stado host recover`, which does not re-bootstrap a system daemon either:
+/// used to be the only answer here, and it sent the operator to a host repair
+/// that does not re-bootstrap a system daemon either:
 /// on 2026-08-19 the object API answered 503 to the whole fleet for an
 /// afternoon with no product path back.
 pub async fn restart_service(

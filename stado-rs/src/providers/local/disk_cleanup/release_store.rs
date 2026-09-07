@@ -26,12 +26,11 @@
 //!   answered `{"state":"absent"}` for every one of its objects by 21:50Z:
 //!   this cleaner deleted it under disk pressure because the object-API
 //!   host's `~/.stado/release-state` was empty and nothing else named it.
-//!   `install-stado.sh`, `self_update.rs`, `deploy/host_release.rs` and
-//!   `deploy/host_recovery_release.rs` all pin a version by
-//!   `STADO_RELEASE_VERSION` / `release.version`, and a declaration in the
-//!   registry is what `host declare-version` writes — neither was a pin here,
-//!   so the fleet's own installers pinned versions this cleaner was free to
-//!   remove. A version somebody has declared is not reclaimable scratch;
+//!   `install-stado.sh`, `self_update.rs` and the declared release host-state
+//!   capability all pin a version by `STADO_RELEASE_VERSION` /
+//!   `release.version`, and a declaration in the registry is the durable pin
+//!   this cleaner reads. A version somebody has declared is not reclaimable
+//!   scratch;
 //! - a version a pipeline run still names, because a delivery job may fetch
 //!   it: every run record under `runs/release-pipeline/` whose state is not
 //!   terminal, and every run younger than the policy's `min_age_seconds`
@@ -287,8 +286,8 @@ pub fn declared_versions(registry: &Value) -> BTreeMap<String, BTreeSet<String>>
 /// The versions an operator pins in a config file on this host, per product,
 /// from `release.version` in every candidate config path under `home`.
 ///
-/// This is the pin `install-stado.sh` reads as `STADO_RELEASE_VERSION`, that
-/// `deploy/host_recovery_release.rs` recovers a wedged host with, and that
+/// This is the pin `install-stado.sh` reads as `STADO_RELEASE_VERSION`, the
+/// declared release host-state capability reconciles, and
 /// `providers/local/version_check.rs` measures a host against. An environment
 /// variable cannot be a pin here — it belongs to whichever process exported
 /// it, not to the host — so the file is the durable half, and the file is

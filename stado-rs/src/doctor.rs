@@ -2286,11 +2286,11 @@ async fn check_agent_template() -> Check {
 const AGENT_SKARBIEC_ID: &str = "agent-skarbiec";
 const AGENT_SKARBIEC_TITLE: &str = "The agent's own Skarbiec broker answers";
 const AGENT_SKARBIEC_REMEDY: &str =
-    "run `stado host reconcile-agent-skarbiec <target>`, which sets agent.skarbiec.url to the \
-     credential endpoint the service directory declares for that host; a queue agent whose \
-     broker is unreachable can claim no job that declares secret_env. A broker that answers \
-     slowly or stops answering mid-request is usually a wedged GnuPG daemon: run `skarbiec \
-     recover-daemons` on that host";
+    "run `stado repair stado-control-plane --step agent-skarbiec --target <target> --apply`, \
+     which sets agent.skarbiec.url to the credential endpoint the service directory declares \
+     for that host; a queue agent whose broker is unreachable can claim no job that declares \
+     secret_env. A broker that answers slowly or stops answering mid-request is usually a \
+     wedged GnuPG daemon: run `skarbiec recover-daemons` on that host";
 
 /// Whether this host's queue agent can reach the broker it is configured to
 /// read workload secrets through.
@@ -2373,7 +2373,7 @@ const OWNER_VAULT_REMEDY: &str =
 ///
 /// On 2026-09-05 six `skarbiec set-json` writes landed in
 /// `~/.local/share/skarbiec/skarbiec.vault.json` — real, `active` on the host,
-/// and invisible to `stado host reconcile-release-verifier`, which reads
+/// and invisible to `stado repair stado --step release-verifier`, which reads
 /// `~/.stado/skarbiec.vault.json`. The fleet's release publication boundary
 /// closed for every product and the cause took a day to name, because nothing
 /// reported the split: `stado host vaults` answered "8 vault(s)" and said

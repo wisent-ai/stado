@@ -1059,7 +1059,7 @@ struct ServicesView: View {
                 Text("Privileged bootstrap required")
                     .font(WisentTypeScale.bodyStrong())
                     .foregroundStyle(WisentDesign.secondary)
-                Text("This is a system LaunchDaemon; the approved channel is unprivileged and cannot bootstrap it. Use stado host recover \(entry.host), or load it as root on the host itself.")
+                Text("This is a system LaunchDaemon; the approved channel is unprivileged and cannot bootstrap it. Use stado repair stado --step host --target \(entry.host) --apply, or load it as root on the host itself.")
                     .font(WisentTypeScale.body())
                     .foregroundStyle(WisentDesign.secondary)
                     .fixedSize(horizontal: false, vertical: true)

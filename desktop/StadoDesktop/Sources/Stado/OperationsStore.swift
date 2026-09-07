@@ -1177,10 +1177,9 @@ final class HostInventoryStore: ObservableObject {
 /// about the host while it was quiet. One invocation per host, concurrently,
 /// for the same reason `host gates` is read that way — a fleet read serially is
 /// a fleet the operator gives up on and opens a terminal for.
-///
-/// Reads are side-effect-free. The one write is `host repair-link`, exposed
-/// only for the exact publisher diagnosis the CLI marks repairable; the CLI
-/// owns the refusal, verifier reconciliation and fresh-beacon postcondition.
+/// Reads are side-effect-free. Link repair delegates to the declared `repair`
+/// capability, which owns the refusal, verifier reconciliation and
+/// fresh-beacon postcondition.
 @MainActor
 final class HostLinkStore: ObservableObject {
     @Published private(set) var links: [HostLink] = []
@@ -1230,7 +1229,7 @@ final class HostLinkStore: ObservableObject {
     }
 
     nonisolated static func repairArguments(host: String) -> [String] {
-        ["host", "repair-link", host, "--json"]
+        ["repair", "stado", "--step", "link", "--target", host, "--apply", "--json"]
     }
 
     func isRepairing(_ host: String) -> Bool {
@@ -1248,11 +1247,13 @@ final class HostLinkStore: ObservableObject {
         repairMutation = .working("Repairing \(host)'s beacon publication")
         do {
             let receipt = try await cli.json(
-                HostLinkRepairReceipt.self,
+                RepairReport.self,
                 arguments: Self.repairArguments(host: host),
                 timeoutSeconds: 180
             )
-            repairMutation = .succeeded(receipt.detail)
+            let detail = receipt.steps.first?.observation.text
+                ?? "The declared link repair completed without a step report."
+            repairMutation = .succeeded(detail)
             await refresh(hosts: [host])
             return true
         } catch {
@@ -1321,20 +1322,6 @@ final class HostLinkStore: ObservableObject {
         var problem: String?
     }
 
-    private struct HostLinkRepairReceipt: Decodable, Sendable {
-        let target: String
-        let state: String
-        let detail: String
-        let authority: String?
-        let beaconAgeSeconds: Int?
-        let silenceClosed: Bool?
-
-        enum CodingKeys: String, CodingKey {
-            case target, state, detail, authority
-            case beaconAgeSeconds = "beacon_age_seconds"
-            case silenceClosed = "silence_closed"
-        }
-    }
 
     private nonisolated static func read(hosts: [String], using cli: StadoCLI) async -> [HostLinkRead] {
         await withTaskGroup(of: HostLinkRead.self) { group in

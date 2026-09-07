@@ -443,8 +443,7 @@ fn host_health_api_url() -> Result<url::Url, CmdError> {
 /// published no beacon at all -- `host ping` called a machine that was serving
 /// releases "down". Every other grant in this fleet already lives as an
 /// owner-only file; this reads the same shape. The bare value in the
-/// environment stays forbidden, which is what `host recover` refuses as an
-/// ambient credential.
+/// environment stays forbidden by the declared host repair.
 fn host_health_api_token_from_file() -> Result<Option<String>, CmdError> {
     let Ok(raw) = std::env::var("STADO_HOST_HEALTH_API_TOKEN_FILE") else {
         return Ok(None);
@@ -537,79 +536,14 @@ async fn host_health_api_token() -> Result<String, CmdError> {
     Ok(token)
 }
 
-/// `stado host recover TARGET [--release VERSION]` — optionally replace the
-/// remote Stado binary from the registry-trusted signed emergency channel,
-/// then recover a registry-managed macOS host through its approved channel.
-///
-/// The canonical remote registry remains the default and fleet-survival
-/// authority. `bundled_registry` is an explicit break-glass path for repairing
-/// the storage or authorization outage that made that authority unreadable.
-/// The selected registry is loaded exactly once: release trust and host
-/// identity must come from the same last-known-good or explicit bundled copy.
-pub async fn recover(
-    target: &str,
-    bundled_registry: bool,
-    release: Option<&str>,
-) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let registry = if bundled_registry {
-        crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))?
-    } else {
-        crate::deploy::host_channel::canonical_registry()
+/// Run the fixed host recovery implementation for the declared repair
+/// capability. The capability owns rendering and the apply boundary.
+pub(crate) async fn apply_host_repair(target: &str) -> Result<Value, CmdError> {
+    let report =
+        crate::deploy::host_recovery::recover_host(target, &crate::deploy::production_runner())
             .await
-            .map_err(|exc| CmdError::click(exc.to_string()))?
-    };
-    let (report, object_api) = match release {
-        Some(version) => {
-            if registry.lookup(target).is_none() {
-                return Err(CmdError::click(format!("target not in registry: {target}")));
-            }
-            // A signed recovery release is fetched through the object API.
-            // Repair that authority first without depending on the authority
-            // itself. The service directory, not the host being recovered,
-            // names where that shared API runs.
-            let object_api_host = registry
-                .service(OBJECT_API_SERVICE)
-                .ok_or_else(|| {
-                    CmdError::click(format!(
-                        "service directory declares no {OBJECT_API_SERVICE}; refusing to guess \
-                         which host owns release-object recovery"
-                    ))
-                })?
-                .active_host
-                .clone();
-            let object_api_target =
-                crate::deploy::host_channel::resolve_target(&registry, &object_api_host)
-                    .map_err(|error| CmdError::click(error.to_string()))?;
-            let object_api = recover_object_api_on_target(object_api_target, &runner).await?;
-            (
-                crate::deploy::host_recovery_release::recover(&registry, target, version, &runner)
-                    .await,
-                Some(object_api),
-            )
-        }
-        None => (
-            crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
-                .await,
-            None,
-        ),
-    };
-    let mut report = report.map_err(|exc| CmdError::click(exc.to_string()))?;
-    if let (Some(object), Some(detail)) = (report.as_object_mut(), object_api) {
-        object.insert(
-            "object_api".to_string(),
-            json!({"status": "healthy", "detail": detail}),
-        );
-    }
-    println!(
-        "{}",
-        crate::deploy::host_recovery::to_sorted_pretty(&report)
-    );
-    if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_recovery::STATUS_OK)
-    {
-        return Err(CmdError::silent(1));
-    }
-    Ok(())
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    Ok(report)
 }
 
 /// `stado host reboot TARGET` — request a graceful reboot through the
@@ -1271,18 +1205,11 @@ pub async fn disk_cleanup_policy(
 //
 // Each of these is a thin shell over one `crate::deploy` module: resolve,
 // run through the shared ssh channel, then either print the report as JSON
-// or render it. NO Python original — the Python CLI stops at
-// `host recover`.
-//
-// Two conventions hold across all five. `--json` prints the deploy
-// module's report with sorted keys, exactly as `host recover` prints its
-// own (`deploy::host_recovery::to_sorted_pretty`). A non-zero remote exit
-// is a click error carrying the remote's own last line, so the shell exit
-// status of `stado host ...` matches the health of the host.
+// or render it. A non-zero remote exit is a click error carrying the remote's
+// own last line, so the shell exit status matches the health of the host.
 // ---------------------------------------------------------------------------
 
-/// Print `report` as sorted-keys JSON, the way `host recover` prints its
-/// own report.
+/// Print `report` as sorted-keys JSON.
 fn print_json(report: &Value) {
     println!("{}", crate::deploy::host_recovery::to_sorted_pretty(report));
 }
@@ -1712,14 +1639,13 @@ pub async fn object_relocate(
 ///
 /// `--dry-run` is mandatory, not defaulted. This command only ever
 /// previews: the enforcing pass belongs to the host's own janitor on the
-/// interval its registry policy declares, and to `stado host recover`,
-/// which runs it as part of a deliberate recovery. A flag that could be
-/// omitted would eventually be omitted.
+/// interval its registry policy declares, and to the declared host repair.
 pub async fn cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdError> {
     if !dry_run {
         return Err(CmdError::usage(
             "host cleanup only previews; pass --dry-run. To actually reclaim space, let the \
-             host's janitor run on its registry interval, or run stado host recover TARGET",
+             host's janitor run on its registry interval, or run stado repair stado --step host \
+             --target TARGET --apply",
         ));
     }
     let runner = crate::deploy::production_runner();
@@ -2055,7 +1981,7 @@ fn host_health_publisher_diagnosis(report: &UnitLogReport) -> Value {
                     crate::config::HOST_HEALTH_API_ITEM
                 ),
                 "repairable": true,
-                "repair_command": format!("stado host repair-link {}", report.target),
+                "repair_command": format!("stado repair stado --step link --target {} --apply", report.target),
             });
         }
         return json!({
@@ -2549,16 +2475,9 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     link_outcome(&resolved.name, verdict, blockers.len())
 }
 
-/// Repair one stale, reachable host whose publisher is being refused because
-/// the dashboard cannot read its route-scoped bearer.
-///
-/// The repair is deliberately narrow. It reads the publisher's own declared
-/// log, refuses every other cause, resolves the object API authority from the
-/// service directory, copies the authoritative route bearer into that
-/// authority's target-local verifier shadow, reconciles the existing grant
-/// without rotating its bearer, then waits for the host's normal one-minute
-/// publisher to prove the repair with a newer beacon. No service is restarted.
-pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared link repair and return the proof report to the repair
+/// capability, which owns rendering.
+pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -2583,15 +2502,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
             "beacon_age_seconds": initial_signal.age_seconds,
             "beacon_reported_at": initial_signal.reported_at,
         });
-        if json_output {
-            print_json(&report);
-        } else {
-            println!(
-                "{}: beacon is already fresh; no repair changed the verifier",
-                resolved.name
-            );
-        }
-        return Ok(());
+        return Ok(report);
     }
 
     let runner = crate::deploy::production_runner();
@@ -2631,7 +2542,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
         .clone();
     crate::deploy::host_channel::resolve_target(&registry, &authority)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let verifier = reconcile_object_verifier_report(&authority).await?;
+    let verifier = apply_object_verifier_repair(&authority).await?;
 
     let previous_reported_at = initial_signal.reported_at.clone();
     let started = std::time::Instant::now();
@@ -2687,22 +2598,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
                         "silence_closed": silence_closed,
                         "waited_seconds": started.elapsed().as_secs(),
                     });
-                    if json_output {
-                        print_json(&report);
-                    } else {
-                        println!(
-                            "{}: dashboard verifier reconciled on {}; a fresh beacon arrived \
-                             and the open silence is {}",
-                            resolved.name,
-                            authority,
-                            if silence_closed {
-                                "closed"
-                            } else {
-                                "not recorded"
-                            }
-                        );
-                    }
-                    return Ok(());
+                    return Ok(report);
                 }
             }
             Err(error) => {
@@ -3436,126 +3332,95 @@ pub async fn promote_version(
     Ok(())
 }
 
-/// `stado host reconcile [TARGET] [--apply]` — what the fleet runs against
-/// what it was told to run.
-///
-/// Without `--apply` nothing changes: an operator must be able to see drift
-/// without a machine moving under them. With it, every host that is BEHIND
-/// its declaration is delivered through the release host-state path, which
-/// verifies the manifest digest before repointing anything.
-///
-/// Only `behind` is delivered. A host running something NEWER than the
-/// declaration is a stale declaration, not a stale host, and quietly
-/// downgrading it would be this command destroying work rather than
-/// reconciling it.
-pub async fn reconcile(
-    target: Option<String>,
-    apply: bool,
-    json_output: bool,
-) -> Result<(), CmdError> {
+/// Apply the declared release-state repair and return its post-delivery
+/// inventory proof to the repair capability.
+pub(crate) async fn apply_release_state_repair(target: &str) -> Result<Value, CmdError> {
     let runner = crate::deploy::production_runner();
     let registry = super::registry::read_registry().await?;
-    let names: Vec<String> = match target {
-        Some(name) => {
-            if registry.targets.iter().all(|entry| entry.name != name) {
-                return Err(CmdError::click(format!(
-                    "registry declares no target {name:?}"
-                )));
-            }
-            vec![name]
-        }
-        None => registry
-            .targets
-            .iter()
-            .map(|entry| entry.name.clone())
-            .collect(),
-    };
-    if names.is_empty() {
-        return Err(CmdError::click("registry has no targets to reconcile"));
+    if registry.targets.iter().all(|entry| entry.name != target) {
+        return Err(CmdError::click(format!(
+            "{target} has no target declaration; add it to the fleet registry."
+        )));
     }
 
-    let mut standings = Vec::with_capacity(names.len());
-    for name in &names {
-        standings.push(crate::deploy::reconcile::examine(name, &runner).await);
-    }
+    let mut standings = vec![crate::deploy::reconcile::examine(target, &runner).await];
 
     let mut deliveries: Vec<Value> = Vec::new();
-    if apply {
-        for standing in &standings {
-            if !standing.needs_delivery() {
+    for standing in &standings {
+        if !standing.needs_delivery() {
+            continue;
+        }
+        let entry = registry
+            .targets
+            .iter()
+            .find(|entry| entry.name == standing.target)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{} target declaration disappeared during repair; retry after the registry is stable.",
+                    standing.target
+                ))
+            })?;
+        for drifted in &standing.drift {
+            if drifted.verdict != "behind" && drifted.verdict != "absent" {
                 continue;
             }
-            let entry = registry
-                .targets
-                .iter()
-                .find(|entry| entry.name == standing.target)
-                .ok_or_else(|| {
-                    CmdError::click(format!("registry target {:?} disappeared", standing.target))
-                })?;
-            for drifted in &standing.drift {
-                if drifted.verdict != "behind" && drifted.verdict != "absent" {
-                    continue;
-                }
-                let binary = &drifted.binary;
-                let version = entry.declared_version(binary).ok_or_else(|| {
-                    CmdError::click(format!(
-                        "{} has no desired {binary} version",
-                        standing.target
-                    ))
-                })?;
-                let outcome = crate::deploy::host_release::release_host(
-                    &standing.target,
-                    binary,
-                    version,
-                    false,
-                    false,
-                    &runner,
-                )
-                .await;
-                deliveries.push(match outcome {
-                    Ok(report)
-                        if matches!(
-                            report.get("status").and_then(Value::as_str),
-                            Some(
-                                crate::deploy::host_release::RELEASED_STATUS
-                                    | crate::deploy::host_release::ALREADY_ACTIVE_STATUS
-                            )
-                        ) =>
-                    {
-                        json!({
-                            "target": standing.target,
-                            "binary": binary,
-                            "version": version,
-                            "status": "delivered",
-                            "report": report,
-                        })
-                    }
-                    Ok(report) => json!({
+            let binary = &drifted.binary;
+            let version = entry.declared_version(binary).ok_or_else(|| {
+                CmdError::click(format!(
+                    "{} declares no desired {binary} version; add it to the target's version declaration.",
+                    standing.target
+                ))
+            })?;
+            let outcome = crate::deploy::host_release::release_host(
+                &standing.target,
+                binary,
+                version,
+                false,
+                false,
+                &runner,
+            )
+            .await;
+            deliveries.push(match outcome {
+                Ok(report)
+                    if matches!(
+                        report.get("status").and_then(Value::as_str),
+                        Some(
+                            crate::deploy::host_release::RELEASED_STATUS
+                                | crate::deploy::host_release::ALREADY_ACTIVE_STATUS
+                        )
+                    ) =>
+                {
+                    json!({
                         "target": standing.target,
                         "binary": binary,
                         "version": version,
-                        "status": "failed",
-                        "detail": report
-                            .get("error")
-                            .and_then(Value::as_str)
-                            .unwrap_or("delivery returned a non-success report"),
+                        "status": "delivered",
                         "report": report,
-                    }),
-                    Err(error) => json!({
-                        "target": standing.target,
-                        "binary": binary,
-                        "version": version,
-                        "status": "failed",
-                        "detail": error.to_string(),
-                    }),
-                });
-            }
-        }
-        standings.clear();
-        for name in &names {
-            standings.push(crate::deploy::reconcile::examine(name, &runner).await);
+                    })
+                }
+                Ok(report) => json!({
+                    "target": standing.target,
+                    "binary": binary,
+                    "version": version,
+                    "status": "failed",
+                    "detail": report
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("delivery returned a non-success report"),
+                    "report": report,
+                }),
+                Err(error) => json!({
+                    "target": standing.target,
+                    "binary": binary,
+                    "version": version,
+                    "status": "failed",
+                    "detail": error.to_string(),
+                }),
+            });
         }
     }
+    standings.clear();
+    standings.push(crate::deploy::reconcile::examine(target, &runner).await);
 
     let healthy = standings
         .iter()
@@ -3563,58 +3428,9 @@ pub async fn reconcile(
         && deliveries
             .iter()
             .all(|entry| entry.get("status").and_then(Value::as_str) == Some("delivered"));
-    let report = crate::deploy::reconcile::report(&standings, &deliveries);
-    if json_output {
-        print_json(&report);
-    } else {
-        for standing in &standings {
-            if let Some(detail) = &standing.unreachable {
-                println!("{}: unreachable — {detail}", standing.target);
-                continue;
-            }
-            if standing.platform_verdict != crate::deploy::host_inventory::MATCHED {
-                println!(
-                    "{}: platform mismatch — declared {}, observed {}",
-                    standing.target, standing.declared_release_platform, standing.release_platform
-                );
-            }
-            if standing.settled() {
-                println!("{}: active versions match desired state", standing.target);
-            }
-            for drift in &standing.drift {
-                println!(
-                    "{}: {} is {} — desired {}, active {}",
-                    standing.target, drift.binary, drift.verdict, drift.declared, drift.installed
-                );
-            }
-            if !standing.undeclared.is_empty() {
-                println!(
-                    "{}: missing desired versions — {}",
-                    standing.target,
-                    standing.undeclared.join(", ")
-                );
-            }
-        }
-        for delivery in &deliveries {
-            println!(
-                "{} {} on {}: {}",
-                delivery.get("binary").and_then(Value::as_str).unwrap_or(""),
-                delivery
-                    .get("version")
-                    .and_then(Value::as_str)
-                    .unwrap_or(""),
-                delivery.get("target").and_then(Value::as_str).unwrap_or(""),
-                delivery.get("status").and_then(Value::as_str).unwrap_or("")
-            );
-        }
-    }
-    if !healthy {
-        return Err(CmdError::click(
-            "reconcile incomplete: every target must be reachable, platform-matched, declared, \
-             and active at its desired versions",
-        ));
-    }
-    Ok(())
+    let mut report = crate::deploy::reconcile::report(&standings, &deliveries);
+    report["healthy"] = json!(healthy);
+    Ok(report)
 }
 pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
@@ -7416,33 +7232,6 @@ pub async fn vault_token_mint(
     Ok(())
 }
 
-fn render_verifier_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(report)?);
-        return Ok(());
-    }
-    let target = report.get("target").and_then(Value::as_str).unwrap_or("-");
-    let consumer = report
-        .get("consumer")
-        .and_then(Value::as_str)
-        .unwrap_or("-");
-    let items = report
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>()
-        .join(",");
-    let verb = if report.get("exact").and_then(Value::as_bool) == Some(true) {
-        "reads exactly"
-    } else {
-        "can read"
-    };
-    println!("{target}: {consumer} {verb} {items}");
-    Ok(())
-}
-
 fn object_namespace_items(document: &Value) -> Result<BTreeMap<String, String>, CmdError> {
     let namespaces = document
         .pointer("/resolved/object_api_namespaces")
@@ -7497,7 +7286,7 @@ fn ensure_object_verifier_declarations_match(
     )))
 }
 
-async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdError> {
+pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, CmdError> {
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
         CmdError::click(format!(
             "invalid object_api.namespaces: {}",
@@ -7538,13 +7327,6 @@ async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdErro
         true,
     )
     .await
-}
-
-/// Reconcile the dashboard verifier on TARGET to every configured object
-/// namespace and the route-scoped host-health bearer.
-pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
-    let report = reconcile_object_verifier_report(target).await?;
-    render_verifier_report(&report, json_output)
 }
 
 fn release_publisher_items(document: &Value) -> Result<BTreeMap<String, String>, CmdError> {
@@ -7599,8 +7381,8 @@ fn ensure_release_verifier_declarations_match(
     )))
 }
 
-/// Reconcile the release verifier on TARGET to every configured publisher.
-pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared release-verifier repair.
+pub(crate) async fn apply_release_verifier_repair(target: &str) -> Result<Value, CmdError> {
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
         CmdError::click(format!(
             "invalid release_api.publishers: {}",
@@ -7628,7 +7410,7 @@ pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Resu
     })?;
     let host = release_publisher_items(&document)?;
     ensure_release_verifier_declarations_match(&host, &local)?;
-    let report = reconcile_verifier(
+    reconcile_verifier(
         target,
         "release",
         "matching local and target release_api.publishers",
@@ -7638,12 +7420,11 @@ pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Resu
         items,
         true,
     )
-    .await?;
-    render_verifier_report(&report, json_output)
+    .await
 }
 
-/// Reconcile the service verifier on TARGET to the exact configured deployer set.
-pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared service-verifier repair.
+pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value, CmdError> {
     let deployers = crate::config::service_api_deployers().map_err(|problems| {
         CmdError::click(format!(
             "invalid service_api.deployers: {}",
@@ -7654,7 +7435,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<std::collections::BTreeSet<_>>();
-    let report = reconcile_verifier(
+    reconcile_verifier(
         target,
         "service",
         "service_api.deployers",
@@ -7664,8 +7445,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         items,
         true,
     )
-    .await?;
-    render_verifier_report(&report, json_output)
+    .await
 }
 
 /// Read one nonsecret Skarbiec metadata report on a managed host.
@@ -8090,19 +7870,8 @@ async fn reconcile_verifier(
     Ok(report)
 }
 
-/// Recover a Skarbiec audit-lock stall on TARGET and restart only its loaded
-/// dependants.
-///
-/// The helper runs on TARGET, so the endpoints it probes must be TARGET's. Its
-/// own defaults are this fleet's operator laptop -- Skarbiec on 8787, the
-/// object API on 18765 -- and on 2026-09-03 that refused a real audit-lock
-/// stall on `charless-mac-mini`, where Skarbiec answers 8895 and the object API
-/// 8765, with "did not report an audit-lock failure": the script had asked a
-/// port nothing serves on that host and read the silence as health. The
-/// registry already states where each service answers per asking machine, so
-/// resolve TARGET's own endpoints and hand them over rather than letting a
-/// hard-coded default decide which host the operator meant.
-pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared Skarbiec audit-lock repair.
+pub(crate) async fn apply_skarbiec_audit_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -8128,19 +7897,11 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
         )));
     }
     let detail = recovered.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "recovered": detail.contains("recovered"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "recovered": detail.contains("recovered"),
+        "detail": detail,
+    }))
 }
 
 /// Shell prologue exporting the health endpoints TARGET itself serves on, read
@@ -8183,8 +7944,8 @@ async fn target_health_probes(target: &str) -> String {
     prologue
 }
 
-/// Recover stale per-user GnuPG daemons after Skarbiec reports a keybox stall.
-pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared Skarbiec cryptographic-daemon repair.
+pub(crate) async fn apply_skarbiec_crypto_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -8205,26 +7966,15 @@ pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<
         )));
     }
     let detail = recovered.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "recovered": detail.contains("recovered"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "recovered": detail.contains("recovered"),
+        "detail": detail,
+    }))
 }
 
-/// Repair Skarbiec's short-lived acquisition state after a service-user cutover.
-pub async fn recover_skarbiec_acquisition_state(
-    target: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
+/// Apply the declared Skarbiec acquisition-state repair.
+pub(crate) async fn apply_skarbiec_acquisition_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -8245,19 +7995,11 @@ pub async fn recover_skarbiec_acquisition_state(
         )));
     }
     let detail = recovered.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "recovered": detail.contains("recovered"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "recovered": detail.contains("recovered"),
+        "detail": detail,
+    }))
 }
 
 /// Restore the core object API without depending on the API being available.
@@ -8314,41 +8056,25 @@ PY"#,
     Ok(recovered.stdout.trim().to_string())
 }
 
-/// Run the object-API boundary repair as a focused operator command.
-pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared object-API repair.
+pub(crate) async fn apply_object_api_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let detail = recover_object_api_on_target(&resolved, &runner).await?;
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "healthy": true,
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    let detail =
+        recover_object_api_on_target(&resolved, &crate::deploy::production_runner()).await?;
+    Ok(json!({
+        "target": resolved.name,
+        "healthy": true,
+        "detail": detail,
+    }))
 }
 
-/// Repair the release-catalog ownership fault on the object API authority.
-///
-/// This is a separate operation from [`recover_object_api`]: the listener is
-/// healthy and authorized, but its local backend cannot replace one existing
-/// catalog object because root created that coordinate's directories. The
-/// fixed helper validates each source owner before changing it and has no
-/// operator-supplied path, so the repair cannot widen into a recursive chown of
-/// the store.
-pub async fn repair_release_store(
+/// Apply the declared release-catalog ownership repair.
+pub(crate) async fn apply_release_store_repair(
     target: &str,
     product: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
+) -> Result<Value, CmdError> {
     if !crate::release_control::identifier(product) {
         return Err(CmdError::usage(
             "product must be a canonical release identifier",
@@ -8379,20 +8105,12 @@ pub async fn repair_release_store(
         )));
     }
     let detail = repaired.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "status": "repaired",
-                "scope": format!("stado://system/release-catalog/{product}.json"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "status": "repaired",
+        "scope": format!("stado://system/release-catalog/{product}.json"),
+        "detail": detail,
+    }))
 }
 
 /// Authorize TARGET's service resolver on the service-directory authority.
@@ -9587,42 +9305,6 @@ pub async fn storage_root_reconcile_result(
     Ok(StorageRootReconciliationResult { report, outcome })
 }
 
-/// Create or apply one durable, source-preserving reconciliation of the two
-/// fixed physical local-store roots on a host.
-pub async fn storage_root_reconcile(
-    target: &str,
-    transaction: &str,
-    phase: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let StorageRootReconciliationResult { report, outcome } =
-        storage_root_reconcile_result(target, transaction, phase)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-    if json_output {
-        print_json(&report);
-    } else {
-        println!(
-            "{} storage-root reconciliation {}: {}",
-            target,
-            transaction,
-            report
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("failed")
-        );
-        if let Some(path) = report.pointer("/receipt/snapshot").and_then(Value::as_str) {
-            println!("checkpoint: {path}");
-        }
-        if let Some(count) = report
-            .pointer("/receipt/verified_objects")
-            .and_then(Value::as_u64)
-        {
-            println!("verified objects: {count}");
-        }
-    }
-    outcome
-}
 pub async fn storage_root_reconcile_worker(
     target: &str,
     target_config: &str,
@@ -10139,10 +9821,8 @@ pub async fn config_set(
 /// instead of printing it.
 ///
 /// A caller that owns its own report cannot print this document: with
-/// `--json` a second one on the same stream makes the answer unparseable,
-/// which is exactly what `reconcile-agent-skarbiec --json` emitted before
-/// this split. The guards stay here so no writer can reach the host without
-/// them.
+/// `--json` a second one on the same stream makes the answer unparseable.
+/// The guards stay here so no writer can reach the host without them.
 pub(crate) async fn write_host_config(
     target: &str,
     key: &str,
@@ -10171,23 +9851,12 @@ pub(crate) async fn write_host_config(
     Ok(stdout)
 }
 
-/// `stado host reconcile-agent-skarbiec TARGET [--json]` — make TARGET's
-/// `agent.skarbiec.url` the credential endpoint the service directory
-/// declares for that host.
-///
-/// The agent's broker address was a hand-written port in one host's config
-/// and nothing compared it with the fleet's own declaration. On 2026-09-05
-/// `lukasz-macbook` carried `http://127.0.0.1:19096`, which nothing on that
-/// machine has ever bound, while the directory declared
-/// `http://127.0.0.1:8787` for it. Three brokers were listening and none was
-/// the one named, so the agent claimed a `preferences` release job and then
-/// died resolving its `GITHUB_TOKEN` — a build failure whose cause was in a
-/// different product's configuration file.
+/// Apply the agent's declared Skarbiec endpoint repair.
 ///
 /// Derived, never invented: the value comes from
 /// `service_directory.services.skarbiec.endpoints[<target>]`, and a host the
 /// directory gives no endpoint is refused rather than pointed at a guess.
-pub async fn reconcile_agent_skarbiec(target: &str, json_output: bool) -> Result<(), CmdError> {
+pub(crate) async fn apply_agent_skarbiec_repair(target: &str) -> Result<Value, CmdError> {
     let document = super::registry::fetch_document().await?;
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -10228,28 +9897,12 @@ pub async fn reconcile_agent_skarbiec(target: &str, json_output: bool) -> Result
     if changed {
         write_host_config(&canonical.name, "agent.skarbiec.url", &declared).await?;
     }
-    let report = json!({
+    Ok(json!({
         "target": canonical.name,
         "declared": declared,
         "previous": if current.trim().is_empty() { Value::Null } else { Value::from(current.trim()) },
         "changed": changed,
-    });
-    if json_output {
-        print_json(&report);
-    } else if changed {
-        println!(
-            "{}: agent.skarbiec.url -> {declared} (was {})",
-            canonical.name,
-            if current.trim().is_empty() {
-                "unset"
-            } else {
-                current.trim()
-            }
-        );
-    } else {
-        println!("{}: agent.skarbiec.url already {declared}", canonical.name);
-    }
-    Ok(())
+    }))
 }
 
 /// Retract one configuration key from a fleet host.
@@ -10381,8 +10034,8 @@ async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Resu
          declared publisher set against its grant's item set, and one unmintable name makes them \
          unequal for every product, answering 401 or 503 to every release-catalog read on the \
          fleet. Mint the item on {host} first - `stado credentials item put --host {host} {item} \
-         --type token` - then declare it and run `stado host reconcile-release-verifier {host} --product \
-         {product}`.",
+         --type token` - then declare it and run `stado repair stado --step release-verifier \
+         --target {host} --apply`."
         host = resolved.name
     )))
 }
@@ -10402,7 +10055,7 @@ async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Resu
 /// existed the whole time on the host and nowhere an operator was looking.
 ///
 /// So the warning is emitted here, where the declaration is made, and it names
-/// the second half of the trap too: `reconcile-object-verifier` computes the
+/// the second half of the trap too: the declared `object-verifier` repair computes the
 /// item set from the configuration of the machine running it, so a namespace
 /// that exists only on the host can never be satisfied from here. That is why
 /// the sentence asks for the declaration on both sides.
@@ -10434,8 +10087,8 @@ fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
     if covered {
         eprintln!(
             "note: {target}'s object verifier grant must cover {item:?} for namespace \
-             {namespace:?}; this machine declares it too, so reconcile the host with: stado host \
-             reconcile-object-verifier {target}"
+             {namespace:?}; this machine declares it too, so reconcile the host with: stado \
+             repair stado --step object-verifier --target {target} --apply"
         );
         return;
     }
@@ -10445,10 +10098,10 @@ fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
          grant covers that item its WHOLE object authorization boundary closes — every \
          /api/object read answers 503, not just this namespace — and the failure surfaces at the \
          next restart of anything that reads the registry, including the release agent that \
-         publishes every stable bind. `stado host reconcile-object-verifier {target}` computes the \
-         item set from THIS machine's configuration, so declare the namespace here as well and \
-         then run it: stado config set {key} '<the same JSON>' && stado host \
-         reconcile-object-verifier {target}"
+         publishes every stable bind. The declared object-verifier repair computes the item set \
+         from THIS machine's configuration, so declare the namespace here as well and then run: \
+         stado config set {key} '<the same JSON>' && stado repair stado --step object-verifier \
+         --target {target} --apply"
     );
 }
 
@@ -10467,15 +10120,15 @@ fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) {
     let maps: [(&str, &str); 3] = [
         (
             "release_api.publishers.",
-            "stado host reconcile-release-verifier {target} --product {name}",
+            "stado repair stado --step release-verifier --target {target} --apply",
         ),
         (
             "machine_api.clients.",
-            "stado host reconcile-object-verifier {target}",
+            "stado repair stado --step object-verifier --target {target} --apply",
         ),
         (
             "service_api.deployers.",
-            "stado host reconcile-service-verifier {target}",
+            "stado repair stado --step service-verifier --target {target} --apply",
         ),
     ];
     let Some((name, remedy)) = maps.iter().find_map(|(prefix, remedy)| {

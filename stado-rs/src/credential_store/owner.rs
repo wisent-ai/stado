@@ -93,7 +93,7 @@ pub fn binary() -> Result<PathBuf, SkarbiecError> {
 /// one machine, two answers, and no way for an operator to see the
 /// disagreement: on 2026-09-05 six `skarbiec set-json` writes went to
 /// `.local/share/skarbiec` and were simultaneously real, `active` on the
-/// host, and invisible to `stado host reconcile-release-verifier`, which read
+/// host, and invisible to `stado repair stado --step release-verifier`, which read
 /// the other file. That closed the fleet's release publication boundary for
 /// every product until the declarations were retracted.
 ///
@@ -177,7 +177,7 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
 /// vaults lukasz-macbook` answered "8 vault(s)" for months while two of them
 /// claimed one owner, and nothing in the report said that every owner write
 /// and every authoritative read on that machine was refused because of it —
-/// that surfaced only when `stado host reconcile-release-verifier` failed,
+/// that surfaced only when `stado repair stado --step release-verifier` failed,
 /// with the fleet's release publication boundary already closed.
 ///
 /// The three states are the resolution rule itself, and no item name is

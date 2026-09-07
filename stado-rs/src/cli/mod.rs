@@ -57,6 +57,7 @@ pub mod release_cmd;
 pub mod release_evidence;
 pub mod release_quarantine;
 pub mod release_submit;
+pub mod repair;
 pub mod resolver;
 pub mod resources;
 pub mod results;
@@ -639,6 +640,8 @@ enum Commands {
     /// Place declared work on an eligible fleet host and return its stream or receipt.
     #[command(subcommand)]
     Workload(workload::WorkloadCommands),
+    /// Inspect and apply the ordered repair steps services declare.
+    Repair(repair::RepairArgs),
 }
 
 #[derive(Subcommand)]
@@ -1403,43 +1406,6 @@ enum HostCommands {
     /// nothing at all, which is worse than reporting the operator's own list.
     #[command(name = "beacon-units")]
     BeaconUnits,
-    /// Recover a registry-managed macOS host through its approved channel.
-    Recover {
-        target: String,
-        /// Use the bundled registry snapshot when the canonical registry cannot be read.
-        #[arg(long)]
-        bundled_registry: bool,
-        /// Replace Stado from an exact registry-trusted signed release before recovery.
-        #[arg(long, value_name = "VERSION")]
-        release: Option<String>,
-    },
-    /// Restore the core object API from its physical local store.
-    ///
-    /// Reconcile only the declared object service. The selected public
-    /// connection is not inspected or reconfigured; verify release delivery
-    /// separately through the configured Stado origin.
-    #[command(name = "recover-object-api")]
-    RecoverObjectApi {
-        target: String,
-        /// Emit the recovery report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Repair the bounded local-store ownership fault blocking release catalog writes.
-    ///
-    /// The checked-in helper runs on TARGET through Stado's fixed-script channel.
-    /// It considers only the named release-catalog object, its metadata sidecar,
-    /// its exact CAS lock, and the directories those writes require; foreign
-    /// owners and symlinks are refused.
-    #[command(name = "repair-release-store")]
-    RepairReleaseStore {
-        target: String,
-        /// Product whose one release-catalog coordinate is blocked.
-        product: String,
-        /// Emit the repair report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Authorize TARGET's service resolver to read the registry from the
     /// service-directory authority.
     ///
@@ -1651,20 +1617,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Repair a stale, reachable host whose beacon publisher proves that the
-    /// host-health API verifier is unavailable.
-    ///
-    /// Copies the authoritative route bearer into the object API authority's
-    /// target-local verifier shadow, reconciles the existing least-privilege
-    /// grant, waits for the normal publisher to write a newer beacon, and
-    /// closes the recorded silence. Refuses every other diagnosis.
-    #[command(name = "repair-link")]
-    RepairLink {
-        target: String,
-        /// Emit the repair receipt as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Reclaim disk on HOST in declared stages, measuring each one.
     ///
     /// Previews by default: the host's own janitor pass, the release build
@@ -1688,74 +1640,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Make TARGET's dashboard verifier shadow and grant match every object
-    /// namespace plus the route-scoped host-health bearer exactly.
-    ///
-    /// The route bearer is copied from the authoritative vault without
-    /// rotating it. The verifier's existing bearer and expiry are preserved;
-    /// stale capabilities are removed and missing reads are added.
-    #[command(name = "reconcile-object-verifier")]
-    ReconcileObjectVerifier {
-        target: String,
-        /// Emit the reconciled item set as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make TARGET's release-verifier grant match release_api.publishers exactly.
-    ///
-    /// The existing bearer and expiry are preserved. Stale capabilities are
-    /// removed and missing publisher reads are added without printing the
-    /// bearer or moving it through argv.
-    #[command(name = "reconcile-release-verifier")]
-    ReconcileReleaseVerifier {
-        target: String,
-        /// Emit the reconciled item set as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make TARGET's service-verifier grant match service_api.deployers exactly.
-    ///
-    /// The existing bearer and expiry are preserved. Stale capabilities are
-    /// removed and missing read capabilities are added without printing the
-    /// bearer or moving it through argv.
-    #[command(name = "reconcile-service-verifier")]
-    ReconcileServiceVerifier {
-        target: String,
-        /// Emit the reconciled item set as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make TARGET's `agent.skarbiec.url` the credential endpoint the service
-    /// directory declares for that host, so the queue agent reads workload
-    /// secrets through a broker that exists.
-    #[command(name = "reconcile-agent-skarbiec")]
-    ReconcileAgentSkarbiec {
-        target: String,
-        /// Emit the receipt as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Recover an audit-lock stall in Skarbiec and its loaded local dependants.
-    #[command(name = "recover-skarbiec-audit")]
-    RecoverSkarbiecAudit {
-        target: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Recover stale per-user GnuPG daemons blocking Skarbiec decryption.
-    #[command(name = "recover-skarbiec-crypto")]
-    RecoverSkarbiecCrypto {
-        target: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Repair Skarbiec acquisition state left by a different service user.
-    #[command(name = "recover-skarbiec-acquisition-state")]
-    RecoverSkarbiecAcquisitionState {
-        target: String,
-        #[arg(long)]
-        json: bool,
-    },
     /// The tail of one managed unit's own log on TARGET.
     ///
     /// A crash-looping unit says why in its log and nowhere else: the health
@@ -1769,22 +1653,6 @@ enum HostCommands {
         /// Tail this many lines from each declared log path (default 40).
         #[arg(long)]
         lines: Option<u32>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Run or resume the complete fenced A/B authority handoff, inspect its
-    /// durable state, explicitly roll back before data activation, or finalize
-    /// only after the ordinary coordinator has completed lifecycle cleanup.
-    #[command(name = "storage-root-reconcile")]
-    StorageRootReconcile {
-        target: String,
-        /// Stable transaction id used by the remote checkpoint and receipt.
-        #[arg(long)]
-        transaction: String,
-        /// Transaction action: run, resume, status, rollback, or finalize.
-        #[arg(long, value_parser = ["run", "resume", "status", "rollback", "finalize"])]
-        phase: String,
-        /// Emit the durable transaction receipt as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1858,15 +1726,6 @@ enum HostCommands {
         json: bool,
     },
 
-    /// Compare active versions with desired state; omit TARGET for the fleet.
-    Reconcile {
-        target: Option<String>,
-        /// Close every deliverable difference.
-        #[arg(long)]
-        apply: bool,
-        #[arg(long)]
-        json: bool,
-    },
 
     /// Run one approved command on TARGET (allowlist, not a shell). Every
     /// entry is read-only except the declared provider sign-in repairs.
@@ -2628,19 +2487,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 host::publish_beacon(&source, print).await
             }
             HostCommands::BeaconUnits => host::beacon_units().await,
-            HostCommands::Recover {
-                target,
-                bundled_registry,
-                release,
-            } => host::recover(&target, bundled_registry, release.as_deref()).await,
-            HostCommands::RecoverObjectApi { target, json } => {
-                host::recover_object_api(&target, json).await
-            }
-            HostCommands::RepairReleaseStore {
-                target,
-                product,
-                json,
-            } => host::repair_release_store(&target, &product, json).await,
             HostCommands::ResolverKey { target, json } => {
                 host::authorize_resolver_key(&target, json).await
             }
@@ -2768,7 +2614,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::cleanup(&target, dry_run, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
             HostCommands::Link { target, json } => host::link(&target, json).await,
-            HostCommands::RepairLink { target, json } => host::repair_link(&target, json).await,
             // `--dry-run` is the default and needs no argument: `--apply` is
             // the only flag that changes anything, and clap already refuses
             // the two together.
@@ -2903,39 +2748,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RenderSpisAdmissionTrust { target, source } => {
                 host::render_spis_admission_trust(&target, &source).await
             }
-            HostCommands::ReconcileObjectVerifier { target, json } => {
-                host::reconcile_object_verifier(&target, json).await
-            }
-            HostCommands::ReconcileReleaseVerifier { target, json } => {
-                host::reconcile_release_verifier(&target, json).await
-            }
-            HostCommands::ReconcileServiceVerifier { target, json } => {
-                host::reconcile_service_verifier(&target, json).await
-            }
-            HostCommands::ReconcileAgentSkarbiec { target, json } => {
-                host::reconcile_agent_skarbiec(&target, json).await
-            }
-            HostCommands::RecoverSkarbiecAudit { target, json } => {
-                host::recover_skarbiec_audit(&target, json).await
-            }
-            HostCommands::RecoverSkarbiecCrypto { target, json } => {
-                host::recover_skarbiec_crypto(&target, json).await
-            }
-            HostCommands::RecoverSkarbiecAcquisitionState { target, json } => {
-                host::recover_skarbiec_acquisition_state(&target, json).await
-            }
             HostCommands::UnitLog {
                 target,
                 unit,
                 lines,
                 json,
             } => host::unit_log(&target, &unit, lines, json).await,
-            HostCommands::StorageRootReconcile {
-                target,
-                transaction,
-                phase,
-                json,
-            } => host::storage_root_reconcile(&target, &transaction, &phase, json).await,
             HostCommands::StorageRootReconcileWorker {
                 target,
                 target_config,
@@ -2997,14 +2815,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 arguments,
                 json,
             } => host::run_attached(&target, &program, &arguments, json).await,
-            HostCommands::RemoveRunDirectory { target, path, json } => {
-                host::remove_run_directory(&target, &path, json).await
-            }
-            HostCommands::Reconcile {
-                target,
-                apply,
-                json,
-            } => host::reconcile(target, apply, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
             HostCommands::CapabilityRoute {
                 target,
@@ -3069,6 +2879,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
         Commands::Workload(command) => workload::dispatch(command).await,
+        Commands::Repair(args) => repair::dispatch(args).await,
     }
 }
 

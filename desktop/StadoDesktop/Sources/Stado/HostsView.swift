@@ -94,6 +94,7 @@ struct HostsView: View {
     /// whether that host can resolve one at all.
     @StateObject private var vaultStore = HostVaultStore()
     @StateObject private var workloadStore = WorkloadStore()
+    @StateObject private var repairStore = RepairStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -562,6 +563,7 @@ struct HostsView: View {
                     target: host.targetName ?? host.displayName,
                     store: workloadStore
                 )
+                RepairSection(store: repairStore, host: host.targetName ?? host.displayName)
                 if host.status != .live {
                     WisentAlertPanel(
                         tone: tone(for: host.status),

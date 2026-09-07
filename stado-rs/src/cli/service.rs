@@ -7449,6 +7449,7 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             program: unit.program.clone(),
             args: unit.args.clone(),
             env: unit.env.clone(),
+            repair: Vec::new(),
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
