@@ -33,12 +33,12 @@
 //! depend on the table being perfectly curated, and they give the operator
 //! a real error instead of a silent mismatch.
 //!
-//! Almost every entry is read-only. The exceptions are the sign-in entries at
-//! the end of the table, which exist because a provider grant the vendor has
-//! disowned is repaired by one command and no read can substitute for it; each
-//! states in its own [`ApprovedCommand::why`] exactly what it changes. Every
-//! entry, read or repair, still takes no operator-supplied argument and
-//! carries its own justification.
+//! Almost every entry is read-only. The exceptions are the provider sign-in
+//! repairs and the fixed Probierz run-root preparation at the end of the
+//! table. Those exist because no read can substitute for the bounded repair
+//! or preparation; each states in its own [`ApprovedCommand::why`] exactly
+//! what it changes. Every entry, read or mutation, still takes no
+//! operator-supplied argument and carries its own justification.
 //!
 //! An entry whose program the managed account owns rather than the system —
 //! anything under `~` — is described once more in [`ACCOUNT_PROGRAMS`], which
@@ -367,6 +367,10 @@ pub fn program_candidates(program: &str) -> Option<&'static [&'static str]> {
         .find(|(name, _)| *name == program)
         .map(|(_, candidates)| *candidates)
 }
+/// Cargo's candidates in the one order every host reader must use.
+pub fn cargo_candidates() -> &'static [&'static str] {
+    program_candidates(CARGO_CLI).expect("cargo is in the program candidate table")
+}
 
 /// The Appium server CLI's canonical name in [`PROGRAM_CANDIDATES`].
 pub const APPIUM_PROGRAM: &str = APPIUM_CLI;
@@ -608,6 +612,14 @@ const BRAMA_RUNNER_CORECLR_SIGNATURE: &[&str] = &[
     ".stado/actions-runner-brama/bin/libcoreclr.dylib",
 ];
 
+/// Prepare the one fixed parent under which Probierz run UUIDs live.
+///
+/// The operator can select this exact entry but cannot append a run name or
+/// redirect it to another path. Individual canonical UUID children are made
+/// by `stado host deliver`, which validates them before reaching the host.
+const PROBIERZ_RUN_ROOT_CREATE: &[&str] =
+    &["/bin/mkdir", "-p", ".stado/work/runs"];
+
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
 ///
@@ -657,6 +669,33 @@ fn home_rooted_script(argv: &[&str]) -> String {
         .collect::<Vec<String>>()
         .join(" ");
     format!("set -eu\ncd \"$HOME\"\nexec {fixed}\n")
+}
+
+/// The fixed mutating entry's real program. `mkdir -p` alone inherits an
+/// ambient umask and follows symlinked parents; this script supplies the
+/// restrictive mode and refuses every existing symlink or foreign owner.
+fn probierz_run_root_script() -> String {
+    let mut script = String::from("set -eu\numask 077\ncd \"$HOME\"\n");
+    for path in [".stado", ".stado/work", ".stado/work/runs"] {
+        let quoted = shlex_quote(path);
+        script.push_str(&format!(
+            "[ ! -L {quoted} ] || {{ printf '%s\\n' {}; exit 1; }}\n",
+            shlex_quote(&format!(
+                "refusing run-directory creation: managed path traverses a symlink at $HOME/{path}"
+            ))
+        ));
+        script.push_str(&format!(
+            "if [ -e {quoted} ]; then [ -d {quoted} ] || {{ printf '%s\\n' {}; exit 1; }}; [ -O {quoted} ] || {{ printf '%s\\n' {}; exit 1; }}; else /bin/mkdir {quoted}; /bin/chmod 700 {quoted}; fi\n",
+            shlex_quote(&format!(
+                "refusing run-directory creation: managed path is not a directory at $HOME/{path}"
+            )),
+            shlex_quote(&format!(
+                "refusing run-directory creation: managed path is not owned by this account at $HOME/{path}"
+            )),
+        ));
+    }
+    script.push_str("/bin/chmod 700 .stado/work/runs\nprintf '%s\\n' \"$HOME/.stado/work/runs\"\n");
+    script
 }
 
 /// What an entry whose program the managed account owns needs on top of its
@@ -1677,6 +1716,17 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               memory-access refusal. This status-only invocation changes no boot setting, \
               opens no consent window, and never reboots the host",
     },
+    ApprovedCommand {
+        argv: PROBIERZ_RUN_ROOT_CREATE,
+        why: "creates only the fixed `$HOME/.stado/work/runs` parent used by target-scoped \
+              Probierz deliveries. Added 2026-09-06 because the byk-auth journey previously \
+              opened a raw SSH shell only to create its run root before rsync, bypassing the \
+              target channel Stado owns. The operator supplies no path or run id: the fixed \
+              script derives HOME on the target, sets umask 077, refuses symlinked or \
+              foreign-owned components, creates missing components one at a time, and fixes \
+              the final root at mode 0700. Canonical per-run UUID children are admitted by \
+              `stado host deliver`, not by this allowlist entry",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.
@@ -1909,6 +1959,9 @@ pub async fn exec_host(
             )
             .await?
         }
+        (Some(_), None) if approved.argv == PROBIERZ_RUN_ROOT_CREATE => {
+            host_channel::run_script(&target, &probierz_run_root_script(), runner).await?
+        }
         // A read whose fixed paths are relative to the managed account's home
         // stands in that home first. One candidate, one absolute program, so
         // nothing below has a marker to look for.
@@ -1996,6 +2049,22 @@ mod tests {
             "the real Command Line Tools git must be probed instead"
         );
         assert!(candidates.iter().all(|path| path.starts_with('/')));
+    }
+
+    #[test]
+    fn run_root_preparation_is_one_fixed_guarded_mutation() {
+        let selected = approve(&[
+            "mkdir".into(),
+            "-p".into(),
+            ".stado/work/runs".into(),
+        ])
+        .expect("fixed run root is approved");
+        assert_eq!(selected.argv, PROBIERZ_RUN_ROOT_CREATE);
+        let script = probierz_run_root_script();
+        assert!(script.contains("umask 077"));
+        assert!(script.contains("[ ! -L .stado/work/runs ]"));
+        assert!(script.contains("/bin/chmod 700 .stado/work/runs"));
+        assert!(!script.contains("$1"));
     }
 
     /// Every entry must be reachable by the spelling it advertises.

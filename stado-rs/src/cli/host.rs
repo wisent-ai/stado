@@ -3078,6 +3078,51 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
     report_outcome(&report, expected)
 }
 
+/// `stado host deliver TARGET SOURCE DESTINATION [--files-from PATH] [--json]`
+/// — atomically replace one managed run input with local bytes.
+///
+/// A `-` file list is read as NUL-delimited UTF-8 from stdin. It remains stdin
+/// to rsync rather than becoming argv, so a tracked or untracked checkout can
+/// select its exact files without exposing names to a remote shell.
+pub async fn deliver(
+    target: &str,
+    source: &str,
+    destination: &str,
+    files_from: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let file_list = match files_from {
+        Some("-") => {
+            let mut value = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut value)?;
+            Some(value)
+        }
+        Some(path) => Some(std::fs::read_to_string(path)?),
+        None => None,
+    };
+    let report = crate::deploy::host_delivery::deliver_host(
+        target,
+        source,
+        destination,
+        file_list.as_deref(),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        print_json(&report);
+    } else {
+        println!(
+            "{}: delivered {} {} -> {}",
+            cell(report.get("target")),
+            cell(report.get("kind")),
+            cell(report.get("source")),
+            cell(report.get("destination")),
+        );
+    }
+    Ok(())
+}
+
 /// `stado host inventory TARGET [--json]` — the stado-managed binaries,
 /// fixed Cargo-home metadata and bin membership, forward markers and loopback
 /// listeners of TARGET, and the verdict on whether each marker still matches
@@ -12607,6 +12652,118 @@ cargo test --locked --test ci-cd a_cancelled_release_build_is_retried_under_a_ne
         );
     } else {
         print!("{}", output.stdout);
+    }
+    Ok(())
+}
+
+/// `stado host build TARGET --manifest-path PATH --bin NAME [--json]` —
+/// execute the one Cargo build Stado declares for a delivered source tree.
+///
+/// The variable inputs select a manifest and one binary; they never select a
+/// shell command, Cargo flags, toolchain path, or working directory. Both the
+/// lexical preflight and the host-side physical-path check bind the manifest
+/// below the approved account's `$HOME/.stado/work/runs`.
+pub async fn build(
+    target: &str,
+    manifest_path: &str,
+    binary: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    crate::deploy::host_run::validate_run_descendant(manifest_path)
+        .and_then(|_| crate::deploy::host_run::validate_binary_name(binary))
+        .map_err(|error| CmdError::usage(error).machine_readable(json_output))?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let outcome = crate::deploy::host_run::build(
+        &resolved,
+        manifest_path,
+        binary,
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let exit_code = outcome.exit_code;
+    if json_output {
+        print_json(&serde_json::to_value(&outcome)?);
+    } else {
+        print!("{}", outcome.stdout);
+        eprint!("{}", outcome.stderr);
+    }
+    if exit_code == 0 {
+        Ok(())
+    } else {
+        Err(CmdError::silent(exit_code))
+    }
+}
+
+/// `stado host run-attached TARGET --program PATH [--arg ARG]...` — attach
+/// this process to one executable below the target account's managed run tree.
+///
+/// Standard input is inherited rather than read into a string, so a credential
+/// body does not enter Stado's arguments, logs, or receipts. The non-JSON form
+/// also inherits both output streams byte-for-byte. The JSON form captures
+/// them only because a single machine-readable receipt cannot share stdout
+/// with an arbitrary program protocol.
+pub async fn run_attached(
+    target: &str,
+    program: &str,
+    arguments: &[String],
+    json_output: bool,
+) -> Result<(), CmdError> {
+    crate::deploy::host_run::validate_run_descendant(program)
+        .and_then(|_| crate::deploy::host_run::validate_arguments(arguments))
+        .map_err(|error| CmdError::usage(error).machine_readable(json_output))?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let outcome =
+        crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let exit_code = outcome.exit_code;
+    if json_output {
+        print_json(&serde_json::to_value(&outcome)?);
+    }
+    if exit_code == 0 {
+        Ok(())
+    } else {
+        Err(CmdError::silent(exit_code))
+    }
+}
+
+/// `stado host remove-run-directory TARGET PATH [--json]` — recursively
+/// remove exactly one direct child of the managed run root.
+///
+/// This is deliberately separate from `remove-file`: recursive deletion has a
+/// smaller path boundary, and making `rm -rf` an option on the wider
+/// single-file command would weaken the guard every existing caller relies on.
+pub async fn remove_run_directory(
+    target: &str,
+    path: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    crate::deploy::host_run::validate_run_directory(path)
+        .map_err(|error| CmdError::usage(error).machine_readable(json_output))?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let outcome = crate::deploy::host_run::remove_run_directory(
+        &resolved,
+        path,
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    if !outcome.succeeded() {
+        return Err(
+            CmdError::click(outcome.failure_sentence()).machine_readable(json_output)
+        );
+    }
+    if json_output {
+        print_json(&serde_json::to_value(&outcome)?);
+    } else {
+        println!("{}: {} {}", outcome.target, outcome.path, outcome.status);
     }
     Ok(())
 }

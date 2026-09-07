@@ -95,6 +95,14 @@ name = "host_exec"
 path = "tests/host_exec/main.rs"
 
 [[test]]
+name = "host_delivery"
+path = "tests/host_delivery/main.rs"
+
+[[test]]
+name = "host_run"
+path = "tests/host_run/main.rs"
+
+[[test]]
 name = "apple_challenge"
 path = "tests/apple_challenge/main.rs"
 
