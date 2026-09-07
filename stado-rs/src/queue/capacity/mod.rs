@@ -40,6 +40,10 @@ use crate::constants;
 use super::storage::JobStorage;
 use super::StorageError;
 
+mod readers;
+
+pub use readers::*;
+
 /// Python `CAPACITY_PREFIX`.
 pub const CAPACITY_PREFIX: &str = "capacity/";
 /// Python `CAPACITY_STALE_SECONDS = _wc.CAPACITY_STALE_SECONDS`. (The crate
@@ -70,12 +74,24 @@ pub struct CapacitySnapshot {
 /// `accepting_jobs` is the admission decision consumed by dispatchers. The
 /// remaining fields explain it and let GPU placement compare a job's declared
 /// needs with live hardware state; none is an operator-set concurrency limit.
+///
+/// The host's declared memory refusal is applied HERE and not by the caller,
+/// because a capacity document has two writers on every host — the agent tick
+/// and the heartbeat republisher — and a host that published itself as
+/// claimable from one of them while its own `targets[].memory_reclaim`
+/// refuses work would be selected for exactly the work it cannot run. That is
+/// what happened to charless-mac-mini on 2026-09-06: a machine that could no
+/// longer give a runtime its heap kept being selected, and every selection
+/// died with `Failed to create CoreCLR, HRESULT: 0x8007000C`. The refusal is
+/// declared, never inferred: `refuse_placement` is a registry field, and a
+/// host that does not declare it publishes exactly what its caller measured.
 pub async fn publish_capacity(
     store: &JobStorage,
     consumer_id: &str,
     kind: &str,
     snapshot: &CapacitySnapshot,
 ) -> Result<(), StorageError> {
+    let memory_refusal = crate::providers::local::host_memory::placement_refusal();
     let mut payload = Map::new();
     payload.insert("consumer_id".into(), Value::String(consumer_id.to_string()));
     payload.insert("kind".into(), Value::String(kind.to_string()));
@@ -85,7 +101,7 @@ pub async fn publish_capacity(
     );
     payload.insert(
         "accepting_jobs".into(),
-        Value::from(snapshot.accepting_jobs),
+        Value::from(snapshot.accepting_jobs && memory_refusal.is_none()),
     );
     payload.insert(
         "running_jobs".into(),
@@ -117,7 +133,12 @@ pub async fn publish_capacity(
     if let Some(value) = snapshot.total_ram_gb {
         payload.insert("total_ram_gb".into(), Value::from(value));
     }
-    payload.insert("diag".into(), Value::Object(snapshot.diag.clone()));
+    let mut diag = snapshot.diag.clone();
+    if let Some(reason) = memory_refusal {
+        diag.insert("memory_pressure_active".into(), Value::Bool(true));
+        diag.insert("admission_reason".into(), Value::String(reason.to_string()));
+    }
+    payload.insert("diag".into(), Value::Object(diag));
     payload.insert(
         "stado_version".into(),
         Value::String(env!("CARGO_PKG_VERSION").to_string()),
@@ -275,63 +296,4 @@ async fn read_consumer_capacity_at(
         store.delete_blob(&name).await?;
     }
     Ok(out)
-}
-
-/// Sum available accelerator placements across accepting workers, optionally
-/// filtered by worker kind.
-pub fn total_available_accelerators(
-    consumers: &BTreeMap<String, Value>,
-    kinds: Option<&[&str]>,
-) -> BTreeMap<String, i64> {
-    let mut totals: BTreeMap<String, i64> = BTreeMap::new();
-    for payload in consumers.values() {
-        if payload.get("accepting_jobs").and_then(Value::as_bool) != Some(true) {
-            continue;
-        }
-        if let Some(kinds) = kinds {
-            let kind = payload.get("kind").and_then(Value::as_str).unwrap_or("");
-            if !kinds.contains(&kind) {
-                continue;
-            }
-        }
-        let Some(available) = payload
-            .get("available_accelerators")
-            .and_then(Value::as_object)
-        else {
-            continue;
-        };
-        for (accelerator, count) in available {
-            *totals.entry(accelerator.clone()).or_insert(0) += count.as_i64().unwrap_or_default();
-        }
-    }
-    totals
-}
-
-/// [(consumer_id, free_vram_gb), ...] sorted descending. Empty if none
-/// publish vram. Python `consumers_by_free_vram`.
-pub fn consumers_by_free_vram(
-    consumers: &BTreeMap<String, Value>,
-    kinds: Option<&[&str]>,
-) -> Vec<(String, i64)> {
-    let mut rows: Vec<(String, i64)> = Vec::new();
-    for payload in consumers.values() {
-        if let Some(kinds) = kinds {
-            let kind = payload.get("kind").and_then(Value::as_str).unwrap_or("");
-            if !kinds.contains(&kind) {
-                continue;
-            }
-        }
-        let v = payload
-            .get("free_vram_gb")
-            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)));
-        let Some(v) = v else { continue };
-        // Python `payload["consumer_id"]`; read_consumer_capacity only emits
-        // payloads that carry the key.
-        let Some(cid) = payload.get("consumer_id").and_then(Value::as_str) else {
-            continue;
-        };
-        rows.push((cid.to_string(), v));
-    }
-    rows.sort_by_key(|row| std::cmp::Reverse(row.1));
-    rows
 }

@@ -1,4 +1,4 @@
-//! The disk-cleanup pass, lifted off the agent tick's critical path.
+//! The declared janitor passes, lifted off the agent tick's critical path.
 //!
 //! # The defect this exists to make impossible
 //!
@@ -63,6 +63,12 @@ use serde_json::Value;
 #[derive(Clone, Default)]
 pub struct JanitorReports {
     latest: Arc<Mutex<Option<Value>>>,
+    /// The memory pass's latest completed report, kept beside the disk one
+    /// for the same reason and read the same way. Two declarations, two
+    /// passes, one task: `targets[].disk_cleanup` and
+    /// `targets[].memory_reclaim` are both executed here on every tick, and
+    /// neither waits for the other's next interval.
+    memory_latest: Arc<Mutex<Option<Value>>>,
     /// How many passes have completed. The tick logs the first one so an
     /// operator can tell "no pass has finished yet" from "the janitor is
     /// wedged".
@@ -97,6 +103,14 @@ impl JanitorReports {
         self.completed.load(Ordering::Relaxed)
     }
 
+    /// The most recently COMPLETED memory-reclaim report, or `None` when no
+    /// memory pass has finished yet.
+    pub fn latest_memory(&self) -> Option<Value> {
+        self.memory_latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
     /// Tell the janitor how many jobs are active for the next pass it starts.
     pub fn set_active_jobs(&self, count: i64) {
         self.active_jobs.store(count, Ordering::Relaxed);
@@ -114,6 +128,13 @@ impl JanitorReports {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(report);
         self.completed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_memory(&self, report: Value) {
+        *self
+            .memory_latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(report);
     }
 
     /// Run `pass` forever on a thread of its own, recording each completed
@@ -162,6 +183,23 @@ impl JanitorReports {
                     while !stop_signal.load(Ordering::Relaxed) {
                         let report = pass(reports.active_jobs()).await;
                         reports.record(report);
+                        // The second declared pass, on the same task and the
+                        // same cadence. It is here rather than on the tick for
+                        // the reason this whole module exists: a pass must
+                        // never sit between the agent and its capacity
+                        // publication. It is here rather than in its own unit
+                        // because the operator asked for automatic policy, and
+                        // the tick is the one thing that already runs on every
+                        // host that claims work.
+                        let memory = crate::providers::local::host_memory::run_memory_pass_once(
+                            reports.active_jobs(),
+                            crate::providers::local::host_memory::MemoryWriter::AgentTick,
+                            &mut |message: &str| {
+                                crate::providers::local::agent::agent_log(message);
+                            },
+                        )
+                        .await;
+                        reports.record_memory(memory);
                         tokio::time::sleep(interval).await;
                     }
                 });

@@ -88,6 +88,20 @@ printf 'host_health_beacon: api=%s skarbiec=%s labels=%s\n' \
 
 reported_at=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)
 disk_line=$(/bin/df -h / 2>/dev/null | /usr/bin/awk '{line=$0} END {if (line != "") print line}' || true)
+# The memory line, and why it is a read of the pass rather than a fourth
+# measurement. `targets[].memory_reclaim` is executed on this host by two
+# writers -- the janitor unit on its timer and the queue agent's janitor task
+# on every tick -- and each of them writes the reading it decided against into
+# the state file below. A beacon that ran its own `vm_stat` here would publish
+# a number nothing was measured against, and the first time the two disagreed
+# the operator would have to work out which one the watermark used. So the
+# beacon carries the product's own answer: the last completed pass, with its
+# reading, its watermarks, its outcome and its repairs.
+memory_state="$HOME/.cache/wisent-compute/memory-reclaim-state.json"
+memory_json=null
+if [ -r "$memory_state" ]; then
+  memory_json=$(/usr/bin/tr -d '\t\r\n' < "$memory_state")
+fi
 
 units_json=""
 for lbl in $LABELS; do
@@ -128,7 +142,7 @@ for lbl in $LABELS; do
     units_json="$units_json\"$lbl\":{\"state\":\"$state\"}"
 done
 
-payload="{\"host\":\"$HOST_SLUG\",\"reported_at\":\"$reported_at\",\"disk\":\"$disk_line\",\"units\":{$units_json}}"
+payload="{\"host\":\"$HOST_SLUG\",\"reported_at\":\"$reported_at\",\"disk\":\"$disk_line\",\"memory\":$memory_json,\"units\":{$units_json}}"
 
 "$STADO_BIN" host publish-beacon <(printf '%s' "$payload")
 

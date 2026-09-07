@@ -253,6 +253,21 @@ case "$inference_json" in
     *) inference_json='{}' ;;
 esac
 
+# The memory line, read from the product's own pass rather than measured a
+# second time here. `targets[].memory_reclaim` is executed on this host by the
+# janitor unit and by the queue agent's janitor task, and each writes the
+# reading it decided against into the state file below, with its watermarks,
+# its outcome and its repairs. A beacon that ran its own /proc/meminfo would
+# publish a number no watermark was applied to.
+memory_state="${HOME}/.cache/wisent-compute/memory-reclaim-state.json"
+memory_json=null
+if [ -r "$memory_state" ]; then
+    memory_json=$(/usr/bin/tr -d '\t\r\n' < "$memory_state")
+fi
+case "$memory_json" in
+    \{*\}|null) ;;
+    *) memory_json=null ;;
+esac
 
 payload_dir="${HOME}/.stado/work/host-health-beacon"
 /usr/bin/install -d -m 700 "$payload_dir"
@@ -265,6 +280,7 @@ cat > "$tmpfile" <<EOF
   "disk_pct": ${disk_pct:-0},
   "disk_avail_gb": ${disk_avail_gb:-0},
   "units": {${units_json}},
+  "memory": ${memory_json},
   "inference": ${inference_json}
 }
 EOF
