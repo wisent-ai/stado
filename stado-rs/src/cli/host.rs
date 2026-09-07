@@ -639,6 +639,75 @@ async fn registry_target(target: &str) -> Result<ComputeTarget, CmdError> {
         .cloned()
         .ok_or_else(|| CmdError::click(format!("unknown registry target: {target}")))
 }
+pub(crate) struct CredentialHost {
+    pub target: ComputeTarget,
+    pub home: String,
+    pub vault: String,
+    pub gnupg_home: String,
+}
+
+/// Resolve credential custody from the host's own durable Stado declaration.
+///
+/// The remote configuration document is the declaration every service on that
+/// host consumes. An absent field is never replaced with a conventional path:
+/// a plausible default is precisely how two vaults can both receive real writes.
+pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdError> {
+    let target = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&target, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let configuration = remote_config_output(&target, RemoteConfigAction::Show, &runner).await?;
+    let document: Value = serde_json::from_str(&configuration).map_err(|error| {
+        CmdError::click(format!(
+            "{}: the declared Stado configuration could not be read: {error}",
+            target.name
+        ))
+    })?;
+    let declared = document
+        .pointer("/resolved/skarbiec_vault_file")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} declares no vault authority; add it to secrets.skarbiec.vault_file",
+                target.name
+            ))
+        })?;
+    let vault = declared
+        .strip_prefix("$HOME/")
+        .map(|tail| format!("{home}/{tail}"))
+        .unwrap_or_else(|| declared.to_string());
+    let environment = crate::deploy::host_channel::run_command(
+        &target,
+        "printf '%s\n' \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: GNUPGHOME could not be resolved from the host environment",
+            target.name
+        )));
+    }
+    let gnupg_home = environment.stdout.trim().to_string();
+    if gnupg_home.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: GNUPGHOME is empty; declare it in the host environment",
+            target.name
+        )));
+    }
+    Ok(CredentialHost {
+        target,
+        home,
+        vault,
+        gnupg_home,
+    })
+}
 
 /// `stado host user delete USERNAME --target T [--keep-home]` — remove the
 /// account through the channel that created it.
@@ -3086,7 +3155,7 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
 /// would be a command that could be pointed at `~/.ssh/id_ed25519`.
-/// `stado host vaults [TARGET]` — which Skarbiec vaults the fleet holds.
+/// `stado credentials vaults [--host TARGET]` — which Skarbiec vaults the fleet holds.
 ///
 /// Without a target this asks every registry host, because "how many vaults
 /// does this fleet have" is the question a machine cannot answer about
@@ -3129,8 +3198,15 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
                 document
                     .pointer("/resolved/skarbiec_vault_file")
                     .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
                     .map(str::to_string)
             });
+        if declared.is_none() {
+            return Err(CmdError::click(format!(
+                "{name} declares no vault authority; add it to secrets.skarbiec.vault_file"
+            )));
+        }
         if let Some(object) = host.as_object_mut() {
             let list = object
                 .get("vaults")
@@ -4249,7 +4325,7 @@ pub(crate) async fn deliver_file(
     stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
 }
 
-/// The registration `stado host sync-acquisition-scopes` performs on the host,
+/// The registration `stado credentials acquisition-scopes sync --host TARGET` performs on the host,
 /// natively: the checks and key steps of the retired registration script as
 /// individual remote commands, with every branch taken here. Modeled on
 /// weles's register-weles-acquisition-scopes-host.sh with the two appstore
@@ -4272,6 +4348,7 @@ async fn register_acquisition_scopes(
     resolved: &ComputeTarget,
     delivered: &str,
     catalog_name: &str,
+    vault: &str,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
     use crate::deploy::host_channel;
@@ -4299,11 +4376,10 @@ async fn register_acquisition_scopes(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let bin = format!("{home}/.stado/bin/skarbiec");
-    let vault = format!("{home}/.stado/skarbiec.vault.json");
     let private_key = format!("{home}/.stado/weles-credential-workload-private.pem");
     let catalog = format!("{home}/.stado/files/{catalog_name}");
 
-    for file in [&bin, &vault, &private_key, &catalog] {
+    for file in [bin.as_str(), vault, private_key.as_str(), catalog.as_str()] {
         let present = host_channel::remote_test(
             resolved,
             &format!("-f {}", crate::deploy::shlex_quote(file)),
@@ -4545,7 +4621,7 @@ fn catalog_file_name(source: &str) -> Result<String, CmdError> {
     Ok(name.to_string())
 }
 
-/// `stado host sync-acquisition-scopes TARGET SOURCE` — deliver the checked-in
+/// `stado credentials acquisition-scopes sync --host TARGET SOURCE` — deliver the checked-in
 /// Skarbiec acquisition-scope catalog to TARGET and register it against the
 /// host's fleet vault.
 ///
@@ -4562,13 +4638,13 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
         return Err(CmdError::usage("catalog source must be a regular file"));
     }
     let name = catalog_file_name(source)?;
-    let (delivered, _bytes) = deliver_file(target, source, &name).await?;
-
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let vault = credential_host.vault;
     let runner = crate::deploy::production_runner();
-    let printed = register_acquisition_scopes(&resolved, &delivered, &name, &runner).await?;
+    let (delivered, _bytes) = deliver_file(target, source, &name).await?;
+    let printed =
+        register_acquisition_scopes(&resolved, &delivered, &name, &vault, &runner).await?;
     print!("{printed}");
     if !printed.ends_with('\n') {
         println!();
@@ -6659,7 +6735,7 @@ const VAULT_FIELD_SUMMARY_PROGRAM: &str = concat!(
     " for name in sorted(fields)]}))\n",
 );
 
-/// `stado host vault-item-show` — what one item on TARGET holds, without its
+/// `stado credentials item show --host TARGET ITEM` — what one item holds,
 /// values.
 ///
 /// `vault-item-put` had no counterpart, and the absence was not cosmetic: an
@@ -6685,40 +6761,19 @@ pub async fn vault_item_show(
     if let Some(field) = field {
         vault_word("field", field)?;
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let refused = |detail: String| {
         CmdError::click(format!(
             "{}: {item} could not be read: {detail}",
             resolved.name
         ))
     };
-    if !environment.ok() {
-        return Err(refused(
-            crate::deploy::host_channel::last_error_line(
-                &environment,
-                "the host's vault environment could not be read",
-            )
-            .to_string(),
-        ));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables.next().unwrap_or_default().to_string();
-    let gnupg_home = variables.next().unwrap_or_default().to_string();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
 
     // The encrypted record first: an absent item is an answer, and it is the
     // answer that costs nothing to give.
@@ -6729,19 +6784,10 @@ pub async fn vault_item_show(
         .await
         .unwrap_or_else(|_| "-".to_string());
     if record.state == "absent" {
-        if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "target": resolved.name,
-                    "item": item,
-                    "state": "absent",
-                }))?
-            );
-        } else {
-            println!("{}: {item} is absent", resolved.name);
-        }
-        return Ok(());
+        return Err(CmdError::click(format!(
+            "{} declares no credential item {item}; add it to the vault declared by secrets.skarbiec.vault_file",
+            resolved.name
+        )));
     }
 
     let summary_text = crate::deploy::host_channel::run_command(
@@ -6882,36 +6928,12 @@ pub async fn retag_vault_item(
             vault_word("tag", tag)?;
         }
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    // The host's own overrides, resolved on the host the way the retired
-    // script's `${VAR:-default}` did.
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: {item} could not be retagged: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(
-                &environment,
-                "the host's vault environment could not be read"
-            )
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables.next().unwrap_or_default().to_string();
-    let gnupg_home = variables.next().unwrap_or_default().to_string();
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
 
     // A remote refusal names the check that failed, in the words the retired
@@ -7089,37 +7111,12 @@ pub async fn vault_item_put(
         )));
     }
 
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: the Skarbiec environment could not be read: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
-    let gnupg_home = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
@@ -7136,7 +7133,7 @@ pub async fn vault_item_put(
         item_type,
     ];
 
-    let before = read_vault_phase(&resolved, vault, item, &runner)
+    let before = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(CmdError::click)?;
     let stored = crate::deploy::host_channel::run_program_with_stdin(
@@ -7154,7 +7151,7 @@ pub async fn vault_item_put(
             crate::deploy::host_channel::last_error_line(&stored, "remote command failed")
         )));
     }
-    let after = read_vault_phase(&resolved, vault, item, &runner)
+    let after = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(CmdError::click)?;
     if after.state != "active" || after.revision == before.revision {
@@ -7213,37 +7210,12 @@ pub async fn grant_item_read(
         ));
     }
 
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: the Skarbiec environment could not be read: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
-    let gnupg_home = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
@@ -7329,7 +7301,7 @@ pub async fn grant_show(
         .find(|entry| entry.get("consumer").and_then(Value::as_str) == Some(consumer));
     let Some(grant) = grant else {
         return Err(CmdError::click(format!(
-            "{}: no grant is recorded for consumer {consumer}",
+            "{} declares no grant for {consumer}; add it to the vault declared by secrets.skarbiec.vault_file",
             resolved.name
         )));
     };
@@ -7488,37 +7460,12 @@ async fn remote_skarbiec_json_at(
         .first()
         .map(String::as_str)
         .ok_or_else(|| CmdError::usage("a Skarbiec command is required"))?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: the Skarbiec environment could not be read: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
-    let gnupg_home = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let vault_environment = match vault_relative {
         Some(relative) => format!("SKARBIEC_VAULT_FILE={home}/{relative}"),
@@ -7658,7 +7605,7 @@ fn mirror_items(
     Ok(items)
 }
 
-/// What `stado host sync-vault` would do to TARGET, without doing any of it.
+/// What `stado credentials vault sync --host TARGET` would do, without doing any of it.
 ///
 /// This preview exists because the operation it previews is not a merge, and
 /// its name invites everyone to read it as one. `skarbiec sync-pull` copies the
@@ -11060,6 +11007,7 @@ pub async fn backup_audit(
             "exact object inspection is read-only and cannot reclaim backup objects",
         ));
     }
+    let _credential_authority = credential_host(target).await?;
     let namespace = crate::config::wc_stado_storage_namespace();
     if namespace.trim().is_empty() && object_uris.is_empty() && inventory_namespaces.is_empty() {
         return Err(CmdError::click(
@@ -12318,8 +12266,8 @@ async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Resu
          close that host's whole release publication boundary: its release verifier compares the \
          declared publisher set against its grant's item set, and one unmintable name makes them \
          unequal for every product, answering 401 or 503 to every release-catalog read on the \
-         fleet. Mint the item on {host} first - `stado host vault-item-put {host} {item} --type \
-         token` - then declare it and run `stado host reconcile-release-verifier {host} --product \
+         fleet. Mint the item on {host} first - `stado credentials item put --host {host} {item} \
+         --type token` - then declare it and run `stado host reconcile-release-verifier {host} --product \
          {product}`.",
         host = resolved.name
     )))

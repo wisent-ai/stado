@@ -1,4 +1,4 @@
-//! `stado host authenticator-seed-freshness` — is each login row's stored
+//! `stado credentials seed-freshness --host TARGET` — is each login row's stored
 //! authenticator seed still the one its account has enrolled?
 //!
 //! # Why the name, and why Stado owns it
@@ -668,18 +668,25 @@ pub async fn authenticator_seed_freshness(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = super::host::credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault_path = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
 
     let mut arguments = vec![String::from("totp-seed-state")];
     if let Some(item) = login_item {
         arguments.push(item.to_string());
     }
-    let vault = remote_seed_state(&resolved, &runner, &home, &arguments).await;
+    let vault = remote_seed_state(
+        &resolved,
+        &runner,
+        &home,
+        &vault_path,
+        &gnupg_home,
+        &arguments,
+    )
+    .await;
     // One item asked for comes back as one object; the report always joins on
     // a list, so a single row is wrapped rather than special-cased below.
     let mut vault_unsupported = None;
@@ -783,31 +790,10 @@ async fn remote_seed_state(
     resolved: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
     home: &str,
+    vault: &str,
+    gnupg_home: &str,
     arguments: &[String],
 ) -> Result<Value, CmdError> {
-    let environment = crate::deploy::host_channel::run_command(
-        resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: the Skarbiec environment could not be read",
-            resolved.name
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
-    let gnupg_home = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = release_managed_skarbiec(resolved, runner, home).await?;
     let tool_path = format!(
         "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/local/MacGPG2/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"

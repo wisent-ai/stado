@@ -540,6 +540,14 @@ struct HostsView: View {
             ) {
                 gateSection(for: host)
                 linkSection(for: host)
+                CredentialsHostSection(
+                    host: host.targetName ?? host.displayName,
+                    store: vaultStore
+                ) {
+                    vaultBearerTarget = HostVaultBearerTarget(
+                        host: host.targetName ?? host.displayName
+                    )
+                }
                 tailscaleLogSection(for: host)
 
                 appleChallengeSection(for: host)
@@ -569,19 +577,6 @@ struct HostsView: View {
                 WisentField(label: "Last capacity report", value: ConsoleFormat.age(host.ageSeconds))
                 if host.status == .live {
                     WisentField(label: "Availability", value: host.availabilityReason)
-                }
-                if host.declared {
-                    WisentActionButton(
-                        action: WisentAction(
-                            "Bounded vault bearer…",
-                            symbol: "key.horizontal",
-                            kind: .primary
-                        ) {
-                            vaultBearerTarget = HostVaultBearerTarget(
-                                host: host.targetName ?? host.displayName
-                            )
-                        }
-                    )
                 }
                 policySection(for: host)
                 WisentActionButton(

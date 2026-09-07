@@ -1691,169 +1691,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Replace the tags of one Skarbiec item on TARGET, payload untouched.
-    ///
-    /// Consumers enumerate vault items by tag: Brama spends a subscription only
-    /// when its item carries `brama:subscription` and `brama:agent:<agent>`, so
-    /// an item that loses them leaves the fleet while its credential stays
-    /// valid and every check that counts credentials keeps answering green.
-    /// The owner key that may rewrite tags lives on the host, so this runs
-    /// there, reads the item before and after, and reports both.
-    #[command(name = "retag-vault-item")]
-    RetagVaultItem {
-        target: String,
-        /// Vault item id, e.g. provider:kimi:brama-sub-wisent-app-kimi-primary.
-        item: String,
-        /// The complete tag list to store, comma separated. This replaces the
-        /// item's tags rather than adding to them.
-        ///
-        /// Omit it to READ: the item's current state, revision and tags are
-        /// reported and nothing is written. A command that can only replace a
-        /// tag list forces an operator to guess the list they are replacing,
-        /// and a guess that drops `brama:agent:<other>` silently unsubscribes
-        /// another agent from a paid plan while every credential count stays
-        /// green.
-        #[arg(long)]
-        tags: Option<String>,
-        /// Emit the before/after report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Pull TARGET's Skarbiec mirror into its live vault without discarding
-    /// local-only items.
-    ///
-    /// This replaces the live vault file with the mirror rather than merging
-    /// the two; run `--check` first, which names every item that would be
-    /// replaced and every one that would be lost, and exits non-zero when
-    /// either set is not empty.
-    #[command(name = "sync-vault")]
-    SyncVault {
-        target: String,
-        /// Report what a pull would change and exit non-zero on any conflict
-        /// or loss, applying nothing.
-        #[arg(long)]
-        check: bool,
-        /// Emit the Skarbiec pull report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Store one typed item directly in TARGET's owner vault.
-    ///
-    /// The canonical JSON payload is read from stdin and carried only in the
-    /// encrypted host channel's request body. Credential fields never enter a
-    /// local or remote argument vector, and the host's other items are untouched.
-    #[command(name = "vault-item-put")]
-    VaultItemPut {
-        target: String,
-        /// Credential item id.
-        item: String,
-        /// Canonical Skarbiec item kind.
-        #[arg(long = "type")]
-        item_type: String,
-        /// Emit the nonsecret before/after report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Report what one item in TARGET's vault holds, without its values.
-    ///
-    /// `vault-item-put` had no counterpart, and the absence was not cosmetic:
-    /// an operator who had just written an item could not confirm from a
-    /// workstation that the host held it. `retag-vault-item`'s read reports
-    /// state, revision and tags and nothing about the payload,
-    /// `stado credentials get` reads the local store, and `skarbiec get` is
-    /// not a host-exec command. A migration wrote seven bundles and twenty
-    /// credential fields into a workstation vault nothing on the fleet reads,
-    /// and only a 401 from Brama revealed it.
-    ///
-    /// Prints kind, schema, revision, tags, `updated_at`, and per field its
-    /// name, byte length and SHA-256. The decryption and the hashing both
-    /// happen on the host: comparing the digest against a local copy's
-    /// answers "does the host hold what this row references" without either
-    /// side sending the value.
-    #[command(name = "vault-item-show")]
-    VaultItemShow {
-        target: String,
-        /// Credential item id.
-        item: String,
-        /// Report only this field's length and digest.
-        #[arg(long)]
-        field: Option<String>,
-        /// Emit the nonsecret report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Report what one consumer's Skarbiec grant on TARGET holds.
-    ///
-    /// Prints the recorded capabilities as `item#field:action` and, when a
-    /// token file is named, whether the bearer in it is the one the vault
-    /// recorded. Records nothing: the verdict re-asserts a capability the
-    /// grant already holds, which Skarbiec answers without writing.
-    #[command(name = "grant-show")]
-    GrantShow {
-        target: String,
-        /// Exact Skarbiec consumer name.
-        consumer: String,
-        /// Consumer's bearer file on the target, absolute or rooted at $HOME.
-        #[arg(long)]
-        token_file: Option<String>,
-        /// Emit the nonsecret report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Authorize one consumer to read one field of one item on TARGET.
-    ///
-    /// A Skarbiec grant is per item and per field. The consumer's bearer stays
-    /// on the target: this names its token file, never its bytes.
-    #[command(name = "grant-item-read")]
-    GrantItemRead {
-        target: String,
-        /// Exact Skarbiec consumer name.
-        consumer: String,
-        /// Credential item id.
-        item: String,
-        /// Item field the consumer may read.
-        #[arg(long)]
-        field: String,
-        /// Existing raw bearer file on the target, absolute or rooted at $HOME.
-        #[arg(long)]
-        token_file: String,
-        /// Emit the nonsecret report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
-    #[command(name = "vault-token-mint")]
-    VaultTokenMint {
-        target: String,
-        consumer: String,
-        /// Comma-separated Skarbiec capabilities.
-        #[arg(long)]
-        capabilities: String,
-        /// Exact audience bound into the bearer.
-        #[arg(long)]
-        audience: String,
-        /// Bearer lifetime in seconds.
-        #[arg(long, default_value_t = 31_536_000)]
-        ttl_seconds: u64,
-        /// Replace an existing consumer's capability set.
-        #[arg(long)]
-        replace_capabilities: bool,
-        /// Reuse this owner-vault item's bearer instead of generating one.
-        #[arg(long)]
-        token_item: Option<String>,
-        /// Field in --token-item; defaults to token.
-        #[arg(long, requires = "token_item")]
-        token_field: Option<String>,
-        /// Print only a newly generated bearer, for piping into a secret store.
-        #[arg(long, conflicts_with = "token_item")]
-        raw_token: bool,
-        /// Keep the bearer in TARGET's ~/.stado/NAME; create if absent, reuse if present.
-        #[arg(long, conflicts_with_all = ["raw_token", "token_item"])]
-        token_file_name: Option<String>,
-        /// Emit nonsecret bearer metadata as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Make TARGET's dashboard verifier shadow and grant match every object
     /// namespace plus the route-scoped host-health bearer exactly.
     ///
@@ -1946,44 +1783,6 @@ enum HostCommands {
         repo: String,
         #[arg(long = "ref")]
         revision: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Classify HOST's local replica against the store it mirrors, object by
-    /// object, and optionally reclaim the twins.
-    ///
-    /// Classifying deletes nothing. `--reclaim-twins --apply` deletes ONLY the
-    /// replica objects that same pass proved byte-identical to the primary, by
-    /// hashing both copies moments before the unlink — never a verdict an
-    /// earlier run recorded, because an audit written to a file and a deletion
-    /// run against it later is how a safety net becomes data loss.
-    #[command(name = "backup-audit")]
-    BackupAudit {
-        target: String,
-        /// Compare only this exact object in the fixed local-storage and
-        /// local-backup roots; repeatable. Reports size and SHA-256, never content.
-        #[arg(
-            long = "object",
-            value_name = "STADO_URI",
-            conflicts_with = "reclaim_twins"
-        )]
-        objects: Vec<String>,
-        /// List backup-visible object paths and size metadata in this exact API
-        /// namespace without reading object bodies; repeatable.
-        #[arg(
-            long = "inventory-namespace",
-            value_name = "NAMESPACE",
-            conflicts_with = "reclaim_twins"
-        )]
-        inventory_namespaces: Vec<String>,
-        /// Delete the twins this pass proves. Names them and deletes nothing
-        /// without --apply.
-        #[arg(long = "reclaim-twins")]
-        reclaim_twins: bool,
-        /// Actually delete what --reclaim-twins proved in this same pass.
-        #[arg(long, requires = "reclaim_twins")]
-        apply: bool,
-        /// Emit the classification as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -2104,13 +1903,6 @@ enum HostCommands {
         /// Close every deliverable difference.
         #[arg(long)]
         apply: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Which Skarbiec vaults the fleet holds; omit TARGET to ask every host.
-    Vaults {
-        /// Ask one host instead of the whole registry.
-        target: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -2255,15 +2047,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Deliver the checked-in Skarbiec acquisition-scope catalog to TARGET and
-    /// register it against the host's fleet vault, then print the reconciled
-    /// status.
-    #[command(name = "sync-acquisition-scopes")]
-    SyncAcquisitionScopes {
-        target: String,
-        /// Local acquisition-scope catalog file to deliver and register.
-        source: String,
-    },
     /// Deliver the checked-in Weles receipt-trust renderer to TARGET and print
     /// the public five-field Spis receipt-trust document it builds from
     /// TARGET's own live Skarbiec. The admission authority's private half
@@ -2334,27 +2117,6 @@ enum HostCommands {
         #[arg(long)]
         file: Option<String>,
         /// Emit the report as JSON. Binary file content is base64 encoded.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Whether each of TARGET's login rows still holds an authenticator seed
-    /// its account accepts.
-    ///
-    /// The vault is asked whether a seed exists; the recorded sign-in history
-    /// is asked whether codes computed from it were accepted or refused, and
-    /// since when. Four conditions with four different repairs come out of
-    /// that join: a seed last known good, a seed every attempt has refused
-    /// since a date, a declared `totp_secret` field carrying nothing, and a
-    /// row whose kind has no such field at all. Reads the host's own files, so
-    /// it still answers while the Weles worker API is down. No seed, password
-    /// or one-time code is read, printed or returned, and no code is computed.
-    #[command(name = "authenticator-seed-freshness")]
-    AuthenticatorSeedFreshness {
-        target: String,
-        /// Judge only this login item instead of every login row.
-        #[arg(long)]
-        login_item: Option<String>,
-        /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -3467,79 +3229,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 apply,
                 json,
             } => host::cron(&target, prune.as_deref(), restore.as_deref(), apply, json).await,
-            HostCommands::SyncAcquisitionScopes { target, source } => {
-                host::sync_acquisition_scopes(&target, &source).await
-            }
             HostCommands::RenderSpisAdmissionTrust { target, source } => {
                 host::render_spis_admission_trust(&target, &source).await
             }
             HostCommands::WelesApiRuntime { target, revision } => {
                 host::refresh_weles_api_runtime(&target, &revision).await
-            }
-            HostCommands::RetagVaultItem {
-                target,
-                item,
-                tags,
-                json,
-            } => host::retag_vault_item(&target, &item, tags.as_deref(), json).await,
-            HostCommands::SyncVault {
-                target,
-                check,
-                json,
-            } => host::sync_vault(&target, check, json).await,
-            HostCommands::VaultItemPut {
-                target,
-                item,
-                item_type,
-                json,
-            } => host::vault_item_put(&target, &item, &item_type, json).await,
-            HostCommands::VaultItemShow {
-                target,
-                item,
-                field,
-                json,
-            } => host::vault_item_show(&target, &item, field.as_deref(), json).await,
-            HostCommands::GrantShow {
-                target,
-                consumer,
-                token_file,
-                json,
-            } => host::grant_show(&target, &consumer, token_file.as_deref(), json).await,
-            HostCommands::GrantItemRead {
-                target,
-                consumer,
-                item,
-                field,
-                token_file,
-                json,
-            } => host::grant_item_read(&target, &consumer, &item, &field, &token_file, json).await,
-            HostCommands::VaultTokenMint {
-                target,
-                consumer,
-                capabilities,
-                audience,
-                ttl_seconds,
-                replace_capabilities,
-                token_item,
-                token_field,
-                raw_token,
-                token_file_name,
-                json,
-            } => {
-                host::vault_token_mint(
-                    &target,
-                    &consumer,
-                    &capabilities,
-                    &audience,
-                    ttl_seconds,
-                    replace_capabilities,
-                    token_item.as_deref(),
-                    token_field.as_deref().unwrap_or("token"),
-                    raw_token,
-                    token_file_name.as_deref(),
-                    json,
-                )
-                .await
             }
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
@@ -3574,24 +3268,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 revision,
                 json,
             } => host::verify_release_platform(&target, &repo, &revision, json).await,
-            HostCommands::BackupAudit {
-                target,
-                objects,
-                inventory_namespaces,
-                reclaim_twins,
-                apply,
-                json,
-            } => {
-                host::backup_audit(
-                    &target,
-                    &objects,
-                    &inventory_namespaces,
-                    reclaim_twins,
-                    apply,
-                    json,
-                )
-                .await
-            }
             HostCommands::StorageRootReconcile {
                 target,
                 transaction,
@@ -3662,7 +3338,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 apply,
                 json,
             } => host::reconcile(target, apply, json).await,
-            HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
             HostCommands::Software { target, json } => host::software(target, json).await,
             HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
@@ -3675,14 +3350,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 file,
                 json,
             } => host::weles_run_diagnostics(&target, &run_id, file.as_deref(), json).await,
-            HostCommands::AuthenticatorSeedFreshness {
-                target,
-                login_item,
-                json,
-            } => {
-                seed_freshness::authenticator_seed_freshness(&target, login_item.as_deref(), json)
-                    .await
-            }
             HostCommands::WelesImageInspect { target, url, json } => {
                 host::weles_image_inspect(&target, &url, json).await
             }

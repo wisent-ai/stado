@@ -119,7 +119,7 @@ actor StadoCLI {
     /// Run a command whose successful stdout is intentionally plain text.
     ///
     /// This is reserved for explicit reveal/copy flows such as
-    /// `host vault-token-mint --raw-token`. Unlike `json`, a non-zero exit can
+    /// `credentials token mint --raw-token`. Unlike `json`, a non-zero exit can
     /// never be a decodable state, so the CLI's refusal is thrown immediately.
     nonisolated func text(
         arguments: [String],
