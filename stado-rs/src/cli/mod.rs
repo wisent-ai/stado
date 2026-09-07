@@ -1411,6 +1411,10 @@ enum HostCommands {
         release: Option<String>,
     },
     /// Restore the core object API from its physical local store.
+    ///
+    /// Reconcile only the declared object service. The selected public
+    /// connection is not inspected or reconfigured; verify release delivery
+    /// separately through the configured Stado origin.
     #[command(name = "recover-object-api")]
     RecoverObjectApi {
         target: String,

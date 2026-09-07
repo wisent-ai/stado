@@ -21,7 +21,7 @@ jobs:
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       STADO_WRITER_API_URL: http://127.0.0.1:18776
-      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
+      STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
     steps:
       - uses: actions/checkout@v5
@@ -389,33 +389,28 @@ jobs:
           STADO_EMBEDDED_EOF
       - name: Build the current immutable recovery client
         run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
-      - name: Reconcile public release origin
+      - name: Reconcile the declared object service
         run: |
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          ingress_ok() {
-            "$stado_bin" host exec charless-mac-mini -- \
-              tailscale serve status --json |
-              jq -e '
-                any(
-                  .Web | to_entries[];
-                  (.key | endswith(":443")) and
-                  .value.Handlers["/api/release/object"].Proxy ==
-                    "http://127.0.0.1:8765/api/release/object"
-                )
-              ' >/dev/null
+          object_service_ok() {
+            status="$(
+              "$stado_bin" host exec charless-mac-mini -- \
+                /usr/bin/curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+                'http://127.0.0.1:8765/api/release/object?uri=stado://releases/precondition'
+            )"
+            case "$status" in
+              000|502|503|504) return 1 ;;
+              *) return 0 ;;
+            esac
           }
-          # The check is the goal, the recovery is the repair for when it
-          # fails. Running the repair first made a correct, serving ingress
-          # depend on the mini's skarbiec blue-green policy record being
-          # complete, and on 2026-09-04 that record carries null legacy fields
-          # — the recovery refused with "skarbiec bootstrap refused: release
-          # target is incomplete" and the 0.14.9 delivery died although the
-          # route it reconciles was answering the whole time.
-          if ! ingress_ok; then
+          # Recovery owns the declared object listener, not whichever public
+          # connection exposes it. Public bytes are verified through the
+          # configured release origin after each coordinate is published.
+          if ! object_service_ok; then
             "$stado_bin" host recover-object-api charless-mac-mini --json \
-              > "$RUNNER_TEMP/public-release-ingress.json"
+              > "$RUNNER_TEMP/object-service-recovery.json"
           fi
-          ingress_ok
+          object_service_ok
       - name: Resume the exact immutable publication
         env:
           STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}

@@ -50,6 +50,8 @@ const VERDICT_PORT_UNHELD: &str = "port-unheld";
 /// The unit serves and the public hostname does not point at this product's
 /// edge, so the public name reaches something else or nothing at all.
 const VERDICT_DNS_ELSEWHERE: &str = "dns-elsewhere";
+/// The selected Stado edge has no valid declaration.
+const VERDICT_EDGE_UNCONFIGURED: &str = "edge-unconfigured";
 
 /// The hostname resolved to at least one address.
 const DNS_RESOLVED: &str = "resolved";
@@ -123,13 +125,11 @@ async fn resolve_hostname(hostname: &str) -> (&'static str, Vec<String>) {
 /// would produce a false finding every time they rotate. Such a product is
 /// judged on whether the name resolves at all, which is the part that is
 /// genuinely this fleet's business.
-fn expected_address(declared: &WebApiProduct) -> Option<String> {
+fn expected_address(declared: &WebApiProduct) -> Result<Option<&'static str>, &'static [String]> {
     if declared.edge() != "stado" {
-        return None;
+        return Ok(None);
     }
-    crate::config::web_api_edge()
-        .ok()
-        .map(|edge| edge.address().to_string())
+    crate::config::web_api_edge().map(|edge| Some(edge.address()))
 }
 
 /// One product's verdict and the row that explains it.
@@ -172,32 +172,39 @@ async fn examine(
     managed_all: &[ServiceStatus],
     runner: &Runner,
 ) -> Verdict {
+    let (expected, edge_error) = match expected_address(declared) {
+        Ok(expected) => (expected, None),
+        Err(problems) => (None, Some(problems.join("; "))),
+    };
     // A redirect has no unit, no port and no host to ask. Its whole state is
     // whether the hostname resolves to the edge that answers it, and running
     // the unit questions against it would report `not-deployed` for something
     // that was never deployable.
     if declared.is_redirect() {
         let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
-        let expected = expected_address(declared);
-        let published = expected
-            .as_ref()
-            .is_some_and(|address| addresses.iter().any(|found| found == address));
+        let published =
+            expected.is_some_and(|address| addresses.iter().any(|found| found == address));
+        let word = if edge_error.is_some() {
+            VERDICT_EDGE_UNCONFIGURED
+        } else if published {
+            VERDICT_SERVING
+        } else {
+            VERDICT_NOT_DEPLOYED
+        };
         return Verdict {
             row: json!({
                 "product": name,
+                "verdict": word,
                 "kind": "redirect",
                 "redirect_to": declared.redirect_to(),
                 "hostname": declared.hostname(),
                 "edge": declared.edge(),
+                "edge_error": edge_error,
                 "dns": dns_state,
                 "addresses": addresses,
                 "expected_address": expected,
             }),
-            word: if published {
-                VERDICT_SERVING
-            } else {
-                VERDICT_NOT_DEPLOYED
-            },
+            word,
         };
     }
     // A hostname in front of an existing service has no unit of its own
@@ -208,40 +215,42 @@ async fn examine(
     // exist and never will.
     if let Some(service) = declared.upstream_service() {
         let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
-        let expected = expected_address(declared);
-        let published = expected
-            .as_ref()
-            .is_some_and(|address| addresses.iter().any(|found| found == address));
+        let published =
+            expected.is_some_and(|address| addresses.iter().any(|found| found == address));
         let upstream = upstream_service_state(service, managed_all);
         let up = upstream
             .get("state")
             .and_then(Value::as_str)
             .is_some_and(|state| state == service::STATE_ACTIVE);
+        let word = if !up {
+            VERDICT_UNIT_DOWN
+        } else if edge_error.is_some() {
+            VERDICT_EDGE_UNCONFIGURED
+        } else if published {
+            VERDICT_SERVING
+        } else {
+            VERDICT_NOT_DEPLOYED
+        };
         return Verdict {
             row: json!({
                 "product": name,
+                "verdict": word,
                 "kind": "upstream-service",
                 "upstream_service": service,
                 "upstream": upstream,
                 "hostname": declared.hostname(),
                 "edge": declared.edge(),
+                "edge_error": edge_error,
                 "dns": dns_state,
                 "addresses": addresses,
                 "expected_address": expected,
             }),
-            word: if published && up {
-                VERDICT_SERVING
-            } else if up {
-                VERDICT_NOT_DEPLOYED
-            } else {
-                VERDICT_UNIT_DOWN
-            },
+            word,
         };
     }
     let unit = super::unit_label(name);
     let port = declared.port();
     let (dns_state, addresses) = resolve_hostname(declared.hostname()).await;
-    let expected = expected_address(declared);
 
     // The port question is asked on the host, and only when there is a unit
     // to ask about. A host read for a product the registry does not manage
@@ -340,7 +349,7 @@ async fn examine(
     // DNS is judged last because it is the only failure that leaves a working
     // unit: a product whose unit is down is reported as that, not as a name
     // pointing at the wrong place.
-    let dns_detail = match (&expected, dns_state) {
+    let dns_detail = match (expected, dns_state) {
         (_, DNS_UNREADABLE) => format!(
             "{} could not be resolved inside {}s",
             declared.hostname(),
@@ -353,22 +362,31 @@ async fn examine(
             addresses.join(", ")
         ),
         (Some(address), _) => format!("{} points at the edge {address}", declared.hostname()),
-        // A Cloudflare-edge product: the answer is reported and deliberately
-        // not measured against an expectation.
-        (None, _) => format!(
-            "{} points at {} through the {} edge, whose addresses are not ours to assert",
-            declared.hostname(),
-            addresses.join(", "),
-            declared.edge()
-        ),
+        (None, _) => match &edge_error {
+            Some(problem) => format!(
+                "{} resolves to {}, but {problem}",
+                declared.hostname(),
+                addresses.join(", ")
+            ),
+            None => format!(
+                "{} points at {} through the {} edge, whose addresses are not ours to assert",
+                declared.hostname(),
+                addresses.join(", "),
+                declared.edge()
+            ),
+        },
     };
-    let dns_wrong = match (&expected, dns_state) {
+    let dns_wrong = match (expected, dns_state) {
         (_, DNS_UNREADABLE | DNS_UNRESOLVED) => true,
         (Some(address), _) => !addresses.iter().any(|found| found == address),
         (None, _) => false,
     };
-    if word == VERDICT_SERVING && dns_wrong {
-        word = VERDICT_DNS_ELSEWHERE;
+    if word == VERDICT_SERVING {
+        if edge_error.is_some() {
+            word = VERDICT_EDGE_UNCONFIGURED;
+        } else if dns_wrong {
+            word = VERDICT_DNS_ELSEWHERE;
+        }
     }
 
     let row = json!({
@@ -380,6 +398,7 @@ async fn examine(
         "unit": unit,
         "unit_domain": super::UNIT_DOMAIN,
         "edge": declared.edge(),
+        "edge_error": edge_error,
         "consumer": declared.consumer(),
         "readyz": declared.readyz(),
         "unit_state": unit_state,
@@ -496,6 +515,9 @@ pub(crate) async fn status(name: Option<&str>, json: bool) -> Result<(), CmdErro
                 row["dns_state"].as_str().unwrap_or("unknown"),
                 row["dns_detail"].as_str().unwrap_or_default(),
             );
+            if let Some(problem) = row["edge_error"].as_str() {
+                println!("  edge: {problem}");
+            }
         }
     }
 

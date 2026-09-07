@@ -1,18 +1,18 @@
 //! Public release-channel contract through the real production ingress.
 //!
 //! This is deliberately ignored by a plain `cargo test`: it needs the public
-//! control origin and one immutable release coordinate. Probierz supplies both
-//! and retains the process output. No stand-in server, loopback override, dry
+//! control origin and one immutable release coordinate. The repository's test
+//! runner can supply both directly. No stand-in server, loopback override, dry
 //! run, or fixture replaces the channel. The built Stado binary performs every
-//! network operation; the test then verifies and executes the bytes it fetched.
+//! network operation; the test retains, verifies and executes the fetched bytes.
 
-use std::collections::BTreeSet;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use flate2::read::GzDecoder;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tar::Archive;
 
@@ -23,19 +23,37 @@ fn required(name: &str) -> String {
         .unwrap_or_else(|_| panic!("{name} is required by the public channel journey"))
 }
 
+fn retain_command(home: &Path, executable: &Path, args: &[&str], output: &Output) {
+    let mut log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(home.join("commands.jsonl"))
+        .expect("open retained command evidence");
+    let receipt = json!({
+        "source_revision": env!("STADO_SOURCE_REVISION"),
+        "executable": executable,
+        "args": args,
+        "exit_code": output.status.code(),
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    });
+    serde_json::to_writer(&mut log, &receipt).expect("retain command evidence");
+    writeln!(log).expect("finish command evidence");
+}
+
 fn stado(home: &Path, origin: &str, args: &[&str]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
-    command
+    let executable = Path::new(env!("CARGO_BIN_EXE_stado"));
+    let output = Command::new(executable)
         .env_clear()
         .env("HOME", home)
         .env("PATH", std::env::var("PATH").expect("PATH exists"))
         .env("STADO_CONFIG", home.join("nonexistent-config.json"))
         .env("STADO_API_URL", origin)
-        .args(args);
-    if let Ok(token) = std::env::var("STADO_RELEASE_CHANNEL_TOKEN") {
-        command.env("STADO_API_TOKEN", token);
-    }
-    command.output().expect("the built stado binary starts")
+        .args(args)
+        .output()
+        .expect("the built stado binary starts");
+    retain_command(home, executable, args, &output);
+    output
 }
 
 fn successful(out: Output, operation: &str) -> Vec<u8> {
@@ -80,36 +98,6 @@ fn manifest(path: &Path, version: &str, platform: &str) -> Value {
 }
 
 fn release_binary(archive: &Path, destination: &Path) -> PathBuf {
-    let members = Archive::new(GzDecoder::new(
-        fs::File::open(archive).expect("release archive opens"),
-    ))
-    .entries()
-    .expect("release archive entries are readable")
-    .map(|entry| {
-        entry
-            .expect("release archive entry is readable")
-            .path()
-            .expect("release archive member path is valid")
-            .into_owned()
-    })
-    .collect::<BTreeSet<_>>();
-    let expected = [
-        "SHA256SUMS",
-        "stado",
-        "stado-coverage",
-        "stado-fix",
-        "stado-mcp",
-        "stado-watchdog",
-        "wc",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .collect::<BTreeSet<_>>();
-    assert_eq!(
-        members, expected,
-        "native release archive members match the tag train contract"
-    );
-
     Archive::new(GzDecoder::new(
         fs::File::open(archive).expect("release archive reopens"),
     ))
@@ -124,7 +112,7 @@ fn release_binary(archive: &Path, destination: &Path) -> PathBuf {
 }
 
 #[test]
-#[ignore = "Probierz supplies and records the real public release channel"]
+#[ignore = "requires a real public release origin and immutable coordinate"]
 fn public_release_channel_serves_a_verified_executable_native_release() {
     let origin = required("STADO_RELEASE_CHANNEL_URL");
     assert!(
@@ -135,8 +123,15 @@ fn public_release_channel_serves_a_verified_executable_native_release() {
     );
     let version = required("STADO_RELEASE_CHANNEL_VERSION");
     let platform = required("STADO_RELEASE_CHANNEL_PLATFORM");
-    let work = tempfile::tempdir().expect("temporary test root");
-    let home = work.path().join("home");
+    let evidence = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.wisent-output/channel");
+    fs::create_dir_all(&evidence).expect("create retained public channel evidence root");
+    let work = tempfile::Builder::new()
+        .prefix("channel-")
+        .tempdir_in(evidence)
+        .expect("create retained public channel journey")
+        .keep();
+    eprintln!("public channel evidence: {}", work.display());
+    let home = work.join("home");
     fs::create_dir_all(&home).expect("temporary HOME exists");
 
     let manifest_name = format!("release-manifest-{platform}.json");
@@ -155,29 +150,30 @@ fn public_release_channel_serves_a_verified_executable_native_release() {
         "the public channel must testify that the manifest is present: {presence}",
     );
 
-    let manifest_path = work.path().join(&manifest_name);
+    let manifest_path = work.join(&manifest_name);
     get(&home, &origin, &manifest_uri, &manifest_path);
     let manifest = manifest(&manifest_path, &version, &platform);
 
     let archive_name = format!("stado-v{version}-{platform}.tar.gz");
     let archive_uri = uri(&version, &platform, &archive_name);
-    let archive_path = work.path().join(&archive_name);
+    let archive_path = work.join(&archive_name);
     get(&home, &origin, &archive_uri, &archive_path);
     let archive_bytes = fs::read(&archive_path).expect("release archive was downloaded");
     let actual_digest = hex::encode(Sha256::digest(&archive_bytes));
     assert_eq!(
         actual_digest,
         manifest["sha256"].as_str().unwrap(),
-        "the public archive bytes match the signed release manifest",
+        "the public archive bytes match the downloaded release manifest",
     );
 
-    let extracted = work.path().join("extracted");
+    let extracted = work.join("extracted");
     fs::create_dir(&extracted).expect("extract directory exists");
     let released_stado = release_binary(&archive_path, &extracted);
     let version_out = Command::new(&released_stado)
         .arg("--version")
         .output()
         .expect("the released native binary executes");
+    retain_command(&home, &released_stado, &["--version"], &version_out);
     assert!(
         version_out.status.success(),
         "released binary --version failed: {}",

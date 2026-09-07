@@ -162,7 +162,11 @@ pub(crate) enum WebCommands {
         #[arg(long)]
         json: bool,
     },
-    /// One verdict per product: unit state, its own port, and its hostname.
+    /// Report each product's declared edge, live unit/port state, and observed DNS.
+    ///
+    /// A missing or invalid selected Stado edge is reported in edge_error,
+    /// never accepted as an external edge with unknown addresses. Any
+    /// non-serving product makes the command exit with status 1.
     Status {
         /// Product name; omit for every declared product.
         name: Option<String>,

@@ -109,3 +109,7 @@ path = "tests/documentation/main.rs"
 [[test]]
 name = "runner"
 path = "tests/runner/main.rs"
+
+[[test]]
+name = "web"
+path = "tests/web/main.rs"

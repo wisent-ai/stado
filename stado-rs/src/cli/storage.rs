@@ -2834,7 +2834,7 @@ impl RemoteObjectApi {
                 } else {
                     Ok(unanswered_for_status(
                         status.as_u16(),
-                        format!("the release channel answered HTTP {status}"),
+                        self.response_error(response, None).await.to_string(),
                     ))
                 }
             }

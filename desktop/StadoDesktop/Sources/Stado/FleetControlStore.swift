@@ -21,6 +21,11 @@ final class FleetControlStore: ObservableObject {
     /// repeating the same explicit operation.
     @Published private(set) var tailscaleLogAttempts: [String: HostTailscaleLogAttempt] = [:]
     @Published private(set) var tailscaleLogReadingHosts: Set<String> = []
+    @Published private(set) var webStatusResult: OperatorCommandResult?
+    @Published private(set) var webStatusRows: [WebProductStatus] = []
+    @Published private(set) var webStatusError: String?
+    @Published private(set) var webStatusEndpoint: String?
+    @Published private(set) var isReadingWebStatus = false
 
     /// The host whose GitHub runner was last addressed, its report, and the
     /// outcome of that call. Separate from the general `mutation` because a
@@ -84,6 +89,11 @@ final class FleetControlStore: ObservableObject {
         registryImportMutation = .idle
         tailscaleLogAttempts = [:]
         tailscaleLogReadingHosts = []
+        webStatusResult = nil
+        webStatusRows = []
+        webStatusError = nil
+        webStatusEndpoint = nil
+        isReadingWebStatus = false
 
     }
 
@@ -111,6 +121,51 @@ final class FleetControlStore: ObservableObject {
         } catch {
             guard requestGeneration == generation else { return }
             errorMessage = Self.describe(error)
+        }
+    }
+
+    func readWebStatus(product: String) async {
+        guard !isReadingWebStatus else { return }
+        webStatusResult = nil
+        webStatusRows = []
+        webStatusError = nil
+        guard let address else {
+            webStatusError = "No Stado endpoint is configured, so web status was not requested."
+            return
+        }
+        let generation = requestGeneration
+        webStatusEndpoint = address.baseURL.absoluteString
+        isReadingWebStatus = true
+        defer {
+            if requestGeneration == generation { isReadingWebStatus = false }
+        }
+        var arguments = ["web", "status"]
+        let selected = product.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty { arguments.append(selected) }
+        arguments.append("--json")
+        do {
+            let result = try await client.run(
+                arguments: arguments,
+                confirmsMutation: false,
+                at: address,
+                authorizationToken: authorizationToken
+            )
+            guard requestGeneration == generation else { return }
+            webStatusResult = result
+            do {
+                webStatusRows = try JSONDecoder().decode(
+                    [WebProductStatus].self,
+                    from: Data(result.standardOutput.utf8)
+                )
+                webStatusError = result.ok ? nil : result.message
+            } catch {
+                webStatusError = result.ok
+                    ? "Stado returned an unreadable web status report: \(error.localizedDescription)"
+                    : result.message
+            }
+        } catch {
+            guard requestGeneration == generation else { return }
+            webStatusError = error.localizedDescription
         }
     }
 
