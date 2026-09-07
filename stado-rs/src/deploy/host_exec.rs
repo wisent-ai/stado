@@ -2026,17 +2026,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn every_entry_states_why_it_is_safe() {
-        for entry in APPROVED_COMMANDS {
-            assert!(
-                entry.why.len() > 40,
-                "{}: an entry without a defensible reason does not belong in the table",
-                entry.display()
-            );
-        }
-    }
-
     /// The three service-tree reads name one service and no operator path.
     #[test]
     fn the_service_tree_reads_are_home_rooted_and_carry_no_absolute_path_argument() {

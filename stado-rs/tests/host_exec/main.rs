@@ -562,24 +562,20 @@ impl Journey {
         assert_eq!(read["read_only"], true, "{read:#}");
         assert_eq!(read["ok"], true, "{read:#}");
         assert_eq!(read["exit_code"], 0, "{read:#}");
-        if read["structured"].is_null() {
-            assert_eq!(
-                read["stdout_truncated"], true,
-                "a complete successful retained-log receipt must be structured: {read:#}",
-            );
-            assert!(
-                !read["stdout"].as_str().unwrap_or_default().is_empty(),
-                "a truncated native receipt must retain its bounded prefix: {read:#}",
-            );
-        } else {
-            assert_eq!(read["structured"]["target"], TARGET, "{read:#}");
-            assert_eq!(read["structured"]["status"], "ok", "{read:#}");
-            assert_eq!(
-                read["structured"]["command"],
-                self.story.words.join(" "),
-                "{read:#}",
-            );
-        }
+        assert_eq!(
+            read["stdout_truncated"], false,
+            "Desktop cannot decode the real native log receipt after truncation; full response retained at {}",
+            self.root.display(),
+        );
+        let receipt: Value = serde_json::from_str(
+            read["stdout"]
+                .as_str()
+                .expect("Desktop receives the native command stdout"),
+        )
+        .expect("Desktop must be able to decode the complete native host-exec receipt");
+        assert_eq!(receipt["target"], TARGET);
+        assert_eq!(receipt["status"], "ok");
+        assert_eq!(receipt["command"], self.story.words.join(" "));
 
         assert_eq!(
             refusal_status,

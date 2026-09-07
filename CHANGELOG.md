@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Release request diagnostics:** storage HTTP failures preserve the original cause chain when displayed by the CLI, recorded by a release run, or returned through the native Desktop command API. Connection errors no longer stop at `error sending request`; storage operations, schemas, and retry loops are unchanged.
+- **Retained Tailscale diagnostics:** `host exec` reads the previous hour of macOS native Tailscale logs or the Linux `tailscaled` journal through two fixed, read-only commands. Hosts in Desktop exposes the same reads with the selected platform, original messages, process status, and refusals; neither empty output nor a completed read is a public Funnel health verdict. These two reads preserve up to 16 MiB of command stdout for a decodable native receipt, while other command limits and mutation confirmations remain unchanged.
 
 ## 0.16.40
 
