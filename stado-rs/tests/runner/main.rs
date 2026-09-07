@@ -1,4 +1,12 @@
 //! Declared runner capability tests against an isolated local registry.
+//!
+//! Hardening the runner root against the account that executes it also took
+//! that account's own OAuth key at mode 0600, so on 2026-09-07 the listener
+//! died at `RSAFileKeyManager.GetKey` while systemd reported `active
+//! (running)`. The rendered installer is driven here, because one `chown`
+//! ordered against another is the whole of that defect. The same repair's
+//! other half - Brama read from the host that declares Brama - is not pinned
+//! here and not faked: install refuses at the destination check first.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -14,6 +22,13 @@ fn stado(storage: &Path, args: &[&str]) -> Output {
         .env_remove("WC_PROFILES_DIR")
         .output()
         .expect("stado binary runs")
+}
+
+fn install(storage: &Path, target: &str, profile: &str) -> Output {
+    stado(
+        storage,
+        &["runner", "install", target, "--profile", profile, "--json"],
+    )
 }
 
 fn stdout(output: &Output) -> String {
@@ -51,13 +66,11 @@ fn list_reads_every_profile_from_the_compiled_declaration() {
     );
     let document: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runner list JSON");
+    let profiles = &document["profiles"];
     assert_eq!(document["schema_version"], 1);
-    assert_eq!(document["profiles"][0]["name"], "precheck");
-    assert_eq!(document["profiles"][0]["slug"], "stado-precheck");
-    assert_eq!(
-        document["profiles"][0]["installers"]["darwin-arm64"],
-        "kronika-launchd"
-    );
+    assert_eq!(profiles[0]["name"], "precheck");
+    assert_eq!(profiles[0]["slug"], "stado-precheck");
+    assert_eq!(profiles[0]["installers"]["darwin-arm64"], "kronika-launchd");
     assert_eq!(
         document["profiles"][0]["labels"],
         serde_json::json!([
@@ -69,10 +82,7 @@ fn list_reads_every_profile_from_the_compiled_declaration() {
         ])
     );
     assert_eq!(document["profiles"][0]["github_runner_group"], "Default");
-    assert_eq!(
-        document["profiles"][0]["unit_label"],
-        "stado-precheck-runner"
-    );
+    assert_eq!(profiles[0]["unit_label"], "stado-precheck-runner");
     assert_eq!(document["profiles"][1]["name"], "repository-precheck");
     assert_eq!(document["profiles"][2]["name"], "publisher");
     assert_eq!(
@@ -80,7 +90,7 @@ fn list_reads_every_profile_from_the_compiled_declaration() {
         "the declaration carries the secrets instead of a profile-specific command"
     );
     assert_eq!(
-        document["profiles"][2]["installers"]["linux-amd64"],
+        profiles[2]["installers"]["linux-amd64"],
         "publisher-systemd"
     );
     assert_eq!(
@@ -88,10 +98,7 @@ fn list_reads_every_profile_from_the_compiled_declaration() {
         serde_json::json!(["stado", "stado-publisher"])
     );
     assert_eq!(document["profiles"][2]["github_runner_group"], "Default");
-    assert_eq!(
-        document["profiles"][2]["unit_label"],
-        "stado-publisher-runner"
-    );
+    assert_eq!(profiles[2]["unit_label"], "stado-publisher-runner");
     assert_eq!(document["profiles"][1]["accepts_repository_scope"], true);
     assert_eq!(
         persisted_registry(storage.path()),
@@ -103,17 +110,7 @@ fn list_reads_every_profile_from_the_compiled_declaration() {
 #[test]
 fn install_refuses_an_unknown_profile_with_the_declaration_remedy() {
     let storage = storage_with_registry(EMPTY_REGISTRY);
-    let output = stado(
-        storage.path(),
-        &[
-            "runner",
-            "install",
-            "runner-fixture",
-            "--profile",
-            "missing",
-            "--json",
-        ],
-    );
+    let output = install(storage.path(), "runner-fixture", "missing");
     assert!(!output.status.success(), "unknown profile was accepted");
     assert!(
         stderr(&output).contains(
@@ -128,17 +125,7 @@ fn install_refuses_an_unknown_profile_with_the_declaration_remedy() {
 #[test]
 fn install_refuses_an_unknown_target_with_the_registry_sentence() {
     let storage = storage_with_registry(EMPTY_REGISTRY);
-    let output = stado(
-        storage.path(),
-        &[
-            "runner",
-            "install",
-            "ghost",
-            "--profile",
-            "precheck",
-            "--json",
-        ],
-    );
+    let output = install(storage.path(), "ghost", "precheck");
     assert!(!output.status.success(), "unknown target was accepted");
     assert!(
         stderr(&output)
@@ -152,17 +139,7 @@ fn install_refuses_an_unknown_target_with_the_registry_sentence() {
 #[test]
 fn install_refuses_a_host_without_a_reachable_registry_destination() {
     let storage = storage_with_registry(REGISTRY_WITH_OFFLINE_HOST);
-    let output = stado(
-        storage.path(),
-        &[
-            "runner",
-            "install",
-            "runner-fixture",
-            "--profile",
-            "precheck",
-            "--json",
-        ],
-    );
+    let output = install(storage.path(), "runner-fixture", "precheck");
     assert!(!output.status.success(), "unreachable host was accepted");
     assert!(
         stderr(&output).contains(
@@ -180,17 +157,7 @@ fn install_refuses_a_host_without_a_reachable_registry_destination() {
 #[test]
 fn install_refuses_a_nonlocal_registry_target() {
     let storage = storage_with_registry(REGISTRY_WITH_NONLOCAL_TARGET);
-    let output = stado(
-        storage.path(),
-        &[
-            "runner",
-            "install",
-            "runner-cloud",
-            "--profile",
-            "precheck",
-            "--json",
-        ],
-    );
+    let output = install(storage.path(), "runner-cloud", "precheck");
     assert!(!output.status.success(), "nonlocal target was accepted");
     assert!(
         stderr(&output).contains(
@@ -244,19 +211,7 @@ fn fleet_report_keeps_listener_and_job_slot_typed_for_each_profile() {
 
 #[test]
 fn repository_scope_is_carried_into_the_exact_installer_program() {
-    let program = stado::deploy::host_precheck_runner::installer_program(
-        &stado::deploy::host_precheck_runner::InstallerRequest {
-            profile_name: "precheck",
-            target_name: "runner-fixture",
-            platform_name: "darwin-arm64",
-            repository: Some("example"),
-        },
-        "registration-token",
-        "http://127.0.0.1:18080",
-        18_080,
-        false,
-    )
-    .expect("declared installer renders");
+    let program = rendered("precheck", "darwin-arm64", Some("example"));
     assert!(
         program.contains("https://github.com/wisent-ai/example"),
         "repository registration URL is absent"
@@ -265,6 +220,47 @@ fn repository_scope_is_carried_into_the_exact_installer_program() {
         program.contains("repository:wisent-ai/example"),
         "host registration record does not carry the actual repository scope"
     );
+}
+
+#[test]
+fn the_linux_installer_hands_the_account_back_its_own_credentials() {
+    let program = rendered("repository-precheck", "linux-amd64", Some("weles-landing"));
+    let hardening = program
+        .rfind("chown -R root:root \"$runner_root\"\n")
+        .expect("no chown");
+    let handback = program
+        .rfind("for owned in .runner ")
+        .expect("no hand-back");
+    assert!(handback > hardening, "hand-back precedes the root chown");
+    let owned = &program[handback..];
+    for file in [".credentials ", ".credentials_rsaparams ", ".service;"] {
+        assert!(owned.contains(file), "the hand-back omits {file}: {owned}");
+    }
+    let writable = program.contains("ReadWritePaths=$runner_root/_work ")
+        && program.contains("$runner_root/.dotnet")
+        && !program.contains("ReadWritePaths=$runner_root ");
+    assert!(
+        writable,
+        "the unit must grant .dotnet and never the whole root"
+    );
+}
+
+/// Both installer tests read the one rendered program a host would run, so the
+/// request boilerplate lives here and the tests stay assertions.
+fn rendered(profile: &str, platform: &str, repository: Option<&str>) -> String {
+    stado::deploy::host_precheck_runner::installer_program(
+        &stado::deploy::host_precheck_runner::InstallerRequest {
+            profile_name: profile,
+            target_name: "runner-fixture",
+            platform_name: platform,
+            repository,
+        },
+        "registration-token",
+        "http://127.0.0.1:18080",
+        18_080,
+        false,
+    )
+    .expect("declared installer renders")
 }
 
 #[test]
