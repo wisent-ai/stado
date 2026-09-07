@@ -69,6 +69,25 @@ root chown -R root:root "$runner_root"
 root chmod -R go-w "$runner_root"
 root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
 root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
+# The four files `config.sh` wrote as the runner account, handed back to it.
+#
+# `chown -R root:root` above is what keeps the account from rewriting the
+# binaries it executes, and it also took the runner's own registration and
+# OAuth key with it. They are mode 0600, so root-owned means the account cannot
+# even read them, and the listener dies before it opens a session:
+# `System.UnauthorizedAccessException: Access to the path
+# '<root>/.credentials_rsaparams' is denied` at
+# `RSAFileKeyManager.GetKey` -> `OAuthCredential.GetVssCredentials` ->
+# `BrokerMessageListener.CreateSessionAsync`. Measured on
+# ubuntu-server-rtx-pro-6000 on 2026-09-07; the unit reported `active
+# (running)` with `Result=success` and seven restarts throughout, and GitHub
+# reported the runner offline, because a crash loop this early writes nothing
+# journald keeps.
+for owned in .runner .runner_migrated .credentials .credentials_migrated .credentials_rsaparams .service; do
+  [ -e "$runner_root/$owned" ] || continue
+  root chown "$runner_user:$runner_user" "$runner_root/$owned"
+  root chmod 600 "$runner_root/$owned"
+done
 
 root mkdir -p "$runner_root/routes"
 printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
