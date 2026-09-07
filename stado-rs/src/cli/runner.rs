@@ -65,6 +65,12 @@ pub enum RunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Resolve the declared GitHub credential route and confront it with GitHub.
+    Credential {
+        /// Emit the resolution and GitHub's answer as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn click(error: crate::deploy::DeployError, json: bool) -> CmdError {
@@ -286,5 +292,6 @@ pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
             render_fleet(&report, json);
             Ok(())
         }
+        RunnerCommands::Credential { json } => crate::github_identity::report(json).await,
     }
 }

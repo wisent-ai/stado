@@ -26,6 +26,7 @@ pub mod doctor;
 pub mod failure;
 pub mod failure_fixer;
 pub mod fleet_shape;
+pub mod github_identity;
 pub mod host_software;
 pub mod inference;
 pub mod machine;
