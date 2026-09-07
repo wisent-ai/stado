@@ -3721,16 +3721,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 destination,
                 files_from,
                 json,
-            } => {
-                host::deliver(
-                    &target,
-                    &source,
-                    &destination,
-                    files_from.as_deref(),
-                    json,
-                )
-                .await
-            }
+            } => host::deliver(&target, &source, &destination, files_from.as_deref(), json).await,
             HostCommands::Build {
                 target,
                 manifest_path,

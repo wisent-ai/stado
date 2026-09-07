@@ -79,7 +79,11 @@ fn destination_components(destination: &str) -> Result<Vec<&str>, DeployError> {
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if components.is_empty() || components.iter().any(|component| !safe_component(component)) {
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| !safe_component(component))
+    {
         return Err(DeployError(format!(
             "destination {destination:?} must contain only path components made of letters, digits, '.', '_' or '-' and no '..'"
         )));
@@ -139,7 +143,11 @@ fn validate_file_list(raw: Option<&str>, kind: SourceKind) -> Result<Option<Stri
     Ok(Some(raw.to_string()))
 }
 
-fn plan(source: &str, destination: &str, file_list: Option<&str>) -> Result<DeliveryPlan, DeployError> {
+fn plan(
+    source: &str,
+    destination: &str,
+    file_list: Option<&str>,
+) -> Result<DeliveryPlan, DeployError> {
     let components = destination_components(destination)?;
     let metadata = std::fs::symlink_metadata(source)
         .map_err(|error| DeployError(format!("cannot read delivery source {source:?}: {error}")))?;
@@ -192,7 +200,10 @@ fn guard_lines(home: &str, components: &[&str], include_destination: bool) -> St
     lines
 }
 
-fn parse_marker(target: &ComputeTarget, output: &super::CommandOutput) -> Result<(String, String), DeployError> {
+fn parse_marker(
+    target: &ComputeTarget,
+    output: &super::CommandOutput,
+) -> Result<(String, String), DeployError> {
     let fields = output
         .stdout
         .lines()
@@ -270,7 +281,6 @@ async fn preflight(
     }
     Ok((destination, stage))
 }
-
 
 async fn transfer(
     target: &ComputeTarget,
@@ -427,7 +437,10 @@ pub async fn deliver_host(
     let plan = plan(source, destination, file_list)?;
     let target = host_channel::canonical_target(target_name).await?;
     let home = host_channel::remote_home(&target, runner).await?;
-    if home.bytes().any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))) {
+    if home
+        .bytes()
+        .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-')))
+    {
         return Err(DeployError(format!(
             "{}: the approved account home cannot be represented safely by the rsync transport",
             target.name
@@ -435,15 +448,7 @@ pub async fn deliver_host(
     }
     let (absolute_destination, stage) = preflight(&target, &home, &plan, runner).await?;
     transfer(&target, &stage, &plan, runner).await?;
-    commit(
-        &target,
-        &home,
-        &absolute_destination,
-        &stage,
-        &plan,
-        runner,
-    )
-    .await?;
+    commit(&target, &home, &absolute_destination, &stage, &plan, runner).await?;
     Ok(json!({
         "schema": "stado.host-delivery-receipt.v1",
         "target": target.name,
@@ -466,10 +471,10 @@ mod tests {
         )
         .is_ok());
         assert!(destination_components(".stado/work/runs/not-a-uuid/probierz").is_err());
-        assert!(destination_components(
-            ".stado/work/runs/123e4567-e89b-12d3-a456-426614174000"
-        )
-        .is_err());
+        assert!(
+            destination_components(".stado/work/runs/123e4567-e89b-12d3-a456-426614174000")
+                .is_err()
+        );
     }
 
     #[test]
