@@ -727,6 +727,11 @@ struct HostsView: View {
         }
         if let receipt = attempt.receipt {
             WisentField(label: "Reported host", value: receipt.target)
+            WisentField(
+                label: "Route",
+                value: receipt.usedConnection?.summary
+                    ?? "This Stado did not report which route carried the read."
+            )
             WisentField(label: "Reported command", value: receipt.command)
             WisentField(
                 label: "Process result",

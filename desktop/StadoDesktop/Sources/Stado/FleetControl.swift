@@ -366,11 +366,37 @@ enum HostTailscaleLogSource: String, CaseIterable, Hashable, Identifiable, Senda
     }
 }
 
+/// The route one host-exec operation actually travelled.
+///
+/// The declared routes stay out of this client, as they always have: they are
+/// registry material. This is the different fact — which of them carried THIS
+/// read — and it exists nowhere else, so an operator reading a retained-log
+/// panel could not tell a healthy preferred route from a dead one whose
+/// fallback rescued the read.
+struct HostExecRoute: Decodable, Sendable {
+    /// `ssh` for a declared remote route, `local` for the machine itself.
+    let kind: String
+    /// The declared path name, or `local`.
+    let name: String
+    /// Present only for a remote route.
+    let destination: String?
+
+    /// One operator line: the route, and where it went when that means
+    /// anything.
+    var summary: String {
+        guard let destination, !destination.isEmpty else {
+            return kind == "local" ? "local channel on this host" : name
+        }
+        return "\(name) · \(destination)"
+    }
+}
+
 /// The exact inner receipt printed by `stado host exec TARGET --json`.
 ///
-/// Connection details are intentionally not duplicated here. Swift's decoder
-/// ignores those receipt fields while retaining the host identity, fixed argv,
-/// both raw streams, process status, and the remote's own failure sentence.
+/// The declared connection fields are intentionally not duplicated here.
+/// Swift's decoder ignores them while retaining the host identity, the route
+/// that carried the operation, the fixed argv, both raw streams, process
+/// status, and the remote's own failure sentence.
 struct HostTailscaleLogReceipt: Decodable, Sendable {
     let schema: String
     let target: String
@@ -381,6 +407,8 @@ struct HostTailscaleLogReceipt: Decodable, Sendable {
     let exitCode: Int
     let status: String
     let error: String?
+    /// Absent from a receipt printed by a Stado older than this field.
+    let usedConnection: HostExecRoute?
 
     enum CodingKeys: String, CodingKey {
         case schema, target, command, status, error
@@ -388,6 +416,7 @@ struct HostTailscaleLogReceipt: Decodable, Sendable {
         case standardOutput = "stdout"
         case standardError = "stderr"
         case exitCode = "exit_code"
+        case usedConnection = "used_connection"
     }
 }
 
