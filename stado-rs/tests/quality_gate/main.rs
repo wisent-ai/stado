@@ -1,4 +1,4 @@
-//! `scripts/quality_gate.sh` says whose revision a refused quality step
+//! `tests/release_quality_gate.sh` says whose revision a refused quality step
 //! belongs to.
 //!
 //! Every test runs the real script with `bash`, against a real git repository
@@ -95,15 +95,13 @@ fn repository(base_marker: &str, head_marker: &str) -> tempfile::TempDir {
 
 fn run_gate(repo: &Path, base: Option<&str>) -> Output {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repository root")
-        .join("scripts/quality_gate.sh");
+        .join("tests/release_quality_gate.sh");
     let mut command = Command::new("bash");
     command.arg(&script).current_dir(repo);
     if let Some(base) = base {
         command.args(["--base", base]);
     }
-    command.output().expect("quality_gate.sh runs")
+    command.output().expect("release quality gate runs")
 }
 
 fn stderr(out: &Output) -> String {

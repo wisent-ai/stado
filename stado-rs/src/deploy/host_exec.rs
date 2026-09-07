@@ -810,19 +810,13 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
         why: "reads kernel uptime and load counters; takes no argument and writes nothing",
     },
     ApprovedCommand {
-        argv: &["/usr/bin/vm_stat"],
-        why: "reads the macOS kernel's page counters — free, active, wired, compressed, and \
-              the pageout/swapin totals; takes no argument and writes nothing. Added \
-              2026-09-06: `stado host precheck-runner install` failed with `Failed to create \
-              CoreCLR, HRESULT: 0x8007000C` (E_OUTOFMEMORY) at 5.7 GiB free disk, and no \
-              command in the fleet could read the one number that explains it. `host health` \
-              reports memory, load and swap as null on every host",
-    },
-    ApprovedCommand {
         argv: &["/usr/sbin/sysctl", "vm.swapusage"],
         why: "reads the macOS swap file's total, used and free bytes; one fixed read-only \
-              key, no path and no write. Added 2026-09-06 with vm_stat: page counters alone \
-              cannot say whether a host is out of memory or merely paging",
+              key, no path and no write. Added 2026-09-06: `vm_stat` further down this list \
+              already answered the page counters, and page counters alone cannot say whether \
+              a host is out of memory or merely paging. charless-mac-mini held 597 MiB free \
+              with 4.7 GiB of its 6 GiB swap in use while every .NET runner on it failed to \
+              start with E_OUTOFMEMORY",
     },
     ApprovedCommand {
         argv: &["/bin/df", "-h"],

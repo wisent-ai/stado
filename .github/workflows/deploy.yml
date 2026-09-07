@@ -316,6 +316,342 @@ jobs:
       # this job publishes create-only release objects and a checkout that changes
       # behaviour under it cannot be corrected after the fact.
       - uses: actions/checkout@v5
+
+      - name: Prepare release implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/stado-release-tools"
+          cat > "$RUNNER_TEMP/stado-release-tools/release_manifest.sh" <<'STADO_EMBEDDED_EOF'
+          # Emit the canonical immutable archive manifest shared by Stado products.
+          set -eu
+          
+          die() {
+              printf 'FATAL: %s\n' "$*" > /dev/stderr
+              false
+          }
+          
+          RELEASE_DIR="${STADO_RELEASE_DIR:?set STADO_RELEASE_DIR}"
+          ARCHIVE="${STADO_RELEASE_ARCHIVE:?set STADO_RELEASE_ARCHIVE}"
+          VERSION="${STADO_RELEASE_VERSION:?set STADO_RELEASE_VERSION}"
+          PLATFORM="${STADO_RELEASE_PLATFORM:?set STADO_RELEASE_PLATFORM}"
+          SOURCE_COMMIT="${STADO_RELEASE_SOURCE_COMMIT:?set STADO_RELEASE_SOURCE_COMMIT}"
+          
+          for command_name in jq openssl; do
+              command -v "$command_name" >/dev/null || die "required command is unavailable: $command_name"
+          done
+          [ -s "$ARCHIVE" ] || die "release archive is missing or empty: $ARCHIVE"
+          case "$VERSION" in
+              *[![:alnum:]._-]* | "") die "invalid immutable release version" ;;
+          esac
+          case "$PLATFORM" in
+              *[![:alnum:]._-]* | "") die "invalid immutable release platform" ;;
+          esac
+          case "$SOURCE_COMMIT" in
+              *[!0-9a-fA-F]* | "") die "source commit must be hexadecimal" ;;
+          esac
+          
+          sha256="$(openssl dgst -sha256 "$ARCHIVE" | sed 's/^.*= //')"
+          manifest="$RELEASE_DIR/release-manifest-$PLATFORM.json"
+          jq -cS -n \
+              --arg product stado \
+              --arg version "$VERSION" \
+              --arg platform "$PLATFORM" \
+              --arg source_commit "$SOURCE_COMMIT" \
+              --arg sha256 "$sha256" \
+              '{
+                  "platform": $platform,
+                  "product": $product,
+                  "sha256": $sha256,
+                  "source_commit": $source_commit,
+                  "version": $version
+              }' > "$manifest"
+          printf '%s\n' "$manifest"
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-release-tools/adopt_published_release.sh" <<'STADO_EMBEDDED_EOF'
+          set -euo pipefail
+          
+          # Make a second attempt at one release coordinate possible.
+          #
+          # Release objects are create-only. The archive this train publishes is produced
+          # by `stado storage archive`, and tar+gzip output is not byte-reproducible
+          # across runs — mtimes, member order and the gzip header all move — while the
+          # executables inside it carry `env!("CARGO_MANIFEST_DIR")`, which is a fresh
+          # `$RUNNER_TEMP/stado-source.XXXX` on every checkout. So a rebuilt attempt at an
+          # already-published version produces DIFFERENT bytes for the same names, and the
+          # writer answers exactly that:
+          #
+          #   Error: immutable object already differs on the writer:
+          #   stado://releases/stado/0.13.47/darwin-arm64/stado-v0.13.47-darwin-arm64.tar.gz
+          #
+          # 0.13.47 died there. Attempt 1 published all thirteen objects of its darwin
+          # coordinate; attempt 2 rebuilt the archive, refused it twelve times, failed the
+          # job, and `deploy-fleet` was skipped — a release whose bytes were complete and
+          # public never reached a single host, and no later attempt at that tag could
+          # have ended differently.
+          #
+          # The way out is to stop rebuilding what is already published. If the archive is
+          # there, it IS the release: this adopts it and derives the whole release
+          # directory from it, so every subsequent `storage put --if-absent` either
+          # matches the published object exactly or creates the one that is missing. That
+          # also completes a half-published coordinate instead of leaving it stranded,
+          # which is the state `stado/0.11.0/darwin-arm64` has been in since April.
+          #
+          # Called with STADO_API_URL pointing at the authenticated writer, the same
+          # origin the publish loop uses.
+          
+          if [ "$#" -ne 5 ]; then
+            echo "usage: adopt_published_release.sh STADO_BIN RELEASE_DIR PRODUCT VERSION PLATFORM" >&2
+            exit 2
+          fi
+          
+          stado_bin="$1"
+          release_dir="$2"
+          product="$3"
+          version="$4"
+          platform="$5"
+          
+          case "$product" in
+            *[![:alnum:]_-]*|"") echo "invalid release product: $product" >&2; exit 2 ;;
+          esac
+          case "$version" in
+            *[![:alnum:]._-]*|"") echo "invalid release version: $version" >&2; exit 2 ;;
+          esac
+          case "$platform" in
+            *[![:alnum:]_-]*|"") echo "invalid release platform: $platform" >&2; exit 2 ;;
+          esac
+          
+          test -x "$stado_bin"
+          test -d "$release_dir"
+          
+          prefix="stado://releases/$product/$version/$platform"
+          archive_name="$product-v$version-$platform.tar.gz"
+          manifest_name="release-manifest-$platform.json"
+          
+          published_state() {
+            "$stado_bin" storage stat "$prefix/$1" --json | jq -er '.state'
+          }
+          
+          # `storage stat` answers present or absent with exit status zero and reserves
+          # non-zero for a store that did not answer. Guessing "absent" from a store that
+          # is merely unreachable would rebuild over a live coordinate, so an unusable
+          # answer stops this instead.
+          archive_state="$(published_state "$archive_name")"
+          case "$archive_state" in
+            absent)
+              echo "no published $prefix/$archive_name: this attempt publishes its own build"
+              exit 0
+              ;;
+            present) ;;
+            *)
+              echo "::error::the writer could not say whether $prefix/$archive_name exists" \
+                "(state $archive_state); this attempt will not rebuild over a coordinate it cannot read" >&2
+              exit 1
+              ;;
+          esac
+          
+          echo "adopting the published $prefix/$archive_name; this attempt publishes no rebuilt bytes"
+          "$stado_bin" storage get "$prefix/$archive_name" "$release_dir/$archive_name"
+          # The archive carries every executable plus SHA256SUMS, so extracting it over
+          # the release directory replaces this attempt's build with the bytes the
+          # coordinate already holds — which is what the publish loop, the public
+          # validation and the delivery all have to agree about.
+          /usr/bin/tar -xzf "$release_dir/$archive_name" -C "$release_dir"
+          
+          # The manifest is regenerated deterministically from the adopted archive by the
+          # caller's own manifest step (product, version, platform, source_commit and the
+          # archive digest, and nothing else), so a published one must still match. Taking
+          # the published copy when it exists means the comparison is against the bytes a
+          # consumer gets rather than against a second derivation of them.
+          manifest_state="$(published_state "$manifest_name")"
+          case "$manifest_state" in
+            present) "$stado_bin" storage get "$prefix/$manifest_name" "$release_dir/$manifest_name" ;;
+            absent)
+              echo "$prefix/$manifest_name is absent; the adopted archive's manifest will be published"
+              ;;
+            *)
+              echo "::error::the writer could not say whether $prefix/$manifest_name exists" \
+                "(state $manifest_state)" >&2
+              exit 1
+              ;;
+          esac
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-release-tools/verify_public_stado_release.sh" <<'STADO_EMBEDDED_EOF'
+          set -euo pipefail
+          
+          if [ "$#" -ne 6 ]; then
+            echo "usage: verify_public_stado_release.sh STADO_BIN RELEASE_DIR PRODUCT VERSION PLATFORM SCRATCH_DIR" >&2
+            exit 2
+          fi
+          
+          stado_bin="$1"
+          release_dir="$2"
+          product="$3"
+          version="$4"
+          platform="$5"
+          scratch_dir="$6"
+          
+          case "$product" in
+            *[![:alnum:]_-]*|"") echo "invalid release product: $product" >&2; exit 2 ;;
+          esac
+          case "$version" in
+            *[![:alnum:]._-]*|"") echo "invalid release version: $version" >&2; exit 2 ;;
+          esac
+          case "$platform" in
+            *[![:alnum:]_-]*|"") echo "invalid release platform: $platform" >&2; exit 2 ;;
+          esac
+          
+          test -x "$stado_bin"
+          test -d "$release_dir"
+          test -d "$scratch_dir"
+          
+          prefix="stado://releases/$product/$version/$platform"
+          version_claim_uri="stado://releases/$product/$version/source-revision.json"
+          platform_claim_uri="$prefix/source-revision.json"
+          archive_name="$product-v$version-$platform.tar.gz"
+          manifest_name="release-manifest-$platform.json"
+          test -f "$release_dir/$archive_name"
+          test -f "$release_dir/$manifest_name"
+          
+          # One coordinate, two producers. This workflow publishes the executables,
+          # SHA256SUMS, the platform archive and the platform manifest. The product's own
+          # signed-release path publishes `release.json`, `release.sig`, `release.tar.gz`
+          # and `qualification.json` into the SAME prefix — see
+          # `cli::release_submit::publish`, which records
+          # `stado://releases/<product>/<version>/<platform>/qualification.json` as the
+          # run's qualification URI. 0.13.45's linux leg is exactly that state: nine
+          # objects from here, four from there, and a check that expected the coordinate
+          # to hold only what this runner had on disk refused a complete release.
+          #
+          # The platform `source-revision.json` remains a coordinate member for older
+          # clients. The platformless version claim sits one level above this listing and
+          # is fetched and compared below; it is the create-only arbitration point shared
+          # by every publisher and platform.
+          # `[A-Z_]*` and not `[A-Z]*`: a two-word constant like
+          # `RELEASE_REVISION_NAME`'s successors would otherwise be silently skipped and
+          # read as a member nobody declares.
+          control_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/stado-rs/src/release_control.rs"
+          test -f "$control_source"
+          control_names="$(
+            sed -n 's/^pub const RELEASE_[A-Z_]*_NAME: &str = "\([^"]*\)";$/\1/p' "$control_source" |
+              sort -u
+          )"
+          declared_control="$(printf '%s\n' "$control_names" | sed '/^$/d' | /usr/bin/wc -l | tr -d '[:space:]')"
+          if [ "$declared_control" -lt 5 ]; then
+            echo "$control_source declares $declared_control release-owned object name(s);" \
+              "this check needs them to know which members the pipeline and the coordinate" \
+              "claim write" >&2
+            exit 1
+          fi
+          
+          # Every immutable put already reads the exact bytes back through the authenticated
+          # writer. Public validation therefore has a different job: prove that the public
+          # route exposes that complete coordinate. The archive contains every executable
+          # plus SHA256SUMS, so one exact archive read proves their bytes through the public
+          # route. The listing proves that every standalone object is also visible with its
+          # writer-verified size. Re-downloading each executable repeated hundreds of MiB
+          # and exceeded the release runner's wall-clock budget without proving more.
+          #
+          # A chunked put stages its parts at `<key>.__stado_upload/<id>/<index>` under
+          # this same prefix, and the composition that finishes the object deletes them.
+          # An interrupted upload therefore leaves parts a later attempt cleans up:
+          # 0.13.44's first darwin attempt left four when the runner lost its connection
+          # mid-archive. Parts are upload state, never coordinate members, so they are
+          # dropped here — while any OTHER unexpected member still fails the coordinate.
+          listing="$(
+            $stado_bin storage objects releases "$product/$version/$platform/" --json |
+              jq -c '{objects: [.objects[] | select((.key // .uri) | contains(".__stado_upload/") | not)]}'
+          )"
+          
+          version_claim="$scratch_dir/public-$version-source-revision.json"
+          platform_claim="$scratch_dir/public-$version-$platform-source-revision.json"
+          rm -f "$version_claim" "$platform_claim"
+          "$stado_bin" storage get "$version_claim_uri" "$version_claim"
+          "$stado_bin" storage get "$platform_claim_uri" "$platform_claim"
+          source_revision="$(
+            jq -er --arg product "$product" --arg version "$version" '
+              select(
+                keys == ["product", "schema_version", "source_revision", "version"] and
+                .schema_version == 1 and
+                .product == $product and
+                .version == $version and
+                (.source_revision | test("^[0-9a-f]{40}$"))
+              ) | .source_revision
+            ' "$version_claim"
+          )"
+          jq -e \
+            --arg product "$product" \
+            --arg version "$version" \
+            --arg platform "$platform" \
+            --arg source_revision "$source_revision" '
+              keys == ["platform", "product", "schema_version", "source_revision", "version"] and
+              .schema_version == 1 and
+              .product == $product and
+              .version == $version and
+              .platform == $platform and
+              .source_revision == $source_revision
+            ' "$platform_claim" >/dev/null
+          jq -e \
+            --arg product "$product" \
+            --arg version "$version" \
+            --arg platform "$platform" \
+            --arg source_revision "$source_revision" '
+              .product == $product and
+              .version == $version and
+              .platform == $platform and
+              .source_commit == $source_revision
+            ' "$release_dir/$manifest_name" >/dev/null
+          for source in "$release_dir"/*; do
+            name="${source##*/}"
+            uri="$prefix/$name"
+            size="$(/usr/bin/wc -c < "$source" | tr -d '[:space:]')"
+            if ! jq -e --arg uri "$uri" --argjson size "$size" \
+              '([.objects[] | select(.uri == $uri and .size == $size)] | length) == 1' \
+              <<<"$listing" >/dev/null; then
+              echo "public release coordinate omitted $uri at its writer-verified size $size" >&2
+              exit 1
+            fi
+          done
+          
+          # Every member is now accounted for by one of the two producers, so anything
+          # left over is an object nobody declares — a stray write into an immutable
+          # coordinate, which is what this check is for.
+          declared="$(
+            {
+              printf '%s\n' "$control_names"
+              for source in "$release_dir"/*; do printf '%s\n' "${source##*/}"; done
+            } | jq -R -s 'split("\n") | map(select(length > 0))'
+          )"
+          undeclared="$(
+            jq -r --argjson declared "$declared" '
+              ([.objects[] | (.key // .uri) | sub(".*/"; "")] - $declared) | unique | join(" ")
+            ' <<<"$listing"
+          )"
+          if [ -n "$undeclared" ]; then
+            echo "public release coordinate carries member(s) neither producer declares: $undeclared" >&2
+            exit 1
+          fi
+          
+          for name in "$archive_name" "$manifest_name"; do
+            source="$release_dir/$name"
+            uri="$prefix/$name"
+            delivered="$scratch_dir/public-$platform-$name"
+            visible=false
+            for attempt in $(seq 1 12); do
+              rm -f "$delivered"
+              if "$stado_bin" storage get "$uri" "$delivered" &&
+                 cmp --silent "$source" "$delivered"; then
+                visible=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [ "$visible" != true ]; then
+              echo "public release delivery did not serve immutable $uri" >&2
+              exit 1
+            fi
+          done
+          STADO_EMBEDDED_EOF
       - name: Ensure daemonless cross-build toolchain
         run: |
           PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
@@ -551,7 +887,7 @@ jobs:
           STADO_LICENSE_FILE="$GITHUB_WORKSPACE/LICENSE" \
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,cloudflare,box,vast" \
-            scripts/release_manifest.sh
+            bash "$RUNNER_TEMP/stado-release-tools/release_manifest.sh"
           mv "$archive" "$release_dir/stado-v$STADO_VERSION-linux-amd64.tar.gz"
 
       - name: Create immutable Linux release through Stado
@@ -571,7 +907,7 @@ jobs:
           # them. Release objects are create-only and a rebuilt archive is
           # never byte-identical, so without this the same tag can never be
           # retried.
-          bash "$GITHUB_WORKSPACE/scripts/adopt_published_release.sh" \
+          bash "$RUNNER_TEMP/stado-release-tools/adopt_published_release.sh" \
             "$stado_bin" "$RUNNER_TEMP/stado-release" stado "$STADO_VERSION" linux-amd64
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
@@ -627,7 +963,7 @@ jobs:
         run: |
           export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          bash "$GITHUB_WORKSPACE/scripts/verify_public_stado_release.sh" \
+          bash "$RUNNER_TEMP/stado-release-tools/verify_public_stado_release.sh" \
             "$stado_bin" "$RUNNER_TEMP/stado-release" stado \
             "$STADO_VERSION" linux-amd64 "$RUNNER_TEMP"
       - name: Reclaim Rust release cache
@@ -677,6 +1013,342 @@ jobs:
           git -C "$source_dir" checkout --detach "$GITHUB_SHA"
           test "$(git -C "$source_dir" rev-parse HEAD)" = "$GITHUB_SHA"
           echo "STADO_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+
+      - name: Prepare release implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/stado-release-tools"
+          cat > "$RUNNER_TEMP/stado-release-tools/release_manifest.sh" <<'STADO_EMBEDDED_EOF'
+          # Emit the canonical immutable archive manifest shared by Stado products.
+          set -eu
+          
+          die() {
+              printf 'FATAL: %s\n' "$*" > /dev/stderr
+              false
+          }
+          
+          RELEASE_DIR="${STADO_RELEASE_DIR:?set STADO_RELEASE_DIR}"
+          ARCHIVE="${STADO_RELEASE_ARCHIVE:?set STADO_RELEASE_ARCHIVE}"
+          VERSION="${STADO_RELEASE_VERSION:?set STADO_RELEASE_VERSION}"
+          PLATFORM="${STADO_RELEASE_PLATFORM:?set STADO_RELEASE_PLATFORM}"
+          SOURCE_COMMIT="${STADO_RELEASE_SOURCE_COMMIT:?set STADO_RELEASE_SOURCE_COMMIT}"
+          
+          for command_name in jq openssl; do
+              command -v "$command_name" >/dev/null || die "required command is unavailable: $command_name"
+          done
+          [ -s "$ARCHIVE" ] || die "release archive is missing or empty: $ARCHIVE"
+          case "$VERSION" in
+              *[![:alnum:]._-]* | "") die "invalid immutable release version" ;;
+          esac
+          case "$PLATFORM" in
+              *[![:alnum:]._-]* | "") die "invalid immutable release platform" ;;
+          esac
+          case "$SOURCE_COMMIT" in
+              *[!0-9a-fA-F]* | "") die "source commit must be hexadecimal" ;;
+          esac
+          
+          sha256="$(openssl dgst -sha256 "$ARCHIVE" | sed 's/^.*= //')"
+          manifest="$RELEASE_DIR/release-manifest-$PLATFORM.json"
+          jq -cS -n \
+              --arg product stado \
+              --arg version "$VERSION" \
+              --arg platform "$PLATFORM" \
+              --arg source_commit "$SOURCE_COMMIT" \
+              --arg sha256 "$sha256" \
+              '{
+                  "platform": $platform,
+                  "product": $product,
+                  "sha256": $sha256,
+                  "source_commit": $source_commit,
+                  "version": $version
+              }' > "$manifest"
+          printf '%s\n' "$manifest"
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-release-tools/adopt_published_release.sh" <<'STADO_EMBEDDED_EOF'
+          set -euo pipefail
+          
+          # Make a second attempt at one release coordinate possible.
+          #
+          # Release objects are create-only. The archive this train publishes is produced
+          # by `stado storage archive`, and tar+gzip output is not byte-reproducible
+          # across runs — mtimes, member order and the gzip header all move — while the
+          # executables inside it carry `env!("CARGO_MANIFEST_DIR")`, which is a fresh
+          # `$RUNNER_TEMP/stado-source.XXXX` on every checkout. So a rebuilt attempt at an
+          # already-published version produces DIFFERENT bytes for the same names, and the
+          # writer answers exactly that:
+          #
+          #   Error: immutable object already differs on the writer:
+          #   stado://releases/stado/0.13.47/darwin-arm64/stado-v0.13.47-darwin-arm64.tar.gz
+          #
+          # 0.13.47 died there. Attempt 1 published all thirteen objects of its darwin
+          # coordinate; attempt 2 rebuilt the archive, refused it twelve times, failed the
+          # job, and `deploy-fleet` was skipped — a release whose bytes were complete and
+          # public never reached a single host, and no later attempt at that tag could
+          # have ended differently.
+          #
+          # The way out is to stop rebuilding what is already published. If the archive is
+          # there, it IS the release: this adopts it and derives the whole release
+          # directory from it, so every subsequent `storage put --if-absent` either
+          # matches the published object exactly or creates the one that is missing. That
+          # also completes a half-published coordinate instead of leaving it stranded,
+          # which is the state `stado/0.11.0/darwin-arm64` has been in since April.
+          #
+          # Called with STADO_API_URL pointing at the authenticated writer, the same
+          # origin the publish loop uses.
+          
+          if [ "$#" -ne 5 ]; then
+            echo "usage: adopt_published_release.sh STADO_BIN RELEASE_DIR PRODUCT VERSION PLATFORM" >&2
+            exit 2
+          fi
+          
+          stado_bin="$1"
+          release_dir="$2"
+          product="$3"
+          version="$4"
+          platform="$5"
+          
+          case "$product" in
+            *[![:alnum:]_-]*|"") echo "invalid release product: $product" >&2; exit 2 ;;
+          esac
+          case "$version" in
+            *[![:alnum:]._-]*|"") echo "invalid release version: $version" >&2; exit 2 ;;
+          esac
+          case "$platform" in
+            *[![:alnum:]_-]*|"") echo "invalid release platform: $platform" >&2; exit 2 ;;
+          esac
+          
+          test -x "$stado_bin"
+          test -d "$release_dir"
+          
+          prefix="stado://releases/$product/$version/$platform"
+          archive_name="$product-v$version-$platform.tar.gz"
+          manifest_name="release-manifest-$platform.json"
+          
+          published_state() {
+            "$stado_bin" storage stat "$prefix/$1" --json | jq -er '.state'
+          }
+          
+          # `storage stat` answers present or absent with exit status zero and reserves
+          # non-zero for a store that did not answer. Guessing "absent" from a store that
+          # is merely unreachable would rebuild over a live coordinate, so an unusable
+          # answer stops this instead.
+          archive_state="$(published_state "$archive_name")"
+          case "$archive_state" in
+            absent)
+              echo "no published $prefix/$archive_name: this attempt publishes its own build"
+              exit 0
+              ;;
+            present) ;;
+            *)
+              echo "::error::the writer could not say whether $prefix/$archive_name exists" \
+                "(state $archive_state); this attempt will not rebuild over a coordinate it cannot read" >&2
+              exit 1
+              ;;
+          esac
+          
+          echo "adopting the published $prefix/$archive_name; this attempt publishes no rebuilt bytes"
+          "$stado_bin" storage get "$prefix/$archive_name" "$release_dir/$archive_name"
+          # The archive carries every executable plus SHA256SUMS, so extracting it over
+          # the release directory replaces this attempt's build with the bytes the
+          # coordinate already holds — which is what the publish loop, the public
+          # validation and the delivery all have to agree about.
+          /usr/bin/tar -xzf "$release_dir/$archive_name" -C "$release_dir"
+          
+          # The manifest is regenerated deterministically from the adopted archive by the
+          # caller's own manifest step (product, version, platform, source_commit and the
+          # archive digest, and nothing else), so a published one must still match. Taking
+          # the published copy when it exists means the comparison is against the bytes a
+          # consumer gets rather than against a second derivation of them.
+          manifest_state="$(published_state "$manifest_name")"
+          case "$manifest_state" in
+            present) "$stado_bin" storage get "$prefix/$manifest_name" "$release_dir/$manifest_name" ;;
+            absent)
+              echo "$prefix/$manifest_name is absent; the adopted archive's manifest will be published"
+              ;;
+            *)
+              echo "::error::the writer could not say whether $prefix/$manifest_name exists" \
+                "(state $manifest_state)" >&2
+              exit 1
+              ;;
+          esac
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-release-tools/verify_public_stado_release.sh" <<'STADO_EMBEDDED_EOF'
+          set -euo pipefail
+          
+          if [ "$#" -ne 6 ]; then
+            echo "usage: verify_public_stado_release.sh STADO_BIN RELEASE_DIR PRODUCT VERSION PLATFORM SCRATCH_DIR" >&2
+            exit 2
+          fi
+          
+          stado_bin="$1"
+          release_dir="$2"
+          product="$3"
+          version="$4"
+          platform="$5"
+          scratch_dir="$6"
+          
+          case "$product" in
+            *[![:alnum:]_-]*|"") echo "invalid release product: $product" >&2; exit 2 ;;
+          esac
+          case "$version" in
+            *[![:alnum:]._-]*|"") echo "invalid release version: $version" >&2; exit 2 ;;
+          esac
+          case "$platform" in
+            *[![:alnum:]_-]*|"") echo "invalid release platform: $platform" >&2; exit 2 ;;
+          esac
+          
+          test -x "$stado_bin"
+          test -d "$release_dir"
+          test -d "$scratch_dir"
+          
+          prefix="stado://releases/$product/$version/$platform"
+          version_claim_uri="stado://releases/$product/$version/source-revision.json"
+          platform_claim_uri="$prefix/source-revision.json"
+          archive_name="$product-v$version-$platform.tar.gz"
+          manifest_name="release-manifest-$platform.json"
+          test -f "$release_dir/$archive_name"
+          test -f "$release_dir/$manifest_name"
+          
+          # One coordinate, two producers. This workflow publishes the executables,
+          # SHA256SUMS, the platform archive and the platform manifest. The product's own
+          # signed-release path publishes `release.json`, `release.sig`, `release.tar.gz`
+          # and `qualification.json` into the SAME prefix — see
+          # `cli::release_submit::publish`, which records
+          # `stado://releases/<product>/<version>/<platform>/qualification.json` as the
+          # run's qualification URI. 0.13.45's linux leg is exactly that state: nine
+          # objects from here, four from there, and a check that expected the coordinate
+          # to hold only what this runner had on disk refused a complete release.
+          #
+          # The platform `source-revision.json` remains a coordinate member for older
+          # clients. The platformless version claim sits one level above this listing and
+          # is fetched and compared below; it is the create-only arbitration point shared
+          # by every publisher and platform.
+          # `[A-Z_]*` and not `[A-Z]*`: a two-word constant like
+          # `RELEASE_REVISION_NAME`'s successors would otherwise be silently skipped and
+          # read as a member nobody declares.
+          control_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/stado-rs/src/release_control.rs"
+          test -f "$control_source"
+          control_names="$(
+            sed -n 's/^pub const RELEASE_[A-Z_]*_NAME: &str = "\([^"]*\)";$/\1/p' "$control_source" |
+              sort -u
+          )"
+          declared_control="$(printf '%s\n' "$control_names" | sed '/^$/d' | /usr/bin/wc -l | tr -d '[:space:]')"
+          if [ "$declared_control" -lt 5 ]; then
+            echo "$control_source declares $declared_control release-owned object name(s);" \
+              "this check needs them to know which members the pipeline and the coordinate" \
+              "claim write" >&2
+            exit 1
+          fi
+          
+          # Every immutable put already reads the exact bytes back through the authenticated
+          # writer. Public validation therefore has a different job: prove that the public
+          # route exposes that complete coordinate. The archive contains every executable
+          # plus SHA256SUMS, so one exact archive read proves their bytes through the public
+          # route. The listing proves that every standalone object is also visible with its
+          # writer-verified size. Re-downloading each executable repeated hundreds of MiB
+          # and exceeded the release runner's wall-clock budget without proving more.
+          #
+          # A chunked put stages its parts at `<key>.__stado_upload/<id>/<index>` under
+          # this same prefix, and the composition that finishes the object deletes them.
+          # An interrupted upload therefore leaves parts a later attempt cleans up:
+          # 0.13.44's first darwin attempt left four when the runner lost its connection
+          # mid-archive. Parts are upload state, never coordinate members, so they are
+          # dropped here — while any OTHER unexpected member still fails the coordinate.
+          listing="$(
+            $stado_bin storage objects releases "$product/$version/$platform/" --json |
+              jq -c '{objects: [.objects[] | select((.key // .uri) | contains(".__stado_upload/") | not)]}'
+          )"
+          
+          version_claim="$scratch_dir/public-$version-source-revision.json"
+          platform_claim="$scratch_dir/public-$version-$platform-source-revision.json"
+          rm -f "$version_claim" "$platform_claim"
+          "$stado_bin" storage get "$version_claim_uri" "$version_claim"
+          "$stado_bin" storage get "$platform_claim_uri" "$platform_claim"
+          source_revision="$(
+            jq -er --arg product "$product" --arg version "$version" '
+              select(
+                keys == ["product", "schema_version", "source_revision", "version"] and
+                .schema_version == 1 and
+                .product == $product and
+                .version == $version and
+                (.source_revision | test("^[0-9a-f]{40}$"))
+              ) | .source_revision
+            ' "$version_claim"
+          )"
+          jq -e \
+            --arg product "$product" \
+            --arg version "$version" \
+            --arg platform "$platform" \
+            --arg source_revision "$source_revision" '
+              keys == ["platform", "product", "schema_version", "source_revision", "version"] and
+              .schema_version == 1 and
+              .product == $product and
+              .version == $version and
+              .platform == $platform and
+              .source_revision == $source_revision
+            ' "$platform_claim" >/dev/null
+          jq -e \
+            --arg product "$product" \
+            --arg version "$version" \
+            --arg platform "$platform" \
+            --arg source_revision "$source_revision" '
+              .product == $product and
+              .version == $version and
+              .platform == $platform and
+              .source_commit == $source_revision
+            ' "$release_dir/$manifest_name" >/dev/null
+          for source in "$release_dir"/*; do
+            name="${source##*/}"
+            uri="$prefix/$name"
+            size="$(/usr/bin/wc -c < "$source" | tr -d '[:space:]')"
+            if ! jq -e --arg uri "$uri" --argjson size "$size" \
+              '([.objects[] | select(.uri == $uri and .size == $size)] | length) == 1' \
+              <<<"$listing" >/dev/null; then
+              echo "public release coordinate omitted $uri at its writer-verified size $size" >&2
+              exit 1
+            fi
+          done
+          
+          # Every member is now accounted for by one of the two producers, so anything
+          # left over is an object nobody declares — a stray write into an immutable
+          # coordinate, which is what this check is for.
+          declared="$(
+            {
+              printf '%s\n' "$control_names"
+              for source in "$release_dir"/*; do printf '%s\n' "${source##*/}"; done
+            } | jq -R -s 'split("\n") | map(select(length > 0))'
+          )"
+          undeclared="$(
+            jq -r --argjson declared "$declared" '
+              ([.objects[] | (.key // .uri) | sub(".*/"; "")] - $declared) | unique | join(" ")
+            ' <<<"$listing"
+          )"
+          if [ -n "$undeclared" ]; then
+            echo "public release coordinate carries member(s) neither producer declares: $undeclared" >&2
+            exit 1
+          fi
+          
+          for name in "$archive_name" "$manifest_name"; do
+            source="$release_dir/$name"
+            uri="$prefix/$name"
+            delivered="$scratch_dir/public-$platform-$name"
+            visible=false
+            for attempt in $(seq 1 12); do
+              rm -f "$delivered"
+              if "$stado_bin" storage get "$uri" "$delivered" &&
+                 cmp --silent "$source" "$delivered"; then
+                visible=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [ "$visible" != true ]; then
+              echo "public release delivery did not serve immutable $uri" >&2
+              exit 1
+            fi
+          done
+          STADO_EMBEDDED_EOF
 
       - name: Build native Rust control plane
         run: |
@@ -796,7 +1468,7 @@ jobs:
           STADO_LICENSE_FILE="$STADO_SOURCE_DIR/LICENSE" \
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
-            "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
+            bash "$RUNNER_TEMP/stado-release-tools/release_manifest.sh"
           mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
           # Each put reads exact bytes back through the authenticated writer;
           # public delivery is verified in the next step.
@@ -830,7 +1502,7 @@ jobs:
           # failed, and `deploy-fleet` was skipped — a complete, public release
           # that reached no host, on a tag no later attempt could have saved.
           archive_name="stado-v$version-$platform.tar.gz"
-          bash "$STADO_SOURCE_DIR/scripts/adopt_published_release.sh" \
+          bash "$RUNNER_TEMP/stado-release-tools/adopt_published_release.sh" \
             "$stado_bin" "$release_dir" stado "$version" "$platform"
           # The same bounded retry the Linux publisher above has had all along.
           # `storage put --if-absent` is idempotent for identical immutable
@@ -940,7 +1612,7 @@ jobs:
         run: |
           export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
           stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          bash "$STADO_SOURCE_DIR/scripts/verify_public_stado_release.sh" \
+          bash "$RUNNER_TEMP/stado-release-tools/verify_public_stado_release.sh" \
             "$stado_bin" "$STADO_NATIVE_RELEASE_DIR" stado \
             "$STADO_NATIVE_RELEASE_VERSION" "$STADO_NATIVE_RELEASE_PLATFORM" \
             "$RUNNER_TEMP"

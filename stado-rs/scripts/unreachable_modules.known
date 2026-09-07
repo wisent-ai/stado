@@ -1,0 +1,22 @@
+# Files under src/ that no `mod` declaration reaches, as of 2026-08-31.
+#
+# Each one is compiled into nothing. This file is a ratchet, not an amnesty:
+# it exists so `scripts/unreachable_modules.py` can fail on anything NEW while
+# these two wait for an owner's decision. Removing a line is the fix;
+# adding one needs a reason that survives being read in a year.
+#
+# A stale entry - a path listed here that no longer exists - also fails the
+# check, so this list cannot quietly outlive the files it describes.
+
+# 139 lines of PRODUCT code - operator secret storage on the configured queue
+# backend - last touched 2026-07-27. Nothing references it; `secrets::` in
+# src/cli/mod.rs resolves to src/cli/secrets.rs, a different module. Either the
+# queue secret store is wanted and must be declared, or it is superseded and
+# should be deleted.
+src/queue/secrets.rs
+
+# Test-support file, unreferenced by anything in src/ or tests/. Integration
+# tests under tests/ are their own crate roots and cannot reach a private
+# module of the library, so it can only ever have been used through a `mod`
+# declaration that is now gone. Delete or re-declare.
+src/testutil.rs

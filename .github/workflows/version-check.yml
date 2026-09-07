@@ -8,10 +8,10 @@ name: Version check
 # the gate copied: this repository already owns every piece of it, and this workflow
 # only arranges for them to run on a change instead of on a release.
 #
-#   scripts/surface.py              reads the advertised command list out of a binary
-#   scripts/baseline.py             derives the baseline from verified channel bytes
-#   scripts/version_check.sh        compares the candidate with that generated baseline
-#   scripts/version_check_proof.sh  proves the gate refuses dishonest inputs
+#   the embedded surface reader              reads the advertised command list out of a binary
+#   the embedded baseline generator             derives the baseline from verified channel bytes
+#   the embedded version gate        compares the candidate with that generated baseline
+#   the embedded version-gate proof  proves the gate refuses dishonest inputs
 #
 # deploy.yml consumes this workflow's exact-SHA verdict before it allocates the
 # publisher runner. Keeping qualification here means a tag can enqueue while its
@@ -64,6 +64,985 @@ jobs:
       # replacement for the deprecated Node 20 runtime in v4.
       - uses: actions/checkout@v5
 
+      - name: Prepare version-check implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/stado-version-check"
+          cat > "$RUNNER_TEMP/stado-version-check/surface.py" <<'STADO_EMBEDDED_EOF'
+          """Emit the public top-level command surface advertised by a CLI binary."""
+          
+          from __future__ import annotations
+          
+          import argparse
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+          
+          COMMAND = re.compile(r"^  ([a-z0-9][a-z0-9-]*)\s{2,}\S")
+          
+          
+          def advertised_commands(help_text: str) -> list[str]:
+              commands: list[str] = []
+              in_commands = False
+              for line in help_text.splitlines():
+                  if line == "Commands:":
+                      in_commands = True
+                      continue
+                  if not in_commands:
+                      continue
+                  if line and not line.startswith(" "):
+                      break
+                  match = COMMAND.match(line)
+                  if match and match.group(1) != "help":
+                      commands.append(match.group(1))
+              if not commands:
+                  raise SystemExit("CLI help contains no advertised Commands section")
+              return sorted(set(commands))
+          
+          
+          def main() -> None:
+              parser = argparse.ArgumentParser()
+              source = parser.add_mutually_exclusive_group(required=True)
+              source.add_argument("--binary", type=Path)
+              source.add_argument("--help-text", type=Path)
+              args = parser.parse_args()
+          
+              if args.binary:
+                  result = subprocess.run(
+                      [str(args.binary), "help"],
+                      check=True,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE,
+                      text=True,
+                  )
+                  help_text = result.stdout
+              else:
+                  help_text = args.help_text.read_text(encoding="utf-8")
+          
+              print(json.dumps({"surface": advertised_commands(help_text)}, indent=2))
+          
+          
+          if __name__ == "__main__":
+              main()
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-version-check/baseline.py" <<'STADO_EMBEDDED_EOF'
+          """Derive the Stado command-surface baseline from verified release bytes."""
+          
+          from __future__ import annotations
+          
+          import argparse
+          import hashlib
+          import json
+          import platform
+          import re
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+          import time
+          
+          from pathlib import Path
+          
+          TAG = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
+          HEX = re.compile(r"^[0-9a-fA-F]+$")
+          
+          
+          def command(*args: str, cwd: Path | None = None) -> str:
+              return subprocess.run(
+                  args,
+                  cwd=cwd,
+                  check=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+              ).stdout
+          
+          
+          def version_key(tag: str) -> tuple[int, int, int, int, str]:
+              match = TAG.fullmatch(tag)
+              if not match:
+                  raise ValueError(tag)
+              prerelease = match.group(4)
+              return (
+                  int(match.group(1)),
+                  int(match.group(2)),
+                  int(match.group(3)),
+                  1 if prerelease is None else 0,
+                  prerelease or "",
+              )
+          
+          
+          def visible_tags() -> list[str]:
+              if command("git", "rev-parse", "--is-shallow-repository").strip() == "true":
+                  raise SystemExit("repository is shallow; release tags are not fully visible")
+              local = {tag for tag in command("git", "tag", "--list", "v*").splitlines() if TAG.fullmatch(tag)}
+              remote = {
+                  ref.removeprefix("refs/tags/").removesuffix("^{}")
+                  for line in command("git", "ls-remote", "--tags", "origin").splitlines()
+                  for ref in [line.split("\t", 1)[1]]
+                  if TAG.fullmatch(ref.removeprefix("refs/tags/").removesuffix("^{}"))
+              }
+              missing = remote - local
+              if missing:
+                  raise SystemExit(f"release tags are not fully visible: missing {sorted(missing)}")
+              return sorted(local, key=version_key, reverse=True)
+          
+          
+          def declared_version() -> str | None:
+              cargo = Path("stado-rs/Cargo.toml")
+              if not cargo.is_file():
+                  return None
+              match = re.search(
+                  r'^version\s*=\s*"([^"]+)"\s*$',
+                  cargo.read_text(encoding="utf-8"),
+                  re.MULTILINE,
+              )
+              if match and TAG.fullmatch(f"v{match.group(1)}"):
+                  return match.group(1)
+              return None
+          
+          
+          def native_platform() -> str:
+              system = platform.system().lower()
+              machine = platform.machine().lower()
+              if system == "darwin" and machine in {"arm64", "aarch64"}:
+                  return "darwin-arm64"
+              if system == "linux" and machine in {"x86_64", "amd64"}:
+                  return "linux-amd64"
+              raise SystemExit(f"no executable Stado release platform for {system}/{machine}")
+          
+          
+          def run_stado(stado: Path, *args: str) -> subprocess.CompletedProcess[str]:
+              return subprocess.run(
+                  [str(stado), *args],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+              )
+          
+          def run_storage(stado: Path, *args: str) -> subprocess.CompletedProcess[str]:
+              """Run a read-only release-channel operation through transient outages.
+          
+              The release boundary and its authorization service reload independently.
+              Retry only failures the Stado CLI classifies as infrastructure/transient;
+              auth, malformed requests, and absent objects remain immediate failures.
+              """
+              attempts = 12
+              for attempt in range(1, attempts + 1):
+                  result = run_stado(stado, "storage", *args)
+                  if result.returncode == 0:
+                      return result
+                  detail = result.stderr.lower()
+                  transient = any(
+                      marker in detail
+                      for marker in (
+                          "http 502",
+                          "http 503",
+                          "[infra_down]",
+                          "infrastructure we depend on is unreachable",
+                          "unreachable, not absent",
+                      )
+                  )
+                  if not transient or attempt == attempts:
+                      return result
+                  time.sleep(attempt * 2)
+              raise AssertionError("storage retry loop exhausted without returning")
+          
+          
+          
+          def state(stado: Path, uri: str) -> str:
+              result = run_storage(stado, "stat", uri, "--json")
+              if result.returncode:
+                  raise SystemExit(result.stderr.strip() or f"storage stat failed for {uri}")
+              try:
+                  return str(json.loads(result.stdout).get("state", ""))
+              except json.JSONDecodeError as error:
+                  raise SystemExit(f"storage stat returned invalid JSON for {uri}") from error
+          
+          
+          def get(stado: Path, uri: str, destination: Path) -> None:
+              result = run_storage(stado, "get", uri, str(destination))
+              if result.returncode:
+                  raise SystemExit(result.stderr.strip() or f"storage get failed for {uri}")
+          
+          
+          def release_base(version: str, release_platform: str) -> str:
+              return f"stado://releases/stado/{version}/{release_platform}"
+          
+          
+          def manifest_for(stado: Path, version: str, release_platform: str, root: Path) -> tuple[dict[str, str], str]:
+              uri = f"{release_base(version, release_platform)}/release-manifest-{release_platform}.json"
+              destination = root / f"manifest-{release_platform}.json"
+              get(stado, uri, destination)
+              try:
+                  value = json.loads(destination.read_text(encoding="utf-8"))
+              except json.JSONDecodeError as error:
+                  raise SystemExit(f"release channel returned invalid JSON for {uri}") from error
+              fields = {"platform", "product", "sha256", "source_commit", "version"}
+              if not isinstance(value, dict) or set(value) != fields:
+                  raise SystemExit(f"release manifest has unexpected fields: {uri}")
+              if (value["product"], value["version"], value["platform"]) != ("stado", version, release_platform):
+                  raise SystemExit(f"release manifest identity mismatch: {uri}")
+              digest = value["sha256"]
+              commit = value["source_commit"]
+              if not isinstance(digest, str) or len(digest) != 64 or not HEX.fullmatch(digest):
+                  raise SystemExit(f"release manifest digest is invalid: {uri}")
+              if not isinstance(commit, str) or len(commit) not in {40, 64} or not HEX.fullmatch(commit):
+                  raise SystemExit(f"release manifest source commit is invalid: {uri}")
+              return value, uri
+          
+          
+          def safe_extract(archive: Path, destination: Path) -> None:
+              destination = destination.resolve()
+              with tarfile.open(archive, "r:gz") as bundle:
+                  for member in bundle.getmembers():
+                      target = (destination / member.name).resolve()
+                      if destination != target and destination not in target.parents:
+                          raise SystemExit(f"release archive contains an unsafe path: {member.name}")
+                  bundle.extractall(destination, filter="data")
+          
+          
+          def surface_from_release(stado: Path, version: str, release_platform: str, root: Path) -> dict[str, object]:
+              manifest, manifest_uri = manifest_for(stado, version, release_platform, root)
+              archive_uri = f"{release_base(version, release_platform)}/stado-v{version}-{release_platform}.tar.gz"
+              archive = root / "release.tar.gz"
+              get(stado, archive_uri, archive)
+              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+              if digest != manifest["sha256"]:
+                  raise SystemExit(f"release archive differs from its manifest: {archive_uri}")
+              extracted = root / "release"
+              extracted.mkdir()
+              safe_extract(archive, extracted)
+              binary = extracted / "stado"
+              if not binary.is_file():
+                  raise SystemExit(f"release archive contains no stado binary: {archive_uri}")
+              binary.chmod(binary.stat().st_mode | 0o100)
+              surface = json.loads(command("python3", str(Path(__file__).resolve().with_name("surface.py")), "--binary", str(binary)))
+              commands = surface.get("surface")
+              if not isinstance(commands, list) or not commands or not all(isinstance(item, str) for item in commands):
+                  raise SystemExit(f"release binary advertised an invalid command surface: {archive_uri}")
+              return {
+                  "version": version,
+                  "source": f"{manifest_uri} published from {manifest['source_commit']}",
+                  "surface": commands,
+              }
+          
+          
+          def best(stado: Path, output: Path | None) -> str:
+              tags = visible_tags()
+              versions = {tag[1:] for tag in tags}
+              current = declared_version()
+              if current is not None:
+                  versions.add(current)
+              release_platform = native_platform()
+              # The baseline is a command surface, which is architecture-independent.
+              # Verify and execute the release matching this runner. Requiring every
+              # platform here made the Linux publisher depend on the later Darwin
+              # control-plane job, while that job depends on this publisher succeeding.
+              required_platforms = (release_platform,)
+              # Coordinates that carry a manifest and not the archive it names. Kept so
+              # the skip is reported as a fact rather than leaving a half-published
+              # version to surface as a 404 in somebody else's pull request.
+              partial: list[str] = []
+              for version in sorted(versions, key=lambda value: version_key(f"v{value}"), reverse=True):
+                  states = {
+                      candidate: state(
+                          stado,
+                          f"{release_base(version, candidate)}/release-manifest-{candidate}.json",
+                      )
+                      for candidate in required_platforms
+                  }
+                  if all(verdict == "absent" for verdict in states.values()):
+                      continue
+                  unexpected = {name: verdict for name, verdict in states.items() if verdict not in {"present", "absent"}}
+                  if unexpected:
+                      raise SystemExit(f"release channel returned unknown platform states for {version}: {unexpected}")
+                  if any(verdict != "present" for verdict in states.values()):
+                      continue
+                  # A manifest is not a publication.
+                  #
+                  # This loop used to select on the manifest alone and fetch the archive
+                  # afterwards, which meant the highest version with a manifest won even
+                  # when its bytes were missing. On 2026-09-03 `0.14.0` published a
+                  # linux-amd64 manifest whose archive was absent, `--best` chose it, and
+                  # EVERY `version-check` run in the repository died on
+                  # `HTTP 404 Not Found: {"state":"absent","uri":".../stado-v0.14.0-linux-amd64.tar.gz"}`
+                  # — on this branch and on `main` alike, so nothing could merge at all.
+                  # The gate still measures exactly what it measured before; the
+                  # difference is that the baseline it measures against exists.
+                  #
+                  # Release objects are immutable, so a partial coordinate can never be
+                  # completed. Skipping to the next whole version is the only thing that
+                  # can be done with one, and it has to be said out loud.
+                  archives = {
+                      candidate: state(
+                          stado,
+                          f"{release_base(version, candidate)}/stado-v{version}-{candidate}.tar.gz",
+                      )
+                      for candidate in required_platforms
+                  }
+                  unknown = {
+                      name: verdict for name, verdict in archives.items() if verdict not in {"present", "absent"}
+                  }
+                  if unknown:
+                      raise SystemExit(f"release channel returned unknown archive states for {version}: {unknown}")
+                  missing = sorted(name for name, verdict in archives.items() if verdict != "present")
+                  if missing:
+                      partial.extend(f"{version}/{name}" for name in missing)
+                      print(
+                          f"{version} is half published, skipping: the release manifest is present and the "
+                          f"archive it names is absent for {', '.join(missing)}. Release objects are "
+                          f"immutable, so this coordinate cannot be completed; looking for an older whole "
+                          f"release to build the baseline from.",
+                          file=sys.stderr,
+                      )
+                      continue
+                  if partial:
+                      print(
+                          f"baseline built from {version}; skipped {len(partial)} half-published "
+                          f"coordinate(s): {', '.join(partial)}",
+                          file=sys.stderr,
+                      )
+                  if output is None:
+                      return f"stado:{version}"
+                  with tempfile.TemporaryDirectory(prefix="stado-baseline-") as temporary:
+                      root = Path(temporary)
+                      manifests = {
+                          candidate: manifest_for(stado, version, candidate, root)[0]
+                          for candidate in required_platforms
+                      }
+                      commits = {manifest["source_commit"] for manifest in manifests.values()}
+                      if len(commits) != 1:
+                          raise SystemExit(f"release platforms for {version} name different source commits")
+                      baseline = surface_from_release(stado, version, release_platform, root)
+                  output.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+                  return f"stado:{version}"
+          
+              # A coordinate whose archive is absent has published nothing this can be
+              # built from, and never will: release objects are immutable. So it counts
+              # as absent here and the channel is still empty, which is exactly the
+              # state the gate was in when it last passed — `main` at b6695579 printed
+              # `bootstrap:0.14.0`, "The release channel is empty", at 05:27, before the
+              # 0.14.0 linux-amd64 manifest appeared without its archive.
+              #
+              # The skipped coordinates are named on stderr rather than spliced into the
+              # baseline document, because `the embedded version gate` asserts the
+              # bootstrap `source` string byte for byte. "The channel was empty" and
+              # "the channel held a version nobody can fetch" are different facts, and
+              # the log is where the second one has to be readable.
+              partial_note = (
+                  ""
+                  if not partial
+                  else (
+                      f"; skipped {len(partial)} half-published coordinate(s) whose manifest is present and "
+                      f"archive absent, which immutability makes permanent: {', '.join(partial)}"
+                  )
+              )
+              if partial:
+                  print(
+                      f"release channel holds no whole release{partial_note}. Bootstrapping the baseline "
+                      "from the candidate binary, as it does on an empty channel.",
+                      file=sys.stderr,
+                  )
+          
+              # Bootstrap exactly once when the channel has no verified release. There
+              # is no older immutable artifact to compare against; the binary compiled
+              # from this tagged commit becomes the initial public contract. Every later
+              # release is compared with the immutable object created from this one.
+              if current is not None:
+                  if output is None:
+                      return f"bootstrap:{current}"
+                  surface = json.loads(command("python3", str(Path(__file__).resolve().with_name("surface.py")), "--binary", str(stado)))
+                  commands = surface.get("surface")
+                  if not isinstance(commands, list) or not commands or not all(
+                      isinstance(item, str) for item in commands
+                  ):
+                      raise SystemExit("candidate binary advertised an invalid bootstrap command surface")
+                  output.write_text(
+                      json.dumps(
+                          {
+                              "version": current,
+                              # Byte-exact: `the embedded version gate` asserts this
+                              # string literally, and a bootstrap baseline whose source
+                              # is anything else is refused. The skipped coordinates are
+                              # reported on stderr instead of being spliced in here.
+                              "source": "bootstrap from the candidate binary; release channel was empty",
+                              "surface": commands,
+                          },
+                          indent=2,
+                      )
+                      + "\n",
+                      encoding="utf-8",
+                  )
+                  return f"bootstrap:{current}"
+              raise SystemExit(
+                  f"release channel contains no complete verified Stado release{partial_note}"
+              )
+          
+          
+          def main() -> None:
+              parser = argparse.ArgumentParser()
+              parser.add_argument("--best", action="store_true", required=True)
+              parser.add_argument("--stado", type=Path, required=True)
+              parser.add_argument("--output", type=Path)
+              args = parser.parse_args()
+              print(best(args.stado, args.output))
+          
+          
+          if __name__ == "__main__":
+              main()
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-version-check/version_check.sh" <<'STADO_EMBEDDED_EOF'
+          # Refuse a release whose declared version disagrees with what it did to the public
+          # contract of `stado`. That contract is the command list the binary advertises: adding
+          # a command is a capability, removing one breaks every script that invoked it.
+          #
+          # The rule itself has one home for the whole fleet and is not copied here:
+          # https://github.com/lbartoszcze/AutoVersion. This script supplies only the three
+          # things this repository alone knows — the surface of the artifact about to be
+          # published, the version that artifact declares, and which release channel it is
+          # published to.
+          #
+          # Run by .github/workflows/deploy.yml in front of the first `storage put`. Release
+          # objects are create-only, so a wrong version is not a mistake anyone can correct
+          # afterwards; the only useful place for this check is ahead of the publish it guards.
+          #
+          # Usage:
+          #   the embedded version gate <candidate-surface.json>
+          # Environment:
+          #   AUTOVERSION  the shared rule's entry point
+          #   STADO_BIN    stado used to read the channel
+          #   BASELINE     baseline generated from verified release bytes (required)
+          #   MANIFEST     the crate that declares version (default: stado-rs/Cargo.toml)
+          
+          set -euo pipefail
+          script_dir="$(cd "$(dirname "$0")" && pwd)"
+          
+          candidate="${1:?usage: the embedded version gate <candidate-surface.json>}"
+          baseline="${BASELINE:?set BASELINE to the document generated by the embedded baseline generator --output}"
+          manifest="${MANIFEST:-stado-rs/Cargo.toml}"
+          autoversion="${AUTOVERSION:?set AUTOVERSION to the pinned rule}"
+          stado_bin="${STADO_BIN:?set STADO_BIN to the channel-aware stado binary}"
+          
+          test -r "$candidate"
+          test -r "$baseline"
+          test -r "$manifest"
+          test -x "$stado_bin"
+          
+          # Read the declared version exactly the way deploy.yml reads it, so the gate and the
+          # publish can never disagree about what is being released.
+          version_line="$(sed -n '/^version = /p' "$manifest")"
+          declared="${version_line#*\"}"
+          declared="${declared%%\"*}"
+          released="$(jq -r .version "$baseline")"
+          test -n "$declared"
+          test -n "$released"
+          echo "declared version: $declared"
+          echo "baseline version: $released"
+          
+          verdict="$("$autoversion" decide \
+            --current "$released" \
+            --published-surface "$baseline" \
+            --candidate-surface "$candidate" \
+            --json)"
+          echo "$verdict"
+          
+          change="$(printf '%s' "$verdict" | jq -r .change)"
+          required="$(printf '%s' "$verdict" | jq -r .next)"
+          test -n "$change"
+          test -n "$required"
+          
+          if [ "$declared" = "$released" ]; then
+            if [ "$change" != internal ]; then
+              echo "::error::The advertised command surface changed ($change), but" \
+                "$manifest still declares the baseline version $released." \
+                "The next version must be $required."
+              false
+            fi
+            echo "The surface is unchanged, so the declared version may stay $released."
+          elif ! python3 "$script_dir/semver_at_least.py" "$declared" "$required"; then
+            echo "::error::$manifest declares $declared, but a $change change to" \
+              "$released requires at least $required."
+            false
+          else
+            echo "Declared version $declared satisfies the $change change (minimum $required)."
+          fi
+          
+          # the embedded baseline generator writes the exact manifest URI it read and verified. A
+          # hand-written phrase, tag, or guessed coordinate has no accepted spelling.
+          marker="$(jq -r '.source | split(" ") | first' "$baseline")"
+          echo "baseline marker: $marker"
+          if [ "$marker" = bootstrap ]; then
+            source="$(jq -r .source "$baseline")"
+            if [ "$source" != "bootstrap from the candidate binary; release channel was empty" ] ||
+               [ "$released" != "$declared" ]; then
+              echo "::error::invalid bootstrap baseline: source '$source', baseline '$released'," \
+                "declared '$declared'."
+              false
+            fi
+            best="$(python3 "$script_dir/baseline.py" --best --stado "$stado_bin")"
+            if [ "$best" != "bootstrap:$released" ]; then
+              echo "::error::bootstrap baseline claims an empty channel, but generator returned '$best'."
+              false
+            fi
+            echo "The release channel is empty; $declared establishes its first immutable baseline."
+            exit 0
+          fi
+          case "$marker" in
+            stado://releases/stado/*/release-manifest-*.json) ;;
+            *)
+              echo "::error::unknown baseline marker in $baseline: $marker." \
+                "Generate it from the channel: python3 "$script_dir/baseline.py" --best --stado STADO --output BASELINE"
+              false
+              ;;
+          esac
+          
+          # What the channel itself says about the exact object the baseline names.
+          #
+          # This used to list `releases` through the object API and search the result. That
+          # route does not exist on the release channel and never did: releases are published
+          # and served by their own route, which answers a served object with a redirect to
+          # where the bytes live. The listing therefore returned a 404 on every run, and under
+          # `set -e` the gate died before judging anything -- a gate that cannot say yes is as
+          # useless as one that cannot say no.
+          #
+          # `storage stat` on a full stado:// URI asks the channel and names one of three
+          # states, where a listing had only silence. Only a stated present or absent counts.
+          # Anything else -- unreachable, an empty field, a state this script does not know --
+          # is an answer nobody gave, and refusing is the direction that cannot certify a lie.
+          # Its stderr is deliberately not swallowed: when the channel fails to answer, the
+          # reason belongs in the log next to the refusal it caused.
+          channel_state() {
+            "$stado_bin" storage stat "$1" --json | jq -r '.state // ""' || true
+          }
+          
+          state="$(channel_state "$marker")"
+          case "$state" in
+            present) ;;
+            absent)
+              echo "::error::$baseline names $marker, which the release channel no longer serves."
+              false
+              ;;
+            *)
+              echo "::error::the release channel did not testify about $marker (state" \
+                "'${state:-none}'), so the generated baseline cannot be trusted."
+              false
+              ;;
+          esac
+          echo "The channel serves $marker, as the generated baseline records."
+          
+          # The generator must independently select the same version now. This catches a
+          # newer complete release appearing between baseline generation and the verdict.
+          have="stado:$released"
+          # Into a file, with the status tested on its own line. `set -e` does reach a bare
+          # assignment from a command substitution, but it stops reaching the moment a pipeline
+          # appears inside one, and this line is one edit away from growing a `| tail` -- so the
+          # status is tested where it cannot be discarded. Then both identities are asserted
+          # non-empty BEFORE they are compared: an identity that read empty must be reported as
+          # an identity that read empty, not as an artifact named "" superseding this baseline,
+          # and if both sides ever read empty the comparison would pass vacuously.
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          if ! python3 "$script_dir/baseline.py" --best --stado "$stado_bin" > "$scratch/best"; then
+            echo "::error::the baseline generator could not establish the best reachable" \
+              "artifact, so whether this baseline is superseded is unproven." \
+              "Refusing rather than assuming it is current."
+            false
+          fi
+          best="$(cat "$scratch/best")"
+          if [ -z "$best" ] || [ -z "$have" ]; then
+            echo "::error::an artifact identity read empty (best '$best', baseline '$have')," \
+              "so this comparison would prove nothing."
+            false
+          fi
+          if [ "$best" != "$have" ]; then
+            echo "::error::the generated baseline is $have, but $best is reachable now." \
+              "Generate the baseline again from one channel snapshot."
+            false
+          fi
+          echo "$have is still the best artifact available."
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-version-check/version_check_proof.sh" <<'STADO_EMBEDDED_EOF'
+          # Prove that the embedded version gate actually refuses. A gate nobody has watched say
+          # no is indistinguishable from a gate that always says yes, and this one guards
+          # create-only release objects, so the refusals are the part worth checking.
+          #
+          # Five cases, run against a baseline generated from verified channel bytes:
+          #   1 surface untouched                     -> internal, passes
+          #   2 one advertised command removed        -> breaking, refuses
+          #   3 one advertised command added          -> additive, refuses
+          #   4 "source" is prose, not a manifest URI -> refuses
+          #   5 baseline names an object the channel does not serve -> refuses
+          #
+          # Cases mutate copies under a temporary directory. The repository is never
+          # written to.
+          #
+          # Usage:
+          #   BASELINE=/path/generated.json the embedded version-gate proof [stado-binary]
+          # Environment:
+          #   BASELINE     document generated by the embedded baseline generator --output (required)
+          #   AUTOVERSION  the shared rule's entry point
+          #   STADO_BIN    stado used to read the channel
+          set -uo pipefail
+          
+          script_dir="$(cd "$(dirname "$0")" && pwd)" || exit
+          repository="${GITHUB_WORKSPACE:?set GITHUB_WORKSPACE to the repository root}"
+          cd "$repository" || exit
+          
+          binary="${1:-stado-rs/target/release/stado}"
+          export BASELINE="${BASELINE:?set BASELINE to a channel-generated document}"
+          export AUTOVERSION="${AUTOVERSION:?set AUTOVERSION to the pinned rule}"
+          export STADO_BIN="${STADO_BIN:?set STADO_BIN to the channel-aware stado binary}"
+          
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          failures=""
+          
+          # check_case <name> <pass|refuse> <baseline> <candidate>
+          check_case() {
+            local name="$1" expected="$2" baseline="$3" candidate="$4" observed
+            echo
+            echo "### $name (expect $expected)"
+            if BASELINE="$baseline" bash "$script_dir/version_check.sh" "$candidate"; then
+              observed=pass
+            else
+              observed=refuse
+            fi
+            if [ "$observed" = "$expected" ]; then
+              echo "OK: $name -> $observed"
+            else
+              echo "FAIL: $name -> $observed, expected $expected"
+              failures="${failures}x"
+            fi
+          }
+          
+          python3 "$script_dir/surface.py" --binary "$binary" > "$work/candidate.json" || exit
+          removed="$(jq -r '.surface | last' "$work/candidate.json")"
+          echo "candidate surface: $(jq -c '.surface | length' "$work/candidate.json") commands"
+          jq -c .surface "$work/candidate.json"
+          
+          jq --arg gone "$removed" '{surface: (.surface | map(select(. != $gone)))}' \
+            "$work/candidate.json" > "$work/removed.json"
+          jq '{surface: ((.surface + ["teleport"]) | sort)}' \
+            "$work/candidate.json" > "$work/added.json"
+          jq '.source = "handwritten by someone in a hurry"' "$BASELINE" \
+            > "$work/prose.json"
+          jq '.source = "stado://releases/stado/9.9.9/nowhere-noarch/release-manifest-nowhere-noarch.json published from 0000000000000000000000000000000000000000"' \
+            "$BASELINE" > "$work/absent-object.json"
+          
+          # Case 3 needs a baseline that already carries this tree's surface at the version this
+          # tree declares. Compared against the published baseline instead, it proves nothing:
+          # this tree is normally already additive over what the channel serves, so one more
+          # command changes neither the class of the change nor the version it demands, and the
+          # case passes for a reason that has nothing to do with the command it added. The
+          # marker is left untouched, because the gate uses it only to confirm the channel still
+          # serves the object the baseline names, which stays true.
+          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
+          declared="${version_line#*\"}"
+          declared="${declared%%\"*}"
+          jq --arg declared "$declared" --slurpfile candidate "$work/candidate.json" \
+            '.version = $declared | .surface = $candidate[0].surface' "$BASELINE" \
+            > "$work/current.json"
+          
+          check_case "surface untouched" pass "$BASELINE" "$work/candidate.json"
+          check_case "removed $removed" refuse "$BASELINE" "$work/removed.json"
+          check_case "added teleport" refuse "$work/current.json" "$work/added.json"
+          check_case "prose baseline source" refuse "$work/prose.json" "$work/candidate.json"
+          check_case "baseline claims absent object" refuse "$work/absent-object.json" \
+            "$work/candidate.json"
+          
+          echo
+          if [ -n "$failures" ]; then
+            echo "the gate did not behave as specified"
+            false
+          else
+            echo "every case behaved as specified"
+          fi
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-version-check/semver_at_least.py" <<'STADO_EMBEDDED_EOF'
+          """Exit successfully when ACTUAL is a valid SemVer at least MINIMUM."""
+          
+          from __future__ import annotations
+          
+          import re
+          import sys
+          
+          SEMVER = re.compile(
+              r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+              r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+              r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+          )
+          
+          
+          def parse(value: str) -> tuple[tuple[int, int, int], list[str] | None]:
+              match = SEMVER.fullmatch(value)
+              if not match:
+                  raise ValueError(f"invalid semantic version: {value}")
+              core = tuple(int(match.group(index)) for index in range(1, 4))
+              prerelease = match.group(4)
+              return core, prerelease.split(".") if prerelease else None
+          
+          
+          def prerelease_compare(left: list[str] | None, right: list[str] | None) -> int:
+              if left is None or right is None:
+                  return (left is None) - (right is None)
+              for a, b in zip(left, right):
+                  if a == b:
+                      continue
+                  if a.isdigit() and b.isdigit():
+                      return (int(a) > int(b)) - (int(a) < int(b))
+                  if a.isdigit() != b.isdigit():
+                      return -1 if a.isdigit() else 1
+                  return (a > b) - (a < b)
+              return (len(left) > len(right)) - (len(left) < len(right))
+          
+          
+          def at_least(actual: str, minimum: str) -> bool:
+              actual_core, actual_pre = parse(actual)
+              minimum_core, minimum_pre = parse(minimum)
+              if actual_core != minimum_core:
+                  return actual_core > minimum_core
+              return prerelease_compare(actual_pre, minimum_pre) >= 0
+          
+          
+          def main() -> None:
+              if len(sys.argv) != 3:
+                  raise SystemExit("usage: semver_at_least.py ACTUAL MINIMUM")
+              try:
+                  accepted = at_least(sys.argv[1], sys.argv[2])
+              except ValueError as error:
+                  print(error, file=sys.stderr)
+                  raise SystemExit(2) from error
+              raise SystemExit(0 if accepted else 1)
+          
+          
+          if __name__ == "__main__":
+              main()
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-version-check/unreachable_modules.py" <<'STADO_EMBEDDED_EOF'
+          """Every `.rs` file under `src/` must be reachable from a crate root.
+          
+          A Rust source file that no `mod` declaration names is not a compile error.
+          It is not compiled at all. `cargo check` passes, `cargo clippy` passes, the
+          file sits in the tree, `git log` shows it landing, and nothing it contains
+          runs. The only symptom is silence.
+          
+          One way this has already happened in this repository:
+          
+          - On 2026-08-31 at 15:48Z one commit replaced `src/cli/mod.rs` with a
+            six-day-old copy, deleting nine `pub mod` declarations - `builds`,
+            `database`, `egress`, `fleet`, `product`, `release_evidence`,
+            `release_quarantine`, `service_converge`, `stream` - while all nine files
+            stayed on disk. `main` stopped compiling, but not because a module was
+            undeclared: it failed 27 errors away, in unrelated callers, and no
+            diagnostic named a missing declaration. A file listing looked untouched.
+          So the declaration and the tree disagree and nothing compares them. This
+          compares them: resolve every `mod` declaration from `src/lib.rs` and each
+          `[[bin]]` path in `Cargo.toml`, then report any `.rs` file the walk never
+          reached.
+          
+          Exit status is the contract: zero means every file is reachable, non-zero
+          names the ones that are not.
+          
+          Files already unreachable when this check was written are listed in
+          `the embedded unreachable-module allowlist`, one path per line with the reason beside
+          it. That file is a ratchet, not an amnesty: anything unreachable and unlisted
+          fails, and a listed path that no longer exists also fails, because a stale
+          entry would silently re-admit a real orphan under the same name later.
+          
+          Usage:
+              the embedded unreachable-module checker [--crate DIR] [--known FILE] [--json]
+          """
+          
+          from __future__ import annotations
+          
+          import argparse
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          
+          # `mod name;` / `pub mod name;` / `pub(crate) mod name;`, and the raw
+          # identifier spelling `mod r#box;` that a keyword module needs. A `mod name {`
+          # block is deliberately NOT matched: it declares its contents inline and
+          # resolves to no file.
+          MOD_DECLARATION = re.compile(
+              r"^[^\S\n]*(?:pub(?:\([^)]*\))?[^\S\n]+)?mod[^\S\n]+(?:r#)?(\w+)[^\S\n]*;",
+              re.MULTILINE,
+          )
+          
+          # `path = "src/bin/whatever.rs"` inside Cargo.toml. Every `[[bin]]` is its own
+          # crate root, so a file reachable only from one of them still counts.
+          CARGO_BIN_PATH = re.compile(r'^path\s*=\s*"(src/[^"]+\.rs)"', re.MULTILINE)
+          
+          
+          def read_known(path: Path | None, crate: Path) -> list[str]:
+              """Paths recorded as already-unreachable, `# reason` stripped."""
+              if path is None:
+                  return []
+              resolved = path if path.is_absolute() else crate / path
+              if not resolved.is_file():
+                  print(f"error: {resolved} is not a file", file=sys.stderr)
+                  raise SystemExit(2)
+              entries = []
+              for raw in resolved.read_text(encoding="utf-8").splitlines():
+                  entry = raw.split("#", 1)[0].strip()
+                  if entry:
+                      entries.append(entry)
+              return entries
+          
+          
+          def crate_roots(crate: Path) -> list[Path]:
+              """`src/lib.rs` plus every `[[bin]]` path Cargo declares."""
+              roots = []
+              lib = crate / "src" / "lib.rs"
+              if lib.is_file():
+                  roots.append(lib)
+              manifest = crate / "Cargo.toml"
+              if manifest.is_file():
+                  text = manifest.read_text(encoding="utf-8", errors="replace")
+                  for match in CARGO_BIN_PATH.finditer(text):
+                      candidate = crate / match.group(1)
+                      if candidate.is_file():
+                          roots.append(candidate)
+              return roots
+          
+          
+          def child_directory(path: Path, roots: set[Path]) -> Path:
+              """Where a file's `mod` declarations resolve.
+          
+              `foo/mod.rs` and a crate root own their own directory; `foo/bar.rs` owns
+              `foo/bar/`. Getting this wrong in the other direction would make the walk
+              miss real files and invent orphans, so it is the one rule here worth
+              stating.
+              """
+              if path.name == "mod.rs" or path in roots:
+                  return path.parent
+              return path.parent / path.stem
+          
+          
+          def reachable(crate: Path) -> tuple[set[Path], list[Path]]:
+              roots = crate_roots(crate)
+              root_set = set(roots)
+              seen: set[Path] = set()
+              stack = list(roots)
+              while stack:
+                  current = stack.pop()
+                  if current in seen or not current.is_file():
+                      continue
+                  seen.add(current)
+                  directory = child_directory(current, root_set)
+                  text = current.read_text(encoding="utf-8", errors="replace")
+                  for name in MOD_DECLARATION.findall(text):
+                      for candidate in (directory / f"{name}.rs", directory / name / "mod.rs"):
+                          if candidate.is_file() and candidate not in seen:
+                              stack.append(candidate)
+              return seen, roots
+          
+          
+          def main() -> int:
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument(
+                  "--crate",
+                  default=Path(__file__).resolve().parent.parent,
+                  type=Path,
+                  help="crate directory holding Cargo.toml and src/ (default: this script's crate)",
+              )
+              parser.add_argument(
+                  "--known",
+                  type=Path,
+                  metavar="FILE",
+                  help="file listing already-unreachable paths, one per line, `# reason` accepted",
+              )
+              parser.add_argument("--json", action="store_true", help="emit the report as JSON")
+              args = parser.parse_args()
+          
+              crate: Path = args.crate.resolve()
+              source = crate / "src"
+              if not source.is_dir():
+                  print(f"error: {source} is not a directory", file=sys.stderr)
+                  return 2
+          
+              every = {path.resolve() for path in source.rglob("*.rs")}
+              seen, roots = reachable(crate)
+              if not roots:
+                  print(f"error: {crate} declares no crate root", file=sys.stderr)
+                  return 2
+          
+              known = {(crate / entry).resolve() for entry in read_known(args.known, crate)}
+              stale = sorted(path for path in known if path not in every)
+              orphans = sorted(every - {path.resolve() for path in seen} - known)
+          
+              def relative(path: Path) -> str:
+                  return str(path.relative_to(crate))
+          
+              if args.json:
+                  print(
+                      json.dumps(
+                          {
+                              "crate": str(crate),
+                              "roots": [relative(path) for path in roots],
+                              "files": len(every),
+                              "reachable": len(every) - len(orphans) - len(known),
+                              "known": [relative(path) for path in sorted(known)],
+                              "stale": [relative(path) for path in stale],
+                              "unreachable": [relative(path) for path in orphans],
+                          },
+                          indent=2,
+                      )
+                  )
+              else:
+                  print(f"{len(every)} .rs files under {relative(source)}")
+                  print(f"{len(roots)} crate root(s): {', '.join(relative(p) for p in roots)}")
+                  for path in stale:
+                      print(f"stale --known entry (no such file): {relative(path)}")
+                  if orphans:
+                      print(f"\n{len(orphans)} file(s) no `mod` declaration reaches:")
+                      for path in orphans:
+                          print(f"  {relative(path)}")
+                      print(
+                          "\nEach is compiled into nothing. Declare it, delete it, or record it\n"
+                          "in the --known file with the reason beside it."
+                      )
+                  else:
+                      print("\nevery file is reachable from a crate root")
+          
+              # A stale entry is also a failure: it is a claim about a file that no
+              # longer exists, and leaving it would silently re-admit a real orphan
+              # under the same name later.
+              return 1 if orphans or stale else 0
+          
+          
+          if __name__ == "__main__":
+              sys.exit(main())
+          STADO_EMBEDDED_EOF
+          cat > "$RUNNER_TEMP/stado-version-check/unreachable_modules.known" <<'STADO_EMBEDDED_EOF'
+          # Files under src/ that no `mod` declaration reaches, as of 2026-08-31.
+          #
+          # Each one is compiled into nothing. This file is a ratchet, not an amnesty:
+          # it exists so `the embedded unreachable-module checker` can fail on anything NEW while
+          # these two wait for an owner's decision. Removing a line is the fix;
+          # adding one needs a reason that survives being read in a year.
+          #
+          # A stale entry - a path listed here that no longer exists - also fails the
+          # check, so this list cannot quietly outlive the files it describes.
+          
+          # 139 lines of PRODUCT code - operator secret storage on the configured queue
+          # backend - last touched 2026-07-27. Nothing references it; `secrets::` in
+          # src/cli/mod.rs resolves to src/cli/secrets.rs, a different module. Either the
+          # queue secret store is wanted and must be declared, or it is superseded and
+          # should be deleted.
+          src/queue/secrets.rs
+          
+          # Test-support file, unreferenced by anything in src/ or tests/. Integration
+          # tests under tests/ are their own crate roots and cannot reach a private
+          # module of the library, so it can only ever have been used through a `mod`
+          # declaration that is now gone. Delete or re-declare.
+          src/testutil.rs
+          STADO_EMBEDDED_EOF
+
       - name: Keep Supabase schema in its canonical repository
         run: |
           if [ -e supabase ]; then
@@ -86,15 +1065,15 @@ jobs:
         # it runs first and cheaply. The .known file is a ratchet: the three files
         # already unreachable are listed with reasons, anything new fails, and a
         # listed path that no longer exists fails too.
-        run: scripts/unreachable_modules.py --known scripts/unreachable_modules.known
+        run: python3 "$RUNNER_TEMP/stado-version-check/unreachable_modules.py" --crate . --known "$RUNNER_TEMP/stado-version-check/unreachable_modules.known"
         working-directory: stado-rs
 
       - name: Make tags and history visible to the version check
-        # actions/checkout fetches one commit and no tags, and scripts/baseline.py
+        # actions/checkout fetches one commit and no tags, and the embedded baseline generator
         # refuses outright on such a clone -- assert_refs_visible() reads
         # `git rev-parse --is-shallow-repository` and cross-checks `git tag --list`
         # against `git ls-remote --tags origin`, precisely so a tier cannot be ranked
-        # blind. scripts/version_check.sh calls that generator to ask whether a better
+        # blind. the embedded version gate calls that generator to ask whether a better
         # artifact than the committed baseline has appeared, so without this step the
         # gate does not go quietly green: it reports that staleness is unproven. The
         # tag trees matter separately, because the git-archive tier rebuilds one.
@@ -148,12 +1127,12 @@ jobs:
         working-directory: stado-rs
 
       - name: Read the public surface
-        # No import, no source scan: scripts/surface.py asks the artifact itself and
+        # No import, no source scan: the embedded surface reader asks the artifact itself and
         # refuses an empty answer rather than reporting a shrunken surface, because a
         # shrink reads as a breaking removal that never happened.
         run: |
           set -euo pipefail
-          python3 scripts/surface.py --binary stado-rs/target/release/stado \
+          python3 "$RUNNER_TEMP/stado-version-check/surface.py" --binary stado-rs/target/release/stado \
             > "$RUNNER_TEMP/candidate-surface.json"
           echo "advertised commands: $(jq -r '.surface | length' \
             "$RUNNER_TEMP/candidate-surface.json")"
@@ -176,7 +1155,7 @@ jobs:
               false ;;
           esac
 
-          # scripts/version_check.sh asserts the baseline against the release channel
+          # the embedded version gate asserts the baseline against the release channel
           # in both directions, and reads absence only from the channel's own
           # testimony. That testimony is only as current as the binary asked for it:
           # this used to ask the installed `~/.stado/bin/stado`, so the gate measured
@@ -198,7 +1177,7 @@ jobs:
           # Derive the comparison document from an immutable native artifact
           # served by this channel. No committed file can claim publication.
           baseline="$RUNNER_TEMP/released-surface.json"
-          python3 scripts/baseline.py --best --stado "$stado_bin" --output "$baseline"
+          python3 "$RUNNER_TEMP/stado-version-check/baseline.py" --best --stado "$stado_bin" --output "$baseline"
 
           # The verdict on this revision. Its status is captured rather than allowed to
           # end the step, so the refusal proof below still runs and reports: a red build
@@ -206,27 +1185,27 @@ jobs:
           # one that can also say no.
           judged=pass
           if ! BASELINE="$baseline" AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
-               scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"; then
+               bash "$RUNNER_TEMP/stado-version-check/version_check.sh" "$RUNNER_TEMP/candidate-surface.json"; then
             judged=refuse
           fi
 
           # And the proof that it can refuse, in the same step that consumed that
           # verdict -- because a rule answering a constant `internal` survives
           # everything above, and when declared equals released `internal` IS the
-          # passing branch. This is not written again here: scripts/version_check_proof.sh
-          # already drives scripts/version_check.sh through five cases against the
+          # passing branch. This is not written again here: the embedded version-gate proof
+          # already drives the embedded version gate through five cases against the
           # committed baseline and a built binary -- surface untouched must pass, a
           # removed command and an added command must refuse, and a baseline whose
           # source is prose or names an object the channel does not serve must refuse.
           # It writes nothing into the repository.
           proved=yes
           if ! BASELINE="$baseline" AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
-               scripts/version_check_proof.sh stado-rs/target/release/stado; then
+               bash "$RUNNER_TEMP/stado-version-check/version_check_proof.sh" stado-rs/target/release/stado; then
             proved=no
           fi
 
           if [ "$proved" != yes ]; then
-            echo "::error::scripts/version_check_proof.sh did not behave as specified, so" \
+            echo "::error::the embedded version-gate proof did not behave as specified, so" \
               "this gate has not been shown to refuse and any pass it reports is" \
               "worthless. Read its per-case output above before trusting the verdict."
           fi
@@ -319,7 +1298,7 @@ jobs:
           # `inherited` for everything.
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
         # One implementation, checked in and runnable by hand:
-        # `scripts/quality_gate.sh` reads the same `platforms.<platform>.quality`
+        # `the embedded quality gate` reads the same `platforms.<platform>.quality`
         # the release worker executes and runs exactly those argv. It also says
         # WHOSE revision a refusal belongs to, by re-running the refused step
         # against the base in its own worktree -- because a pull request is
@@ -329,5 +1308,183 @@ jobs:
         # gate said "fix the tree" to the wrong person.
         run: |
           set -euo pipefail
+          cat > "$RUNNER_TEMP/stado-quality-gate.sh" <<'STADO_QUALITY_EOF'
+          # Run the quality steps the release manifest declares, and say WHOSE revision
+          # a refusal belongs to.
+          #
+          # The definition of "good" is not restated here. `.wisent-release.json` is the
+          # product's release-pipeline manifest: `stado release submit` reads
+          # `platforms.<platform>.quality` and the release worker executes exactly those
+          # argv before it builds. This script reads the same key out of the same file
+          # and executes the same argv, so the gate cannot drift from the one it stands
+          # in for.
+          #
+          # What it adds is attribution. A pull request is judged on its MERGE result, so
+          # a step that already refuses the base branch refuses every pull request opened
+          # against it — for files the author never touched. On 2026-09-04 and 2026-09-05
+          # that happened three times in one day on this repository: `main` carried
+          # unformatted `cli/onboarding.rs`, then `cli/identity.rs`, then
+          # `dashboard/mod.rs`, and each time the gate told the author of an unrelated
+          # change to "fix the tree". Three authors reformatted somebody else's code to
+          # get their own work through, and the revision that introduced it was never
+          # named. So on a refusal this script runs the same step against the base
+          # revision in its own worktree and reports one of two verdicts:
+          #
+          #   introduced  this revision introduces the failure
+          #   inherited   the base already fails it, with the base sha
+          #
+          # Usage: the embedded quality gate [--manifest <path>] [--base <ref>]
+          #
+          # `--base` defaults to `origin/main` when it resolves and is skipped when it
+          # does not: a repository with no base to compare against still gets the gate,
+          # it just gets no attribution.
+          set -euo pipefail
+          
+          manifest=".wisent-release.json"
+          base="origin/main"
+          while [ "$#" -gt 0 ]; do
+            case "$1" in
+              --manifest) manifest="${2:?--manifest needs a path}"; shift 2 ;;
+              --base) base="${2:?--base needs a ref}"; shift 2 ;;
+              --help|-h)
+                /usr/bin/sed -n '2,29p' "$0" | /usr/bin/sed 's/^# \{0,1\}//'
+                exit 0 ;;
+              *) printf '::error::unknown option %s\n' "$1" >&2; exit 64 ;;
+            esac
+          done
+          
+          if [ ! -f "$manifest" ]; then
+            printf '::error::%s does not exist, so there is no declared gate to run\n' "$manifest" >&2
+            exit 1
+          fi
+          
+          # The runner's own platform, not a hardcoded one, so moving this to a macOS
+          # runner runs the darwin-arm64 steps rather than silently judging the wrong
+          # ones.
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) platform=linux-amd64 ;;
+            Darwin-arm64) platform=darwin-arm64 ;;
+            *)
+              printf '::error::%s declares no release platform for %s-%s\n' \
+                "$manifest" "$(uname -s)" "$(uname -m)" >&2
+              exit 1 ;;
+          esac
+          printf 'platform: %s\n' "$platform"
+          
+          # A gate that can only say yes is worth nothing, and the cheapest way to reach
+          # that state is to empty the array this reads. An absent platform, an absent
+          # `quality` key or an empty one is a refusal, not a pass with zero steps.
+          steps="$(jq -er --arg p "$platform" '.platforms[$p].quality // [] | length' "$manifest")"
+          if [ "$steps" -lt 1 ]; then
+            printf '::error::%s declares %s quality step(s) for %s. With nothing declared there is no gate, and a green tick here would be a lie. Restore the declaration or delete this gate deliberately.\n' \
+              "$manifest" "$steps" "$platform" >&2
+            exit 1
+          fi
+          printf '%s declares %s quality step(s) for %s\n' "$manifest" "$steps" "$platform"
+          
+          step_argv() {
+            # NUL-delimited, so an argv element containing a space or a glob reaches the
+            # program the way the release worker passes it, not the way a shell would
+            # re-split it.
+            jq -j --arg p "$platform" --argjson i "$1" \
+              '.platforms[$p].quality[$i].argv[] | . + "\u0000"' "$manifest"
+          }
+          
+          base_sha=""
+          if git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; then
+            base_sha="$(git rev-parse "$base^{commit}")"
+          fi
+          
+          # A revision compared against itself measures nothing, and it would answer
+          # `inherited` for every failure -- exactly backwards, because on a push to
+          # `main` the revision under judgement IS `origin/main`. So the base has to be a
+          # different revision than the one being judged.
+          #
+          # "Different revision" is the base commit against the WORKING TREE, not against
+          # `HEAD`: run by hand on a checkout of `main` with an uncommitted break, the
+          # base sha equals `HEAD` and the comparison is still real, because the base's
+          # own worktree does not carry that break. Only a clean tree at the base commit
+          # has nothing to compare.
+          self_comparison=""
+          if [ -n "$base_sha" ] &&
+             [ "$base_sha" = "$(git rev-parse 'HEAD^{commit}')" ] &&
+             [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+            self_comparison="yes"
+            base_sha=""
+          fi
+          
+          # Printed on every run, green ones included: a check whose comparison basis is
+          # invisible while it passes cannot be audited, and the push path resolves its
+          # base from a different field than the pull-request path does. This line is
+          # where an operator sees which revision the attribution below would use.
+          if [ -n "$base_sha" ]; then
+            printf 'base: %s (%s)\n' "$base_sha" "$base"
+          elif [ -n "$self_comparison" ]; then
+            printf 'base: none -- %s is this revision and the tree is clean, so a refusal here cannot be attributed\n' "$base"
+          else
+            printf 'base: none -- %s does not resolve to a commit here, so a refusal here cannot be attributed\n' "$base"
+          fi
+          
+          # Whether the same step also refuses the base revision, run in the base's own
+          # worktree so the answer is about that revision's files and nothing else.
+          #
+          # A base that cannot be checked out, or that is this revision, is not evidence
+          # either way: the step's own verdict stands and the report says so.
+          inherited() {
+            local index="$1" checkout status
+            [ -n "$base_sha" ] || return 2
+            checkout="$(mktemp -d)"
+            if ! git worktree add --detach --quiet "$checkout" "$base_sha" >/dev/null 2>&1; then
+              /bin/rm -rf "$checkout"
+              return 2
+            fi
+            local argv=()
+            while IFS= read -r -d '' element; do argv+=("$element"); done < <(step_argv "$index")
+            status=0
+            ( cd "$checkout" && "${argv[@]}" ) >/dev/null 2>&1 || status=$?
+            git worktree remove --force "$checkout" >/dev/null 2>&1 || /bin/rm -rf "$checkout"
+            [ "$status" -ne 0 ]
+          }
+          
+          index=0
+          while [ "$index" -lt "$steps" ]; do
+            name="$(jq -er --arg p "$platform" --argjson i "$index" \
+              '.platforms[$p].quality[$i].name' "$manifest")"
+            argv=()
+            while IFS= read -r -d '' element; do argv+=("$element"); done < <(step_argv "$index")
+            if [ "${#argv[@]}" -lt 1 ]; then
+              printf "::error::quality step '%s' declares no argv\n" "$name" >&2
+              exit 1
+            fi
+            printf '::group::%s: %s\n' "$name" "${argv[*]}"
+            if ! "${argv[@]}"; then
+              printf '::endgroup::\n'
+              verdict=0
+              inherited "$index" || verdict=$?
+              case "$verdict" in
+                0)
+                  printf "::error::verdict=inherited step='%s' base=%s: the release quality step refuses this revision AND already refuses %s at %s, so this pull request did not introduce it and reformatting here fixes somebody else's revision. Repair %s in its own change; this gate stays red until that lands.\n" \
+                    "$name" "$base_sha" "$base" "$base_sha" "$base" >&2 ;;
+                2)
+                  if [ -n "$self_comparison" ]; then
+                    printf "::error::verdict=unattributed step='%s': the release quality step refuses this revision, and the base given (%s) IS this revision, so there is nothing to compare it against. This is the answer on a push to the branch itself: pass the commit before it to learn whether that push introduced the failure. Fix the tree; do not narrow the step.\n" \
+                      "$name" "$base" >&2
+                  else
+                    printf "::error::verdict=unattributed step='%s': the release quality step refuses this revision and the base (%s) could not be checked out to compare, so whose revision carries it is unknown. Fix the tree; do not narrow the step.\n" \
+                      "$name" "$base" >&2
+                  fi
+                  ;;
+                *)
+                  printf "::error::verdict=introduced step='%s': the release quality step refuses this revision and passes on %s at %s, so this change introduces it. It is declared in %s and the release worker runs the same argv, so this is the failure the release would have hit -- with a version already spent on it. Fix the tree; do not narrow the step.\n" \
+                    "$name" "$base" "$base_sha" "$manifest" >&2 ;;
+              esac
+              exit 1
+            fi
+            printf '::endgroup::\n'
+            index=$((index + 1))
+          done
+          
+          printf 'Every quality step %s declares for %s passed.\n' "$manifest" "$platform"
+          STADO_QUALITY_EOF
           git fetch --no-tags --depth 1 origin "$BASE_REF" >/dev/null 2>&1 || true
-          bash scripts/quality_gate.sh --manifest "$MANIFEST" --base "$BASE_REF"
+          bash "$RUNNER_TEMP/stado-quality-gate.sh" --manifest "$MANIFEST" --base "$BASE_REF"

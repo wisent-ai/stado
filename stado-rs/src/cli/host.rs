@@ -4999,6 +4999,17 @@ pub async fn refresh_weles_api_runtime(target: &str, revision: &str) -> Result<(
              {quoted_work}/node_modules/node-pty/build/Release/spawn-helper 2>/dev/null || true"
         ),
     ));
+    // `--ignore-scripts` is deliberate — Playwright's install hook would pull
+    // browsers this fleet does not use — but the recording path needs the exact
+    // ffmpeg the installed Playwright pins, and `browserContext.newPage`
+    // refuses outright without it. On 2026-09-07 that turned every browser task
+    // on the host into `Executable doesn't exist at .../ffmpeg-1011/ffmpeg-mac`
+    // seconds after a clean deployment, so the component is installed here,
+    // from the Playwright this revision resolved.
+    steps.push((
+        "recording dependency",
+        format!("cd {quoted_work} && PATH={path} npx --no-install playwright install ffmpeg"),
+    ));
     steps.push((
         "build",
         format!("cd {quoted_work} && PATH={path} npm run build"),
@@ -5047,18 +5058,79 @@ pub async fn refresh_weles_api_runtime(target: &str, revision: &str) -> Result<(
         ));
     }
 
+    // The port decides which process is the live API, and until this
+    // deployment nothing owned it: the API ran as a login-spawned process from
+    // a shell wrapper, so a restart of the managed unit found the port taken
+    // and its launcher correctly stood by, leaving the old build serving. The
+    // takeover is part of the deployment, and it refuses any listener that is
+    // not a Weles API: an unexpected process on this port is reported, never
+    // killed.
+    let listeners = host_channel::run_command(
+        &resolved,
+        &format!("PATH={path} lsof -tiTCP:{WELES_API_PORT} -sTCP:LISTEN 2>/dev/null || true"),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    for pid in listeners
+        .stdout
+        .split_whitespace()
+        .filter(|value| value.chars().all(|character| character.is_ascii_digit()))
+    {
+        let described = host_channel::run_command(
+            &resolved,
+            &format!("PATH={path} ps -p {pid} -o command= 2>/dev/null || true"),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        let command = described.stdout.trim().to_string();
+        if command.is_empty() {
+            continue;
+        }
+        if !command.contains("weles-api-server") && !command.contains("weles-api-launcher") {
+            return Err(refused(
+                "port takeover",
+                format!("port {WELES_API_PORT} is held by pid {pid}, which is not a Weles API: {command}"),
+            ));
+        }
+        let ended = host_channel::run_command(
+            &resolved,
+            &format!("PATH={path} kill -TERM {pid}"),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !ended.ok() {
+            return Err(refused(
+                "port takeover",
+                format!("pid {pid} on port {WELES_API_PORT} refused SIGTERM: {}",
+                    host_channel::last_error_line(&ended, "no output")),
+            ));
+        }
+        println!("{}: ended unowned Weles API pid {pid} on port {WELES_API_PORT}", resolved.name);
+    }
+
     // A built tree the running process has not loaded is not deployed. The
     // restart goes through the managed path, so the unit's own audit record
     // carries this change, and `weles doctor` on the host reads the revision
     // recorded above.
     crate::cli::service::restart(WELES_API_SERVICE, Some(&resolved.name), None, None, false)
         .await?;
-    println!("{}: {WELES_API_SERVICE} now serves {revision}", resolved.name);
+    println!(
+        "{}: {WELES_API_SERVICE} now serves {revision}",
+        resolved.name
+    );
     Ok(())
 }
 
-/// The launchd label the managed Weles API runs under.
-const WELES_API_SERVICE: &str = "com.wisent.always-on.weles-api";
+/// The registry name of the managed Weles API service. Stado renders and owns
+/// the launchd label; the name is what every service command takes.
+const WELES_API_SERVICE: &str = "weles-api";
+
+/// The port the Weles API serves on, and the only thing that says which
+/// process is the live one.
+const WELES_API_PORT: u16 = 8788;
 
 /// Where the managed runtime's own checkout lives, relative to its home.
 const WELES_API_WORK_DIR: &str = ".stado/build-work/weles-api-managed";
@@ -5069,8 +5141,7 @@ const WELES_SOURCE_REPOSITORY: &str = "https://github.com/wisent-ai/weles.git";
 /// The interpreters this build needs, in the order the fleet's hosts install
 /// them: a login shell reached through the channel does not necessarily carry
 /// the Homebrew prefix that holds `node` and `npm`.
-const WELES_API_BUILD_PATH: &str =
-    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+const WELES_API_BUILD_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 async fn transfer_secret(
     target: &str,

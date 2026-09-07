@@ -2,7 +2,7 @@
 //!
 //! Operator documentation is published as pages on `https://stado.wisent.com`,
 //! authored in `wisent-ai/stado-landing` (`src/content/docs.json`, edited with
-//! `scripts/docs-page.mjs export|import|create`). It is not a directory of
+//! `src/cli/docs-page.mjs export|import|create`). It is not a directory of
 //! Markdown files in this repository, and the difference is not cosmetic: on
 //! 2026-09-06 eight sections written into this repository's own copy of the
 //! channels page — the pre-check runner's status fields, the one-runner-per-host
@@ -100,7 +100,7 @@ fn operator_documentation_is_not_carried_as_repository_markdown() {
     assert!(
         stray.is_empty(),
         "documentation belongs to https://stado.wisent.com/docs, authored in \
-         wisent-ai/stado-landing with `node scripts/docs-page.mjs create <page.md> <file>` \
+         wisent-ai/stado-landing with `node src/cli/docs-page.mjs create <page.md> <file>` \
          and registered in src/lib/docs.ts. These Markdown files are a second corpus \
          nobody publishes: {stray:?}"
     );
