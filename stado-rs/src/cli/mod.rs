@@ -3197,9 +3197,14 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     kind,
                     release_platform,
                 } => registry::host_add(&host, &ssh, &kind, &release_platform).await,
+                // A caller that asked for a typed receipt gets a typed
+                // refusal: Stado Desktop reads these documents and cannot
+                // handle a prose failure where a receipt was promised.
                 RegistryHostCommands::Path { command } => match command {
                     RegistryHostPathCommands::List { host, json } => {
-                        registry::host_path_list(&host, json).await
+                        registry::host_path_list(&host, json)
+                            .await
+                            .map_err(|error| error.machine_readable(json))
                     }
                     RegistryHostPathCommands::Set {
                         host,
@@ -3207,9 +3212,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                         ssh,
                         priority,
                         json,
-                    } => registry::host_path_set(&host, &path, &ssh, priority, json).await,
+                    } => registry::host_path_set(&host, &path, &ssh, priority, json)
+                        .await
+                        .map_err(|error| error.machine_readable(json)),
                     RegistryHostPathCommands::Remove { host, path, json } => {
-                        registry::host_path_remove(&host, &path, json).await
+                        registry::host_path_remove(&host, &path, json)
+                            .await
+                            .map_err(|error| error.machine_readable(json))
                     }
                 },
             },
