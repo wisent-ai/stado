@@ -446,7 +446,7 @@ final class HostVaultBearerStore: ObservableObject {
 
     nonisolated static func arguments(_ request: HostVaultBearerRequest) -> [String] {
         var arguments = [
-            "host", "vault-token-mint", request.host, request.consumer,
+            "credentials", "token", "mint", "--host", request.host, request.consumer,
             "--capabilities", request.capabilities,
             "--audience", request.audience,
         ]
@@ -1531,7 +1531,7 @@ final class HostForwardStore: ObservableObject {
 }
 
 /// Which vault a selected host's credential operations resolve to, read
-/// through `stado host vaults <target>`.
+/// through `stado credentials vaults --host <target>`.
 ///
 /// Read-only and per host on demand. The console showed how many items a
 /// machine held and never which store answered, which is exactly the gap that
@@ -1552,7 +1552,7 @@ final class HostVaultStore: ObservableObject {
     }
 
     nonisolated static func arguments(host: String) -> [String] {
-        ["host", "vaults", host, "--json"]
+        ["credentials", "vaults", "--host", host, "--json"]
     }
 
     func load(host name: String) async {

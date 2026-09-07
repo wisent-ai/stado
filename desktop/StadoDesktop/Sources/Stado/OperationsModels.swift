@@ -503,7 +503,7 @@ struct HostGatesCapacity: Decodable, Sendable {
     }
 }
 
-/// Non-secret receipt from `stado host vault-token-mint --json`.
+/// Non-secret receipt from `stado credentials token mint --json`.
 ///
 /// The bearer is deliberately not represented. Desktop keeps only the grant
 /// metadata the command returns after removing the token, plus the optional
@@ -1977,7 +1977,7 @@ struct HostForwardMarker: Decodable, Identifiable, Sendable {
 }
 
 /// One vault a host holds: an owner, two counts and a path, which is all
-/// `stado host vaults` transports. Item names never cross the wire.
+/// `stado credentials vaults --host` transports. Item names never cross the wire.
 struct HostVault: Decodable, Identifiable, Sendable {
     let path: String
     let owner: String?
