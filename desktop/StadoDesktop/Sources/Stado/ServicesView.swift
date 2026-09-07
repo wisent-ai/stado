@@ -23,6 +23,7 @@ struct ServicesView: View {
     /// The beacon-read fleet list with the restart write; kept out of
     /// `store`, which is documented and tested as read-only.
     @ObservedObject var fleetStore: FleetServicesStore
+    @ObservedObject var controlStore: FleetControlStore
     /// The registry hosts to ask. `service converge` reports per host, so the
     /// screen reads one host at a time and the host travels with every row.
     let hosts: [String]
@@ -31,6 +32,7 @@ struct ServicesView: View {
     @State private var facet: ServiceFacet = .units
     @State private var selection: String?
     @State private var showsDeclare = false
+    @State private var showsWebStatus = false
     @State private var restartCandidate: FleetServiceEntry?
     @State private var removeFileCandidate: FleetServiceEntry?
     @State private var deployCandidate: FleetServiceEntry?
@@ -63,6 +65,9 @@ struct ServicesView: View {
                 WisentAction("Declare service", symbol: "plus") {
                     showsDeclare = true
                 },
+                WisentAction("Web hosting", symbol: "globe") {
+                    showsWebStatus = true
+                },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
                     Task { await refresh() }
                 },
@@ -85,6 +90,9 @@ struct ServicesView: View {
             ServiceDeclareView(hosts: hosts) {
                 Task { await refresh() }
             }
+        }
+        .sheet(isPresented: $showsWebStatus) {
+            WebStatusView(store: controlStore)
         }
         .sheet(isPresented: $showsConverge) {
             convergeSheet

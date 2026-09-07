@@ -55,10 +55,9 @@ jobs:
   version-check:
     runs-on: ubuntu-latest
     env:
-      # Qualification uses the temporary resolver bootstrap origin so the
-      # candidate that repairs the mini's declared Funnel can itself qualify.
-      # Deployment proves the mini origin before accepting any release bytes.
-      STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
+      # Read the published baseline through the configured canonical release
+      # channel rather than a provider-specific ingress address.
+      STADO_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
     steps:
       # v5 targets Node 24 directly rather than relying on GitHub's forced
       # replacement for the deprecated Node 20 runtime in v4.

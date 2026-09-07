@@ -164,99 +164,6 @@ PY
 /usr/bin/plutil -lint "$staged" >/dev/null
 
 
-reconcile_ingress() {
-  tailscale_bin=''
-  if /usr/bin/which tailscale >/dev/null 2>&1; then
-    tailscale_bin=$(/usr/bin/which tailscale)
-  else
-    for candidate in \
-      /Applications/Tailscale.app/Contents/MacOS/Tailscale \
-      /usr/local/bin/tailscale \
-      /opt/homebrew/bin/tailscale
-    do
-      if [ -x "$candidate" ]; then
-        tailscale_bin="$candidate"
-        break
-      fi
-    done
-  fi
-  if [ -z "$tailscale_bin" ]; then
-    printf 'ingress_unmanaged tailscale_absent\n'
-    return 0
-  fi
-
-  status="$work/tailscale-serve-status.json"
-  "$tailscale_bin" serve status --json > "$status"
-  route_state=$(/usr/bin/python3 - "$status" <<'PY'
-import json, sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    document = json.load(handle)
-declared = any(
-    key.endswith(":443") and value is True
-    for key, value in (document.get("AllowFunnel") or {}).items()
-)
-if not declared:
-    print("undeclared")
-    raise SystemExit
-routes = (
-    "/api/object",
-    "/api/object/compose",
-    "/api/object/list",
-    "/api/object/stat",
-    "/api/release/object",
-)
-matched = any(
-    key.endswith(":443")
-    and all(
-        ((value.get("Handlers") or {}).get(route) or {}).get("Proxy")
-        == f"http://127.0.0.1:8765{route}"
-        for route in routes
-    )
-    for key, value in (document.get("Web") or {}).items()
-)
-print("matched" if matched else "drifted")
-PY
-)
-  if [ "$route_state" = undeclared ]; then
-    printf 'ingress_unmanaged https=443 object_routes\n'
-    return 0
-  fi
-  if [ "$route_state" = drifted ]; then
-    for route in /api/object /api/object/compose /api/object/list /api/object/stat /api/release/object; do
-      "$tailscale_bin" funnel --bg --yes --https=443 \
-        --set-path "$route" "http://127.0.0.1:8765$route"
-    done
-    "$tailscale_bin" serve status --json > "$status"
-  fi
-  /usr/bin/python3 - "$status" <<'PY'
-import json, sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    document = json.load(handle)
-routes = (
-    "/api/object",
-    "/api/object/compose",
-    "/api/object/list",
-    "/api/object/stat",
-    "/api/release/object",
-)
-assert any(
-    key.endswith(":443") and value is True
-    for key, value in (document.get("AllowFunnel") or {}).items()
-)
-assert any(
-    key.endswith(":443")
-    and all(
-        ((value.get("Handlers") or {}).get(route) or {}).get("Proxy")
-        == f"http://127.0.0.1:8765{route}"
-        for route in routes
-    )
-    for key, value in (document.get("Web") or {}).items()
-)
-PY
-  printf 'ingress_reconciled https=443 object_routes prior=%s\n' "$route_state"
-}
 
 # Break the one dependency cycle the installed release agent cannot repair
 # itself: an interrupted handoff may leave Stado's exact Skarbiec proxy alive,
@@ -862,7 +769,6 @@ if loaded_ready_for_root "$store" yes; then
   if [ "$same" -eq 0 ]; then
     /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
   fi
-  reconcile_ingress
   printf 'already_healthy %s backend=local store=%s loaded_environment=matched\n' \
     "$label" "$store"
   exit 0
@@ -880,7 +786,6 @@ if /usr/bin/sudo -n /bin/test -f "$plist"; then
 fi
 if [ "$healthy" -eq 1 ]; then
   /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
-  reconcile_ingress
   printf 'persisted_while_healthy %s store=%s backup=%s loaded_job=unchanged\n' \
     "$label" "$store" "${backup:-none}"
   exit 0
@@ -904,7 +809,6 @@ fi
 deadline=$((SECONDS + 180))
 while [ "$SECONDS" -lt "$deadline" ]; do
   if loaded_ready_for_root "$store" yes; then
-    reconcile_ingress
     printf '%s %s store=%s backup=%s\n' "$action" "$label" "$store" "${backup:-none}"
     exit 0
   fi
