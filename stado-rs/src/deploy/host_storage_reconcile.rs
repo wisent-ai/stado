@@ -1,6 +1,6 @@
 //! Interruption-safe reconciliation of the two fixed co-located local object roots.
 //!
-//! This is deliberately not `host object-relocate`: relocation moves one in-store
+//! This is deliberately not `space relocate`: relocation moves one in-store
 //! address and refuses overwrites. This transaction checkpoints both physical
 //! roots with copy-on-write clones, then additively makes `local-storage`
 //! contain `local-backup`'s exact objects and effective metadata. Backup bytes

@@ -31,7 +31,7 @@
 //!   longer than the retention window has a clone older than the gate, and it
 //!   is the most recent one in the root: keeping it costs one bundle and
 //!   removes the only case age alone cannot see. Same rule, same reason, as
-//!   `host reclaim`'s "never the newest artefact".
+//!   `space reclaim`'s "never the newest artefact".
 //! - **one snapshot of the process table per pass.** A clone whose path any
 //!   live argv names is never a candidate — that is what an app launched out
 //!   of its own clone (a translocated bundle) looks like from outside.

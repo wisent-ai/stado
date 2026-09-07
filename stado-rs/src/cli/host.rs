@@ -1,8 +1,7 @@
-//! `stado host ...` — implementations of the retained host administration
-//! surface: health, recovery, users, policy and the read-only diagnostics of
-//! `stado.wisent.com/docs/missing-commands` items two through six (`uptime`,
-//! `ping`, `disk`, `cleanup --dry-run`, `exec`), which have no Python original
-//! and live in `crate::deploy::host_*`.
+//! `stado host ...` — host health, recovery, user provisioning, and Weles
+//! recordings policy, plus read-only diagnostics such as uptime, ping, and
+//! exec. Storage inspection and mutation live under the declaration-driven
+//! `stado space` capability.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::collections::{BTreeMap, BTreeSet};
@@ -659,41 +658,79 @@ pub async fn user_delete(username: &str, target: &str, keep_home: bool) -> Resul
     }
 }
 
-/// `stado host build-caches report|prune TARGET --root PATH --min-age-days N`
-/// — the disk cleaner covers model caches and recordings, not build output,
-/// which is what actually fills a developer host.
-pub async fn build_caches(
-    target: &str,
-    root: &str,
-    min_age_days: &str,
-    apply: bool,
-    force: bool,
+fn print_report(
+    report: &crate::deploy::host_gui_automation::GuiAutomationReport,
+    json: bool,
 ) -> Result<(), CmdError> {
-    let resolved = registry_target(target).await?;
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_build_caches::run_on_host(
-        &resolved,
-        root,
-        min_age_days,
-        apply,
-        force,
-        &runner,
-    )
-    .await;
-    let mut total_kib: u64 = u64::default();
-    for entry in &report.entries {
-        println!(
-            "{}\t{}\t{}\t{}",
-            report.target, entry.state, entry.kib, entry.path
-        );
-        total_kib += entry.kib.parse::<u64>().unwrap_or_default();
+    if json {
+        println!("{}", serde_json::to_string_pretty(report)?);
+    } else {
+        for (item, state) in &report.items {
+            println!("{}\t{item}\t{state}", report.target);
+        }
     }
-    println!("{}\ttotal-kib\t{total_kib}", report.target);
-    match report.error {
-        Some(detail) if !detail.is_empty() => Err(CmdError::click(detail)),
+    match &report.error {
+        Some(detail) if !detail.is_empty() => Err(CmdError::click(detail.clone())),
         Some(_) => Err(CmdError::click("remote command failed".to_string())),
         None => Ok(()),
     }
+}
+
+/// `stado host gui-automation status TARGET` — report autologin, remote
+/// management, VNC, automation artifacts and the console owner.
+pub async fn gui_automation_status(target: &str, json: bool) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
+    let runner = crate::deploy::production_runner();
+    let report =
+        crate::deploy::host_gui_automation::status(&resolved, password.as_deref(), &runner).await;
+    print_report(&report, json)
+}
+
+/// `stado host gui-automation enable TARGET` — configure persistent GUI login,
+/// install the pinned signed CuaDriver app and grant Accessibility.
+pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved)
+        .await?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} has no readable host-account password",
+                resolved.name
+            ))
+        })?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
+    print_report(&report, false)
+}
+
+/// `stado host gui-automation grant-accessibility TARGET [--apple-only]` —
+/// prepare the Apple helper, optionally leaving CuaDriver and its runtime untouched.
+pub async fn gui_automation_grant_accessibility(
+    target: &str,
+    apple_only: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved).await?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_gui_automation::grant_accessibility(
+        &resolved,
+        apple_only,
+        password.as_deref(),
+        &runner,
+    )
+    .await;
+    print_report(&report, json)
+}
+
+/// `stado host gui-automation disable TARGET [--bundle ID]` — revert the
+/// enablement and report every item it touched.
+pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
+    print_report(&report, false)
 }
 
 /// Read one line with terminal echo disabled (Python
@@ -911,293 +948,36 @@ done
     Ok(())
 }
 
-/// Every field `stado host disk-cleanup` may rewrite, as parsed from argv.
-///
-/// One field per registry key, because the policy is the whole contract
-/// between an operator and the janitor and a setter that covered part of it
-/// would leave the rest editable only by hand. Before this existed, `stado`
-/// could set only one cleaner's root through the retired recordings verb and
-/// the dashboard accepted exactly one more field, `mode`, so a watermark, a
-/// budget or a `build_caches` root could only be changed by pulling
-/// `registry.json`, editing it, and pushing it back.
-pub struct DiskCleanupPolicyEdit {
-    pub mode: Option<String>,
-    pub check_interval_seconds: Option<i64>,
-    pub low_free_gb: Option<i64>,
-    pub target_free_gb: Option<i64>,
-    pub max_items_per_pass: Option<i64>,
-    pub max_bytes_per_pass: Option<i64>,
-    pub max_scan_items: Option<i64>,
-    pub max_pass_seconds: Option<i64>,
-    pub clear_max_pass_seconds: bool,
-    pub add_cleaner: Vec<String>,
-    pub remove_cleaner: Vec<String>,
-    pub cleaner_root: Vec<String>,
-    pub clear_cleaner_root: Vec<String>,
-    pub cleaner_min_age_seconds: Vec<String>,
-    pub cleaner_keep_newest: Vec<String>,
-}
-
-impl DiskCleanupPolicyEdit {
-    /// Whether argv asked for a read rather than a write.
-    fn is_read_only(&self) -> bool {
-        self.mode.is_none()
-            && self.check_interval_seconds.is_none()
-            && self.low_free_gb.is_none()
-            && self.target_free_gb.is_none()
-            && self.max_items_per_pass.is_none()
-            && self.max_bytes_per_pass.is_none()
-            && self.max_scan_items.is_none()
-            && self.max_pass_seconds.is_none()
-            && !self.clear_max_pass_seconds
-            && self.add_cleaner.is_empty()
-            && self.remove_cleaner.is_empty()
-            && self.cleaner_root.is_empty()
-            && self.clear_cleaner_root.is_empty()
-            && self.cleaner_min_age_seconds.is_empty()
-            && self.cleaner_keep_newest.is_empty()
+fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), CmdError> {
+    fn plutil(plist: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
+        std::process::Command::new("/usr/bin/plutil")
+            .args(args)
+            .arg(plist)
+            .output()
     }
-}
 
-/// `NAME=VALUE` from one repeatable flag.
-fn cleaner_pair(raw: &str, flag: &str) -> Result<(String, String), CmdError> {
-    let Some((name, value)) = raw.split_once('=') else {
-        return Err(CmdError::usage(format!(
-            "--{flag} takes NAME=VALUE, got {raw:?}"
-        )));
-    };
-    let (name, value) = (name.trim().to_string(), value.trim().to_string());
-    if name.is_empty() || value.is_empty() {
-        return Err(CmdError::usage(format!(
-            "--{flag} takes NAME=VALUE, got {raw:?}"
-        )));
-    }
-    Ok((name, value))
-}
-
-/// The retention floor `targets::validate_registry` enforces for one cleaner,
-/// used as the age gate a newly enabled cleaner starts with. Read from the
-/// same three cases the validator states, so enabling a cleaner cannot
-/// produce a document the validator then refuses.
-fn cleaner_age_floor(name: &str) -> i64 {
-    match name {
-        "huggingface_cache" => 3600,
-        "queue_workdirs" | "backup_twins" | "release_store" => 0,
-        _ => 86400,
-    }
-}
-
-/// `serde` writes `Option::None` as `null`, and the cleaner schema accepts a
-/// key list rather than nulls, so a seeded default is stripped before it is
-/// validated. Applied only to the policy subtree this command builds.
-fn strip_nulls(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            map.retain(|_, entry| !entry.is_null());
-            for entry in map.values_mut() {
-                strip_nulls(entry);
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(strip_nulls),
-        _ => {}
-    }
-}
-
-/// Read or rewrite one target's `disk_cleanup` policy.
-///
-/// The write is the same compare-and-swap every registry setter here uses:
-/// read the current generation, rewrite exactly the named fields, validate the
-/// WHOLE document, and swap it only if nobody else moved it. A target that
-/// declares no policy is seeded from
-/// [`crate::targets::DiskCleanupPolicy::reporting_default`] first, so its
-/// first declaration starts at `report` rather than at whatever the flags
-/// happen to omit.
-pub async fn disk_cleanup_policy(
-    target: &str,
-    edit: DiskCleanupPolicyEdit,
-    json: bool,
-) -> Result<(), CmdError> {
-    if edit.max_pass_seconds.is_some() && edit.clear_max_pass_seconds {
-        return Err(CmdError::usage(
-            "--max-pass-seconds and --clear-max-pass-seconds are mutually exclusive",
-        ));
-    }
-    let store = crate::targets::RegistryStore::open().await?;
-    let current = store
-        .read_versioned()
-        .await?
-        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
-    let mut document: Value = serde_json::from_str(&current.content)?;
-    let targets = document
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
-    let entry = targets
-        .iter_mut()
-        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
-
-    if edit.is_read_only() {
-        let declared = entry.get("disk_cleanup").cloned();
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "target": target,
-                    "generation": current.version,
-                    "declared": declared.is_some(),
-                    "disk_cleanup": declared,
-                }))?
-            );
-        } else if let Some(policy) = declared {
-            println!("{target}: {}", serde_json::to_string_pretty(&policy)?);
-        } else {
-            println!(
-                "{target}: declares no disk_cleanup policy; it is measured against the \
-                 reporting default, which reports and never deletes"
-            );
-        }
+    let key = "EnvironmentVariables.WELES_RECORDINGS_ROOT";
+    let replace = plutil(plist, &["-replace", key, "-string", path])?;
+    if replace.status.success() {
         return Ok(());
     }
-
-    let mut policy = match entry.get("disk_cleanup") {
-        Some(existing) if existing.is_object() => existing.clone(),
-        _ => {
-            let mut seeded =
-                serde_json::to_value(crate::targets::DiskCleanupPolicy::reporting_default())?;
-            strip_nulls(&mut seeded);
-            seeded
-        }
-    };
-    let policy_map = policy
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target disk_cleanup must be an object"))?;
-
-    for (key, declared) in [
-        ("mode", edit.mode.clone().map(Value::from)),
-        (
-            "check_interval_seconds",
-            edit.check_interval_seconds.map(Value::from),
-        ),
-        ("low_free_gb", edit.low_free_gb.map(Value::from)),
-        ("target_free_gb", edit.target_free_gb.map(Value::from)),
-        (
-            "max_items_per_pass",
-            edit.max_items_per_pass.map(Value::from),
-        ),
-        (
-            "max_bytes_per_pass",
-            edit.max_bytes_per_pass.map(Value::from),
-        ),
-        ("max_scan_items", edit.max_scan_items.map(Value::from)),
-        ("max_pass_seconds", edit.max_pass_seconds.map(Value::from)),
-    ] {
-        if let Some(value) = declared {
-            policy_map.insert(key.to_string(), value);
-        }
+    let insert = plutil(plist, &["-insert", key, "-string", path])?;
+    if insert.status.success() {
+        return Ok(());
     }
-    if edit.clear_max_pass_seconds {
-        policy_map.remove("max_pass_seconds");
+    let _ = plutil(
+        plist,
+        &["-insert", "EnvironmentVariables", "-xml", "<dict/>"],
+    )?;
+    let retry = plutil(plist, &["-insert", key, "-string", path])?;
+    if retry.status.success() {
+        return Ok(());
     }
-
-    let cleaners = policy_map
-        .entry("cleaners".to_string())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("disk_cleanup.cleaners must be an object"))?;
-
-    // Enabling a cleaner writes the retention floor its own schema demands,
-    // so `--cleaner build_caches` produces a document that validates rather
-    // than one refused for a missing `min_age_seconds`.
-    let enable = |name: &str, cleaners: &mut serde_json::Map<String, Value>| {
-        cleaners
-            .entry(name.to_string())
-            .or_insert_with(|| json!({ "min_age_seconds": cleaner_age_floor(name) }));
-    };
-    for name in &edit.add_cleaner {
-        enable(name, cleaners);
-    }
-    for name in &edit.remove_cleaner {
-        cleaners.remove(name);
-    }
-    for raw in &edit.cleaner_root {
-        let (name, path) = cleaner_pair(raw, "cleaner-root")?;
-        enable(&name, cleaners);
-        cleaners
-            .get_mut(&name)
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| {
-                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
-            })?
-            .insert("root".to_string(), Value::from(path));
-    }
-    for name in &edit.clear_cleaner_root {
-        if let Some(cleaner) = cleaners.get_mut(name).and_then(Value::as_object_mut) {
-            cleaner.remove("root");
-        }
-    }
-    for raw in &edit.cleaner_min_age_seconds {
-        let (name, raw_seconds) = cleaner_pair(raw, "cleaner-min-age-seconds")?;
-        let seconds: i64 = raw_seconds.parse().map_err(|_| {
-            CmdError::usage(format!(
-                "--cleaner-min-age-seconds takes NAME=SECONDS, got {raw:?}"
-            ))
-        })?;
-        enable(&name, cleaners);
-        cleaners
-            .get_mut(&name)
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| {
-                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
-            })?
-            .insert("min_age_seconds".to_string(), Value::from(seconds));
-    }
-    for raw in &edit.cleaner_keep_newest {
-        let (name, raw_count) = cleaner_pair(raw, "cleaner-keep-newest")?;
-        let count: i64 = raw_count.parse().map_err(|_| {
-            CmdError::usage(format!(
-                "--cleaner-keep-newest takes NAME=COUNT, got {raw:?}"
-            ))
-        })?;
-        enable(&name, cleaners);
-        cleaners
-            .get_mut(&name)
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| {
-                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
-            })?
-            .insert("keep_newest".to_string(), Value::from(count));
-    }
-
-    entry.insert("disk_cleanup".to_string(), policy.clone());
-    // The whole registry, not the field: a policy is only valid in the
-    // document that carries it, and the janitor refuses a document that does
-    // not validate as a whole. Remove declarations the current model
-    // intentionally retired (`slots`, `max_concurrent`, and
-    // `WC_LOCAL_SLOTS`) on this ordinary policy update instead of retaining a
-    // second capacity contract.
-    crate::targets::strip_legacy_capacity_declarations(&mut document);
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let generation = store.compare_and_swap(&current.version, &payload).await?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "generation": generation,
-                "disk_cleanup": policy,
-            }))?
-        );
-    } else {
-        println!("{target}: {}", serde_json::to_string_pretty(&policy)?);
-        println!("generation {generation}");
-    }
-    Ok(())
+    let message = String::from_utf8_lossy(&retry.stderr).trim().to_string();
+    Err(CmdError::click(format!(
+        "{}: failed to update WELES_RECORDINGS_ROOT: {message}",
+        plist.display()
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,368 +1125,12 @@ fn beacon_age(section: Option<&Value>) -> String {
         )
 }
 
-/// `stado host disk TARGET [--json]` — disk usage plus the registry
-/// cleanup policy and its recorded state (`stado.wisent.com/docs/missing-commands`
-/// item four).
-pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_disk::disk_host(target, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let expected = crate::deploy::host_disk::OK_STATUS;
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-    let usage = report.get("usage");
-    let used = |key: &str| cell(usage.and_then(|value| value.get(key)));
-    super::table::print(
-        &[
-            "FILESYSTEM",
-            "MOUNT",
-            "BLOCKS KB",
-            "USED KB",
-            "AVAIL KB",
-            "CAPACITY",
-        ],
-        &[vec![
-            used("filesystem"),
-            used("mounted_on"),
-            used("blocks_kb"),
-            used("used_kb"),
-            used("available_kb"),
-            used("capacity"),
-        ]],
-    );
-
-    let policy = report.get("policy");
-    let declared = |key: &str| cell(policy.and_then(|value| value.get(key)));
-    if policy.is_none() || policy == Some(&Value::Null) {
-        println!("\ncleanup policy: none declared in the registry for this target");
-    } else {
-        println!(
-            "\ncleanup policy: mode={} every {}s, low={}GiB target={}GiB",
-            declared("mode"),
-            declared("check_interval_seconds"),
-            declared("low_free_gb"),
-            declared("target_free_gb"),
-        );
-    }
-
-    let state = report.get("cleanup_state");
-    let recorded = |key: &str| cell(state.and_then(|value| value.get(key)));
-    if state.and_then(|value| value.get("present")) == Some(&Value::Bool(true)) {
-        super::table::print(
-            &[
-                "LAST PASS",
-                "OUTCOME",
-                "FREED BYTES",
-                "LAST SUCCESS",
-                "NEXT PASS",
-            ],
-            &[vec![
-                recorded("last_pass_at"),
-                recorded("outcome"),
-                recorded("freed_bytes"),
-                recorded("last_success_at"),
-                recorded("next_pass_at"),
-            ]],
-        );
-        if let Some(Value::String(detail)) = state.and_then(|value| value.get("error")) {
-            println!("cleanup state unreadable: {detail}");
-        }
-        // Whose verdict this is. Several processes write that one file on an
-        // always-on host -- the queue agent every tick, a `disk-cleanup
-        // --watch` unit on its own timer -- so OUTCOME above is the last pass
-        // by whoever made it, not a property of the host. On 2026-08-31 the
-        // agent recorded `interval_noop` with no errors and this command read
-        // `invalid_or_unavailable_policy` 46 seconds later from the same path.
-        // Naming the writer is what lets an operator tell those apart instead
-        // of believing whichever arrived last.
-        if let Some(Value::String(writer)) = state.and_then(|value| value.get("writer")) {
-            let version = state
-                .and_then(|value| value.get("writer_version"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown version");
-            println!(
-                "that pass was written by {writer} running {version}; this file \
-                 has more than one writer, so OUTCOME is the last pass rather \
-                 than the state of the host"
-            );
-        }
-        // Which declared cleaners the pass never reached. `cap_reached` above
-        // says a budget stopped the pass and cannot say whom it stopped, and
-        // the per-cleaner table prints the same three zeros for a cleaner that
-        // never got a turn as for one that looked and found nothing. On
-        // charless-mac-mini `backup_twins` sat at zeros under real pressure
-        // for as long as anyone had looked, behind a `build_caches` walk of
-        // the whole of `$HOME`, while the host refused every ordinary job.
-        let unscanned: Vec<&str> = state
-            .and_then(|value| value.get("unscanned_cleaners"))
-            .and_then(Value::as_array)
-            .map(|names| names.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        if !unscanned.is_empty() {
-            println!(
-                "the pass ended before these declared cleaner(s) scanned anything: {} — raise \
-                 `max_pass_seconds` or `max_scan_items` with `stado host disk-cleanup`, or narrow \
-                 an earlier cleaner's root, or their zeros mean nobody looked",
-                unscanned.join(", ")
-            );
-        }
-    } else {
-        println!(
-            "\ncleanup state: no state file at {} — the janitor has never \
-             completed a pass on this host",
-            recorded("path")
-        );
-    }
-    // Who holds the run lock, printed with the state it explains. A pass that
-    // reported `lock_busy`, and an agent publishing `cleanup_in_progress`, are
-    // both this one fact seen from the outside; until this line existed an
-    // operator could read either of them for hours with no way to learn which
-    // process to look at.
-    let lock = report.get("cleanup_lock");
-    let lock_read = lock.and_then(|value| value.get("read")) == Some(&Value::Bool(true));
-    let holders: Vec<&Value> = lock
-        .and_then(|value| value.get("holders"))
-        .and_then(Value::as_array)
-        .map(|rows| rows.iter().collect())
-        .unwrap_or_default();
-    if lock_read && !holders.is_empty() {
-        let cells: Vec<Vec<String>> = holders
-            .iter()
-            .map(|holder| {
-                vec![
-                    cell(holder.get("pid")),
-                    cell(holder.get("command")),
-                    cell(lock.and_then(|value| value.get("path"))),
-                ]
-            })
-            .collect();
-        println!("\nthe janitor's run lock is held — no pass can scan while it is:");
-        super::table::print(&["PID", "COMMAND", "LOCK"], &cells);
-    } else if lock_read {
-        println!("\nthe janitor's run lock is free");
-    }
-    // Said after the cleanup state, because it is the answer to the question
-    // that state raises: the janitor ran, it freed what it could, and the disk
-    // is still full. macOS publishes no size for a snapshot, so the count and
-    // the host's own names are all there is to print — and printing "0 bytes"
-    // for them would be the false reassurance this block exists to prevent.
-    let snapshots = report.get("local_snapshots");
-    let names: Vec<&str> = snapshots
-        .and_then(|value| value.get("names"))
-        .and_then(Value::as_array)
-        .map(|names| names.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    if snapshots.and_then(|value| value.get("supported")) == Some(&Value::Bool(true))
-        && !names.is_empty()
-    {
-        println!(
-            "\nlocal APFS snapshots: {} — their blocks are inside USED above, no \
-             stado command removes them, and macOS reports no size for them. \
-             Thin them with tmutil if the space is needed:",
-            names.len()
-        );
-        for name in names {
-            println!("  {name}");
-        }
-    }
-    report_outcome(&report, expected)
-}
-
-/// `stado host object-relocate TARGET --namespace NS --from-prefix P
-/// [--to-prefix Q] [--apply]` — re-address objects inside the store, on the
-/// host that holds it.
-///
-/// The refusals are printed last and printed always, because they are the
-/// only lines an operator has to act on: an object whose destination exists
-/// with different bytes is still at its wrong address and still has a second
-/// copy, and a run that reports 88 moves and hides one of those reads as a
-/// completed repair.
-pub async fn object_relocate(
-    target: &str,
-    plan: &crate::deploy::host_object_relocate::RelocatePlan,
-    json: bool,
-) -> Result<(), CmdError> {
-    let apply = plan.apply;
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_object_relocate::relocate_host(target, plan, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let expected = crate::deploy::host_object_relocate::OK_STATUS;
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-    let store = report.get("store");
-    let named = |key: &str| cell(store.and_then(|value| value.get(key)));
-    if let Some(Value::String(root)) = store.and_then(|value| value.get("missing_root")) {
-        println!("no store at {root} on this host — nothing was read");
-        return report_outcome(&report, expected);
-    }
-    if let Some(Value::String(os)) = store.and_then(|value| value.get("no_hasher")) {
-        println!(
-            "no sha256 program on this {os} host, so no body could be verified and \
-             none was touched"
-        );
-        return report_outcome(&report, expected);
-    }
-    println!(
-        "store {}\n  from {}\n    to {}",
-        named("root"),
-        named("source_prefix"),
-        named("destination_prefix"),
-    );
-    let totals = report.get("totals");
-    let counted = |key: &str| {
-        totals
-            .and_then(|value| value.get(key))
-            .and_then(Value::as_i64)
-            .unwrap_or_default()
-    };
-    let objects: Vec<&Value> = report
-        .get("objects")
-        .and_then(Value::as_array)
-        .map(|items| items.iter().collect())
-        .unwrap_or_default();
-    let field = |item: &Value, key: &str| cell(item.get(key));
-    super::table::print(
-        &["OUTCOME", "BYTES", "SOURCE KEY", "DESTINATION KEY"],
-        &objects
-            .iter()
-            .map(|item| {
-                vec![
-                    field(item, "outcome"),
-                    field(item, "bytes"),
-                    field(item, "source_key"),
-                    field(item, "destination_key"),
-                ]
-            })
-            .collect::<Vec<_>>(),
-    );
-    println!(
-        "\n{} scanned, {} decided, {} relocated ({:.2} GiB), {} refused, {} empty \
-         directories pruned",
-        counted("scanned"),
-        counted("decided"),
-        counted("moved"),
-        counted("moved_bytes") as f64 / 1024.0_f64.powi(3),
-        counted("refused"),
-        counted("pruned_directories"),
-    );
-    // Said as its own line rather than folded into the counts above, because
-    // it is a different repair: the body is at the right address and the
-    // sidecar beside it still records the wrong one, which is what
-    // `storage ls --long` reads out.
-    let stale = counted("stale_uris");
-    if stale > 0 {
-        println!(
-            "{stale} sidecars still record the old address, {} rewritten",
-            counted("repaired_uris"),
-        );
-    }
-    if !apply {
-        println!("nothing was changed: pass --apply to relocate what is listed above");
-    }
-    // A pass the host cut short states so rather than letting its totals read
-    // as the whole tree.
-    if totals.and_then(|value| value.get("complete")) != Some(&Value::Bool(true)) {
-        println!(
-            "the host's closing count never arrived, so these totals are a lower bound; \
-             run the command again"
-        );
-    }
-    let remaining = counted("remaining");
-    if remaining > 0 {
-        println!("{remaining} left under the source prefix; run the command again to continue");
-    }
-    for item in &objects {
-        let outcome = item.get("outcome").and_then(Value::as_str).unwrap_or("");
-        if crate::deploy::host_object_relocate::is_refusal(outcome) {
-            println!(
-                "  {outcome}: {} still holds its own bytes and was left where it is",
-                field(item, "source_key")
-            );
-        }
-    }
-    report_outcome(&report, expected)
-}
-
-/// `stado host cleanup TARGET --dry-run [--json]` — preview what the
-/// registry cleanup would delete (`stado.wisent.com/docs/missing-commands` item five).
-///
-/// `--dry-run` is mandatory, not defaulted. This command only ever
-/// previews: the enforcing pass belongs to the host's own janitor on the
-/// interval its registry policy declares, and to the declared host repair.
-pub async fn cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdError> {
-    if !dry_run {
-        return Err(CmdError::usage(
-            "host cleanup only previews; pass --dry-run. To actually reclaim space, let the \
-             host's janitor run on its registry interval, or run stado repair stado --step host \
-             --target TARGET --apply",
-        ));
-    }
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_cleanup::cleanup_preview(target, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let expected = crate::deploy::host_cleanup::PREVIEW_STATUS;
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-    println!("DRY RUN — nothing on {target} is deleted.");
-    println!(
-        "registry policy mode: {}",
-        cell(report.get("registry_policy_mode"))
-    );
-    let plan = report.get("plan").filter(|value| !value.is_null());
-    let Some(plan) = plan else {
-        println!(
-            "no plan: {}",
-            cell(report.get("unavailable").or_else(|| report.get("error")))
-        );
-        return report_outcome(&report, expected);
-    };
-    println!("outcome:              {}", cell(plan.get("outcome")));
-    println!(
-        "free bytes:           {} (low watermark {})",
-        cell(plan.get("free_bytes_before")),
-        cell(plan.get("low_bytes"))
-    );
-    let rows: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)
-        .iter()
-        .map(|cleaner| {
-            vec![
-                cleaner.name.clone(),
-                cleaner.scanned_items.to_string(),
-                cleaner.eligible_items.to_string(),
-                cleaner.expected_bytes.to_string(),
-                cleaner.deleted_items.to_string(),
-            ]
-        })
-        .collect();
-    super::table::print(
-        &[
-            "CLEANER",
-            "SCANNED",
-            "WOULD DELETE",
-            "WOULD FREE BYTES",
-            "DELETED",
-        ],
-        &rows,
-    );
-    println!("\nDELETED is zero by construction — this pass ran in the janitor's report mode.");
-    report_outcome(&report, expected)
-}
 
 /// `stado host gates HOST [--json]` — why this host is claiming nothing, in
 /// one payload.
 ///
 /// The exit status follows `claiming`, the way `host ping`'s follows its
-/// combined verdict, so `stado host reclaim mini --apply --reason … && stado
+/// combined verdict, so `stado space reclaim mini --apply --reason … && stado
 /// host gates mini` is a usable sentence and a blocked host cannot be
 /// mistaken for a healthy one by a script that only reads status codes.
 ///
@@ -1828,14 +1252,14 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
     }
     // Printed after the verdict and never as part of it: a note is a thing the
     // operator has to know before they conclude the numbers do not add up, and
-    // `stado host reclaim` is about to tell them it freed less than the deficit.
+    // `stado space reclaim` is about to tell them it freed less than the deficit.
     for note in &gates.notes {
         if note == crate::deploy::host_gates::LOCAL_SNAPSHOTS_UNRECLAIMABLE {
             println!(
                 "note:     {note} — {} local APFS snapshot(s), which macOS reports no size \
-                 for. `stado host reclaim {}` names each one and why it refuses it; the \
-                 `com.apple.os.update-*` ones are OS-update snapshots rather than local Time \
-                 Machine snapshots, so no stado command deletes them and none should",
+                 for. `stado space reclaim {} --stage local_apfs_snapshots` may thin local \
+                 Time Machine snapshots to the declared watermark; `com.apple.os.update-*` \
+                 snapshots remain OS recovery state, so no Stado command deletes them",
                 gates
                     .local_snapshots
                     .map_or_else(|| "-".to_string(), |count| count.to_string()),
@@ -2652,145 +2076,6 @@ fn link_outcome(host: &str, verdict: &str, blockers: usize) -> Result<(), CmdErr
     Err(CmdError::click(format!(
         "{host} link verdict is {verdict}, with {blockers} blocker(s) named in the report above"
     )))
-}
-
-/// `stado host reclaim HOST [--dry-run|--apply --reason TEXT] [--json]` — get
-/// the space back, in declared stages, measuring each one.
-///
-/// Previewing is the default and `--apply` is the only thing that deletes,
-/// because the alternative — a flag that has to be remembered to make the
-/// command safe — is a flag that will be forgotten on the one host where it
-/// mattered. `--apply` additionally refuses to run without `--reason`: the
-/// record it appends on the host is the only account of why several tens of
-/// gigabytes left that machine, and a record whose reason is blank is a record
-/// nobody can act on six months later.
-pub async fn reclaim(
-    host: &str,
-    apply: bool,
-    reason: Option<&str>,
-    json: bool,
-) -> Result<(), CmdError> {
-    let reason = reason.map(str::trim).filter(|text| !text.is_empty());
-    if apply && reason.is_none() {
-        return Err(CmdError::usage(
-            "host reclaim --apply removes files and needs --reason <text>; the reason is \
-             appended to the host's own audit log beside the disk it changed. Run without \
-             --apply to see what each stage would remove",
-        ));
-    }
-    let runner = crate::deploy::production_runner();
-    let (target, reclamation) = crate::deploy::host_reclaim::reclaim_host(host, apply, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    // A skipped stage is an infrastructure failure that the command survived,
-    // so the classification line `main_entry` emits on the error path never
-    // fires for it — and a stage nobody could judge, reported only as a row
-    // in a human table, is the silence that cost the release train three
-    // attempts. The store's own sentence rides in the reason, so `HTTP 502`
-    // classes as `infra_down`, `retryable=true` here instead of the
-    // `unknown`, `retryable=false` a discarded error used to produce. The
-    // point and service are the two `cli/mod.rs` would derive for this
-    // command: `failure_point` walks the subcommand names, `failure_service`
-    // maps `host` to `fleet`.
-    for (stage, reason) in &reclamation.skipped {
-        crate::failure::log_failure(
-            "cli.host.reclaim",
-            "fleet",
-            crate::failure::classify_message(reason),
-            &format!("{stage}: {reason}"),
-        );
-    }
-    let audited = match reason {
-        Some(reason) if apply => Some(
-            crate::deploy::host_reclaim::record_audit(
-                &target,
-                &reclamation,
-                reason,
-                &super::autonomy_cmd::actor(),
-                &runner,
-            )
-            .await
-            .map_err(|exc| CmdError::click(exc.to_string()))?,
-        ),
-        _ => None,
-    };
-    let report = Value::Object(crate::deploy::host_reclaim::to_report(
-        &target,
-        &reclamation,
-    ));
-    if json {
-        print_json(&report);
-        return Ok(());
-    }
-    if apply {
-        println!("APPLIED — {} lost the files named below.", target.name);
-    } else {
-        // Said before the table, not after it: an operator reading a list of
-        // paths has to know which of the two things they are looking at.
-        println!(
-            "DRY RUN — nothing on {} is deleted. Re-run with --apply --reason <text> \
-             to remove what follows.",
-            target.name
-        );
-    }
-    let rows: Vec<Vec<String>> = reclamation
-        .stages
-        .iter()
-        .map(|stage| {
-            vec![
-                stage.stage.clone(),
-                gigabytes(stage.free_kb_before.map(gib)),
-                gigabytes(stage.free_kb_after.map(gib)),
-                stage.items.to_string(),
-            ]
-        })
-        .collect();
-    super::table::print(&["STAGE", "FREE BEFORE", "FREE AFTER", "ITEMS"], &rows);
-    for stage in &reclamation.stages {
-        if let Some(detail) = &stage.detail {
-            println!("{}: {detail}", stage.stage);
-        }
-        for path in &stage.paths {
-            println!("  {} {path}", stage.stage);
-        }
-    }
-    // A stage that could not be judged is not a stage that found nothing.
-    // Printed beside the table, because the table's zero is the same digit a
-    // clean host prints.
-    for (stage, reason) in &reclamation.skipped {
-        println!("{stage}: SKIPPED — {reason}");
-    }
-    if let Some(plan) = &reclamation.janitor_plan {
-        let cleaners: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)
-            .iter()
-            .map(|cleaner| {
-                vec![
-                    cleaner.name.clone(),
-                    cleaner.scanned_items.to_string(),
-                    cleaner.eligible_items.to_string(),
-                    cleaner.deleted_items.to_string(),
-                ]
-            })
-            .collect();
-        if !cleaners.is_empty() {
-            println!("\nthe host's own janitor, per declared cleaner:");
-            super::table::print(&["CLEANER", "SCANNED", "ELIGIBLE", "DELETED"], &cleaners);
-        }
-    }
-    println!(
-        "\nfree: {} -> {}",
-        gigabytes(reclamation.free_kb_before.map(gib)),
-        gigabytes(reclamation.free_kb_after.map(gib)),
-    );
-    if let Some(audited) = audited {
-        println!("audited: {audited} on {}", target.name);
-    }
-    Ok(())
-}
-
-/// `df -Pk` blocks as GiB, through the one conversion `host disk` owns.
-fn gib(blocks: i64) -> f64 {
-    crate::deploy::host_disk::gib_from_blocks(blocks as f64)
 }
 
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
@@ -4691,7 +3976,7 @@ impl RetireFileOutcome {
 }
 
 fn retire_refused(message: impl Into<String>) -> CmdError {
-    CmdError::click(format!("retire-file refused: {}", message.into()))
+    CmdError::click(format!("space file retire refused: {}", message.into()))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4735,7 +4020,7 @@ fn retire_file_binding(
     ) {
         (None, None, None, None) if request.dry_run => Ok(None),
         (None, None, None, None) => Err(CmdError::usage(
-            "mutating retire-file requires transaction, expected-sha256, expected-size, and expected-mode from a reviewed receipt",
+            "mutating space file retire requires transaction, expected-sha256, expected-size, and expected-mode from a reviewed receipt",
         )),
         (Some(transaction), Some(expected_sha256), Some(expected_size), Some(expected_mode)) => {
             if request.dry_run {
@@ -4745,7 +4030,7 @@ fn retire_file_binding(
             }
             if !safe_retirement_transaction(transaction) {
                 return Err(CmdError::usage(
-                    "transaction must be the exact token from a handoff or retire-file dry-run receipt",
+                    "transaction must be the exact token from a handoff or space file retire --dry-run receipt",
                 ));
             }
             if expected_sha256.len() != 64
@@ -5065,7 +4350,7 @@ fn rollback_retirement(
     }
 }
 
-/// Run the device-local filesystem half of `host retire-file`.
+/// Run the device-local filesystem half of `space file retire`.
 ///
 /// Every path component is opened with `O_NOFOLLOW`, held by descriptor through
 /// the mutation, and checked against the approved account uid. The source is
@@ -5369,7 +4654,12 @@ pub fn retire_file_local(
     if json_output {
         println!("{}", serde_json::to_string(&outcome)?);
     } else {
-        print_retire_file_outcome(&outcome);
+        println!(
+            "{} {} -> {}",
+            outcome.status,
+            outcome.source,
+            outcome.destination.as_deref().unwrap_or("-")
+        );
     }
     Ok(())
 }
@@ -5606,8 +4896,9 @@ async fn retire_file_document(
         let expected_size = binding.map(|binding| binding.expected_size.to_string());
         let mut words = vec![
             binary.as_str(),
-            "host",
-            "retire-file-local",
+            "space",
+            "file",
+            "retire-local",
             path,
             "--product",
             product,
@@ -5635,7 +4926,7 @@ async fn retire_file_document(
             .map_err(|error| CmdError::click(error.to_string()))?;
         if !output.ok() {
             return Err(CmdError::click(format!(
-                "{}: installed Stado retire-file primitive failed: {}",
+                "{}: installed Stado space file retire primitive failed: {}",
                 resolved.name,
                 crate::deploy::host_channel::last_error_line(
                     &output,
@@ -5658,38 +4949,13 @@ async fn retire_file_document(
     }
 }
 
-fn print_retire_file_outcome(outcome: &RetireFileOutcome) {
-    if outcome.status == "absent" {
-        println!("{}: {} absent", outcome.target, outcome.source);
-    } else {
-        println!(
-            "{}: {} {} -> {} (transaction {}, {} bytes, sha256 {}, mode {})",
-            outcome.target,
-            outcome.source,
-            outcome.status,
-            outcome.destination.as_deref().unwrap_or("-"),
-            outcome.transaction.as_deref().unwrap_or("-"),
-            outcome.size.unwrap_or(0),
-            outcome.sha256.as_deref().unwrap_or("-"),
-            outcome.mode.as_deref().unwrap_or("-"),
-        );
-    }
-}
-
-/// `stado host retire-file TARGET PATH --product PRODUCT [--dry-run]`.
-pub async fn retire_file(
+/// Resolve and perform one declaration-bound retirement for the space capability.
+pub async fn retire_file_outcome(
     target: &str,
-    request: RetireFileRequest<'_>,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let binding = retire_file_binding(&request)?;
-    let outcome = retire_file_document(target, &request, binding.as_ref()).await?;
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&outcome)?);
-    } else {
-        print_retire_file_outcome(&outcome);
-    }
-    Ok(())
+    request: &RetireFileRequest<'_>,
+) -> Result<RetireFileOutcome, CmdError> {
+    let binding = retire_file_binding(request)?;
+    retire_file_document(target, request, binding.as_ref()).await
 }
 
 /// Remove one file from TARGET's home: the path Stado never had a way to
@@ -5837,49 +5103,6 @@ fi
     } else {
         Err(CmdError::click(outcome.failure_sentence()))
     }
-}
-
-/// Remove one file from TARGET's home: the path Stado never had a way to
-/// delete, so a retired or broken unit left its plist on disk forever and the
-/// only answer was a bare `rm` over ssh, which nothing bounds and nobody
-/// audits. This is that answer as a product verb. The guards are on the host,
-/// not on the client, because the file is what the host says it is, not what
-/// the operator believes:
-///
-/// - the path must be absolute, contain no `..`, and live under
-///   `$HOME/Library/LaunchAgents` or `$HOME/.stado` of the approved account —
-///   a system path is not refused because it is dangerous, it is refused
-///   because this channel has no right there, and the refusal names the
-///   privileged command that does have one;
-/// - it must be a regular file owned by that account — a symlink under an
-///   allowed root can point anywhere, a directory would make this a recursive
-///   delete, and somebody else's file is not this login's to remove.
-///
-/// Absence is reported as `absent`, not invented into a success.
-pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), CmdError> {
-    let outcome = remove_file_document(target, path).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": outcome.target,
-                "path": outcome.path,
-                "status": outcome.status,
-                "detail": outcome.detail,
-            }))?
-        );
-    } else {
-        match &outcome.detail {
-            Some(detail) if !detail.is_empty() => {
-                println!(
-                    "{}: {} {} — {detail}",
-                    outcome.target, outcome.path, outcome.status
-                )
-            }
-            _ => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
-        }
-    }
-    Ok(())
 }
 
 /// `stado host cron TARGET [--prune TEXT] [--apply] [--restore PATH]` — the

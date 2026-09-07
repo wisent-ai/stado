@@ -1,11 +1,9 @@
-//! The one ssh channel every read-only `stado host ...` command rides.
+//! The one registry-authorized channel every host capability rides.
 //!
-//! NO Python original: `stado.wisent.com/docs/missing-commands` items 2-6 (`host uptime`,
-//! `host ping`, `host disk`, `host cleanup --dry-run`, `host exec`) were
-//! never written in Python — the Python CLI stops at `host recover`. The
-//! rules below are not new either; they are the shape
-//! [`crate::deploy::host_reboot`] already ships, factored out so five
-//! commands cannot drift into five slightly different channels:
+//! Host and space operations share the option set and report shape factored
+//! from [`crate::deploy::host_reboot`], so target identity, local-vs-SSH
+//! selection, timeout behavior, and failure sentences cannot drift into
+//! capability-specific variants:
 //!
 //! - [`canonical_registry`] selects the HOST and nothing else: the canonical
 //!   remote registry ([`crate::targets::fetch_registry_remote`], the

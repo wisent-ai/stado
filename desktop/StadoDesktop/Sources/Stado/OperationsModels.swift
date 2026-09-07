@@ -399,7 +399,7 @@ struct ServiceRemoveReport: Decodable, Sendable {
 }
 
 extension FleetServiceEntry {
-    /// True only where `stado host remove-file`'s host-side guards could
+    /// True only where `stado space file remove`'s host-side guards could
     /// pass: a path inside a user's own `Library/LaunchAgents` (never the
     /// system `/Library/LaunchDaemons`) or under `.stado`. Offering the verb
     /// anywhere else would be a button that can only be refused.
@@ -569,7 +569,7 @@ struct HostVaultBearerSource: Decodable, Sendable {
     let field: String
 }
 
-/// Typed receipt from `stado host retire-file --json`.
+/// Typed receipt from `stado space file retire --json`.
 ///
 /// The CLI is the policy authority. Desktop keeps these fields verbatim so the
 /// preflight an operator reviews is the same source, destination, identity, and
@@ -589,7 +589,7 @@ struct HostRetireFileReceipt: Decodable, Sendable {
     var isRetired: Bool { status == "retired" }
 }
 
-/// One `stado host reclaim` pass, in either mode. `mode` is the command's own
+/// One `stado space reclaim` pass, in either mode. `mode` is the command's own
 /// word for what it did, so a preview and an applied pass cannot be confused
 /// for one another after the fact.
 struct HostReclaimPass: Decodable, Sendable {
@@ -619,7 +619,7 @@ struct HostReclaimPass: Decodable, Sendable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
-        // `dry_run`, the spelling `stado host reclaim` prints, so a report that
+        // `dry_run`, the spelling `stado space reclaim` prints, so a report that
         // arrived without the field cannot read as a different mode than the
         // command's own.
         mode = try values.decodeIfPresent(String.self, forKey: .mode) ?? "dry_run"

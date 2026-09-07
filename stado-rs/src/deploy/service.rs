@@ -7635,7 +7635,7 @@ pub fn quote_command_match(value: &str) -> Result<String, DeployError> {
 ///
 /// The last gap in the world-to-declaration direction. `service list
 /// --undeclared` can name a unit the registry never declared, and
-/// `host remove-file` can delete its unit file — but `service stop` refuses a
+/// `space file remove` can delete its unit file — but `service stop` refuses a
 /// unit with no declaration to resolve. A loaded unit whose file is already
 /// gone otherwise has no owner left that can stop it.
 ///

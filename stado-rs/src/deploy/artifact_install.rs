@@ -174,7 +174,7 @@ echo "STADO_DETAIL=$program"
 /// `~/.stado/services` for `stado-object-api` and `weles-admission` held about
 /// 6 GiB while the disk sat at 6.1 GiB against the janitor's 15 GiB low
 /// watermark, so the host claimed nothing and the space came back only because
-/// an operator ran `stado host reclaim` by hand - four times in one day. The
+/// an operator ran `stado space reclaim` by hand - four times in one day. The
 /// janitor cannot reach these: its declared cleaners cover the release store,
 /// build caches, queue workdirs and browser clones, and a delivered service
 /// tree is none of those.

@@ -1,63 +1,29 @@
-//! `stado host reclaim HOST [--dry-run|--apply --reason TEXT]` — get the disk
-//! back, in declared stages, measuring each one.
+//! `stado space reclaim TARGET [--stage STAGE]... [--dry-run|--apply]` gets
+//! disk space back in measured, auditable stages.
 //!
-//! NO Python original. The incident: the Mac mini's data volume sat at roughly
-//! 2 GiB free against a 55 GiB registry policy. Its queue agent publishes
-//! `disk_pressure_unresolved` and fails admission closed while that is true, so
-//! it claimed nothing for hours and every release build queued behind it. The
-//! janitor's declared cleaners did not cover what had actually filled the disk,
-//! and there was no command for the rest of it: the space came back by hand,
-//! over ssh, from a shell script written during the outage. This is that
-//! reclamation as a product command — same stages, same measurements, same
-//! refusals, through the registry-authorized channel and with an audit record
-//! left on the machine whose disk changed. [`crate::deploy::host_gates`] is the
-//! read half that says the space is the reason nothing is being claimed.
+//! The selectable vocabulary and its ordering come from
+//! `stado-rs/data/space.json`, compiled into the binary. The remote program
+//! contains each stage's guarded implementation, while one `stage_enabled`
+//! predicate selects declaration rows without a command-side match arm. A new
+//! target product is therefore a declaration change, not another CLI verb.
 //!
-//! Four stages, in this order, and nothing else:
+//! `registry_cleanup` runs the target's own janitor and consequently reads its
+//! cleaner policy from the canonical registry. The other declared stages cover
+//! build scratch, queue workdirs, foreign home trees, delivered product trees,
+//! rebuildable caches, Chromium clones, local APFS snapshots, and runner work
+//! trees. Every candidate remains constrained to its stage's product-owned or
+//! operating-system-owned root.
 //!
-//! 1. `registry_cleanup` — the host's OWN janitor
-//!    ([`crate::providers::local::disk_cleanup`]), invoked exactly the way
-//!    [`crate::deploy::host_cleanup`] invokes it, so the policy stays the one
-//!    the registry declares and this module contains no cleanup policy of its
-//!    own. `--dry-run` runs its planning phase; `--apply` runs the enforcing
-//!    pass. The item count is the janitor's own.
-//! 2. `build_scratch` — `$HOME/`[`BUILD_WORK_ROOT`], the release build scratch
-//!    tree. `scripts/build-stado-linux-host.sh` works there and does not remove
-//!    what it wrote; a from-scratch release build leaves its checkout and its
-//!    vendored sources behind every time.
-//! 3. `delivered_trees` — the version directories under `$HOME/`[`SERVICES_ROOT`],
-//!    where every `service deploy` and every artifact install stages one tree
-//!    per version and keeps the previous one beside it as
-//!    `current.before-<version>` so a rollback is a rename; plus every
-//!    superseded delivery root the product catalog declares
-//!    ([`crate::deploy::products::Product::superseded_roots`]). The mini
-//!    carries 20 `weles-worker` versions, 9.7 GiB, under
-//!    `$HOME/.local/share/weles-worker` from the installer that predates
-//!    [`crate::deploy::artifact_install`], while the worker runs from its own
-//!    checkout — trees no rollback will reach and, until the catalog declared
-//!    that root, trees no command could see. Same rules for both: the roots
-//!    come from declarations so the next delivery path change is a data
-//!    change, and a product's LIVE install root is never one of them.
-//! 4. `chromium_clones` — the per-launch bundle clones under this account's
-//!    macOS temporary container, `<container>/`[`CLONE_CONTAINER`]`/`
-//!    [`CLONE_ROOT_NAME`]. macOS clones the whole browser bundle every time
-//!    Chromium starts so it can validate a signature nobody can swap
-//!    underneath it, Weles drives Chromium for browser automation, and a run
-//!    that is killed leaves its clone behind. On the mini the day this landed:
-//!    137 clones, 130 of them untouched for more than a day. Last of the four
-//!    because the first three are space the fleet's own software wrote, and
-//!    this is space the operating system wrote — the same order, and the same
-//!    reason, as the janitor's cleaner
-//!    ([`crate::providers::local::disk_cleanup::chromium_clones`], which is
-//!    what removes these when the registry declares that cleaner; this stage
-//!    is for the hosts and the moments where it has not).
+//! Dry-run is the default. Apply mode uses the identical enumeration, gates the
+//! actual removal behind the mode bit, and is audited on the target whose state
+//! changed.
 //!
 //! Five rules, encoded here rather than left to whoever is at the keyboard:
 //!
-//! - **nothing outside those roots.** Every candidate is produced by globbing
-//!   one of the three declared roots; no path arrives from the registry, from
-//!   the operator, or from the host's own output. The one exception is named
-//!   and constrained: the clone container is the OS's own answer for this
+//! - **nothing outside the stage roots.** Every candidate is produced by
+//!   traversing a fixed product or operating-system root; no path arrives from
+//!   the registry, the operator, or the host's own output. The one exception is
+//!   named and constrained: the clone container is the OS's own answer for this
 //!   account (`$TMPDIR`, `getconf DARWIN_USER_TEMP_DIR` behind it), and the
 //!   stage refuses it unless it is under `/var/folders`, which is the only
 //!   place macOS puts one.
@@ -88,8 +54,11 @@
 //! spelling a program this size through escaped quotes is how a marker gets
 //! silently mistyped.
 
+use std::collections::BTreeSet;
+use std::sync::LazyLock;
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use super::host_channel;
@@ -132,35 +101,103 @@ pub const DRY_RUN_MODE: &str = "dry_run";
 /// `mode` for a run that removed what its stages named.
 pub const APPLY_MODE: &str = "apply";
 
-/// The stage name for the host's own janitor pass.
-pub const REGISTRY_CLEANUP_STAGE: &str = "registry_cleanup";
-/// The stage name for the release build scratch tree.
-pub const BUILD_SCRATCH_STAGE: &str = "build_scratch";
-/// The stage name for delivered product trees.
-pub const DELIVERED_TREES_STAGE: &str = "delivered_trees";
-/// The stage name for the macOS per-launch Chromium bundle clones.
-pub const CHROMIUM_CLONES_STAGE: &str = "chromium_clones";
-/// Rebuildable package/browser caches owned by build tooling.
-pub const REBUILDABLE_CACHES_STAGE: &str = "rebuildable_caches";
-/// The stage name for macOS-style home trees found on a Linux host.
-pub const FOREIGN_HOME_TREES_STAGE: &str = "foreign_home_trees";
-/// The stage name for eligible local Time Machine APFS snapshots.
-pub const LOCAL_APFS_SNAPSHOTS_STAGE: &str = "local_apfs_snapshots";
-/// The stage name for queue job trees left in the OS scratch directory by an
-/// agent that predates the persistent `$HOME/.stado/work/jobs` root.
-pub const LEGACY_TMP_WORKDIRS_STAGE: &str = "legacy_tmp_workdirs";
-/// The stage name for the `_work` trees of the host's GitHub runners.
-///
-/// A runner's own `ACTIONS_RUNNER_HOOK_JOB_COMPLETED` hook clears `_work`
-/// after each job it finishes; nothing clears it after a job that never
-/// finished, and nothing clears the runners a repository installed and stopped
-/// using. On 2026-09-06 `charless-mac-mini` sat at 0.9 GiB free with five
-/// runner roots on it, every reclaim stage reported zero items, and no .NET
-/// listener on the host could start — so the machine could neither run CI nor
-/// be repaired through CI. Every stage before this one looks inside a home or
-/// a Stado-owned tree; the runner roots are root-owned and outside both, which
-/// is exactly why they were invisible.
-pub const RUNNER_WORK_TREES_STAGE: &str = "runner_work_trees";
+/// The one document declaring every selectable reclamation stage.
+pub const DECLARATION_PATH: &str = "stado-rs/data/space.json";
+const DECLARATION: &str = include_str!("../../data/space.json");
+const DECLARATION_SCHEMA_VERSION: u64 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpaceDeclaration {
+    schema_version: u64,
+    reclaim_stages: Vec<StageDeclaration>,
+}
+
+/// One fleet-declared stage, in execution order.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageDeclaration {
+    pub name: String,
+    pub description: String,
+}
+
+static DECLARED_STAGES: LazyLock<Result<Vec<StageDeclaration>, String>> =
+    LazyLock::new(|| parse_stage_declaration(DECLARATION));
+
+fn parse_stage_declaration(text: &str) -> Result<Vec<StageDeclaration>, String> {
+    let declaration: SpaceDeclaration = serde_json::from_str(text)
+        .map_err(|error| format!("{DECLARATION_PATH} is not a valid declaration: {error}"))?;
+    if declaration.schema_version != DECLARATION_SCHEMA_VERSION {
+        return Err(format!(
+            "{DECLARATION_PATH} declares schema_version {}, and this build reads {DECLARATION_SCHEMA_VERSION}",
+            declaration.schema_version
+        ));
+    }
+    if declaration.reclaim_stages.is_empty() {
+        return Err(format!(
+            "{DECLARATION_PATH} declares no reclaim stages; add at least one to reclaim_stages"
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for stage in &declaration.reclaim_stages {
+        if stage.name.is_empty()
+            || !stage
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            return Err(format!(
+                "{DECLARATION_PATH} reclaim stage {} is not a lowercase identifier",
+                crate::deploy::py_str_repr(&stage.name)
+            ));
+        }
+        if stage.description.trim().is_empty() {
+            return Err(format!(
+                "{DECLARATION_PATH} reclaim stage {} declares no description; add it to reclaim_stages",
+                crate::deploy::py_str_repr(&stage.name)
+            ));
+        }
+        if !names.insert(stage.name.clone()) {
+            return Err(format!(
+                "{DECLARATION_PATH} declares reclaim stage {} more than once",
+                crate::deploy::py_str_repr(&stage.name)
+            ));
+        }
+    }
+    Ok(declaration.reclaim_stages)
+}
+
+/// Every selectable stage from the compiled fleet declaration.
+pub fn declared_stages() -> Result<&'static [StageDeclaration], DeployError> {
+    match &*DECLARED_STAGES {
+        Ok(stages) => Ok(stages),
+        Err(error) => Err(DeployError(error.clone())),
+    }
+}
+
+/// Resolve repeatable `--stage` values without a command-side stage match.
+pub fn select_stages(requested: &[String]) -> Result<Vec<String>, DeployError> {
+    let declared = declared_stages()?;
+    if requested.is_empty() {
+        return Ok(declared.iter().map(|stage| stage.name.clone()).collect());
+    }
+    let names: BTreeSet<&str> = declared.iter().map(|stage| stage.name.as_str()).collect();
+    for stage in requested {
+        if !names.contains(stage.as_str()) {
+            return Err(DeployError(format!(
+                "stage {} is not declared; add it to {DECLARATION_PATH} reclaim_stages",
+                crate::deploy::py_str_repr(stage)
+            )));
+        }
+    }
+    Ok(declared
+        .iter()
+        .filter(|stage| requested.contains(&stage.name))
+        .map(|stage| stage.name.clone())
+        .collect())
+}
+
+const REGISTRY_CLEANUP_STAGE: &str = "registry_cleanup";
 
 /// The only prefix a macOS temporary container has, and the guard on the one
 /// root this module does not spell itself.
@@ -191,6 +228,7 @@ pub const AUDIT_LOG: &str = ".stado/audit/host-reclaim.jsonl";
 /// Substitution points in [`REMOTE_SCRIPT_TEMPLATE`]. Every value spliced in is
 /// a crate constant, never registry or operator data.
 const APPLY_MARK: &str = "@APPLY@";
+const STAGES_MARK: &str = "@STAGES@";
 const WC_WORDS_MARK: &str = "@WC_WORDS@";
 const SERVICES_ROOT_MARK: &str = "@SERVICES_ROOT@";
 const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
@@ -228,6 +266,14 @@ target_free_kb=@TARGET_FREE_KB@
 keep_mode="@LOCAL_EVIDENCE_MODE@"
 local_evidence="$HOME/@LOCAL_EVIDENCE_ROOT@"
 local_grace=@LOCAL_TERMINALITY_GRACE_SECONDS@
+stages=" @STAGES@ "
+
+stage_enabled() {
+  case "$stages" in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 free_kb() { /bin/df -Pk / 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}'; }
 
@@ -357,6 +403,7 @@ reclaim() {
 
 printf 'STADO_RECLAIM_FREE\tbefore\t%s\n' "$(free_kb)"
 
+if stage_enabled registry_cleanup; then
 before=$(free_kb)
 wc_bin=""
 for candidate in @WC_WORDS@; do
@@ -374,7 +421,9 @@ else
   fi
   printf 'STADO_RECLAIM_CLEANUP\t%s\t%s\t%s\n' "$before" "$(free_kb)" "$plan"
 fi
+fi
 
+if stage_enabled build_scratch; then
 before=$(free_kb)
 if [ -d "$scratch" ]; then
   for entry in "$scratch"/*; do
@@ -384,7 +433,9 @@ if [ -d "$scratch" ]; then
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tbuild_scratch\t%s\t%s\n' "$before" "$(free_kb)"
+fi
 
+if stage_enabled queue_workdirs; then
 before=$(free_kb)
 # The queue store is the primary terminality authority. If it is unavailable,
 # never turn that absence into an empty keep-list. Instead require three local
@@ -417,7 +468,9 @@ for workroot in @WORK_ROOTS@; do
   done
 done
 printf 'STADO_RECLAIM_STAGE\tqueue_workdirs\t%s\t%s\n' "$before" "$(free_kb)"
+fi
 
+if stage_enabled foreign_home_trees; then
 before=$(free_kb)
 # macOS-style home trees on a Linux host. `/Users/<name>` exists on Linux only
 # as debris of a job or delivery that carried a hard-wired Mac path — on
@@ -431,7 +484,9 @@ if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Linux" ] && [ -d /Users ];
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tforeign_home_trees\t%s\t%s\n' "$before" "$(free_kb)"
+fi
 
+if stage_enabled delivered_trees; then
 before=$(free_kb)
 # One directory of versions: keep what `current` resolves to, keep the newest,
 # take the stale unheld rest. A function because the same rules have to hold
@@ -507,7 +562,9 @@ for superseded in @SUPERSEDED_ROOTS@; do
   sweep_versions "$superseded"
 done
 printf 'STADO_RECLAIM_STAGE\tdelivered_trees\t%s\t%s\n' "$before" "$(free_kb)"
+fi
 
+if stage_enabled rebuildable_caches; then
 before=$(free_kb)
 # The account's macOS temporary container, as the OS reports it: its name
 # carries a per-account hash, so nothing on this side can spell it. $TMPDIR is
@@ -583,6 +640,8 @@ if [ -d "$entry" ] && [ ! -L "$HOME/.stado" ] &&
   fi
 fi
 printf 'STADO_RECLAIM_STAGE\trebuildable_caches\t%s\t%s\n' "$before" "$(free_kb)"
+fi
+if stage_enabled chromium_clones; then
 before=$(free_kb)
 
 container=${TMPDIR:-$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)}
@@ -626,7 +685,9 @@ if [ -n "$clones" ] && [ -d "$clones" ]; then
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tchromium_clones\t%s\t%s\n' "$before" "$(free_kb)"
+fi
 
+if stage_enabled local_apfs_snapshots; then
 before=$(free_kb)
 if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" != "Darwin" ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'host is not macOS'
@@ -668,7 +729,9 @@ else
   IFS=$saved_ifs
 fi
 printf 'STADO_RECLAIM_STAGE\tlocal_apfs_snapshots\t%s\t%s\n' "$before" "$(free_kb)"
+fi
 
+if stage_enabled runner_work_trees; then
 before=$(free_kb)
 # The `_work` trees of the host's GitHub runners. A runner clears its own
 # after each job it FINISHES; a cancelled job, a killed listener and a runner
@@ -695,6 +758,7 @@ else
   done
 fi
 printf 'STADO_RECLAIM_STAGE\trunner_work_trees\t%s\t%s\n' "$before" "$(free_kb)"
+fi
 
 printf 'STADO_RECLAIM_FREE\tafter\t%s\n' "$(free_kb)"
 "#;
@@ -725,15 +789,17 @@ fn superseded_words() -> String {
 /// deletion from the two-pass local proof.
 pub fn remote_script(
     apply: bool,
+    stages: &[String],
     live_jobs: Option<&[String]>,
     work_roots: &str,
     target_free_gb: Option<i64>,
 ) -> String {
-    remote_script_with_stado(apply, live_jobs, work_roots, target_free_gb, None)
+    remote_script_with_stado(apply, stages, live_jobs, work_roots, target_free_gb, None)
 }
 
 fn remote_script_with_stado(
     apply: bool,
+    stages: &[String],
     live_jobs: Option<&[String]>,
     work_roots: &str,
     target_free_gb: Option<i64>,
@@ -758,6 +824,7 @@ fn remote_script_with_stado(
         .join(" ");
     REMOTE_SCRIPT_TEMPLATE
         .replace(APPLY_MARK, if apply { "1" } else { "0" })
+        .replace(STAGES_MARK, &stages.join(" "))
         .replace(WC_WORDS_MARK, &wc_words)
         .replace(SERVICES_ROOT_MARK, SERVICES_ROOT)
         .replace(BUILD_WORK_MARK, BUILD_WORK_ROOT)
@@ -905,6 +972,14 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                 let paths = drain(&mut pending, stage);
                 let stage_refused = drain(&mut refused, stage);
                 let stage_local_evidence = drain_evidence(&mut local_evidence, stage);
+                let unavailable_name = format!("{stage}{UNAVAILABLE_SUFFIX}");
+                if reclamation
+                    .stages
+                    .iter()
+                    .any(|record| record.stage == unavailable_name)
+                {
+                    continue;
+                }
                 reclamation.stages.push(Stage {
                     stage: (*stage).to_string(),
                     free_kb_before: blocks(before),
@@ -1083,7 +1158,8 @@ pub async fn record_audit(
 ) -> Result<String, DeployError> {
     let record = json!({
         "at": crate::models::isoformat_utc(chrono::Utc::now()),
-        "command": "stado host reclaim",
+        "host": target.name,
+        "command": "stado space reclaim",
         "mode": reclamation.mode,
         "actor": actor,
         "reason": reason,
@@ -1131,28 +1207,34 @@ pub async fn record_audit(
 pub async fn reclaim_host(
     target_name: &str,
     apply: bool,
+    stages: &[String],
     runner: &Runner,
 ) -> Result<(ComputeTarget, Reclamation), DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
+    let queue_selected = stages.iter().any(|stage| stage == "queue_workdirs");
     let mut unreadable = Vec::new();
-    let live_jobs = match crate::queue::JobStorage::new().await {
-        Ok(store) => {
-            let mut ids = Vec::new();
-            for state in ["queue", "running"] {
-                match store.list_jobs(state, 0).await {
-                    Ok(jobs) => ids.extend(jobs.into_iter().map(|job| job.job_id)),
-                    Err(error) => unreadable.push(format!("{state}/: {error}")),
+    let live_jobs = if !queue_selected {
+        Some(Vec::new())
+    } else {
+        match crate::queue::JobStorage::new().await {
+            Ok(store) => {
+                let mut ids = Vec::new();
+                for state in ["queue", "running"] {
+                    match store.list_jobs(state, 0).await {
+                        Ok(jobs) => ids.extend(jobs.into_iter().map(|job| job.job_id)),
+                        Err(error) => unreadable.push(format!("{state}/: {error}")),
+                    }
+                }
+                if unreadable.is_empty() {
+                    Some(ids)
+                } else {
+                    None
                 }
             }
-            if unreadable.is_empty() {
-                Some(ids)
-            } else {
+            Err(error) => {
+                unreadable.push(format!("opening the queue store: {error}"));
                 None
             }
-        }
-        Err(error) => {
-            unreadable.push(format!("opening the queue store: {error}"));
-            None
         }
     };
     let target_free_gb = target
@@ -1171,6 +1253,7 @@ pub async fn reclaim_host(
             .map_err(|_| DeployError("current Stado path is not valid UTF-8".to_string()))?;
         remote_script_with_stado(
             apply,
+            stages,
             live_jobs.as_deref(),
             DEFAULT_WORK_ROOTS,
             target_free_gb,
@@ -1179,6 +1262,7 @@ pub async fn reclaim_host(
     } else {
         remote_script(
             apply,
+            stages,
             live_jobs.as_deref(),
             DEFAULT_WORK_ROOTS,
             target_free_gb,
@@ -1193,7 +1277,7 @@ pub async fn reclaim_host(
         )));
     }
     let mut reclamation = parse_output(&output.stdout, apply);
-    if live_jobs.is_none() {
+    if queue_selected && live_jobs.is_none() {
         reclamation.skipped.push((
             "queue_authority".to_string(),
             format!(
@@ -1202,6 +1286,12 @@ pub async fn reclaim_host(
                 unreadable.join("; ")
             ),
         ));
+    }
+    if reclamation.stages.is_empty() {
+        return Err(DeployError(format!(
+            "{} declares no eligible space reclamation stage; add it to {} reclaim_stages",
+            target.name, DECLARATION_PATH
+        )));
     }
     Ok((target, reclamation))
 }
@@ -1212,7 +1302,13 @@ mod tests {
 
     #[test]
     fn unavailable_queue_uses_two_observation_local_proof() {
-        let script = remote_script(true, None, "/fixture", Some(18));
+        let script = remote_script(
+            true,
+            &["queue_workdirs".to_string()],
+            None,
+            "/fixture",
+            Some(18),
+        );
 
         assert!(script.contains("keep_mode=\"local\""));
         assert!(script.contains("local_grace=900"));

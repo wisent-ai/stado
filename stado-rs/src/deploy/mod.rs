@@ -14,18 +14,18 @@
 //! - [`host_users`] — `stado host user create`: account creation on
 //!   registry hosts over SSH; the password travels only on SSH stdin.
 //!
-//! The read-only `stado host ...` commands of `stado.wisent.com/docs/missing-commands`
-//! items two through six have NO Python original. They all ride one
+//! The read-only host commands of `stado.wisent.com/docs/missing-commands`
+//! have NO Python original. They share one
 //! channel, [`host_channel`], which is the option set and report shape of
 //! [`host_reboot`] factored out:
 //!
 //! - [`host_uptime`] — `stado host uptime`: uptime, load averages, logins.
 //! - [`host_ping`] — `stado host ping`: ssh reachability AND health-beacon
 //!   age, combined into the worse of the two verdicts.
-//! - [`host_disk`] — `stado host disk`: `df` plus the registry cleanup
-//!   policy and the janitor's own recorded state.
-//! - [`host_cleanup`] — `stado host cleanup --dry-run`: drives the host's
-//!   own janitor in preview mode; contains no cleanup policy itself.
+//! - [`host_disk`] — the reader behind `stado space report`: `df` plus the
+//!   registry cleanup policy and the janitor's own recorded state.
+//! - [`host_cleanup`] — the `registry_cleanup` stage behind `stado space
+//!   reclaim`: drives the host's own janitor and contains no cleanup policy.
 //! - [`host_exec`] — `stado host exec`: one command from a fixed
 //!   allowlist, read-only apart from the declared provider sign-in
 //!   repairs. Not a shell.
@@ -36,8 +36,8 @@
 //!   It is NOT an `host_exec` allowlist entry because it reduces and caps
 //!   every value it reads off the host; that table passes a program's
 //!   output through untouched.
-//! - [`host_object_relocate`] — `stado host object-relocate`: re-address
-//!   objects from one key prefix to another INSIDE the store, on the host
+//! - [`host_object_relocate`] — `stado space relocate`: re-address objects
+//!   from one key prefix to another INSIDE the store, on the host
 //!   that holds it. The object API has no move and no server-side copy, so
 //!   the alternative was pulling 134 MiB bodies through the control plane's
 //!   loopback writer, which is what took that host's release ingress down.

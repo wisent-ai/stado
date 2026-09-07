@@ -7,7 +7,7 @@
 //! true — `accepting_jobs: false`, no new job, deliberately
 //! ([`crate::providers::local::agent`]). So the host claimed nothing for
 //! hours, every release build queued behind it, and no command in this CLI
-//! said any of it: `host disk` printed the free bytes and the policy but never
+//! said any of it: the former disk report printed free bytes and policy but never
 //! the admission verdict, `registry doctor` listed the host as broadcasting
 //! normally, and the one fact that mattered — the agent had stopped claiming,
 //! on purpose, for a reason it was republishing every tick — existed only
@@ -21,9 +21,9 @@
 //!   invented a second vocabulary for the same condition;
 //! - the registry target and its [`crate::targets::DiskCleanupPolicy`]
 //!   serialized as they stand;
-//! - `df -Pk /` and the janitor's own state file, read with the exact script
-//!   [`crate::deploy::host_disk`] sends, so `host gates` and `host disk` can
-//!   never disagree about how much space this host has;
+//! - `df -Pk /` and the janitor's own state file, read with the exact sections
+//!   [`crate::deploy::host_disk`] sends, so `host gates` and `space report`
+//!   cannot disagree about how much space this host has;
 //! - the host's own effective `wc_storage_backend`, read with the exact script
 //!   `stado host config-show` sends, and classified by
 //!   [`crate::capabilities::storage_reach`]. The fourth source exists because
@@ -148,16 +148,15 @@ pub const AGENT_STORE_UNKNOWN: &str = "agent_store_unknown";
 pub const AGENT_STORE_UNREADABLE: &str = "agent_store_unreadable";
 
 /// Local APFS snapshots are holding space while this host cannot prove it has
-/// room, and no command in this product will take them.
+/// room.
 ///
 /// A NOTE and never a blocker: snapshots do not stop the agent claiming, disk
-/// pressure does, and a host claiming normally with snapshots on it is a
-/// healthy host. It is reported because of what an operator does next — they
-/// run `stado host reclaim`, watch it free what it can, see the host still
-/// short of its watermark, and have to be told where the rest of the space is
-/// rather than left to conclude the numbers are lying. macOS publishes no size
-/// for a snapshot ([`host_disk::LocalSnapshots`]), so this says how many there
-/// are and never how large they are.
+/// pressure does. It is reported because an operator may next run `stado space
+/// reclaim`; the declared `local_apfs_snapshots` stage can thin local Time
+/// Machine snapshots to the target watermark, while OS-update snapshots remain
+/// recovery state. macOS publishes no per-snapshot size
+/// ([`host_disk::LocalSnapshots`]), so this says how many there are and never
+/// how large they are.
 pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 
 /// This host's janitor has not completed a pass within
@@ -198,7 +197,7 @@ pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 /// ran and got nowhere — read its report, its policy, its errors. A held lock
 /// is a janitor that never started, and the only thing worth looking at is the
 /// process on the other end of `~/.cache/wisent-compute/disk-cleanup.lock`,
-/// which `stado host disk` names in `cleanup_lock.holders`.
+/// which `stado space report` names in `cleanup_lock.holders`.
 ///
 /// On 2026-09-03 charless-mac-mini reported the stalled word with 18.4 GiB
 /// free against a 15 GiB watermark while its own agent (pid 79473) held the
@@ -345,7 +344,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
     // Only the sections this command reads. `assemble` below consumes
     // `usage`, `state` and `snapshots` and nothing else, while the full
     // script also walks `$HOME` with `du` for an `inventory` only
-    // `host disk` prints. Measured on `lukasz-macbook` on 2026-09-02, the
+    // `space report` prints. Measured on `lukasz-macbook` on 2026-09-02, the
     // three fields take 0.8s and the full script had not finished in 180s,
     // so this command died on `remote_timeout` on the machine it was
     // running on and published no verdict at all — a gate condition nobody
@@ -388,7 +387,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
 ///
 /// Read with [`crate::cli::host::remote_config_output`] — the exact script
 /// `stado host config-show` sends — and not a second remote script of this
-/// module's own, for the same reason `host gates` and `host disk` share one
+/// module's own, for the same reason `host gates` and `space report` share one
 /// `df`: two scripts reading one host's configuration would eventually read
 /// two different configurations, under a different `HOME` or a different
 /// `STADO_CONFIG`, and the whole finding here is which configuration that
@@ -538,7 +537,7 @@ pub fn assemble(
     // Being turned away while nothing has got through for the whole window the
     // stall is measured over is not being turned away — it is a lock that is
     // held, and it has a different remedy from every other condition here:
-    // find the holder (`host disk`'s `cleanup_lock.holders` names the pid) and
+    // find the holder (`space report`'s `cleanup_lock.holders` names the pid) and
     // deal with THAT process. See [`DISK_CLEANUP_LOCK_HELD`].
     let disk_cleanup_lock_held = cleanup_prevented
         && match (stall_after_seconds, cleanup_success_age_seconds) {
@@ -838,9 +837,9 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "low_watermark_gb": gates.low_watermark_gb,
             "target_free_gb": gates.target_free_gb,
             "policy_mode": gates.policy_mode,
-            // Held space no stage of `host reclaim` can return, so an operator
-            // reading "free 2 GiB, watermark 55 GiB" is not left to guess.
-            // Null on a host that has no such notion at all.
+            // Snapshot space is reported separately so an operator reading
+            // "free 2 GiB, watermark 55 GiB" knows the declared APFS stage may
+            // need to thin local Time Machine snapshots. Null where unsupported.
             "local_snapshots": gates.local_snapshots,
             // Whether anything is still trying to keep the two numbers above
             // apart, and how long since it last managed to.

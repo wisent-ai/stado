@@ -68,6 +68,7 @@ pub mod service;
 pub mod service_converge;
 pub mod service_refresh_image;
 pub mod service_verify;
+pub mod space;
 pub mod status;
 pub mod storage;
 pub mod stream;
@@ -645,6 +646,9 @@ enum Commands {
     /// Operate declared GitHub runner profiles across registry hosts.
     #[command(subcommand)]
     Runner(runner::RunnerCommands),
+    /// Read and reclaim a host's declared space, including guarded file operations.
+    #[command(subcommand)]
+    Space(space::SpaceCommands),
 }
 
 #[derive(Subcommand)]
@@ -1306,66 +1310,6 @@ enum HostCommands {
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
-    /// Read or set TARGET's disk-cleanup policy in the canonical registry.
-    ///
-    /// Without a mutating flag this prints the policy in force. With one it
-    /// rewrites exactly the named fields, validates the whole registry, and
-    /// compare-and-swaps it, so a policy is an operator declaration rather
-    /// than a document somebody edits by hand. A target that declares no
-    /// policy is seeded from the reporting default before the flags apply.
-    #[command(name = "disk-cleanup")]
-    DiskCleanupPolicy {
-        target: String,
-        /// `off`, `report` or `enforce`; only `enforce` deletes.
-        #[arg(long)]
-        mode: Option<String>,
-        /// Seconds between passes.
-        #[arg(long)]
-        check_interval_seconds: Option<i64>,
-        /// A pass does nothing while more than this many GB are free.
-        #[arg(long)]
-        low_free_gb: Option<i64>,
-        /// A pass stops as soon as this many GB are free.
-        #[arg(long)]
-        target_free_gb: Option<i64>,
-        /// Directories one pass may delete.
-        #[arg(long)]
-        max_items_per_pass: Option<i64>,
-        /// Bytes one pass may delete.
-        #[arg(long)]
-        max_bytes_per_pass: Option<i64>,
-        /// Directories one pass may cross.
-        #[arg(long)]
-        max_scan_items: Option<i64>,
-        /// Seconds one pass may spend; absent means the janitor's own 30.
-        #[arg(long)]
-        max_pass_seconds: Option<i64>,
-        /// Drop the declared pass deadline and return to the janitor's own.
-        #[arg(long)]
-        clear_max_pass_seconds: bool,
-        /// Enable a cleaner by name; repeatable.
-        #[arg(long = "cleaner")]
-        add_cleaner: Vec<String>,
-        /// Disable a cleaner by name; repeatable.
-        #[arg(long)]
-        remove_cleaner: Vec<String>,
-        /// Narrow one cleaner's walk, as `NAME=PATH`; repeatable.
-        #[arg(long, value_name = "NAME=PATH")]
-        cleaner_root: Vec<String>,
-        /// Return one cleaner to its default root; repeatable.
-        #[arg(long)]
-        clear_cleaner_root: Vec<String>,
-        /// One cleaner's age gate, as `NAME=SECONDS`; repeatable.
-        #[arg(long, value_name = "NAME=SECONDS")]
-        cleaner_min_age_seconds: Vec<String>,
-        /// How many newest versions of each product `release_store` keeps with
-        /// no other reason to, as `release_store=N`; repeatable.
-        #[arg(long, value_name = "NAME=COUNT")]
-        cleaner_keep_newest: Vec<String>,
-        /// Emit the policy and registry generation as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Persist and immediately reconcile TARGET's NVIDIA board power cap.
     #[command(name = "gpu-power-limit")]
     GpuPowerLimit {
@@ -1387,9 +1331,9 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Report or reclaim tagged build caches on TARGET.
-    #[command(name = "build-caches", subcommand)]
-    BuildCaches(HostBuildCacheCommands),
+    /// Manage the GUI-automation enablement of TARGET.
+    #[command(name = "gui-automation", subcommand)]
+    GuiAutomation(HostGuiAutomationCommands),
     /// Report TARGET's uptime, load averages and logged-in users.
     Uptime {
         target: String,
@@ -1400,66 +1344,6 @@ enum HostCommands {
     /// Check TARGET's ssh reachability AND health-beacon age as one verdict.
     Ping {
         target: String,
-        /// Emit the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Report TARGET's disk usage and its registry cleanup policy state.
-    Disk {
-        target: String,
-        /// Emit the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Move objects from one key prefix to another inside TARGET's store,
-    /// on the host that holds it.
-    ///
-    /// The object API has GET, PUT, DELETE, list and stat and no move, so
-    /// re-addressing an object used to mean pulling its body to the control
-    /// plane and pushing it back. On 2026-08-30 doing that with 134 MiB GGUF
-    /// parts took the always-on mac's release ingress down for ten minutes.
-    /// Inside one store the bytes never move at all: the destination is
-    /// hard-linked, hashed, compared against the source, and only then is the
-    /// source unlinked.
-    ///
-    /// Previews by default. An existing destination is never overwritten.
-    #[command(name = "object-relocate")]
-    ObjectRelocate {
-        target: String,
-        /// Store namespace holding both addresses, e.g. probierz.
-        #[arg(long)]
-        namespace: String,
-        /// The mis-addressed key prefix, e.g. ecosystem/probierz/.
-        #[arg(long)]
-        from_prefix: String,
-        /// The key prefix it belongs under. Empty means the namespace root.
-        #[arg(long, default_value = "")]
-        to_prefix: String,
-        /// Store root on the host. Defaults to the object API's own backing
-        /// directory, $HOME/.stado/local-storage.
-        #[arg(long)]
-        store_root: Option<String>,
-        /// Report what a pass would move and change nothing. The default, so
-        /// it never has to be remembered.
-        #[arg(long)]
-        dry_run: bool,
-        /// Relocate what the pass names.
-        #[arg(long, conflicts_with = "dry_run")]
-        apply: bool,
-        /// Decide at most this many objects in one pass. 0 is every one of
-        /// them; the command is resumable either way.
-        #[arg(long, default_value_t = 0)]
-        limit: usize,
-        /// Emit the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Preview what the registry cleanup would delete on TARGET.
-    Cleanup {
-        target: String,
-        /// Required: this command only ever previews.
-        #[arg(long)]
-        dry_run: bool,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -1489,26 +1373,248 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Reclaim disk on HOST in declared stages, measuring each one.
+    /// Repair a stale, reachable host whose beacon publisher proves that the
+    /// host-health API verifier is unavailable.
     ///
-    /// Previews by default: the host's own janitor pass, the release build
-    /// scratch tree, and delivered product trees no `current` link and no
-    /// live process references. `--apply` is the only thing that deletes and
-    /// requires `--reason`, which is recorded on the host itself.
-    Reclaim {
-        host: String,
-        /// Report what each stage would remove and delete nothing. The
-        /// default, so it never has to be remembered.
+    /// Copies the authoritative route bearer into the object API authority's
+    /// target-local verifier shadow, reconciles the existing least-privilege
+    /// grant, waits for the normal publisher to write a newer beacon, and
+    /// closes the recorded silence. Refuses every other diagnosis.
+    #[command(name = "repair-link")]
+    RepairLink {
+        target: String,
+        /// Emit the repair receipt as JSON.
         #[arg(long)]
-        dry_run: bool,
-        /// Remove what the stages name. Requires --reason.
-        #[arg(long, conflicts_with = "dry_run")]
-        apply: bool,
-        /// Why the space is being reclaimed; appended to the host's own
-        /// audit log beside the disk it changed.
+        json: bool,
+    },
+    /// Replace the tags of one Skarbiec item on TARGET, payload untouched.
+    ///
+    /// Consumers enumerate vault items by tag: Brama spends a subscription only
+    /// when its item carries `brama:subscription` and `brama:agent:<agent>`, so
+    /// an item that loses them leaves the fleet while its credential stays
+    /// valid and every check that counts credentials keeps answering green.
+    /// The owner key that may rewrite tags lives on the host, so this runs
+    /// there, reads the item before and after, and reports both.
+    #[command(name = "retag-vault-item")]
+    RetagVaultItem {
+        target: String,
+        /// Vault item id, e.g. provider:kimi:brama-sub-wisent-app-kimi-primary.
+        item: String,
+        /// The complete tag list to store, comma separated. This replaces the
+        /// item's tags rather than adding to them.
+        ///
+        /// Omit it to READ: the item's current state, revision and tags are
+        /// reported and nothing is written. A command that can only replace a
+        /// tag list forces an operator to guess the list they are replacing,
+        /// and a guess that drops `brama:agent:<other>` silently unsubscribes
+        /// another agent from a paid plan while every credential count stays
+        /// green.
         #[arg(long)]
-        reason: Option<String>,
-        /// Emit the staged report as JSON.
+        tags: Option<String>,
+        /// Emit the before/after report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pull TARGET's Skarbiec mirror into its live vault without discarding
+    /// local-only items.
+    ///
+    /// This replaces the live vault file with the mirror rather than merging
+    /// the two; run `--check` first, which names every item that would be
+    /// replaced and every one that would be lost, and exits non-zero when
+    /// either set is not empty.
+    #[command(name = "sync-vault")]
+    SyncVault {
+        target: String,
+        /// Report what a pull would change and exit non-zero on any conflict
+        /// or loss, applying nothing.
+        #[arg(long)]
+        check: bool,
+        /// Emit the Skarbiec pull report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Store one typed item directly in TARGET's owner vault.
+    ///
+    /// The canonical JSON payload is read from stdin and carried only in the
+    /// encrypted host channel's request body. Credential fields never enter a
+    /// local or remote argument vector, and the host's other items are untouched.
+    #[command(name = "vault-item-put")]
+    VaultItemPut {
+        target: String,
+        /// Credential item id.
+        item: String,
+        /// Canonical Skarbiec item kind.
+        #[arg(long = "type")]
+        item_type: String,
+        /// Emit the nonsecret before/after report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report what one item in TARGET's vault holds, without its values.
+    ///
+    /// `vault-item-put` had no counterpart, and the absence was not cosmetic:
+    /// an operator who had just written an item could not confirm from a
+    /// workstation that the host held it. `retag-vault-item`'s read reports
+    /// state, revision and tags and nothing about the payload,
+    /// `stado credentials get` reads the local store, and `skarbiec get` is
+    /// not a host-exec command. A migration wrote seven bundles and twenty
+    /// credential fields into a workstation vault nothing on the fleet reads,
+    /// and only a 401 from Brama revealed it.
+    ///
+    /// Prints kind, schema, revision, tags, `updated_at`, and per field its
+    /// name, byte length and SHA-256. The decryption and the hashing both
+    /// happen on the host: comparing the digest against a local copy's
+    /// answers "does the host hold what this row references" without either
+    /// side sending the value.
+    #[command(name = "vault-item-show")]
+    VaultItemShow {
+        target: String,
+        /// Credential item id.
+        item: String,
+        /// Report only this field's length and digest.
+        #[arg(long)]
+        field: Option<String>,
+        /// Emit the nonsecret report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report what one consumer's Skarbiec grant on TARGET holds.
+    ///
+    /// Prints the recorded capabilities as `item#field:action` and, when a
+    /// token file is named, whether the bearer in it is the one the vault
+    /// recorded. Records nothing: the verdict re-asserts a capability the
+    /// grant already holds, which Skarbiec answers without writing.
+    #[command(name = "grant-show")]
+    GrantShow {
+        target: String,
+        /// Exact Skarbiec consumer name.
+        consumer: String,
+        /// Consumer's bearer file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        token_file: Option<String>,
+        /// Emit the nonsecret report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Authorize one consumer to read one field of one item on TARGET.
+    ///
+    /// A Skarbiec grant is per item and per field. The consumer's bearer stays
+    /// on the target: this names its token file, never its bytes.
+    #[command(name = "grant-item-read")]
+    GrantItemRead {
+        target: String,
+        /// Exact Skarbiec consumer name.
+        consumer: String,
+        /// Credential item id.
+        item: String,
+        /// Item field the consumer may read.
+        #[arg(long)]
+        field: String,
+        /// Existing raw bearer file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        token_file: String,
+        /// Emit the nonsecret report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
+    #[command(name = "vault-token-mint")]
+    VaultTokenMint {
+        target: String,
+        consumer: String,
+        /// Comma-separated Skarbiec capabilities.
+        #[arg(long)]
+        capabilities: String,
+        /// Exact audience bound into the bearer.
+        #[arg(long)]
+        audience: String,
+        /// Bearer lifetime in seconds.
+        #[arg(long, default_value_t = 31_536_000)]
+        ttl_seconds: u64,
+        /// Replace an existing consumer's capability set.
+        #[arg(long)]
+        replace_capabilities: bool,
+        /// Reuse this owner-vault item's bearer instead of generating one.
+        #[arg(long)]
+        token_item: Option<String>,
+        /// Field in --token-item; defaults to token.
+        #[arg(long, requires = "token_item")]
+        token_field: Option<String>,
+        /// Print only a newly generated bearer, for piping into a secret store.
+        #[arg(long, conflicts_with = "token_item")]
+        raw_token: bool,
+        /// Keep the bearer in TARGET's ~/.stado/NAME; create if absent, reuse if present.
+        #[arg(long, conflicts_with_all = ["raw_token", "token_item"])]
+        token_file_name: Option<String>,
+        /// Emit nonsecret bearer metadata as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make TARGET's dashboard verifier shadow and grant match every object
+    /// namespace plus the route-scoped host-health bearer exactly.
+    ///
+    /// The route bearer is copied from the authoritative vault without
+    /// rotating it. The verifier's existing bearer and expiry are preserved;
+    /// stale capabilities are removed and missing reads are added.
+    #[command(name = "reconcile-object-verifier")]
+    ReconcileObjectVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make TARGET's release-verifier grant match release_api.publishers exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing publisher reads are added without printing the
+    /// bearer or moving it through argv.
+    #[command(name = "reconcile-release-verifier")]
+    ReconcileReleaseVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make TARGET's service-verifier grant match service_api.deployers exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing read capabilities are added without printing the
+    /// bearer or moving it through argv.
+    #[command(name = "reconcile-service-verifier")]
+    ReconcileServiceVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make TARGET's `agent.skarbiec.url` the credential endpoint the service
+    /// directory declares for that host, so the queue agent reads workload
+    /// secrets through a broker that exists.
+    #[command(name = "reconcile-agent-skarbiec")]
+    ReconcileAgentSkarbiec {
+        target: String,
+        /// Emit the receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recover an audit-lock stall in Skarbiec and its loaded local dependants.
+    #[command(name = "recover-skarbiec-audit")]
+    RecoverSkarbiecAudit {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recover stale per-user GnuPG daemons blocking Skarbiec decryption.
+    #[command(name = "recover-skarbiec-crypto")]
+    RecoverSkarbiecCrypto {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Repair Skarbiec acquisition state left by a different service user.
+    #[command(name = "recover-skarbiec-acquisition-state")]
+    RecoverSkarbiecAcquisitionState {
+        target: String,
         #[arg(long)]
         json: bool,
     },
@@ -1700,76 +1806,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Remove one file from TARGET's home, with guards a bare `rm` over ssh
-    /// does not have: the path must live under a managed area of the approved
-    /// account's home, be a regular file owned by that account, and never be
-    /// a symlink — anything else is refused before anything is deleted.
-    #[command(name = "remove-file")]
-    RemoveFile {
-        target: String,
-        /// Absolute path on the target. Only `$HOME/Library/LaunchAgents`
-        /// and `$HOME/.stado` are deletable by this command; a system path is
-        /// refused with the privileged command that could remove it named.
-        path: String,
-        /// Emit the removal report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Archive one obsolete executable or launchd declaration from TARGET
-    /// without deleting its bytes.
-    ///
-    /// User executables must be direct children of `$HOME/.stado/bin`,
-    /// `$HOME/.local/bin`, or `$HOME/.cargo/bin`. A system launchd declaration
-    /// must be one exact `/Library/LaunchDaemons/*.plist` file and is moved
-    /// under the host's approved sudo grant to a non-loadable sibling. Each
-    /// mutating path requires a handoff or dry-run receipt and verifies
-    /// its size, mode, and SHA-256 after the atomic move.
-    #[command(name = "retire-file")]
-    RetireFile {
-        target: String,
-        /// Absolute path to one approved user binary or system launchd plist.
-        path: String,
-        /// Canonical product name owning the retirement receipt.
-        #[arg(long)]
-        product: String,
-        /// Inspect and report the exact source without moving it.
-        #[arg(long)]
-        dry_run: bool,
-        /// One-use transaction token from a handoff or dry-run receipt.
-        #[arg(long)]
-        transaction: Option<String>,
-        /// SHA-256 from the same receipt.
-        #[arg(long)]
-        expected_sha256: Option<String>,
-        /// Byte count from the same receipt.
-        #[arg(long)]
-        expected_size: Option<u64>,
-        /// Four-digit octal mode from the same receipt.
-        #[arg(long)]
-        expected_mode: Option<String>,
-        /// Emit the retirement report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Device-local endpoint for the target-resolving retire-file command.
-    #[command(name = "retire-file-local", hide = true)]
-    RetireFileLocal {
-        path: String,
-        #[arg(long)]
-        product: String,
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        transaction: Option<String>,
-        #[arg(long)]
-        expected_sha256: Option<String>,
-        #[arg(long)]
-        expected_size: Option<u64>,
-        #[arg(long)]
-        expected_mode: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
     /// Read TARGET's crontab, and optionally prune one entry from it.
     ///
     /// The periodic table is the one place a fleet host can declare a
@@ -1917,27 +1953,38 @@ enum HostCommands {
 }
 
 #[derive(Subcommand)]
-enum HostBuildCacheCommands {
-    /// List tagged cache directories older than --min-age-days with sizes.
-    Report {
+enum HostGuiAutomationCommands {
+    /// Report autologin, remote management, TCC, CuaDriver, and the signed
+    /// Apple challenge helper for the registry-bound GUI user.
+    Status {
         target: String,
-        /// Absolute directory to search.
+        /// Return the complete observed host state as JSON.
         #[arg(long)]
-        root: String,
-        /// Only consider directories untouched for this many whole days.
-        #[arg(long)]
-        min_age_days: String,
+        json: bool,
     },
-    /// Delete those directories.
-    Prune {
+    /// Configure the persistent GUI login, CuaDriver, the Apple challenge
+    /// helper, runtime, and Accessibility grants.
+    Enable { target: String },
+    /// Reconcile the signed Apple challenge helper and grant it and the
+    /// installed CuaDriver Accessibility for the registry-bound GUI user.
+    #[command(name = "grant-accessibility")]
+    GrantAccessibility {
         target: String,
+        /// Prepare only the Apple challenge helper; leave CuaDriver, its
+        /// Accessibility grants, and its runtime unchanged.
         #[arg(long)]
-        root: String,
+        apple_only: bool,
+        /// Return the complete preparation report, including partial work on failure.
         #[arg(long)]
-        min_age_days: String,
-        /// Remove tagged caches even when they were used today.
+        json: bool,
+    },
+    /// Revert the enablement: autologin, kcpassword, remote management,
+    /// the driver's accessibility grant, and the installed artifacts.
+    Disable {
+        target: String,
+        /// Bundle id whose accessibility grant is revoked; omitted leaves TCC alone.
         #[arg(long)]
-        force: bool,
+        bundle: Option<String>,
     },
 }
 
@@ -2135,6 +2182,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         | "artifact" => "queue",
         "fleet"
         | "host"
+        | "space"
         | "registry"
         | "builds"
         | "service"
@@ -2397,155 +2445,28 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 watts,
                 json,
             } => host::gpu_power_limit(&target, watts, json).await,
-            HostCommands::DiskCleanupPolicy {
-                target,
-                mode,
-                check_interval_seconds,
-                low_free_gb,
-                target_free_gb,
-                max_items_per_pass,
-                max_bytes_per_pass,
-                max_scan_items,
-                max_pass_seconds,
-                clear_max_pass_seconds,
-                add_cleaner,
-                remove_cleaner,
-                cleaner_root,
-                clear_cleaner_root,
-                cleaner_min_age_seconds,
-                cleaner_keep_newest,
-                json,
-            } => {
-                host::disk_cleanup_policy(
-                    &target,
-                    host::DiskCleanupPolicyEdit {
-                        mode,
-                        check_interval_seconds,
-                        low_free_gb,
-                        target_free_gb,
-                        max_items_per_pass,
-                        max_bytes_per_pass,
-                        max_scan_items,
-                        max_pass_seconds,
-                        clear_max_pass_seconds,
-                        add_cleaner,
-                        remove_cleaner,
-                        cleaner_root,
-                        clear_cleaner_root,
-                        cleaner_min_age_seconds,
-                        cleaner_keep_newest,
-                    },
-                    json,
-                )
-                .await
-            }
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
             }
-            HostCommands::BuildCaches(HostBuildCacheCommands::Report {
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target, json }) => {
+                host::gui_automation_status(&target, json).await
+            }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
+                host::gui_automation_enable(&target).await
+            }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
                 target,
-                root,
-                min_age_days,
-            }) => host::build_caches(&target, &root, &min_age_days, false, false).await,
-            HostCommands::BuildCaches(HostBuildCacheCommands::Prune {
-                target,
-                root,
-                min_age_days,
-                force,
-            }) => host::build_caches(&target, &root, &min_age_days, true, force).await,
+                apple_only,
+                json,
+            }) => host::gui_automation_grant_accessibility(&target, apple_only, json).await,
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
+                host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
+            }
             HostCommands::Uptime { target, json } => host::uptime(&target, json).await,
             HostCommands::Ping { target, json } => host::ping(&target, json).await,
-            HostCommands::Disk { target, json } => host::disk(&target, json).await,
-            // Same default as `host reclaim`: `--dry-run` is what happens
-            // when nothing is asked for, and clap refuses it beside `--apply`.
-            HostCommands::ObjectRelocate {
-                target,
-                namespace,
-                from_prefix,
-                to_prefix,
-                store_root,
-                dry_run: _,
-                apply,
-                limit,
-                json,
-            } => {
-                let plan = crate::deploy::host_object_relocate::RelocatePlan {
-                    namespace,
-                    from: from_prefix,
-                    to: to_prefix,
-                    store_root,
-                    apply,
-                    limit,
-                };
-                host::object_relocate(&target, &plan, json).await
-            }
-            HostCommands::Cleanup {
-                target,
-                dry_run,
-                json,
-            } => host::cleanup(&target, dry_run, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
             HostCommands::Link { target, json } => host::link(&target, json).await,
-            // `--dry-run` is the default and needs no argument: `--apply` is
-            // the only flag that changes anything, and clap already refuses
-            // the two together.
-            HostCommands::Reclaim {
-                host: target,
-                dry_run: _,
-                apply,
-                reason,
-                json,
-            } => host::reclaim(&target, apply, reason.as_deref(), json).await,
-            HostCommands::RemoveFile { target, path, json } => {
-                host::remove_file(&target, &path, json).await
-            }
-            HostCommands::RetireFile {
-                target,
-                path,
-                product,
-                dry_run,
-                transaction,
-                expected_sha256,
-                expected_size,
-                expected_mode,
-                json,
-            } => {
-                host::retire_file(
-                    &target,
-                    host::RetireFileRequest {
-                        path: &path,
-                        product: &product,
-                        dry_run,
-                        transaction: transaction.as_deref(),
-                        expected_sha256: expected_sha256.as_deref(),
-                        expected_size,
-                        expected_mode: expected_mode.as_deref(),
-                    },
-                    json,
-                )
-                .await
-            }
-            HostCommands::RetireFileLocal {
-                path,
-                product,
-                dry_run,
-                transaction,
-                expected_sha256,
-                expected_size,
-                expected_mode,
-                json,
-            } => host::retire_file_local(
-                host::RetireFileRequest {
-                    path: &path,
-                    product: &product,
-                    dry_run,
-                    transaction: transaction.as_deref(),
-                    expected_sha256: expected_sha256.as_deref(),
-                    expected_size,
-                    expected_mode: expected_mode.as_deref(),
-                },
-                json,
-            ),
+
             HostCommands::Cron {
                 target,
                 prune,
@@ -2689,6 +2610,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Workload(command) => workload::dispatch(command).await,
         Commands::Repair(args) => repair::dispatch(args).await,
         Commands::Runner(sub) => runner::run(sub).await,
+        Commands::Space(command) => space::dispatch(command).await,
     }
 }
 

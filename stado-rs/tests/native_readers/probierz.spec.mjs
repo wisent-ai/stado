@@ -102,7 +102,7 @@ await writeFile(tracePath, `${JSON.stringify({
     },
   },
   tests,
-  productionMutations: 'one collision-resistant Probierz LaunchAgent in the selected macOS login domain; isolated HOME, storage, registry, port, logs, and binaries; removed through Stado service bootout and guarded host remove-file lifecycle commands',
+  productionMutations: 'one collision-resistant Probierz LaunchAgent in the selected macOS login domain; isolated HOME, storage, registry, port, logs, and binaries; removed through Stado service bootout and guarded space file remove lifecycle commands',
   contracts: [
     'a real launchd unit can keep executing a private Stado file after its on-disk plist changes to the delivered root',
     'release converge-local-readers reloads that changed definition through the exact launchd domain observed to own it',

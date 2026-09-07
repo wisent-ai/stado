@@ -972,7 +972,7 @@ struct ServicesView: View {
     /// The file-delete verb is offered only where the CLI's guards could
     /// pass: a unit file inside a user's own LaunchAgents or under .stado.
     /// Anything else — a system daemon path, an empty path — has no button,
-    /// because `stado host remove-file` would refuse it before deleting
+    /// because `stado space file remove` would refuse it before deleting
     /// anything anyway.
     @ViewBuilder
     private func removeFileAffordance(_ entry: FleetServiceEntry) -> some View {

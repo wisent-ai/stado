@@ -538,6 +538,9 @@ struct HostsView: View {
                 badges: badges(for: host)
             ) {
                 gateSection(for: host)
+                if host.declared {
+                    SpaceSection(host: host.targetName ?? host.displayName)
+                }
                 linkSection(for: host)
                 CredentialsHostSection(
                     host: host.targetName ?? host.displayName,

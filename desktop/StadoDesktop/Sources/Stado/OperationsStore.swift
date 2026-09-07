@@ -216,7 +216,7 @@ enum StadoRegistryHosts {
 /// What one host answered when it was asked whether it is claiming work, and
 /// the two-step reclamation that is the only write on the Hosts screen.
 ///
-/// Every value here comes from `stado host gates` and `stado host reclaim` run
+/// Every value here comes from `stado host gates` and `stado space reclaim` run
 /// as child processes: the same commands, the same words, the same exit codes
 /// an operator would get in a terminal. Nothing on this screen is computed
 /// from a second source.
@@ -271,11 +271,11 @@ final class HostGatesStore: ObservableObject {
     }
 
     nonisolated static func previewArguments(host: String) -> [String] {
-        ["host", "reclaim", host, "--dry-run", "--json"]
+        ["space", "reclaim", host, "--dry-run", "--json"]
     }
 
     nonisolated static func applyArguments(host: String, reason: String) -> [String] {
-        ["host", "reclaim", host, "--apply", "--reason", reason, "--json"]
+        ["space", "reclaim", host, "--apply", "--reason", reason, "--json"]
     }
 
     /// Read-only. One `host gates` invocation per registry host, concurrently,
@@ -552,7 +552,7 @@ struct HostRetireFileRequest: Equatable, Sendable {
     let product: String
 }
 
-/// Two-step Desktop owner for `stado host retire-file`.
+/// Two-step Desktop owner for `stado space file retire`.
 ///
 /// The store retains the exact request that produced a `ready` receipt and
 /// refuses mutation when any field has changed. It runs only the CLI argv a
@@ -574,7 +574,7 @@ final class HostRetireFileStore: ObservableObject {
 
     nonisolated static func previewArguments(_ request: HostRetireFileRequest) -> [String] {
         [
-            "host", "retire-file", request.host, request.path,
+            "space", "file", "retire", request.host, request.path,
             "--product", request.product, "--dry-run", "--json",
         ]
     }
@@ -589,7 +589,7 @@ final class HostRetireFileStore: ObservableObject {
               let mode = receipt.mode
         else { return nil }
         return [
-            "host", "retire-file", request.host, request.path,
+            "space", "file", "retire", request.host, request.path,
             "--product", request.product,
             "--transaction", transaction,
             "--expected-sha256", sha256,

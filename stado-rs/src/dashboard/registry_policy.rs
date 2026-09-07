@@ -208,11 +208,10 @@ pub(super) async fn import_registry(request: &Request) -> Response {
 
 /// `POST /api/registry/policy`
 ///
-/// The same compare-and-swap `stado host disk-cleanup` performs, over the same
-/// whitelist: read the current generation, rewrite exactly the named fields,
-/// validate the WHOLE document, and swap only if nobody moved it. The returned
-/// generation is the operator's proof the write landed on the document they
-/// were reading.
+/// A compare-and-swap over the registry policy whitelist: read the current
+/// generation, rewrite exactly the named fields, validate the WHOLE document,
+/// and swap only if nobody moved it. The returned generation is the operator's
+/// proof the write landed on the document they were reading.
 pub(super) async fn set_policy(request: &Request) -> Response {
     let payload: Value = match serde_json::from_slice(&request.body) {
         Ok(payload) => payload,

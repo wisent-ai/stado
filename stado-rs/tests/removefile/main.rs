@@ -1,4 +1,4 @@
-//! `stado host remove-file` against the local storage backend.
+//! `stado space file remove` against the local storage backend.
 //!
 //! The target is THIS machine, so the command runs its fixed script through
 //! the local branch of the host channel — the same `/bin/bash -s` the ssh
@@ -70,7 +70,13 @@ fn an_allowed_plist_is_removed() {
     let out = stado(
         storage.path(),
         home.path(),
-        &["host", "remove-file", "this-mac", path.to_str().unwrap()],
+        &[
+            "space",
+            "file",
+            "remove",
+            "this-mac",
+            path.to_str().unwrap(),
+        ],
     );
     assert!(out.status.success(), "removal failed: {}", stderr(&out));
     assert!(stdout(&out).contains("removed"), "{}", stdout(&out));
@@ -85,7 +91,13 @@ fn an_absent_file_reports_absent_without_failing() {
     let out = stado(
         storage.path(),
         home.path(),
-        &["host", "remove-file", "this-mac", path.to_str().unwrap()],
+        &[
+            "space",
+            "file",
+            "remove",
+            "this-mac",
+            path.to_str().unwrap(),
+        ],
     );
     assert!(
         out.status.success(),
@@ -105,7 +117,13 @@ fn a_symlink_is_refused_and_left_alone() {
     let out = stado(
         storage.path(),
         home.path(),
-        &["host", "remove-file", "this-mac", path.to_str().unwrap()],
+        &[
+            "space",
+            "file",
+            "remove",
+            "this-mac",
+            path.to_str().unwrap(),
+        ],
     );
     assert!(!out.status.success(), "a symlink must not pass");
     assert!(
@@ -120,11 +138,18 @@ fn a_symlink_is_refused_and_left_alone() {
 fn a_directory_is_refused_and_left_alone() {
     let home = home_with_plist("real.plist");
     let storage = storage_with_this_host(home.path());
-    let path = home.path().join("Library/LaunchAgents");
+    let path = home.path().join("Library/LaunchAgents/a-directory");
+    std::fs::create_dir(&path).unwrap();
     let out = stado(
         storage.path(),
         home.path(),
-        &["host", "remove-file", "this-mac", path.to_str().unwrap()],
+        &[
+            "space",
+            "file",
+            "remove",
+            "this-mac",
+            path.to_str().unwrap(),
+        ],
     );
     assert!(!out.status.success());
     assert!(
@@ -143,16 +168,17 @@ fn a_system_path_is_refused_with_the_privileged_command_named() {
         storage.path(),
         home.path(),
         &[
-            "host",
-            "remove-file",
+            "space",
+            "file",
+            "remove",
             "this-mac",
-            "/Library/LaunchDaemons/com.wisent.example.plist",
+            "/Library/LaunchDaemons/org.example.plist",
         ],
     );
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains(
-            "outside the managed home areas; remove it on the host with: sudo rm -- /Library/LaunchDaemons/com.wisent.example.plist"
+            "outside the managed areas; remove it on the host with: sudo rm -- /Library/LaunchDaemons/org.example.plist"
         ),
         "the refusal names the privileged command: {}",
         stderr(&out)
@@ -167,7 +193,7 @@ fn a_relative_or_dotdot_path_never_reaches_the_host() {
         let out = stado(
             storage.path(),
             home.path(),
-            &["host", "remove-file", "this-mac", bad],
+            &["space", "file", "remove", "this-mac", bad],
         );
         assert_eq!(
             out.status.code(),

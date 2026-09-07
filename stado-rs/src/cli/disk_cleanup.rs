@@ -10,9 +10,8 @@
 //!
 //! DEVIATION from Python: `--dry-run` has no Python original. It runs
 //! [`crate::providers::local::disk_cleanup::preview_cleanup_once`] instead
-//! of `run_cleanup_once`, and exists so `stado host cleanup TARGET
-//! --dry-run` has something to invoke on the host it is previewing —
-//! see [`crate::deploy::host_cleanup`].
+//! of `run_cleanup_once`, and is the target-local primitive used by the
+//! `registry_cleanup` stage of `stado space reclaim`.
 
 use std::time::Duration;
 
@@ -42,9 +41,9 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
     if dry_run {
         // The janitor's OWN planning phase: same canonical policy, same
         // lock, same scanners, with an `enforce` policy pinned to its
-        // `report` mode and no state written. `stado host cleanup TARGET
-        // --dry-run` (`deploy::host_cleanup`) runs exactly this over ssh
-        // on the host being previewed.
+        // `report` mode and no state written. The `registry_cleanup` stage
+        // (`deploy::host_cleanup`) runs exactly this on the target being
+        // previewed.
         let report = disk_cleanup::preview_cleanup_once(&mut |_message| {}).await;
         println!("{}", disk_cleanup::canonical_json(&report));
         return Ok(());
