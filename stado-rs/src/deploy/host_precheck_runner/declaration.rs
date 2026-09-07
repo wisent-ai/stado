@@ -59,6 +59,21 @@ impl RunnerProfile {
         self.secrets.iter().any(|secret| secret == "probierz-agent")
     }
 
+    /// Whether this profile's repositories carry the Brama review bearer.
+    ///
+    /// Keyed on the secret it installs, the way `needs_publisher_bootstrap` is
+    /// keyed on `SPARKLE_PRIVATE_KEY`. It used to be keyed on `probierz-agent`,
+    /// which is a different declaration — the Kronika signing identity the
+    /// runner carries on its own disk — so a profile that wanted the identity
+    /// and not the repository secret could not say so, and a repository whose
+    /// workflows never call Brama could not get a runner while Brama answered
+    /// 502.
+    pub(crate) fn needs_model_review(&self) -> bool {
+        self.secrets
+            .iter()
+            .any(|secret| secret == "BRAMA_MODEL_ROUTER_TOKEN")
+    }
+
     pub(crate) fn needs_publisher_bootstrap(&self) -> bool {
         self.secrets
             .iter()

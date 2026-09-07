@@ -40,8 +40,8 @@ if [ ! -f "$runner_root/.runner" ]; then
   root mkdir -p "$runner_root"
   root tar -xzf "$archive" -C "$runner_root" --no-same-owner
   root chown -R "$runner_user:$runner_user" "$runner_root"
-  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
-  root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
+  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
+  root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
   root install -o "$runner_user" -g "$runner_user" -m 0600 "$token_file" "$runner_root/.registration-token"
@@ -64,11 +64,11 @@ if [ ! -f "$runner_root/.runner" ]; then
   printf '%s\n%s\n%s\n' __RUNNER_LABELS__ "$runner_group" __RUNNER_SCOPE__ | root tee "$runner_root/.stado/registered-runner" >/dev/null
 fi
 
-root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
+root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
 root chown -R root:root "$runner_root"
 root chmod -R go-w "$runner_root"
-root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
-root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
+root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
+root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
 
 root mkdir -p "$runner_root/routes"
 printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
@@ -140,6 +140,15 @@ ExecStartPre=$runner_root/clean-work.sh
 ExecStart=$runner_root/bin/runsvc.sh
 Restart=always
 RestartSec=5
+# Where the single-file .NET host unpacks itself, and where the runner puts
+# temporary files: inside this profile's own runner root, exactly as the darwin
+# installer already pins them. Without this the listener answered
+# `System.IO.IOException: Permission denied` and never reported listening,
+# because `ProtectSystem=strict` leaves the filesystem read-only apart from
+# `ReadWritePaths` and the extract directory was neither.
+Environment=HOME=$runner_root
+Environment=TMPDIR=$runner_root/.tmp
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet
 Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/job-gate.sh
 Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh
 NoNewPrivileges=true
@@ -154,7 +163,21 @@ ProtectControlGroups=true
 ProtectClock=true
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup /opt/wisent/.stado-runner-jobs
+# The runner's own writable set, and nothing else. Line 68 chowns the whole
+# root to root and drops group write so the account cannot rewrite the
+# binaries it executes, then hands back exactly the directories it must write.
+# `.tmp` and `.dotnet` are on that list because the single-file .NET host
+# unpacks itself into `DOTNET_BUNDLE_EXTRACT_BASE_DIR` before it can run at
+# all: without them the listener answered `System.IO.IOException: Permission
+# denied` and never reported listening, which is how the first second-profile
+# install on a host failed.
+#
+# The job gate stays shared on purpose. One job at a time is a host-wide
+# invariant, not a per-runner one, so every profile account writes its marker
+# into the same sticky 1777 directory; giving each profile its own gate path
+# would let two runners on one host build at once, which is the failure the
+# gate exists to prevent.
+ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup $runner_root/.tmp $runner_root/.dotnet /opt/wisent/.stado-runner-jobs
 
 [Install]
 WantedBy=multi-user.target
