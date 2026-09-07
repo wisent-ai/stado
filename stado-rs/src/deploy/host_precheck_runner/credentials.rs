@@ -1,5 +1,9 @@
-//! Credential reads: the fleet's own admin vault, and the Probierz agent
-//! identity resolved through Brama's Skarbiec routes.
+//! The Probierz agent identity, resolved through Brama's Skarbiec routes.
+//!
+//! The fleet's own admin read used to live here too, as
+//! `admin_credential(item, field)`, and its one caller named the GitHub item by
+//! id. That identity is now resolved through the route declared in
+//! `stado-rs/data/github-identity.json`, so the reader went with the caller.
 
 use serde_json::Value;
 
@@ -13,24 +17,6 @@ pub(crate) struct ProbierzAgentCredential {
     pub(crate) item: String,
     pub(crate) field: String,
     pub(crate) secret: String,
-}
-
-pub(crate) async fn admin_credential(item: &str, field: &str) -> Result<String, DeployError> {
-    let credentials = crate::credential_store::admin_credentials()
-        .map_err(|error| DeployError(error.to_string()))?;
-    let client = crate::skarbiec::Client::direct(
-        &credentials.url,
-        &credentials.consumer,
-        &credentials.token_file,
-        crate::skarbiec::GrantMode::RereadPerRequest,
-    )
-    .map_err(|error| DeployError(error.to_string()))?;
-    client
-        .read_string(item, field)
-        .await
-        .map_err(|error| DeployError(error.to_string()))?
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| DeployError(format!("credential {item}.{field} is required")))
 }
 
 /// The Probierz agent identity the runner signs Kronika requests with, resolved
