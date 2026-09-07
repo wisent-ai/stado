@@ -107,10 +107,7 @@ impl Fleet {
     }
 
     fn destination(&self, name: &str) -> PathBuf {
-        self.home
-            .join(".stado/work/runs")
-            .join(RUN)
-            .join(name)
+        self.home.join(".stado/work/runs").join(RUN).join(name)
     }
 
     fn valid_destination(name: &str) -> String {
@@ -123,30 +120,60 @@ fn a_selected_uncommitted_tree_is_replaced_with_modes_and_symlinks_preserved() {
     let fleet = Fleet::new();
     fs::create_dir_all(fleet.source.join("nested")).unwrap();
     fs::write(fleet.source.join("run.sh"), b"#!/bin/sh\necho first\n").unwrap();
-    fs::set_permissions(fleet.source.join("run.sh"), fs::Permissions::from_mode(0o751)).unwrap();
+    fs::set_permissions(
+        fleet.source.join("run.sh"),
+        fs::Permissions::from_mode(0o751),
+    )
+    .unwrap();
     fs::write(fleet.source.join("nested/data.txt"), b"selected\n").unwrap();
     fs::write(fleet.source.join("ignored.txt"), b"not selected\n").unwrap();
     symlink("nested/data.txt", fleet.source.join("current")).unwrap();
 
     let destination = Fleet::valid_destination("probierz");
-    let first = fleet.deliver_with_stdin(
-        &destination,
-        b"run.sh\0nested/data.txt\0current\0",
+    let first = fleet.deliver_with_stdin(&destination, b"run.sh\0nested/data.txt\0current\0");
+    assert!(
+        first.status.success(),
+        "{}{}",
+        stdout(&first),
+        stderr(&first)
     );
-    assert!(first.status.success(), "{}{}", stdout(&first), stderr(&first));
     let receipt: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(receipt["status"], "delivered");
     assert_eq!(receipt["selection"], "nul-file-list");
     let delivered = fleet.destination("probierz");
-    assert_eq!(fs::read(delivered.join("nested/data.txt")).unwrap(), b"selected\n");
+    assert_eq!(
+        fs::read(delivered.join("nested/data.txt")).unwrap(),
+        b"selected\n"
+    );
     assert!(!delivered.join("ignored.txt").exists());
-    assert_eq!(fs::symlink_metadata(delivered.join("current")).unwrap().file_type().is_symlink(), true);
-    assert_eq!(fs::metadata(delivered.join("run.sh")).unwrap().permissions().mode() & 0o777, 0o751);
+    assert_eq!(
+        fs::symlink_metadata(delivered.join("current"))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        true
+    );
+    assert_eq!(
+        fs::metadata(delivered.join("run.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o751
+    );
 
     fs::write(fleet.source.join("run.sh"), b"#!/bin/sh\necho second\n").unwrap();
     let second = fleet.deliver_with_stdin(&destination, b"run.sh\0current\0nested/data.txt\0");
-    assert!(second.status.success(), "{}{}", stdout(&second), stderr(&second));
-    assert_eq!(fs::read(delivered.join("run.sh")).unwrap(), b"#!/bin/sh\necho second\n");
+    assert!(
+        second.status.success(),
+        "{}{}",
+        stdout(&second),
+        stderr(&second)
+    );
+    assert_eq!(
+        fs::read(delivered.join("run.sh")).unwrap(),
+        b"#!/bin/sh\necho second\n"
+    );
     assert!(!delivered.join(".probierz.stado-previous").exists());
 }
 
@@ -167,9 +194,17 @@ fn an_application_bundle_is_delivered_as_a_complete_mode_preserving_tree() {
         &destination,
         "--json",
     ]);
-    assert!(output.status.success(), "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        stderr(&output)
+    );
     let delivered = fleet.destination("Byk.app/Contents/MacOS/Byk");
-    assert_eq!(fs::metadata(&delivered).unwrap().permissions().mode() & 0o777, 0o755);
+    assert_eq!(
+        fs::metadata(&delivered).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
 }
 
 #[test]
@@ -211,11 +246,15 @@ fn a_symlink_in_the_destination_path_is_refused_before_transfer() {
     ]);
     assert!(!output.status.success());
     assert!(
-        stderr(&output).contains("delivery refused before transfer: destination traverses a symlink"),
+        stderr(&output)
+            .contains("delivery refused before transfer: destination traverses a symlink"),
         "{}",
         stderr(&output)
     );
-    assert!(!outside.join("runs").exists(), "the symlink target stayed untouched");
+    assert!(
+        !outside.join("runs").exists(),
+        "the symlink target stayed untouched"
+    );
 }
 
 #[test]
@@ -229,7 +268,11 @@ fn missing_and_unknown_targets_have_exact_refusals() {
         "{}",
         stderr(&missing)
     );
-    assert!(stderr(&missing).contains("<TARGET>"), "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("<TARGET>"),
+        "{}",
+        stderr(&missing)
+    );
 
     let destination = Fleet::valid_destination("payload");
     let unknown = fleet.run(&[
@@ -259,8 +302,16 @@ fn fixed_host_exec_entry_prepares_only_the_managed_run_root() {
         "-p",
         ".stado/work/runs",
     ]);
-    assert!(output.status.success(), "{}{}", stdout(&output), stderr(&output));
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        stderr(&output)
+    );
     let root = fleet.home.join(".stado/work/runs");
     assert!(root.is_dir());
-    assert_eq!(fs::metadata(root).unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        fs::metadata(root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
 }

@@ -81,9 +81,10 @@ impl RemoveRunDirectoryOutcome {
 /// to its own `$HOME`; this lexical check does not guess that home locally.
 pub fn validate_run_descendant(path: &str) -> Result<(), String> {
     let components = std::path::Path::new(path).components().collect::<Vec<_>>();
-    let ordinary = components.iter().skip(1).all(|component| {
-        matches!(component, std::path::Component::Normal(_))
-    });
+    let ordinary = components
+        .iter()
+        .skip(1)
+        .all(|component| matches!(component, std::path::Component::Normal(_)));
     let managed = path
         .split_once(&format!("/{RUN_AREA}/"))
         .is_some_and(|(home, relative)| !home.is_empty() && !relative.is_empty());
@@ -184,11 +185,7 @@ pub async fn build(
     runner: &Runner,
 ) -> Result<BuildOutcome, DeployError> {
     let mut script = String::from("set -uo pipefail\numask 077\n");
-    script.push_str(&confined_file_prelude(
-        manifest_path,
-        "-f",
-        "manifest",
-    ));
+    script.push_str(&confined_file_prelude(manifest_path, "-f", "manifest"));
     script.push_str("cargo=''\n");
     for candidate in super::host_exec::cargo_candidates() {
         let candidate = if let Some(relative) = candidate.strip_prefix("~/") {
@@ -209,7 +206,8 @@ pub async fn build(
         shlex_quote(binary)
     ));
 
-    let output = host_channel::run_script_with_timeout(target, &script, BUILD_TIMEOUT, runner).await?;
+    let output =
+        host_channel::run_script_with_timeout(target, &script, BUILD_TIMEOUT, runner).await?;
     Ok(BuildOutcome {
         target: target.name.clone(),
         manifest_path: manifest_path.to_string(),
@@ -284,7 +282,11 @@ async fn forward_signal(
         (Some(destination), Some(key)) => {
             ssh_key::add_identity(host_channel::ssh_script_argv(destination), key)?
         }
-        _ => return Err(DeployError("attached host channel is incomplete".to_string())),
+        _ => {
+            return Err(DeployError(
+                "attached host channel is incomplete".to_string(),
+            ))
+        }
     };
     let output = super::production_runner()(CommandSpec {
         argv,
@@ -342,7 +344,9 @@ pub async fn run_attached(
     }
     #[cfg(unix)]
     command.process_group(0);
-    let mut child = command.spawn().map_err(|error| DeployError(error.to_string()))?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| DeployError(error.to_string()))?;
     let stdout_reader = child.stdout.take().map(|mut stdout| {
         tokio::spawn(async move {
             let mut bytes = Vec::new();
@@ -360,9 +364,12 @@ pub async fn run_attached(
     #[cfg(unix)]
     let status = {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut hangup = signal(SignalKind::hangup()).map_err(|error| DeployError(error.to_string()))?;
-        let mut interrupt = signal(SignalKind::interrupt()).map_err(|error| DeployError(error.to_string()))?;
-        let mut terminate = signal(SignalKind::terminate()).map_err(|error| DeployError(error.to_string()))?;
+        let mut hangup =
+            signal(SignalKind::hangup()).map_err(|error| DeployError(error.to_string()))?;
+        let mut interrupt =
+            signal(SignalKind::interrupt()).map_err(|error| DeployError(error.to_string()))?;
+        let mut terminate =
+            signal(SignalKind::terminate()).map_err(|error| DeployError(error.to_string()))?;
         loop {
             tokio::select! {
                 status = child.wait() => break status.map_err(|error| DeployError(error.to_string()))?,
@@ -388,26 +395,33 @@ pub async fn run_attached(
         }
     };
     #[cfg(not(unix))]
-    let status = child.wait().await.map_err(|error| DeployError(error.to_string()))?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|error| DeployError(error.to_string()))?;
 
     let stdout = match stdout_reader {
-        Some(reader) => Some(String::from_utf8_lossy(
-            &reader
-                .await
-                .map_err(|error| DeployError(error.to_string()))?
-                .map_err(|error| DeployError(error.to_string()))?,
-        )
-        .into_owned()),
+        Some(reader) => Some(
+            String::from_utf8_lossy(
+                &reader
+                    .await
+                    .map_err(|error| DeployError(error.to_string()))?
+                    .map_err(|error| DeployError(error.to_string()))?,
+            )
+            .into_owned(),
+        ),
         None => None,
     };
     let stderr = match stderr_reader {
-        Some(reader) => Some(String::from_utf8_lossy(
-            &reader
-                .await
-                .map_err(|error| DeployError(error.to_string()))?
-                .map_err(|error| DeployError(error.to_string()))?,
-        )
-        .into_owned()),
+        Some(reader) => Some(
+            String::from_utf8_lossy(
+                &reader
+                    .await
+                    .map_err(|error| DeployError(error.to_string()))?
+                    .map_err(|error| DeployError(error.to_string()))?,
+            )
+            .into_owned(),
+        ),
         None => None,
     };
     drop(key);
@@ -457,20 +471,22 @@ if [ "$physical_parent" != "$physical_home/{RUN_AREA}" ]; then report refused 'r
 if [ -e "$path" ] || [ -L "$path" ]; then report failed 'rm returned and the run directory is still present'; else report removed ''; fi
 "#
     );
-    let output = host_channel::run_script_with_timeout(
-        target,
-        &script,
-        Duration::from_secs(5 * 60),
-        runner,
-    )
-    .await?;
+    let output =
+        host_channel::run_script_with_timeout(target, &script, Duration::from_secs(5 * 60), runner)
+            .await?;
     let (status, detail) = output
         .stdout
         .lines()
         .find_map(|line| {
             let fields = host_channel::marker_fields(line);
-            (fields.first() == Some(&"STADO_REMOVE_RUN_DIRECTORY") && fields.len() >= 3)
-                .then(|| (fields[1].to_string(), (!fields[2].is_empty()).then(|| fields[2].to_string())))
+            (fields.first() == Some(&"STADO_REMOVE_RUN_DIRECTORY") && fields.len() >= 3).then(
+                || {
+                    (
+                        fields[1].to_string(),
+                        (!fields[2].is_empty()).then(|| fields[2].to_string()),
+                    )
+                },
+            )
         })
         .ok_or_else(|| {
             DeployError(format!(

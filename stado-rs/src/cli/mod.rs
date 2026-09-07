@@ -60,8 +60,8 @@ pub mod repair;
 pub mod resolver;
 pub mod resources;
 pub mod results;
-pub mod runner;
 pub mod route;
+pub mod runner;
 pub mod schedule;
 pub mod secrets;
 pub mod seed_freshness;
@@ -1294,9 +1294,6 @@ enum HostCommands {
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),
-    /// Point TARGET's Weles recordings store at PATH.
-    #[command(name = "weles-recordings-dir")]
-    WelesRecordingsDir { target: String, path: String },
     /// Persist and immediately reconcile TARGET's NVIDIA board power cap.
     #[command(name = "gpu-power-limit")]
     GpuPowerLimit {
@@ -1348,251 +1345,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Repair a stale, reachable host whose beacon publisher proves that the
-    /// host-health API verifier is unavailable.
-    ///
-    /// Copies the authoritative route bearer into the object API authority's
-    /// target-local verifier shadow, reconciles the existing least-privilege
-    /// grant, waits for the normal publisher to write a newer beacon, and
-    /// closes the recorded silence. Refuses every other diagnosis.
-    #[command(name = "repair-link")]
-    RepairLink {
-        target: String,
-        /// Emit the repair receipt as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Replace the tags of one Skarbiec item on TARGET, payload untouched.
-    ///
-    /// Consumers enumerate vault items by tag: Brama spends a subscription only
-    /// when its item carries `brama:subscription` and `brama:agent:<agent>`, so
-    /// an item that loses them leaves the fleet while its credential stays
-    /// valid and every check that counts credentials keeps answering green.
-    /// The owner key that may rewrite tags lives on the host, so this runs
-    /// there, reads the item before and after, and reports both.
-    #[command(name = "retag-vault-item")]
-    RetagVaultItem {
-        target: String,
-        /// Vault item id, e.g. provider:kimi:brama-sub-wisent-app-kimi-primary.
-        item: String,
-        /// The complete tag list to store, comma separated. This replaces the
-        /// item's tags rather than adding to them.
-        ///
-        /// Omit it to READ: the item's current state, revision and tags are
-        /// reported and nothing is written. A command that can only replace a
-        /// tag list forces an operator to guess the list they are replacing,
-        /// and a guess that drops `brama:agent:<other>` silently unsubscribes
-        /// another agent from a paid plan while every credential count stays
-        /// green.
-        #[arg(long)]
-        tags: Option<String>,
-        /// Emit the before/after report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Pull TARGET's Skarbiec mirror into its live vault without discarding
-    /// local-only items.
-    ///
-    /// This replaces the live vault file with the mirror rather than merging
-    /// the two; run `--check` first, which names every item that would be
-    /// replaced and every one that would be lost, and exits non-zero when
-    /// either set is not empty.
-    #[command(name = "sync-vault")]
-    SyncVault {
-        target: String,
-        /// Report what a pull would change and exit non-zero on any conflict
-        /// or loss, applying nothing.
-        #[arg(long)]
-        check: bool,
-        /// Emit the Skarbiec pull report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Store one typed item directly in TARGET's owner vault.
-    ///
-    /// The canonical JSON payload is read from stdin and carried only in the
-    /// encrypted host channel's request body. Credential fields never enter a
-    /// local or remote argument vector, and the host's other items are untouched.
-    #[command(name = "vault-item-put")]
-    VaultItemPut {
-        target: String,
-        /// Credential item id.
-        item: String,
-        /// Canonical Skarbiec item kind.
-        #[arg(long = "type")]
-        item_type: String,
-        /// Emit the nonsecret before/after report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Report what one item in TARGET's vault holds, without its values.
-    ///
-    /// `vault-item-put` had no counterpart, and the absence was not cosmetic:
-    /// an operator who had just written an item could not confirm from a
-    /// workstation that the host held it. `retag-vault-item`'s read reports
-    /// state, revision and tags and nothing about the payload,
-    /// `stado credentials get` reads the local store, and `skarbiec get` is
-    /// not a host-exec command. A migration wrote seven bundles and twenty
-    /// credential fields into a workstation vault nothing on the fleet reads,
-    /// and only a 401 from Brama revealed it.
-    ///
-    /// Prints kind, schema, revision, tags, `updated_at`, and per field its
-    /// name, byte length and SHA-256. The decryption and the hashing both
-    /// happen on the host: comparing the digest against a local copy's
-    /// answers "does the host hold what this row references" without either
-    /// side sending the value.
-    #[command(name = "vault-item-show")]
-    VaultItemShow {
-        target: String,
-        /// Credential item id.
-        item: String,
-        /// Report only this field's length and digest.
-        #[arg(long)]
-        field: Option<String>,
-        /// Emit the nonsecret report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Report what one consumer's Skarbiec grant on TARGET holds.
-    ///
-    /// Prints the recorded capabilities as `item#field:action` and, when a
-    /// token file is named, whether the bearer in it is the one the vault
-    /// recorded. Records nothing: the verdict re-asserts a capability the
-    /// grant already holds, which Skarbiec answers without writing.
-    #[command(name = "grant-show")]
-    GrantShow {
-        target: String,
-        /// Exact Skarbiec consumer name.
-        consumer: String,
-        /// Consumer's bearer file on the target, absolute or rooted at $HOME.
-        #[arg(long)]
-        token_file: Option<String>,
-        /// Emit the nonsecret report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Authorize one consumer to read one field of one item on TARGET.
-    ///
-    /// A Skarbiec grant is per item and per field. The consumer's bearer stays
-    /// on the target: this names its token file, never its bytes.
-    #[command(name = "grant-item-read")]
-    GrantItemRead {
-        target: String,
-        /// Exact Skarbiec consumer name.
-        consumer: String,
-        /// Credential item id.
-        item: String,
-        /// Item field the consumer may read.
-        #[arg(long)]
-        field: String,
-        /// Existing raw bearer file on the target, absolute or rooted at $HOME.
-        #[arg(long)]
-        token_file: String,
-        /// Emit the nonsecret report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
-    #[command(name = "vault-token-mint")]
-    VaultTokenMint {
-        target: String,
-        consumer: String,
-        /// Comma-separated Skarbiec capabilities.
-        #[arg(long)]
-        capabilities: String,
-        /// Exact audience bound into the bearer.
-        #[arg(long)]
-        audience: String,
-        /// Bearer lifetime in seconds.
-        #[arg(long, default_value_t = 31_536_000)]
-        ttl_seconds: u64,
-        /// Replace an existing consumer's capability set.
-        #[arg(long)]
-        replace_capabilities: bool,
-        /// Reuse this owner-vault item's bearer instead of generating one.
-        #[arg(long)]
-        token_item: Option<String>,
-        /// Field in --token-item; defaults to token.
-        #[arg(long, requires = "token_item")]
-        token_field: Option<String>,
-        /// Print only a newly generated bearer, for piping into a secret store.
-        #[arg(long, conflicts_with = "token_item")]
-        raw_token: bool,
-        /// Keep the bearer in TARGET's ~/.stado/NAME; create if absent, reuse if present.
-        #[arg(long, conflicts_with_all = ["raw_token", "token_item"])]
-        token_file_name: Option<String>,
-        /// Emit nonsecret bearer metadata as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make TARGET's dashboard verifier shadow and grant match every object
-    /// namespace plus the route-scoped host-health bearer exactly.
-    ///
-    /// The route bearer is copied from the authoritative vault without
-    /// rotating it. The verifier's existing bearer and expiry are preserved;
-    /// stale capabilities are removed and missing reads are added.
-    #[command(name = "reconcile-object-verifier")]
-    ReconcileObjectVerifier {
-        target: String,
-        /// Emit the reconciled item set as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make TARGET's release-verifier grant match release_api.publishers exactly.
-    ///
-    /// The existing bearer and expiry are preserved. Stale capabilities are
-    /// removed and missing publisher reads are added without printing the
-    /// bearer or moving it through argv.
-    #[command(name = "reconcile-release-verifier")]
-    ReconcileReleaseVerifier {
-        target: String,
-        /// Emit the reconciled item set as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make TARGET's service-verifier grant match service_api.deployers exactly.
-    ///
-    /// The existing bearer and expiry are preserved. Stale capabilities are
-    /// removed and missing read capabilities are added without printing the
-    /// bearer or moving it through argv.
-    #[command(name = "reconcile-service-verifier")]
-    ReconcileServiceVerifier {
-        target: String,
-        /// Emit the reconciled item set as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make TARGET's `agent.skarbiec.url` the credential endpoint the service
-    /// directory declares for that host, so the queue agent reads workload
-    /// secrets through a broker that exists.
-    #[command(name = "reconcile-agent-skarbiec")]
-    ReconcileAgentSkarbiec {
-        target: String,
-        /// Emit the receipt as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Recover an audit-lock stall in Skarbiec and its loaded local dependants.
-    #[command(name = "recover-skarbiec-audit")]
-    RecoverSkarbiecAudit {
-        target: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Recover stale per-user GnuPG daemons blocking Skarbiec decryption.
-    #[command(name = "recover-skarbiec-crypto")]
-    RecoverSkarbiecCrypto {
-        target: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Repair Skarbiec acquisition state left by a different service user.
-    #[command(name = "recover-skarbiec-acquisition-state")]
-    RecoverSkarbiecAcquisitionState {
-        target: String,
-        #[arg(long)]
-        json: bool,
-    },
     /// The tail of one managed unit's own log on TARGET.
     ///
     /// A crash-looping unit says why in its log and nowhere else: the health
@@ -1625,7 +1377,6 @@ enum HostCommands {
         #[arg(long)]
         runner_gate: String,
     },
-
 
     /// Run one approved command on TARGET (allowlist, not a shell). Every
     /// entry is read-only except the declared provider sign-in repairs.
@@ -2377,6 +2128,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 arguments,
                 json,
             } => host::run_attached(&target, &program, &arguments, json).await,
+            HostCommands::RemoveRunDirectory { target, path, json } => {
+                host::remove_run_directory(&target, &path, json).await
+            }
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {

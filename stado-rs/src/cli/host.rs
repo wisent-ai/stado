@@ -948,38 +948,6 @@ done
     Ok(())
 }
 
-fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), CmdError> {
-    fn plutil(plist: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
-        std::process::Command::new("/usr/bin/plutil")
-            .args(args)
-            .arg(plist)
-            .output()
-    }
-
-    let key = "EnvironmentVariables.WELES_RECORDINGS_ROOT";
-    let replace = plutil(plist, &["-replace", key, "-string", path])?;
-    if replace.status.success() {
-        return Ok(());
-    }
-    let insert = plutil(plist, &["-insert", key, "-string", path])?;
-    if insert.status.success() {
-        return Ok(());
-    }
-    let _ = plutil(
-        plist,
-        &["-insert", "EnvironmentVariables", "-xml", "<dict/>"],
-    )?;
-    let retry = plutil(plist, &["-insert", key, "-string", path])?;
-    if retry.status.success() {
-        return Ok(());
-    }
-    let message = String::from_utf8_lossy(&retry.stderr).trim().to_string();
-    Err(CmdError::click(format!(
-        "{}: failed to update WELES_RECORDINGS_ROOT: {message}",
-        plist.display()
-    )))
-}
-
 // ---------------------------------------------------------------------------
 // stado.wisent.com/docs/missing-commands items two through six
 //
@@ -1124,7 +1092,6 @@ fn beacon_age(section: Option<&Value>) -> String {
             |age| super::registry::human_age(chrono::TimeDelta::seconds(age)),
         )
 }
-
 
 /// `stado host gates HOST [--json]` — why this host is claiming nothing, in
 /// one payload.
@@ -7436,9 +7403,6 @@ pub async fn unit_log(
     Ok(())
 }
 
-
-
-
 /// The replica roots every fleet host uses, relative to the managed home. Both
 /// are the values the service catalog declares for the object API unit
 /// (`WC_LOCAL_STORAGE_PATH`) and its replica, so this command reads the same
@@ -8496,7 +8460,7 @@ async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Resu
          unequal for every product, answering 401 or 503 to every release-catalog read on the \
          fleet. Mint the item on {host} first - `stado credentials item put --host {host} {item} \
          --type token` - then declare it and run `stado repair stado --step release-verifier \
-         --target {host} --apply`."
+         --target {host} --apply`.",
         host = resolved.name
     )))
 }
@@ -8848,10 +8812,9 @@ pub async fn run_attached(
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
-    let outcome =
-        crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let outcome = crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
     let exit_code = outcome.exit_code;
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
@@ -8887,9 +8850,7 @@ pub async fn remove_run_directory(
     .await
     .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
     if !outcome.succeeded() {
-        return Err(
-            CmdError::click(outcome.failure_sentence()).machine_readable(json_output)
-        );
+        return Err(CmdError::click(outcome.failure_sentence()).machine_readable(json_output));
     }
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
