@@ -94,8 +94,7 @@ fn repository(base_marker: &str, head_marker: &str) -> tempfile::TempDir {
 }
 
 fn run_gate(repo: &Path, base: Option<&str>) -> Output {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/release_quality_gate.sh");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/release_quality_gate.sh");
     let mut command = Command::new("bash");
     command.arg(&script).current_dir(repo);
     if let Some(base) = base {
