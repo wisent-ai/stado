@@ -1,8 +1,7 @@
-//! `stado host ...` — Rust implementations of the complete `host` group:
-//! health, recovery, user provisioning, and Weles recordings policy, plus
-//! the read-only diagnostics of `stado.wisent.com/docs/missing-commands` items two
-//! through six (`uptime`, `ping`, `disk`, `cleanup --dry-run`, `exec`),
-//! which have no Python original and live in `crate::deploy::host_*`.
+//! `stado host ...` — host health, recovery, user provisioning, and Weles
+//! recordings policy, plus read-only diagnostics such as uptime, ping, and
+//! exec. Storage inspection and mutation live under the declaration-driven
+//! `stado space` capability.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::collections::{BTreeMap, BTreeSet};
@@ -443,8 +442,7 @@ fn host_health_api_url() -> Result<url::Url, CmdError> {
 /// published no beacon at all -- `host ping` called a machine that was serving
 /// releases "down". Every other grant in this fleet already lives as an
 /// owner-only file; this reads the same shape. The bare value in the
-/// environment stays forbidden, which is what `host recover` refuses as an
-/// ambient credential.
+/// environment stays forbidden by the declared host repair.
 fn host_health_api_token_from_file() -> Result<Option<String>, CmdError> {
     let Ok(raw) = std::env::var("STADO_HOST_HEALTH_API_TOKEN_FILE") else {
         return Ok(None);
@@ -537,79 +535,14 @@ async fn host_health_api_token() -> Result<String, CmdError> {
     Ok(token)
 }
 
-/// `stado host recover TARGET [--release VERSION]` — optionally replace the
-/// remote Stado binary from the registry-trusted signed emergency channel,
-/// then recover a registry-managed macOS host through its approved channel.
-///
-/// The canonical remote registry remains the default and fleet-survival
-/// authority. `bundled_registry` is an explicit break-glass path for repairing
-/// the storage or authorization outage that made that authority unreadable.
-/// The selected registry is loaded exactly once: release trust and host
-/// identity must come from the same last-known-good or explicit bundled copy.
-pub async fn recover(
-    target: &str,
-    bundled_registry: bool,
-    release: Option<&str>,
-) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let registry = if bundled_registry {
-        crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))?
-    } else {
-        crate::deploy::host_channel::canonical_registry()
+/// Run the fixed host recovery implementation for the declared repair
+/// capability. The capability owns rendering and the apply boundary.
+pub(crate) async fn apply_host_repair(target: &str) -> Result<Value, CmdError> {
+    let report =
+        crate::deploy::host_recovery::recover_host(target, &crate::deploy::production_runner())
             .await
-            .map_err(|exc| CmdError::click(exc.to_string()))?
-    };
-    let (report, object_api) = match release {
-        Some(version) => {
-            if registry.lookup(target).is_none() {
-                return Err(CmdError::click(format!("target not in registry: {target}")));
-            }
-            // A signed recovery release is fetched through the object API.
-            // Repair that authority first without depending on the authority
-            // itself. The service directory, not the host being recovered,
-            // names where that shared API runs.
-            let object_api_host = registry
-                .service(OBJECT_API_SERVICE)
-                .ok_or_else(|| {
-                    CmdError::click(format!(
-                        "service directory declares no {OBJECT_API_SERVICE}; refusing to guess \
-                         which host owns release-object recovery"
-                    ))
-                })?
-                .active_host
-                .clone();
-            let object_api_target =
-                crate::deploy::host_channel::resolve_target(&registry, &object_api_host)
-                    .map_err(|error| CmdError::click(error.to_string()))?;
-            let object_api = recover_object_api_on_target(object_api_target, &runner).await?;
-            (
-                crate::deploy::host_recovery_release::recover(&registry, target, version, &runner)
-                    .await,
-                Some(object_api),
-            )
-        }
-        None => (
-            crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
-                .await,
-            None,
-        ),
-    };
-    let mut report = report.map_err(|exc| CmdError::click(exc.to_string()))?;
-    if let (Some(object), Some(detail)) = (report.as_object_mut(), object_api) {
-        object.insert(
-            "object_api".to_string(),
-            json!({"status": "healthy", "detail": detail}),
-        );
-    }
-    println!(
-        "{}",
-        crate::deploy::host_recovery::to_sorted_pretty(&report)
-    );
-    if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_recovery::STATUS_OK)
-    {
-        return Err(CmdError::silent(1));
-    }
-    Ok(())
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    Ok(report)
 }
 
 /// `stado host reboot TARGET` — request a graceful reboot through the
@@ -628,8 +561,8 @@ pub async fn reboot(target: &str) -> Result<(), CmdError> {
     report_outcome(&report, "reboot_requested")
 }
 
-/// Resolve TARGET in the canonical registry, the same source
-/// `host weles-recordings-dir` writes back to.
+/// Resolve TARGET in the canonical registry used by declaration-backed host
+/// operations.
 async fn registry_target(target: &str) -> Result<ComputeTarget, CmdError> {
     let registry = super::registry::read_registry().await?;
     registry
@@ -638,6 +571,75 @@ async fn registry_target(target: &str) -> Result<ComputeTarget, CmdError> {
         .find(|candidate| candidate.name == target)
         .cloned()
         .ok_or_else(|| CmdError::click(format!("unknown registry target: {target}")))
+}
+pub(crate) struct CredentialHost {
+    pub target: ComputeTarget,
+    pub home: String,
+    pub vault: String,
+    pub gnupg_home: String,
+}
+
+/// Resolve credential custody from the host's own durable Stado declaration.
+///
+/// The remote configuration document is the declaration every service on that
+/// host consumes. An absent field is never replaced with a conventional path:
+/// a plausible default is precisely how two vaults can both receive real writes.
+pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdError> {
+    let target = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&target, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let configuration = remote_config_output(&target, RemoteConfigAction::Show, &runner).await?;
+    let document: Value = serde_json::from_str(&configuration).map_err(|error| {
+        CmdError::click(format!(
+            "{}: the declared Stado configuration could not be read: {error}",
+            target.name
+        ))
+    })?;
+    let declared = document
+        .pointer("/resolved/skarbiec_vault_file")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} declares no vault authority; add it to secrets.skarbiec.vault_file",
+                target.name
+            ))
+        })?;
+    let vault = declared
+        .strip_prefix("$HOME/")
+        .map(|tail| format!("{home}/{tail}"))
+        .unwrap_or_else(|| declared.to_string());
+    let environment = crate::deploy::host_channel::run_command(
+        &target,
+        "printf '%s\n' \"${GNUPGHOME:-$HOME/.gnupg}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: GNUPGHOME could not be resolved from the host environment",
+            target.name
+        )));
+    }
+    let gnupg_home = environment.stdout.trim().to_string();
+    if gnupg_home.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: GNUPGHOME is empty; declare it in the host environment",
+            target.name
+        )));
+    }
+    Ok(CredentialHost {
+        target,
+        home,
+        vault,
+        gnupg_home,
+    })
 }
 
 /// `stado host user delete USERNAME --target T [--keep-home]` — remove the
@@ -654,117 +656,6 @@ pub async fn user_delete(username: &str, target: &str, keep_home: bool) -> Resul
             Ok(())
         }
     }
-}
-
-/// `stado host build-caches report|prune TARGET --root PATH --min-age-days N`
-/// — the disk cleaner covers model caches and recordings, not build output,
-/// which is what actually fills a developer host.
-pub async fn build_caches(
-    target: &str,
-    root: &str,
-    min_age_days: &str,
-    apply: bool,
-    force: bool,
-) -> Result<(), CmdError> {
-    let resolved = registry_target(target).await?;
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_build_caches::run_on_host(
-        &resolved,
-        root,
-        min_age_days,
-        apply,
-        force,
-        &runner,
-    )
-    .await;
-    let mut total_kib: u64 = u64::default();
-    for entry in &report.entries {
-        println!(
-            "{}\t{}\t{}\t{}",
-            report.target, entry.state, entry.kib, entry.path
-        );
-        total_kib += entry.kib.parse::<u64>().unwrap_or_default();
-    }
-    println!("{}\ttotal-kib\t{total_kib}", report.target);
-    match report.error {
-        Some(detail) if !detail.is_empty() => Err(CmdError::click(detail)),
-        Some(_) => Err(CmdError::click("remote command failed".to_string())),
-        None => Ok(()),
-    }
-}
-fn print_report(
-    report: &crate::deploy::host_gui_automation::GuiAutomationReport,
-    json: bool,
-) -> Result<(), CmdError> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(report)?);
-    } else {
-        for (item, state) in &report.items {
-            println!("{}\t{item}\t{state}", report.target);
-        }
-    }
-    match &report.error {
-        Some(detail) if !detail.is_empty() => Err(CmdError::click(detail.clone())),
-        Some(_) => Err(CmdError::click("remote command failed".to_string())),
-        None => Ok(()),
-    }
-}
-
-/// `stado host gui-automation status TARGET` — report autologin, remote
-/// management, VNC, automation artifacts and the console owner.
-pub async fn gui_automation_status(target: &str, json: bool) -> Result<(), CmdError> {
-    let resolved = registry_target(target).await?;
-    let password = super::service::host_sudo_password(&resolved).await?;
-    let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_gui_automation::status(&resolved, password.as_deref(), &runner).await;
-    print_report(&report, json)
-}
-
-/// `stado host gui-automation enable TARGET` — configure persistent GUI login,
-/// install the pinned signed CuaDriver app and grant Accessibility.
-pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
-    let resolved = registry_target(target).await?;
-    let password = super::service::host_sudo_password(&resolved)
-        .await?
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{} has no readable host-account password",
-                resolved.name
-            ))
-        })?;
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
-    print_report(&report, false)
-}
-
-/// `stado host gui-automation grant-accessibility TARGET [--apple-only]` —
-/// prepare the Apple helper, optionally leaving CuaDriver and its runtime untouched.
-pub async fn gui_automation_grant_accessibility(
-    target: &str,
-    apple_only: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    let resolved = registry_target(target).await?;
-    let password = super::service::host_sudo_password(&resolved).await?;
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::grant_accessibility(
-        &resolved,
-        apple_only,
-        password.as_deref(),
-        &runner,
-    )
-    .await;
-    print_report(&report, json)
-}
-
-/// `stado host gui-automation disable TARGET [--bundle ID]` — revert the
-/// enablement and report every item it touched.
-pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), CmdError> {
-    let resolved = registry_target(target).await?;
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
-    print_report(&report, false)
 }
 
 /// Read one line with terminal echo disabled (Python
@@ -894,113 +785,6 @@ pub async fn user_create(
     Ok(())
 }
 
-/// `stado host weles-recordings-dir TARGET PATH` — update the canonical
-/// registry with generation fencing, then update local Weles LaunchAgents
-/// when TARGET resolves to this host.
-///
-/// The registry object is resolved by [`crate::targets::RegistryStore`],
-/// the same seam `cli/registry.rs::push` writes through, so this repairs
-/// the registry on whichever store `WC_STORAGE_BACKEND` selects. It used
-/// to build a `GcsBackend` on a hardcoded bucket and so failed closed on
-/// an Azure-only deployment.
-pub async fn weles_recordings_dir(target: &str, path: &str) -> Result<(), CmdError> {
-    use serde_json::{json, Map};
-
-    if !std::path::Path::new(path).is_absolute() {
-        return Err(CmdError::click("PATH must be absolute"));
-    }
-
-    let store = crate::targets::RegistryStore::open().await?;
-    let current = store
-        .read_versioned()
-        .await?
-        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
-    let mut document: Value = serde_json::from_str(&current.content)?;
-    let targets = document
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
-    let entry = targets
-        .iter_mut()
-        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
-    let entry = entry
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
-
-    let weles = entry
-        .entry("weles")
-        .or_insert_with(|| json!({"enabled": false, "actions": []}))
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("weles must be an object"))?;
-    weles.insert(
-        "recordings_dir".to_string(),
-        Value::String(path.to_string()),
-    );
-
-    if let Some(cleanup) = entry.get_mut("disk_cleanup").and_then(Value::as_object_mut) {
-        let cleaners = cleanup
-            .entry("cleaners")
-            .or_insert_with(|| Value::Object(Map::new()))
-            .as_object_mut()
-            .ok_or_else(|| CmdError::click("disk_cleanup.cleaners must be an object"))?;
-        let cleaner = cleaners
-            .entry("weles_recordings")
-            .or_insert_with(|| {
-                let min_age = "604800".parse::<i64>().expect("constant integer");
-                json!({"min_age_seconds": min_age})
-            })
-            .as_object_mut()
-            .ok_or_else(|| CmdError::click("weles_recordings cleaner must be an object"))?;
-        cleaner.insert("root".to_string(), Value::String(path.to_string()));
-    }
-
-    crate::targets::validate_registry(&document).map_err(|exc| CmdError::click(exc.to_string()))?;
-    let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let generation = store.compare_and_swap(&current.version, &payload).await?;
-    println!("registry: {target} weles.recordings_dir={path} (generation {generation})");
-
-    let hostname = std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .unwrap_or_default();
-    let registry = crate::targets::load_registry_from_str(&payload)
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let is_self = registry
-        .lookup_self(&hostname)
-        .map_err(|exc| CmdError::click(exc.to_string()))?
-        .is_some_and(|entry| entry.name == target);
-    if !is_self {
-        println!(
-            "run `wc host weles-recordings-dir {target} {path}` on {target} to update its LaunchAgents"
-        );
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(path)?;
-    let agents_dir = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| CmdError::click("HOME is not set"))?
-        .join("Library/LaunchAgents");
-    let mut touched = usize::default();
-    for item in std::fs::read_dir(&agents_dir)? {
-        let plist = item?.path();
-        let Some(name) = plist.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("com.wisent.weles-") || !name.ends_with(".plist") {
-            continue;
-        }
-        set_plist_recordings_root(&plist, path)?;
-        touched += usize::from(true);
-        println!("  {name}: WELES_RECORDINGS_ROOT={path}");
-    }
-    println!("updated {touched} LaunchAgent plist(s); reload weles agents to apply");
-    Ok(())
-}
-
 /// Persist TARGET's NVIDIA board power cap in the canonical registry and apply
 /// it immediately. The local agent keeps reconciling the declaration, including
 /// after driver resets and host reboots.
@@ -1089,344 +873,16 @@ done
     Ok(())
 }
 
-/// Every field `stado host disk-cleanup` may rewrite, as parsed from argv.
-///
-/// One field per registry key, because the policy is the whole contract
-/// between an operator and the janitor and a setter that covered part of it
-/// would leave the rest editable only by hand. Before this existed, `stado`
-/// could set exactly one of these — `host weles-recordings-dir`, one
-/// cleaner's root — and the dashboard accepted exactly one more, `mode`, so a
-/// watermark, a budget or a `build_caches` root could only be changed by
-/// pulling `registry.json`, editing it, and pushing it back.
-pub struct DiskCleanupPolicyEdit {
-    pub mode: Option<String>,
-    pub check_interval_seconds: Option<i64>,
-    pub low_free_gb: Option<i64>,
-    pub target_free_gb: Option<i64>,
-    pub max_items_per_pass: Option<i64>,
-    pub max_bytes_per_pass: Option<i64>,
-    pub max_scan_items: Option<i64>,
-    pub max_pass_seconds: Option<i64>,
-    pub clear_max_pass_seconds: bool,
-    pub add_cleaner: Vec<String>,
-    pub remove_cleaner: Vec<String>,
-    pub cleaner_root: Vec<String>,
-    pub clear_cleaner_root: Vec<String>,
-    pub cleaner_min_age_seconds: Vec<String>,
-    pub cleaner_keep_newest: Vec<String>,
-}
-
-impl DiskCleanupPolicyEdit {
-    /// Whether argv asked for a read rather than a write.
-    fn is_read_only(&self) -> bool {
-        self.mode.is_none()
-            && self.check_interval_seconds.is_none()
-            && self.low_free_gb.is_none()
-            && self.target_free_gb.is_none()
-            && self.max_items_per_pass.is_none()
-            && self.max_bytes_per_pass.is_none()
-            && self.max_scan_items.is_none()
-            && self.max_pass_seconds.is_none()
-            && !self.clear_max_pass_seconds
-            && self.add_cleaner.is_empty()
-            && self.remove_cleaner.is_empty()
-            && self.cleaner_root.is_empty()
-            && self.clear_cleaner_root.is_empty()
-            && self.cleaner_min_age_seconds.is_empty()
-            && self.cleaner_keep_newest.is_empty()
-    }
-}
-
-/// `NAME=VALUE` from one repeatable flag.
-fn cleaner_pair(raw: &str, flag: &str) -> Result<(String, String), CmdError> {
-    let Some((name, value)) = raw.split_once('=') else {
-        return Err(CmdError::usage(format!(
-            "--{flag} takes NAME=VALUE, got {raw:?}"
-        )));
-    };
-    let (name, value) = (name.trim().to_string(), value.trim().to_string());
-    if name.is_empty() || value.is_empty() {
-        return Err(CmdError::usage(format!(
-            "--{flag} takes NAME=VALUE, got {raw:?}"
-        )));
-    }
-    Ok((name, value))
-}
-
-/// The retention floor `targets::validate_registry` enforces for one cleaner,
-/// used as the age gate a newly enabled cleaner starts with. Read from the
-/// same three cases the validator states, so enabling a cleaner cannot
-/// produce a document the validator then refuses.
-fn cleaner_age_floor(name: &str) -> i64 {
-    match name {
-        "huggingface_cache" => 3600,
-        "queue_workdirs" | "backup_twins" | "release_store" => 0,
-        _ => 86400,
-    }
-}
-
-/// `serde` writes `Option::None` as `null`, and the cleaner schema accepts a
-/// key list rather than nulls, so a seeded default is stripped before it is
-/// validated. Applied only to the policy subtree this command builds.
-fn strip_nulls(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            map.retain(|_, entry| !entry.is_null());
-            for entry in map.values_mut() {
-                strip_nulls(entry);
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(strip_nulls),
-        _ => {}
-    }
-}
-
-/// Read or rewrite one target's `disk_cleanup` policy.
-///
-/// The write is the same compare-and-swap every registry setter here uses:
-/// read the current generation, rewrite exactly the named fields, validate the
-/// WHOLE document, and swap it only if nobody else moved it. A target that
-/// declares no policy is seeded from
-/// [`crate::targets::DiskCleanupPolicy::reporting_default`] first, so its
-/// first declaration starts at `report` rather than at whatever the flags
-/// happen to omit.
-pub async fn disk_cleanup_policy(
-    target: &str,
-    edit: DiskCleanupPolicyEdit,
-    json: bool,
-) -> Result<(), CmdError> {
-    if edit.max_pass_seconds.is_some() && edit.clear_max_pass_seconds {
-        return Err(CmdError::usage(
-            "--max-pass-seconds and --clear-max-pass-seconds are mutually exclusive",
-        ));
-    }
-    let store = crate::targets::RegistryStore::open().await?;
-    let current = store
-        .read_versioned()
-        .await?
-        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
-    let mut document: Value = serde_json::from_str(&current.content)?;
-    let targets = document
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
-    let entry = targets
-        .iter_mut()
-        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
-        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
-
-    if edit.is_read_only() {
-        let declared = entry.get("disk_cleanup").cloned();
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "target": target,
-                    "generation": current.version,
-                    "declared": declared.is_some(),
-                    "disk_cleanup": declared,
-                }))?
-            );
-        } else if let Some(policy) = declared {
-            println!("{target}: {}", serde_json::to_string_pretty(&policy)?);
-        } else {
-            println!(
-                "{target}: declares no disk_cleanup policy; it is measured against the \
-                 reporting default, which reports and never deletes"
-            );
-        }
-        return Ok(());
-    }
-
-    let mut policy = match entry.get("disk_cleanup") {
-        Some(existing) if existing.is_object() => existing.clone(),
-        _ => {
-            let mut seeded =
-                serde_json::to_value(crate::targets::DiskCleanupPolicy::reporting_default())?;
-            strip_nulls(&mut seeded);
-            seeded
-        }
-    };
-    let policy_map = policy
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("registry target disk_cleanup must be an object"))?;
-
-    for (key, declared) in [
-        ("mode", edit.mode.clone().map(Value::from)),
-        (
-            "check_interval_seconds",
-            edit.check_interval_seconds.map(Value::from),
-        ),
-        ("low_free_gb", edit.low_free_gb.map(Value::from)),
-        ("target_free_gb", edit.target_free_gb.map(Value::from)),
-        (
-            "max_items_per_pass",
-            edit.max_items_per_pass.map(Value::from),
-        ),
-        (
-            "max_bytes_per_pass",
-            edit.max_bytes_per_pass.map(Value::from),
-        ),
-        ("max_scan_items", edit.max_scan_items.map(Value::from)),
-        ("max_pass_seconds", edit.max_pass_seconds.map(Value::from)),
-    ] {
-        if let Some(value) = declared {
-            policy_map.insert(key.to_string(), value);
-        }
-    }
-    if edit.clear_max_pass_seconds {
-        policy_map.remove("max_pass_seconds");
-    }
-
-    let cleaners = policy_map
-        .entry("cleaners".to_string())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| CmdError::click("disk_cleanup.cleaners must be an object"))?;
-
-    // Enabling a cleaner writes the retention floor its own schema demands,
-    // so `--cleaner build_caches` produces a document that validates rather
-    // than one refused for a missing `min_age_seconds`.
-    let enable = |name: &str, cleaners: &mut serde_json::Map<String, Value>| {
-        cleaners
-            .entry(name.to_string())
-            .or_insert_with(|| json!({ "min_age_seconds": cleaner_age_floor(name) }));
-    };
-    for name in &edit.add_cleaner {
-        enable(name, cleaners);
-    }
-    for name in &edit.remove_cleaner {
-        cleaners.remove(name);
-    }
-    for raw in &edit.cleaner_root {
-        let (name, path) = cleaner_pair(raw, "cleaner-root")?;
-        enable(&name, cleaners);
-        cleaners
-            .get_mut(&name)
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| {
-                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
-            })?
-            .insert("root".to_string(), Value::from(path));
-    }
-    for name in &edit.clear_cleaner_root {
-        if let Some(cleaner) = cleaners.get_mut(name).and_then(Value::as_object_mut) {
-            cleaner.remove("root");
-        }
-    }
-    for raw in &edit.cleaner_min_age_seconds {
-        let (name, raw_seconds) = cleaner_pair(raw, "cleaner-min-age-seconds")?;
-        let seconds: i64 = raw_seconds.parse().map_err(|_| {
-            CmdError::usage(format!(
-                "--cleaner-min-age-seconds takes NAME=SECONDS, got {raw:?}"
-            ))
-        })?;
-        enable(&name, cleaners);
-        cleaners
-            .get_mut(&name)
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| {
-                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
-            })?
-            .insert("min_age_seconds".to_string(), Value::from(seconds));
-    }
-    for raw in &edit.cleaner_keep_newest {
-        let (name, raw_count) = cleaner_pair(raw, "cleaner-keep-newest")?;
-        let count: i64 = raw_count.parse().map_err(|_| {
-            CmdError::usage(format!(
-                "--cleaner-keep-newest takes NAME=COUNT, got {raw:?}"
-            ))
-        })?;
-        enable(&name, cleaners);
-        cleaners
-            .get_mut(&name)
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| {
-                CmdError::click(format!("disk_cleanup.cleaners.{name} must be an object"))
-            })?
-            .insert("keep_newest".to_string(), Value::from(count));
-    }
-
-    entry.insert("disk_cleanup".to_string(), policy.clone());
-    // The whole registry, not the field: a policy is only valid in the
-    // document that carries it, and the janitor refuses a document that does
-    // not validate as a whole. Remove declarations the current model
-    // intentionally retired (`slots`, `max_concurrent`, and
-    // `WC_LOCAL_SLOTS`) on this ordinary policy update instead of retaining a
-    // second capacity contract.
-    crate::targets::strip_legacy_capacity_declarations(&mut document);
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
-    let generation = store.compare_and_swap(&current.version, &payload).await?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "generation": generation,
-                "disk_cleanup": policy,
-            }))?
-        );
-    } else {
-        println!("{target}: {}", serde_json::to_string_pretty(&policy)?);
-        println!("generation {generation}");
-    }
-    Ok(())
-}
-
-fn set_plist_recordings_root(plist: &std::path::Path, path: &str) -> Result<(), CmdError> {
-    fn plutil(plist: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
-        std::process::Command::new("/usr/bin/plutil")
-            .args(args)
-            .arg(plist)
-            .output()
-    }
-
-    let key = "EnvironmentVariables.WELES_RECORDINGS_ROOT";
-    let replace = plutil(plist, &["-replace", key, "-string", path])?;
-    if replace.status.success() {
-        return Ok(());
-    }
-    let insert = plutil(plist, &["-insert", key, "-string", path])?;
-    if insert.status.success() {
-        return Ok(());
-    }
-    let _ = plutil(
-        plist,
-        &["-insert", "EnvironmentVariables", "-xml", "<dict/>"],
-    )?;
-    let retry = plutil(plist, &["-insert", key, "-string", path])?;
-    if retry.status.success() {
-        return Ok(());
-    }
-    let message = String::from_utf8_lossy(&retry.stderr).trim().to_string();
-    Err(CmdError::click(format!(
-        "{}: failed to update WELES_RECORDINGS_ROOT: {message}",
-        plist.display()
-    )))
-}
-
 // ---------------------------------------------------------------------------
 // stado.wisent.com/docs/missing-commands items two through six
 //
 // Each of these is a thin shell over one `crate::deploy` module: resolve,
 // run through the shared ssh channel, then either print the report as JSON
-// or render it. NO Python original — the Python CLI stops at
-// `host recover`.
-//
-// Two conventions hold across all five. `--json` prints the deploy
-// module's report with sorted keys, exactly as `host recover` prints its
-// own (`deploy::host_recovery::to_sorted_pretty`). A non-zero remote exit
-// is a click error carrying the remote's own last line, so the shell exit
-// status of `stado host ...` matches the health of the host.
+// or render it. A non-zero remote exit is a click error carrying the remote's
+// own last line, so the shell exit status matches the health of the host.
 // ---------------------------------------------------------------------------
 
-/// Print `report` as sorted-keys JSON, the way `host recover` prints its
-/// own report.
+/// Print `report` as sorted-keys JSON.
 fn print_json(report: &Value) {
     println!("{}", crate::deploy::host_recovery::to_sorted_pretty(report));
 }
@@ -1562,369 +1018,11 @@ fn beacon_age(section: Option<&Value>) -> String {
         )
 }
 
-/// `stado host disk TARGET [--json]` — disk usage plus the registry
-/// cleanup policy and its recorded state (`stado.wisent.com/docs/missing-commands`
-/// item four).
-pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_disk::disk_host(target, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let expected = crate::deploy::host_disk::OK_STATUS;
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-    let usage = report.get("usage");
-    let used = |key: &str| cell(usage.and_then(|value| value.get(key)));
-    super::table::print(
-        &[
-            "FILESYSTEM",
-            "MOUNT",
-            "BLOCKS KB",
-            "USED KB",
-            "AVAIL KB",
-            "CAPACITY",
-        ],
-        &[vec![
-            used("filesystem"),
-            used("mounted_on"),
-            used("blocks_kb"),
-            used("used_kb"),
-            used("available_kb"),
-            used("capacity"),
-        ]],
-    );
-
-    let policy = report.get("policy");
-    let declared = |key: &str| cell(policy.and_then(|value| value.get(key)));
-    if policy.is_none() || policy == Some(&Value::Null) {
-        println!("\ncleanup policy: none declared in the registry for this target");
-    } else {
-        println!(
-            "\ncleanup policy: mode={} every {}s, low={}GiB target={}GiB",
-            declared("mode"),
-            declared("check_interval_seconds"),
-            declared("low_free_gb"),
-            declared("target_free_gb"),
-        );
-    }
-
-    let state = report.get("cleanup_state");
-    let recorded = |key: &str| cell(state.and_then(|value| value.get(key)));
-    if state.and_then(|value| value.get("present")) == Some(&Value::Bool(true)) {
-        super::table::print(
-            &[
-                "LAST PASS",
-                "OUTCOME",
-                "FREED BYTES",
-                "LAST SUCCESS",
-                "NEXT PASS",
-            ],
-            &[vec![
-                recorded("last_pass_at"),
-                recorded("outcome"),
-                recorded("freed_bytes"),
-                recorded("last_success_at"),
-                recorded("next_pass_at"),
-            ]],
-        );
-        if let Some(Value::String(detail)) = state.and_then(|value| value.get("error")) {
-            println!("cleanup state unreadable: {detail}");
-        }
-        // Whose verdict this is. Several processes write that one file on an
-        // always-on host -- the queue agent every tick, a `disk-cleanup
-        // --watch` unit on its own timer -- so OUTCOME above is the last pass
-        // by whoever made it, not a property of the host. On 2026-08-31 the
-        // agent recorded `interval_noop` with no errors and this command read
-        // `invalid_or_unavailable_policy` 46 seconds later from the same path.
-        // Naming the writer is what lets an operator tell those apart instead
-        // of believing whichever arrived last.
-        if let Some(Value::String(writer)) = state.and_then(|value| value.get("writer")) {
-            let version = state
-                .and_then(|value| value.get("writer_version"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown version");
-            println!(
-                "that pass was written by {writer} running {version}; this file \
-                 has more than one writer, so OUTCOME is the last pass rather \
-                 than the state of the host"
-            );
-        }
-        // Which declared cleaners the pass never reached. `cap_reached` above
-        // says a budget stopped the pass and cannot say whom it stopped, and
-        // the per-cleaner table prints the same three zeros for a cleaner that
-        // never got a turn as for one that looked and found nothing. On
-        // charless-mac-mini `backup_twins` sat at zeros under real pressure
-        // for as long as anyone had looked, behind a `build_caches` walk of
-        // the whole of `$HOME`, while the host refused every ordinary job.
-        let unscanned: Vec<&str> = state
-            .and_then(|value| value.get("unscanned_cleaners"))
-            .and_then(Value::as_array)
-            .map(|names| names.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        if !unscanned.is_empty() {
-            println!(
-                "the pass ended before these declared cleaner(s) scanned anything: {} — raise \
-                 `max_pass_seconds` or `max_scan_items` with `stado host disk-cleanup`, or narrow \
-                 an earlier cleaner's root, or their zeros mean nobody looked",
-                unscanned.join(", ")
-            );
-        }
-    } else {
-        println!(
-            "\ncleanup state: no state file at {} — the janitor has never \
-             completed a pass on this host",
-            recorded("path")
-        );
-    }
-    // Who holds the run lock, printed with the state it explains. A pass that
-    // reported `lock_busy`, and an agent publishing `cleanup_in_progress`, are
-    // both this one fact seen from the outside; until this line existed an
-    // operator could read either of them for hours with no way to learn which
-    // process to look at.
-    let lock = report.get("cleanup_lock");
-    let lock_read = lock.and_then(|value| value.get("read")) == Some(&Value::Bool(true));
-    let holders: Vec<&Value> = lock
-        .and_then(|value| value.get("holders"))
-        .and_then(Value::as_array)
-        .map(|rows| rows.iter().collect())
-        .unwrap_or_default();
-    if lock_read && !holders.is_empty() {
-        let cells: Vec<Vec<String>> = holders
-            .iter()
-            .map(|holder| {
-                vec![
-                    cell(holder.get("pid")),
-                    cell(holder.get("command")),
-                    cell(lock.and_then(|value| value.get("path"))),
-                ]
-            })
-            .collect();
-        println!("\nthe janitor's run lock is held — no pass can scan while it is:");
-        super::table::print(&["PID", "COMMAND", "LOCK"], &cells);
-    } else if lock_read {
-        println!("\nthe janitor's run lock is free");
-    }
-    // Said after the cleanup state, because it is the answer to the question
-    // that state raises: the janitor ran, it freed what it could, and the disk
-    // is still full. macOS publishes no size for a snapshot, so the count and
-    // the host's own names are all there is to print — and printing "0 bytes"
-    // for them would be the false reassurance this block exists to prevent.
-    let snapshots = report.get("local_snapshots");
-    let names: Vec<&str> = snapshots
-        .and_then(|value| value.get("names"))
-        .and_then(Value::as_array)
-        .map(|names| names.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    if snapshots.and_then(|value| value.get("supported")) == Some(&Value::Bool(true))
-        && !names.is_empty()
-    {
-        println!(
-            "\nlocal APFS snapshots: {} — their blocks are inside USED above, no \
-             stado command removes them, and macOS reports no size for them. \
-             Thin them with tmutil if the space is needed:",
-            names.len()
-        );
-        for name in names {
-            println!("  {name}");
-        }
-    }
-    report_outcome(&report, expected)
-}
-
-/// `stado host object-relocate TARGET --namespace NS --from-prefix P
-/// [--to-prefix Q] [--apply]` — re-address objects inside the store, on the
-/// host that holds it.
-///
-/// The refusals are printed last and printed always, because they are the
-/// only lines an operator has to act on: an object whose destination exists
-/// with different bytes is still at its wrong address and still has a second
-/// copy, and a run that reports 88 moves and hides one of those reads as a
-/// completed repair.
-pub async fn object_relocate(
-    target: &str,
-    plan: &crate::deploy::host_object_relocate::RelocatePlan,
-    json: bool,
-) -> Result<(), CmdError> {
-    let apply = plan.apply;
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_object_relocate::relocate_host(target, plan, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let expected = crate::deploy::host_object_relocate::OK_STATUS;
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-    let store = report.get("store");
-    let named = |key: &str| cell(store.and_then(|value| value.get(key)));
-    if let Some(Value::String(root)) = store.and_then(|value| value.get("missing_root")) {
-        println!("no store at {root} on this host — nothing was read");
-        return report_outcome(&report, expected);
-    }
-    if let Some(Value::String(os)) = store.and_then(|value| value.get("no_hasher")) {
-        println!(
-            "no sha256 program on this {os} host, so no body could be verified and \
-             none was touched"
-        );
-        return report_outcome(&report, expected);
-    }
-    println!(
-        "store {}\n  from {}\n    to {}",
-        named("root"),
-        named("source_prefix"),
-        named("destination_prefix"),
-    );
-    let totals = report.get("totals");
-    let counted = |key: &str| {
-        totals
-            .and_then(|value| value.get(key))
-            .and_then(Value::as_i64)
-            .unwrap_or_default()
-    };
-    let objects: Vec<&Value> = report
-        .get("objects")
-        .and_then(Value::as_array)
-        .map(|items| items.iter().collect())
-        .unwrap_or_default();
-    let field = |item: &Value, key: &str| cell(item.get(key));
-    super::table::print(
-        &["OUTCOME", "BYTES", "SOURCE KEY", "DESTINATION KEY"],
-        &objects
-            .iter()
-            .map(|item| {
-                vec![
-                    field(item, "outcome"),
-                    field(item, "bytes"),
-                    field(item, "source_key"),
-                    field(item, "destination_key"),
-                ]
-            })
-            .collect::<Vec<_>>(),
-    );
-    println!(
-        "\n{} scanned, {} decided, {} relocated ({:.2} GiB), {} refused, {} empty \
-         directories pruned",
-        counted("scanned"),
-        counted("decided"),
-        counted("moved"),
-        counted("moved_bytes") as f64 / 1024.0_f64.powi(3),
-        counted("refused"),
-        counted("pruned_directories"),
-    );
-    // Said as its own line rather than folded into the counts above, because
-    // it is a different repair: the body is at the right address and the
-    // sidecar beside it still records the wrong one, which is what
-    // `storage ls --long` reads out.
-    let stale = counted("stale_uris");
-    if stale > 0 {
-        println!(
-            "{stale} sidecars still record the old address, {} rewritten",
-            counted("repaired_uris"),
-        );
-    }
-    if !apply {
-        println!("nothing was changed: pass --apply to relocate what is listed above");
-    }
-    // A pass the host cut short states so rather than letting its totals read
-    // as the whole tree.
-    if totals.and_then(|value| value.get("complete")) != Some(&Value::Bool(true)) {
-        println!(
-            "the host's closing count never arrived, so these totals are a lower bound; \
-             run the command again"
-        );
-    }
-    let remaining = counted("remaining");
-    if remaining > 0 {
-        println!("{remaining} left under the source prefix; run the command again to continue");
-    }
-    for item in &objects {
-        let outcome = item.get("outcome").and_then(Value::as_str).unwrap_or("");
-        if crate::deploy::host_object_relocate::is_refusal(outcome) {
-            println!(
-                "  {outcome}: {} still holds its own bytes and was left where it is",
-                field(item, "source_key")
-            );
-        }
-    }
-    report_outcome(&report, expected)
-}
-
-/// `stado host cleanup TARGET --dry-run [--json]` — preview what the
-/// registry cleanup would delete (`stado.wisent.com/docs/missing-commands` item five).
-///
-/// `--dry-run` is mandatory, not defaulted. This command only ever
-/// previews: the enforcing pass belongs to the host's own janitor on the
-/// interval its registry policy declares, and to `stado host recover`,
-/// which runs it as part of a deliberate recovery. A flag that could be
-/// omitted would eventually be omitted.
-pub async fn cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdError> {
-    if !dry_run {
-        return Err(CmdError::usage(
-            "host cleanup only previews; pass --dry-run. To actually reclaim space, let the \
-             host's janitor run on its registry interval, or run stado host recover TARGET",
-        ));
-    }
-    let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_cleanup::cleanup_preview(target, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let expected = crate::deploy::host_cleanup::PREVIEW_STATUS;
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-    println!("DRY RUN — nothing on {target} is deleted.");
-    println!(
-        "registry policy mode: {}",
-        cell(report.get("registry_policy_mode"))
-    );
-    let plan = report.get("plan").filter(|value| !value.is_null());
-    let Some(plan) = plan else {
-        println!(
-            "no plan: {}",
-            cell(report.get("unavailable").or_else(|| report.get("error")))
-        );
-        return report_outcome(&report, expected);
-    };
-    println!("outcome:              {}", cell(plan.get("outcome")));
-    println!(
-        "free bytes:           {} (low watermark {})",
-        cell(plan.get("free_bytes_before")),
-        cell(plan.get("low_bytes"))
-    );
-    let rows: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)
-        .iter()
-        .map(|cleaner| {
-            vec![
-                cleaner.name.clone(),
-                cleaner.scanned_items.to_string(),
-                cleaner.eligible_items.to_string(),
-                cleaner.expected_bytes.to_string(),
-                cleaner.deleted_items.to_string(),
-            ]
-        })
-        .collect();
-    super::table::print(
-        &[
-            "CLEANER",
-            "SCANNED",
-            "WOULD DELETE",
-            "WOULD FREE BYTES",
-            "DELETED",
-        ],
-        &rows,
-    );
-    println!("\nDELETED is zero by construction — this pass ran in the janitor's report mode.");
-    report_outcome(&report, expected)
-}
-
 /// `stado host gates HOST [--json]` — why this host is claiming nothing, in
 /// one payload.
 ///
 /// The exit status follows `claiming`, the way `host ping`'s follows its
-/// combined verdict, so `stado host reclaim mini --apply --reason … && stado
+/// combined verdict, so `stado space reclaim mini --apply --reason … && stado
 /// host gates mini` is a usable sentence and a blocked host cannot be
 /// mistaken for a healthy one by a script that only reads status codes.
 ///
@@ -2046,14 +1144,14 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
     }
     // Printed after the verdict and never as part of it: a note is a thing the
     // operator has to know before they conclude the numbers do not add up, and
-    // `stado host reclaim` is about to tell them it freed less than the deficit.
+    // `stado space reclaim` is about to tell them it freed less than the deficit.
     for note in &gates.notes {
         if note == crate::deploy::host_gates::LOCAL_SNAPSHOTS_UNRECLAIMABLE {
             println!(
                 "note:     {note} — {} local APFS snapshot(s), which macOS reports no size \
-                 for. `stado host reclaim {}` names each one and why it refuses it; the \
-                 `com.apple.os.update-*` ones are OS-update snapshots rather than local Time \
-                 Machine snapshots, so no stado command deletes them and none should",
+                 for. `stado space reclaim {} --stage local_apfs_snapshots` may thin local \
+                 Time Machine snapshots to the declared watermark; `com.apple.os.update-*` \
+                 snapshots remain OS recovery state, so no Stado command deletes them",
                 gates
                     .local_snapshots
                     .map_or_else(|| "-".to_string(), |count| count.to_string()),
@@ -2199,7 +1297,7 @@ fn host_health_publisher_diagnosis(report: &UnitLogReport) -> Value {
                     crate::config::HOST_HEALTH_API_ITEM
                 ),
                 "repairable": true,
-                "repair_command": format!("stado host repair-link {}", report.target),
+                "repair_command": format!("stado repair stado --step link --target {} --apply", report.target),
             });
         }
         return json!({
@@ -2693,16 +1791,9 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     link_outcome(&resolved.name, verdict, blockers.len())
 }
 
-/// Repair one stale, reachable host whose publisher is being refused because
-/// the dashboard cannot read its route-scoped bearer.
-///
-/// The repair is deliberately narrow. It reads the publisher's own declared
-/// log, refuses every other cause, resolves the object API authority from the
-/// service directory, copies the authoritative route bearer into that
-/// authority's target-local verifier shadow, reconciles the existing grant
-/// without rotating its bearer, then waits for the host's normal one-minute
-/// publisher to prove the repair with a newer beacon. No service is restarted.
-pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared link repair and return the proof report to the repair
+/// capability, which owns rendering.
+pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -2727,15 +1818,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
             "beacon_age_seconds": initial_signal.age_seconds,
             "beacon_reported_at": initial_signal.reported_at,
         });
-        if json_output {
-            print_json(&report);
-        } else {
-            println!(
-                "{}: beacon is already fresh; no repair changed the verifier",
-                resolved.name
-            );
-        }
-        return Ok(());
+        return Ok(report);
     }
 
     let runner = crate::deploy::production_runner();
@@ -2775,7 +1858,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
         .clone();
     crate::deploy::host_channel::resolve_target(&registry, &authority)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let verifier = reconcile_object_verifier_report(&authority).await?;
+    let verifier = apply_object_verifier_repair(&authority).await?;
 
     let previous_reported_at = initial_signal.reported_at.clone();
     let started = std::time::Instant::now();
@@ -2831,22 +1914,7 @@ pub async fn repair_link(target: &str, json_output: bool) -> Result<(), CmdError
                         "silence_closed": silence_closed,
                         "waited_seconds": started.elapsed().as_secs(),
                     });
-                    if json_output {
-                        print_json(&report);
-                    } else {
-                        println!(
-                            "{}: dashboard verifier reconciled on {}; a fresh beacon arrived \
-                             and the open silence is {}",
-                            resolved.name,
-                            authority,
-                            if silence_closed {
-                                "closed"
-                            } else {
-                                "not recorded"
-                            }
-                        );
-                    }
-                    return Ok(());
+                    return Ok(report);
                 }
             }
             Err(error) => {
@@ -2900,145 +1968,6 @@ fn link_outcome(host: &str, verdict: &str, blockers: usize) -> Result<(), CmdErr
     Err(CmdError::click(format!(
         "{host} link verdict is {verdict}, with {blockers} blocker(s) named in the report above"
     )))
-}
-
-/// `stado host reclaim HOST [--dry-run|--apply --reason TEXT] [--json]` — get
-/// the space back, in declared stages, measuring each one.
-///
-/// Previewing is the default and `--apply` is the only thing that deletes,
-/// because the alternative — a flag that has to be remembered to make the
-/// command safe — is a flag that will be forgotten on the one host where it
-/// mattered. `--apply` additionally refuses to run without `--reason`: the
-/// record it appends on the host is the only account of why several tens of
-/// gigabytes left that machine, and a record whose reason is blank is a record
-/// nobody can act on six months later.
-pub async fn reclaim(
-    host: &str,
-    apply: bool,
-    reason: Option<&str>,
-    json: bool,
-) -> Result<(), CmdError> {
-    let reason = reason.map(str::trim).filter(|text| !text.is_empty());
-    if apply && reason.is_none() {
-        return Err(CmdError::usage(
-            "host reclaim --apply removes files and needs --reason <text>; the reason is \
-             appended to the host's own audit log beside the disk it changed. Run without \
-             --apply to see what each stage would remove",
-        ));
-    }
-    let runner = crate::deploy::production_runner();
-    let (target, reclamation) = crate::deploy::host_reclaim::reclaim_host(host, apply, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    // A skipped stage is an infrastructure failure that the command survived,
-    // so the classification line `main_entry` emits on the error path never
-    // fires for it — and a stage nobody could judge, reported only as a row
-    // in a human table, is the silence that cost the release train three
-    // attempts. The store's own sentence rides in the reason, so `HTTP 502`
-    // classes as `infra_down`, `retryable=true` here instead of the
-    // `unknown`, `retryable=false` a discarded error used to produce. The
-    // point and service are the two `cli/mod.rs` would derive for this
-    // command: `failure_point` walks the subcommand names, `failure_service`
-    // maps `host` to `fleet`.
-    for (stage, reason) in &reclamation.skipped {
-        crate::failure::log_failure(
-            "cli.host.reclaim",
-            "fleet",
-            crate::failure::classify_message(reason),
-            &format!("{stage}: {reason}"),
-        );
-    }
-    let audited = match reason {
-        Some(reason) if apply => Some(
-            crate::deploy::host_reclaim::record_audit(
-                &target,
-                &reclamation,
-                reason,
-                &super::autonomy_cmd::actor(),
-                &runner,
-            )
-            .await
-            .map_err(|exc| CmdError::click(exc.to_string()))?,
-        ),
-        _ => None,
-    };
-    let report = Value::Object(crate::deploy::host_reclaim::to_report(
-        &target,
-        &reclamation,
-    ));
-    if json {
-        print_json(&report);
-        return Ok(());
-    }
-    if apply {
-        println!("APPLIED — {} lost the files named below.", target.name);
-    } else {
-        // Said before the table, not after it: an operator reading a list of
-        // paths has to know which of the two things they are looking at.
-        println!(
-            "DRY RUN — nothing on {} is deleted. Re-run with --apply --reason <text> \
-             to remove what follows.",
-            target.name
-        );
-    }
-    let rows: Vec<Vec<String>> = reclamation
-        .stages
-        .iter()
-        .map(|stage| {
-            vec![
-                stage.stage.clone(),
-                gigabytes(stage.free_kb_before.map(gib)),
-                gigabytes(stage.free_kb_after.map(gib)),
-                stage.items.to_string(),
-            ]
-        })
-        .collect();
-    super::table::print(&["STAGE", "FREE BEFORE", "FREE AFTER", "ITEMS"], &rows);
-    for stage in &reclamation.stages {
-        if let Some(detail) = &stage.detail {
-            println!("{}: {detail}", stage.stage);
-        }
-        for path in &stage.paths {
-            println!("  {} {path}", stage.stage);
-        }
-    }
-    // A stage that could not be judged is not a stage that found nothing.
-    // Printed beside the table, because the table's zero is the same digit a
-    // clean host prints.
-    for (stage, reason) in &reclamation.skipped {
-        println!("{stage}: SKIPPED — {reason}");
-    }
-    if let Some(plan) = &reclamation.janitor_plan {
-        let cleaners: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)
-            .iter()
-            .map(|cleaner| {
-                vec![
-                    cleaner.name.clone(),
-                    cleaner.scanned_items.to_string(),
-                    cleaner.eligible_items.to_string(),
-                    cleaner.deleted_items.to_string(),
-                ]
-            })
-            .collect();
-        if !cleaners.is_empty() {
-            println!("\nthe host's own janitor, per declared cleaner:");
-            super::table::print(&["CLEANER", "SCANNED", "ELIGIBLE", "DELETED"], &cleaners);
-        }
-    }
-    println!(
-        "\nfree: {} -> {}",
-        gigabytes(reclamation.free_kb_before.map(gib)),
-        gigabytes(reclamation.free_kb_after.map(gib)),
-    );
-    if let Some(audited) = audited {
-        println!("audited: {audited} on {}", target.name);
-    }
-    Ok(())
-}
-
-/// `df -Pk` blocks as GiB, through the one conversion `host disk` owns.
-fn gib(blocks: i64) -> f64 {
-    crate::deploy::host_disk::gib_from_blocks(blocks as f64)
 }
 
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
@@ -3131,7 +2060,7 @@ pub async fn deliver(
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
 /// would be a command that could be pointed at `~/.ssh/id_ed25519`.
-/// `stado host vaults [TARGET]` — which Skarbiec vaults the fleet holds.
+/// `stado credentials vaults [--host TARGET]` — which Skarbiec vaults the fleet holds.
 ///
 /// Without a target this asks every registry host, because "how many vaults
 /// does this fleet have" is the question a machine cannot answer about
@@ -3174,8 +2103,15 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
                 document
                     .pointer("/resolved/skarbiec_vault_file")
                     .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
                     .map(str::to_string)
             });
+        if declared.is_none() {
+            return Err(CmdError::click(format!(
+                "{name} declares no vault authority; add it to secrets.skarbiec.vault_file"
+            )));
+        }
         if let Some(object) = host.as_object_mut() {
             let list = object
                 .get("vaults")
@@ -3273,8 +2209,8 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
     Ok(())
 }
 
-/// `stado host declare-version TARGET --binary B --version V` — say what a
-/// host must run. `--unset` removes that one declaration.
+/// `stado release declare-version --host TARGET --binary B --version V` says
+/// what a host must run. `--unset` removes that declaration.
 ///
 /// `managed_versions` is the declaration every version verdict is measured
 /// against, and nothing wrote it: `host inventory` compared each host's
@@ -3304,8 +2240,10 @@ pub async fn declare_version(
         }
         (Some(version), false) => {
             let version = version.trim();
-            if version.is_empty() {
-                return Err(CmdError::usage("--version must name an exact version"));
+            if !crate::deploy::host_release::is_exact_semver(version) {
+                return Err(CmdError::usage(
+                    "--version must name an exact semantic version such as 0.5.1",
+                ));
             }
             Some(version)
         }
@@ -3322,14 +2260,24 @@ pub async fn declare_version(
             let object = candidate.as_object_mut()?;
             (object.get("name").and_then(Value::as_str) == Some(target)).then_some(object)
         })
-        .ok_or_else(|| CmdError::click(format!("registry declares no target {target:?}")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{target} is missing from registry.targets; add the host declaration before \
+                 declaring a managed version"
+            ))
+        })?;
 
     if let Some(version) = version {
         let versions = entry
             .entry("managed_versions".to_string())
             .or_insert_with(|| Value::Object(serde_json::Map::new()))
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{target} declares managed_versions as a non-object; replace \
+                     targets[].managed_versions with an object"
+                ))
+            })?;
         versions.insert(binary.name.to_string(), json!(version));
         let generation = super::registry::push_document_if(&document, &expected_generation).await?;
         if json {
@@ -3349,7 +2297,12 @@ pub async fn declare_version(
         None => false,
         Some(versions) => versions
             .as_object_mut()
-            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{target} declares managed_versions as a non-object; replace \
+                     targets[].managed_versions with an object"
+                ))
+            })?
             .remove(&binary.name)
             .is_some(),
     };
@@ -3373,10 +2326,11 @@ pub async fn declare_version(
     Ok(())
 }
 
-/// Promote one published version into fleet desired state in one fenced
-/// registry write. Every platform manifest must already exist and identify
-/// the canonical coordinate before `managed_versions` moves.
+/// Promote one published version into one host's desired state in one fenced
+/// registry write. The platform manifest must already exist and identify the
+/// canonical coordinate before `managed_versions` moves.
 pub async fn promote_version(
+    target_name: &str,
     binary: &str,
     version: &str,
     json_output: bool,
@@ -3417,10 +2371,15 @@ pub async fn promote_version(
             Ok((name.to_string(), platform.to_string()))
         })
         .collect::<Result<_, CmdError>>()?;
+    let target_specs: Vec<(String, String)> = target_specs
+        .into_iter()
+        .filter(|(name, _)| name == target_name)
+        .collect();
     if target_specs.is_empty() {
-        return Err(CmdError::click(
-            "registry has no targets; refusing an empty desired-state promotion",
-        ));
+        return Err(CmdError::click(format!(
+            "{target_name} is missing from registry.targets; add the host declaration before \
+             promoting a release"
+        )));
     }
 
     // Resolve every legacy omission before mutating the in-memory document.
@@ -3504,6 +2463,9 @@ pub async fn promote_version(
             .and_then(Value::as_str)
             .ok_or_else(|| CmdError::click("registry target has no name"))?
             .to_string();
+        if name != target_name {
+            continue;
+        }
         let observed = observed_platforms.get(&name).ok_or_else(|| {
             CmdError::click(format!(
                 "target {name:?} was not inventoried before promotion"
@@ -3528,6 +2490,7 @@ pub async fn promote_version(
     if json_output {
         print_json(&json!({
             "binary": managed.name,
+            "host": target_name,
             "version": version,
             "targets": target_specs.iter().map(|(name, _)| name).collect::<Vec<_>>(),
             "platforms": platforms,
@@ -3546,126 +2509,95 @@ pub async fn promote_version(
     Ok(())
 }
 
-/// `stado host reconcile [TARGET] [--apply]` — what the fleet runs against
-/// what it was told to run.
-///
-/// Without `--apply` nothing changes: an operator must be able to see drift
-/// without a machine moving under them. With it, every host that is BEHIND
-/// its declaration is delivered through the ordinary `host release` path,
-/// which verifies the digest before it repoints anything.
-///
-/// Only `behind` is delivered. A host running something NEWER than the
-/// declaration is a stale declaration, not a stale host, and quietly
-/// downgrading it would be this command destroying work rather than
-/// reconciling it.
-pub async fn reconcile(
-    target: Option<String>,
-    apply: bool,
-    json_output: bool,
-) -> Result<(), CmdError> {
+/// Apply the declared release-state repair and return its post-delivery
+/// inventory proof to the repair capability.
+pub(crate) async fn apply_release_state_repair(target: &str) -> Result<Value, CmdError> {
     let runner = crate::deploy::production_runner();
     let registry = super::registry::read_registry().await?;
-    let names: Vec<String> = match target {
-        Some(name) => {
-            if registry.targets.iter().all(|entry| entry.name != name) {
-                return Err(CmdError::click(format!(
-                    "registry declares no target {name:?}"
-                )));
-            }
-            vec![name]
-        }
-        None => registry
-            .targets
-            .iter()
-            .map(|entry| entry.name.clone())
-            .collect(),
-    };
-    if names.is_empty() {
-        return Err(CmdError::click("registry has no targets to reconcile"));
+    if registry.targets.iter().all(|entry| entry.name != target) {
+        return Err(CmdError::click(format!(
+            "{target} has no target declaration; add it to the fleet registry."
+        )));
     }
 
-    let mut standings = Vec::with_capacity(names.len());
-    for name in &names {
-        standings.push(crate::deploy::reconcile::examine(name, &runner).await);
-    }
+    let mut standings = vec![crate::deploy::reconcile::examine(target, &runner).await];
 
     let mut deliveries: Vec<Value> = Vec::new();
-    if apply {
-        for standing in &standings {
-            if !standing.needs_delivery() {
+    for standing in &standings {
+        if !standing.needs_delivery() {
+            continue;
+        }
+        let entry = registry
+            .targets
+            .iter()
+            .find(|entry| entry.name == standing.target)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{} target declaration disappeared during repair; retry after the registry is stable.",
+                    standing.target
+                ))
+            })?;
+        for drifted in &standing.drift {
+            if drifted.verdict != "behind" && drifted.verdict != "absent" {
                 continue;
             }
-            let entry = registry
-                .targets
-                .iter()
-                .find(|entry| entry.name == standing.target)
-                .ok_or_else(|| {
-                    CmdError::click(format!("registry target {:?} disappeared", standing.target))
-                })?;
-            for drifted in &standing.drift {
-                if drifted.verdict != "behind" && drifted.verdict != "absent" {
-                    continue;
-                }
-                let binary = &drifted.binary;
-                let version = entry.declared_version(binary).ok_or_else(|| {
-                    CmdError::click(format!(
-                        "{} has no desired {binary} version",
-                        standing.target
-                    ))
-                })?;
-                let outcome = crate::deploy::host_release::release_host(
-                    &standing.target,
-                    binary,
-                    version,
-                    false,
-                    false,
-                    &runner,
-                )
-                .await;
-                deliveries.push(match outcome {
-                    Ok(report)
-                        if matches!(
-                            report.get("status").and_then(Value::as_str),
-                            Some(
-                                crate::deploy::host_release::RELEASED_STATUS
-                                    | crate::deploy::host_release::ALREADY_ACTIVE_STATUS
-                            )
-                        ) =>
-                    {
-                        json!({
-                            "target": standing.target,
-                            "binary": binary,
-                            "version": version,
-                            "status": "delivered",
-                            "report": report,
-                        })
-                    }
-                    Ok(report) => json!({
+            let binary = &drifted.binary;
+            let version = entry.declared_version(binary).ok_or_else(|| {
+                CmdError::click(format!(
+                    "{} declares no desired {binary} version; add it to the target's version declaration.",
+                    standing.target
+                ))
+            })?;
+            let outcome = crate::deploy::host_release::release_host(
+                &standing.target,
+                binary,
+                version,
+                false,
+                false,
+                &runner,
+            )
+            .await;
+            deliveries.push(match outcome {
+                Ok(report)
+                    if matches!(
+                        report.get("status").and_then(Value::as_str),
+                        Some(
+                            crate::deploy::host_release::RELEASED_STATUS
+                                | crate::deploy::host_release::ALREADY_ACTIVE_STATUS
+                        )
+                    ) =>
+                {
+                    json!({
                         "target": standing.target,
                         "binary": binary,
                         "version": version,
-                        "status": "failed",
-                        "detail": report
-                            .get("error")
-                            .and_then(Value::as_str)
-                            .unwrap_or("delivery returned a non-success report"),
+                        "status": "delivered",
                         "report": report,
-                    }),
-                    Err(error) => json!({
-                        "target": standing.target,
-                        "binary": binary,
-                        "version": version,
-                        "status": "failed",
-                        "detail": error.to_string(),
-                    }),
-                });
-            }
-        }
-        standings.clear();
-        for name in &names {
-            standings.push(crate::deploy::reconcile::examine(name, &runner).await);
+                    })
+                }
+                Ok(report) => json!({
+                    "target": standing.target,
+                    "binary": binary,
+                    "version": version,
+                    "status": "failed",
+                    "detail": report
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("delivery returned a non-success report"),
+                    "report": report,
+                }),
+                Err(error) => json!({
+                    "target": standing.target,
+                    "binary": binary,
+                    "version": version,
+                    "status": "failed",
+                    "detail": error.to_string(),
+                }),
+            });
         }
     }
+    standings.clear();
+    standings.push(crate::deploy::reconcile::examine(target, &runner).await);
 
     let healthy = standings
         .iter()
@@ -3673,58 +2605,9 @@ pub async fn reconcile(
         && deliveries
             .iter()
             .all(|entry| entry.get("status").and_then(Value::as_str) == Some("delivered"));
-    let report = crate::deploy::reconcile::report(&standings, &deliveries);
-    if json_output {
-        print_json(&report);
-    } else {
-        for standing in &standings {
-            if let Some(detail) = &standing.unreachable {
-                println!("{}: unreachable — {detail}", standing.target);
-                continue;
-            }
-            if standing.platform_verdict != crate::deploy::host_inventory::MATCHED {
-                println!(
-                    "{}: platform mismatch — declared {}, observed {}",
-                    standing.target, standing.declared_release_platform, standing.release_platform
-                );
-            }
-            if standing.settled() {
-                println!("{}: active versions match desired state", standing.target);
-            }
-            for drift in &standing.drift {
-                println!(
-                    "{}: {} is {} — desired {}, active {}",
-                    standing.target, drift.binary, drift.verdict, drift.declared, drift.installed
-                );
-            }
-            if !standing.undeclared.is_empty() {
-                println!(
-                    "{}: missing desired versions — {}",
-                    standing.target,
-                    standing.undeclared.join(", ")
-                );
-            }
-        }
-        for delivery in &deliveries {
-            println!(
-                "{} {} on {}: {}",
-                delivery.get("binary").and_then(Value::as_str).unwrap_or(""),
-                delivery
-                    .get("version")
-                    .and_then(Value::as_str)
-                    .unwrap_or(""),
-                delivery.get("target").and_then(Value::as_str).unwrap_or(""),
-                delivery.get("status").and_then(Value::as_str).unwrap_or("")
-            );
-        }
-    }
-    if !healthy {
-        return Err(CmdError::click(
-            "reconcile incomplete: every target must be reachable, platform-matched, declared, \
-             and active at its desired versions",
-        ));
-    }
-    Ok(())
+    let mut report = crate::deploy::reconcile::report(&standings, &deliveries);
+    report["healthy"] = json!(healthy);
+    Ok(report)
 }
 pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
@@ -4150,119 +3033,6 @@ pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
     report_outcome(&report, expected)
 }
 
-/// `stado host release TARGET --binary NAME --version X.Y.Z` — put one
-/// registry-declared managed binary onto TARGET.
-///
-/// The write counterpart of `host inventory`: that command says a host is
-/// behind its declared version, this one closes the gap, and it refuses to
-/// do anything the declaration does not already say. `--binary` selects a
-/// compile-time entry and never becomes a path; `--version` is an exact
-/// immutable coordinate that has to equal what the registry declares.
-pub async fn release(
-    target: &str,
-    binary: &str,
-    version: &str,
-    dry_run: bool,
-    reinstall: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    use crate::deploy::host_release;
-
-    let runner = crate::deploy::production_runner();
-    let report = host_release::release_host(target, binary, version, dry_run, reinstall, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    // Three outcomes are success, and conflating them would be the lie this
-    // command exists to avoid: a delivery, a host that already ran the
-    // requested version, and a dry run that mutated nothing.
-    let expected = match report.get("status").and_then(Value::as_str) {
-        Some(host_release::ALREADY_ACTIVE_STATUS) => host_release::ALREADY_ACTIVE_STATUS,
-        Some(host_release::PLANNED_STATUS) if dry_run => host_release::PLANNED_STATUS,
-        _ => host_release::RELEASED_STATUS,
-    };
-    if json {
-        print_json(&report);
-        return report_outcome(&report, expected);
-    }
-
-    println!("target:   {}", cell(report.get("target")));
-    println!(
-        "binary:   {} {} ({})",
-        cell(report.get("binary")),
-        cell(report.get("version")),
-        cell(report.get("platform"))
-    );
-    println!("declared: {}", cell(report.get("declared_version")));
-    println!("artifact: {}", cell(report.get("release_uri")));
-    println!(
-        "sha256:   {} (release manifest)",
-        cell(report.get("sha256"))
-    );
-    println!(
-        "installed: {} ({})",
-        cell(report.get("active_version")),
-        cell(report.get("active_state"))
-    );
-    println!("unit:     {}", cell(report.get("unit")));
-
-    let steps = report
-        .get("steps")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    super::table::print(
-        &["STEP", "STATE", "DETAIL"],
-        &steps
-            .iter()
-            .map(|step| {
-                vec![
-                    cell(step.get("step")),
-                    cell(step.get("state")),
-                    cell(step.get("detail")),
-                ]
-            })
-            .collect::<Vec<Vec<String>>>(),
-    );
-
-    match report.get("status").and_then(Value::as_str) {
-        Some(host_release::ALREADY_ACTIVE_STATUS) => println!(
-            "\nalready active: {} is the running version, so nothing was fetched, \
-             staged, activated or restarted",
-            cell(report.get("version"))
-        ),
-        Some(host_release::PLANNED_STATUS) => {
-            // Named one by one, because the value of a dry run is the order.
-            println!("\nplanned, nothing was mutated on the host:");
-            for step in report
-                .get("planned_steps")
-                .and_then(Value::as_array)
-                .unwrap_or(&Vec::new())
-            {
-                println!("  {}", cell(Some(step)));
-            }
-        }
-        Some(host_release::RELEASED_STATUS) => println!(
-            "\nreleased: {} now runs {} {}",
-            cell(report.get("target")),
-            cell(report.get("binary")),
-            cell(report.get("version"))
-        ),
-        _ => {
-            // The question an operator asks after a failure is what is
-            // running now, and the answer is almost always "the same thing
-            // as before". Say so rather than making them re-run inventory.
-            if report.get("active_version_unchanged") == Some(&Value::Bool(true)) {
-                println!(
-                    "\nnothing was activated: {} still runs {}",
-                    cell(report.get("target")),
-                    cell(report.get("active_version"))
-                );
-            }
-        }
-    }
-    report_outcome(&report, expected)
-}
-
 /// Where a delivered file lands, relative to the target account's home.
 ///
 /// Separate from `.stado` itself so a delivery can never take the name of a
@@ -4282,7 +3052,7 @@ pub(crate) async fn install_secret_value_at_home(
 /// landed, for a caller that renders its own report.
 ///
 /// A callee that prints is unusable from a machine-readable caller:
-/// `stado host publish-placement-policy --json` would put a delivery report in
+/// `stado route placement publish --json` would put a delivery report in
 /// front of its own document and hand the operator two JSON objects on one
 /// stream. Same channel, same checksum, same owner-only mode — only the
 /// reporting belongs to whoever asked.
@@ -4294,7 +3064,7 @@ pub(crate) async fn deliver_file(
     stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
 }
 
-/// The registration `stado host sync-acquisition-scopes` performs on the host,
+/// The registration `stado credentials acquisition-scopes sync --host TARGET` performs on the host,
 /// natively: the checks and key steps of the retired registration script as
 /// individual remote commands, with every branch taken here. Modeled on
 /// weles's register-weles-acquisition-scopes-host.sh with the two appstore
@@ -4317,6 +3087,7 @@ async fn register_acquisition_scopes(
     resolved: &ComputeTarget,
     delivered: &str,
     catalog_name: &str,
+    vault: &str,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
     use crate::deploy::host_channel;
@@ -4344,11 +3115,10 @@ async fn register_acquisition_scopes(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let bin = format!("{home}/.stado/bin/skarbiec");
-    let vault = format!("{home}/.stado/skarbiec.vault.json");
     let private_key = format!("{home}/.stado/weles-credential-workload-private.pem");
     let catalog = format!("{home}/.stado/files/{catalog_name}");
 
-    for file in [&bin, &vault, &private_key, &catalog] {
+    for file in [bin.as_str(), vault, private_key.as_str(), catalog.as_str()] {
         let present = host_channel::remote_test(
             resolved,
             &format!("-f {}", crate::deploy::shlex_quote(file)),
@@ -4490,7 +3260,7 @@ async fn register_acquisition_scopes(
             "PATH={} SKARBIEC_VAULT_FILE={} {} token-register-acquisitions {} \
              --workload-public-key-file {} --replace-capabilities >/dev/null",
             crate::deploy::shlex_quote(&openssl_search_path),
-            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(vault),
             crate::deploy::shlex_quote(&bin),
             crate::deploy::shlex_quote(&catalog),
             crate::deploy::shlex_quote(&public_key),
@@ -4590,7 +3360,7 @@ fn catalog_file_name(source: &str) -> Result<String, CmdError> {
     Ok(name.to_string())
 }
 
-/// `stado host sync-acquisition-scopes TARGET SOURCE` — deliver the checked-in
+/// `stado credentials acquisition-scopes sync --host TARGET SOURCE` — deliver the checked-in
 /// Skarbiec acquisition-scope catalog to TARGET and register it against the
 /// host's fleet vault.
 ///
@@ -4607,13 +3377,13 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
         return Err(CmdError::usage("catalog source must be a regular file"));
     }
     let name = catalog_file_name(source)?;
-    let (delivered, _bytes) = deliver_file(target, source, &name).await?;
-
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let vault = credential_host.vault;
     let runner = crate::deploy::production_runner();
-    let printed = register_acquisition_scopes(&resolved, &delivered, &name, &runner).await?;
+    let (delivered, _bytes) = deliver_file(target, source, &name).await?;
+    let printed =
+        register_acquisition_scopes(&resolved, &delivered, &name, &vault, &runner).await?;
     print!("{printed}");
     if !printed.ends_with('\n') {
         println!();
@@ -4962,234 +3732,6 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
     Ok(())
 }
 
-/// `stado host weles-api-runtime TARGET --revision <sha>` — move TARGET's
-/// managed Weles API runtime onto one exact revision, restart the unit that
-/// serves it, and report the revision now answering.
-///
-/// The runtime is a source build on the host: one clone under
-/// `$HOME/.stado/build-work/weles-api-managed`, checked out at an exact
-/// revision, built there, and served by `com.wisent.always-on.weles-api`.
-/// Nothing moved that clone when the repository moved, so on 2026-09-06 the
-/// host served a 2026-08-30 revision for a week: it asked Brama for the alias
-/// a merged fix had already replaced, and every browser task on the host died
-/// with `subscription_unavailable` while the host's own bearer was being
-/// served. The steps are named here, in this binary, and each one is a program
-/// this command runs on the target — there is no file for an operator to run
-/// by hand and no revision this command can be told about twice.
-pub async fn refresh_weles_api_runtime(target: &str, revision: &str) -> Result<(), CmdError> {
-    use crate::deploy::host_channel;
-
-    let revision = revision.trim();
-    if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(CmdError::usage(
-            "the runtime revision must be one full 40-character git object name",
-        ));
-    }
-
-    let resolved = host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let refused = |step: &str, detail: String| {
-        CmdError::click(format!(
-            "{}: the runtime was NOT moved to {revision}: {step} refused: {detail}",
-            resolved.name
-        ))
-    };
-
-    let home = host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let work = format!("{home}/{WELES_API_WORK_DIR}");
-    let quoted_work = crate::deploy::shlex_quote(&work);
-    let path = crate::deploy::shlex_quote(WELES_API_BUILD_PATH);
-    let marker = format!("{work}/.weles-api-revision");
-
-    let cloned = host_channel::remote_test(&resolved, &format!("-d {quoted_work}/.git"), &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-
-    // Each step is one command with its own refusal, so a build that stops
-    // says which half of the deployment happened.
-    let mut steps: Vec<(&str, String)> = Vec::new();
-    if !cloned {
-        steps.push((
-            "clone",
-            format!(
-                "PATH={path} git clone --filter=blob:none --no-checkout {} {quoted_work}",
-                crate::deploy::shlex_quote(WELES_SOURCE_REPOSITORY)
-            ),
-        ));
-    }
-    steps.push((
-        "fetch",
-        format!("PATH={path} git -C {quoted_work} fetch origin {revision}"),
-    ));
-    steps.push((
-        "checkout",
-        format!("PATH={path} git -C {quoted_work} checkout --detach --force {revision}"),
-    ));
-    steps.push((
-        "install",
-        format!("cd {quoted_work} && PATH={path} npm ci --ignore-scripts"),
-    ));
-    // node-pty ships its `spawn-helper` at 0644, and `posix_spawnp` cannot
-    // execute it: every trajectory that drives a CLI dies inside node-pty on a
-    // host where the CLI itself is fine. Nothing rebuilds it, so the bit is set
-    // here, on the copy this deployment installed.
-    steps.push((
-        "node-pty helper",
-        format!(
-            "PATH={path} chmod u=rwx,go=rx {quoted_work}/node_modules/node-pty/prebuilds/*/spawn-helper \
-             {quoted_work}/node_modules/node-pty/build/Release/spawn-helper 2>/dev/null || true"
-        ),
-    ));
-    // `--ignore-scripts` is deliberate — Playwright's install hook would pull
-    // browsers this fleet does not use — but the recording path needs the exact
-    // ffmpeg the installed Playwright pins, and `browserContext.newPage`
-    // refuses outright without it. On 2026-09-07 that turned every browser task
-    // on the host into `Executable doesn't exist at .../ffmpeg-1011/ffmpeg-mac`
-    // seconds after a clean deployment, so the component is installed here,
-    // from the Playwright this revision resolved.
-    steps.push((
-        "recording dependency",
-        format!("cd {quoted_work} && PATH={path} npx --no-install playwright install ffmpeg"),
-    ));
-    steps.push((
-        "build",
-        format!("cd {quoted_work} && PATH={path} npm run build"),
-    ));
-    steps.push((
-        "record",
-        format!(
-            "PATH={path} printf '%s\\n' {} > {}",
-            crate::deploy::shlex_quote(revision),
-            crate::deploy::shlex_quote(&marker)
-        ),
-    ));
-
-    for (step, command) in steps {
-        let ran = host_channel::run_command(&resolved, &command, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        if !ran.ok() {
-            return Err(refused(
-                step,
-                host_channel::last_error_line(&ran, "no output"),
-            ));
-        }
-    }
-
-    // What the host wrote, not what the build said.
-    let recorded = host_channel::run_command(
-        &resolved,
-        &format!("cat {}", crate::deploy::shlex_quote(&marker)),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    let observed = recorded.stdout.trim().to_string();
-    if observed != revision {
-        return Err(refused(
-            "readback",
-            format!(
-                "the host recorded {} in {marker}",
-                if observed.is_empty() {
-                    "nothing".to_string()
-                } else {
-                    observed
-                }
-            ),
-        ));
-    }
-
-    // The port decides which process is the live API, and until this
-    // deployment nothing owned it: the API ran as a login-spawned process from
-    // a shell wrapper, so a restart of the managed unit found the port taken
-    // and its launcher correctly stood by, leaving the old build serving. The
-    // takeover is part of the deployment, and it refuses any listener that is
-    // not a Weles API: an unexpected process on this port is reported, never
-    // killed.
-    let listeners = host_channel::run_command(
-        &resolved,
-        &format!("PATH={path} lsof -tiTCP:{WELES_API_PORT} -sTCP:LISTEN 2>/dev/null || true"),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    for pid in listeners
-        .stdout
-        .split_whitespace()
-        .filter(|value| value.chars().all(|character| character.is_ascii_digit()))
-    {
-        let described = host_channel::run_command(
-            &resolved,
-            &format!("PATH={path} ps -p {pid} -o command= 2>/dev/null || true"),
-            &runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-        let command = described.stdout.trim().to_string();
-        if command.is_empty() {
-            continue;
-        }
-        if !command.contains("weles-api-server") && !command.contains("weles-api-launcher") {
-            return Err(refused(
-                "port takeover",
-                format!("port {WELES_API_PORT} is held by pid {pid}, which is not a Weles API: {command}"),
-            ));
-        }
-        let ended =
-            host_channel::run_command(&resolved, &format!("PATH={path} kill -TERM {pid}"), &runner)
-                .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
-        if !ended.ok() {
-            return Err(refused(
-                "port takeover",
-                format!(
-                    "pid {pid} on port {WELES_API_PORT} refused SIGTERM: {}",
-                    host_channel::last_error_line(&ended, "no output")
-                ),
-            ));
-        }
-        println!(
-            "{}: ended unowned Weles API pid {pid} on port {WELES_API_PORT}",
-            resolved.name
-        );
-    }
-
-    // A built tree the running process has not loaded is not deployed. The
-    // restart goes through the managed path, so the unit's own audit record
-    // carries this change, and `weles doctor` on the host reads the revision
-    // recorded above.
-    crate::cli::service::restart(WELES_API_SERVICE, Some(&resolved.name), None, None, false)
-        .await?;
-    println!(
-        "{}: {WELES_API_SERVICE} now serves {revision}",
-        resolved.name
-    );
-    Ok(())
-}
-
-/// The registry name of the managed Weles API service. Stado renders and owns
-/// the launchd label; the name is what every service command takes.
-const WELES_API_SERVICE: &str = "weles-api";
-
-/// The port the Weles API serves on, and the only thing that says which
-/// process is the live one.
-const WELES_API_PORT: u16 = 8788;
-
-/// Where the managed runtime's own checkout lives, relative to its home.
-const WELES_API_WORK_DIR: &str = ".stado/build-work/weles-api-managed";
-
-/// The source the runtime is built from.
-const WELES_SOURCE_REPOSITORY: &str = "https://github.com/wisent-ai/weles.git";
-
-/// The interpreters this build needs, in the order the fleet's hosts install
-/// them: a login shell reached through the channel does not necessarily carry
-/// the Homebrew prefix that holds `node` and `npm`.
-const WELES_API_BUILD_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-
 async fn transfer_secret(
     target: &str,
     name: &str,
@@ -5326,7 +3868,7 @@ impl RetireFileOutcome {
 }
 
 fn retire_refused(message: impl Into<String>) -> CmdError {
-    CmdError::click(format!("retire-file refused: {}", message.into()))
+    CmdError::click(format!("space file retire refused: {}", message.into()))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5370,7 +3912,7 @@ fn retire_file_binding(
     ) {
         (None, None, None, None) if request.dry_run => Ok(None),
         (None, None, None, None) => Err(CmdError::usage(
-            "mutating retire-file requires transaction, expected-sha256, expected-size, and expected-mode from a reviewed receipt",
+            "mutating space file retire requires transaction, expected-sha256, expected-size, and expected-mode from a reviewed receipt",
         )),
         (Some(transaction), Some(expected_sha256), Some(expected_size), Some(expected_mode)) => {
             if request.dry_run {
@@ -5380,7 +3922,7 @@ fn retire_file_binding(
             }
             if !safe_retirement_transaction(transaction) {
                 return Err(CmdError::usage(
-                    "transaction must be the exact token from a handoff or retire-file dry-run receipt",
+                    "transaction must be the exact token from a handoff or space file retire --dry-run receipt",
                 ));
             }
             if expected_sha256.len() != 64
@@ -5700,7 +4242,7 @@ fn rollback_retirement(
     }
 }
 
-/// Run the device-local filesystem half of `host retire-file`.
+/// Run the device-local filesystem half of `space file retire`.
 ///
 /// Every path component is opened with `O_NOFOLLOW`, held by descriptor through
 /// the mutation, and checked against the approved account uid. The source is
@@ -6004,7 +4546,12 @@ pub fn retire_file_local(
     if json_output {
         println!("{}", serde_json::to_string(&outcome)?);
     } else {
-        print_retire_file_outcome(&outcome);
+        println!(
+            "{} {} -> {}",
+            outcome.status,
+            outcome.source,
+            outcome.destination.as_deref().unwrap_or("-")
+        );
     }
     Ok(())
 }
@@ -6241,8 +4788,9 @@ async fn retire_file_document(
         let expected_size = binding.map(|binding| binding.expected_size.to_string());
         let mut words = vec![
             binary.as_str(),
-            "host",
-            "retire-file-local",
+            "space",
+            "file",
+            "retire-local",
             path,
             "--product",
             product,
@@ -6270,7 +4818,7 @@ async fn retire_file_document(
             .map_err(|error| CmdError::click(error.to_string()))?;
         if !output.ok() {
             return Err(CmdError::click(format!(
-                "{}: installed Stado retire-file primitive failed: {}",
+                "{}: installed Stado space file retire primitive failed: {}",
                 resolved.name,
                 crate::deploy::host_channel::last_error_line(
                     &output,
@@ -6293,38 +4841,13 @@ async fn retire_file_document(
     }
 }
 
-fn print_retire_file_outcome(outcome: &RetireFileOutcome) {
-    if outcome.status == "absent" {
-        println!("{}: {} absent", outcome.target, outcome.source);
-    } else {
-        println!(
-            "{}: {} {} -> {} (transaction {}, {} bytes, sha256 {}, mode {})",
-            outcome.target,
-            outcome.source,
-            outcome.status,
-            outcome.destination.as_deref().unwrap_or("-"),
-            outcome.transaction.as_deref().unwrap_or("-"),
-            outcome.size.unwrap_or(0),
-            outcome.sha256.as_deref().unwrap_or("-"),
-            outcome.mode.as_deref().unwrap_or("-"),
-        );
-    }
-}
-
-/// `stado host retire-file TARGET PATH --product PRODUCT [--dry-run]`.
-pub async fn retire_file(
+/// Resolve and perform one declaration-bound retirement for the space capability.
+pub async fn retire_file_outcome(
     target: &str,
-    request: RetireFileRequest<'_>,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let binding = retire_file_binding(&request)?;
-    let outcome = retire_file_document(target, &request, binding.as_ref()).await?;
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&outcome)?);
-    } else {
-        print_retire_file_outcome(&outcome);
-    }
-    Ok(())
+    request: &RetireFileRequest<'_>,
+) -> Result<RetireFileOutcome, CmdError> {
+    let binding = retire_file_binding(request)?;
+    retire_file_document(target, request, binding.as_ref()).await
 }
 
 /// Remove one file from TARGET's home: the path Stado never had a way to
@@ -6472,49 +4995,6 @@ fi
     } else {
         Err(CmdError::click(outcome.failure_sentence()))
     }
-}
-
-/// Remove one file from TARGET's home: the path Stado never had a way to
-/// delete, so a retired or broken unit left its plist on disk forever and the
-/// only answer was a bare `rm` over ssh, which nothing bounds and nobody
-/// audits. This is that answer as a product verb. The guards are on the host,
-/// not on the client, because the file is what the host says it is, not what
-/// the operator believes:
-///
-/// - the path must be absolute, contain no `..`, and live under
-///   `$HOME/Library/LaunchAgents` or `$HOME/.stado` of the approved account —
-///   a system path is not refused because it is dangerous, it is refused
-///   because this channel has no right there, and the refusal names the
-///   privileged command that does have one;
-/// - it must be a regular file owned by that account — a symlink under an
-///   allowed root can point anywhere, a directory would make this a recursive
-///   delete, and somebody else's file is not this login's to remove.
-///
-/// Absence is reported as `absent`, not invented into a success.
-pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), CmdError> {
-    let outcome = remove_file_document(target, path).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": outcome.target,
-                "path": outcome.path,
-                "status": outcome.status,
-                "detail": outcome.detail,
-            }))?
-        );
-    } else {
-        match &outcome.detail {
-            Some(detail) if !detail.is_empty() => {
-                println!(
-                    "{}: {} {} — {detail}",
-                    outcome.target, outcome.path, outcome.status
-                )
-            }
-            _ => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
-        }
-    }
-    Ok(())
 }
 
 /// `stado host cron TARGET [--prune TEXT] [--apply] [--restore PATH]` — the
@@ -6704,7 +5184,7 @@ const VAULT_FIELD_SUMMARY_PROGRAM: &str = concat!(
     " for name in sorted(fields)]}))\n",
 );
 
-/// `stado host vault-item-show` — what one item on TARGET holds, without its
+/// `stado credentials item show --host TARGET ITEM` — what one item holds,
 /// values.
 ///
 /// `vault-item-put` had no counterpart, and the absence was not cosmetic: an
@@ -6730,40 +5210,19 @@ pub async fn vault_item_show(
     if let Some(field) = field {
         vault_word("field", field)?;
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let refused = |detail: String| {
         CmdError::click(format!(
             "{}: {item} could not be read: {detail}",
             resolved.name
         ))
     };
-    if !environment.ok() {
-        return Err(refused(
-            crate::deploy::host_channel::last_error_line(
-                &environment,
-                "the host's vault environment could not be read",
-            )
-            .to_string(),
-        ));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables.next().unwrap_or_default().to_string();
-    let gnupg_home = variables.next().unwrap_or_default().to_string();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
 
     // The encrypted record first: an absent item is an answer, and it is the
     // answer that costs nothing to give.
@@ -6774,19 +5233,10 @@ pub async fn vault_item_show(
         .await
         .unwrap_or_else(|_| "-".to_string());
     if record.state == "absent" {
-        if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "target": resolved.name,
-                    "item": item,
-                    "state": "absent",
-                }))?
-            );
-        } else {
-            println!("{}: {item} is absent", resolved.name);
-        }
-        return Ok(());
+        return Err(CmdError::click(format!(
+            "{} declares no credential item {item}; add it to the vault declared by secrets.skarbiec.vault_file",
+            resolved.name
+        )));
     }
 
     let summary_text = crate::deploy::host_channel::run_command(
@@ -6927,36 +5377,12 @@ pub async fn retag_vault_item(
             vault_word("tag", tag)?;
         }
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    // The host's own overrides, resolved on the host the way the retired
-    // script's `${VAR:-default}` did.
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: {item} could not be retagged: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(
-                &environment,
-                "the host's vault environment could not be read"
-            )
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables.next().unwrap_or_default().to_string();
-    let gnupg_home = variables.next().unwrap_or_default().to_string();
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
 
     // A remote refusal names the check that failed, in the words the retired
@@ -7134,37 +5560,12 @@ pub async fn vault_item_put(
         )));
     }
 
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: the Skarbiec environment could not be read: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
-    let gnupg_home = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
@@ -7181,7 +5582,7 @@ pub async fn vault_item_put(
         item_type,
     ];
 
-    let before = read_vault_phase(&resolved, vault, item, &runner)
+    let before = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(CmdError::click)?;
     let stored = crate::deploy::host_channel::run_program_with_stdin(
@@ -7199,7 +5600,7 @@ pub async fn vault_item_put(
             crate::deploy::host_channel::last_error_line(&stored, "remote command failed")
         )));
     }
-    let after = read_vault_phase(&resolved, vault, item, &runner)
+    let after = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(CmdError::click)?;
     if after.state != "active" || after.revision == before.revision {
@@ -7258,37 +5659,12 @@ pub async fn grant_item_read(
         ));
     }
 
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: the Skarbiec environment could not be read: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
-    let gnupg_home = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
@@ -7374,7 +5750,7 @@ pub async fn grant_show(
         .find(|entry| entry.get("consumer").and_then(Value::as_str) == Some(consumer));
     let Some(grant) = grant else {
         return Err(CmdError::click(format!(
-            "{}: no grant is recorded for consumer {consumer}",
+            "{} declares no grant for {consumer}; add it to the vault declared by secrets.skarbiec.vault_file",
             resolved.name
         )));
     };
@@ -7533,37 +5909,12 @@ async fn remote_skarbiec_json_at(
         .first()
         .map(String::as_str)
         .ok_or_else(|| CmdError::usage("a Skarbiec command is required"))?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let credential_host = credential_host(target).await?;
+    let resolved = credential_host.target;
+    let home = credential_host.home;
+    let vault = credential_host.vault;
+    let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\"",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !environment.ok() {
-        return Err(CmdError::click(format!(
-            "{}: the Skarbiec environment could not be read: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
-        )));
-    }
-    let mut variables = environment.stdout.lines();
-    let vault = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: the vault path is empty", resolved.name)))?;
-    let gnupg_home = variables
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click(format!("{}: GNUPGHOME is empty", resolved.name)))?;
     let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let vault_environment = match vault_relative {
         Some(relative) => format!("SKARBIEC_VAULT_FILE={home}/{relative}"),
@@ -7703,7 +6054,7 @@ fn mirror_items(
     Ok(items)
 }
 
-/// What `stado host sync-vault` would do to TARGET, without doing any of it.
+/// What `stado credentials vault sync --host TARGET` would do, without doing any of it.
 ///
 /// This preview exists because the operation it previews is not a merge, and
 /// its name invites everyone to read it as one. `skarbiec sync-pull` copies the
@@ -7996,33 +6347,6 @@ pub async fn vault_token_mint(
     Ok(())
 }
 
-fn render_verifier_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(report)?);
-        return Ok(());
-    }
-    let target = report.get("target").and_then(Value::as_str).unwrap_or("-");
-    let consumer = report
-        .get("consumer")
-        .and_then(Value::as_str)
-        .unwrap_or("-");
-    let items = report
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>()
-        .join(",");
-    let verb = if report.get("exact").and_then(Value::as_bool) == Some(true) {
-        "reads exactly"
-    } else {
-        "can read"
-    };
-    println!("{target}: {consumer} {verb} {items}");
-    Ok(())
-}
-
 fn object_namespace_items(document: &Value) -> Result<BTreeMap<String, String>, CmdError> {
     let namespaces = document
         .pointer("/resolved/object_api_namespaces")
@@ -8077,7 +6401,7 @@ fn ensure_object_verifier_declarations_match(
     )))
 }
 
-async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdError> {
+pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, CmdError> {
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
         CmdError::click(format!(
             "invalid object_api.namespaces: {}",
@@ -8118,13 +6442,6 @@ async fn reconcile_object_verifier_report(target: &str) -> Result<Value, CmdErro
         true,
     )
     .await
-}
-
-/// Reconcile the dashboard verifier on TARGET to every configured object
-/// namespace and the route-scoped host-health bearer.
-pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
-    let report = reconcile_object_verifier_report(target).await?;
-    render_verifier_report(&report, json_output)
 }
 
 fn release_publisher_items(document: &Value) -> Result<BTreeMap<String, String>, CmdError> {
@@ -8179,8 +6496,8 @@ fn ensure_release_verifier_declarations_match(
     )))
 }
 
-/// Reconcile the release verifier on TARGET to every configured publisher.
-pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared release-verifier repair.
+pub(crate) async fn apply_release_verifier_repair(target: &str) -> Result<Value, CmdError> {
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
         CmdError::click(format!(
             "invalid release_api.publishers: {}",
@@ -8208,7 +6525,7 @@ pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Resu
     })?;
     let host = release_publisher_items(&document)?;
     ensure_release_verifier_declarations_match(&host, &local)?;
-    let report = reconcile_verifier(
+    reconcile_verifier(
         target,
         "release",
         "matching local and target release_api.publishers",
@@ -8218,12 +6535,11 @@ pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Resu
         items,
         true,
     )
-    .await?;
-    render_verifier_report(&report, json_output)
+    .await
 }
 
-/// Reconcile the service verifier on TARGET to the exact configured deployer set.
-pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared service-verifier repair.
+pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value, CmdError> {
     let deployers = crate::config::service_api_deployers().map_err(|problems| {
         CmdError::click(format!(
             "invalid service_api.deployers: {}",
@@ -8234,7 +6550,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<std::collections::BTreeSet<_>>();
-    let report = reconcile_verifier(
+    reconcile_verifier(
         target,
         "service",
         "service_api.deployers",
@@ -8244,8 +6560,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         items,
         true,
     )
-    .await?;
-    render_verifier_report(&report, json_output)
+    .await
 }
 
 /// Read one nonsecret Skarbiec metadata report on a managed host.
@@ -8670,19 +6985,8 @@ async fn reconcile_verifier(
     Ok(report)
 }
 
-/// Recover a Skarbiec audit-lock stall on TARGET and restart only its loaded
-/// dependants.
-///
-/// The helper runs on TARGET, so the endpoints it probes must be TARGET's. Its
-/// own defaults are this fleet's operator laptop -- Skarbiec on 8787, the
-/// object API on 18765 -- and on 2026-09-03 that refused a real audit-lock
-/// stall on `charless-mac-mini`, where Skarbiec answers 8895 and the object API
-/// 8765, with "did not report an audit-lock failure": the script had asked a
-/// port nothing serves on that host and read the silence as health. The
-/// registry already states where each service answers per asking machine, so
-/// resolve TARGET's own endpoints and hand them over rather than letting a
-/// hard-coded default decide which host the operator meant.
-pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared Skarbiec audit-lock repair.
+pub(crate) async fn apply_skarbiec_audit_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -8708,19 +7012,11 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
         )));
     }
     let detail = recovered.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "recovered": detail.contains("recovered"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "recovered": detail.contains("recovered"),
+        "detail": detail,
+    }))
 }
 
 /// Shell prologue exporting the health endpoints TARGET itself serves on, read
@@ -8763,8 +7059,8 @@ async fn target_health_probes(target: &str) -> String {
     prologue
 }
 
-/// Recover stale per-user GnuPG daemons after Skarbiec reports a keybox stall.
-pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared Skarbiec cryptographic-daemon repair.
+pub(crate) async fn apply_skarbiec_crypto_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -8785,26 +7081,15 @@ pub async fn recover_skarbiec_crypto(target: &str, json_output: bool) -> Result<
         )));
     }
     let detail = recovered.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "recovered": detail.contains("recovered"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "recovered": detail.contains("recovered"),
+        "detail": detail,
+    }))
 }
 
-/// Repair Skarbiec's short-lived acquisition state after a service-user cutover.
-pub async fn recover_skarbiec_acquisition_state(
-    target: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
+/// Apply the declared Skarbiec acquisition-state repair.
+pub(crate) async fn apply_skarbiec_acquisition_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -8825,19 +7110,11 @@ pub async fn recover_skarbiec_acquisition_state(
         )));
     }
     let detail = recovered.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "recovered": detail.contains("recovered"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "recovered": detail.contains("recovered"),
+        "detail": detail,
+    }))
 }
 
 /// Restore the core object API without depending on the API being available.
@@ -8894,41 +7171,25 @@ PY"#,
     Ok(recovered.stdout.trim().to_string())
 }
 
-/// Run the object-API boundary repair as a focused operator command.
-pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), CmdError> {
+/// Apply the declared object-API repair.
+pub(crate) async fn apply_object_api_repair(target: &str) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let detail = recover_object_api_on_target(&resolved, &runner).await?;
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "healthy": true,
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
+    let detail =
+        recover_object_api_on_target(&resolved, &crate::deploy::production_runner()).await?;
+    Ok(json!({
+        "target": resolved.name,
+        "healthy": true,
+        "detail": detail,
+    }))
 }
 
-/// Repair the release-catalog ownership fault on the object API authority.
-///
-/// This is a separate operation from [`recover_object_api`]: the listener is
-/// healthy and authorized, but its local backend cannot replace one existing
-/// catalog object because root created that coordinate's directories. The
-/// fixed helper validates each source owner before changing it and has no
-/// operator-supplied path, so the repair cannot widen into a recursive chown of
-/// the store.
-pub async fn repair_release_store(
+/// Apply the declared release-catalog ownership repair.
+pub(crate) async fn apply_release_store_repair(
     target: &str,
     product: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
+) -> Result<Value, CmdError> {
     if !crate::release_control::identifier(product) {
         return Err(CmdError::usage(
             "product must be a canonical release identifier",
@@ -8959,40 +7220,12 @@ pub async fn repair_release_store(
         )));
     }
     let detail = repaired.stdout.trim();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "status": "repaired",
-                "scope": format!("stado://system/release-catalog/{product}.json"),
-                "detail": detail,
-            }))?
-        );
-    } else {
-        println!("{}: {detail}", resolved.name);
-    }
-    Ok(())
-}
-
-/// Authorize TARGET's service resolver on the service-directory authority.
-pub async fn authorize_resolver_key(target: &str, json_output: bool) -> Result<(), CmdError> {
-    let report = crate::deploy::host_resolver_key::authorize(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        println!(
-            "{}: resolver key {} ({}), authorized_keys on {} {}",
-            report["target"].as_str().unwrap_or_default(),
-            report["key_state"].as_str().unwrap_or_default(),
-            report["key_type"].as_str().unwrap_or_default(),
-            report["authority"].as_str().unwrap_or_default(),
-            report["authorized_keys"].as_str().unwrap_or_default(),
-        );
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "status": "repaired",
+        "scope": format!("stado://system/release-catalog/{product}.json"),
+        "detail": detail,
+    }))
 }
 
 /// One collected managed-unit log, before the CLI or a higher-level
@@ -9095,1986 +7328,6 @@ pub async fn unit_log(
     Ok(())
 }
 
-/// What one Weles worker host is doing: the Node.js program that reads the
-/// worker's run evidence on the host itself and prints one JSON document.
-///
-/// Fed to the host's own `node` over the channel's stdin, with the run limit
-/// and API port as argv — the same two values the retired bash wrapper took
-/// from the host's environment. There is nothing to install on the host and
-/// nothing left behind after the read.
-///
-/// Recordings hold page DOM, console output, HAR bodies, personas and proxy
-/// identities. None of that is emitted. What leaves the host is counts,
-/// timestamps, run identifiers, artifact sizes, cost, and the pass/fail flag a
-/// trajectory wrote about itself — the fields a remote operator view needs to
-/// name a run and say how it ended.
-const WELES_ACTIVITY_SOURCE: &str = r#"const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
-
-const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
-const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
-const home = os.homedir();
-const legacyWorkerRoot = path.join(home, '.local/share/weles-worker');
-const managedServiceRoot = path.join(home, '.stado/services/weles-admission');
-const managedWorkerRoot = path.join(managedServiceRoot, 'current');
-
-const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
-const shortHostname = hostname.endsWith('.local') ? hostname.slice(0, -'.local'.length) : hostname;
-
-const isoOrNull = (value) => {
-  const time = Number(value);
-  return Number.isFinite(time) && time > 0 ? new Date(time).toISOString() : null;
-};
-
-const readJson = (file) => {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return null;
-  }
-};
-
-const compareVersions = (left, right) => {
-  const parts = (value) => String(value).split('.').map((piece) => Number.parseInt(piece, 10) || 0);
-  const [a, b] = [parts(left), parts(right)];
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    const difference = (a[index] ?? 0) - (b[index] ?? 0);
-    if (difference !== 0) return difference;
-  }
-  return 0;
-};
-
-const releaseVersions = new Set();
-const recordingSources = [];
-const addRecordingSource = (release, platform, recordings, priority) => {
-  if (typeof release !== 'string' || !release) return;
-  try {
-    if (!fs.statSync(recordings).isDirectory()) return;
-  } catch {
-    return;
-  }
-  releaseVersions.add(release);
-  recordingSources.push({ release, platform, recordings, priority });
-};
-const addManagedRuntime = (runtime, platform, priority) => {
-  const manifest = readJson(path.join(runtime, 'package.json'));
-  const release = typeof manifest?.version === 'string' && manifest.version
-    ? manifest.version
-    : null;
-  if (release) releaseVersions.add(release);
-  addRecordingSource(release, platform, path.join(runtime, 'recordings'), priority);
-};
-
-// `current` is the active immutable coordinate. Count its release even before
-// the first browser run creates a recordings directory.
-addManagedRuntime(path.join(managedWorkerRoot, 'runtime'), 'managed', 2);
-
-// Also report every immutable release Stado installed. The service store is
-// digest-addressed (`sha256-*/<platform>/runtime`), not version-addressed, and
-// tying release discovery to a recordings directory hid fresh installations
-// until their first browser artifact existed.
-try {
-  for (const releaseEntry of fs.readdirSync(managedServiceRoot, { withFileTypes: true })) {
-    if (!releaseEntry.isDirectory() || !releaseEntry.name.startsWith('sha256-')) continue;
-    const releaseRoot = path.join(managedServiceRoot, releaseEntry.name);
-    for (const platformEntry of fs.readdirSync(releaseRoot, { withFileTypes: true })) {
-      if (!platformEntry.isDirectory()) continue;
-      addManagedRuntime(
-        path.join(releaseRoot, platformEntry.name, 'runtime'),
-        platformEntry.name,
-        1,
-      );
-    }
-  }
-} catch (error) {
-  if (error?.code !== 'ENOENT') throw error;
-}
-
-// Keep reporting recordings written by the retired per-version installer while
-// hosts complete their cutover to the fleet-managed service.
-try {
-  for (const releaseEntry of fs.readdirSync(legacyWorkerRoot, { withFileTypes: true })) {
-    if (!releaseEntry.isDirectory()) continue;
-    const release = releaseEntry.name;
-    const releaseRoot = path.join(legacyWorkerRoot, release);
-    for (const platformEntry of fs.readdirSync(releaseRoot, { withFileTypes: true })) {
-      if (!platformEntry.isDirectory()) continue;
-      addRecordingSource(
-        release,
-        platformEntry.name,
-        path.join(releaseRoot, platformEntry.name, 'recordings'),
-        0,
-      );
-    }
-  }
-} catch (error) {
-  if (error?.code !== 'ENOENT') throw error;
-}
-const releases = [...releaseVersions].sort(compareVersions);
-
-// The version marker names the release the retired activator staged. It can
-// disagree with the active fleet-managed release and remains useful evidence
-// that the old delivery path has not been removed from a host yet.
-const releaseMarker = (() => {
-  try {
-    return fs.readFileSync(path.join(home, '.stado/files/weles-release-version'), 'utf8').trim() || null;
-  } catch {
-    return null;
-  }
-})();
-
-const ARTIFACT_CLASSES = [
-  ['screenshots', /\.png$/i],
-  ['pages', /\.html$/i],
-  ['videos', /\.webm$/i],
-  ['logs', /\.(log|ndjson)$/i],
-  ['records', /\.json$|\.jsonl$|\.har$/i],
-];
-
-const classify = (name) => {
-  for (const [label, pattern] of ARTIFACT_CLASSES) {
-    if (pattern.test(name)) return label;
-  }
-  return 'other';
-};
-
-const RUNNING_WINDOW_MS = 180_000;
-
-const describeRun = (release, platform, runDirectory) => {
-  const stat = fs.statSync(runDirectory);
-  const counts = { screenshots: 0, pages: 0, videos: 0, logs: 0, records: 0, other: 0 };
-  let bytes = 0;
-  let action = null;
-  let resultOk = null;
-  let resultHealthy = null;
-  let resultSignal = null;
-  let resultAt = null;
-  let uploadProof = null;
-  let startedAt = null;
-  let completedAt = null;
-
-  const walk = (directory, depth) => {
-    let entries = [];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        // The one directory directly under a run is the action that produced it.
-        if (depth === 0 && !action) action = entry.name;
-        if (depth < 4) walk(full, depth + 1);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      counts[classify(entry.name)] += 1;
-      try {
-        bytes += fs.statSync(full).size;
-      } catch {
-        // A file rotated away mid-walk is not worth failing the report over.
-      }
-      if (/result\.json$/i.test(entry.name)) {
-        const document = readJson(full);
-        if (document && typeof document.ok === 'boolean') resultOk = document.ok;
-        if (typeof document?.completed_at === 'string') completedAt = document.completed_at;
-      } else if (entry.name === 'ban_signal.json') {
-        const document = readJson(full);
-        if (typeof document?.healthy === 'boolean') resultHealthy = document.healthy;
-        if (typeof document?.signal === 'string' && document.signal) resultSignal = document.signal;
-        if (typeof document?.ts === 'string') resultAt = document.ts;
-      } else if (entry.name === '.uploaded.json') {
-        const document = readJson(full);
-        if (typeof document?.sha256 === 'string' && typeof document?.destination === 'string') {
-          uploadProof = { sha256: document.sha256, destination: document.destination };
-        }
-      } else if (entry.name === 'session_meta.json') {
-        const document = readJson(full);
-        if (typeof document?.started_at === 'string') startedAt = document.started_at;
-      }
-    }
-  };
-  walk(runDirectory, 0);
-
-  if (!uploadProof) {
-    const document = readJson(path.join(runDirectory, '.uploaded.json'));
-    if (typeof document?.sha256 === 'string' && typeof document?.destination === 'string') {
-      uploadProof = { sha256: document.sha256, destination: document.destination };
-    }
-  }
-  const costs = readJson(path.join(path.dirname(runDirectory), '_costs', `${path.basename(runDirectory)}.json`));
-  const isFresh = Date.now() - stat.mtimeMs < RUNNING_WINDOW_MS;
-
-  let status = 'recorded';
-  if (resultHealthy === true || resultOk === true) status = 'succeeded';
-  else if (resultHealthy === false || resultOk === false || resultSignal) status = 'failed';
-  else if (isFresh) status = 'running';
-
-  return {
-    id: path.basename(runDirectory),
-    release,
-    platform,
-    action,
-    status,
-    started_at: startedAt ?? isoOrNull(stat.birthtimeMs),
-    completed_at: completedAt,
-    updated_at: isoOrNull(stat.mtimeMs),
-    artifact_counts: counts,
-    artifact_bytes: bytes,
-    cost_usd: typeof costs?.cost_usd === 'number' ? costs.cost_usd : null,
-    result: resultHealthy !== null || resultSignal
-      ? { healthy: resultHealthy, signal: resultSignal, recorded_at: resultAt }
-      : null,
-    uploaded: uploadProof !== null,
-    upload_proof: uploadProof,
-  };
-};
-
-const runsById = new Map();
-for (const source of recordingSources) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(source.recordings, { withFileTypes: true });
-  } catch {
-    continue;
-  }
-  for (const entry of entries) {
-    // `_costs` is the sidecar ledger of the runs beside it, not a run.
-    if (!entry.isDirectory() || entry.name === '_costs') continue;
-    const candidate = {
-      release: source.release,
-      platform: source.platform,
-      directory: path.join(source.recordings, entry.name),
-      priority: source.priority,
-    };
-    const existing = runsById.get(entry.name);
-    if (!existing || candidate.priority > existing.priority) runsById.set(entry.name, candidate);
-  }
-}
-const runs = [...runsById.values()];
-runs.sort((left, right) => {
-  const time = (row) => {
-    try {
-      return fs.statSync(row.directory).mtimeMs;
-    } catch {
-      return 0;
-    }
-  };
-  return time(right) - time(left);
-});
-
-const describedById = new Map();
-for (const row of runs) {
-  const summary = describeRun(row.release, row.platform, row.directory);
-  describedById.set(summary.id, summary);
-}
-
-// Weles API requests keep their process result outside a release runtime so an
-// update cannot erase it. Fold those durable records into the live recording
-// inventory: a cleaned recording loses its artifact counts, not the fact that
-// the run happened or how its process ended.
-const detachedRoot = path.join(home, '.stado/weles-detached-runs');
-try {
-  for (const entry of fs.readdirSync(detachedRoot, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const file = path.join(detachedRoot, entry.name);
-    const document = readJson(file);
-    if (!document || typeof document !== 'object') continue;
-    const stat = fs.statSync(file);
-    const fallbackId = entry.name.slice(0, -'.json'.length);
-    const id = typeof document.run_id === 'string' && document.run_id
-      ? document.run_id
-      : fallbackId;
-    const action = typeof document.action === 'string' && document.action
-      ? document.action
-      : null;
-
-    let status = 'recorded';
-    if (document.status === 'running' || document.ok === null) status = 'running';
-    else if (document.ok === true) status = 'succeeded';
-    else if (document.ok === false || document.status === 'failed') status = 'failed';
-
-    const resultCandidates = [
-      document.result,
-      document.result && typeof document.result === 'object' ? document.result.result : null,
-    ];
-    let result = null;
-    for (const candidate of resultCandidates) {
-      if (!candidate || typeof candidate !== 'object') continue;
-      const healthy = typeof candidate.healthy === 'boolean' ? candidate.healthy : null;
-      const signal = typeof candidate.signal === 'string' && candidate.signal ? candidate.signal : null;
-      if (healthy !== null || signal) {
-        result = {
-          healthy,
-          signal,
-          recorded_at: typeof candidate.ts === 'string'
-            ? candidate.ts
-            : (typeof document.completed_at === 'string' ? document.completed_at : null),
-        };
-        break;
-      }
-    }
-
-    const release = typeof document.release_version === 'string' && document.release_version
-      ? document.release_version
-      : null;
-    const durable = {
-      id,
-      release,
-      platform: process.platform,
-      action,
-      status,
-      started_at: typeof document.started_at === 'string'
-        ? document.started_at
-        : isoOrNull(stat.birthtimeMs),
-      completed_at: typeof document.completed_at === 'string' ? document.completed_at : null,
-      updated_at: isoOrNull(stat.mtimeMs),
-      artifact_counts: { screenshots: 0, pages: 0, videos: 0, logs: 0, records: 0, other: 0 },
-      artifact_bytes: 0,
-      cost_usd: null,
-      result,
-      uploaded: false,
-      upload_proof: null,
-    };
-    const live = describedById.get(id);
-    describedById.set(id, live
-      ? {
-          ...live,
-          action: live.action ?? durable.action,
-          status: durable.status === 'recorded' ? live.status : durable.status,
-          started_at: live.started_at ?? durable.started_at,
-          completed_at: durable.completed_at ?? live.completed_at,
-          updated_at: durable.updated_at ?? live.updated_at,
-          result: durable.result ?? live.result,
-        }
-      : durable);
-  }
-} catch (error) {
-  if (error?.code !== 'ENOENT') throw error;
-}
-
-const allDescribed = [...describedById.values()].sort(
-  (left, right) => (Date.parse(right.updated_at ?? '') || 0) - (Date.parse(left.updated_at ?? '') || 0),
-);
-const runTotal = allDescribed.length;
-const described = allDescribed.slice(0, runLimit);
-
-const probePort = (port) =>
-  new Promise((resolve) => {
-    const socket = net.createConnection({ host: '127.0.0.1', port });
-    const finish = (listening) => {
-      socket.destroy();
-      resolve(listening);
-    };
-    socket.setTimeout(1500);
-    socket.once('connect', () => finish(true));
-    socket.once('timeout', () => finish(false));
-    socket.once('error', () => finish(false));
-  });
-
-probePort(apiPort).then((listening) => {
-  const document = {
-    schema_version: 1,
-    host: shortHostname || hostname,
-    hostname,
-    generated_at: new Date().toISOString(),
-    worker: {
-      staged_release: releaseMarker,
-      installed_releases: releases,
-      newest_release: releases.at(-1) ?? null,
-    },
-    api: {
-      endpoint: `http://127.0.0.1:${apiPort}`,
-      listening,
-    },
-    run_total: runTotal,
-    runs: described,
-  };
-  process.stdout.write(`STADO-WELES-ACTIVITY ${JSON.stringify(document)}\n`);
-});
-"#;
-
-/// The marker [`WELES_ACTIVITY_SOURCE`] prefixes to its one JSON line, so a
-/// login shell's own greeting cannot be mistaken for the report.
-const WELES_ACTIVITY_MARKER: &str = "STADO-WELES-ACTIVITY ";
-
-/// Run [`WELES_ACTIVITY_SOURCE`] on one host with the host's own node, and
-/// hand back what it printed.
-///
-/// The run limit and API port are the host's environment or the defaults the
-/// retired wrapper carried, resolved on the host so an operator's local
-/// environment cannot steer a remote read.
-async fn read_weles_activity(
-    resolved: &ComputeTarget,
-    runner: &crate::deploy::Runner,
-) -> Result<String, crate::deploy::DeployError> {
-    use crate::deploy::host_channel;
-    let mut node = None;
-    for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
-        if host_channel::remote_test(resolved, &format!("-x {candidate}"), runner).await? {
-            node = Some(candidate);
-            break;
-        }
-    }
-    let Some(node) = node else {
-        return Err(crate::deploy::DeployError(
-            "Node.js is unavailable on this host".to_string(),
-        ));
-    };
-    let environment = host_channel::run_command(
-        resolved,
-        "printf '%s %s' \"${WELES_ACTIVITY_RUN_LIMIT:-40}\" \"${WELES_API_PORT:-8788}\"",
-        runner,
-    )
-    .await?;
-    if !environment.ok() {
-        return Err(crate::deploy::DeployError(host_channel::last_error_line(
-            &environment,
-            "the host's Weles environment could not be read",
-        )));
-    }
-    let mut values = environment.stdout.split_whitespace();
-    let limit = values.next().unwrap_or("40");
-    let port = values.next().unwrap_or("8788");
-    let output = host_channel::run_program_with_stdin(
-        resolved,
-        &[node, "-", limit, port],
-        WELES_ACTIVITY_SOURCE,
-        runner,
-    )
-    .await?;
-    if !output.ok() {
-        return Err(crate::deploy::DeployError(host_channel::last_error_line(
-            &output,
-            "the Weles activity read did not complete",
-        )));
-    }
-    Ok(output.stdout)
-}
-
-/// Report TARGET's Weles worker releases, API reachability and recorded runs.
-pub async fn weles_activity(target: &str, json: bool) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
-        })?;
-    let output = read_weles_activity(&resolved, &runner)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
-        })?;
-
-    let document = output
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix(WELES_ACTIVITY_MARKER))
-        .next_back()
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{target}: the Weles activity read printed no report line"
-            ))
-        })?;
-    let report: Value = serde_json::from_str(document).map_err(|error| {
-        CmdError::click(format!(
-            "{target}: the Weles activity report is not readable JSON: {error}"
-        ))
-    })?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
-    }
-
-    let worker = &report["worker"];
-    println!(
-        "{target}: worker {} staged, {} newest installed, API {} on {}",
-        worker["staged_release"].as_str().unwrap_or("unknown"),
-        worker["newest_release"].as_str().unwrap_or("unknown"),
-        if report["api"]["listening"].as_bool().unwrap_or_default() {
-            "answering"
-        } else {
-            "silent"
-        },
-        report["api"]["endpoint"]
-            .as_str()
-            .unwrap_or("unknown endpoint"),
-    );
-    let runs = report["runs"].as_array().map_or(&[][..], Vec::as_slice);
-    println!(
-        "{target}: {} recorded run(s), {} newest below",
-        report["run_total"].as_u64().unwrap_or_default(),
-        runs.len()
-    );
-    // Newest first, exactly as the host ordered them: a run's own verdict and
-    // the time it last wrote are what an operator reads to know where work is.
-    for run in runs {
-        println!(
-            "  {:<10} {:<22} {:<38} {}",
-            run["status"].as_str().unwrap_or("unknown"),
-            run["action"].as_str().unwrap_or("unknown action"),
-            run["id"].as_str().unwrap_or("-"),
-            run["updated_at"].as_str().unwrap_or("-"),
-        );
-    }
-    Ok(())
-}
-
-/// Inspect the images rendered by one HTTPS surface in a read-only Weles
-/// browser session on TARGET.
-pub async fn weles_image_inspect(
-    target: &str,
-    source_url: &str,
-    json: bool,
-) -> Result<(), CmdError> {
-    let parsed = url::Url::parse(source_url)
-        .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
-    if parsed.scheme() != "https"
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-    {
-        return Err(CmdError::usage(
-            "--url must be an HTTPS URL without embedded credentials",
-        ));
-    }
-    let source_url = parsed.to_string();
-    let host = parsed.host_str().expect("checked above");
-    let objective = "Inspect this public page without signing in or changing any user or application state. Scroll through the whole page to trigger lazy-loaded media. Inspect every rendered img element and report its currentSrc URL host and pathname, complete flag, naturalWidth and naturalHeight. Inspect PerformanceResourceTiming entries for image resources and /api/stado/object requests, including responseStatus where Chromium exposes it. Count loaded and failed images, count /api/stado/object image URLs, list every failed URL or HTTP status, and list any visible image-error placeholder text and the affected card or room name. Return one concise JSON object containing final_url, rendered_images, loaded_images, failed_images, stado_object_images, failed_resources, placeholders, and observations. Do not click controls that mutate data, create an account, or submit forms.";
-    let admission = crate::deploy::weles_capture::resolve_admission(target)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let channel = crate::deploy::weles_capture::open_channel(&admission)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let result = crate::deploy::weles_capture::observe_action_payload(
-        &channel,
-        "generic_browser_task",
-        json!({
-            "url": source_url.as_str(),
-            "objective": objective,
-            "flow_name": format!("stado-image-inspection:{host}"),
-            "session_label": format!("stado-image-inspection-{host}"),
-            "proxy": "none",
-            "headless": true,
-            "constraints": {
-                "read_only": true,
-                "no_login": true,
-                "no_mutation": true,
-            },
-        }),
-        None,
-        false,
-    )
-    .await
-    .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let run_id = result
-        .get("run_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click(format!("{target}: Weles returned no diagnostic run id")))?;
-    let diagnostics = crate::deploy::weles_capture::image_diagnostics(&channel, run_id)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let task_result = result.get("result").cloned().unwrap_or(Value::Null);
-    let browser_run = json!({
-        "run_id": run_id,
-        "trajectory_ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
-        "exit_code": result.get("exitCode"),
-        "final_url": task_result.get("final_url"),
-        "trajectory_error": task_result.get("error"),
-    });
-    let report = json!({
-        "target": target,
-        "source_url": source_url.as_str(),
-        "action": "generic_browser_task",
-        "endpoint": admission.declared_url,
-        "transport": channel.transport(),
-        "admission_token": channel.token_state(),
-        "browser_run": browser_run,
-        "images": diagnostics,
-    });
-    if json {
-        print_json(&report);
-    } else {
-        println!(
-            "{target}: inspected {} through {}",
-            report["source_url"].as_str().unwrap_or(source_url.as_str()),
-            admission.declared_url,
-        );
-        print_json(&diagnostics);
-    }
-    Ok(())
-}
-
-/// `stado host weles-capture TARGET --plan PLAN.json [--batch ID] [--json]` —
-/// enqueue one batch of `generic_capture` actions on TARGET's Weles admission
-/// API.
-///
-/// The plan is validated in full before the host is contacted: one bad capture
-/// refuses the whole plan, because a half-enqueued batch still renders pages
-/// and still writes artifacts, and nothing downstream can tell those from the
-/// ones somebody planned.
-pub async fn weles_capture(
-    target: &str,
-    plan: &str,
-    batch: Option<&str>,
-    json: bool,
-) -> Result<(), CmdError> {
-    let plan = crate::deploy::weles_capture::parse_plan(plan, target, batch)
-        .map_err(|error| CmdError::usage(error.to_string()))?;
-    let admission = crate::deploy::weles_capture::resolve_admission(target)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let channel = crate::deploy::weles_capture::open_channel(&admission)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let accepted = crate::deploy::weles_capture::enqueue(&channel, &plan)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    if json {
-        print_json(&json!({
-            "target": target,
-            "batch": plan.batch,
-            "action": crate::deploy::weles_capture::CAPTURE_ACTION,
-            "endpoint": admission.declared_url,
-            "transport": channel.transport(),
-            "admission_token": channel.token_state(),
-            "enqueued": accepted.len(),
-            "actions": accepted
-                .iter()
-                .map(|action| json!({
-                    "action_id": action.action_id,
-                    "site_slug": action.site_slug,
-                    "axis": action.axis,
-                    "artifact_prefix": action.artifact_prefix,
-                }))
-                .collect::<Vec<Value>>(),
-            "status": "enqueued",
-        }));
-        return Ok(());
-    }
-    println!(
-        "{target}: enqueued {} {} action(s) for batch {} on {}",
-        accepted.len(),
-        crate::deploy::weles_capture::CAPTURE_ACTION,
-        plan.batch,
-        admission.declared_url,
-    );
-    for action in &accepted {
-        println!(
-            "  {:<38} {:<24} {:<13} {}",
-            action.action_id, action.site_slug, action.axis, action.artifact_prefix,
-        );
-    }
-    Ok(())
-}
-
-/// `stado host weles-capture-status TARGET --batch ID [--json]` — per-action
-/// state of one capture batch, and the artifact keys already in Stado storage
-/// under that batch's prefix. Read-only.
-///
-/// The exit status answers whether the batch is KNOWN, not whether every
-/// capture succeeded: a runner polls this in a loop and a failed capture is a
-/// row to read, not an error to retry. A batch nobody enqueued exits non-zero,
-/// after printing the report, because that is the one question the report
-/// cannot answer by being empty.
-/// `stado host weles-browser-runtime` — verify, and optionally complete, the
-/// browser runtime a Weles host needs.
-///
-/// Verify always runs first and runs again after a repair, so the command
-/// reports the host's state rather than the installer's exit code: an install
-/// that printed success and left the marker absent is the failure this whole
-/// family of commands exists to catch.
-pub async fn weles_browser_runtime(
-    target: &str,
-    components: &[String],
-    repair: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let declared = crate::deploy::weles_browser_runtime::requirements(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    // This set decides required_state and what a repair installs. Browser-engine
-    // readiness is measured separately and its refusal names an explicit engine.
-    let required: Vec<String> = if components.is_empty() {
-        vec![crate::deploy::weles_browser_runtime::DEFAULT_COMPONENT.to_string()]
-    } else {
-        components.to_vec()
-    };
-    let mut report =
-        crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-
-    let mut installed: Vec<String> = Vec::new();
-    if repair {
-        installed = crate::deploy::weles_browser_runtime::repair(&resolved, &required, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        // Re-verify: the host's own answer decides, not the installer's.
-        report =
-            crate::deploy::weles_browser_runtime::verify(&resolved, &declared, &required, &runner)
-                .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
-    }
-
-    if json {
-        let mut object = report.to_report(&resolved.name);
-        object.insert("repaired".to_string(), serde_json::json!(installed));
-        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
-    } else {
-        println!("host:           {}", resolved.name);
-        println!("runtime:        {}", report.verdict());
-        println!("required state: {}", report.required_state());
-        println!("browser engine: {}", report.browser_engine_state());
-        for line in &installed {
-            println!("repair:   {line}");
-        }
-        super::table::print(
-            &["COMPONENT", "REVISION", "DEFAULT", "STATE", "EXPECTED AT"],
-            &report
-                .components
-                .iter()
-                .map(|component| {
-                    vec![
-                        component.name.clone(),
-                        component.revision.clone(),
-                        component.install_by_default.to_string(),
-                        component.state.clone(),
-                        component.expected_path.clone(),
-                    ]
-                })
-                .collect::<Vec<Vec<String>>>(),
-        );
-    }
-    match report.failure(&resolved.name) {
-        Some(reason) => Err(CmdError::click(reason)),
-        None => Ok(()),
-    }
-}
-
-/// `stado host mobile-runtime TARGET [--repair] [--json]` — verify, and
-/// optionally install, the mobile automation runtime a host declares.
-///
-/// A host that declares no runtime exits zero after saying so. That is not a
-/// pass rounded out of silence: `mobile_runtime` absent means the host is not
-/// a mobile placement, and the alternative — failing every host in the fleet
-/// against a runtime two of them need — is how an operator learns to write
-/// `|| true` after the command, which is the argument
-/// [`crate::host_software`] makes about programs nothing declares.
-pub async fn mobile_runtime(target: &str, repair: bool, json: bool) -> Result<(), CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let Some(declared) = crate::deploy::mobile_runtime::requirement(&resolved).cloned() else {
-        if json {
-            print_json(&json!({
-                "status": crate::deploy::mobile_runtime::OK_STATUS,
-                "target": resolved.name,
-                "runtime": "undeclared",
-                "components": [],
-            }));
-        } else {
-            println!(
-                "{}: declares no mobile_runtime, so nothing is required of it here. Declare one \
-                 in the registry target to place a mobile capture family on this host",
-                resolved.name
-            );
-        }
-        return Ok(());
-    };
-    let mut report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-
-    let mut installed: Vec<String> = Vec::new();
-    if repair {
-        installed = crate::deploy::mobile_runtime::repair(&resolved, &declared, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        // Re-verify: the host's own answer decides, not the installer's.
-        report = crate::deploy::mobile_runtime::verify(&resolved, &declared, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-    }
-
-    if json {
-        let mut object = report.to_report(&resolved.name);
-        object.insert("repaired".to_string(), json!(installed));
-        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
-    } else {
-        println!("host:     {}", resolved.name);
-        println!("runtime:  {}", report.verdict());
-        for line in &installed {
-            println!("repair:   {line}");
-        }
-        super::table::print(
-            &["COMPONENT", "DECLARED", "OBSERVED", "STATE", "RESOLVED AT"],
-            &report
-                .components
-                .iter()
-                .map(|component| {
-                    vec![
-                        component.name.clone(),
-                        component.declared.clone(),
-                        if component.observed.is_empty() {
-                            "-".to_string()
-                        } else {
-                            component.observed.clone()
-                        },
-                        component.state.clone(),
-                        component.path.clone(),
-                    ]
-                })
-                .collect::<Vec<Vec<String>>>(),
-        );
-    }
-    match report.failure(&resolved.name) {
-        Some(reason) => Err(CmdError::click(reason)),
-        None => Ok(()),
-    }
-}
-
-/// `stado host mobile-placement [--family ios|android] [--json]` — which
-/// hosts a mobile capture family may be placed on.
-///
-/// Read out of the registry's declarations and nothing else, contacting no
-/// host. That is the point of it: before this existed, the way to find out
-/// whether a host could take the iOS family was to ask the host, and a
-/// refusal from a machine that cannot run the family at all was
-/// indistinguishable from a fleet-wide policy gap — which is exactly how the
-/// four crawl families spent 2026-09-03 blocked on a question nobody could
-/// answer. A host that declares no runtime for the family is not in the
-/// answer, so it is never asked.
-///
-/// An empty answer exits non-zero and names the capability: no host declaring
-/// the family is a state to act on, not a quiet zero.
-pub async fn mobile_placement(family: Option<&str>, json: bool) -> Result<(), CmdError> {
-    if let Some(asked) = family {
-        if crate::deploy::mobile_runtime::family_driver(asked).is_none() {
-            return Err(CmdError::usage(format!(
-                "{asked:?} is not a mobile capture family; this build carries {}",
-                crate::deploy::mobile_runtime::FAMILIES
-                    .iter()
-                    .map(|(name, driver)| format!("{name} (driver {driver})"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )));
-        }
-    }
-    let registry = load_registry_by_source("auto").await?;
-    let placements = crate::deploy::mobile_runtime::placements(&registry, family);
-    if json {
-        print_json(&json!({
-            "status": "mobile_placement",
-            "capability": crate::deploy::mobile_runtime::CAPABILITY_ID,
-            "family": family,
-            "placements": placements,
-        }));
-    } else if placements.is_empty() {
-        println!(
-            "no registry host declares the {} capability for {}",
-            crate::deploy::mobile_runtime::CAPABILITY_ID,
-            family.unwrap_or("any mobile capture family"),
-        );
-    } else {
-        super::table::print(
-            &[
-                "FAMILY",
-                "HOST",
-                "DRIVER",
-                "APPIUM",
-                "RESOLVE APPIUM AT",
-                "RESOLVE ADB AT",
-            ],
-            &placements
-                .iter()
-                .map(|placement| {
-                    vec![
-                        placement.family.clone(),
-                        placement.host.clone(),
-                        placement.driver.clone(),
-                        placement.appium.clone(),
-                        placement.appium_paths.join(" "),
-                        if placement.adb_paths.is_empty() {
-                            "-".to_string()
-                        } else {
-                            placement.adb_paths.join(" ")
-                        },
-                    ]
-                })
-                .collect::<Vec<Vec<String>>>(),
-        );
-    }
-    if placements.is_empty() {
-        return Err(CmdError::click(format!(
-            "no host declares {} for {}; declare targets[].mobile_runtime with the family's \
-             driver on a host that can carry it",
-            crate::deploy::mobile_runtime::CAPABILITY_ID,
-            family.unwrap_or("any mobile capture family"),
-        )));
-    }
-    Ok(())
-}
-
-/// What one `host capability-route` invocation asks for.
-pub struct CapabilityRouteRequest<'a> {
-    pub target: &'a str,
-    pub resource: Option<&'a str>,
-    pub item: Option<&'a str>,
-    pub field: Option<&'a str>,
-    pub reason: Option<&'a str>,
-    pub verify: bool,
-    /// Address a named broker instance instead of the host's default files.
-    pub capability_file: Option<&'a str>,
-    pub routes_file: Option<&'a str>,
-    pub json: bool,
-}
-
-/// `stado host capability-route` — the fleet's own surface for the table that
-/// decides which credential a login form receives, on the host that holds it.
-///
-/// Read without `--resource`, declare with all four flags: the same shape
-/// `retag-vault-item` uses, so an operator about to change a route can first
-/// see what they would be changing. Nothing secret crosses either way: a
-/// route names coordinates, never a value.
-pub async fn capability_route(request: CapabilityRouteRequest<'_>) -> Result<(), CmdError> {
-    let CapabilityRouteRequest {
-        target,
-        resource,
-        item,
-        field,
-        reason,
-        verify,
-        json,
-        capability_file,
-        routes_file,
-    } = request;
-    // Declaring takes all four or none of them. A partial declaration is the
-    // one input that could look like a read and write something.
-    let declaration =
-        match (resource, item, field, reason) {
-            (None, None, None, None) => None,
-            (Some(resource), Some(item), Some(field), Some(reason)) => {
-                if reason.trim().is_empty() {
-                    return Err(CmdError::usage(
-                    "--reason must say why this route exists; it travels into Skarbiec's journal \
-                     beside the table",
-                ));
-                }
-                Some((resource, item, field, reason))
-            }
-            (None, _, _, _) => {
-                return Err(CmdError::usage(
-                    "reading takes only TARGET; declaring takes --resource, --item, --field and \
-                 --reason together",
-                ))
-            }
-            _ => return Err(CmdError::usage(
-                "declaring one capability route takes --resource, --item, --field and --reason \
-                 together",
-            )),
-        };
-
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let broker = crate::deploy::host_capability::resolve(
-        &resolved,
-        &crate::deploy::host_capability::BrokerFiles {
-            capability_file,
-            routes_file,
-        },
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-
-    if verify && declaration.is_some() {
-        return Err(CmdError::usage(
-            "--verify is a read; it does not combine with declaring a route",
-        ));
-    }
-    let report = match declaration {
-        Some((resource, item, field, reason)) => crate::deploy::host_capability::route_add(
-            &resolved, &broker, resource, item, field, reason, &runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?,
-        None if verify => {
-            crate::deploy::host_capability::verify_routes(&resolved, &broker, &runner)
-                .await
-                .map_err(|error| CmdError::click(error.to_string()))?
-        }
-        None => crate::deploy::host_capability::routes(&resolved, &broker, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?,
-    };
-
-    if json {
-        let mut object = crate::deploy::host_channel::base_report(&resolved);
-        object.insert("vault".to_string(), json!(broker.vault));
-        object.insert("report".to_string(), report);
-        println!("{}", serde_json::to_string_pretty(&Value::Object(object))?);
-        return Ok(());
-    }
-    println!("host:      {}", resolved.name);
-    println!("vault:     {}", broker.vault);
-    match report.get("added").and_then(Value::as_bool) {
-        Some(true) => {
-            println!(
-                "declared:  {} -> {}/{}",
-                report["resource"].as_str().unwrap_or_default(),
-                report["item"].as_str().unwrap_or_default(),
-                report["field"].as_str().unwrap_or_default(),
-            );
-            if let Some(backup) = report.get("backup").and_then(Value::as_str) {
-                println!("backup:    {backup}");
-            }
-        }
-        Some(false) => println!(
-            "unchanged: {} already maps {}/{}",
-            report["resource"].as_str().unwrap_or_default(),
-            report["item"].as_str().unwrap_or_default(),
-            report["field"].as_str().unwrap_or_default(),
-        ),
-        None if verify => {
-            // `checked` plus one line per route that cannot deliver, in the
-            // host's own words. An empty `broken` list is the whole point.
-            println!(
-                "checked:   {}",
-                report.get("checked").and_then(Value::as_u64).unwrap_or(0)
-            );
-            let broken = report
-                .get("broken")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            println!("broken:    {}", broken.len());
-            for row in broken {
-                println!(
-                    "  {:<52} {}",
-                    row["resource"].as_str().unwrap_or_default(),
-                    row["problem"].as_str().unwrap_or_default(),
-                );
-            }
-        }
-        None => {
-            let rows = report
-                .get("routes")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            println!("routes:    {}", rows.len());
-            for row in rows {
-                println!(
-                    "  {:<52} {}/{} item={} field={}",
-                    row["resource"].as_str().unwrap_or_default(),
-                    row["item"].as_str().unwrap_or_default(),
-                    row["field"].as_str().unwrap_or_default(),
-                    row["item_present"].as_bool().unwrap_or(false),
-                    row["field_present"].as_bool().unwrap_or(false),
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-/// What one `host weles-browser-task` invocation asks for.
-pub struct BrowserTaskRequest<'a> {
-    pub target: &'a str,
-    pub url: &'a str,
-    pub objective: &'a str,
-    pub session_label: &'a str,
-    pub action: &'a str,
-    pub allowlist_file: &'a str,
-    pub login_item: Option<&'a str>,
-    /// The account identity that keys the browser profile, when the caller
-    /// pins one so a later run can reuse its session.
-    pub account_id: Option<&'a str>,
-    pub fresh_profile: bool,
-    pub allow_login: bool,
-    pub sign_in_origin: Option<&'a str>,
-    pub sign_in_item: Option<&'a str>,
-    /// Give the agent every capability rather than prefilling the first: see
-    /// the flag's own help for the runtime version this exists for.
-    pub defer_fills: bool,
-    /// Prefill both same-page sign-in fields before the agent runs.
-    pub prefill_all: bool,
-    /// The saved-trajectory key, when it must differ from the profile's label.
-    pub flow_name: Option<&'a str>,
-    pub windowed: bool,
-    pub json: bool,
-}
-
-/// `stado host weles-browser-task` — the general Weles submission surface.
-///
-/// The allowlist check happens first and on its own round trip, because the
-/// point is to refuse before anything is enqueued: a name the worker will not
-/// run must produce a sentence here, not an accepted job that disappears.
-pub async fn weles_browser_task(request: BrowserTaskRequest<'_>) -> Result<(), CmdError> {
-    let BrowserTaskRequest {
-        target,
-        url,
-        objective,
-        session_label,
-        action,
-        allowlist_file,
-        login_item,
-        account_id,
-        fresh_profile,
-        allow_login,
-        sign_in_origin,
-        sign_in_item,
-        defer_fills,
-        prefill_all,
-        flow_name,
-        windowed,
-        json,
-    } = request;
-    // Both halves or neither, and only where the run says it may sign in.
-    // Checked before the host is resolved: a flag combination that cannot work
-    // should cost nothing.
-    let sign_in =
-        match (sign_in_origin, sign_in_item) {
-            (None, None) => None,
-            (Some(_), None) => {
-                return Err(CmdError::usage(
-                    "--sign-in-origin needs --sign-in-item: the vault item holding the account",
-                ))
-            }
-            (None, Some(_)) => return Err(CmdError::usage(
-                "--sign-in-item needs --sign-in-origin: the page origin whose fields are filled",
-            )),
-            (Some(origin), Some(item)) => {
-                if !allow_login {
-                    return Err(CmdError::usage(
-                    "--sign-in-origin requires --allow-login: a prefilled credential is a sign-in, \
-                     and the run's own instructions would otherwise tell the agent not to",
-                ));
-                }
-                let origin = crate::deploy::weles_browser_task::exact_origin(origin)
-                    .map_err(|error| CmdError::usage(error.to_string()))?;
-                Some((origin, item))
-            }
-        };
-    let parsed = url::Url::parse(url)
-        .map_err(|error| CmdError::usage(format!("--url is not a URL: {error}")))?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.username() != "" {
-        return Err(CmdError::usage(
-            "--url must be an HTTP or HTTPS URL without embedded credentials",
-        ));
-    }
-    // `@path` keeps a long objective out of a shell history and out of argv.
-    let objective = match objective.strip_prefix('@') {
-        Some(path) => std::fs::read_to_string(path)
-            .map_err(|error| {
-                CmdError::usage(format!("cannot read objective from {path}: {error}"))
-            })?
-            .trim()
-            .to_string(),
-        // Trimmed on both paths: an all-whitespace objective is not a task,
-        // and only trimming the `@file` path made that depend on how the
-        // objective was supplied.
-        None => objective.trim().to_string(),
-    };
-    if objective.is_empty() {
-        return Err(CmdError::usage("--objective is empty"));
-    }
-    if let Some(item) = login_item {
-        let bytes = item.as_bytes();
-        if bytes.is_empty()
-            || bytes.len() > 128
-            || !bytes[0].is_ascii_alphanumeric()
-            || !bytes
-                .iter()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        {
-            return Err(CmdError::usage("--login-item is not a valid Weles item id"));
-        }
-        if !action.ends_with("_login") {
-            return Err(CmdError::usage(
-                "--login-item requires an action whose name ends in _login",
-            ));
-        }
-        if !allow_login {
-            return Err(CmdError::usage("--login-item requires --allow-login"));
-        }
-    }
-    // A pinned identity is the caller's; otherwise a fresh profile still needs
-    // one, because the API refuses `fresh_profile` without an account to bind
-    // the new directory to.
-    let account_id = match account_id {
-        Some(pinned) => Some(
-            crate::deploy::weles_capture::checked_account_id(pinned)
-                .map_err(|error| CmdError::click(error.to_string()))?
-                .to_string(),
-        ),
-        None => fresh_profile.then(|| format!("stado-fresh-profile-{}", uuid::Uuid::new_v4())),
-    };
-
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let allowlist =
-        crate::deploy::weles_browser_task::host_allowlist(&resolved, allowlist_file, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-    crate::deploy::weles_browser_task::ensure_allowed(&resolved.name, action, &allowlist)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-
-    // Only now: a capability is single-use and expires, so it is issued after
-    // the action has been shown to be one this host accepts, never before.
-    // Issued ON that host, because redemption is a socket there.
-    let (credential_prefill, credential_deferred) = match &sign_in {
-        None => (Vec::new(), Vec::new()),
-        Some((origin, item)) => {
-            // The identity comes from the catalog this host's vault was
-            // registered from, never from a constant here: Skarbiec looks a
-            // capability's agent up by name, and a name it does not register
-            // is denied however correct the route and the reference are.
-            let prefill = crate::deploy::weles_browser_task::issue_sign_in_prefill(
-                &resolved,
-                origin,
-                item,
-                crate::deploy::weles_browser_task::REGISTERED_SCOPES_FILE,
-                &runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-            if !json {
-                println!("sign-in:   {origin} as the account in {item}");
-                println!(
-                    "prefill:   {} field(s) to {}, issued on {}, single-use",
-                    prefill.entries.len(),
-                    prefill.agents.join(", "),
-                    resolved.name
-                );
-                if !prefill.deferred.is_empty() {
-                    println!(
-                        "deferred:  {} field(s) handed over unspent, for the page that has them",
-                        prefill.deferred.len()
-                    );
-                }
-                if !prefill.unconfirmed.is_empty() {
-                    println!(
-                        "note:      this channel could not open {} to confirm the field; the \
-                         worker's own broker reads it at fill time (`host capability-route {} \
-                         --verify` says why)",
-                        prefill.unconfirmed.join(", "),
-                        resolved.name
-                    );
-                }
-            }
-            if defer_fills {
-                // Nothing is prefilled: on a runtime that fills at load without
-                // waiting, a capability is spent whether or not the input has
-                // rendered, and a spent one cannot be retried. The agent acts
-                // after the page is up, so it can see the field it fills.
-                let mut all = prefill.entries;
-                all.extend(prefill.deferred);
-                (Vec::new(), all)
-            } else if prefill_all {
-                // Same-page forms can be completed without a model handling
-                // either credential. Weles 0.5.41+ checks field presence before
-                // redemption, so an absent later field remains available in
-                // the constraints for the agent.
-                let mut all = prefill.entries;
-                all.extend(prefill.deferred);
-                (all, Vec::new())
-            } else {
-                (prefill.entries, prefill.deferred)
-            }
-        }
-    };
-
-    let task = crate::deploy::weles_browser_task::BrowserTask {
-        action,
-        url: parsed.as_str(),
-        objective: &objective,
-        session_label,
-        login_item,
-        account_id: account_id.as_deref(),
-        fresh_profile,
-        allow_login,
-        headless: !windowed,
-        credential_prefill,
-    };
-    let outcome =
-        crate::deploy::weles_browser_task::submit(target, &task, flow_name, &credential_deferred)
-            .await
-            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&Value::Object(
-                outcome.to_report(&resolved.name, action)
-            ))?
-        );
-    } else {
-        println!("host:      {}", resolved.name);
-        println!("action:    {action}");
-        println!("run:       {}", outcome.run_id);
-        println!("outcome:   {}", if outcome.ok { "ok" } else { "failed" });
-        if let Some(code) = outcome.exit_code {
-            println!("exit:      {code}");
-        }
-        if let Some(profile) = &outcome.profile {
-            println!(
-                "profile:   {}",
-                profile["directory"].as_str().unwrap_or("fresh")
-            );
-        }
-        if !outcome.result.is_null() {
-            println!("result:    {}", serde_json::to_string(&outcome.result)?);
-        }
-    }
-    if outcome.ok {
-        Ok(())
-    } else {
-        Err(CmdError::click(format!(
-            "{}: {action} run {} did not succeed",
-            resolved.name, outcome.run_id
-        )))
-    }
-}
-
-/// Read one completed browser run through Weles' authenticated diagnostic API.
-pub async fn weles_run_diagnostics(
-    target: &str,
-    run_id: &str,
-    file: Option<&str>,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let admission = crate::deploy::weles_capture::resolve_admission(target)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let channel = crate::deploy::weles_capture::open_channel(&admission)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let Some(path) = file else {
-        let manifest = crate::deploy::weles_capture::run_diagnostics(&channel, run_id)
-            .await
-            .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-        print_json(&manifest);
-        return Ok(());
-    };
-    let bytes = crate::deploy::weles_capture::run_diagnostic_file(&channel, run_id, path)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let byte_count = bytes.len();
-    let (encoding, content) = match String::from_utf8(bytes) {
-        Ok(text) => ("utf8", text),
-        Err(error) => ("base64", STANDARD.encode(error.into_bytes())),
-    };
-    if json_output {
-        print_json(&json!({
-            "target": target,
-            "run_id": run_id,
-            "path": path,
-            "bytes": byte_count,
-            "encoding": encoding,
-            "content": content,
-        }));
-    } else if encoding == "utf8" {
-        print!("{content}");
-    } else {
-        println!("base64:{content}");
-    }
-    Ok(())
-}
-
-pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Result<(), CmdError> {
-    let admission = crate::deploy::weles_capture::resolve_admission(target)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let channel = crate::deploy::weles_capture::open_channel(&admission)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let batch_status = crate::deploy::weles_capture::status(&channel, batch)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let states = batch_status.captures;
-    let totals = crate::deploy::weles_capture::totals(&states);
-    let stored: usize = states.iter().map(|state| state.artifacts.len()).sum();
-    if json {
-        print_json(&json!({
-            "target": target,
-            "batch": batch,
-            "action": crate::deploy::weles_capture::CAPTURE_ACTION,
-            "endpoint": admission.declared_url,
-            "transport": channel.transport(),
-            "artifacts_unreachable": batch_status.artifacts_unreachable,
-            "actions": states
-                .iter()
-                .map(|state| json!({
-                    "action_id": state.action_id,
-                    "site_slug": state.site_slug,
-                    "axis": state.axis,
-                    "state": state.state,
-                    "error": state.error,
-                    "artifact_prefix": state.artifact_prefix,
-                    "artifacts": state.artifacts,
-                }))
-                .collect::<Vec<Value>>(),
-            "totals": totals
-                .iter()
-                .map(|(state, count)| (state.clone(), Value::from(*count)))
-                .collect::<serde_json::Map<String, Value>>(),
-            "artifacts_stored": stored,
-        }));
-    } else {
-        println!(
-            "{target}: batch {batch} carries {} {} action(s), {}",
-            states.len(),
-            crate::deploy::weles_capture::CAPTURE_ACTION,
-            totals
-                .iter()
-                .map(|(state, count)| format!("{count} {state}"))
-                .collect::<Vec<String>>()
-                .join(", "),
-        );
-        if let Some(unreachable) = &batch_status.artifacts_unreachable {
-            println!("{target}: artifact listing unreadable: {unreachable}");
-        }
-        for state in &states {
-            println!(
-                "  {:<9} {:<24} {:<13} {:>3} artifact(s)  {}{}",
-                state.state,
-                state.site_slug,
-                state.axis,
-                state.artifacts.len(),
-                state.action_id,
-                state
-                    .error
-                    .as_deref()
-                    .map_or_else(String::new, |error| format!("  {error}")),
-            );
-        }
-        println!(
-            "{target}: {stored} object(s) under stado://{}/{batch}/",
-            crate::deploy::weles_capture::ARTIFACT_NAMESPACE
-        );
-    }
-    if states.is_empty() {
-        return Err(CmdError::click(format!(
-            "{target}: no {} action carries batch {batch}, so nothing was ever enqueued under that id",
-            crate::deploy::weles_capture::CAPTURE_ACTION
-        )));
-    }
-    Ok(())
-}
-
-/// Open a background reverse SSH forward using the exact registry channel.
-/// Both ends bind loopback; SSH supplies transport encryption and refuses to
-/// report success until the remote listener exists.
-/// The `-R` specification `forward_local` gave ssh, which is what identifies
-/// one channel among several on this machine.
-///
-/// Matching on this and the destination, never on the program name: this host
-/// runs other forwards, and `pkill ssh` would take the fleet's other channels
-/// down with the one being closed.
-fn reverse_forward_spec(remote_port: u16, local_port: u16) -> String {
-    format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}")
-}
-fn local_forward_spec_prefix(local_port: u16) -> String {
-    format!("127.0.0.1:{local_port}:127.0.0.1:")
-}
-
-/// `stado host forward-close TARGET NAME` — end a channel opened by either
-/// `forward-local` or `forward-remote` and reconcile its markers.
-///
-/// Order matters. The process is ended first, then the markers are removed,
-/// then the exposed port is re-read: a marker deleted while the tunnel still
-/// carried traffic would leave a live port nothing describes, which is worse
-/// than the stale marker it was trying to fix.
-pub async fn forward_close(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
-    release_component("forward name", name)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
-    let local_marker = std::path::Path::new(&home)
-        .join(".stado")
-        .join("forwards")
-        .join(format!("{name}.local"));
-    let local_forward_marker = std::path::Path::new(&home)
-        .join(".stado")
-        .join("forwards")
-        .join(format!("{name}.url"));
-
-    // The ports come from the markers the open wrote, so a close addresses the
-    // exact channel that was opened rather than a port an operator remembers.
-    let local_port = std::fs::read_to_string(&local_marker)
-        .ok()
-        .and_then(|body| url::Url::parse(body.trim()).ok())
-        .and_then(|parsed| parsed.port());
-    let remote_marker_body = crate::deploy::service_file_fetch::fetch_file(
-        &resolved,
-        &format!("$HOME/.stado/forwards/{name}.url"),
-        &runner,
-    )
-    .await
-    .ok()
-    .filter(|fetched| fetched.ok())
-    .map(|fetched| String::from_utf8_lossy(&fetched.content).trim().to_string());
-    let remote_port = remote_marker_body
-        .as_deref()
-        .and_then(|body| url::Url::parse(body).ok())
-        .and_then(|parsed| parsed.port());
-    // `forward-remote` has no marker on TARGET. Its local `.url` marker is
-    // considered only when neither half of a reverse forward exists, so the
-    // same name can never make this close the wrong direction.
-    let local_forward_port = if local_port.is_none() && remote_port.is_none() {
-        std::fs::read_to_string(&local_forward_marker)
-            .ok()
-            .and_then(|body| url::Url::parse(body.trim()).ok())
-            .and_then(|parsed| parsed.port())
-    } else {
-        None
-    };
-
-    if local_port.is_none() && remote_port.is_none() && local_forward_port.is_none() {
-        return Err(CmdError::click(format!(
-            "{target}: no forward named {name:?} is recorded here or on the host, so there is \
-             nothing to close; `stado host inventory {target}` lists the markers that exist"
-        )));
-    }
-
-    // End the ssh that carries it, matched on the whole -R spec.
-    let mut ended: Vec<String> = Vec::new();
-    if let (Some(remote), Some(local)) = (remote_port, local_port) {
-        let spec = reverse_forward_spec(remote, local);
-        let listing = tokio::process::Command::new("/bin/ps")
-            .args(["ax", "-o", "pid=", "-o", "command="])
-            .output()
-            .await?;
-        for line in String::from_utf8_lossy(&listing.stdout).lines() {
-            let trimmed = line.trim_start();
-            let Some((pid, command)) = trimmed.split_once(char::is_whitespace) else {
-                continue;
-            };
-            if !command.contains(&spec) || !command.contains("ssh") {
-                continue;
-            }
-            let Ok(parsed) = pid.parse::<i32>() else {
-                continue;
-            };
-            let killed = tokio::process::Command::new("/bin/kill")
-                .args(["-TERM", &parsed.to_string()])
-                .output()
-                .await?;
-            ended.push(format!(
-                "pid {parsed}{}",
-                if killed.status.success() {
-                    ""
-                } else {
-                    " (signal refused)"
-                }
-            ));
-        }
-    }
-    // A local forward is identified by the complete local half of its `-L`
-    // specification and the registry target's exact SSH destination. Matching
-    // either one alone could end an unrelated channel.
-    if let Some(local) = local_forward_port {
-        let destinations = resolved
-            .ssh_connections()
-            .map(|(_, destination)| destination.to_string())
-            .collect::<Vec<_>>();
-        if destinations.is_empty() {
-            return Err(CmdError::click(
-                "registry target has no SSH connection path",
-            ));
-        }
-        let spec_prefix = local_forward_spec_prefix(local);
-        let listing = tokio::process::Command::new("/bin/ps")
-            .args(["ax", "-o", "pid=", "-o", "command="])
-            .output()
-            .await?;
-        for line in String::from_utf8_lossy(&listing.stdout).lines() {
-            let trimmed = line.trim_start();
-            let Some((pid, command)) = trimmed.split_once(char::is_whitespace) else {
-                continue;
-            };
-            if !command.contains("ssh")
-                || !command.contains(" -L ")
-                || !command.contains(&spec_prefix)
-                || !destinations
-                    .iter()
-                    .any(|destination| command.contains(destination))
-            {
-                continue;
-            }
-            let Ok(parsed) = pid.parse::<i32>() else {
-                continue;
-            };
-            let killed = tokio::process::Command::new("/bin/kill")
-                .args(["-TERM", &parsed.to_string()])
-                .output()
-                .await?;
-            ended.push(format!(
-                "pid {parsed}{}",
-                if killed.status.success() {
-                    ""
-                } else {
-                    " (signal refused)"
-                }
-            ));
-        }
-    }
-
-    // Then the markers, remote first for a reverse forward: it is the one
-    // another machine reads.
-    let remote_removed = if remote_marker_body.is_some() {
-        let script = format!(
-            "set -eu\n/bin/rm -f \"$HOME/.stado/forwards/\"{name}\".url\"\n",
-            name = crate::deploy::shlex_quote(name)
-        );
-        let removed = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        if !removed.ok() {
-            return Err(CmdError::click(format!(
-                "{target}: the channel was ended and its host marker could not be removed, so \
-                 the host still advertises an endpoint: {}",
-                crate::deploy::host_channel::last_error_line(
-                    &removed,
-                    "remote marker removal failed"
-                )
-            )));
-        }
-        true
-    } else {
-        false
-    };
-    let local_removed = if local_forward_port.is_some() {
-        std::fs::remove_file(&local_forward_marker).is_ok()
-    } else {
-        std::fs::remove_file(&local_marker).is_ok()
-    };
-
-    // Re-read the side that was exposed. The endpoint itself, not a process
-    // lookup, decides whether the port was reclaimed.
-    let still_listening = if let Some(port) = local_forward_port {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        Some(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                tokio::net::TcpStream::connect(("127.0.0.1", port)),
-            )
-            .await
-            .map_or(true, |result| result.is_ok()),
-        )
-    } else {
-        match remote_port {
-            Some(port) => {
-                let report = crate::deploy::service_serving::read_serving(
-                    &resolved,
-                    "com.wisent.host-health-beacon",
-                    "",
-                    &[port],
-                    &runner,
-                )
-                .await
-                .ok();
-                report.map(|report| {
-                    report
-                        .ports
-                        .first()
-                        .is_some_and(|entry| !entry.holders.is_empty())
-                })
-            }
-            None => None,
-        }
-    };
-    let effective_local_port = local_forward_port.or(local_port);
-    let direction = if local_forward_port.is_some() {
-        "local"
-    } else {
-        "reverse"
-    };
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "name": name,
-                "direction": direction,
-                "remote_port": remote_port,
-                "local_port": effective_local_port,
-                "ended": ended,
-                "remote_marker_removed": remote_removed,
-                "local_marker_removed": local_removed,
-                "port_still_listening": still_listening,
-                "remote_port_still_listening": if local_forward_port.is_none() { still_listening } else { None },
-                "local_port_still_listening": if local_forward_port.is_some() { still_listening } else { None },
-            }))?
-        );
-    } else {
-        println!("host:      {}", resolved.name);
-        println!("forward:   {name}");
-        println!("direction: {direction}");
-        println!(
-            "ports:     remote {} local {}",
-            remote_port.map_or_else(|| "-".to_string(), |port| port.to_string()),
-            effective_local_port.map_or_else(|| "-".to_string(), |port| port.to_string())
-        );
-        println!(
-            "ended:    {}",
-            if ended.is_empty() {
-                "no matching ssh process on this machine".to_string()
-            } else {
-                ended.join(", ")
-            }
-        );
-        println!(
-            "markers:  host {} local {}",
-            if remote_removed { "removed" } else { "absent" },
-            if local_removed { "removed" } else { "absent" }
-        );
-        println!(
-            "port:     {}",
-            match still_listening {
-                Some(true) if local_forward_port.is_some() => "STILL LISTENING locally",
-                Some(true) => "STILL LISTENING on the host",
-                Some(false) => "reclaimed",
-                None => "unverified",
-            }
-        );
-    }
-    match still_listening {
-        Some(true) => Err(CmdError::click(format!(
-            "{}: {name} was closed and its {} port is still listening, so something else holds \
-             it; the markers are gone and the port is not this forward's any more",
-            resolved.name,
-            if local_forward_port.is_some() {
-                "local"
-            } else {
-                "remote"
-            }
-        ))),
-        _ => Ok(()),
-    }
-}
-
-pub async fn forward_local(
-    target: &str,
-    name: &str,
-    remote_port: u16,
-    local_port: u16,
-    json: bool,
-) -> Result<(), CmdError> {
-    if remote_port == u16::default() || local_port == u16::default() {
-        return Err(CmdError::usage("forwarding ports must be nonzero"));
-    }
-    release_component("forward name", name)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        return Err(CmdError::usage(
-            "forward-local requires a remote registry target",
-        ));
-    }
-    let runner = crate::deploy::production_runner();
-    let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let connection_path = connection.name.to_string();
-    let mut argv = crate::deploy::host_channel::ssh_options(connection.destination);
-    let destination = argv
-        .pop()
-        .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
-    argv.extend([
-        "-f".to_string(),
-        "-N".to_string(),
-        "-o".to_string(),
-        "ExitOnForwardFailure=yes".to_string(),
-        "-o".to_string(),
-        "ServerAliveInterval=30".to_string(),
-        "-o".to_string(),
-        "ServerAliveCountMax=3".to_string(),
-        "-R".to_string(),
-        format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}"),
-        destination,
-    ]);
-    let key = crate::deploy::ssh_key::materialize(&resolved.name)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let argv = crate::deploy::ssh_key::add_identity(argv, &key)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let (program, arguments) = argv
-        .split_first()
-        .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
-    let output = tokio::process::Command::new(program)
-        .args(arguments)
-        .kill_on_drop(true)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(CmdError::click(format!(
-            "{target}: reverse SSH forwarding failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .next_back()
-                .unwrap_or("ssh forwarding failed")
-        )));
-    }
-    let endpoint = format!("http://127.0.0.1:{remote_port}");
-    let marker = format!("$HOME/.stado/forwards/{name}.url");
-    let marker_script = format!(
-        "set -euo pipefail\ndirectory=\"$HOME/.stado/forwards\"\n/bin/mkdir -p \"$directory\"\n/bin/chmod u=rwx,go= \"$directory\"\nprintf '%s\\n' {endpoint} > \"$directory/\"{name}\".url\"\n/bin/chmod u=rw,go= \"$directory/\"{name}\".url\"\n",
-        endpoint = crate::deploy::shlex_quote(&endpoint),
-        name = crate::deploy::shlex_quote(name),
-    );
-    let runner = crate::deploy::production_runner();
-    let marked = crate::deploy::host_channel::run_script(&resolved, &marker_script, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !marked.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: forwarding is live but its endpoint marker failed: {}",
-            crate::deploy::host_channel::last_error_line(&marked, "remote endpoint marker failed")
-        )));
-    }
-    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
-    let local_marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
-    std::fs::create_dir_all(&local_marker_directory)?;
-    let local_marker_path = local_marker_directory.join(format!("{name}.local"));
-    std::fs::write(
-        &local_marker_path,
-        format!("http://127.0.0.1:{local_port}\n"),
-    )?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "remote": format!("127.0.0.1:{remote_port}"),
-                "local": format!("127.0.0.1:{local_port}"),
-                "marker": marker,
-                "local_marker": local_marker_path,
-                "transport": "ssh",
-                "connection_path": connection_path,
-                "status": "forwarding",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: forwarding 127.0.0.1:{remote_port} to local 127.0.0.1:{local_port} over SSH via {connection_path}"
-        );
-    }
-    Ok(())
-}
-
-/// Open a background SSH forward from this host to TARGET's loopback.
-/// Both ends bind loopback; SSH supplies transport encryption and refuses to
-/// report success unless the local listener is established.
-pub async fn forward_remote(
-    target: &str,
-    name: &str,
-    remote_port: u16,
-    local_port: u16,
-    json: bool,
-) -> Result<(), CmdError> {
-    if remote_port == u16::default() || local_port == u16::default() {
-        return Err(CmdError::usage("forwarding ports must be nonzero"));
-    }
-    release_component("forward name", name)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        return Err(CmdError::usage(
-            "forward-remote requires a remote registry target",
-        ));
-    }
-    let runner = crate::deploy::production_runner();
-    let connection = crate::deploy::host_channel::select_ssh_connection(&resolved, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let connection_path = connection.name.to_string();
-    let mut argv = crate::deploy::host_channel::ssh_options(connection.destination);
-    let destination = argv
-        .pop()
-        .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
-    argv.extend([
-        "-f".to_string(),
-        "-N".to_string(),
-        "-o".to_string(),
-        "ExitOnForwardFailure=yes".to_string(),
-        "-o".to_string(),
-        "ServerAliveInterval=30".to_string(),
-        "-o".to_string(),
-        "ServerAliveCountMax=3".to_string(),
-        "-L".to_string(),
-        format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
-        destination,
-    ]);
-    let key = crate::deploy::ssh_key::materialize(&resolved.name)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let argv = crate::deploy::ssh_key::add_identity(argv, &key)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let (program, arguments) = argv
-        .split_first()
-        .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
-    let output = tokio::process::Command::new(program)
-        .args(arguments)
-        .kill_on_drop(true)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(CmdError::click(format!(
-            "{target}: SSH forwarding failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .next_back()
-                .unwrap_or("ssh forwarding failed")
-        )));
-    }
-    let endpoint = format!("http://127.0.0.1:{local_port}");
-    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
-    let marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
-    std::fs::create_dir_all(&marker_directory)?;
-    let marker_path = marker_directory.join(format!("{name}.url"));
-    std::fs::write(&marker_path, format!("{endpoint}\n"))?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "remote": format!("127.0.0.1:{remote_port}"),
-                "local": format!("127.0.0.1:{local_port}"),
-                "marker": marker_path,
-                "transport": "ssh",
-                "connection_path": connection_path,
-                "status": "forwarding",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH via {connection_path}"
-        );
-    }
-    Ok(())
-}
-
 /// The replica roots every fleet host uses, relative to the managed home. Both
 /// are the values the service catalog declares for the object API unit
 /// (`WC_LOCAL_STORAGE_PATH`) and its replica, so this command reads the same
@@ -11105,6 +7358,7 @@ pub async fn backup_audit(
             "exact object inspection is read-only and cannot reclaim backup objects",
         ));
     }
+    let _credential_authority = credential_host(target).await?;
     let namespace = crate::config::wc_stado_storage_namespace();
     if namespace.trim().is_empty() && object_uris.is_empty() && inventory_namespaces.is_empty() {
         return Err(CmdError::click(
@@ -11401,42 +7655,6 @@ pub async fn storage_root_reconcile_result(
     Ok(StorageRootReconciliationResult { report, outcome })
 }
 
-/// Create or apply one durable, source-preserving reconciliation of the two
-/// fixed physical local-store roots on a host.
-pub async fn storage_root_reconcile(
-    target: &str,
-    transaction: &str,
-    phase: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let StorageRootReconciliationResult { report, outcome } =
-        storage_root_reconcile_result(target, transaction, phase)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-    if json_output {
-        print_json(&report);
-    } else {
-        println!(
-            "{} storage-root reconciliation {}: {}",
-            target,
-            transaction,
-            report
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("failed")
-        );
-        if let Some(path) = report.pointer("/receipt/snapshot").and_then(Value::as_str) {
-            println!("checkpoint: {path}");
-        }
-        if let Some(count) = report
-            .pointer("/receipt/verified_objects")
-            .and_then(Value::as_u64)
-        {
-            println!("verified objects: {count}");
-        }
-    }
-    outcome
-}
 pub async fn storage_root_reconcile_worker(
     target: &str,
     target_config: &str,
@@ -11694,8 +7912,8 @@ struct CarriedArtifact {
     age_seconds: Option<i64>,
 }
 
-/// `stado host provenance TARGET [--json]` — what TARGET carries, and who
-/// produced it.
+/// `stado release provenance --host TARGET [--json]` — what TARGET carries,
+/// and who produced it.
 ///
 /// The command that did not exist on 2026-08-11, when the only record of what
 /// was running the control plane was a version string the repository had never
@@ -11924,175 +8142,6 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// The release-control binaries rolled out to one target, as concrete paths the
-/// reporter can hash.
-///
-/// A rollout product lives under its own install root — brama is
-/// `/Users/charles/.stado/services/brama/bin/brama` — so it appears in neither
-/// `$HOME/.stado/bin` nor any `managed_versions` entry, and a report that did not
-/// name it could say nothing at all about the one binary
-/// `stado release status` is about.
-fn release_product_programs(
-    document: &Value,
-    host: &str,
-) -> Vec<crate::host_software::ProductBinary> {
-    let Ok(Some(control)) = crate::release_control::control(document) else {
-        return Vec::new();
-    };
-    control
-        .products
-        .values()
-        .filter(|policy| policy.targets.contains_key(host))
-        .map(|policy| {
-            let path = format!(
-                "{}/{}",
-                policy.install_root.trim_end_matches('/'),
-                policy.binary.trim_start_matches('/')
-            );
-            crate::host_software::ProductBinary {
-                name: path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&policy.binary)
-                    .to_string(),
-                path,
-                desired: policy
-                    .desired
-                    .as_ref()
-                    .map(|desired| desired.version.clone()),
-            }
-        })
-        .collect()
-}
-
-/// `stado host software [TARGET] [--json]` — what a host actually runs, and
-/// which of it came out of a release.
-///
-/// Naming a TARGET takes the report: one round trip over the audited channel,
-/// and the answer is persisted as an observation before it is printed, so
-/// `stado release status` can judge every rollout without opening an ssh
-/// connection per target. Omitting TARGET reads what is already on file for
-/// every host, ages included — a host that has never reported is absent from
-/// that list and is reported as `never` by every gate that asks about it, which
-/// is the state that used to print as `unreported` beside a zero exit.
-///
-/// The failure of the read is recorded too. Leaving the previous report in place
-/// after a refused connection would let an hour-old answer keep reading as
-/// current, which is the exact shape of the outage
-/// [`crate::observations`] exists to make visible.
-pub async fn software(target: Option<String>, json: bool) -> Result<(), CmdError> {
-    let Some(target) = target else {
-        let hosts = crate::host_software::reported_hosts(&crate::observations::load());
-        return print_reports(&hosts, json).await;
-    };
-    let resolved = crate::deploy::host_channel::canonical_target(&target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let document = super::registry::fetch_document().await?;
-    let products = release_product_programs(&document, &resolved.name);
-    let programs: Vec<String> = products
-        .iter()
-        .map(|product| product.path.clone())
-        .collect();
-    let runner = crate::deploy::production_runner();
-    match crate::host_software::gather(&resolved, &programs, &runner).await {
-        Ok((rows, scripts)) => {
-            crate::host_software::record(&resolved.name, &rows, scripts)
-                .map_err(|error| CmdError::click(error.to_string()))?;
-        }
-        Err(error) => {
-            // Recorded, then reported. An operator who is told the read failed
-            // and finds yesterday's report still on file has been told two
-            // different things by one command.
-            if let Err(write) = crate::host_software::record_refusal(&resolved.name, &error.0) {
-                eprintln!("warning: could not record the failed software read: {write}");
-            }
-            return Err(CmdError::click(format!(
-                "{target}: cannot read what software it runs: {}",
-                error.0
-            )));
-        }
-    }
-    print_reports(&[resolved.name], json).await
-}
-
-/// Every named host's newest report, with the disagreements the fleet has
-/// against it.
-async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
-    let records = crate::observations::load();
-    // The remote registry, because the declaration being checked is the fleet's
-    // and not whatever a local copy last said. One fetch for every row: the
-    // question "what does this host declare" is asked once per host and the
-    // answer is one document.
-    let registry = super::registry::read_registry().await.ok();
-    let mut payload: Vec<Value> = Vec::new();
-    let mut failures = usize::default();
-    for host in hosts {
-        let report = crate::host_software::load_in(&records, host);
-        let declared = registry
-            .as_ref()
-            .and_then(|registry| registry.targets.iter().find(|entry| &entry.name == host))
-            .map(|entry| entry.managed_versions.clone())
-            .unwrap_or_default();
-        let finding = crate::host_software::judge(&report, &declared, None);
-        if finding.failed {
-            failures = failures.saturating_add(1);
-        }
-        if json {
-            let mut object = report.json();
-            finding.merge_into(&mut object);
-            payload.push(object);
-            continue;
-        }
-        println!("{host}: {} [{}]", report.summary(), report.age());
-        if !report.refusal().is_empty() {
-            println!("  the last read did not complete: {}", report.refusal());
-        }
-        let rows: Vec<Vec<String>> = report
-            .rows
-            .iter()
-            .map(|row| {
-                vec![
-                    row.provenance.clone(),
-                    row.name.clone(),
-                    row.version.clone(),
-                    row.sha256.chars().take(12).collect(),
-                    row.path.clone(),
-                ]
-            })
-            .collect();
-        if !rows.is_empty() {
-            super::table::print(&["PROVENANCE", "NAME", "VERSION", "SHA256", "PATH"], &rows);
-        }
-        for sentence in &finding.sentences {
-            println!("  ! {sentence}");
-        }
-    }
-    if json {
-        print_json(&json!({"hosts": payload}));
-    } else if hosts.is_empty() {
-        println!(
-            "no host has reported its software: run `stado host software TARGET` for each \
-             registry target, because a host that never says what it runs is not a host anything \
-             here can vouch for"
-        );
-    }
-    if failures == usize::default() {
-        return Ok(());
-    }
-    // This command reports and it also gates, for the same reason
-    // `stado release status` now does: printing a host that cannot be shown to
-    // run what the fleet declares, and then exiting zero, is the shape of the
-    // failure the whole report exists to end. Every sentence is already beside
-    // the host it belongs to, so nothing is said twice.
-    eprintln!(
-        "{failures} of {} host(s) cannot be shown to be running what the fleet declares for \
-         them; each is named above",
-        hosts.len()
-    );
-    Err(CmdError::silent(super::CLICK_ERROR_CODE))
-}
-
 /// Read the effective configuration on a fleet host using the same installed
 /// Stado binary and config path its services consume.
 pub async fn config_show(target: &str) -> Result<(), CmdError> {
@@ -12122,10 +8171,8 @@ pub async fn config_set(
 /// instead of printing it.
 ///
 /// A caller that owns its own report cannot print this document: with
-/// `--json` a second one on the same stream makes the answer unparseable,
-/// which is exactly what `reconcile-agent-skarbiec --json` emitted before
-/// this split. The guards stay here so no writer can reach the host without
-/// them.
+/// `--json` a second one on the same stream makes the answer unparseable.
+/// The guards stay here so no writer can reach the host without them.
 pub(crate) async fn write_host_config(
     target: &str,
     key: &str,
@@ -12154,23 +8201,12 @@ pub(crate) async fn write_host_config(
     Ok(stdout)
 }
 
-/// `stado host reconcile-agent-skarbiec TARGET [--json]` — make TARGET's
-/// `agent.skarbiec.url` the credential endpoint the service directory
-/// declares for that host.
-///
-/// The agent's broker address was a hand-written port in one host's config
-/// and nothing compared it with the fleet's own declaration. On 2026-09-05
-/// `lukasz-macbook` carried `http://127.0.0.1:19096`, which nothing on that
-/// machine has ever bound, while the directory declared
-/// `http://127.0.0.1:8787` for it. Three brokers were listening and none was
-/// the one named, so the agent claimed a `preferences` release job and then
-/// died resolving its `GITHUB_TOKEN` — a build failure whose cause was in a
-/// different product's configuration file.
+/// Apply the agent's declared Skarbiec endpoint repair.
 ///
 /// Derived, never invented: the value comes from
 /// `service_directory.services.skarbiec.endpoints[<target>]`, and a host the
 /// directory gives no endpoint is refused rather than pointed at a guess.
-pub async fn reconcile_agent_skarbiec(target: &str, json_output: bool) -> Result<(), CmdError> {
+pub(crate) async fn apply_agent_skarbiec_repair(target: &str) -> Result<Value, CmdError> {
     let document = super::registry::fetch_document().await?;
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -12211,28 +8247,12 @@ pub async fn reconcile_agent_skarbiec(target: &str, json_output: bool) -> Result
     if changed {
         write_host_config(&canonical.name, "agent.skarbiec.url", &declared).await?;
     }
-    let report = json!({
+    Ok(json!({
         "target": canonical.name,
         "declared": declared,
         "previous": if current.trim().is_empty() { Value::Null } else { Value::from(current.trim()) },
         "changed": changed,
-    });
-    if json_output {
-        print_json(&report);
-    } else if changed {
-        println!(
-            "{}: agent.skarbiec.url -> {declared} (was {})",
-            canonical.name,
-            if current.trim().is_empty() {
-                "unset"
-            } else {
-                current.trim()
-            }
-        );
-    } else {
-        println!("{}: agent.skarbiec.url already {declared}", canonical.name);
-    }
-    Ok(())
+    }))
 }
 
 /// Retract one configuration key from a fleet host.
@@ -12363,9 +8383,9 @@ async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Resu
          close that host's whole release publication boundary: its release verifier compares the \
          declared publisher set against its grant's item set, and one unmintable name makes them \
          unequal for every product, answering 401 or 503 to every release-catalog read on the \
-         fleet. Mint the item on {host} first - `stado host vault-item-put {host} {item} --type \
-         token` - then declare it and run `stado host reconcile-release-verifier {host} --product \
-         {product}`.",
+         fleet. Mint the item on {host} first - `stado credentials item put --host {host} {item} \
+         --type token` - then declare it and run `stado repair stado --step release-verifier \
+         --target {host} --apply`.",
         host = resolved.name
     )))
 }
@@ -12385,7 +8405,7 @@ async fn refuse_unminted_publisher(target: &str, key: &str, value: &str) -> Resu
 /// existed the whole time on the host and nowhere an operator was looking.
 ///
 /// So the warning is emitted here, where the declaration is made, and it names
-/// the second half of the trap too: `reconcile-object-verifier` computes the
+/// the second half of the trap too: the declared `object-verifier` repair computes the
 /// item set from the configuration of the machine running it, so a namespace
 /// that exists only on the host can never be satisfied from here. That is why
 /// the sentence asks for the declaration on both sides.
@@ -12417,8 +8437,8 @@ fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
     if covered {
         eprintln!(
             "note: {target}'s object verifier grant must cover {item:?} for namespace \
-             {namespace:?}; this machine declares it too, so reconcile the host with: stado host \
-             reconcile-object-verifier {target}"
+             {namespace:?}; this machine declares it too, so reconcile the host with: stado \
+             repair stado --step object-verifier --target {target} --apply"
         );
         return;
     }
@@ -12428,10 +8448,10 @@ fn warn_unbacked_object_namespace(target: &str, key: &str, value: &str) {
          grant covers that item its WHOLE object authorization boundary closes — every \
          /api/object read answers 503, not just this namespace — and the failure surfaces at the \
          next restart of anything that reads the registry, including the release agent that \
-         publishes every stable bind. `stado host reconcile-object-verifier {target}` computes the \
-         item set from THIS machine's configuration, so declare the namespace here as well and \
-         then run it: stado config set {key} '<the same JSON>' && stado host \
-         reconcile-object-verifier {target}"
+         publishes every stable bind. The declared object-verifier repair computes the item set \
+         from THIS machine's configuration, so declare the namespace here as well and then run: \
+         stado config set {key} '<the same JSON>' && stado repair stado --step object-verifier \
+         --target {target} --apply"
     );
 }
 
@@ -12450,15 +8470,15 @@ fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) {
     let maps: [(&str, &str); 3] = [
         (
             "release_api.publishers.",
-            "stado host reconcile-release-verifier {target} --product {name}",
+            "stado repair stado --step release-verifier --target {target} --apply",
         ),
         (
             "machine_api.clients.",
-            "stado host reconcile-object-verifier {target}",
+            "stado repair stado --step object-verifier --target {target} --apply",
         ),
         (
             "service_api.deployers.",
-            "stado host reconcile-service-verifier {target}",
+            "stado repair stado --step service-verifier --target {target} --apply",
         ),
     ];
     let Some((name, remedy)) = maps.iter().find_map(|(prefix, remedy)| {
@@ -12765,8 +8785,8 @@ pub async fn remove_run_directory(
     Ok(())
 }
 
-/// `stado host activate-staged-release TARGET --product P` — run the staged
-/// release's OWN installer, once, on a host whose installed one cannot.
+/// `stado release activate-staged --host TARGET --product P` runs the staged
+/// release's OWN installer once when the installed one cannot.
 ///
 /// The host installs its own releases by running the installer that ships
 /// inside the active release. When that copy is broken the host cannot install
@@ -12795,7 +8815,8 @@ pub async fn activate_staged_release(
         .map_err(click)?;
     if !fetched.ok() {
         return Err(CmdError::click(format!(
-            "{}: could not read {env_file}: {}",
+            "{} declares staged release coordinates in {env_file}, but that file could not be \
+             read ({}); restore the deployment env file before activating",
             resolved.name, fetched.report.file_state
         )));
     }
@@ -12814,7 +8835,8 @@ pub async fn activate_staged_release(
     let platform = platform.stdout.trim().to_string();
     if platform == "unknown" {
         return Err(CmdError::click(format!(
-            "{}: could not name this host's release platform",
+            "{} reports no supported staged-release platform; add this OS/architecture to the \
+             release platform declaration before activating",
             resolved.name
         )));
     }
@@ -12840,7 +8862,8 @@ pub async fn activate_staged_release(
     .map_err(click)?;
     let Some(observed) = staged_release::parse_shasum(&hashed.stdout) else {
         return Err(CmdError::click(format!(
-            "{}: no staged archive at {archive} to activate",
+            "{} declares a staged release but {archive} is missing; stage the declared archive \
+             before activating it",
             resolved.name
         )));
     };

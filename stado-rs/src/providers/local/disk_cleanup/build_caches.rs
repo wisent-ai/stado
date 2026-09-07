@@ -13,10 +13,9 @@
 //! disk that is 99.5% full is worse than no janitor, because the number is
 //! believed.
 //!
-//! `stado host build-caches` ([`crate::deploy::host_build_caches`]) already
-//! recognises such a directory safely, but only when an operator asks it to,
-//! over ssh, one host at a time. This module is the same judgement inside the
-//! automatic pass.
+//! `stado space report` ([`crate::deploy::host_build_caches`]) recognises such
+//! directories safely from the target's declared cleaner. This module is the
+//! same judgement inside the automatic pass.
 //!
 //! The safety criterion is that module's, unchanged and imported rather than
 //! copied: a directory may be deleted if and only if it contains a

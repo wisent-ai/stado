@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "workloads": [
+    {
+      "kind": "jeden-session",
+      "product": "jeden",
+      "interactive": true,
+      "registry_allowance": null,
+      "plan_schema": null,
+      "report": ["target", "workspace", "stdio_stream", "durable_session_ledger"]
+    },
+    {
+      "kind": "weles-capture",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": "generic_capture",
+      "plan_schema": "wisent.weles-capture-plan.v1",
+      "report": ["target", "batch", "actions", "artifact_prefixes", "enqueue_receipt"]
+    },
+    {
+      "kind": "weles-browser-task",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": "$plan.action",
+      "plan_schema": "wisent.weles-browser-task-plan.v1",
+      "report": ["target", "action", "run_id", "outcome", "profile", "result"]
+    },
+    {
+      "kind": "weles-diagnostics",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": "wisent.weles-diagnostics-plan.v1",
+      "report": ["target", "run_id", "artifact_inventory", "artifact_content"]
+    },
+    {
+      "kind": "weles-image-inspect",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": "generic_browser_task",
+      "plan_schema": "wisent.weles-image-inspect-plan.v1",
+      "report": ["target", "run_id", "source_url", "image_diagnostics"]
+    },
+    {
+      "kind": "weles-activity",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": null,
+      "report": ["target", "worker_release", "api_runtime", "recorded_runs"]
+    },
+    {
+      "kind": "weles-recordings",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": "wisent.weles-recordings-plan.v1",
+      "report": ["target", "recordings_directory", "registry_generation", "updated_launch_agents"]
+    },
+    {
+      "kind": "weles-api-runtime",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": "wisent.weles-api-runtime-plan.v1",
+      "report": ["target", "revision", "service_restart"]
+    },
+    {
+      "kind": "weles-browser-runtime",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": "wisent.weles-browser-runtime-plan.v1",
+      "report": ["target", "required_components", "observed_components", "browser_engine", "repairs"]
+    },
+    {
+      "kind": "gui-automation",
+      "product": "cua-driver",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": "wisent.gui-automation-plan.v1",
+      "report": ["target", "operation", "autologin", "remote_management", "accessibility", "runtime"]
+    },
+    {
+      "kind": "mobile-runtime",
+      "product": "weles-worker",
+      "interactive": false,
+      "registry_allowance": null,
+      "plan_schema": "wisent.mobile-runtime-plan.v1",
+      "report": ["target", "appium", "drivers", "platform_tools", "repairs"]
+    }
+  ]
+}

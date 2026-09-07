@@ -66,7 +66,7 @@ pub const STATE_REFUSED: &str = "refused";
 pub const STATE_RESTORED: &str = "restored";
 
 /// Where `--apply` keeps the table it replaced. Under the fleet's own install
-/// root so [`crate::cli::host`]'s `remove-file` can reach it and an operator
+/// root so `space file remove` can reach it and an operator
 /// is never asked to trust `/tmp` with the boot sequence of a production box.
 pub const BACKUP_DIR: &str = "$HOME/.stado/cron-backups";
 

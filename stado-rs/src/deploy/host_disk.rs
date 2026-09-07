@@ -1,5 +1,5 @@
-//! `stado host disk TARGET` — current disk usage of a registry host
-//! alongside the state of the registry cleanup policy that governs it.
+//! The host reader behind `stado space report TARGET`: current filesystem and
+//! memory usage beside the registry cleanup policy and janitor state.
 //!
 //! NO Python original: item four of `stado.wisent.com/docs/missing-commands`. Shape and
 //! rules come from [`crate::deploy::host_reboot`] via
@@ -27,8 +27,8 @@
 //! - Local APFS snapshots come from `tmutil listlocalsnapshots /`, and they
 //!   are here because NOTHING in this product can reclaim them and their
 //!   blocks are already inside the `used` figure above. On
-//!   `control-host` on 2026-08-18 the janitor's cleaners and the three
-//!   `host reclaim` filesystem stages between them accounted for every
+//!   `control-host` on 2026-08-18 the janitor's cleaners and the declared
+//!   space-reclamation filesystem stages between them accounted for every
 //!   consumer an operator could act on, and three OS-update snapshots sat
 //!   outside all of it — the kind of thing that holds tens of GiB and turns
 //!   "the product says the disk is accounted for" into a false statement.
@@ -84,8 +84,8 @@ const LOCK_PATH_MARK: &str = "@LOCK_PATH@";
 /// reads `inventory`, `clone_summaries` or `lock_holders`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiskScope {
-    /// Every field. `host disk`'s [`to_report`] reads all eight, so its
-    /// script is unchanged and its cost is the cost of what it prints.
+    /// Every field. `space report`'s [`to_report`] reads all eight, so its
+    /// script's cost is the cost of what it prints.
     Full,
     /// `usage`, `state` and `snapshots` only: exactly the three fields
     /// `deploy::host_gates::assemble` reads. The omitted sections are
@@ -109,9 +109,9 @@ done
 ///
 /// A host out of memory and a host out of disk fail differently and are
 /// repaired differently, and until 2026-09-06 this fleet could read only one
-/// of the two. `stado host precheck-runner install charless-mac-mini` failed
+/// of the two. `stado runner install charless-mac-mini --profile precheck` failed
 /// four times with `Failed to create CoreCLR, HRESULT: 0x8007000C` while
-/// `host disk` reported 5.7 GiB free and `host health` reported memory, load
+/// `space report` reported 5.7 GiB free and `host health` reported memory, load
 /// and swap as null; the machine was in fact holding 638 MiB of free RAM with
 /// 4.7 GiB of its 6 GiB swap file in use. Two fixed, read-only readers answer
 /// it, and a host missing either reports what it has.
@@ -143,7 +143,7 @@ fi
 "#;
 
 /// `lsof` on the run lock — `lock_holders`, `lock_read`, `lock_path`. Read
-/// only by `host disk`'s report; `host gates` never looks at them.
+/// only by `space report`; `host gates` never looks at them.
 const CLEANUP_LOCK_SECTION: &str = r#"lock="$HOME/@LOCK_PATH@"
 # Who holds the janitor's run lock. `lock_busy` in a cleanup report and
 # `cleanup_in_progress` in an agent's capacity broadcast are the same fact
@@ -184,7 +184,7 @@ fi
 "#;
 
 /// The `du` inventory and the Chromium clone census — `inventory` and
-/// `clone_summaries`. Read only by `host disk`'s report, and the whole cost
+/// `clone_summaries`. Read only by `space report`, and the whole cost
 /// of this script: the depth caps the output, not the traversal. macOS needs
 /// its clone and application-state roots; Linux needs the managed home plus
 /// `/home`, `/mnt`, `/var`, and `/opt` because a depth-two root report only
@@ -370,11 +370,11 @@ pub struct CleanupState {
 /// product removes.
 ///
 /// Their blocks are inside `df`'s used figure, so free space does not come
-/// back until they are thinned — and `stado host reclaim` cannot thin them:
-/// dropping a snapshot is dropping a restore point, which is an operator's
-/// decision about that machine's recovery and not a janitor's about its disk.
-/// Reported so nobody reads a reclamation that freed nothing and concludes the
-/// space is unexplained.
+/// back until they are thinned. `stado space reclaim` handles them only in its
+/// declared APFS stage and only against the target watermark, because dropping
+/// a snapshot is a decision about that machine's recovery rather than ordinary
+/// janitor cleanup. Reported so nobody reads a reclamation that freed nothing
+/// and concludes the space is unexplained.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalSnapshots {
     /// Whether the host could be asked at all. False on every Linux host and
@@ -701,16 +701,21 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
     report
 }
 
-/// Read disk usage and cleanup state from one canonical registry host.
-pub async fn disk_host(target_name: &str, runner: &Runner) -> Result<Value, DeployError> {
-    let target = host_channel::canonical_target(target_name).await?;
-    let output = host_channel::run_script(&target, &remote_script(), runner).await?;
+/// Read the complete space report inputs for an already-resolved target.
+pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
+    let output = host_channel::run_script(target, &remote_script(), runner).await?;
     let interval = target
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.check_interval_seconds);
     let reading = parse_output(&output.stdout, interval);
-    let mut report = to_report(&target, &reading);
+    let mut report = to_report(target, &reading);
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
     Ok(Value::Object(report))
+}
+
+/// Resolve a canonical registry target and read its complete space inputs.
+pub async fn disk_host(target_name: &str, runner: &Runner) -> Result<Value, DeployError> {
+    let target = host_channel::canonical_target(target_name).await?;
+    disk_target(&target, runner).await
 }

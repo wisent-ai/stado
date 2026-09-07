@@ -6,11 +6,11 @@
 //! charless-mac-mini. Stado had exactly two ways to put work on a Weles
 //! worker and neither could carry an operator's task:
 //!
-//! - `host weles-capture` hard-codes `generic_capture`
+//! - The `weles-capture` workload uses `generic_capture`
 //!   ([`super::weles_capture::CAPTURE_ACTION`]), and that action is not in
 //!   that host's 226-entry `WELES_ACTION_ALLOWLIST`. The worker refuses any
-//!   name outside the allowlist, so the command cannot run there at all.
-//! - `host weles-image-inspect` does submit the allowlisted
+//!   name outside the allowlist, so that workload cannot run there at all.
+//! - The `weles-image-inspect` workload does submit the allowlisted
 //!   `generic_browser_task`, but its objective and constraints are fixed in
 //!   product code: read-only, no login, no mutation, and an objective about
 //!   counting rendered images.
@@ -438,31 +438,19 @@ pub fn prefill_entry(
 /// The sentence a caller reads when the redeeming host has no route for the
 /// origin they asked to sign in on.
 ///
-/// It names both exact resources, the item they must map to, and the command
-/// that declares them. Declaring which credential a login form receives is a
-/// decision that belongs in a command someone ran on purpose, so this refuses
-/// rather than creating them.
+/// It names both exact resources and the item they must map to. Route changes
+/// belong in Skarbiec; this refusal points at the declaration-backed route
+/// inspection rather than mutating which credential a login form receives.
 pub fn missing_route_sentence(host: &str, origin: &str, item: &str, detail: &str) -> String {
-    let declarations: Vec<String> = SIGN_IN_FIELDS
-        .iter()
-        .map(|(_, field_class)| {
-            format!(
-                "stado host capability-route {host} --resource {} --item {item} --field {} \
-                 --reason <why>",
-                fill_resource(origin, field_class),
-                vault_field_for(field_class),
-            )
-        })
-        .collect();
     format!(
         "{host} cannot fill a sign-in on {origin}: {detail}. It needs both of \
-         {} and {}, mapped to vault item {item} fields {} and {}. Declare them there, on \
-         purpose, then run this again:\n  {}",
+         {} and {}, mapped to vault item {item} fields {} and {}. Inspect the active route with \
+         `stado route capability weles-admission`, change both mappings in Skarbiec if needed, \
+         then run this again.",
         fill_resource(origin, SIGN_IN_FIELDS[0].1),
         fill_resource(origin, SIGN_IN_FIELDS[1].1),
         vault_field_for(SIGN_IN_FIELDS[0].1),
         vault_field_for(SIGN_IN_FIELDS[1].1),
-        declarations.join("\n  "),
     )
 }
 
@@ -655,9 +643,9 @@ pub struct BrowserTask<'a> {
 }
 
 impl BrowserTask<'_> {
-    /// The parameter object, in the exact shape
-    /// `host weles-image-inspect` already sends for this action — so the two
-    /// callers of `generic_browser_task` cannot disagree about its schema.
+    /// The parameter object, in the exact shape the `weles-image-inspect`
+    /// workload sends for this action, so the two callers of
+    /// `generic_browser_task` cannot disagree about its schema.
     ///
     /// `credential_prefill` is added only when there is one, so a run without
     /// a sign-in puts exactly the bytes on the wire it always did.
@@ -804,8 +792,8 @@ mod tests {
 
     #[test]
     fn an_action_the_host_does_not_carry_is_refused_naming_action_and_host() {
-        // The exact case: `generic_capture` is what `host weles-capture`
-        // hard-codes, and charless-mac-mini's worker does not accept it.
+        // The exact case: `generic_capture` is what the `weles-capture`
+        // workload declares, and charless-mac-mini's worker does not accept it.
         let allow = vec![
             "generic_browser_task".to_string(),
             "generic_saved_task".to_string(),
@@ -861,7 +849,7 @@ mod tests {
         let params = permitted.params();
         assert_eq!(params["constraints"]["no_login"], json!(false));
         assert_eq!(params["constraints"]["no_mutation"], json!(false));
-        // The schema stays the one `weles-image-inspect` already sends.
+        // The schema stays the one the `weles-image-inspect` workload sends.
         assert_eq!(params["proxy"], json!("none"));
         assert!(params["flow_name"]
             .as_str()
@@ -1084,12 +1072,11 @@ mod tests {
         );
     }
 
-    /// A host with no route for the origin must be told exactly what to
-    /// declare, on which host, against which item — and must NOT have it
-    /// declared for it. This sentence is the whole interface between "the run
-    /// cannot work" and "an operator decided which credential this form gets".
+    /// A host with no route for the origin is told which resources and item
+    /// disagree, then pointed at the declaration-backed route inspection.
+    /// Stado does not choose or mutate a credential route as a side effect.
     #[test]
-    fn a_host_without_the_routes_is_told_exactly_what_to_declare() {
+    fn a_host_without_the_routes_is_told_how_to_inspect_the_declaration() {
         let said = missing_route_sentence(
             "charless-mac-mini",
             "https://accounts.google.com",
@@ -1110,12 +1097,11 @@ mod tests {
         // ones every existing `origin:` route in the fleet maps to.
         assert!(said.contains("username"), "{said}");
         assert!(said.contains("password"), "{said}");
-        // And the command that declares them, on that host, with a reason.
         assert!(
-            said.contains("stado host capability-route charless-mac-mini --resource"),
+            said.contains("stado route capability weles-admission"),
             "{said}"
         );
-        assert!(said.contains("--reason"), "{said}");
+        assert!(said.contains("change both mappings in Skarbiec"), "{said}");
     }
 
     #[test]

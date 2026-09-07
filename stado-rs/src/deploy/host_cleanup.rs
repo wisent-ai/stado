@@ -1,9 +1,5 @@
-//! `stado host cleanup TARGET --dry-run` — preview what the registry
-//! cleanup would delete on one host, deleting nothing.
-//!
-//! NO Python original: item five of `stado.wisent.com/docs/missing-commands`. Shape and
-//! rules come from [`crate::deploy::host_reboot`] via
-//! [`crate::deploy::host_channel`].
+//! The `registry_cleanup` stage behind `stado space reclaim`: ask one target's
+//! own janitor what its canonical registry policy would remove.
 //!
 //! This module contains NO cleanup policy. It cannot: the policy is a
 //! bounded, dir_fd-relative walk of the target's own filesystem
@@ -16,7 +12,7 @@
 //! So the preview runs where the files are. The remote program locates the
 //! host's own stado binary through
 //! [`crate::deploy::host_recovery::WC_CANDIDATES`] — the same discovery
-//! list `host recover` uses to run the real cleanup — and invokes
+//! list the declared host repair uses to run the real cleanup — and invokes
 //! `disk-cleanup --once --dry-run`, which is
 //! [`crate::providers::local::disk_cleanup::preview_cleanup_once`]: the
 //! janitor's own planning phase with an `enforce` policy pinned down to its

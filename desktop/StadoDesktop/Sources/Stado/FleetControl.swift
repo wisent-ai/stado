@@ -93,9 +93,9 @@ struct FleetCleanupPolicy: Decodable, Sendable {
 
 /// One numeric `disk_cleanup` field an operator client may rewrite.
 ///
-/// The same set the dashboard whitelists and `stado host disk-cleanup` sets,
-/// because a field the app can display and cannot change is a control an
-/// operator will try to use, and one it can change and cannot display is a
+/// The same set the dashboard whitelists and the canonical registry schema
+/// declares, because a field the app can display and cannot change is a control
+/// an operator will try to use, and one it can change and cannot display is a
 /// write nobody can verify.
 enum FleetCleanupNumericField: String, CaseIterable, Identifiable, Sendable {
     case lowFreeGB = "low_free_gb"

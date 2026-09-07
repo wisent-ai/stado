@@ -972,7 +972,7 @@ struct ServicesView: View {
     /// The file-delete verb is offered only where the CLI's guards could
     /// pass: a unit file inside a user's own LaunchAgents or under .stado.
     /// Anything else — a system daemon path, an empty path — has no button,
-    /// because `stado host remove-file` would refuse it before deleting
+    /// because `stado space file remove` would refuse it before deleting
     /// anything anyway.
     @ViewBuilder
     private func removeFileAffordance(_ entry: FleetServiceEntry) -> some View {
@@ -1059,7 +1059,7 @@ struct ServicesView: View {
                 Text("Privileged bootstrap required")
                     .font(WisentTypeScale.bodyStrong())
                     .foregroundStyle(WisentDesign.secondary)
-                Text("This is a system LaunchDaemon; the approved channel is unprivileged and cannot bootstrap it. Use stado host recover \(entry.host), or load it as root on the host itself.")
+                Text("This is a system LaunchDaemon; the approved channel is unprivileged and cannot bootstrap it. Use stado repair stado --step host --target \(entry.host) --apply, or load it as root on the host itself.")
                     .font(WisentTypeScale.body())
                     .foregroundStyle(WisentDesign.secondary)
                     .fixedSize(horizontal: false, vertical: true)

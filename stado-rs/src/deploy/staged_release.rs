@@ -72,7 +72,8 @@ pub fn coordinate(body: &str, product: &str) -> Result<Coordinate, DeployError> 
     }
     let missing = |key: &str| {
         DeployError(format!(
-            "the deployment env file declares no {key}, so there is no staged release to activate"
+            "the deployment env file declares no {key}; add it to the deployment env file \
+             before activating a staged release"
         ))
     };
     let coordinate = Coordinate {
@@ -93,7 +94,8 @@ pub fn coordinate(body: &str, product: &str) -> Result<Coordinate, DeployError> 
         || coordinate.sha256.len() != 64
     {
         return Err(DeployError(format!(
-            "{sha_key} is not a sha256 digest: {:?}",
+            "the deployment env file declares {sha_key}={:?}, which is not a sha256 digest; \
+             replace it with the staged archive's 64-character digest",
             coordinate.sha256
         )));
     }
@@ -126,8 +128,8 @@ pub fn expand_home(path: &str, home: &str) -> Result<String, DeployError> {
     };
     if expanded.contains('$') {
         return Err(DeployError(format!(
-            "the deployment env file declares {path:?}, which this cannot resolve without \
-             running a shell over it"
+            "the deployment env file declares path {path:?}, which this cannot resolve without \
+             running a shell over it; replace it with $HOME, ${{HOME}}, ~, or an absolute path"
         )));
     }
     Ok(expanded)
@@ -143,7 +145,8 @@ pub fn digest_verdict(declared: &str, observed: &str) -> Result<(), DeployError>
     }
     Err(DeployError(format!(
         "the staged archive hashes to {observed}, but the deployment env file declares \
-         {declared}; refusing to activate an archive the host has not agreed to run"
+         {declared}; refusing to activate an archive the host has not agreed to run - stage \
+         the declared archive or update the deployment env declaration"
     )))
 }
 

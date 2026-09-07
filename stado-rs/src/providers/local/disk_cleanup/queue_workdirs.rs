@@ -508,7 +508,7 @@ pub fn scan_queue_workdirs(
                 // such trees held 14.2 GB on charless-mac-mini while the host
                 // sat at 1.1 GB free, which took its object API, the registry
                 // authority and every Skarbiec decryption down together while
-                // `host reclaim` measured zero in all eight stages. The gate is
+                // `space reclaim` measured zero in all eight stages. The gate is
                 // the canonical pass's own: this account owns it, it is a
                 // directory on the legacy root's device, and its job is
                 // terminal by the same keep-list.

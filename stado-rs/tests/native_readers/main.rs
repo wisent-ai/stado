@@ -452,7 +452,7 @@ impl Fixture {
 
         let plist = self.plist.to_string_lossy().into_owned();
         match self
-            .command(&["host", "remove-file", HOST, &plist, "--json"])
+            .command(&["space", "file", "remove", HOST, &plist, "--json"])
             .output()
         {
             Ok(remove) => {
@@ -466,12 +466,14 @@ impl Fixture {
                     || self.plist.exists()
                 {
                     failures.push(format!(
-                        "Stado guarded remove-file did not prove cleanup: {}",
+                        "Stado guarded space file remove did not prove cleanup: {}",
                         said(&remove)
                     ));
                 }
             }
-            Err(error) => failures.push(format!("Stado guarded remove-file did not run: {error}")),
+            Err(error) => failures.push(format!(
+                "Stado guarded space file remove did not run: {error}"
+            )),
         }
 
         if failures.is_empty() {

@@ -1,5 +1,5 @@
-//! `stado host object-relocate TARGET` — move objects from one key prefix to
-//! another INSIDE the store, on the host that holds it.
+//! `stado space relocate TARGET` — move objects from one key prefix to another
+//! INSIDE the store, on the declared host that holds it.
 //!
 //! The object API exposes GET, PUT, DELETE, list and stat and nothing else:
 //! there is no move and no server-side copy. So for as long as this fleet has
@@ -14,8 +14,8 @@
 //!
 //! Adding a move route to the object API would have been the other answer. It
 //! is the worse one: a new verb on a live store, reachable by anything holding
-//! a bearer, to serve a defect's cleanup. This command needs the same host
-//! shell the read-only `host disk` already speaks, so it uses it.
+//! a bearer, to serve a defect's cleanup. This command uses the shared
+//! registry-authorized host channel instead.
 //!
 //! The shape and the rules come from [`crate::deploy::host_disk`] via
 //! [`crate::deploy::host_channel`]: one FIXED remote program, registry data
@@ -416,7 +416,7 @@ pub fn parse_output(stdout: &str) -> RelocateReading {
     reading
 }
 
-/// The reading as the `--json` report, in `host disk`'s report shape.
+/// The reading as the `--json` report, in the shared host report shape.
 pub fn to_report(
     target: &ComputeTarget,
     reading: &RelocateReading,

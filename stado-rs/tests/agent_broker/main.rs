@@ -1,5 +1,5 @@
-//! `stado host reconcile-agent-skarbiec` points a host's queue agent at the
-//! credential broker the service directory declares for it.
+//! The declared `stado-control-plane` `agent-skarbiec` repair points a host's
+//! queue agent at the credential broker the service directory declares for it.
 //!
 //! Every test drives the built `stado` binary (`CARGO_BIN_EXE_stado`) with
 //! WC_STORAGE_BACKEND=local + WC_LOCAL_STORAGE_PATH=<TempDir> holding a real
@@ -152,23 +152,31 @@ fn the_declared_endpoint_replaces_a_port_nothing_serves() {
     let out = stado(
         home.path(),
         storage.path(),
-        &["host", "reconcile-agent-skarbiec", "w1", "--json"],
+        &[
+            "repair",
+            "stado-control-plane",
+            "--step",
+            "agent-skarbiec",
+            "--target",
+            "w1",
+            "--apply",
+            "--json",
+        ],
     );
     assert!(out.status.success(), "{}", combined(&out));
-    // One document on the stream: a receipt with the host's whole
-    // configuration printed beside it is not parseable.
     let report: serde_json::Value =
-        serde_json::from_str(stdout(&out).trim()).expect("json receipt");
+        serde_json::from_str(stdout(&out).trim()).expect("repair report");
+    let observation = &report["steps"][0]["observation"];
     assert_eq!(report["target"], serde_json::json!("w1"));
     assert_eq!(
-        report["declared"],
+        observation["declared"],
         serde_json::json!("http://127.0.0.1:8787")
     );
     assert_eq!(
-        report["previous"],
+        observation["previous"],
         serde_json::json!("http://127.0.0.1:19096")
     );
-    assert_eq!(report["changed"], serde_json::json!(true));
+    assert_eq!(observation["changed"], serde_json::json!(true));
     assert_eq!(
         agent_url(home.path()).as_deref(),
         Some("http://127.0.0.1:8787"),
@@ -185,13 +193,23 @@ fn a_second_run_reports_the_idempotent_outcome() {
     let out = stado(
         home.path(),
         storage.path(),
-        &["host", "reconcile-agent-skarbiec", "w1"],
+        &[
+            "repair",
+            "stado-control-plane",
+            "--step",
+            "agent-skarbiec",
+            "--target",
+            "w1",
+            "--apply",
+            "--json",
+        ],
     );
     assert!(out.status.success(), "{}", combined(&out));
-    assert!(
-        stdout(&out).contains("agent.skarbiec.url already http://127.0.0.1:8787"),
-        "{}",
-        stdout(&out)
+    let report: serde_json::Value =
+        serde_json::from_str(stdout(&out).trim()).expect("repair report");
+    assert_eq!(
+        report["steps"][0]["observation"]["changed"],
+        serde_json::json!(false)
     );
     assert_eq!(
         agent_url(home.path()).as_deref(),
@@ -205,13 +223,23 @@ fn an_unset_agent_url_is_declared_from_the_directory() {
     let out = stado(
         home.path(),
         storage.path(),
-        &["host", "reconcile-agent-skarbiec", "w1"],
+        &[
+            "repair",
+            "stado-control-plane",
+            "--step",
+            "agent-skarbiec",
+            "--target",
+            "w1",
+            "--apply",
+            "--json",
+        ],
     );
     assert!(out.status.success(), "{}", combined(&out));
-    assert!(
-        stdout(&out).contains("(was unset)"),
-        "an absent value is stated as absent: {}",
-        stdout(&out)
+    let report: serde_json::Value =
+        serde_json::from_str(stdout(&out).trim()).expect("repair report");
+    assert_eq!(
+        report["steps"][0]["observation"]["previous"],
+        serde_json::Value::Null
     );
     assert_eq!(
         agent_url(home.path()).as_deref(),
@@ -230,7 +258,16 @@ fn a_host_the_directory_gives_no_endpoint_is_refused() {
     let out = stado(
         home.path(),
         storage.path(),
-        &["host", "reconcile-agent-skarbiec", "w1"],
+        &[
+            "repair",
+            "stado-control-plane",
+            "--step",
+            "agent-skarbiec",
+            "--target",
+            "w1",
+            "--apply",
+            "--json",
+        ],
     );
     assert!(!out.status.success(), "a guess is not an answer");
     let text = combined(&out);

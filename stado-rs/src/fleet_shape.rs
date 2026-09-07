@@ -885,7 +885,7 @@ fn duplicate_domains(
                 unit.declaring_paths.join(", ")
             ),
             command: format!(
-                "stado host remove-file {} <the domain that should not own it> then stado service ensure {}",
+                "stado space file remove {} <the domain that should not own it> then stado service ensure {}",
                 target.name, unit.label
             ),
         });
@@ -1229,7 +1229,7 @@ async fn disk_headroom(
                 subject: target.name.clone(),
                 declared: "the host answers df".to_string(),
                 observed: format!("disk read failed: {error}"),
-                command: format!("stado host disk {}", target.name),
+                command: format!("stado space report {}", target.name),
             });
             return;
         }
@@ -1260,7 +1260,7 @@ async fn disk_headroom(
             subject: target.name.clone(),
             declared: format!("low watermark {} GiB", policy.low_free_gb),
             observed: "df answered without an available column".to_string(),
-            command: format!("stado host disk {} --json", target.name),
+            command: format!("stado space report {} --json", target.name),
         });
         return;
     };
@@ -1275,7 +1275,7 @@ async fn disk_headroom(
             ),
             observed: format!("{free_gib:.1} GiB free, so this host is refusing work"),
             command: format!(
-                "stado host reclaim {} --apply --reason <why> and stado host backup-audit {} --reclaim-twins --apply",
+                "stado space reclaim {} --apply --reason <why> and stado host backup-audit {} --reclaim-twins --apply",
                 target.name, target.name
             ),
         });

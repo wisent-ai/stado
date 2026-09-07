@@ -221,7 +221,7 @@ impl ActiveSlot {
 /// publishing capacity throughout.
 ///
 /// Measured on `charless-mac-mini` on 2026-09-03: the agent (pid 79473, alive
-/// 11.5 hours) held the lock, `host disk` named it as the holder, every pass
+/// 11.5 hours) held the lock, `space report` named it as the holder, every pass
 /// reported `outcome: lock_busy, duration_ms: 372`, and the janitor's last
 /// success stayed at 16:40:29Z. `host gates` then read that success age
 /// against `STALL_INTERVALS * 300s` and reported `disk_cleanup_stalled`, which

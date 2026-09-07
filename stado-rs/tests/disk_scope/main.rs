@@ -17,7 +17,7 @@
 //! The caller matrix for `host_disk::remote_script`:
 //!
 //! * `host_gates.rs:290` — `host gates` — reads `usage`, `state`, `snapshots`
-//! * `host_disk.rs:551` — `host disk`, via `to_report:437` — reads all eight
+//! * `host_disk.rs` — `space report`, via `to_report` — reads all eight
 //!   (`usage`, `state`, `snapshots`, `inventory`, `clone_summaries`,
 //!   `lock_holders`, `lock_read`, `lock_path`)
 //!
@@ -39,7 +39,7 @@
 
 use stado::deploy::host_disk::{remote_script, remote_script_for, DiskScope};
 
-/// Markers only `host disk` consumes, each emitted by a section the gate
+/// Markers only `space report` consumes, each emitted by a section the gate
 /// scope must not carry.
 const INVENTORY_MARKERS: [&str; 3] = [
     "STADO_DISK_ITEM",
@@ -71,7 +71,7 @@ fn the_gate_scope_carries_every_field_the_gate_reads() {
     }
 }
 
-/// The gate scope must not carry the work only `host disk` reads.
+/// The gate scope must not carry the work only `space report` reads.
 ///
 /// This is the defect itself: 120 seconds of `du` for an `inventory` the gate
 /// never looks at.
@@ -92,7 +92,7 @@ fn the_gate_scope_drops_the_work_only_host_disk_reads() {
     }
 }
 
-/// `host disk` keeps everything. The capability is scoped, never removed.
+/// `space report` keeps everything. The capability is scoped, never removed.
 #[test]
 fn the_full_scope_still_carries_the_inventory() {
     let full = remote_script_for(DiskScope::Full);
@@ -104,7 +104,7 @@ fn the_full_scope_still_carries_the_inventory() {
     }
     assert!(
         full.contains("/usr/bin/du"),
-        "the inventory is `host disk`'s own output and must survive"
+        "the inventory is `space report`'s own output and must survive"
     );
 }
 

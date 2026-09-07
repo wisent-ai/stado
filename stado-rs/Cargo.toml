@@ -114,9 +114,6 @@ path = "tests/service_convergence/main.rs"
 name = "documentation"
 path = "tests/documentation/main.rs"
 
-[[test]]
-name = "runner"
-path = "tests/runner/main.rs"
 
 [[test]]
 name = "web"

@@ -356,16 +356,15 @@ struct EnrollmentCheckPanel: View {
 
 /// The two proofs that a registry entry is a working machine and not a row.
 ///
-/// They are the same two commands whichever way the machine got in, so they
-/// are one view rather than one per method. The release field only extends the
-/// second command; leaving it empty remains the established recovery path.
+/// They use the stored channel and the same declared host repair capability
+/// shown on the host operations surface.
 struct EnrollmentProofSection: View {
     @ObservedObject var store: MachineEnrollmentStore
 
     var body: some View {
         WisentSectionBox(
             title: "The two proofs",
-            detail: "First open the stored channel. Then run the one canonical host recovery command, optionally installing one exact signed Stado release before the existing recovery."
+            detail: "First open the stored channel. Then apply the declared stado host repair step and keep its report."
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
                 EnrollmentCheckPanel(
@@ -373,34 +372,11 @@ struct EnrollmentProofSection: View {
                     fallbackCommand: "stado fleet key check \(store.draft.machineName)"
                 )
 
-                VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-                    Text("EXACT STADO VERSION · OPTIONAL")
-                        .font(WisentTypeScale.eyebrow())
-                        .tracking(0.8)
-                        .foregroundStyle(WisentDesign.muted)
-                    TextField(
-                        "For example, 0.7.34",
-                        text: Binding(
-                            get: { store.recoveryRelease },
-                            set: { store.setRecoveryRelease($0) }
-                        )
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .font(WisentTypeScale.identifier())
-                    .disabled(store.isRunning)
-                    .accessibilityLabel("Exact Stado recovery version")
-                    Text(store.recoveryVersion.isEmpty
-                         ? "Leave empty to recover with the installed binary, exactly as before."
-                         : "This restores the release object API, then downloads and verifies the signed \(store.recoveryVersion) artifact before recovery. The prior binary is restored if its resolver probe fails.")
-                        .font(WisentTypeScale.caption())
-                        .foregroundStyle(WisentDesign.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(verbatim: store.recoveryCommand)
-                        .font(WisentTypeScale.identifierSmall())
-                        .foregroundStyle(WisentDesign.muted)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(verbatim: store.recoveryCommand)
+                    .font(WisentTypeScale.identifierSmall())
+                    .foregroundStyle(WisentDesign.muted)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                     ForEach(store.recoverySteps) { result in

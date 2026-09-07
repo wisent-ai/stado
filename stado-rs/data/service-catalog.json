@@ -5,13 +5,15 @@
       "summary": "The authenticated provider-neutral gateway every Wisent model call goes through.",
       "program": "$HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec",
       "args": [],
-      "unit": "com.wisent.always-on.brama"
+      "unit": "com.wisent.always-on.brama",
+      "repair": []
     },
     {
       "name": "weles",
       "summary": "The browser-automation worker for authorized web workflows.",
       "program": "$HOME/.stado/bin/weles-worker",
-      "args": []
+      "args": [],
+      "repair": []
     },
     {
       "name": "skarbiec",
@@ -27,7 +29,27 @@
         "GNUPGHOME": "$HOME/.gnupg",
         "SKARBIEC_AUDIT_FILE": "$HOME/.stado/skarbiec.audit.jsonl",
         "SKARBIEC_VAULT_FILE": "$HOME/.stado/skarbiec.vault.json"
-      }
+      },
+      "repair": [
+        {
+          "name": "audit-lock",
+          "summary": "An audit journal lock wedges credential reads, and this step restarts only loaded Skarbiec dependants to restore the audit and object-authorization paths.",
+          "mutating": true,
+          "proof": "Skarbiec health reports ok and the Stado object boundary reports object=true"
+        },
+        {
+          "name": "crypto",
+          "summary": "Stale per-user GnuPG daemons wedge keybox access, and this step replaces those daemons to restore Skarbiec decryption.",
+          "mutating": true,
+          "proof": "Skarbiec readiness reports ok after keyboxd and gpg-agent relaunch"
+        },
+        {
+          "name": "acquisition-state",
+          "summary": "A service-user cutover wedges Skarbiec acquisition state behind foreign ownership or a stale lock, and this step restores the declared owner, mode, and advisory lock.",
+          "mutating": true,
+          "proof": "the acquisition state and advisory lock have the current uid, gid, mode 0600, and no live legacy lock"
+        }
+      ]
     },
     {
       "name": "stado-control-plane",
@@ -40,7 +62,21 @@
       "env": {
         "HOME": "$HOME",
         "STADO_CONFIG": "$HOME/.config/stado/config.json"
-      }
+      },
+      "repair": [
+        {
+          "name": "release-state",
+          "summary": "Delivered binaries wedge behind their registry-declared versions, and this step restores every absent or behind binary through the verified host release path.",
+          "mutating": true,
+          "proof": "host inventory reports every managed binary at its declared version and release platform"
+        },
+        {
+          "name": "agent-skarbiec",
+          "summary": "A stale agent credential URL wedges secret resolution, and this step restores the Skarbiec endpoint declared for the target by the service directory.",
+          "mutating": true,
+          "proof": "the target's resolved agent.skarbiec.url equals its service-directory endpoint"
+        }
+      ]
     },
     {
       "name": "stado",
@@ -65,13 +101,64 @@
         "WC_LOCAL_STORAGE_PATH": "$HOME/.stado/local-storage",
         "WC_BACKUP_STORAGE_BACKEND": "local",
         "WC_BACKUP_LOCAL_STORAGE_PATH": "$HOME/.stado/local-backup"
-      }
+      },
+      "repair": [
+        {
+          "name": "host",
+          "summary": "Disk pressure, unloaded managed units, or lost stable binds wedge a registry-managed macOS host, and this step restores the host's fixed recovery program.",
+          "mutating": true,
+          "proof": "the recovery report shows disk after cleanup, every managed unit finding, stable-bind findings, and no blocker"
+        },
+        {
+          "name": "object-api",
+          "summary": "A stale launch definition or closed local-store authority wedges the core object API, and this step restores its declared primary root and authenticated object reads.",
+          "mutating": true,
+          "proof": "the loaded object API serves its declared local root and an authenticated object read succeeds"
+        },
+        {
+          "name": "release-store",
+          "summary": "Foreign ownership of one release-catalog coordinate wedges atomic publication, and this step restores only the service's catalog object, metadata, lock, and required parent ownership.",
+          "mutating": true,
+          "proof": "the service's primary and backup release-catalog paths are regular, non-symlink coordinates owned by the service account"
+        },
+        {
+          "name": "link",
+          "summary": "A stale verifier shadow wedges beacon publication from an otherwise reachable host, and this step restores the route bearer grant without rotating it.",
+          "mutating": true,
+          "proof": "a newer beacon is inside the fleet silence threshold and the recorded silence is closed"
+        },
+        {
+          "name": "object-verifier",
+          "summary": "Object namespace drift wedges authenticated object reads, and this step restores the verifier grant to the exact target and local namespace declaration plus host-health.",
+          "mutating": true,
+          "proof": "the preserved verifier bearer reads exactly every declared object item and host-health"
+        },
+        {
+          "name": "release-verifier",
+          "summary": "Publisher declaration drift wedges release publication, and this step restores the release verifier grant to the exact declared publisher item set.",
+          "mutating": true,
+          "proof": "the preserved release verifier bearer reads exactly every declared publisher item"
+        },
+        {
+          "name": "service-verifier",
+          "summary": "Deployer declaration drift wedges service publication, and this step restores the service verifier grant to the exact declared deployer item set.",
+          "mutating": true,
+          "proof": "the preserved service verifier bearer reads exactly every declared deployer item"
+        },
+        {
+          "name": "storage-root",
+          "summary": "A partial primary and backup authority handoff wedges local object storage, and this step starts the fenced source-preserving reconciliation that restores the declared root.",
+          "mutating": true,
+          "proof": "the durable transaction receipt reports its checkpoint, verified object count, writer fence, and accepted resident owner"
+        }
+      ]
     },
     {
       "name": "oko",
       "summary": "The local Oko autonomy service.",
       "program": "$HOME/.oko/bin/run-autonomy-service",
-      "args": []
+      "args": [],
+      "repair": []
     },
     {
       "name": "transcript-lake",
@@ -80,7 +167,8 @@
       "args": [
         "stream",
         "--json"
-      ]
+      ],
+      "repair": []
     }
   ]
 }

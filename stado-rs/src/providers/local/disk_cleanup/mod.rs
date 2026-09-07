@@ -384,7 +384,7 @@ pub struct CleanupReport {
     /// rather than a measurement it never made. Both readers of the table
     /// already tolerate its absence
     /// ([`crate::deploy::host_cleanup::cleaner_plans`] returns no rows and
-    /// `stado host disk` prints no per-cleaner section), and the `outcome`
+    /// `stado space report` keeps janitor state separate), and the `outcome`
     /// vocabulary is unchanged: `lock_busy`, `interval_noop`,
     /// `invalid_or_unavailable_policy` and `healthy_noop` already say which
     /// non-run this was.
@@ -1320,7 +1320,7 @@ fn write_state(
         by_writer.insert(writer.to_string(), serde_json::json!(attempted_at));
     }
     // `last_attempt_at` keeps its meaning - the last attempt by ANYONE, which
-    // is what `host disk` reports and what `next_pass_at` is computed from -
+    // is what `space report` reports and what `next_pass_at` is computed from -
     // and never moves backwards. An `interval_noop` anchors on its own older
     // stamp, and writing that verbatim would rewind a newer pass by another
     // writer.
@@ -1352,7 +1352,7 @@ fn write_state(
     //
     // Only the time is recorded here, not the holder: a `flock` owner cannot be
     // named from the process that failed to take it, and the one thing in this
-    // product that can name it -- `host disk`'s `cleanup_lock.holders` --
+    // product that can name it -- `space report`'s `cleanup_lock.holders` --
     // already does. What the arithmetic needs is prevented-since-a-known-time,
     // and that is what this is.
     let outcome = report.get("outcome").and_then(Value::as_str);
@@ -1664,7 +1664,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         }),
     };
     // The declared cleaners the pass never reached, kept in the public form
-    // because the reader that needs it is `stado host disk` on another
+    // because `stado space report` may read it on another
     // machine. Filtered to the six known cleaner names: this crosses a host
     // boundary into an operator's terminal, and every other field here is
     // bounded for the same reason.
@@ -2719,7 +2719,7 @@ async fn run_with_lock(
 /// An `outcome` cannot be solved that way, because it is an event and not a
 /// declaration. On 2026-08-31 the agent's pass at 14:55:24Z reported
 /// `interval_noop` with no errors and all six cleaners scanned, and 46 seconds
-/// later `stado host disk` read `invalid_or_unavailable_policy` from the same
+/// later `stado space report` read `invalid_or_unavailable_policy` from the same
 /// path: two processes, opposite verdicts, and the operator's answer decided by
 /// which wrote last. A long-running writer holding a superseded configuration —
 /// or an older binary that rejects a cleaner the registry now declares, which
@@ -2786,10 +2786,10 @@ pub async fn run_cleanup_to_target_once(
 /// cleanup would delete must get an answer rather than `interval_noop`,
 /// and the preview carries zero running jobs because it is not the worker.
 ///
-/// `stado disk-cleanup --dry-run` runs this locally;
-/// `stado host cleanup TARGET --dry-run`
-/// ([`crate::deploy::host_cleanup`]) runs it over ssh on the host being
-/// previewed, which is the only place the host's filesystem exists.
+/// `stado disk-cleanup --dry-run` runs this locally; the `registry_cleanup`
+/// stage of `stado space reclaim TARGET --dry-run`
+/// ([`crate::deploy::host_cleanup`]) runs it on the target whose filesystem is
+/// being previewed.
 pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.

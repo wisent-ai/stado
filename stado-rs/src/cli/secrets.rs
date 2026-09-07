@@ -76,13 +76,16 @@ pub enum SecretsCommands {
     /// and until this command existed nothing said which — the answer lived
     /// in a discovery rule and one environment variable, and it surfaced only
     /// as a refusal from whatever command hit it. On 2026-09-05 that was
-    /// `stado host reconcile-release-verifier`, after two vaults on this
+    /// `stado repair stado --step release-verifier`, after two vaults on this
     /// machine had been claiming one owner for long enough to close the
     /// fleet's release publication boundary.
     ///
     /// Exits non-zero when nothing resolves, so a script can gate on it.
     Vault {
-        /// Emit the state, the resolved path and the candidates as JSON.
+        /// Host-vault operation. Omit to report this machine's authority.
+        #[command(subcommand)]
+        command: Option<CredentialVaultCommands>,
+        /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
     },
@@ -155,6 +158,191 @@ pub enum SecretsCommands {
         #[arg(long, requires = "host")]
         keychain_only: bool,
     },
+    /// Credential item operations on the host that owns the vault.
+    Item {
+        #[command(subcommand)]
+        command: CredentialItemCommands,
+    },
+    /// Credential token operations on the host that owns the vault.
+    Token {
+        #[command(subcommand)]
+        command: CredentialTokenCommands,
+    },
+    /// Which Skarbiec vaults the fleet holds.
+    Vaults {
+        /// Ask one host instead of the whole registry.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Acquisition-scope operations on a host vault.
+    #[command(name = "acquisition-scopes")]
+    AcquisitionScopes {
+        #[command(subcommand)]
+        command: CredentialAcquisitionScopeCommands,
+    },
+    /// Consumer grant operations on a host vault.
+    Grant {
+        #[command(subcommand)]
+        command: CredentialGrantCommands,
+    },
+    /// Backup operations associated with credential custody.
+    Backup {
+        #[command(subcommand)]
+        command: CredentialBackupCommands,
+    },
+    /// Whether login items still hold authenticator seeds their accounts accept.
+    #[command(name = "seed-freshness")]
+    SeedFreshness {
+        #[arg(long)]
+        host: String,
+        /// Judge only this login item instead of every login row.
+        #[arg(long)]
+        login_item: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialItemCommands {
+    /// Store one typed item directly in a host's declared owner vault.
+    Put {
+        #[arg(long)]
+        host: String,
+        item: String,
+        #[arg(long = "type")]
+        item_type: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report one host-vault item without revealing its values.
+    Show {
+        #[arg(long)]
+        host: String,
+        item: String,
+        #[arg(long)]
+        field: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace one host-vault item's tags, or read them when --tags is omitted.
+    Retag {
+        #[arg(long)]
+        host: String,
+        item: String,
+        #[arg(long)]
+        tags: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialTokenCommands {
+    /// Mint a bounded Skarbiec bearer, or register an existing vault field.
+    Mint {
+        #[arg(long)]
+        host: String,
+        consumer: String,
+        #[arg(long)]
+        capabilities: String,
+        #[arg(long)]
+        audience: String,
+        #[arg(long, default_value_t = 31_536_000)]
+        ttl_seconds: u64,
+        #[arg(long)]
+        replace_capabilities: bool,
+        #[arg(long)]
+        token_item: Option<String>,
+        #[arg(long, requires = "token_item")]
+        token_field: Option<String>,
+        #[arg(long, conflicts_with = "token_item")]
+        raw_token: bool,
+        #[arg(long, conflicts_with_all = ["raw_token", "token_item"])]
+        token_file_name: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialVaultCommands {
+    /// Pull a host's Skarbiec mirror into its declared live vault.
+    Sync {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialAcquisitionScopeCommands {
+    /// Deliver and register an acquisition-scope catalog.
+    Sync {
+        #[arg(long)]
+        host: String,
+        source: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialGrantCommands {
+    /// Authorize a consumer to read one field of one item.
+    #[command(name = "item-read")]
+    ItemRead {
+        #[arg(long)]
+        host: String,
+        consumer: String,
+        item: String,
+        #[arg(long)]
+        field: String,
+        #[arg(long)]
+        token_file: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report one consumer's recorded grant.
+    Show {
+        #[arg(long)]
+        host: String,
+        consumer: String,
+        #[arg(long)]
+        token_file: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CredentialBackupCommands {
+    /// Classify a host's local replica against the store it mirrors.
+    Audit {
+        #[arg(long)]
+        host: String,
+        #[arg(
+            long = "object",
+            value_name = "STADO_URI",
+            conflicts_with = "reclaim_twins"
+        )]
+        objects: Vec<String>,
+        #[arg(
+            long = "inventory-namespace",
+            value_name = "NAMESPACE",
+            conflicts_with = "reclaim_twins"
+        )]
+        inventory_namespaces: Vec<String>,
+        #[arg(long = "reclaim-twins")]
+        reclaim_twins: bool,
+        #[arg(long, requires = "reclaim_twins")]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
@@ -163,7 +351,12 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // a grant, a token and a live service, which is exactly the set of
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
-        SecretsCommands::Vault { json } => vault_authority(json),
+        SecretsCommands::Vault { command, json } => match command {
+            None => vault_authority(json),
+            Some(CredentialVaultCommands::Sync { host, check, json }) => {
+                super::host::sync_vault(&host, check, json).await
+            }
+        },
         SecretsCommands::InspectVault {
             vault,
             host,
@@ -205,6 +398,109 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             field,
             output,
         } => mint_acquisition_token(&consumer, &item, &field, &output),
+        SecretsCommands::Item { command } => match command {
+            CredentialItemCommands::Put {
+                host,
+                item,
+                item_type,
+                json,
+            } => super::host::vault_item_put(&host, &item, &item_type, json).await,
+            CredentialItemCommands::Show {
+                host,
+                item,
+                field,
+                json,
+            } => super::host::vault_item_show(&host, &item, field.as_deref(), json).await,
+            CredentialItemCommands::Retag {
+                host,
+                item,
+                tags,
+                json,
+            } => super::host::retag_vault_item(&host, &item, tags.as_deref(), json).await,
+        },
+        SecretsCommands::Token { command } => match command {
+            CredentialTokenCommands::Mint {
+                host,
+                consumer,
+                capabilities,
+                audience,
+                ttl_seconds,
+                replace_capabilities,
+                token_item,
+                token_field,
+                raw_token,
+                token_file_name,
+                json,
+            } => {
+                super::host::vault_token_mint(
+                    &host,
+                    &consumer,
+                    &capabilities,
+                    &audience,
+                    ttl_seconds,
+                    replace_capabilities,
+                    token_item.as_deref(),
+                    token_field.as_deref().unwrap_or("token"),
+                    raw_token,
+                    token_file_name.as_deref(),
+                    json,
+                )
+                .await
+            }
+        },
+        SecretsCommands::Vaults { host, json } => super::host::vaults(host, json).await,
+        SecretsCommands::AcquisitionScopes { command } => match command {
+            CredentialAcquisitionScopeCommands::Sync { host, source } => {
+                super::host::sync_acquisition_scopes(&host, &source).await
+            }
+        },
+        SecretsCommands::Grant { command } => match command {
+            CredentialGrantCommands::ItemRead {
+                host,
+                consumer,
+                item,
+                field,
+                token_file,
+                json,
+            } => {
+                super::host::grant_item_read(&host, &consumer, &item, &field, &token_file, json)
+                    .await
+            }
+            CredentialGrantCommands::Show {
+                host,
+                consumer,
+                token_file,
+                json,
+            } => super::host::grant_show(&host, &consumer, token_file.as_deref(), json).await,
+        },
+        SecretsCommands::Backup { command } => match command {
+            CredentialBackupCommands::Audit {
+                host,
+                objects,
+                inventory_namespaces,
+                reclaim_twins,
+                apply,
+                json,
+            } => {
+                super::host::backup_audit(
+                    &host,
+                    &objects,
+                    &inventory_namespaces,
+                    reclaim_twins,
+                    apply,
+                    json,
+                )
+                .await
+            }
+        },
+        SecretsCommands::SeedFreshness {
+            host,
+            login_item,
+            json,
+        } => {
+            super::seed_freshness::authenticator_seed_freshness(&host, login_item.as_deref(), json)
+                .await
+        }
     }
 }
 

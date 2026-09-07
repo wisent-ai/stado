@@ -1,7 +1,7 @@
 #!/bin/sh
 # Recover the credential path when Skarbiec stalls or Stado retains a closed
-# object boundary after Skarbiec has recovered. Invoked by
-# `stado host recover-skarbiec-audit`.
+# object boundary after Skarbiec has recovered. Invoked by the declared
+# `skarbiec/audit-lock` repair step.
 set -eu
 
 health_url="${SKARBIEC_HEALTH_URL:-http://127.0.0.1:8787/health}"

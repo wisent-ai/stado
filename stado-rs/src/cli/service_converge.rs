@@ -34,13 +34,11 @@
 //!               one. This is the state that hid behind a passing
 //!               `service list` for as long as it took somebody to notice
 //!               the behaviour was old. `--apply` delivers the declared
-//!               version through `stado host release`.
-//!   host-ahead  the host runs a version strictly NEWER than the declared
-//!               one: the declaration is the thing that is stale. Delivering
-//!               the declared version here would DOWNGRADE a live host, so
-//!               `--apply` refuses to touch it and names the
-//!               `stado host declare-version` command that moves the
-//!               declaration to the version the host is actually running.
+//!               version through `stado release host-state --host TARGET --apply`.
+//!   host-ahead  the host runs a version strictly NEWER than the declared one:
+//!               the declaration is stale, and delivering it would DOWNGRADE a
+//!               live host. `--apply` refuses and names the `stado release
+//!               declare-version` command that moves the declaration.
 //!   unknown     the host said nothing usable: the reporter could not run, the
 //!               channel refused, or the artefact carries no
 //!               version metadata at all. Kept apart from both drift verdicts
@@ -69,14 +67,13 @@
 //!
 //! Two things this command deliberately does not do. It never writes the
 //! registry: the declared version is the operator's statement of intent,
-//! published through `stado registry push` (`stado host declare-version`), and
-//! a converge that edited the document to match the host would turn a drift
-//! report into a rubber stamp. And it has no delivery mechanism of its own:
-//! closing the gap is [`crate::deploy::host_release::release_host`], the exact
-//! path `stado host release --binary NAME --version X.Y.Z TARGET` runs, called
-//! in-process. One fetch, one digest check, one staging tree, one `rename(2)`,
-//! one restart — for the command that reports drift and for the command that
-//! delivers, because two ways to put a build on a host is one way too many.
+//! published through `stado release declare-version`, and a convergence that
+//! edited the document to match the host would turn a drift report into a
+//! rubber stamp. Closing the gap is
+//! [`crate::deploy::host_release::release_host`], called in-process by
+//! `stado release host-state --host TARGET --apply`. One fetch, one digest
+//! check, one staging tree, one `rename(2)`, one restart — there is one path
+//! that both reports drift and delivers the declaration.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -100,6 +97,9 @@ pub const HOST_BEHIND: &str = "host-behind";
 pub const HOST_AHEAD: &str = "host-ahead";
 /// Nothing usable came back, so drift is neither confirmed nor ruled out.
 pub const UNKNOWN: &str = "unknown";
+/// The host carries no managed-version declaration. With nothing desired there
+/// is nothing to compare, so this is never drift.
+pub const UNDECLARED: &str = "undeclared";
 /// The host runs bytes this fleet cannot attest: the version they claim has
 /// no delivered copy staged on the host, or the installed file differs from
 /// the staged one it should have been installed from.
@@ -192,6 +192,10 @@ struct Row {
     unit: String,
     /// What launchd (or systemd) says about that unit.
     state: String,
+    /// Whether the installed bytes match the release staged for `version`.
+    attestation: String,
+    /// The delivery receipt carried beside the staged release, or `none`.
+    receipt: String,
     /// The executable the live process under `unit` is running, or `None` when
     /// no process was found to ask about.
     running_binary: Option<String>,
@@ -214,11 +218,14 @@ impl Row {
     fn to_json(&self) -> Value {
         json!({
             "binary": self.binary,
-            "declared_version": self.declared,
-            "installed_version": self.installed,
+            "version": self.installed,
             "root": self.root,
             "unit": self.unit,
             "state": self.state,
+            "attestation": self.attestation,
+            "receipt": self.receipt,
+            "declared_version": self.declared,
+            "installed_version": self.installed,
             "running_binary": self.running_binary,
             "binary_matches_process": self.binary_matches_process,
             "verdict": self.verdict,
@@ -262,7 +269,7 @@ struct Installed {
     receipt: String,
 }
 
-/// One `host release` invocation, run for one `host-behind` binary.
+/// One delivery run for a `host-behind` binary.
 struct Released {
     binary: String,
     version: String,
@@ -283,9 +290,9 @@ impl Released {
 
 /// What `--apply` found behind its declaration and could do nothing about,
 /// kept apart from the
-/// deliveries on purpose: a binary `host release` does not carry produced no
-/// delivery at all, and counting it as a failed one would report an attempt
-/// that never happened.
+/// deliveries on purpose: a binary the release declaration cannot carry
+/// produced no delivery at all, and counting it as a failed one would report
+/// an attempt that never happened.
 struct Undeliverable {
     binary: String,
     detail: String,
@@ -388,6 +395,18 @@ pub async fn converge_result(
         .await
         .map_err(click)?;
     let declared = declaring(&resolved, binary)?;
+    if declared.is_empty() {
+        return Ok(ServiceConvergeResult::new(resolved.name, None, Vec::new()));
+    }
+    crate::deploy::products::managed_platform(resolved.release_platform.trim()).map_err(
+        |error| {
+            CmdError::click(format!(
+                "{} declares release_platform {:?}, which cannot carry a managed release: {}; \
+             set targets[].release_platform to a published platform",
+                resolved.name, resolved.release_platform, error
+            ))
+        },
+    )?;
     let runner = production_runner();
 
     let reported = read_installed(&resolved, &runner).await;
@@ -398,8 +417,8 @@ pub async fn converge_result(
     }
 
     let mut pass = apply_releases(&resolved.name, &rows, &runner).await;
-    // Re-read rather than trust delivery's own word for it. A `host release`
-    // that reports `released` has testified about its own work, which is the
+    // Re-read rather than trust delivery's own word. A delivery that reports
+    // `released` has testified about its own work, which is the
     // one witness that cannot establish the fact being claimed; the version the
     // host reports afterwards comes back through the same reporter that
     // produced the drift finding, so a successful delivery and a confirmed
@@ -457,16 +476,15 @@ pub async fn converge(
 /// The binaries TARGET declares a version for, narrowed by BINARY.
 ///
 /// Read straight off `targets[].managed_versions` through
-/// [`ComputeTarget::declared_version`], the same accessor `host inventory` and
-/// `host release` judge against: two readings of the declaration that can
-/// disagree turn "the host is behind" and "the delivery is refused" into
-/// independent answers to one question.
+/// [`ComputeTarget::declared_version`], the same accessor the release delivery
+/// judges against: two readings of the declaration that can disagree turn
+/// "the host is behind" and "the delivery is refused" into independent
+/// answers to one question.
 ///
 /// A declared version that is not an exact semantic version is refused here,
 /// before the host is contacted at all, and so is a key someone emptied instead
-/// of removing. `host release` refuses to deliver either one, so a comparison
-/// against them could only ever produce drift no command in this pack can
-/// close.
+/// of removing. Delivery refuses either one, so a comparison against them could
+/// only ever produce drift no command in this pack can close.
 fn declaring(
     target: &ComputeTarget,
     binary: Option<&str>,
@@ -478,27 +496,20 @@ fn declaring(
         .map(|(name, version)| (name.clone(), version.clone()))
         .collect();
     if declared.is_empty() {
-        return Err(CmdError::click(match binary {
-            Some(query) => format!(
-                "{} declares no {query} version; `stado host declare-version {} \
-                 --binary {query} --version X.Y.Z` states one. Delivery carries out a \
-                 declaration, it does not stand in for one",
+        if let Some(query) = binary {
+            return Err(CmdError::click(format!(
+                "{} declares no {query} version; add it to targets[].managed_versions with \
+                 `stado release declare-version --host {} --binary {query} --version X.Y.Z`",
                 target.name, target.name
-            ),
-            None => format!(
-                "{} declares no {} at all, so nothing on it has a version to be in \
-                 sync with; declare one with `stado host declare-version`",
-                target.name,
-                host_release::MANAGED_VERSIONS_KEY
-            ),
-        }));
+            )));
+        }
+        return Ok(declared);
     }
     for (name, version) in &declared {
         if !host_release::is_exact_semver(version) {
             return Err(CmdError::click(format!(
-                "declared {name} version {version:?} on {} is not an exact \
-                 semantic version such as 0.5.1; fix the declaration before comparing \
-                 anything against it",
+                "{} declares {name} version {version:?}, which is not an exact semantic version; \
+                 set targets[].managed_versions.{name} to a version such as 0.5.1",
                 target.name
             )));
         }
@@ -865,7 +876,7 @@ async fn artefact_version(
 ///
 /// Host-local and cheap: `cmp -s` against
 /// `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, which
-/// `host release` writes and verifies against the canonical manifest's
+/// release delivery writes and verifies against the canonical manifest's
 /// SHA-256 before it installs anything. No network, no manifest fetch, and no
 /// second opinion needed about what a version string means — a local build
 /// claiming a released version has no staged copy to match.
@@ -888,7 +899,7 @@ async fn attest_installed(
     let staged = format!("{coordinate}/{binary}");
     let quoted_staged = crate::deploy::shlex_quote(&staged);
     if !host_channel::remote_test(target, &format!("-f {quoted_staged}"), runner).await? {
-        // `host release` creates `<binary>/<version>/<platform>/` only when it
+        // Release delivery creates `<binary>/<version>/<platform>/` only when it
         // stages, so the binary directory existing at all is the record that
         // this host has been delivered to before. Its absence is bootstrap,
         // not tampering.
@@ -915,7 +926,7 @@ async fn attest_installed(
     if !same {
         return Ok((ATTEST_DIFFERS, String::new()));
     }
-    // The receipt `host release` leaves beside the staged copy, when there is
+    // The receipt release delivery leaves beside the staged copy, when there is
     // one. A delivery made before that format has none, and its absence is
     // "installed before receipts" rather than a finding: the byte comparison
     // above has already attested these bytes without it.
@@ -1183,7 +1194,7 @@ fn verdict_rows(
                     "the host runs {} and this binary has never been delivered here: \
                      $HOME/.stado/releases holds no version of it at all. The bootstrap \
                      installer stages nothing, so this is the expected reading for a host \
-                     that has not had a `stado host release` yet — it is not evidence that \
+                     that has not had a release delivery yet — it is not evidence that \
                      anything was replaced",
                     installed.as_deref().unwrap_or(UNKNOWN)
                 )),
@@ -1205,6 +1216,11 @@ fn verdict_rows(
                     root: entry.map(|entry| entry.root.clone()).unwrap_or_default(),
                     unit: entry.map(|entry| entry.unit.clone()).unwrap_or_default(),
                     state: entry.map(|entry| entry.state.clone()).unwrap_or_default(),
+                    attestation: attestation.to_string(),
+                    receipt: entry
+                        .map(|entry| entry.receipt.clone())
+                        .filter(|receipt| !receipt.is_empty())
+                        .unwrap_or_else(|| String::from(NONE)),
                     running_binary: None,
                     binary_matches_process: None,
                 };
@@ -1228,7 +1244,7 @@ fn verdict_rows(
                         format!(
                             "the host runs {version}, older than the declared \
                              {declared_version}; --apply delivers the declared one \
-                             through `stado host release`"
+                             through `stado release host-state`"
                         ),
                     ),
                     // The declaration is behind the host: delivering it would
@@ -1297,6 +1313,14 @@ fn verdict_rows(
                 root: cell(entry.map(|entry| entry.root.as_str())),
                 unit: cell(entry.map(|entry| entry.unit.as_str())),
                 state: cell(entry.map(|entry| entry.state.as_str())),
+                attestation: entry
+                    .map(|entry| entry.attestation.clone())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| String::from(ATTEST_UNKNOWN)),
+                receipt: entry
+                    .map(|entry| entry.receipt.clone())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| String::from(NONE)),
                 // Filled by [`attach_processes`], which asks the host a second
                 // question. Left empty here so the version comparison — the
                 // answer this command exists for — never depends on a process
@@ -1360,12 +1384,10 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
 /// bytes the fleet cannot attest, and refuse only what a delivery would take
 /// backwards.
 ///
-/// This is `stado host release --binary NAME --version X.Y.Z TARGET`, called
+/// This is the delivery owned by `stado release host-state --apply`, called
 /// in-process rather than reimplemented: the digest check against the canonical
-/// release manifest, the versioned staging tree, the `rename(2)` activation and
-/// the unit restart all happen exactly once in this pack, and a second path to
-/// "put a build on a host" is how two of them come to disagree about what a
-/// verified artifact is.
+/// release manifest, versioned staging, activation, and unit restart all happen
+/// exactly once.
 ///
 /// A binary the registry declares but no product declaration carries is
 /// recorded as undeliverable and never attempted: that refusal is made
@@ -1381,21 +1403,16 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
 /// `host-ahead` rows are refused outright: the host runs NEWER than the
 /// declaration, so delivering the declared version is a downgrade of a live
 /// host, and a converge that performs one is the registry's staleness shipped
-/// as an outage. Each refusal records the exact `stado host declare-version`
+/// as an outage. Each refusal records the exact `stado release declare-version`
 /// command that moves the declaration to the observed version instead.
 async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedPass {
     let mut pass = AppliedPass::default();
     // An unattested binary is delivered, not reported at.
     //
-    // Until 2026-09-02 every `unattested` row was refused with a remediation
-    // naming `stado host release TARGET --binary X --version Y` — which is
-    // `host_release::release_host`, the function this very command calls three
-    // lines further down for a host that is merely behind. So `--apply` printed
-    // the command it owns and declined to run it, and the 0.13.46 train died on
-    // that twice: `deploy-fleet` declared 0.13.46 for charless-mac-mini, found
-    // it running an unattested 0.13.45, refused, and exited non-zero, while the
-    // delivery that fixed it arrived minutes later from the host's own release
-    // agent. Bytes with no provenance are exactly what a delivery replaces.
+    // Earlier versions refused every unattested row even though delivery is
+    // exactly what replaces bytes the fleet cannot attest. This path now owns
+    // that delivery. Only an unattested binary strictly ahead of its
+    // declaration remains refused, because replacing it would be a downgrade.
     //
     // The one case still refused is a host strictly AHEAD of its declaration:
     // there a delivery takes a live host backwards on a stale declaration, and
@@ -1414,9 +1431,9 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
                 declared: row.declared.clone(),
                 installed: row.installed_cell().to_string(),
                 remediation: format!(
-                    "stado host release {target} --binary {} --version {} (deliver a published \
-                     version; do NOT declare-version onto bytes the fleet cannot attest)",
-                    row.binary, row.declared
+                    "stado release host-state --host {target} --binary {} --apply \
+                     (deliver a published version; do not declare unattested bytes)",
+                    row.binary
                 ),
             });
             continue;
@@ -1431,7 +1448,7 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
     }
     for row in rows.iter().filter(|row| row.verdict == HOST_AHEAD) {
         let remediation = format!(
-            "stado host declare-version {target} --binary {} --version {}",
+            "stado release declare-version --host {target} --binary {} --version {}",
             row.binary,
             row.installed_cell()
         );
@@ -1564,8 +1581,8 @@ async fn deliver(target: &str, row: &Row, runner: &Runner, pass: &mut AppliedPas
                 status,
                 host_release::RELEASED_STATUS | host_release::ALREADY_ACTIVE_STATUS
             );
-            // `host release` reports host-side refusals as a structured
-            // `Ok(report)`, with any diagnostic in `error`. Reducing that
+            // Delivery reports host-side refusals as a structured `Ok(report)`,
+            // with any diagnostic in `error`. Reducing that
             // report to its status discarded the only place a cause could be
             // retained: historical trains printed only `detail: "failed"`,
             // which does not establish whether the inner report had an error.
@@ -1612,6 +1629,7 @@ fn report_json(target: &str, applied: Option<&AppliedPass>, rows: &[Row]) -> Val
     let pass = applied.unwrap_or(&empty);
     json!({
         "target": target,
+        "state": if rows.is_empty() { UNDECLARED } else { "declared" },
         "applied": applied.is_some(),
         "releases": pass.releases.iter().map(Released::to_json).collect::<Vec<Value>>(),
         "undeliverable": pass
@@ -1633,20 +1651,27 @@ fn emit(result: &ServiceConvergeResult, json_output: bool) -> Result<(), CmdErro
         println!("{}", serde_json::to_string_pretty(&result.report_json())?);
         return Ok(());
     }
-    println!(
-        "{:<20} {:<12} {:<12} {:<9} {:<40} {:<10} {:<8} DETAIL",
-        "BINARY", "DECLARED", "INSTALLED", "VERDICT", "ROOT", "STATE", "PROCESS"
-    );
+    if rows.is_empty() {
+        println!(
+            "target={} state={UNDECLARED}: this host declares no managed versions; \
+             add them to targets[].managed_versions",
+            result.target
+        );
+        return Ok(());
+    }
     for row in rows {
         println!(
-            "{:<20} {:<12} {:<12} {:<9} {:<40} {:<10} {:<8} {}",
+            "binary={} version={} root={} unit={} state={} attestation={} receipt={} \
+             verdict={} declared={} detail={}",
             row.binary,
-            row.declared,
             row.installed_cell(),
-            row.verdict,
             row.root,
+            row.unit,
             row.state,
-            row.process_cell(),
+            row.attestation,
+            row.receipt.replace(' ', "_"),
+            row.verdict,
+            row.declared,
             row.detail
         );
     }
@@ -1684,13 +1709,6 @@ fn emit(result: &ServiceConvergeResult, json_output: bool) -> Result<(), CmdErro
     }
     for entry in &pass.undeliverable {
         eprintln!("{}: {}", entry.binary, entry.detail);
-    }
-    for entry in &pass.refused {
-        eprintln!(
-            "{}: runs {}, newer than the declared {} — refused to downgrade the \
-             host; move the declaration instead: {}",
-            entry.binary, entry.installed, entry.declared, entry.remediation
-        );
     }
     Ok(())
 }
@@ -1737,8 +1755,8 @@ fn report_gate_diagnostics(rows: &[Row], exit_code: i32) {
             "{unattested} declared binary/binaries run bytes this fleet cannot attest: \
              the version they claim has no delivered copy staged on the host, or the \
              installed file is not the one that was staged. A version string is not \
-             provenance. Deliver a published version with `stado host release`; do not \
-             move the declaration onto them"
+             provenance. Deliver with `stado release host-state --apply`; do not move \
+             the declaration onto them"
         );
     }
     if behind != 0 {
@@ -1751,8 +1769,7 @@ fn report_gate_diagnostics(rows: &[Row], exit_code: i32) {
         eprintln!(
             "{ahead} declared binary/binaries run a version NEWER than the \
              registry declares: the declaration is stale, not the host; \
-             `stado host declare-version` moves it, --apply will not touch \
-             these hosts"
+             `stado release declare-version` moves it, --apply will not touch these hosts"
         );
     }
 }
@@ -1794,6 +1811,13 @@ fn apply_gate_diagnostics(rows: &[Row], pass: &AppliedPass, exit_code: i32) {
             row.installed_cell()
         );
     }
+    for entry in &pass.refused {
+        eprintln!(
+            "{}: runs {}, newer than the declared {} — refused to downgrade the \
+             host; move the declaration instead: {}",
+            entry.binary, entry.installed, entry.declared, entry.remediation
+        );
+    }
     // A failed delivery remains a failed apply even when the final read finds
     // matching bytes (for example because another release actor converged the
     // host concurrently). The delivery receipt is an asserted part of this
@@ -1815,7 +1839,7 @@ fn apply_gate_diagnostics(rows: &[Row], pass: &AppliedPass, exit_code: i32) {
         }
     } else {
         effort.push_str(&format!(
-            "; {} host-behind binary/binaries are not deliverable by `stado host release`",
+            "; {} host-behind binary/binaries have no declared release product",
             pass.undeliverable.len()
         ));
     }

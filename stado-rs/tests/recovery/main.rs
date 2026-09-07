@@ -399,9 +399,14 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// The `host recover` document, parsed out of what the command printed.
+/// Parse the single JSON document printed by the command under test.
 fn document(out: &Output) -> serde_json::Value {
-    serde_json::from_str(&stdout(out)).expect("host recover prints one JSON document")
+    serde_json::from_str(&stdout(out)).expect("command prints one JSON document")
+}
+
+fn host_repair_document(out: &Output) -> serde_json::Value {
+    let report = document(out);
+    report["steps"][0]["observation"].clone()
 }
 
 /// `service restart` of a system LaunchDaemon whose process the approved user
@@ -569,20 +574,28 @@ fn service_stop_refuses_a_system_daemon_without_a_host_password() {
     );
 }
 
-/// `host recover` used to print `status: ok` over a managed unit it had done
-/// nothing about. The unit it skipped, and why, are now in the document, and
-/// the status and exit code carry it.
+/// The declared host repair reports every managed unit it could not bootstrap,
+/// and its status and exit code carry that refusal.
 #[test]
 fn host_recover_reports_the_unit_it_could_not_bootstrap() {
     let host = Harness::new();
 
-    let out = host.stado(&["host", "recover", "fake-mini"]);
+    let out = host.stado(&[
+        "repair",
+        "stado",
+        "--step",
+        "host",
+        "--target",
+        "fake-mini",
+        "--apply",
+        "--json",
+    ]);
     assert!(
         !out.status.success(),
         "a pass that left a managed unit unloaded is not a success: {}",
         stdout(&out)
     );
-    let report = document(&out);
+    let report = host_repair_document(&out);
     assert_eq!(report["status"], "blocked");
     assert_eq!(report["agents"][BEACON], "needs_privileged_bootstrap");
     assert_eq!(report["blockers"], serde_json::json!([]));
@@ -610,9 +623,18 @@ fn host_recover_carries_a_missing_unit_file_as_a_blocker() {
     let host = Harness::new();
     host.remove_daemon(BEACON);
 
-    let out = host.stado(&["host", "recover", "fake-mini"]);
+    let out = host.stado(&[
+        "repair",
+        "stado",
+        "--step",
+        "host",
+        "--target",
+        "fake-mini",
+        "--apply",
+        "--json",
+    ]);
     assert!(!out.status.success());
-    let report = document(&out);
+    let report = host_repair_document(&out);
     assert_eq!(report["status"], "blocked");
     assert_eq!(report["agents"][BEACON], "missing_plist");
     assert_eq!(report["skipped"], serde_json::json!([]));
@@ -642,14 +664,23 @@ fn host_recover_still_reloads_an_undeclared_per_login_agent() {
     host.host("fake-agent-mini");
     host.declare_agent(BEACON);
 
-    let out = host.stado(&["host", "recover", "fake-agent-mini"]);
+    let out = host.stado(&[
+        "repair",
+        "stado",
+        "--step",
+        "host",
+        "--target",
+        "fake-agent-mini",
+        "--apply",
+        "--json",
+    ]);
     assert!(
         out.status.success(),
         "a pass with nothing skipped and nothing blocking must exit 0: {}{}",
         stdout(&out),
         stderr(&out)
     );
-    let report = document(&out);
+    let report = host_repair_document(&out);
     assert_eq!(report["status"], "ok");
     assert_eq!(report["agents"][BEACON], "restarted");
     assert_eq!(report["skipped"], serde_json::json!([]));

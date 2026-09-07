@@ -160,16 +160,19 @@ async fn resolver_public_key(
         .filter(|key| !key.is_empty())
         .ok_or_else(|| {
             DeployError(format!(
-                "{}: the target reported no resolver public key",
-                target.name
+                "{}: the target reported no resolver public key; ensure its HOME is writable and run `stado route key {}` again",
+                target.name, target.name
             ))
         })?;
     Ok((public_key, minted))
 }
 
-/// Authorize TARGET's resolver on the service-directory authority host.
-pub async fn authorize(target_name: &str) -> Result<Value, DeployError> {
-    let registry = host_channel::canonical_registry().await?;
+/// Authorize TARGET's resolver on the service-directory authority from this
+/// exact registry read.
+pub async fn authorize(
+    registry: &crate::targets::Registry,
+    target_name: &str,
+) -> Result<Value, DeployError> {
     let directory = registry.service_directory.as_ref().ok_or_else(|| {
         DeployError("the canonical registry carries no service directory".to_string())
     })?;
@@ -184,8 +187,8 @@ pub async fn authorize(target_name: &str) -> Result<Value, DeployError> {
              canonical store directly and opens no session to authorize"
         )));
     }
-    let target = host_channel::resolve_target(&registry, target_name)?.clone();
-    let authority = host_channel::resolve_target(&registry, &authority_name)?.clone();
+    let target = host_channel::resolve_target(registry, target_name)?.clone();
+    let authority = host_channel::resolve_target(registry, &authority_name)?.clone();
 
     let (public_key, minted) = resolver_public_key(&target).await?;
     // The program is a compile-time constant in argv and the key rides stdin:

@@ -382,7 +382,7 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         // `queue_workdirs` is the exception in the other direction, and it is
         // not a weaker rule but a different one. A job workdir is safe to
         // remove when its job is terminal, which the janitor establishes from
-        // the queue store's own `queue` and `running` listings. `host reclaim`
+        // the queue store's own `queue` and `running` listings. `space reclaim`
         // delegates these directories to that same locked janitor rather than
         // maintaining a second sweep. Age adds nothing to the terminal gate
         // and a floor would subtract: on the always-on mac the workdirs that

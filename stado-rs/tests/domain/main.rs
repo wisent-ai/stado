@@ -878,10 +878,8 @@ fn the_disowned_sweep_ends_only_the_processes_of_the_unit_it_restarts() {
     );
 }
 
-/// `host recover` used to print `status: ok` with `launchd_domain: {name:
-/// user/501, status: fallback}` underneath it over a unit it had not loaded.
-/// The fallback is the reason that unit cannot be loaded, so it is a blocker
-/// with that reason, and the pass is `blocked`.
+/// The declared host repair carries a launchd domain fallback as a blocker,
+/// because a fallback is the reason that unit cannot be loaded.
 #[test]
 fn host_recover_carries_the_domain_fallback_as_a_blocker() {
     let host = Harness::new();
@@ -890,14 +888,24 @@ fn host_recover_carries_the_domain_fallback_as_a_blocker() {
     let beacon = host.declare_agent(BEACON, &["host-health-beacon"]);
     host.declare_registry(&[(BEACON, &beacon)]);
 
-    let out = host.stado(&["host", "recover", "fake-agent"]);
+    let out = host.stado(&[
+        "repair",
+        "stado",
+        "--step",
+        "host",
+        "--target",
+        "fake-agent",
+        "--apply",
+        "--json",
+    ]);
     assert!(
         !out.status.success(),
         "a pass that loaded no managed unit is not a success: {}",
         stdout(&out)
     );
-    let document: serde_json::Value =
-        serde_json::from_str(&stdout(&out)).expect("host recover prints one JSON document");
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("repair prints one JSON document");
+    let document = &report["steps"][0]["observation"];
     assert_eq!(document["status"], "blocked");
     assert_eq!(
         document["launchd_domain"],
@@ -940,15 +948,25 @@ fn host_recover_reports_ok_when_the_agent_domain_is_the_graphical_one() {
     let beacon = host.declare_agent(BEACON, &["host-health-beacon"]);
     host.declare_registry(&[(BEACON, &beacon)]);
 
-    let out = host.stado(&["host", "recover", "fake-agent"]);
+    let out = host.stado(&[
+        "repair",
+        "stado",
+        "--step",
+        "host",
+        "--target",
+        "fake-agent",
+        "--apply",
+        "--json",
+    ]);
     assert!(
         out.status.success(),
         "a pass with nothing skipped and nothing blocking must exit 0: {}{}",
         stdout(&out),
         stderr(&out)
     );
-    let document: serde_json::Value =
-        serde_json::from_str(&stdout(&out)).expect("host recover prints one JSON document");
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("repair prints one JSON document");
+    let document = &report["steps"][0]["observation"];
     assert_eq!(document["status"], "ok");
     assert_eq!(document["agents"][BEACON], "restarted");
     assert_eq!(document["launchd_domain"]["name"], "gui/501");

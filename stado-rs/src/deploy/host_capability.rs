@@ -102,8 +102,7 @@ pub async fn resolve(
     if !host_channel::remote_test(target, &format!("-x {}", shlex_quote(&skarbiec)), runner).await?
     {
         return Err(DeployError(format!(
-            "{}: no Skarbiec binary at {skarbiec}, so no capability can be issued where it \
-             would be redeemed",
+            "{}: no Skarbiec binary at {skarbiec}; install Skarbiec at that path on the declared active host",
             target.name
         )));
     }

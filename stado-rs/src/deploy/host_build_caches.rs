@@ -156,6 +156,13 @@ pub struct BuildCacheReport {
     pub error: Option<String>,
 }
 
+/// The resolved registry declaration that drove one cache read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildCacheDeclaration {
+    pub root: String,
+    pub min_age_seconds: i64,
+}
+
 /// Reject a root that is not an absolute path, so a relative argument cannot
 /// resolve against whatever directory the remote shell happens to start in.
 pub fn validate_root(root: &str) -> Result<(), DeployError> {
@@ -215,6 +222,67 @@ pub fn parse_report(stdout: &str) -> Vec<CacheEntry> {
 /// Re-exported from [`crate::deploy::host_channel`], which now owns the one
 /// definition of "this machine" the whole deploy family shares.
 use crate::deploy::host_channel::target_is_this_host as target_is_local;
+
+/// Resolve the build-cache cleaner from the target's own cleanup declaration.
+pub async fn declared_for_target(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<BuildCacheDeclaration, DeployError> {
+    let policy = target.disk_cleanup.as_ref().ok_or_else(|| {
+        DeployError(format!(
+            "{} declares no disk cleanup policy; add it to registry targets[].disk_cleanup",
+            target.name
+        ))
+    })?;
+    let cleaner = policy.cleaners.get("build_caches").ok_or_else(|| {
+        DeployError(format!(
+            "{} declares no build cache cleaner; add it to registry targets[].disk_cleanup.cleaners.build_caches",
+            target.name
+        ))
+    })?;
+    let configured = cleaner.root.as_deref();
+    let root = match configured {
+        Some(root) if root.starts_with('/') => root.to_string(),
+        Some("~") => host_channel::remote_home(target, runner).await?,
+        Some(root) if root.starts_with("~/") => {
+            let home = host_channel::remote_home(target, runner).await?;
+            format!("{home}/{}", root.trim_start_matches("~/"))
+        }
+        Some(root) => {
+            return Err(DeployError(format!(
+                "{} declares build cache root {root:?} outside an absolute or home-relative path; fix registry targets[].disk_cleanup.cleaners.build_caches.root",
+                target.name
+            )))
+        }
+        None => host_channel::remote_home(target, runner).await?,
+    };
+    Ok(BuildCacheDeclaration {
+        root,
+        min_age_seconds: cleaner.min_age_seconds,
+    })
+}
+
+/// Read cache verdicts from one already-resolved cleaner declaration.
+pub async fn report_declaration_on_host(
+    target: &ComputeTarget,
+    declaration: &BuildCacheDeclaration,
+    runner: &Runner,
+) -> BuildCacheReport {
+    let min_age_days = declaration
+        .min_age_seconds
+        .saturating_sub(1)
+        .div_euclid(86_400)
+        .to_string();
+    run_on_host(
+        target,
+        &declaration.root,
+        &min_age_days,
+        false,
+        false,
+        runner,
+    )
+    .await
+}
 
 /// Report or prune on one registry host.
 pub async fn run_on_host(

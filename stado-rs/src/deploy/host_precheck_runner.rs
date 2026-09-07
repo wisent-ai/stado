@@ -1,12 +1,14 @@
-//! Rust-owned lifecycle for the isolated GitHub pre-check runner pool.
+//! Rust-owned lifecycle for GitHub runner profiles declared by the fleet.
 //!
-//! Stado resolves the host from the canonical registry, obtains a short-lived
-//! GitHub registration token through Skarbiec, and sends one fixed installer
-//! program over the audited host channel. No Python helper or operator shell is
-//! part of the lifecycle.
+//! Stado selects a profile from the compiled declaration, resolves the host
+//! from the canonical registry, obtains a short-lived GitHub registration token
+//! through Skarbiec, and sends one fixed installer program over the audited host
+//! channel. No Python helper or operator shell is part of the lifecycle.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::{
@@ -15,6 +17,7 @@ use base64::{
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{Ed25519KeyPair, KeyPair};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{host_channel, production_runner, CommandOutput, DeployError, Runner};
@@ -22,14 +25,8 @@ use crate::targets::ComputeTarget;
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
 pub const GITHUB_CREDENTIAL_ITEM: &str = "GITHUB_TOKEN";
-pub const RUNNER_GROUP: &str = "stado-precheck";
-pub const RUNNER_USER: &str = "stado-precheck";
 pub const PROBIERZ_AGENT_ID: &str = "probierz";
 pub const PROBIERZ_AGENT_RESOURCE: &str = "agent:probierz";
-pub const LINUX_KRONIKA_AGENT_SECRET_FILE: &str =
-    "/opt/wisent/stado-precheck-runner/.stado/kronika-agent-auth-secret";
-pub const MACOS_KRONIKA_AGENT_SECRET_FILE: &str =
-    "/Users/Shared/stado-precheck-runner/.stado/kronika-agent-auth-secret";
 pub const RUNNER_VERSION: &str = "2.336.0";
 pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d";
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
@@ -59,49 +56,192 @@ struct BramaSkarbiecContext {
     home: String,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RunnerProfile {
-    kind: &'static str,
-    slug: &'static str,
-    group: &'static str,
-    labels: &'static str,
+/// The compiled declaration that makes runner kinds data rather than commands.
+pub const DECLARATION_PATH: &str = "stado-rs/data/runner-profiles.json";
+const DECLARATION: &str = include_str!("../../data/runner-profiles.json");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerProfileDeclaration {
+    pub schema_version: u64,
+    pub profiles: Vec<RunnerProfile>,
 }
 
-/// The one runner a host carries.
-///
-/// It holds the union of every label the fleet's workflows ask for, so one
-/// registration answers all of them and a runner takes one job at a time:
-/// `stado-control-plane` (Stado's own deploy and publish jobs),
-/// `stado-release` (Brama and Wisent Backend release jobs), `stado-publisher`
-/// and `stado` (the desktop publisher), and `stado-precheck` (the Probierz and
-/// Kronika evidence gate, whose reusable workflow also defaults its Brama
-/// route file to this runner's root — which is why the slug stays
-/// `stado-precheck` and every consumer keeps working unchanged).
-///
-/// Five separate runners used to serve those five label sets on one machine,
-/// three of them under the same account with the same access, each installed
-/// when a repository needed CI. Nothing coordinated them: GitHub hands a job
-/// to whichever runner is idle, Stado's slot cap governs only its own queue,
-/// and on 2026-09-06 the machine's free space fell from 10.6 GiB to 4.9 GiB in
-/// twenty minutes until no .NET runner on it could start at all. One runner
-/// bounds that by construction.
-///
-/// The group is `Default` because a job can only reach a runner its
-/// repository's group allows, and one runner serving every repository has to
-/// be in the group every repository has.
-const PRECHECK: RunnerProfile = RunnerProfile {
-    kind: "fleet",
-    slug: "stado-precheck",
-    group: "Default",
-    labels: "stado,stado-precheck,stado-release,stado-publisher,stado-control-plane",
-};
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerProfile {
+    pub name: String,
+    pub slug: String,
+    pub labels: Vec<String>,
+    pub github_runner_group: String,
+    pub unit_label: String,
+    pub installers: BTreeMap<String, String>,
+    pub secrets: Vec<String>,
+    pub accepts_repository_scope: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub developer_id_account_item: Option<String>,
+}
 
-const PUBLISHER: RunnerProfile = RunnerProfile {
-    kind: "publisher",
-    slug: "stado-publisher",
-    group: "Default",
-    labels: "stado,stado-publisher",
-};
+impl RunnerProfile {
+    fn labels_text(&self) -> String {
+        self.labels.join(",")
+    }
+
+    fn installer_kind(&self, platform: &str) -> Result<&str, DeployError> {
+        self.installers
+            .get(platform)
+            .map(String::as_str)
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "runner profile '{}' declares no installer for '{platform}'; add it to {DECLARATION_PATH}",
+                    self.name
+                ))
+            })
+    }
+
+    fn needs_kronika(&self) -> bool {
+        self.secrets.iter().any(|secret| secret == "probierz-agent")
+    }
+
+    fn needs_publisher_bootstrap(&self) -> bool {
+        self.secrets
+            .iter()
+            .any(|secret| secret == "SPARKLE_PRIVATE_KEY")
+    }
+}
+
+fn parse_declaration() -> Result<RunnerProfileDeclaration, String> {
+    let declaration: RunnerProfileDeclaration = serde_json::from_str(DECLARATION)
+        .map_err(|error| format!("{DECLARATION_PATH} is invalid: {error}"))?;
+    if declaration.schema_version != 1 {
+        return Err(format!(
+            "{DECLARATION_PATH} schema_version is {}, expected 1",
+            declaration.schema_version
+        ));
+    }
+    if declaration.profiles.is_empty() {
+        return Err(format!(
+            "{DECLARATION_PATH} declares no runner profiles; add at least one profile"
+        ));
+    }
+    let mut names = BTreeSet::new();
+    let mut slugs = BTreeSet::new();
+    for (index, profile) in declaration.profiles.iter().enumerate() {
+        let location = format!("{DECLARATION_PATH}.profiles[{index}]");
+        if profile.name.is_empty()
+            || !profile
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(format!(
+                "{location}.name must be a lowercase runner profile identifier"
+            ));
+        }
+        if !names.insert(profile.name.as_str()) {
+            return Err(format!(
+                "{location}.name duplicates runner profile {:?}",
+                profile.name
+            ));
+        }
+        if profile.slug.is_empty() || !slugs.insert(profile.slug.as_str()) {
+            return Err(format!(
+                "{location}.slug must be a non-empty unique runner slug"
+            ));
+        }
+        if profile.labels.is_empty()
+            || profile.github_runner_group.is_empty()
+            || profile.unit_label.is_empty()
+        {
+            return Err(format!(
+                "{location} must declare labels, github_runner_group, and unit_label"
+            ));
+        }
+        let labels = profile.labels.iter().collect::<BTreeSet<_>>();
+        if labels.len() != profile.labels.len() {
+            return Err(format!("{location}.labels contains a duplicate label"));
+        }
+        let secrets = profile.secrets.iter().collect::<BTreeSet<_>>();
+        if secrets.len() != profile.secrets.len() {
+            return Err(format!("{location}.secrets contains a duplicate secret"));
+        }
+        if profile.needs_publisher_bootstrap()
+            && profile
+                .developer_id_account_item
+                .as_deref()
+                .unwrap_or("")
+                .is_empty()
+        {
+            return Err(format!(
+                "{} declares no developer_id_account_item; add it to {DECLARATION_PATH}",
+                profile.name
+            ));
+        }
+        for platform in ["darwin-arm64", "linux-amd64"] {
+            let kind = profile.installers.get(platform).ok_or_else(|| {
+                format!(
+                    "{location}.installers declares no {platform}; add it to {DECLARATION_PATH}"
+                )
+            })?;
+            let expected_suffix = if platform == "darwin-arm64" {
+                "-launchd"
+            } else {
+                "-systemd"
+            };
+            if !kind.ends_with(expected_suffix) {
+                return Err(format!(
+                    "{location}.installers.{platform} is {kind:?}, expected an installer ending in {expected_suffix:?}"
+                ));
+            }
+        }
+    }
+    Ok(declaration)
+}
+
+static RUNNER_PROFILES: LazyLock<Result<RunnerProfileDeclaration, String>> =
+    LazyLock::new(parse_declaration);
+
+pub fn runner_declaration() -> Result<&'static RunnerProfileDeclaration, DeployError> {
+    RUNNER_PROFILES
+        .as_ref()
+        .map_err(|error| DeployError(error.clone()))
+}
+
+pub fn runner_profile(name: &str) -> Result<&'static RunnerProfile, DeployError> {
+    runner_declaration()?
+        .profiles
+        .iter()
+        .find(|profile| profile.name == name)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "runner profile '{name}' is not declared; add it to {DECLARATION_PATH}"
+            ))
+        })
+}
+async fn runner_target(name: &str) -> Result<ComputeTarget, DeployError> {
+    match host_channel::canonical_target(name).await {
+        Ok(target) => Ok(target),
+        Err(error) => {
+            let detail = error.to_string();
+            if detail.contains("is not in the canonical registry") {
+                return Err(DeployError(format!(
+                    "{name} declares no host target; add it to the canonical fleet registry"
+                )));
+            }
+            if detail.contains("is not a local host") {
+                return Err(DeployError(format!(
+                    "{name} declares no local host provider; set its kind to a local host capability in the canonical fleet registry or select a local host target"
+                )));
+            }
+            if detail.contains("has no registry-managed ssh destination and is not this host") {
+                return Err(DeployError(format!(
+                    "{name} declares no reachable host destination; add a registry-managed ssh destination to the canonical fleet registry or run the command on that host"
+                )));
+            }
+            Err(error)
+        }
+    }
+}
 
 const APP_STORE_CONNECT_ITEM: &str = "api-appstoreconnect-weles";
 const SPARKLE_ITEM_PREFIX: &str = "desktop-release-sparkle-";
@@ -130,22 +270,39 @@ enum Platform {
 }
 
 impl Platform {
-    fn for_target(target: &ComputeTarget) -> Result<Self, DeployError> {
-        match target.release_platform.as_str() {
+    fn for_name(name: &str, target_name: &str) -> Result<Self, DeployError> {
+        match name {
             "linux-amd64" => Ok(Self::LinuxAmd64),
             "darwin-arm64" => Ok(Self::DarwinArm64),
             other => Err(DeployError(format!(
-                "target {:?} has unsupported precheck runner platform {:?}",
-                target.name, other
+                "{target_name} declares no supported runner platform for {other:?}; set release_platform in the canonical fleet registry to \"darwin-arm64\" or \"linux-amd64\""
             ))),
         }
     }
 
-    fn kronika_agent_secret_file(self) -> &'static str {
+    fn for_target(target: &ComputeTarget) -> Result<Self, DeployError> {
+        Self::for_name(&target.release_platform, &target.name)
+    }
+
+    fn name(self) -> &'static str {
         match self {
-            Self::LinuxAmd64 => LINUX_KRONIKA_AGENT_SECRET_FILE,
-            Self::DarwinArm64 => MACOS_KRONIKA_AGENT_SECRET_FILE,
+            Self::LinuxAmd64 => "linux-amd64",
+            Self::DarwinArm64 => "darwin-arm64",
         }
+    }
+
+    fn runner_root(self, profile: &RunnerProfile) -> String {
+        match self {
+            Self::LinuxAmd64 => format!("/opt/wisent/{}-runner", profile.slug),
+            Self::DarwinArm64 => format!("/Users/Shared/{}-runner", profile.slug),
+        }
+    }
+
+    fn kronika_agent_secret_file(self, profile: &RunnerProfile) -> String {
+        format!(
+            "{}/.stado/kronika-agent-auth-secret",
+            self.runner_root(profile)
+        )
     }
 }
 
@@ -161,20 +318,25 @@ fn replace(template: &str, pairs: &[(&str, String)]) -> String {
         })
 }
 
-/// Render a template for one profile.
+/// Render a platform program from the selected declaration row.
 ///
-/// The slug is the runner's identity on the host — its account, root, unit
-/// label and firewall table all carry it — and the kind is the word a refusal
-/// uses. They are substituted separately and the kind only through its own
-/// marker: rewriting every `precheck` in the text renamed the identity too,
-/// so on 2026-09-06 `status` looked for `com.wisent.stado-fleet-runner` on a
-/// host running `com.wisent.stado-precheck-runner` and reported the installed
-/// runner as missing.
-fn profile_template(template: &str, profile: RunnerProfile) -> String {
+/// The local account and root follow `slug`; the service manager's identifier
+/// follows `unit_label`. Keeping those substitutions distinct lets a third
+/// profile reuse an installer kind without adding a command or hard-coded
+/// profile match.
+fn profile_template(template: &str, profile: &RunnerProfile) -> String {
     template
-        .replace("stado-precheck", profile.slug)
+        .replace(
+            "com.wisent.stado-precheck-runner",
+            &format!("com.wisent.{}", profile.unit_label),
+        )
+        .replace(
+            "wisent-stado-precheck-runner.service",
+            &format!("wisent-{}.service", profile.unit_label),
+        )
+        .replace("stado-precheck", &profile.slug)
         .replace("stado_precheck", &profile.slug.replace('-', "_"))
-        .replace("__RUNNER_KIND__", profile.kind)
+        .replace("__RUNNER_KIND__", &profile.name)
 }
 
 /// Where each platform keeps the host's job markers. Fixed, root-created
@@ -236,15 +398,15 @@ pub fn job_gate_program(jobs_dir: &str) -> String {
 }
 
 fn linux_installer(
-    target: &ComputeTarget,
+    target_name: &str,
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
     restart_registered: bool,
-    profile: RunnerProfile,
+    profile: &RunnerProfile,
     scope: &RunnerScope,
 ) -> String {
-    let runner_name = format!("{}-{}", profile.slug, target.name);
+    let runner_name = format!("{}-{target_name}", profile.slug);
     replace(
         &profile_template(LINUX_INSTALLER, profile),
         &[
@@ -253,7 +415,7 @@ fn linux_installer(
             ("__TOKEN__", super::shlex_quote(registration_token)),
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
             ("__RUNNER_GROUP__", super::shlex_quote(scope.group(profile))),
-            ("__RUNNER_LABELS__", profile.labels.to_string()),
+            ("__RUNNER_LABELS__", profile.labels_text()),
             (
                 "__RESTART_REGISTERED__",
                 u8::from(restart_registered).to_string(),
@@ -274,15 +436,15 @@ fn linux_installer(
 }
 
 fn macos_installer(
-    target: &ComputeTarget,
+    target_name: &str,
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
     restart_registered: bool,
-    profile: RunnerProfile,
+    profile: &RunnerProfile,
     scope: &RunnerScope,
 ) -> String {
-    let runner_name = format!("{}-{}", profile.slug, target.name);
+    let runner_name = format!("{}-{target_name}", profile.slug);
     replace(
         &profile_template(MACOS_INSTALLER, profile),
         &[
@@ -295,7 +457,7 @@ fn macos_installer(
             ("__TOKEN__", super::shlex_quote(registration_token)),
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
             ("__RUNNER_GROUP__", super::shlex_quote(scope.group(profile))),
-            ("__RUNNER_LABELS__", profile.labels.to_string()),
+            ("__RUNNER_LABELS__", profile.labels_text()),
             (
                 "__RESTART_REGISTERED__",
                 u8::from(restart_registered).to_string(),
@@ -850,7 +1012,7 @@ pub async fn reconcile_model_review_secret(
     repository: &str,
 ) -> Result<Value, DeployError> {
     let repository = repository_name(repository)?;
-    let target = host_channel::canonical_target(target_name).await?;
+    let target = runner_target(target_name).await?;
     let context = brama_skarbiec_context(&target).await?;
     reconcile_brama_introspection_grant(&target, &context).await?;
     let primary_route = reconcile_model_review_route(&target, &context).await?;
@@ -1211,7 +1373,7 @@ pub async fn bootstrap_developer_id(
         }));
     }
 
-    let target = host_channel::canonical_target(target_name).await?;
+    let target = runner_target(target_name).await?;
     if Platform::for_target(&target)? != Platform::DarwinArm64 {
         return Err(DeployError(format!(
             "{} cannot issue a Developer ID certificate: its release platform is {}",
@@ -1477,11 +1639,9 @@ impl RunnerScope {
         }
     }
 
-    /// Runner groups exist only at organization level, so a repository-scoped
-    /// runner declares none rather than an invented one.
-    fn group(&self, profile: RunnerProfile) -> &str {
+    fn group<'a>(&self, profile: &'a RunnerProfile) -> &'a str {
         match self {
-            Self::Organization => profile.group,
+            Self::Organization => &profile.github_runner_group,
             Self::Repository(_) => "",
         }
     }
@@ -1506,6 +1666,79 @@ impl RunnerScope {
             }
         }
     }
+}
+
+fn scope_for_profile(
+    profile: &RunnerProfile,
+    repository: Option<&str>,
+) -> Result<RunnerScope, DeployError> {
+    let Some(repository) = repository else {
+        return Ok(RunnerScope::Organization);
+    };
+    if !profile.accepts_repository_scope {
+        return Err(DeployError(format!(
+            "runner profile '{}' declares no repository scope; enable accepts_repository_scope in {DECLARATION_PATH}",
+            profile.name
+        )));
+    }
+    Ok(RunnerScope::Repository(
+        repository_name(repository)?.to_string(),
+    ))
+}
+
+/// What one registration names: the declared profile, the host it installs
+/// on, the platform whose installer is rendered, and the repository whose
+/// scope GitHub is asked for. These four travel together because a scope is
+/// only meaningful against the profile that declares it accepts one, and
+/// because a rendered installer is reviewable only as the whole set.
+pub struct InstallerRequest<'a> {
+    pub profile_name: &'a str,
+    pub target_name: &'a str,
+    pub platform_name: &'a str,
+    pub repository: Option<&'a str>,
+}
+
+/// Render the exact installer program the host channel will execute.
+///
+/// Keeping this boundary pure makes registration scope reviewable without a
+/// live host while the production path still supplies short-lived credentials.
+pub fn installer_program(
+    request: &InstallerRequest<'_>,
+    registration_token: &str,
+    brama_url: &str,
+    brama_port: u16,
+    restart_registered: bool,
+) -> Result<String, DeployError> {
+    let &InstallerRequest {
+        profile_name,
+        target_name,
+        platform_name,
+        repository,
+    } = request;
+    let profile = runner_profile(profile_name)?;
+    let scope = scope_for_profile(profile, repository)?;
+    let platform = Platform::for_name(platform_name, target_name)?;
+    profile.installer_kind(platform.name())?;
+    Ok(match platform {
+        Platform::LinuxAmd64 => linux_installer(
+            target_name,
+            registration_token,
+            brama_url,
+            brama_port,
+            restart_registered,
+            profile,
+            &scope,
+        ),
+        Platform::DarwinArm64 => macos_installer(
+            target_name,
+            registration_token,
+            brama_url,
+            brama_port,
+            restart_registered,
+            profile,
+            &scope,
+        ),
+    })
 }
 
 async fn github_runner_token(scope: &RunnerScope, kind: &str) -> Result<String, DeployError> {
@@ -1652,106 +1885,6 @@ fn repository_name(repository: &str) -> Result<&str, DeployError> {
     Ok(repository)
 }
 
-/// Ensure one repository can schedule jobs on the Stado-managed runner group.
-///
-/// Runner installation and repository admission are deliberately separate
-/// GitHub resources. Registering a healthy runner does not make it visible to a
-/// repository when the group uses selected-repository access, which previously
-/// left jobs queued forever with an empty runner name.
-pub async fn reconcile_repository_in_group(
-    repository: &str,
-    runner_group: &str,
-) -> Result<Value, DeployError> {
-    let runner_group = repository_name(runner_group)?;
-    let repository = repository_name(repository)?;
-    let credential = github_credential().await?;
-    let groups_endpoint = format!(
-        "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups?per_page=100"
-    );
-    let groups = github_json(reqwest::Method::GET, &groups_endpoint, &credential, None).await?;
-    let group = groups
-        .get("runner_groups")
-        .and_then(Value::as_array)
-        .and_then(|groups| {
-            groups
-                .iter()
-                .find(|group| group.get("name").and_then(Value::as_str) == Some(runner_group))
-        })
-        .ok_or_else(|| DeployError(format!("GitHub runner group {runner_group:?} is missing")))?;
-    let group_id = group
-        .get("id")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| DeployError(format!("GitHub runner group {runner_group:?} has no id")))?;
-    let visibility = group
-        .get("visibility")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !matches!(visibility, "selected" | "all") {
-        return Err(DeployError(format!(
-            "GitHub runner group {runner_group:?} visibility is {visibility:?}, expected \"selected\" or \"all\""
-        )));
-    }
-
-    let repository_endpoint =
-        format!("https://api.github.com/repos/{GITHUB_ORGANIZATION}/{repository}");
-    let repository_document = github_json(
-        reqwest::Method::GET,
-        &repository_endpoint,
-        &credential,
-        None,
-    )
-    .await?;
-    let repository_id = repository_document
-        .get("id")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| DeployError(format!("GitHub repository {repository:?} has no id")))?;
-    let repository_is_public = !repository_document
-        .get("private")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let public_repositories_enabled = group
-        .get("allows_public_repositories")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let group_endpoint = format!(
-        "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}"
-    );
-    if repository_is_public && !public_repositories_enabled {
-        let update = json!({
-            "name": runner_group,
-            "visibility": visibility,
-            "allows_public_repositories": true,
-        });
-        github_json(
-            reqwest::Method::PATCH,
-            &group_endpoint,
-            &credential,
-            Some(&update),
-        )
-        .await?;
-    }
-    if visibility == "selected" {
-        let access_endpoint = format!(
-            "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}/repositories/{repository_id}"
-        );
-        github_json(reqwest::Method::PUT, &access_endpoint, &credential, None).await?;
-    }
-
-    Ok(json!({
-        "organization": GITHUB_ORGANIZATION,
-        "runner_group": runner_group,
-        "repository": repository,
-        "repository_id": repository_id,
-        "access": visibility,
-        "repository_visibility": if repository_is_public { "public" } else { "private" },
-        "status": "reconciled",
-    }))
-}
-
-pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError> {
-    reconcile_repository_in_group(repository, RUNNER_GROUP).await
-}
-
 fn command_failure(output: &CommandOutput, fallback: &str) -> String {
     let stderr = output.stderr.trim();
     if stderr.is_empty() {
@@ -1765,23 +1898,27 @@ fn report(
     target: &ComputeTarget,
     output: &CommandOutput,
     action: &str,
-    profile: RunnerProfile,
+    profile: &RunnerProfile,
 ) -> Value {
     json!({
         "target": target.name,
         "platform": target.release_platform,
-        "runner_kind": profile.kind,
-        "runner_group": profile.group,
-        "runner_labels": profile.labels,
+        "profile": profile.name,
+        "runner_kind": profile.name,
+        "runner_group": profile.github_runner_group,
+        "runner_labels": profile.labels_text(),
         // Read from the host's own registration record. A runner installed by
         // a build that did not record its scope reports `unrecorded` rather
-        // than the declaration's own default: claiming the organization for a
-        // runner nobody registered there is exactly the unread declaration
-        // this fleet keeps paying for.
+        // than the declaration's desired scope.
         "runner_scope": registered_scope(&output.stdout).unwrap_or_else(|| "unrecorded".to_string()),
+        "listener": listener(&output.stdout),
         // Which runner holds the host's one job slot, straight from the gate's
         // own markers: `none`, or `<account> pid=<n>`, or `<account> stale`.
         "host_job_slot": host_job_slot(&output.stdout),
+        "installed": match action {
+            "remove" => false,
+            _ => output.ok(),
+        },
         "action": action,
         "status": if output.ok() { "completed" } else { "failed" },
         "exit_code": output.code,
@@ -1789,7 +1926,6 @@ fn report(
         "stderr": output.stderr,
     })
 }
-
 /// The third line of `.stado/registered-runner`, which every status script
 /// prints: `organization:<org>` or `repository:<org>/<name>`.
 fn registered_scope(stdout: &str) -> Option<String> {
@@ -1798,6 +1934,30 @@ fn registered_scope(stdout: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| line.starts_with("organization:") || line.starts_with("repository:"))
         .map(str::to_string)
+}
+
+/// The listener's connection to GitHub, not merely its daemon process state.
+///
+/// Status programs print one `listener:` line sourced from the runner's own
+/// diagnostic log. A successful restart prints `runner listener:`. Both feed
+/// one typed field so callers never need to scrape script output.
+fn listener(stdout: &str) -> Value {
+    let state = stdout.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("listener: ")
+            .or_else(|| line.strip_prefix("runner listener: "))
+    });
+    let connected = state.map(|state| {
+        let lower = state.to_ascii_lowercase();
+        lower.contains("listening for jobs")
+            || lower.contains("running job")
+            || (lower.contains("job ") && lower.contains(" completed"))
+            || lower == "connected"
+    });
+    json!({
+        "connected": connected,
+        "state": state.unwrap_or("unknown"),
+    })
 }
 
 /// The `host job slot:` line every status script prints — which runner holds
@@ -1954,14 +2114,15 @@ fn brama_gateway_origin(
 async fn install_kronika_agent_secret(
     target: &ComputeTarget,
     platform: Platform,
+    profile: &RunnerProfile,
     secret: &str,
-) -> Result<(), DeployError> {
+) -> Result<String, DeployError> {
     let runner = production_runner();
-    let secret_file = platform.kronika_agent_secret_file();
+    let secret_file = platform.kronika_agent_secret_file(profile);
+    let runner_user = profile.slug.as_str();
     // macOS install(1) rejects /dev/stdin as a source. Create the destination
     // with its final owner and mode first, then let that owner replace only its
-    // bytes through dd. The secret never appears in argv or command output, and
-    // there is no interval where another account can read the file.
+    // bytes through dd. The secret never appears in argv or command output.
     let prepared = host_channel::run_program(
         target,
         &[
@@ -1969,13 +2130,13 @@ async fn install_kronika_agent_secret(
             "-n",
             "/usr/bin/install",
             "-o",
-            RUNNER_USER,
+            runner_user,
             "-g",
-            RUNNER_USER,
+            runner_user,
             "-m",
             "600",
             "/dev/null",
-            secret_file,
+            &secret_file,
         ],
         &runner,
     )
@@ -1994,7 +2155,7 @@ async fn install_kronika_agent_secret(
             "/usr/bin/sudo",
             "-n",
             "-u",
-            RUNNER_USER,
+            runner_user,
             "/bin/dd",
             &destination,
             "bs=4096",
@@ -2010,7 +2171,7 @@ async fn install_kronika_agent_secret(
             command_failure(&written, "remote secret write failed")
         )));
     }
-    Ok(())
+    Ok(secret_file)
 }
 
 /// The host whose Brama installation holds the Probierz agent identity for a
@@ -2040,13 +2201,14 @@ async fn brama_identity_host(target: &ComputeTarget) -> Result<ComputeTarget, De
 
 async fn install_profile(
     target_name: &str,
-    profile: RunnerProfile,
+    profile: &RunnerProfile,
     scope: &RunnerScope,
 ) -> Result<Value, DeployError> {
-    let target = host_channel::canonical_target(target_name).await?;
+    let target = runner_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
+    profile.installer_kind(platform.name())?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
-    let kronika_credential = if profile.kind == PRECHECK.kind {
+    let kronika_credential = if profile.needs_kronika() {
         Some(kronika_agent_credential(&brama_identity_host(&target).await?).await?)
     } else {
         None
@@ -2055,17 +2217,11 @@ async fn install_profile(
         Platform::LinuxAmd64 => format!("/opt/wisent/{}-runner", profile.slug),
         Platform::DarwinArm64 => format!("/Users/Shared/{}-runner", profile.slug),
     };
-    // A runner already registered with DIFFERENT labels, a different group or
-    // against a different scope answers a different set of jobs than this
-    // profile declares, and all three are fixed at registration: `config.sh`
-    // reads them once. The installer used to skip a registered runner
-    // entirely, so changing the declaration changed nothing on the host and
-    // the jobs it was meant to take kept queueing. Stado therefore records
-    // what it registered, in `.stado/registered-runner`, and re-registers
-    // when that record and this declaration disagree.
+    // Labels, group, and actual registration scope are fixed when config.sh
+    // runs. Reconcile whenever the host record differs from this declaration.
     let registration = format!(
         "printf '%s\\n%s\\n%s\\n' {} {} {}",
-        super::shlex_quote(profile.labels),
+        super::shlex_quote(&profile.labels_text()),
         super::shlex_quote(scope.group(profile)),
         super::shlex_quote(&scope.label())
     );
@@ -2084,28 +2240,23 @@ async fn install_profile(
     };
     let runner_name = format!("{}-{}", profile.slug, target.name);
     let restart_registered = already_registered
-        && profile.kind == PUBLISHER.kind
+        && profile.needs_publisher_bootstrap()
         && !github_runner_is_online(&runner_name).await?;
-    let script = match platform {
-        Platform::LinuxAmd64 => linux_installer(
-            &target,
-            &token,
-            &brama_url,
-            brama_port,
-            restart_registered,
-            profile,
-            scope,
-        ),
-        Platform::DarwinArm64 => macos_installer(
-            &target,
-            &token,
-            &brama_url,
-            brama_port,
-            restart_registered,
-            profile,
-            scope,
-        ),
-    };
+    let script = installer_program(
+        &InstallerRequest {
+            profile_name: &profile.name,
+            target_name: &target.name,
+            platform_name: platform.name(),
+            repository: match &scope {
+                RunnerScope::Organization => None,
+                RunnerScope::Repository(repository) => Some(repository.as_str()),
+            },
+        },
+        &token,
+        &brama_url,
+        brama_port,
+        restart_registered,
+    )?;
     let output = host_channel::run_script_with_timeout(
         &target,
         &script,
@@ -2118,28 +2269,31 @@ async fn install_profile(
         return Err(DeployError(format!(
             "{}: {} runner installation failed: {}",
             target.name,
-            profile.kind,
+            profile.name,
             command_failure(&output, "remote installer failed")
         )));
     }
     if let Some(kronika_credential) = kronika_credential {
-        install_kronika_agent_secret(&target, platform, &kronika_credential.secret).await?;
+        let secret_file =
+            install_kronika_agent_secret(&target, platform, profile, &kronika_credential.secret)
+                .await?;
         value["kronika_identity"] = json!({
             "agent_id": PROBIERZ_AGENT_ID,
             "resource": PROBIERZ_AGENT_RESOURCE,
             "secret_item": kronika_credential.item,
             "secret_field": kronika_credential.field,
-            "secret_file": platform.kronika_agent_secret_file(),
+            "secret_file": secret_file,
             "status": "installed",
         });
     }
     Ok(value)
 }
 
-async fn status_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
-    let target = host_channel::canonical_target(target_name).await?;
+async fn status_profile(target_name: &str, profile: &RunnerProfile) -> Result<Value, DeployError> {
+    let target = runner_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
-    let script = if profile.kind == PUBLISHER.kind {
+    let installer = profile.installer_kind(platform.name())?;
+    let script = if installer.starts_with("publisher-") {
         match platform {
             Platform::LinuxAmd64 => profile_template(LINUX_PUBLISHER_STATUS, profile),
             Platform::DarwinArm64 => profile_template(MACOS_PUBLISHER_STATUS, profile),
@@ -2156,14 +2310,16 @@ async fn status_profile(target_name: &str, profile: RunnerProfile) -> Result<Val
     let output = host_channel::run_script(&target, &script, &production_runner()).await?;
     let mut value = report(&target, &output, "status", profile);
     if !output.ok() {
-        return Err(DeployError(format!(
+        value["installed"] = json!(registered_scope(&output.stdout).is_some());
+        value["error"] = json!(format!(
             "{}: {} runner status failed: {}",
             target.name,
-            profile.kind,
+            profile.name,
             command_failure(&output, "remote status failed")
-        )));
+        ));
+        return Ok(value);
     }
-    if profile.kind == PRECHECK.kind {
+    if profile.needs_kronika() {
         value["brama_route"] = brama_route_verdict(target_name, &output.stdout).await?;
     }
     Ok(value)
@@ -2201,8 +2357,8 @@ async fn brama_route_verdict(target_name: &str, stdout: &str) -> Result<Value, D
             "matches": false,
             "detail": format!(
                 "the precheck runner publishes no Brama route, so the documentation gate on \
-                 this host dials nothing. Reinstall it: stado host precheck-runner install \
-                 {target_name}"
+                 this host dials nothing. Reinstall it: stado runner install {target_name} \
+                 --profile precheck"
             ),
         }));
     }
@@ -2215,7 +2371,7 @@ async fn brama_route_verdict(target_name: &str, stdout: &str) -> Result<Value, D
                 "the precheck runner dials {published} and the service directory declares \
                  {declared} for this host. Every Kronika documentation gate on this runner \
                  fails with `fetch failed` until the two agree: correct whichever is wrong, \
-                 then republish with stado host precheck-runner install {target_name}"
+                 then republish with stado runner install {target_name} --profile precheck"
             ),
         }));
     }
@@ -2228,11 +2384,12 @@ async fn brama_route_verdict(target_name: &str, stdout: &str) -> Result<Value, D
 
 async fn remove_profile(
     target_name: &str,
-    profile: RunnerProfile,
+    profile: &RunnerProfile,
     scope: &RunnerScope,
 ) -> Result<Value, DeployError> {
-    let target = host_channel::canonical_target(target_name).await?;
+    let target = runner_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
+    profile.installer_kind(platform.name())?;
     let token = github_runner_token(scope, "remove").await?;
     let script = replace(
         &profile_template(
@@ -2256,24 +2413,25 @@ async fn remove_profile(
         return Err(DeployError(format!(
             "{}: {} runner removal failed: {}",
             target.name,
-            profile.kind,
+            profile.name,
             command_failure(&output, "remote removal failed")
         )));
     }
     Ok(value)
 }
 
-/// Restart TARGET's pre-check runner in place and wait for it to report that
-/// it is listening for jobs again.
-pub async fn restart(target_name: &str) -> Result<Value, DeployError> {
-    let target = host_channel::canonical_target(target_name).await?;
+/// Restart one declared runner in place and wait for a fresh listener event.
+pub async fn restart_declared(target_name: &str, profile_name: &str) -> Result<Value, DeployError> {
+    let profile = runner_profile(profile_name)?;
+    let target = runner_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
+    profile.installer_kind(platform.name())?;
     let script = profile_template(
         match platform {
             Platform::LinuxAmd64 => LINUX_RESTART,
             Platform::DarwinArm64 => MACOS_RESTART,
         },
-        PRECHECK,
+        profile,
     );
     let output = host_channel::run_script_with_timeout(
         &target,
@@ -2282,62 +2440,150 @@ pub async fn restart(target_name: &str) -> Result<Value, DeployError> {
         &production_runner(),
     )
     .await?;
-    let value = report(&target, &output, "restart", PRECHECK);
+    let value = report(&target, &output, "restart", profile);
     if !output.ok() {
         return Err(DeployError(format!(
-            "{}: precheck runner restart failed: {}",
+            "{}: {} runner restart failed: {}",
             target.name,
+            profile.name,
             command_failure(&output, "remote restart failed")
         )));
     }
     Ok(value)
 }
 
-/// Install the host's one runner. `repository` registers it against that
-/// repository instead of the organization: the same runner, the same labels,
-/// the other door — which is the one the fleet's own credential is allowed to
-/// open.
-pub async fn install(target_name: &str, repository: Option<&str>) -> Result<Value, DeployError> {
-    install_profile(target_name, PRECHECK, &scope_for(repository)).await
-}
-
-pub async fn status(target_name: &str) -> Result<Value, DeployError> {
-    status_profile(target_name, PRECHECK).await
-}
-
-pub async fn remove(target_name: &str, repository: Option<&str>) -> Result<Value, DeployError> {
-    remove_profile(target_name, PRECHECK, &scope_for(repository)).await
-}
-
-/// A removal or registration addresses one scope, and a runner registered
-/// against a repository cannot be removed through the organization endpoint.
-fn scope_for(repository: Option<&str>) -> RunnerScope {
-    match repository {
-        Some(repository) => RunnerScope::Repository(repository.to_string()),
-        None => RunnerScope::Organization,
-    }
-}
-
-pub async fn install_publisher(
+/// Install one profile, including the profile's repository-scoped setup.
+pub async fn install_declared(
     target_name: &str,
-    repositories: &[String],
+    profile_name: &str,
+    repository: Option<&str>,
 ) -> Result<Value, DeployError> {
-    for repository in repositories {
-        bootstrap_publisher_repository(repository).await?;
+    let profile = runner_profile(profile_name)?;
+    let scope = scope_for_profile(profile, repository)?;
+    // Resolve before any repository mutation so a typo cannot publish secrets.
+    runner_target(target_name).await?;
+
+    let repository_bootstrap = if let Some(repository) = repository {
+        if profile.needs_publisher_bootstrap() {
+            let bootstrap = bootstrap_publisher_repository(repository).await?;
+            let developer_id = match &profile.developer_id_account_item {
+                Some(account_item) => {
+                    bootstrap_developer_id(target_name, account_item, &[repository.to_string()])
+                        .await?
+                }
+                None => Value::Null,
+            };
+            Some(json!({
+                "release": bootstrap,
+                "developer_id": developer_id,
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let model_review = if profile.needs_kronika() {
+        match repository {
+            Some(repository) => Some(reconcile_model_review_secret(target_name, repository).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let mut value = install_profile(target_name, profile, &scope).await?;
+    if let Some(repository_bootstrap) = repository_bootstrap {
+        value["repository_bootstrap"] = repository_bootstrap;
     }
-    install_profile(target_name, PUBLISHER, &RunnerScope::Organization).await
+    if let Some(model_review) = model_review {
+        value["model_review"] = model_review;
+    }
+    Ok(value)
 }
 
-pub async fn reconcile_publisher_repository(repository: &str) -> Result<Value, DeployError> {
-    bootstrap_publisher_repository(repository).await
+pub async fn status_declared(target_name: &str, profile_name: &str) -> Result<Value, DeployError> {
+    status_profile(target_name, runner_profile(profile_name)?).await
 }
 
-pub async fn status_publisher(target_name: &str) -> Result<Value, DeployError> {
-    status_profile(target_name, PUBLISHER).await
+pub async fn remove_declared(
+    target_name: &str,
+    profile_name: &str,
+    repository: Option<&str>,
+) -> Result<Value, DeployError> {
+    let profile = runner_profile(profile_name)?;
+    let scope = scope_for_profile(profile, repository)?;
+    remove_profile(target_name, profile, &scope).await
 }
 
-pub async fn remove_publisher(target_name: &str) -> Result<Value, DeployError> {
-    remove_profile(target_name, PUBLISHER, &RunnerScope::Organization).await
+fn unavailable_status(
+    target: &ComputeTarget,
+    profile: &RunnerProfile,
+    error: impl ToString,
+) -> Value {
+    json!({
+        "target": target.name,
+        "platform": target.release_platform,
+        "profile": profile.name,
+        "runner_kind": profile.name,
+        "runner_group": profile.github_runner_group,
+        "runner_labels": profile.labels_text(),
+        "runner_scope": Value::Null,
+        "listener": {
+            "connected": Value::Null,
+            "state": "unavailable",
+        },
+        "host_job_slot": "unknown",
+        "installed": Value::Null,
+        "status": "unavailable",
+        "error": error.to_string(),
+    })
+}
+
+/// Read every declared profile from one registered host.
+pub async fn status_all(target_name: &str) -> Result<Value, DeployError> {
+    let target = runner_target(target_name).await?;
+    let mut profiles = Vec::new();
+    for profile in &runner_declaration()?.profiles {
+        profiles.push(
+            status_profile(target_name, profile)
+                .await
+                .unwrap_or_else(|error| unavailable_status(&target, profile, error)),
+        );
+    }
+    Ok(json!({
+        "target": target.name,
+        "profiles": profiles,
+    }))
+}
+
+/// Read runner state across every local host in the canonical registry.
+pub async fn fleet_report() -> Result<Value, DeployError> {
+    let registry = host_channel::canonical_registry().await?;
+    let declaration = runner_declaration()?;
+    let mut hosts = Vec::new();
+    for target in registry
+        .targets
+        .iter()
+        .filter(|target| target.is_provider(crate::capabilities::ProviderId::Local))
+    {
+        let mut profiles = Vec::new();
+        for profile in &declaration.profiles {
+            profiles.push(
+                status_profile(&target.name, profile)
+                    .await
+                    .unwrap_or_else(|error| unavailable_status(target, profile, error)),
+            );
+        }
+        hosts.push(json!({
+            "target": target.name,
+            "profiles": profiles,
+        }));
+    }
+    Ok(json!({
+        "schema_version": 1,
+        "hosts": hosts,
+    }))
 }
 
 const DEVELOPER_ID_PREPARE: &str = r#"set -euo pipefail
@@ -2832,28 +3078,59 @@ printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\np
 
 const LINUX_PUBLISHER_STATUS: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
-root systemctl is-active wisent-stado-precheck-runner.service
-root systemctl is-enabled wisent-stado-precheck-runner.service
-id stado-precheck
-root nft list table inet stado_precheck
-root /usr/sbin/runuser --user stado-precheck -- /usr/bin/env HOME=/opt/wisent/stado-precheck-runner /opt/wisent/stado-precheck-runner/bin/Runner.Listener --version
+runner_root=/opt/wisent/stado-precheck-runner
+runner_user=stado-precheck
+root systemctl is-active wisent-stado-precheck-runner.service >/dev/null
+root systemctl is-enabled wisent-stado-precheck-runner.service >/dev/null
+id "$runner_user" >/dev/null
+root nft list table inet stado_precheck >/dev/null
+scope=$(root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true)
+newest_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
+if [ -n "$newest_log" ]; then
+  listener_state=$(root tail -n 400 "$newest_log" | grep -a -E 'Listening for Jobs|Running job|Job .* completed|Terminate|Error|Exception' | tail -n 1 || true)
+  [ -n "$listener_state" ] || listener_state='no listener event in the last 400 log lines'
+else
+  listener_state='no runner diagnostic log, so the listener has never started'
+fi
+job_holder=none
+for marker in /opt/wisent/.stado-runner-jobs/*.job; do
+  [ -f "$marker" ] || continue
+  pid=$(root head -n 1 "$marker" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
+done
+printf 'listener: %s\nhost job slot: %s\n%s\n' "$listener_state" "$job_holder" "${scope:-unrecorded}"
 "#;
 
 const MACOS_PUBLISHER_STATUS: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
-if ! root launchctl print system/com.wisent.stado-publisher-runner; then
-  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-publisher-runner.plist >&2 || true
-  root tail -n 80 /Users/Shared/stado-publisher-runner/_diag/launchd.stderr.log >&2 || true
+runner_root=/Users/Shared/stado-precheck-runner
+runner_user=stado-precheck
+if ! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null; then
+  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
+  root tail -n 80 "$runner_root/_diag/launchd.stderr.log" >&2 || true
   exit 1
 fi
-dscl . -read /Users/stado-publisher UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password
-root pfctl -a com.wisent.stado-publisher -sr
-root tail -n 40 /Users/Shared/stado-publisher-runner/_diag/launchd.stdout.log 2>/dev/null || true
-root tail -n 40 /Users/Shared/stado-publisher-runner/_diag/launchd.stderr.log >&2 2>/dev/null || true
-root sudo -u stado-publisher -H -- /usr/bin/env HOME=/Users/Shared/stado-publisher-runner TMPDIR=/Users/Shared/stado-publisher-runner/_work /Users/Shared/stado-publisher-runner/bin/Runner.Listener --version
-identity_output=$(root sudo -u stado-publisher -H -- /usr/bin/security find-identity -v -p codesigning /Users/Shared/stado-publisher-runner/Library/Keychains/login.keychain-db 2>&1 || true)
-printf '%s\n' "$identity_output"
+dscl . -read "/Users/$runner_user" UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password >/dev/null
+root pfctl -a com.wisent.stado-precheck -sr >/dev/null
+identity_output=$(root sudo -u "$runner_user" -H -- /usr/bin/security find-identity -v -p codesigning "$runner_root/Library/Keychains/login.keychain-db" 2>&1 || true)
 printf '%s\n' "$identity_output" | grep -F '"Developer ID Application:' >/dev/null
+scope=$(root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true)
+newest_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
+if [ -n "$newest_log" ]; then
+  listener_state=$(root tail -n 400 "$newest_log" | /usr/bin/grep -a -E 'Listening for Jobs|Running job|Job .* completed|Terminate|Error|Exception' | /usr/bin/tail -n 1 || true)
+  [ -n "$listener_state" ] || listener_state='no listener event in the last 400 log lines'
+else
+  listener_state='no runner diagnostic log, so the listener has never started'
+fi
+job_holder=none
+for marker in /Users/Shared/.stado-runner-jobs/*.job; do
+  [ -f "$marker" ] || continue
+  pid=$(root head -n 1 "$marker" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
+done
+printf 'listener: %s\nhost job slot: %s\n%s\n' "$listener_state" "$job_holder" "${scope:-unrecorded}"
 "#;
 
 const LINUX_STATUS: &str = r#"set -euo pipefail
@@ -2882,7 +3159,14 @@ for marker in /opt/wisent/.stado-runner-jobs/*.job; do
   case "$pid" in ''|*[!0-9]*) continue ;; esac
   if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
 done
-printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nhost job slot: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$job_holder" "${scope:-organization:wisent-ai}"
+newest_log=$(root sh -c "ls -t /opt/wisent/stado-precheck-runner/_diag/Runner_*.log 2>/dev/null | head -n 1")
+if [ -n "$newest_log" ]; then
+  listener_state=$(root tail -n 400 "$newest_log" | grep -a -E 'Listening for Jobs|Running job|Job .* completed|Terminate|Error|Exception' | tail -n 1 || true)
+  [ -n "$listener_state" ] || listener_state='no listener event in the last 400 log lines'
+else
+  listener_state='no runner diagnostic log, so the listener has never started'
+fi
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nhost job slot: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "$job_holder" "${scope:-unrecorded}"
 "#;
 
 /// Each check states its own refusal, because the caller reports the last
@@ -2936,24 +3220,17 @@ listener_owner=$(/bin/ps -Ao user=,comm= |
   /usr/bin/awk -v root="$runner_root/" \
     '$2 ~ /Runner\.Listener$/ && index($2, root) == 1 && !seen++ { owner = $1 } END { print owner }') ||
   fail 'the process table could not be read'
+listener_problem=
 if [ -z "$listener_owner" ]; then
-  # Three logs, one sentence: the wrapper's stdout, the wrapper's stderr and
-  # the runner's own diagnostic. A listener that will not start says so in
-  # exactly one of them, and reading them one round trip at a time is how an
-  # operator spends an evening on a queued job.
   daemon_out=$(root tail -n 3 "$runner_root/_diag/launchd.stdout.log" 2>/dev/null | /usr/bin/tr '\n' ' ')
   daemon_err=$(root tail -n 3 "$runner_root/_diag/launchd.stderr.log" 2>/dev/null | /usr/bin/tr '\n' ' ')
   runner_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
   runner_tail=$(root tail -n 3 "$runner_log" 2>/dev/null | /usr/bin/tr '\n' ' ')
-  # How many processes the runner account holds. A listener that exits and is
-  # relaunched every five seconds can leave the account at its process limit,
-  # and then every allocation fails: `Failed to create CoreCLR, HRESULT:
-  # 0x8007000C` with exit 137 is what that looks like from the wrapper.
   owned=$(/bin/ps -Ao user= | /usr/bin/grep -c -x 'stado-precheck')
-  fail "no listener is running from $runner_root, so this host takes no jobs for its labels. stado-precheck holds $owned processes. wrapper stdout: $daemon_out | wrapper stderr: $daemon_err | runner log ($runner_log): $runner_tail"
+  listener_problem="no listener is running from $runner_root, so this host takes no jobs for its labels. stado-precheck holds $owned processes. wrapper stdout: $daemon_out | wrapper stderr: $daemon_err | runner log ($runner_log): $runner_tail"
+elif [ "$listener_owner" != "stado-precheck" ]; then
+  listener_problem="the runner listener runs as $listener_owner, not stado-precheck"
 fi
-[ "$listener_owner" = "stado-precheck" ] ||
-  fail "the runner listener runs as $listener_owner, not stado-precheck"
 agent_id=$(root cat "$runner_root/routes/kronika-agent-id" 2>/dev/null) ||
   fail 'routes/kronika-agent-id is unreadable'
 [ -n "$agent_id" ] || fail 'routes/kronika-agent-id is empty'
@@ -2979,6 +3256,7 @@ if [ -n "$newest_log" ]; then
 else
   listener_state='no runner diagnostic log, so the listener has never started'
 fi
+if [ -n "$listener_problem" ]; then listener_state=$listener_problem; fi
 # Every runner listener this host runs, with its owner and its path. A host
 # carries several runners, and "a Runner.Listener is running" says nothing
 # about which one: the reclaim phase of `restart` needs the process that
@@ -2994,7 +3272,7 @@ for marker in /Users/Shared/.stado-runner-jobs/*.job; do
   case "$pid" in ''|*[!0-9]*) continue ;; esac
   if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
 done
-printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\nhost job slot: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}" "$job_holder" "${scope:-organization:wisent-ai}"
+printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\nhost job slot: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}" "$job_holder" "${scope:-unrecorded}"
 "#;
 
 /// Restart the runner in place and wait until it says it is listening again.

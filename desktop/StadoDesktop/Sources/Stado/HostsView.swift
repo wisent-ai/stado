@@ -89,10 +89,13 @@ struct HostsView: View {
     /// Read on demand for the selected host: what that machine dials for each
     /// service, and whether the fleet declares that address.
     @StateObject private var forwardStore = HostForwardStore()
+    @StateObject private var routesStore = RoutesStore()
     @StateObject private var reconciliationStore = StorageReconciliationStore.shared
     /// Which vault the selected host's credential operations resolve to, and
     /// whether that host can resolve one at all.
     @StateObject private var vaultStore = HostVaultStore()
+    @StateObject private var workloadStore = WorkloadStore()
+    @StateObject private var repairStore = RepairStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -117,9 +120,6 @@ struct HostsView: View {
 
     @State private var connectionPathsTarget: HostConnectionPathsTarget?
     @State private var reconciliationTarget: StorageReconciliationTarget?
-    /// The registration scope typed for the selected host's runner. Empty
-    /// means the organization, which is what the CLI's absent flag means.
-    @State private var runnerRepository = ""
     var body: some View {
         WisentScreen(
             title: "Hosts",
@@ -539,12 +539,33 @@ struct HostsView: View {
                 badges: badges(for: host)
             ) {
                 gateSection(for: host)
+                if host.declared {
+                    SpaceSection(host: host.targetName ?? host.displayName)
+                }
                 linkSection(for: host)
+                CredentialsHostSection(
+                    host: host.targetName ?? host.displayName,
+                    store: vaultStore
+                ) {
+                    vaultBearerTarget = HostVaultBearerTarget(
+                        host: host.targetName ?? host.displayName
+                    )
+                }
+                RoutesSection(store: routesStore, selectedHost: host.targetName ?? host.displayName)
                 tailscaleLogSection(for: host)
+                HostReleaseSection(
+                    store: store.hostReleaseStore,
+                    host: host.targetName ?? host.displayName
+                )
 
                 appleChallengeSection(for: host)
                 cargoInventorySection(for: host)
-                runnerSection(for: host)
+                RunnerSection(host: host, fleetStore: fleetStore)
+                WorkloadSection(
+                    target: host.targetName ?? host.displayName,
+                    store: workloadStore
+                )
+                RepairSection(store: repairStore, host: host.targetName ?? host.displayName)
                 if host.status != .live {
                     WisentAlertPanel(
                         tone: tone(for: host.status),
@@ -569,19 +590,6 @@ struct HostsView: View {
                 WisentField(label: "Last capacity report", value: ConsoleFormat.age(host.ageSeconds))
                 if host.status == .live {
                     WisentField(label: "Availability", value: host.availabilityReason)
-                }
-                if host.declared {
-                    WisentActionButton(
-                        action: WisentAction(
-                            "Bounded vault bearer…",
-                            symbol: "key.horizontal",
-                            kind: .primary
-                        ) {
-                            vaultBearerTarget = HostVaultBearerTarget(
-                                host: host.targetName ?? host.displayName
-                            )
-                        }
-                    )
                 }
                 policySection(for: host)
                 WisentActionButton(
@@ -838,96 +846,6 @@ struct HostsView: View {
         }
     }
 
-    /// The host's own GitHub runner, with the same lifecycle the CLI has.
-    ///
-    /// Every field the report carries is shown, including the two that used to
-    /// exist only in a terminal: which GitHub door the registration went
-    /// through (`organization:<org>` needs the organization's
-    /// self-hosted-runner permission, `repository:<org>/<name>` needs admin on
-    /// that repository) and whether a job is holding this machine's single job
-    /// slot right now.
-    @ViewBuilder
-    private func runnerSection(for host: WorkerNode) -> some View {
-        let target = host.targetName ?? host.displayName
-        let report = fleetStore.runnerHost == target ? fleetStore.runnerReport : nil
-        WisentSectionBox(
-            title: "GitHub runner",
-            detail: "One runner per host, taking one job at a time. A repository name registers it against that repository instead of the organization."
-        ) {
-            WisentField(
-                label: "Read-only command",
-                value: StadoCLI.commandLine(
-                    FleetControlStore.hostRunnerArguments(action: "status", host: target, repository: nil)
-                )
-            )
-            WisentField(label: "Registration scope", value: report?.runnerScope ?? "Not read")
-            WisentField(label: "Labels", value: report?.runnerLabels ?? "Not read")
-            WisentField(label: "Host job slot", value: report?.hostJobSlot ?? "Not read")
-            WisentActionButton(
-                action: WisentAction(
-                    "Read runner",
-                    symbol: "arrow.clockwise",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
-                ) {
-                    Task { await fleetStore.readHostRunner(host: target) }
-                }
-            )
-            TextField("Repository (optional)", text: $runnerRepository)
-                .textFieldStyle(.roundedBorder)
-                .font(WisentTypeScale.body())
-            WisentField(
-                label: "Command",
-                value: StadoCLI.commandLine(
-                    FleetControlStore.hostRunnerArguments(
-                        action: "install",
-                        host: target,
-                        repository: runnerRepository
-                    )
-                )
-            )
-            WisentActionButton(
-                action: WisentAction(
-                    "Install or reconcile",
-                    symbol: "square.and.arrow.down",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
-                ) {
-                    Task {
-                        await fleetStore.installHostRunner(host: target, repository: runnerRepository)
-                    }
-                }
-            )
-            WisentActionButton(
-                action: WisentAction(
-                    "Restart in place",
-                    symbol: "arrow.triangle.2.circlepath",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
-                ) {
-                    Task { await fleetStore.restartHostRunner(host: target) }
-                }
-            )
-            WisentActionButton(
-                action: WisentAction(
-                    "Remove",
-                    symbol: "trash",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
-                ) {
-                    Task {
-                        await fleetStore.removeHostRunner(host: target, repository: runnerRepository)
-                    }
-                }
-            )
-            if let report {
-                let stderr = report.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !stderr.isEmpty {
-                    WisentAlertPanel(
-                        tone: .warning,
-                        title: "The host reported this while answering",
-                        detail: stderr
-                    )
-                }
-            }
-        }
-    }
 
     @ViewBuilder
     private func cargoInventorySection(for host: WorkerNode) -> some View {

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "reclaim_stages": [
+    {
+      "name": "registry_cleanup",
+      "description": "The host janitor runs the cleaners declared in targets[].disk_cleanup.cleaners."
+    },
+    {
+      "name": "build_scratch",
+      "description": "Stale release-build work beneath $HOME/.stado/build-work."
+    },
+    {
+      "name": "queue_workdirs",
+      "description": "Terminal queue work trees proved unused by the queue authority or conservative local evidence."
+    },
+    {
+      "name": "foreign_home_trees",
+      "description": "macOS-style /Users trees left on Linux hosts."
+    },
+    {
+      "name": "delivered_trees",
+      "description": "Stale product versions under the service root and product-catalog superseded roots."
+    },
+    {
+      "name": "rebuildable_caches",
+      "description": "Declared product-owned package, browser, probe, download, and build caches."
+    },
+    {
+      "name": "chromium_clones",
+      "description": "Stale macOS Chromium code-signing clones."
+    },
+    {
+      "name": "local_apfs_snapshots",
+      "description": "Eligible local Time Machine APFS snapshots below the declared free-space target."
+    },
+    {
+      "name": "runner_work_trees",
+      "description": "Inactive GitHub runner _work trees outside runner bookkeeping directories."
+    }
+  ]
+}

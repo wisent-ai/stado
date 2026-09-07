@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "name": "precheck",
+      "slug": "stado-precheck",
+      "labels": [
+        "stado",
+        "stado-precheck",
+        "stado-release",
+        "stado-publisher",
+        "stado-control-plane"
+      ],
+      "github_runner_group": "Default",
+      "unit_label": "stado-precheck-runner",
+      "installers": {
+        "darwin-arm64": "kronika-launchd",
+        "linux-amd64": "kronika-systemd"
+      },
+      "secrets": [
+        "GITHUB_TOKEN",
+        "probierz-agent",
+        "BRAMA_MODEL_ROUTER_TOKEN"
+      ],
+      "accepts_repository_scope": true
+    },
+    {
+      "name": "publisher",
+      "slug": "stado-publisher",
+      "labels": [
+        "stado",
+        "stado-publisher"
+      ],
+      "github_runner_group": "Default",
+      "unit_label": "stado-publisher-runner",
+      "installers": {
+        "darwin-arm64": "publisher-launchd",
+        "linux-amd64": "publisher-systemd"
+      },
+      "secrets": [
+        "GITHUB_TOKEN",
+        "RELEASE_BOOTSTRAP_TOKEN",
+        "AC_API_KEY_ID",
+        "AC_API_ISSUER_ID",
+        "AC_API_KEY_P8",
+        "SPARKLE_PRIVATE_KEY",
+        "MACOS_CERT_P12",
+        "MACOS_CERT_PASSWORD",
+        "MACOS_SIGN_IDENTITY"
+      ],
+      "accepts_repository_scope": true,
+      "developer_id_account_item": "apple-account-holder"
+    }
+  ]
+}

@@ -221,13 +221,14 @@ final class StorageReconciliationStore: ObservableObject {
 
     nonisolated static func arguments(
         host: String,
-        transaction: String,
-        phase: StorageReconciliationPhase
+        transaction _: String,
+        phase _: StorageReconciliationPhase
     ) -> [String] {
         [
-            "host", "storage-root-reconcile", host,
-            "--transaction", transaction,
-            "--phase", phase.rawValue,
+            "repair", "stado",
+            "--step", "storage-root",
+            "--target", host,
+            "--apply",
             "--json",
         ]
     }

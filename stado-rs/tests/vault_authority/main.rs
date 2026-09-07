@@ -15,7 +15,7 @@
 //! `~/.stado/skarbiec.vault.json` with 626 — because the `skarbiec` CLI
 //! defaults to the first and Stado used to name the second. Six `skarbiec
 //! set-json` writes were simultaneously real, active on the host, and
-//! invisible to `stado host reconcile-release-verifier`, which closed the
+//! invisible to the declared `release-verifier` repair, which closed the
 //! fleet's release publication boundary for every product: `stado doctor
 //! --deployment-preflight` failed `object-auth` with seven publisher items
 //! missing from the release verifier's grant, and the repair could not run
