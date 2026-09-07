@@ -5094,21 +5094,23 @@ pub async fn refresh_weles_api_runtime(target: &str, revision: &str) -> Result<(
                 format!("port {WELES_API_PORT} is held by pid {pid}, which is not a Weles API: {command}"),
             ));
         }
-        let ended = host_channel::run_command(
-            &resolved,
-            &format!("PATH={path} kill -TERM {pid}"),
-            &runner,
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        let ended =
+            host_channel::run_command(&resolved, &format!("PATH={path} kill -TERM {pid}"), &runner)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
         if !ended.ok() {
             return Err(refused(
                 "port takeover",
-                format!("pid {pid} on port {WELES_API_PORT} refused SIGTERM: {}",
-                    host_channel::last_error_line(&ended, "no output")),
+                format!(
+                    "pid {pid} on port {WELES_API_PORT} refused SIGTERM: {}",
+                    host_channel::last_error_line(&ended, "no output")
+                ),
             ));
         }
-        println!("{}: ended unowned Weles API pid {pid} on port {WELES_API_PORT}", resolved.name);
+        println!(
+            "{}: ended unowned Weles API pid {pid} on port {WELES_API_PORT}",
+            resolved.name
+        );
     }
 
     // A built tree the running process has not loaded is not deployed. The
