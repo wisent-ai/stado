@@ -25,6 +25,26 @@
       "accepts_repository_scope": true
     },
     {
+      "name": "repository-precheck",
+      "slug": "stado-repo-precheck",
+      "labels": [
+        "stado",
+        "stado-precheck",
+        "stado-repository-precheck"
+      ],
+      "github_runner_group": "Default",
+      "unit_label": "stado-repo-precheck-runner",
+      "installers": {
+        "darwin-arm64": "kronika-launchd",
+        "linux-amd64": "kronika-systemd"
+      },
+      "secrets": [
+        "GITHUB_TOKEN",
+        "probierz-agent"
+      ],
+      "accepts_repository_scope": true
+    },
+    {
       "name": "publisher",
       "slug": "stado-publisher",
       "labels": [
