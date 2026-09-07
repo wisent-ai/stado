@@ -25,7 +25,7 @@
 //! - its remote program is one compile-time script with no interpolation
 //!   in it at all, run over the shared channel
 //!   ([`crate::deploy::host_channel::run_script`]), the same way
-//!   `host forward-local` writes its marker;
+//!   `route open --remote` writes its marker;
 //! - every value it reads off the host is reduced to a JSON-inert
 //!   character set and capped in length on BOTH sides, so a corrupt or
 //!   hostile file under `~/.stado` cannot push arbitrary text into an
@@ -841,7 +841,7 @@ probe_subcommand() {
   separator=,
 }
 probe_subcommand host inventory
-probe_subcommand host forward-local
+probe_subcommand route list
 probe_subcommand host exec
 probe_subcommand service list
 probe_subcommand registry doctor
@@ -1334,7 +1334,7 @@ pub fn parse_inventory(stdout: &str) -> Result<Inventory, DeployError> {
 
 /// The loopback port a forward marker points at.
 ///
-/// A marker is the one line `stado host forward-local` writes:
+/// A marker is the one line `stado route open --remote` writes, for example
 /// `http://127.0.0.1:8766`. A marker that is not that shape has no port to
 /// reconcile, and saying so beats guessing one.
 pub fn marker_port(url: &str) -> Option<u32> {

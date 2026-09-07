@@ -89,6 +89,7 @@ struct HostsView: View {
     /// Read on demand for the selected host: what that machine dials for each
     /// service, and whether the fleet declares that address.
     @StateObject private var forwardStore = HostForwardStore()
+    @StateObject private var routesStore = RoutesStore()
     @StateObject private var reconciliationStore = StorageReconciliationStore.shared
     /// Which vault the selected host's credential operations resolve to, and
     /// whether that host can resolve one at all.
@@ -550,6 +551,7 @@ struct HostsView: View {
                         host: host.targetName ?? host.displayName
                     )
                 }
+                RoutesSection(store: routesStore, selectedHost: host.targetName ?? host.displayName)
                 tailscaleLogSection(for: host)
                 HostReleaseSection(
                     store: store.hostReleaseStore,

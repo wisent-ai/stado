@@ -1,6 +1,6 @@
 //! `stado placement move` — one fenced transaction for a colocated service
-//! group — and `stado host publish-placement-policy`, which makes the registry
-//! the only writer of a host's Weles placement policy.
+//! group — and `stado route placement publish`, which makes the registry the
+//! only writer of a host's Weles placement policy.
 //!
 //! The registry profile is the complete operational contract: concrete units
 //! per host, stop/start order, durable files, loopback health probes, and routing
@@ -1200,7 +1200,7 @@ async fn move_services(
 }
 
 // ---------------------------------------------------------------------------
-// host publish-placement-policy
+// route placement publish
 // ---------------------------------------------------------------------------
 
 /// Basename the policy takes in the target's delivered-files directory, and the
@@ -1265,7 +1265,7 @@ async fn jq_eval(
 /// reads, or refuse and change nothing — the checks the retired apply script
 /// ran, as individual remote commands with every branch taken here.
 ///
-/// `stado host publish-placement-policy` delivers the document to
+/// `stado route placement publish` delivers the document to
 /// `$HOME/.stado/files/placement-policy.json` through the audited channel and
 /// then runs this. It takes no operator input on purpose: a writer that
 /// accepted a source or a destination path would be a remote writer with the
@@ -1509,7 +1509,7 @@ const VANTAGE_MARKER: &str = "PLACEMENT_VANTAGE";
 /// and the host's own agent, which reconciles the same declaration on its own
 /// disk. Which one wrote the file is the first question asked of a host whose
 /// worker is declining rows, so the answer is in the file.
-const PUBLISHED_BY: &str = "stado host publish-placement-policy";
+const PUBLISHED_BY: &str = "stado route placement publish";
 
 /// [`PUBLISHED_BY`] for the host-side reconciler.
 pub(crate) const RECONCILED_BY: &str = "stado agent reconcile-placement-policy";
@@ -1518,11 +1518,6 @@ pub(crate) const RECONCILED_BY: &str = "stado agent reconcile-placement-policy";
 /// 1`, `placement-policy.ts`). Publishing anything else delivers a file the
 /// consumer refuses.
 const POLICY_SCHEMA_VERSION: u64 = 1;
-
-/// How long a worker keeps a successfully loaded policy before reading the file
-/// again — `CACHE_TTL_MS = 30_000` in `placement-policy.ts`. Reported so an
-/// operator knows whether a still-refusing worker is stale or wrong.
-const POLICY_CACHE_SECONDS: u64 = 30;
 
 /// The worker's own hostname rule, transcribed from `normalizeHostname` in
 /// `weles/src/worker/identity.ts`: trim, lowercase, drop trailing dots.
@@ -1617,7 +1612,7 @@ fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, Cmd
 
 /// The policy document one target's registry declaration produces.
 ///
-/// One builder for both writers. `stado host publish-placement-policy` sends
+/// One builder for both writers. `stado route placement publish` sends
 /// these bytes from the coordinator through the audited channel, and
 /// [`crate::providers::local::agent::reconcile_placement_policy`] writes the
 /// same bytes on the host's own disk. Two builders would be two policies for
@@ -1736,18 +1731,8 @@ fn action_list(field: &str) -> Vec<String> {
         .collect()
 }
 
-/// An empty difference has to read as empty, not as a blank line an operator
-/// scanning a delta will fill in with an assumption.
-fn or_none(actions: &[&str]) -> String {
-    if actions.is_empty() {
-        "(none)".to_string()
-    } else {
-        actions.join(", ")
-    }
-}
-
-/// `stado host publish-placement-policy TARGET [--json]` — put the registry's
-/// `weles` declaration onto the host, stamped with the generation it came from.
+/// Build and install one target's declared placement policy for
+/// `stado route placement publish`.
 ///
 /// The registry declares `weles.actions` per target and the worker never reads
 /// it. The worker reads `~/.config/weles/placement-policy.json` on the box it
@@ -1766,14 +1751,14 @@ fn or_none(actions: &[&str]) -> String {
 /// went are the whole content of the operation, and an unchanged list is itself
 /// an answer worth reading.
 #[allow(clippy::too_many_lines)]
-pub async fn publish_placement_policy(
+pub(crate) async fn publish_placement_policy_report(
+    document: &Value,
+    generation: &str,
     target_name: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let (document, generation) = registry::fetch_versioned_document().await?;
-    let declared = parse_registry(&document)?;
+) -> Result<Value, CmdError> {
+    let declared = parse_registry(document)?;
     let resolved = target(&declared, target_name)?.clone();
-    let policy = policy_document(&resolved, &generation, PUBLISHED_BY)?;
+    let policy = policy_document(&resolved, generation, PUBLISHED_BY)?;
 
     // Staged as a file because the delivery channel carries files: the same
     // delivered-file path any other artifact takes, checksummed on arrival,
@@ -1839,78 +1824,22 @@ pub async fn publish_placement_policy(
         .as_ref()
         .map_or("unreported", |held| held.enabled.as_str());
 
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "vantage": vantage,
-                "delivered": delivered,
-                "bytes": bytes,
-                "installed": POLICY_DESTINATION,
-                "registry_generation": generation,
-                "previous_generation": previous_generation,
-                "published_at": policy.pointer("/_source/published_at"),
-                "enabled": installed.enabled,
-                "previous_enabled": previous_enabled,
-                "actions": current,
-                "previous_actions": previous.as_ref().map(|held| held.actions.clone()),
-                "added": added,
-                "removed": removed,
-                "unchanged": unchanged,
-                "status": "published",
-            }))?
-        );
-        return Ok(());
-    }
-
-    println!("target:      {}", resolved.name);
-    println!("vantage:     {vantage}");
-    println!("delivered:   {delivered} ({bytes} bytes)");
-    println!("installed:   {POLICY_DESTINATION}");
-    println!(
-        "generation:  {previous_generation} -> {}",
-        installed.generation
-    );
-    println!("enabled:     {previous_enabled} -> {}", installed.enabled);
-    println!("actions:     {}", or_none(&current));
-    println!("added:       {}", or_none(&added));
-    println!("removed:     {}", or_none(&removed));
-    println!("unchanged:   {}", or_none(&unchanged));
-
-    // What the replaced file was is worth a sentence of its own. None of these
-    // three is trivia: an unstamped file is the pre-provenance cache this
-    // command retires, an unparseable one is a worker that had been failing its
-    // placement load on every claim, and an absent one is a worker that had
-    // nothing to load at all. All three were silent.
-    match previous_generation {
-        "unstamped" => println!(
-            "\nthe file it replaced carried no _source: nothing on that host could say which \
-             registry read produced it, or when"
-        ),
-        "unreadable" => println!(
-            "\nthe file it replaced did not parse: the worker's loader had been throwing on \
-             every read, and a worker that cannot load placement claims nothing"
-        ),
-        "absent" => println!(
-            "\nthere was no policy file on that host: under WELES_PLACEMENT_MODE=required the \
-             worker had been refusing every action for want of one"
-        ),
-        _ => {}
-    }
-
-    if added.is_empty() && removed.is_empty() {
-        println!(
-            "\nno action changed: {} was already carrying this list, and now carries the \
-             registry generation that proves where it came from",
-            resolved.name
-        );
-    } else {
-        println!(
-            "\n{} may now run what the registry declares and nothing else; its worker re-reads \
-             {POLICY_DESTINATION} within {POLICY_CACHE_SECONDS} seconds",
-            resolved.name
-        );
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "vantage": vantage,
+        "delivered": delivered,
+        "bytes": bytes,
+        "installed": POLICY_DESTINATION,
+        "registry_generation": generation,
+        "previous_generation": previous_generation,
+        "published_at": policy.pointer("/_source/published_at"),
+        "enabled": installed.enabled,
+        "previous_enabled": previous_enabled,
+        "actions": current,
+        "previous_actions": previous.as_ref().map(|held| held.actions.clone()),
+        "added": added,
+        "removed": removed,
+        "unchanged": unchanged,
+        "status": "published",
+    }))
 }

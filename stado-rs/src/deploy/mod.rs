@@ -96,6 +96,7 @@ pub mod host_cron;
 pub mod host_disk;
 pub mod host_delivery;
 pub mod host_exec;
+pub mod host_forward;
 pub mod host_gates;
 pub mod host_gui_automation;
 pub mod host_inventory;

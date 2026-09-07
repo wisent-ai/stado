@@ -61,6 +61,7 @@ pub mod resolver;
 pub mod resources;
 pub mod results;
 pub mod runner;
+pub mod route;
 pub mod schedule;
 pub mod secrets;
 pub mod seed_freshness;
@@ -649,6 +650,9 @@ enum Commands {
     /// Read and reclaim a host's declared space, including guarded file operations.
     #[command(subcommand)]
     Space(space::SpaceCommands),
+    /// Inspect and operate service-directory routing without naming a product.
+    #[command(subcommand)]
+    Route(route::RouteCommands),
 }
 
 #[derive(Subcommand)]
@@ -1285,23 +1289,6 @@ enum HostCommands {
     /// nothing at all, which is worse than reporting the operator's own list.
     #[command(name = "beacon-units")]
     BeaconUnits,
-    /// Authorize TARGET's service resolver to read the registry from the
-    /// service-directory authority.
-    ///
-    /// A resolver anywhere but on the authority host itself can only obtain a
-    /// registry snapshot over ssh to that host, and a resolver with no snapshot
-    /// binds none of its declared adapters — so the host publishes nothing at
-    /// all, loudly in its log and invisibly everywhere else. This mints the
-    /// resolver keypair on TARGET when it has none and appends its PUBLIC half
-    /// to the authority account's authorized_keys, once. The private half is
-    /// generated where it is used and never travels.
-    #[command(name = "resolver-key")]
-    ResolverKey {
-        target: String,
-        /// Emit the authorization report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
@@ -1316,18 +1303,6 @@ enum HostCommands {
         target: String,
         watts: u32,
         /// Emit the registry generation and driver report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Publish TARGET's registry `weles` declaration as its placement policy.
-    ///
-    /// The worker decides what it may claim from a file on its own disk, not
-    /// from the registry. This regenerates that file from the registry, stamps
-    /// it with the generation it came from, and reports what changed.
-    #[command(name = "publish-placement-policy")]
-    PublishPlacementPolicy {
-        target: String,
-        /// Emit the publication and its action delta as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1650,59 +1625,6 @@ enum HostCommands {
         #[arg(long)]
         runner_gate: String,
     },
-    /// Open an encrypted reverse SSH forwarding channel to TARGET.
-    #[command(name = "forward-local")]
-    ForwardLocal {
-        target: String,
-        /// Safe name for the remote endpoint marker.
-        name: String,
-        /// Loopback port exposed on TARGET.
-        #[arg(long)]
-        remote_port: u16,
-        /// Loopback port served by this control-plane host.
-        #[arg(long)]
-        local_port: u16,
-        /// Emit the forwarding report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Close a forwarding channel opened by `forward-local` or
-    /// `forward-remote`, and reconcile its markers.
-    ///
-    /// A tunnel the fleet can open and cannot close is a port it cannot
-    /// reclaim: the detached `ssh -f -N` outlives the command that made it, and
-    /// its marker under `~/.stado/forwards` keeps asserting an endpoint that
-    /// may no longer carry anything. This ends the exact channel, deletes its
-    /// markers, and re-reads the exposed port to confirm it stopped listening.
-    ///
-    /// The ssh process is matched on its complete `-R` or `-L` specification
-    /// and its destination, never on the word `ssh`: this machine runs several
-    /// forwards, and a match by program name would tear down the fleet's other
-    /// channels.
-    #[command(name = "forward-close")]
-    ForwardClose {
-        target: String,
-        /// The forward name whose markers were written.
-        name: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Open an encrypted local SSH forwarding channel to TARGET.
-    #[command(name = "forward-remote")]
-    ForwardRemote {
-        target: String,
-        /// Safe name for the local endpoint marker.
-        name: String,
-        /// Loopback port served on TARGET.
-        #[arg(long)]
-        remote_port: u16,
-        /// Loopback port exposed on this control-plane host.
-        #[arg(long)]
-        local_port: u16,
-        /// Emit the forwarding report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
 
 
     /// Run one approved command on TARGET (allowlist, not a shell). Every
@@ -1853,72 +1775,6 @@ enum HostCommands {
     Inventory {
         target: String,
         /// Emit the inventory and its reconciliation as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Read, or declare, one Skarbiec capability route ON TARGET.
-    ///
-    /// A capability route maps a resource the broker is asked to resolve —
-    /// `origin:<page origin>/<field class>` for a browser fill — onto one
-    /// vault item and field. The table decides which credential a login form
-    /// receives, and it is per-host: charless-mac-mini holds its own, so a
-    /// route declared on an operator's laptop makes nothing resolvable there.
-    /// `capability-issue` refuses a resource with no route at issue time,
-    /// which is why this exists as its own verb rather than as a side effect
-    /// of some flow that needed one.
-    ///
-    /// Without `--resource` this is a READ: every route on TARGET with that
-    /// host's own answer for it — whether the item is one it can open and
-    /// whether the field is one that item carries. With all four flags it
-    /// declares one route. Skarbiec keeps the previous table beside the new
-    /// one, records the reason in its journal, reports an identical route as
-    /// unchanged, and refuses to repoint a live route.
-    #[command(name = "capability-route")]
-    CapabilityRoute {
-        target: String,
-        /// The resource to map, e.g. `origin:https://accounts.google.com/email`.
-        #[arg(long)]
-        resource: Option<String>,
-        /// The vault item on TARGET that holds the credential.
-        #[arg(long)]
-        item: Option<String>,
-        /// The field of that item, e.g. `username` or `password`.
-        #[arg(long)]
-        field: Option<String>,
-        /// Why this route exists. Required by Skarbiec for a declaration, and
-        /// carried into its journal beside the table: a change to which
-        /// credential a form receives is never self-explanatory later.
-        #[arg(long)]
-        reason: Option<String>,
-        /// Ask TARGET to verify its whole table and report the SENTENCE behind
-        /// every route that cannot deliver, instead of the two booleans the
-        /// listing prints. A non-interactive channel may be unable to open a
-        /// vault the broker service on that host opens fine, and only the
-        /// sentence tells those apart.
-        #[arg(long)]
-        verify: bool,
-        /// Address one broker instance's capability state instead of the
-        /// host's vault-adjacent default. `capability-serve` is started with
-        /// whatever its launcher exports, and only that instance can redeem
-        /// what is issued into it. A leading `$HOME/` expands on the host.
-        #[arg(long)]
-        capability_file: Option<String>,
-        /// The route table that same instance resolves against.
-        #[arg(long)]
-        routes_file: Option<String>,
-        /// Emit the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Which hosts a mobile capture family may be placed on, out of the
-    /// registry's declarations alone. Read-only, contacts no host: a host that
-    /// declares no runtime for the family is absent from the answer and is
-    /// never probed for it.
-    #[command(name = "mobile-placement")]
-    MobilePlacement {
-        /// `ios` or `android`; omit for every family.
-        #[arg(long)]
-        family: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -2407,9 +2263,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 host::publish_beacon(&source, print).await
             }
             HostCommands::BeaconUnits => host::beacon_units().await,
-            HostCommands::ResolverKey { target, json } => {
-                host::authorize_resolver_key(&target, json).await
-            }
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,
@@ -2445,9 +2298,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 watts,
                 json,
             } => host::gpu_power_limit(&target, watts, json).await,
-            HostCommands::PublishPlacementPolicy { target, json } => {
-                placement::publish_placement_policy(&target, json).await
-            }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target, json }) => {
                 host::gui_automation_status(&target, json).await
             }
@@ -2503,23 +2353,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 )
                 .await
             }
-            HostCommands::ForwardLocal {
-                target,
-                name,
-                remote_port,
-                local_port,
-                json,
-            } => host::forward_local(&target, &name, remote_port, local_port, json).await,
-            HostCommands::ForwardClose { target, name, json } => {
-                host::forward_close(&target, &name, json).await
-            }
-            HostCommands::ForwardRemote {
-                target,
-                name,
-                remote_port,
-                local_port,
-                json,
-            } => host::forward_remote(&target, &name, remote_port, local_port, json).await,
             HostCommands::Exec {
                 target,
                 json,
@@ -2545,33 +2378,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::run_attached(&target, &program, &arguments, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
-            HostCommands::CapabilityRoute {
-                target,
-                resource,
-                item,
-                field,
-                reason,
-                verify,
-                capability_file,
-                routes_file,
-                json,
-            } => {
-                host::capability_route(host::CapabilityRouteRequest {
-                    target: &target,
-                    resource: resource.as_deref(),
-                    item: item.as_deref(),
-                    field: field.as_deref(),
-                    reason: reason.as_deref(),
-                    verify,
-                    capability_file: capability_file.as_deref(),
-                    routes_file: routes_file.as_deref(),
-                    json,
-                })
-                .await
-            }
-            HostCommands::MobilePlacement { family, json } => {
-                host::mobile_placement(family.as_deref(), json).await
-            }
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
             HostCommands::ConfigSet {
                 target,
@@ -2611,6 +2417,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Repair(args) => repair::dispatch(args).await,
         Commands::Runner(sub) => runner::run(sub).await,
         Commands::Space(command) => space::dispatch(command).await,
+        Commands::Route(sub) => route::dispatch(sub).await,
     }
 }
 

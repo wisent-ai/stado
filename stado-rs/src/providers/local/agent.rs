@@ -287,7 +287,7 @@ async fn read_gpu_power_limits() -> Result<Vec<f64>, String> {
 /// reads, and report `(detail, (enabled, actions))`.
 ///
 /// The document is built by [`crate::cli::placement::policy_document`] — the
-/// same builder `stado host publish-placement-policy` uses, so the bytes an
+/// same builder `stado route placement publish` uses, so the bytes an
 /// operator delivers from the coordinator and the bytes this writes are one
 /// shape decided in one place.
 ///
