@@ -67,6 +67,7 @@ const ALLOWED_FAMILIES: &[&str] = &[
     "storage",
     "submit",
     "vast",
+    "web",
 ];
 
 #[derive(Deserialize)]
@@ -198,6 +199,7 @@ fn is_read_only(args: &[String]) -> bool {
                 "ls" | "stat" | "cat" | "verify" | "objects" | "url"
             )
             | ("vast", "status")
+            | ("web", "status")
             | ("alerts", "channels")
     )
 }

@@ -377,6 +377,7 @@ struct ConsoleView: View {
                 ServicesView(
                     store: serviceStore,
                     fleetStore: fleetServiceStore,
+                    controlStore: fleetStore,
                     hosts: StadoRegistryHosts.names(targets: fleetStore.targets, snapshot: store.snapshot),
                     scope: scopeName
                 )

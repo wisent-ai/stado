@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.16.41"
+version = "0.16.42"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
@@ -109,3 +109,7 @@ path = "tests/documentation/main.rs"
 [[test]]
 name = "runner"
 path = "tests/runner/main.rs"
+
+[[test]]
+name = "web"
+path = "tests/web/main.rs"

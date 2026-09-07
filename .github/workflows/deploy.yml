@@ -301,10 +301,10 @@ jobs:
       STADO_RELEASE_CHANNEL: ${{ needs.identity.outputs.channel }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       # The writer uses one declared resolver adapter for both mutation and
-      # authenticated read-back. Fleet delivery verifies the public read-only
-      # Funnel separately after publication.
+      # authenticated read-back. Fleet delivery verifies the configured public
+      # release channel separately after publication.
       STADO_WRITER_API_URL: http://127.0.0.1:18776
-      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
+      STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -991,7 +991,7 @@ jobs:
       contents: read
     env:
       STADO_WRITER_API_URL: http://127.0.0.1:18776
-      STADO_PUBLIC_RELEASE_API_URL: https://charless-mac-mini.tail6443b3.ts.net
+      STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
@@ -1368,29 +1368,22 @@ jobs:
             jq -e '.providers // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
           fi
 
-      # The public route, asked BEFORE anything is published, because every
-      # later step depends on it and the repair for it used to sit at the end
-      # of the job. On 2026-09-04 this job failed at "Create immutable native
-      # release through Stado" while the loopback listener behind the route
-      # was down, so "Reconcile public release ingress" - which IS the repair,
-      # `stado host recover-object-api` - was skipped on exactly the run that
-      # needed it, and the route stayed 502 for hours. Asking here fails the
-      # job in seconds with the route's own answer instead of after a full
-      # build and publish.
-      - name: Require the public release route before publishing
+      # Ask the configured public route before anything is published, because
+      # every later public release operation depends on it. The immutable-byte
+      # verification after publication remains the authoritative delivery gate.
+      - name: Require the configured public release route before publishing
         run: |
           route="$STADO_PUBLIC_RELEASE_API_URL/api/release/object"
           # A malformed `uri` is answered by the route's own handler, so the
-          # expected status is a refusal, not a success: what is being tested
-          # is that the loopback listener answers at all. 502 is what a dead
-          # listener behind the Funnel produces, and 000 is curl failing to
-          # reach the host.
+          # expected status is a refusal, not a success. Connectivity and
+          # upstream-unavailable statuses mean the selected origin cannot
+          # currently serve the release channel.
           status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
             "$route?uri=stado://releases/precondition")"
           echo "public release route answered HTTP $status"
           case "$status" in
             502|503|504|000)
-              echo "::error::The public release route answers HTTP $status: the object API behind it is not serving. Repair it with 'stado host recover-object-api charless-mac-mini' before publishing."
+              echo "::error::The configured public release route answers HTTP $status and cannot serve release bytes."
               false
               ;;
           esac
@@ -1570,43 +1563,15 @@ jobs:
           echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
           echo "STADO_NATIVE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
-      # Immediately after publication and `if: always()`, because this step IS
-      # the route's repair - `stado host recover-object-api` - and it used to
-      # sit at the END of this job, after delivery. That order meant it was
-      # skipped on precisely the runs that broke the route: on 2026-09-04 the
-      # job failed at "Create immutable native release through Stado" and this
-      # step never ran, leaving `/api/release/object` answering 502 through
-      # both the Funnel and `stado.wisent.com` while `install-stado.sh`,
-      # `self_update.rs`, `host_release.rs` and `host_recovery_release.rs` all
-      # read that path. A repair reachable only on the happy path is not a
-      # repair.
-      - name: Reconcile public release ingress
+      # Run object-service recovery even when an earlier publication step
+      # failed. It repairs only the declared listener; the configured public
+      # connection is judged by the immutable-byte verification below.
+      - name: Reconcile the declared object service
         if: always()
         run: |
           "$HOME/.stado/bin/stado" host recover-object-api \
             charless-mac-mini --json \
-            > "$RUNNER_TEMP/public-release-ingress.json"
-          # `jq -e` judges only the LAST value of a stream, and this host serves
-          # four `.Web` entries — `:443`, `:8443`, `:9443`, `:10000`. The
-          # release route belongs to `:443` alone, so the stream read
-          # `false true false false` and the exit status came from `:10000`
-          # having no such handler. 0.9.5 published both platforms, delivered
-          # them, and then reported failure on that last `false` while the
-          # condition the step means to assert was true.
-          #
-          # The question is "does some `:443` entry proxy the release route",
-          # so it is asked of the whole set at once. `any` over an empty array
-          # is false, so a host serving the route nowhere still refuses.
-          "$HOME/.stado/bin/stado" host exec charless-mac-mini -- \
-            tailscale serve status --json |
-            jq -e '
-              [
-                (.Web // {}) | to_entries[] |
-                (.key | endswith(":443")) and
-                (.value.Handlers["/api/release/object"].Proxy ==
-                  "http://127.0.0.1:8765/api/release/object")
-              ] | any
-            '
+            > "$RUNNER_TEMP/object-service-recovery.json"
 
       - name: Validate public native release delivery
         run: |
