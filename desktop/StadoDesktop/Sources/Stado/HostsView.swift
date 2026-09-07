@@ -93,6 +93,7 @@ struct HostsView: View {
     /// Which vault the selected host's credential operations resolve to, and
     /// whether that host can resolve one at all.
     @StateObject private var vaultStore = HostVaultStore()
+    @StateObject private var workloadStore = WorkloadStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -557,6 +558,10 @@ struct HostsView: View {
                 appleChallengeSection(for: host)
                 cargoInventorySection(for: host)
                 runnerSection(for: host)
+                WorkloadSection(
+                    target: host.targetName ?? host.displayName,
+                    store: workloadStore
+                )
                 if host.status != .live {
                     WisentAlertPanel(
                         tone: tone(for: host.status),

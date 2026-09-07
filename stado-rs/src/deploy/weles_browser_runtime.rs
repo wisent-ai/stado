@@ -257,22 +257,26 @@ impl RuntimeReport {
                     })
                     .collect::<Vec<String>>()
                     .join("; ");
-                let component_flags = missing
+                let components = missing
                     .iter()
-                    .map(|component| format!(" --component {}", component.name))
-                    .collect::<String>();
+                    .map(|component| format!("\"{}\"", component.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 Some(format!(
                     "{host}: the browser runtime is incomplete, so every browser task fails at \
-                     `browserContext.newPage` before any navigation: {listed}; repair it with \
-                     `stado host weles-browser-runtime {host}{component_flags} --repair`."
+                     `browserContext.newPage` before any navigation: {listed}; create a \
+                     wisent.weles-browser-runtime-plan.v1 plan with components [{components}] and \
+                     repair=true, then run `stado workload run weles-browser-runtime --target \
+                     {host} --plan PLAN.json`."
                 ))
             }
             _ => match self.browser_engine_state() {
                 BROWSER_ENGINE_MISSING => Some(format!(
                     "{host}: required Playwright components are complete, but no Chromium, \
                      Firefox, or WebKit engine is installed, so `browserContext.newPage` cannot \
-                     open a page; install Chromium with `stado host weles-browser-runtime {host} \
-                     --component chromium --repair`."
+                     open a page; create a wisent.weles-browser-runtime-plan.v1 plan with \
+                     components [\"chromium\"] and repair=true, then run `stado workload run \
+                     weles-browser-runtime --target {host} --plan PLAN.json`."
                 )),
                 BROWSER_ENGINE_UNKNOWN => Some(format!(
                     "{host}: required Playwright components are complete, but browser-engine \

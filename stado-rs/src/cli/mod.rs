@@ -23,7 +23,6 @@ pub mod builds;
 pub mod cancel;
 pub mod capabilities;
 pub mod cloudflare;
-pub mod coding;
 pub mod config_cmd;
 pub mod control_plane;
 pub mod coordinator;
@@ -75,6 +74,7 @@ pub mod submit;
 pub mod table;
 pub mod vast;
 pub mod web;
+pub mod workload;
 
 /// Command failure with a click-matching exit code. A `Some` message is
 /// printed as `Error: {msg}` on stderr (click `ClickException`, code 1)
@@ -636,6 +636,9 @@ enum Commands {
     /// release channel, agent template, VM identity, registry, queue pause
     /// state and alert channels. Exits non-zero if any check FAILs.
     Doctor(doctor::DoctorArgs),
+    /// Place declared work on an eligible fleet host and return its stream or receipt.
+    #[command(subcommand)]
+    Workload(workload::WorkloadCommands),
 }
 
 #[derive(Subcommand)]
@@ -1465,9 +1468,6 @@ enum HostCommands {
     /// Manage the organization-wide GitHub desktop publisher on a registry host.
     #[command(name = "publisher-runner", subcommand)]
     PublisherRunner(HostPublisherRunnerCommands),
-    /// Point TARGET's Weles recordings store at PATH.
-    #[command(name = "weles-recordings-dir")]
-    WelesRecordingsDir { target: String, path: String },
     /// Read or set TARGET's disk-cleanup policy in the canonical registry.
     ///
     /// Without a mutating flag this prints the policy in force. With one it
@@ -1549,9 +1549,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Manage the GUI-automation enablement of TARGET.
-    #[command(name = "gui-automation", subcommand)]
-    GuiAutomation(HostGuiAutomationCommands),
     /// Report or reclaim tagged build caches on TARGET.
     #[command(name = "build-caches", subcommand)]
     BuildCaches(HostBuildCacheCommands),
@@ -1972,19 +1969,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Place an interactive Jeden RPC session on a live registry host and
-    /// attach it to this process's stdin/stdout.
-    #[command(name = "jeden-connect")]
-    JedenConnect {
-        /// Repository name under ~/Documents/CodingProjects/Wisent.
-        workspace: String,
-        /// Reconnect to the host that owns an existing durable session.
-        #[arg(long)]
-        target: Option<String>,
-        /// Require the selected host to own this ~/.jeden/sessions ledger.
-        #[arg(long)]
-        resume: Option<String>,
-    },
     /// Remove one file from TARGET's home, with guards a bare `rm` over ssh
     /// does not have: the path must live under a managed area of the approved
     /// account's home, be a regular file owned by that account, and never be
@@ -2096,91 +2080,12 @@ enum HostCommands {
         /// Local renderer to deliver and run.
         source: String,
     },
-    /// Move TARGET's managed Weles API runtime onto one exact revision, restart
-    /// the unit that serves it, and report the revision now answering. Refuses
-    /// unless the host records exactly that revision.
-    #[command(name = "weles-api-runtime")]
-    WelesApiRuntime {
-        target: String,
-        /// The full 40-character git object name the runtime must serve.
-        #[arg(long)]
-        revision: String,
-    },
     /// Report TARGET's stado-managed binaries, fixed Cargo-home metadata and
     /// bin membership, forward markers and loopback listeners, and whether
     /// each marker still matches a live listener.
     Inventory {
         target: String,
         /// Emit the inventory and its reconciliation as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// What TARGET's Weles worker is doing: its staged and installed releases,
-    /// whether its worker API answers, and its newest recorded runs with each
-    /// run's own verdict. Counts and timestamps only; recordings stay on the
-    /// host.
-    #[command(name = "weles-activity")]
-    WelesActivity {
-        target: String,
-        /// Emit the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Read the authenticated artifact inventory, or one exact artifact, from
-    /// a completed Weles browser run on TARGET.
-    #[command(name = "weles-run-diagnostics")]
-    WelesRunDiagnostics {
-        target: String,
-        /// Weles run identifier returned by the browser task.
-        run_id: String,
-        /// Exact artifact path from the run inventory.
-        #[arg(long)]
-        file: Option<String>,
-        /// Emit the report as JSON. Binary file content is base64 encoded.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Inspect every image rendered by one HTTPS surface in a read-only Weles
-    /// browser session on TARGET. The objective and safety constraints are
-    /// fixed by Stado; the caller supplies only the URL.
-    #[command(name = "weles-image-inspect")]
-    WelesImageInspect {
-        target: String,
-        /// HTTPS page Weles must render and inspect.
-        #[arg(long)]
-        url: String,
-        /// Emit the complete redacted Weles result as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Enqueue one batch of `generic_capture` actions on TARGET's Weles
-    /// admission API from a checked-in capture plan. The plan is refused in
-    /// full before the host is contacted, the loopback API is reached over the
-    /// registry's own encrypted SSH channel for the length of the command, and
-    /// every artifact lands in Stado storage under the plan's own prefixes.
-    #[command(name = "weles-capture")]
-    WelesCapture {
-        target: String,
-        /// Capture plan file, schema `wisent.weles-capture-plan.v1`.
-        #[arg(long)]
-        plan: String,
-        /// Use this batch id instead of the one the plan declares.
-        #[arg(long)]
-        batch: Option<String>,
-        /// Emit the enqueue report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Per-action state of one capture batch — queued, running, done or
-    /// failed — plus the artifact keys already present in Stado storage under
-    /// the batch prefix. Read-only. Retrieval is `stado storage get`.
-    #[command(name = "weles-capture-status")]
-    WelesCaptureStatus {
-        target: String,
-        /// Batch id to report on.
-        #[arg(long)]
-        batch: String,
-        /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -2235,159 +2140,6 @@ enum HostCommands {
         #[arg(long)]
         routes_file: Option<String>,
         /// Emit the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Run one browser task on TARGET's Weles worker and report its result.
-    ///
-    /// The general submission surface. `weles-capture` hard-codes
-    /// `generic_capture`, which charless-mac-mini's worker does not accept, and
-    /// `weles-image-inspect` submits the allowlisted `generic_browser_task`
-    /// with its objective and constraints fixed in product code. So the only
-    /// action that host would run was reachable only through a command that
-    /// could not be told what to do, and every browser workflow this fleet
-    /// owns sat behind that.
-    ///
-    /// The action name is checked against TARGET's own
-    /// `WELES_ACTION_ALLOWLIST` before any channel is opened, and the
-    /// allowlist is read byte-exact rather than through `env-show`, which
-    /// clamps values at 400 characters and would silently truncate a
-    /// 4488-character list to its first 25 entries. An action the worker would
-    /// refuse is refused here, naming the action and the host.
-    ///
-    /// The request is held open for the run, so this reports what the run
-    /// produced rather than a queue receipt.
-    #[command(name = "weles-browser-task")]
-    WelesBrowserTask {
-        target: String,
-        /// Page the task starts on.
-        #[arg(long)]
-        url: String,
-        /// What the agent must accomplish. `@path` reads the objective from a
-        /// file, for the long ones that do not belong in a shell history.
-        #[arg(long)]
-        objective: String,
-        /// Stable recording label. `--fresh-profile` controls profile identity.
-        #[arg(long)]
-        session_label: String,
-        /// Action to run; must be one TARGET's allowlist carries.
-        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ACTION)]
-        action: String,
-        /// Exact action catalog shipped by the active Weles release.
-        #[arg(long, default_value = crate::deploy::weles_browser_task::DEFAULT_ALLOWLIST_FILE)]
-        allowlist_file: String,
-        /// Exact Weles login item for a named credential trajectory.
-        #[arg(long)]
-        login_item: Option<String>,
-        /// Bind this run to one account identity, which is what keys the
-        /// browser profile. Weles hashes it into a profile directory and the
-        /// API puts it in the trajectory's `ACCOUNT_ID`, so two runs sharing it
-        /// share cookies and a signed-in session. Without it every run is a
-        /// brand-new device to the site being driven, which is how a sign-in
-        /// that succeeded once cannot be built on and why each attempt draws a
-        /// first-visit risk check.
-        #[arg(long)]
-        account_id: Option<String>,
-        /// Give the run a new account identity, which makes Weles create a new
-        /// browser profile directory instead of clearing or reusing one.
-        #[arg(long)]
-        fresh_profile: bool,
-        /// Carry "this run may sign in" into the agent's instructions. This is
-        /// a HINT, not an enforced restriction: Weles appends the
-        /// read_only/no_login/no_mutation constraints to the model's goal text
-        /// and checks them nowhere, and the agent holds fill, click, navigate
-        /// and store_credential whether or not this is set. Its one mechanical
-        /// effect is that --sign-in-origin is refused without it.
-        #[arg(long)]
-        allow_login: bool,
-        /// Sign in on this page origin with the account Skarbiec holds, e.g.
-        /// `https://accounts.google.com`. Stado mints one single-use,
-        /// one-hour `weles.browser.fill` capability per field — email and
-        /// password — under one authorization id, and sends only those
-        /// references: no secret enters argv, the objective, a log line or the
-        /// report. The worker redeems each against its own broker at fill time
-        /// and zeroes the plaintext. Requires --sign-in-item and
-        /// --allow-login. A bare origin only: Weles compares it against the
-        /// live page's own origin, so a run that redirects elsewhere before the
-        /// prefill is refused there rather than filled.
-        #[arg(long)]
-        sign_in_origin: Option<String>,
-        /// The vault item holding that account. Checked against Skarbiec's
-        /// capability route table before anything is minted: the item a route
-        /// names is the item that would be read, and a disagreement is refused
-        /// rather than silently resolved in the route's favour.
-        #[arg(long)]
-        sign_in_item: Option<String>,
-        /// Hand every sign-in capability to the agent instead of prefilling the
-        /// first one. For hosts whose installed runtime fills at page load
-        /// without waiting for the field: weles before 0.5.41 spends a
-        /// capability whether or not the input has rendered, so a slow
-        /// identifier page silently costs the fill and cannot be retried. The
-        /// agent redeems each reference on the page that has the field.
-        #[arg(long)]
-        defer_fills: bool,
-        /// Prefill every sign-in capability on the first loaded page. Use this
-        /// for forms that render the identifier and password together. Weles
-        /// 0.5.41 and newer leave a capability unspent when its field is absent,
-        /// so a later agent step can still redeem it. Mutually exclusive with
-        /// --defer-fills and requires --sign-in-origin.
-        #[arg(long, conflicts_with = "defer_fills", requires = "sign_in_origin")]
-        prefill_all: bool,
-        /// The saved-trajectory key. Defaults to the session label, which is
-        /// also the browser profile's name - two different things that only
-        /// look alike. A run whose `done` carried an error is still codified
-        /// under that key and replayed verbatim on the next run, so resuming a
-        /// profile means inheriting the failure that last used it unless this
-        /// names a fresh flow.
-        #[arg(long)]
-        flow_name: Option<String>,
-        /// Run with a visible window. Some sign-in flows refuse headless.
-        #[arg(long)]
-        windowed: bool,
-        /// Emit the complete result as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Verify, and with --repair complete, the browser runtime TARGET's Weles
-    /// release declares it needs.
-    ///
-    /// The worker records its sessions, so a missing recording dependency kills
-    /// `browserContext.newPage` before any navigation and every browser task on
-    /// the host fails. On charless-mac-mini that was Playwright's ffmpeg, absent
-    /// at ms-playwright/ffmpeg-1011/ffmpeg-mac, and three runs had already
-    /// failed that way before anyone looked. Recording is the evidence Weles
-    /// exists to keep, so the repair completes the runtime rather than turning
-    /// recording off.
-    ///
-    /// The requirement is read from `browsers.json` inside the installed
-    /// release, never hardcoded here, because Playwright pins an exact revision
-    /// per component and a constant would verify the wrong path the moment the
-    /// release moved. The report separately states whether the components
-    /// required by this invocation are present and whether any Chromium,
-    /// Firefox, or WebKit engine can open a page. --repair installs only the
-    /// components named, defaulting to ffmpeg.
-    #[command(name = "weles-browser-runtime")]
-    WelesBrowserRuntime {
-        target: String,
-        /// Component to install with --repair; repeat for each. Defaults to
-        /// ffmpeg, which is what the recording path needs.
-        #[arg(long = "component")]
-        components: Vec<String>,
-        /// Install the missing components, then verify again.
-        #[arg(long)]
-        repair: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Verify, and with --repair install, the mobile automation runtime
-    /// TARGET's registry entry declares it needs: the Appium server at its
-    /// declared version, each declared driver, and Android platform-tools.
-    #[command(name = "mobile-runtime")]
-    MobileRuntime {
-        target: String,
-        /// Install what the declaration asks for, then verify again.
-        #[arg(long)]
-        repair: bool,
         #[arg(long)]
         json: bool,
     },
@@ -2455,42 +2207,6 @@ enum HostBuildCacheCommands {
         /// Remove tagged caches even when they were used today.
         #[arg(long)]
         force: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum HostGuiAutomationCommands {
-    /// Report autologin, remote management, TCC, CuaDriver, and the signed
-    /// Apple challenge helper for the registry-bound GUI user.
-    Status {
-        target: String,
-        /// Return the complete observed host state as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Configure the persistent GUI login, CuaDriver, the Apple challenge
-    /// helper, runtime, and Accessibility grants.
-    Enable { target: String },
-    /// Reconcile the signed Apple challenge helper and grant it and the
-    /// installed CuaDriver Accessibility for the registry-bound GUI user.
-    #[command(name = "grant-accessibility")]
-    GrantAccessibility {
-        target: String,
-        /// Prepare only the Apple challenge helper; leave CuaDriver, its
-        /// Accessibility grants, and its runtime unchanged.
-        #[arg(long)]
-        apple_only: bool,
-        /// Return the complete preparation report, including partial work on failure.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Revert the enablement: autologin, kcpassword, remote management,
-    /// the driver's accessibility grant, and the installed artifacts.
-    Disable {
-        target: String,
-        /// Bundle id whose accessibility grant is revoked; omitted leaves TCC alone.
-        #[arg(long)]
-        bundle: Option<String>,
     },
 }
 
@@ -2958,9 +2674,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 keep_home,
             }) => host::user_delete(&username, &target, keep_home).await,
-            HostCommands::WelesRecordingsDir { target, path } => {
-                host::weles_recordings_dir(&target, &path).await
-            }
             HostCommands::GpuPowerLimit {
                 target,
                 watts,
@@ -3010,20 +2723,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
-            }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target, json }) => {
-                host::gui_automation_status(&target, json).await
-            }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
-                host::gui_automation_enable(&target).await
-            }
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
-                target,
-                apple_only,
-                json,
-            }) => host::gui_automation_grant_accessibility(&target, apple_only, json).await,
-            HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
-                host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }
             HostCommands::BuildCaches(HostBuildCacheCommands::Report {
                 target,
@@ -3204,9 +2903,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RenderSpisAdmissionTrust { target, source } => {
                 host::render_spis_admission_trust(&target, &source).await
             }
-            HostCommands::WelesApiRuntime { target, revision } => {
-                host::refresh_weles_api_runtime(&target, &revision).await
-            }
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
             }
@@ -3288,16 +2984,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 destination,
                 files_from,
                 json,
-            } => {
-                host::deliver(
-                    &target,
-                    &source,
-                    &destination,
-                    files_from.as_deref(),
-                    json,
-                )
-                .await
-            }
+            } => host::deliver(&target, &source, &destination, files_from.as_deref(), json).await,
             HostCommands::Build {
                 target,
                 manifest_path,
@@ -3313,40 +3000,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RemoveRunDirectory { target, path, json } => {
                 host::remove_run_directory(&target, &path, json).await
             }
-            HostCommands::JedenConnect {
-                workspace,
-                target,
-                resume,
-            } => coding::connect_jeden(&workspace, target.as_deref(), resume.as_deref()).await,
             HostCommands::Reconcile {
                 target,
                 apply,
                 json,
             } => host::reconcile(target, apply, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
-            HostCommands::WelesActivity { target, json } => {
-                host::weles_activity(&target, json).await
-            }
-            HostCommands::WelesRunDiagnostics {
-                target,
-                run_id,
-                file,
-                json,
-            } => host::weles_run_diagnostics(&target, &run_id, file.as_deref(), json).await,
-            HostCommands::WelesImageInspect { target, url, json } => {
-                host::weles_image_inspect(&target, &url, json).await
-            }
-            HostCommands::WelesCapture {
-                target,
-                plan,
-                batch,
-                json,
-            } => host::weles_capture(&target, &plan, batch.as_deref(), json).await,
-            HostCommands::WelesCaptureStatus {
-                target,
-                batch,
-                json,
-            } => host::weles_capture_status(&target, &batch, json).await,
             HostCommands::CapabilityRoute {
                 target,
                 resource,
@@ -3371,57 +3030,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 })
                 .await
             }
-            HostCommands::WelesBrowserTask {
-                target,
-                url,
-                objective,
-                session_label,
-                action,
-                allowlist_file,
-                login_item,
-                account_id,
-                fresh_profile,
-                allow_login,
-                sign_in_origin,
-                sign_in_item,
-                defer_fills,
-                prefill_all,
-                flow_name,
-                windowed,
-                json,
-            } => {
-                host::weles_browser_task(host::BrowserTaskRequest {
-                    target: &target,
-                    url: &url,
-                    objective: &objective,
-                    session_label: &session_label,
-                    action: &action,
-                    allowlist_file: &allowlist_file,
-                    login_item: login_item.as_deref(),
-                    account_id: account_id.as_deref(),
-                    fresh_profile,
-                    allow_login,
-                    sign_in_origin: sign_in_origin.as_deref(),
-                    sign_in_item: sign_in_item.as_deref(),
-                    defer_fills,
-                    prefill_all,
-                    flow_name: flow_name.as_deref(),
-                    windowed,
-                    json,
-                })
-                .await
-            }
-            HostCommands::WelesBrowserRuntime {
-                target,
-                components,
-                repair,
-                json,
-            } => host::weles_browser_runtime(&target, &components, repair, json).await,
-            HostCommands::MobileRuntime {
-                target,
-                repair,
-                json,
-            } => host::mobile_runtime(&target, repair, json).await,
             HostCommands::MobilePlacement { family, json } => {
                 host::mobile_placement(family.as_deref(), json).await
             }
@@ -3460,6 +3068,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
+        Commands::Workload(command) => workload::dispatch(command).await,
     }
 }
 
