@@ -21,6 +21,7 @@
 //! | [`install`] | installing a runner and everything its profile declares |
 //! | [`lifecycle`] | restarting, repairing and removing an installed runner |
 //! | [`status`] | what one runner, one host, or the fleet reports |
+//! | [`diagnostics`] | what a runner that will not start is saying, read whole |
 //! | [`report`] | the shape of an answer and the fields read out of a program |
 //! | [`model_review`] | the model-review bearer a repository's CI presents |
 //! | [`publisher`] | a desktop publisher repository's release secrets |
@@ -32,6 +33,7 @@ mod brama;
 mod credentials;
 mod declaration;
 mod developer_id;
+mod diagnostics;
 mod github;
 mod install;
 mod installer;
@@ -52,6 +54,7 @@ mod status;
 // module uses; their submodules address each other directly.
 pub use self::declaration::*;
 pub use self::developer_id::*;
+pub use self::diagnostics::*;
 pub use self::github::*;
 pub use self::install::*;
 pub use self::installer::*;

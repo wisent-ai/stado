@@ -1,7 +1,12 @@
 //! `stado runner` — declared GitHub runner profiles across the fleet.
 
+mod diagnostics;
+mod render;
+
 use clap::Subcommand;
 use serde_json::Value;
+
+use render::{render_fleet, render_profiles, render_status_set};
 
 use super::CmdError;
 
@@ -71,21 +76,32 @@ pub enum RunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read what a runner that will not start is saying: its unit's verdict and
+    /// its own diagnostic log, whole.
+    Diagnostics {
+        target: String,
+        /// Profile name from stado-rs/data/runner-profiles.json.
+        #[arg(long)]
+        profile: String,
+        /// Emit the unit verdict and the log tail as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
-fn click(error: crate::deploy::DeployError, json: bool) -> CmdError {
+pub(crate) fn click(error: crate::deploy::DeployError, json: bool) -> CmdError {
     CmdError::click(error.to_string()).machine_readable(json)
 }
 
-fn print_json(value: &Value) {
+pub(crate) fn print_json(value: &Value) {
     println!("{}", crate::deploy::host_recovery::to_sorted_pretty(value));
 }
 
-fn text(value: Option<&Value>) -> &str {
+pub(crate) fn text(value: Option<&Value>) -> &str {
     value.and_then(Value::as_str).unwrap_or("-")
 }
 
-fn connected(value: &Value) -> &str {
+pub(crate) fn connected(value: &Value) -> &str {
     match value
         .get("listener")
         .and_then(|listener| listener.get("connected"))
@@ -141,85 +157,6 @@ fn route_outcome(report: &Value) -> Result<(), CmdError> {
             .and_then(Value::as_str)
             .unwrap_or("the runner's Brama route does not match the fleet declaration")
     )))
-}
-
-fn render_profiles(json: bool) -> Result<(), CmdError> {
-    let declaration = crate::deploy::host_precheck_runner::runner_declaration()
-        .map_err(|error| click(error, json))?;
-    if json {
-        print_json(&serde_json::to_value(declaration)?);
-        return Ok(());
-    }
-    println!("PROFILE\tSLUG\tRUNNER GROUP\tLABELS");
-    for profile in &declaration.profiles {
-        println!(
-            "{}\t{}\t{}\t{}",
-            profile.name,
-            profile.slug,
-            profile.github_runner_group,
-            profile.labels.join(",")
-        );
-    }
-    Ok(())
-}
-
-fn render_status_set(report: &Value, json: bool) {
-    if json {
-        print_json(report);
-        return;
-    }
-    for profile in report
-        .get("profiles")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        println!(
-            "{}: installed {}; scope {}; listener {}; host job slot {}",
-            text(profile.get("profile")),
-            profile
-                .get("installed")
-                .and_then(Value::as_bool)
-                .map_or("unknown", |installed| if installed { "yes" } else { "no" }),
-            text(profile.get("runner_scope")),
-            connected(profile),
-            text(profile.get("host_job_slot")),
-        );
-    }
-}
-
-fn render_fleet(report: &Value, json: bool) {
-    if json {
-        print_json(report);
-        return;
-    }
-    println!("TARGET\tPROFILE\tINSTALLED\tSCOPE\tLISTENER\tHOST JOB SLOT");
-    for host in report
-        .get("hosts")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        for profile in host
-            .get("profiles")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            println!(
-                "{}\t{}\t{}\t{}\t{}\t{}",
-                text(host.get("target")),
-                text(profile.get("profile")),
-                profile
-                    .get("installed")
-                    .and_then(Value::as_bool)
-                    .map_or("unknown", |installed| if installed { "yes" } else { "no" }),
-                text(profile.get("runner_scope")),
-                connected(profile),
-                text(profile.get("host_job_slot")),
-            );
-        }
-    }
 }
 
 pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
@@ -293,5 +230,10 @@ pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
             Ok(())
         }
         RunnerCommands::Credential { json } => crate::github_identity::report(json).await,
+        RunnerCommands::Diagnostics {
+            target,
+            profile,
+            json,
+        } => diagnostics::render(&target, &profile, json).await,
     }
 }
