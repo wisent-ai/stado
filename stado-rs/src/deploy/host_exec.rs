@@ -617,8 +617,7 @@ const BRAMA_RUNNER_CORECLR_SIGNATURE: &[&str] = &[
 /// The operator can select this exact entry but cannot append a run name or
 /// redirect it to another path. Individual canonical UUID children are made
 /// by `stado host deliver`, which validates them before reaching the host.
-const PROBIERZ_RUN_ROOT_CREATE: &[&str] =
-    &["/bin/mkdir", "-p", ".stado/work/runs"];
+const PROBIERZ_RUN_ROOT_CREATE: &[&str] = &["/bin/mkdir", "-p", ".stado/work/runs"];
 
 /// Every entry whose fixed path arguments name something inside the managed
 /// account's home rather than a system path.
@@ -2053,12 +2052,8 @@ mod tests {
 
     #[test]
     fn run_root_preparation_is_one_fixed_guarded_mutation() {
-        let selected = approve(&[
-            "mkdir".into(),
-            "-p".into(),
-            ".stado/work/runs".into(),
-        ])
-        .expect("fixed run root is approved");
+        let selected = approve(&["mkdir".into(), "-p".into(), ".stado/work/runs".into()])
+            .expect("fixed run root is approved");
         assert_eq!(selected.argv, PROBIERZ_RUN_ROOT_CREATE);
         let script = probierz_run_root_script();
         assert!(script.contains("umask 077"));

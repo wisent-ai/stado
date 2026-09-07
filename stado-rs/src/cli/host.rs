@@ -12717,10 +12717,9 @@ pub async fn run_attached(
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
-    let outcome =
-        crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let outcome = crate::deploy::host_run::run_attached(&resolved, program, arguments, json_output)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
     let exit_code = outcome.exit_code;
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
@@ -12756,9 +12755,7 @@ pub async fn remove_run_directory(
     .await
     .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
     if !outcome.succeeded() {
-        return Err(
-            CmdError::click(outcome.failure_sentence()).machine_readable(json_output)
-        );
+        return Err(CmdError::click(outcome.failure_sentence()).machine_readable(json_output));
     }
     if json_output {
         print_json(&serde_json::to_value(&outcome)?);
