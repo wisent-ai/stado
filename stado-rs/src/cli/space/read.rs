@@ -162,10 +162,14 @@ pub(super) fn print_memory(memory: &Value) {
             .map_or_else(|| "unknown".to_string(), |found| found.to_string())
     };
     let reading = memory.get("reading").unwrap_or(&Value::Null);
+    let mib = crate::providers::local::host_memory::constants::MIB;
+    let total_mb = reading
+        .get("total_bytes")
+        .and_then(Value::as_i64)
+        .map_or_else(|| "unknown".to_string(), |bytes| (bytes / mib).to_string());
     println!(
-        "memory: {} MiB available of {} MiB, swap {}% used",
+        "memory: {} MiB available of {total_mb} MiB, swap {}% used",
         number(reading, "available_mb"),
-        number(reading, "total_bytes"),
         number(reading, "swap_used_pct"),
     );
     println!(
