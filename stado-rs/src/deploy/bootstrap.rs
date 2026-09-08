@@ -632,7 +632,7 @@ async fn run_with_target_keys(
     echo: &mut dyn FnMut(&str),
 ) {
     for target in targets {
-        let key = match ssh_key::materialize(&target.name).await {
+        let key = match ssh_key::materialize(target.channel_key()).await {
             Ok(key) => Arc::new(key),
             Err(exc) => {
                 echo(&format!("[err]  {}: {exc}", target.name));

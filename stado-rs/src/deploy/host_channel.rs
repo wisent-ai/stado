@@ -68,7 +68,7 @@ pub(crate) async fn with_session<T>(
     if target_is_this_host(target) {
         return operation.await;
     }
-    let key = ssh_key::materialize(&target.name).await?;
+    let key = ssh_key::materialize(target.channel_key()).await?;
     let connection = select_connection_with_key(target, &key, runner).await?;
     let session = HostSession {
         target: target.name.clone(),
@@ -352,7 +352,7 @@ pub async fn select_ssh_connection<'a>(
     target: &'a ComputeTarget,
     runner: &Runner,
 ) -> Result<SshConnection<'a>, DeployError> {
-    let key = ssh_key::materialize(&target.name).await?;
+    let key = ssh_key::materialize(target.channel_key()).await?;
     select_connection_with_key(target, &key, runner).await
 }
 
@@ -376,7 +376,7 @@ pub async fn probe_ssh_connections(
     if connections.is_empty() {
         return Ok(probes);
     }
-    let key = match ssh_key::materialize(&target.name).await {
+    let key = match ssh_key::materialize(target.channel_key()).await {
         Ok(key) => key,
         Err(error) if local => {
             probes.extend(
@@ -455,7 +455,7 @@ async fn run_program_with_timeout_and_connection<'a>(
         return Ok((output, UsedConnection::Local));
     }
 
-    let key = ssh_key::materialize(&target.name).await?;
+    let key = ssh_key::materialize(target.channel_key()).await?;
     let connection = select_connection_with_key(target, &key, runner).await?;
     let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
     let output = runner(CommandSpec {
@@ -500,7 +500,7 @@ pub async fn run_program_with_stdin_and_connection<'a>(
         return Ok((output, UsedConnection::Local));
     }
 
-    let key = ssh_key::materialize(&target.name).await?;
+    let key = ssh_key::materialize(target.channel_key()).await?;
     let connection = select_connection_with_key(target, &key, runner).await?;
     let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
     let output = runner(CommandSpec {
@@ -722,7 +722,7 @@ pub async fn run_script_with_timeout_and_connection<'a>(
             UsedConnection::Local,
         )
     } else {
-        let key = ssh_key::materialize(&target.name).await?;
+        let key = ssh_key::materialize(target.channel_key()).await?;
         let connection = select_connection_with_key(target, &key, runner).await?;
         let argv = ssh_key::add_identity(ssh_script_argv(connection.destination), &key)?;
         (argv, Some(key), UsedConnection::Ssh(connection))

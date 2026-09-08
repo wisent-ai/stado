@@ -8071,7 +8071,7 @@ async fn install_from_archive(
         argv.extend(options.into_iter().skip(usize::from(true)));
         argv.push(path.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
-        let key = crate::deploy::ssh_key::materialize(&target.name)
+        let key = crate::deploy::ssh_key::materialize(target.channel_key())
             .await
             .map_err(click)?;
         let argv = crate::deploy::ssh_key::add_identity(argv, &key).map_err(click)?;

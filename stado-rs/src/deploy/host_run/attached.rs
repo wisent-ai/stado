@@ -131,7 +131,7 @@ pub async fn run_attached(
         )
     } else {
         let connection = host_channel::select_ssh_connection(target, &runner).await?;
-        let key = ssh_key::materialize(&target.name).await?;
+        let key = ssh_key::materialize(target.channel_key()).await?;
         let mut argv = host_channel::ssh_options(connection.destination);
         argv.insert(1, "-T".to_string());
         argv.push(script);

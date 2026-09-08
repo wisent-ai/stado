@@ -1,0 +1,23 @@
+{
+  "schema": "stado.scratch-profiles.v1",
+  "profiles": [
+    {
+      "name": "macos-account",
+      "summary": "A throwaway login on a managed mac, trusted by the keys that already reach the host.",
+      "mechanism": "local-account",
+      "platforms": ["darwin-arm64", "darwin-amd64"],
+      "shell": "/bin/zsh",
+      "default_ttl": "1h",
+      "max_ttl": "8h"
+    },
+    {
+      "name": "linux-account",
+      "summary": "A throwaway login on a managed Linux host, trusted by the keys that already reach the host.",
+      "mechanism": "local-account",
+      "platforms": ["linux-amd64", "linux-arm64"],
+      "shell": "/bin/bash",
+      "default_ttl": "1h",
+      "max_ttl": "8h"
+    }
+  ]
+}

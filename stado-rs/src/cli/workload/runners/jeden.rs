@@ -218,7 +218,7 @@ async fn attach_jeden(
             host_channel::select_ssh_connection(&target, &crate::deploy::production_runner())
                 .await
                 .map_err(|error| CmdError::click(error.to_string()))?;
-        let key = ssh_key::materialize(&target.name)
+        let key = ssh_key::materialize(target.channel_key())
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         let mut argv = host_channel::ssh_options(connection.destination);
