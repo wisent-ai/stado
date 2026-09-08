@@ -4,6 +4,15 @@ import WisentDesignSystem
 
 /// Canonical fleet policy and native operator actions through the configured
 /// Stado API, without launching a separate CLI from Desktop.
+///
+/// The per-feature operations sit beside this file in `FleetControlStore/`:
+/// `FleetControlStoreTailscaleLogs.swift`, `FleetControlStoreHostRunner.swift`,
+/// `FleetControlStoreAppleChallenge.swift` and
+/// `FleetControlStoreRegistryImport.swift`. They are extensions of this type,
+/// which is why the state they write is declared below without `private(set)`,
+/// and the transport they share without `private`: a member an extension in
+/// another file of the same module has to reach cannot be private to this one.
+/// Nothing outside this type writes that state.
 @MainActor
 final class FleetControlStore: ObservableObject {
     @Published private(set) var policy: FleetPolicy?
@@ -11,16 +20,16 @@ final class FleetControlStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
-    @Published private(set) var appleChallengeHost: String?
-    @Published private(set) var appleChallengeReceipt: AppleChallengePreparationReceipt?
-    @Published private(set) var appleChallengeMutation: WisentMutationOutcome = .idle
-    @Published private(set) var registryImport: RegistryImportReceipt?
-    @Published private(set) var registryImportMutation: WisentMutationOutcome = .idle
+    @Published var appleChallengeHost: String?
+    @Published var appleChallengeReceipt: AppleChallengePreparationReceipt?
+    @Published var appleChallengeMutation: WisentMutationOutcome = .idle
+    @Published var registryImport: RegistryImportReceipt?
+    @Published var registryImportMutation: WisentMutationOutcome = .idle
     /// One retained-log answer per host. Reads remain attached to the host the
     /// operator selected while they move between rows and can be replaced by
     /// repeating the same explicit operation.
-    @Published private(set) var tailscaleLogAttempts: [String: HostTailscaleLogAttempt] = [:]
-    @Published private(set) var tailscaleLogReadingHosts: Set<String> = []
+    @Published var tailscaleLogAttempts: [String: HostTailscaleLogAttempt] = [:]
+    @Published var tailscaleLogReadingHosts: Set<String> = []
     @Published private(set) var webStatusResult: OperatorCommandResult?
     @Published private(set) var webStatusRows: [WebProductStatus] = []
     @Published private(set) var webStatusError: String?
@@ -31,14 +40,14 @@ final class FleetControlStore: ObservableObject {
     /// outcome of that call. Separate from the general `mutation` because a
     /// runner install takes minutes and an operator reading it should not have
     /// it replaced by an unrelated action's receipt.
-    @Published private(set) var runnerHost: String?
-    @Published private(set) var runnerReport: HostRunnerReport?
-    @Published private(set) var runnerMutation: WisentMutationOutcome = .idle
+    @Published var runnerHost: String?
+    @Published var runnerReport: HostRunnerReport?
+    @Published var runnerMutation: WisentMutationOutcome = .idle
 
-    private let client: FleetControlClient
+    let client: FleetControlClient
     private var addressString = ""
-    private var authorizationToken: String?
-    private var requestGeneration = 0
+    private(set) var authorizationToken: String?
+    private(set) var requestGeneration = 0
 
     /// Caller-retained `stado job rerun` retry identities, keyed by job id.
     private var rerunRetryTokens: [String: String] = [:]
@@ -188,53 +197,6 @@ final class FleetControlStore: ObservableObject {
             mutation = .failed(Self.describe(error))
         }
     }
-    /// Send an existing registry-v2 document to the same product-owned
-    /// operation as `stado registry import`. A receipt is kept for exact
-    /// per-record rendering even when the operation refuses all mutation.
-    @discardableResult
-    func importRegistry(_ document: Data) async -> RegistryImportReceipt? {
-        guard !registryImportMutation.isWorking, !mutation.isWorking else { return nil }
-        guard let address else {
-            registryImportMutation = .failed(
-                "No Stado endpoint is configured, so the registry import was not attempted."
-            )
-            return nil
-        }
-        registryImport = nil
-        registryImportMutation = .working(
-            "Validating and additively merging the existing registry…"
-        )
-        do {
-            let receipt = try await client.importRegistry(
-                document: document,
-                at: address,
-                authorizationToken: authorizationToken
-            )
-            registryImport = receipt
-            if receipt.accepted {
-                let generation = receipt.generation.map { " Canonical generation \($0)." } ?? ""
-                registryImportMutation = .succeeded("\(receipt.outcomeSentence)\(generation)")
-                await refresh()
-            } else {
-                registryImportMutation = .failed(receipt.outcomeSentence)
-            }
-            return receipt
-        } catch {
-            registryImportMutation = .failed(Self.describe(error))
-            return nil
-        }
-    }
-
-    func reportRegistryImportFailure(_ message: String) {
-        guard !registryImportMutation.isWorking else { return }
-        registryImport = nil
-        registryImportMutation = .failed(message)
-    }
-
-    func clearRegistryImportMutation() {
-        registryImportMutation = .idle
-    }
-
 
     /// `stado job rerun <id> --retry-token <token>` through the dashboard's
     /// allowlisted command bridge. The recorded specification is resubmitted
@@ -268,311 +230,11 @@ final class FleetControlStore: ObservableObject {
         }
     }
 
-    nonisolated static func tailscaleLogArguments(
-        host: String,
-        source: HostTailscaleLogSource
-    ) -> [String] {
-        ["host", "exec", host, "--json", "--"] + source.command
-    }
-
-    func tailscaleLogAttempt(for host: String) -> HostTailscaleLogAttempt? {
-        tailscaleLogAttempts[host]
-    }
-
-    func isReadingTailscaleLogs(from host: String) -> Bool {
-        tailscaleLogReadingHosts.contains(host)
-    }
-
-    /// Read the selected host's retained Tailscale messages through Stado's
-    /// authenticated native argv bridge. The source is required from the UI:
-    /// neither the registry projection nor the capacity report declares an OS.
-    func readTailscaleLogs(host: String, source: HostTailscaleLogSource) async {
-        guard !host.isEmpty, !tailscaleLogReadingHosts.contains(host) else { return }
-        let arguments = Self.tailscaleLogArguments(host: host, source: source)
-        guard let address else {
-            tailscaleLogAttempts[host] = HostTailscaleLogAttempt(
-                requestedHost: host,
-                source: source,
-                arguments: arguments,
-                completedAt: Date(),
-                result: nil,
-                receipt: nil,
-                failure: "No Stado endpoint is configured, so the retained Tailscale logs were not read."
-            )
-            return
-        }
-
-        let generation = requestGeneration
-        tailscaleLogReadingHosts.insert(host)
-        defer {
-            if requestGeneration == generation {
-                tailscaleLogReadingHosts.remove(host)
-            }
-        }
-        do {
-            let result = try await client.run(
-                arguments: arguments,
-                confirmsMutation: false,
-                at: address,
-                authorizationToken: authorizationToken
-            )
-            guard requestGeneration == generation, !Task.isCancelled else { return }
-            let receipt = try? JSONDecoder().decode(
-                HostTailscaleLogReceipt.self,
-                from: Data(result.standardOutput.utf8)
-            )
-            tailscaleLogAttempts[host] = HostTailscaleLogAttempt(
-                requestedHost: host,
-                source: source,
-                arguments: arguments,
-                completedAt: Date(),
-                result: result,
-                receipt: receipt,
-                failure: Self.tailscaleLogFailure(
-                    result: result,
-                    receipt: receipt,
-                    requestedHost: host,
-                    source: source
-                )
-            )
-        } catch is CancellationError {
-            return
-        } catch let error as URLError where error.code == .cancelled {
-            return
-        } catch {
-            guard requestGeneration == generation else { return }
-            tailscaleLogAttempts[host] = HostTailscaleLogAttempt(
-                requestedHost: host,
-                source: source,
-                arguments: arguments,
-                completedAt: Date(),
-                result: nil,
-                receipt: nil,
-                failure: Self.describe(error)
-            )
-        }
-    }
-
-    private nonisolated static func tailscaleLogFailure(
-        result: OperatorCommandResult,
-        receipt: HostTailscaleLogReceipt?,
-        requestedHost: String,
-        source: HostTailscaleLogSource
-    ) -> String? {
-        guard let receipt else {
-            if let refusal = nonEmpty(result.standardError) {
-                return refusal
-            }
-            return result.ok
-                ? "Stado returned a host-exec response that Desktop could not read."
-                : result.message
-        }
-        guard receipt.schema == "stado.host-exec-receipt.v1" else {
-            return "Stado returned host-exec receipt schema \(receipt.schema), not stado.host-exec-receipt.v1."
-        }
-        guard receipt.target == requestedHost else {
-            return "The retained-log request named \(requestedHost), but the host-exec receipt names \(receipt.target)."
-        }
-        guard result.arguments == tailscaleLogArguments(host: requestedHost, source: source) else {
-            return "The Stado API receipt did not report the retained-log invocation that Desktop requested."
-        }
-        guard receipt.command == source.command.joined(separator: " "),
-              receipt.arguments == source.receiptArguments
-        else {
-            return "The host-exec receipt did not report the fixed \(source.title) command that Desktop requested."
-        }
-        guard result.readOnly else {
-            return "Stado did not classify this host-exec operation as read-only."
-        }
-        guard result.ok, receipt.status == "ok" else {
-            return nonEmpty(result.standardError)
-                ?? receipt.error.flatMap(nonEmpty)
-                ?? nonEmpty(receipt.standardError)
-                ?? "The retained-log command exited with code \(receipt.exitCode) and printed no error."
-        }
-        return nil
-    }
-
-    private nonisolated static func nonEmpty(_ value: String) -> String? {
-        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
-    }
-
-    nonisolated static func appleChallengeArguments(host: String) -> [String] {
-        ["host", "gui-automation", "grant-accessibility", host, "--apple-only", "--json"]
-    }
-
-    nonisolated static func appleChallengeStatusArguments(host: String) -> [String] {
-        ["host", "gui-automation", "status", host, "--json"]
-    }
-
-    /// One declared GitHub runner profile, addressed exactly as the CLI does.
-    nonisolated static func hostRunnerArguments(
-        action: String,
-        host: String,
-        profile: String,
-        repository: String?
-    ) -> [String] {
-        var arguments = ["runner", action, host, "--profile", profile]
-        let scope = repository?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !scope.isEmpty {
-            arguments.append(contentsOf: ["--repository", scope])
-        }
-        arguments.append("--json")
-        return arguments
-    }
-
-    func readHostRunner(host: String, profile: String) async {
-        await runHostRunner(action: "status", host: host, profile: profile, repository: nil)
-    }
-
-    func installHostRunner(host: String, profile: String, repository: String?) async {
-        await runHostRunner(action: "install", host: host, profile: profile, repository: repository)
-    }
-
-    func restartHostRunner(host: String, profile: String) async {
-        await runHostRunner(action: "restart", host: host, profile: profile, repository: nil)
-    }
-
-    func removeHostRunner(host: String, profile: String, repository: String?) async {
-        await runHostRunner(action: "remove", host: host, profile: profile, repository: repository)
-    }
-
-    private func runHostRunner(action: String, host: String, profile: String, repository: String?) async {
-        guard !runnerMutation.isWorking else { return }
-        runnerHost = host
-        guard let address else {
-            runnerMutation = .failed(
-                "No Stado endpoint is configured, so the runner operation was not attempted."
-            )
-            return
-        }
-        let generation = requestGeneration
-        runnerMutation = .working("Running runner \(action) for \(profile) on \(host)")
-        do {
-            let result = try await client.run(
-                arguments: Self.hostRunnerArguments(
-                    action: action,
-                    host: host,
-                    profile: profile,
-                    repository: repository
-                ),
-                confirmsMutation: action != "status",
-                at: address,
-                authorizationToken: authorizationToken,
-                timeoutSeconds: 1_200
-            )
-            guard requestGeneration == generation else { return }
-            let report: HostRunnerReport
-            do {
-                report = try JSONDecoder().decode(
-                    HostRunnerReport.self,
-                    from: Data(result.standardOutput.utf8)
-                )
-            } catch {
-                runnerMutation = .failed(result.ok
-                    ? "Stado returned an invalid runner report: \(error.localizedDescription)"
-                    : result.message)
-                return
-            }
-            runnerReport = report
-            // A runner whose Brama route disagrees with the fleet exits
-            // non-zero AFTER printing its report, so a non-ok result still
-            // carries the fields an operator needs to read.
-            runnerMutation = result.ok
-                ? .succeeded(Self.runnerSummary(report))
-                : .failed(result.message)
-        } catch {
-            guard requestGeneration == generation else { return }
-            runnerMutation = .failed(Self.describe(error))
-        }
-    }
-
-    /// What the operator reads back: profile, actual GitHub scope, listener,
-    /// labels, and the host-wide single job slot.
-    nonisolated static func runnerSummary(_ report: HostRunnerReport) -> String {
-        var fields = ["profile \(report.profile)"]
-        if let scope = report.runnerScope {
-            fields.append("scope \(scope)")
-        }
-        let listener = report.listener.connected.map {
-            $0 ? "connected" : "disconnected"
-        } ?? report.listener.state
-        fields.append("listener \(listener)")
-        fields.append("labels \(report.runnerLabels)")
-        fields.append("host job slot \(report.hostJobSlot)")
-        return fields.joined(separator: " · ")
-    }
-
-    func clearRunnerMutation() {
-        guard !runnerMutation.isWorking else { return }
-        runnerMutation = .idle
-    }
-
-    func readAppleChallenge(host: String) async {
-        await runAppleChallenge(host: host, prepare: false)
-    }
-
-    func prepareAppleChallenge(host: String) async {
-        await runAppleChallenge(host: host, prepare: true)
-    }
-
-    private func runAppleChallenge(host: String, prepare: Bool) async {
-        guard !appleChallengeMutation.isWorking else { return }
-        appleChallengeHost = host
-        appleChallengeReceipt = nil
-        guard let address else {
-            appleChallengeMutation = .failed("No Stado endpoint is configured, so the Apple helper operation was not attempted.")
-            return
-        }
-        let generation = requestGeneration
-        appleChallengeMutation = .working(prepare
-            ? "Preparing Apple code capture on \(host)"
-            : "Reading Apple code capture status on \(host)")
-        do {
-            let result = try await client.run(
-                arguments: prepare
-                    ? Self.appleChallengeArguments(host: host)
-                    : Self.appleChallengeStatusArguments(host: host),
-                confirmsMutation: prepare,
-                at: address,
-                authorizationToken: authorizationToken,
-                timeoutSeconds: 300
-            )
-            guard requestGeneration == generation else { return }
-            let receipt: AppleChallengePreparationReceipt
-            do {
-                receipt = try JSONDecoder().decode(
-                    AppleChallengePreparationReceipt.self,
-                    from: Data(result.standardOutput.utf8)
-                )
-            } catch {
-                appleChallengeMutation = .failed(result.ok
-                    ? "Stado returned an invalid Apple helper report: \(error.localizedDescription)"
-                    : result.message)
-                return
-            }
-            appleChallengeReceipt = receipt
-            appleChallengeMutation = result.ok && receipt.error == nil
-                ? .succeeded(prepare
-                    ? "Apple code capture is ready on \(receipt.target)"
-                    : "Apple code capture status read on \(receipt.target)")
-                : .failed(receipt.error ?? result.message)
-        } catch {
-            guard requestGeneration == generation else { return }
-            appleChallengeMutation = .failed(Self.describe(error))
-        }
-    }
-
-    func clearAppleChallengeMutation() {
-        guard !appleChallengeMutation.isWorking else { return }
-        appleChallengeMutation = .idle
-    }
-
     func clearMutation() {
         mutation = .idle
     }
 
-    private static func describe(_ error: Error) -> String {
+    static func describe(_ error: Error) -> String {
         if let urlError = error as? URLError {
             switch urlError.code {
             case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .networkConnectionLost,
