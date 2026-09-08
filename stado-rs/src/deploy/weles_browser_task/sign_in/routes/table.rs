@@ -16,7 +16,7 @@ pub fn routed_item(routes: &Value, resource: &str) -> Result<RoutedField, Deploy
     let rows = routes
         .get("routes")
         .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("skarbiec routes list returned no routes".to_string()))?;
+        .ok_or_else(|| DeployError("skarbiec route resolve returned no routes".to_string()))?;
     let row = rows
         .iter()
         .find(|row| row.get("resource").and_then(Value::as_str) == Some(resource))

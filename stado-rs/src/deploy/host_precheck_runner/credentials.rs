@@ -53,7 +53,11 @@ pub(crate) async fn kronika_agent_credential(
     let routes = context.routes;
     let gnupg = context.gnupg;
     let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-    let reconciled_routes = host_channel::run_program(
+    // One read. `route resolve` derives what each vault item declares about
+    // itself at read time, so the separate reconciliation pass the removed
+    // `routes` verb group needed no longer exists and nothing has to be
+    // written before the identity can be found.
+    let resolved = host_channel::run_program(
         target,
         &[
             "/usr/bin/env",
@@ -62,44 +66,21 @@ pub(crate) async fn kronika_agent_credential(
             &gnupg,
             program_path,
             &skarbiec,
-            "routes",
-            "reconcile",
-        ],
-        &runner,
-    )
-    .await?;
-    if !reconciled_routes.ok() {
-        return Err(DeployError(format!(
-            "{}: Skarbiec cannot reconcile credential routes: {}",
-            target.name,
-            command_failure(&reconciled_routes, "capability route reconciliation failed")
-        )));
-    }
-
-    let listed = host_channel::run_program(
-        target,
-        &[
-            "/usr/bin/env",
-            &vault,
-            &routes,
-            &gnupg,
-            program_path,
-            &skarbiec,
-            "routes",
-            "list",
+            "route",
+            "resolve",
             PROBIERZ_AGENT_ID,
         ],
         &runner,
     )
     .await?;
-    if !listed.ok() {
+    if !resolved.ok() {
         return Err(DeployError(format!(
             "{}: cannot resolve {PROBIERZ_AGENT_RESOURCE} through Skarbiec: {}",
             target.name,
-            command_failure(&listed, "capability route lookup failed")
+            command_failure(&resolved, "capability route lookup failed")
         )));
     }
-    let document: Value = serde_json::from_str(&listed.stdout)
+    let document: Value = serde_json::from_str(&resolved.stdout)
         .map_err(|error| DeployError(format!("Skarbiec route report is invalid: {error}")))?;
     let route = document
         .get("routes")
@@ -110,14 +91,10 @@ pub(crate) async fn kronika_agent_credential(
             })
         })
         .ok_or_else(|| {
-            let detail = reconciled_routes.stdout.trim();
-            let detail = if detail.is_empty() {
-                "Skarbiec reported no reconciliation detail"
-            } else {
-                detail
-            };
             DeployError(format!(
-                "Skarbiec maps no credential for {PROBIERZ_AGENT_RESOURCE}; reconciliation: {detail}"
+                "Skarbiec maps no credential for {PROBIERZ_AGENT_RESOURCE}; declare one with \
+                 `skarbiec route declare --resource {PROBIERZ_AGENT_RESOURCE} --item <item> \
+                 --field <field> --reason <text>` beside that host's Brama"
             ))
         })?;
     if route.get("item_present") != Some(&Value::Bool(true))

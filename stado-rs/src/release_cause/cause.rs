@@ -90,12 +90,12 @@ impl QuarantineCause {
                 Some("check which key can still open the vault with: stado credentials doctor")
             }
             Self::CredentialCannotServe => {
-                Some("inspect every route with: skarbiec routes verify, or skarbiec doctor")
+                Some("inspect every route with: skarbiec route verify, or skarbiec doctor")
             }
             Self::CapabilityRoutesUnmapped => Some(
-                "map the resource with: skarbiec routes add --resource <resource> \
-                 --item <item> --field <field> --reason <text>, or derive it with \
-                 skarbiec routes reconcile",
+                "map the resource with: skarbiec route declare --resource <resource> \
+                 --item <item> --field <field> --reason <text>, and read what the vault \
+                 already declares for itself with: skarbiec route resolve",
             ),
             // The capability was refused at the far end. Nothing in this
             // product reissues or extends one, and the sibling's own repair

@@ -77,7 +77,7 @@ impl QuarantineCause {
     /// this fleet has one and the evidence says what to ask about.
     ///
     /// Only [`Self::CredentialCannotServe`] has one today, and it is the
-    /// command already named as that cause's remedy: `skarbiec routes verify`
+    /// command already named as that cause's remedy: `skarbiec route verify`
     /// exits non-zero exactly when a route cannot serve a usable credential.
     /// Attaching a remedy and never calling it was the gap this closes.
     ///
@@ -97,7 +97,7 @@ impl QuarantineCause {
         let resource = resource_in(evidence)?;
         Some(CausePredicate {
             args: vec![
-                "routes".to_string(),
+                "route".to_string(),
                 "verify".to_string(),
                 resource.to_string(),
             ],
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(
             predicate.args,
             vec![
-                "routes",
+                "route",
                 "verify",
                 "provider:kimi:brama-sub-wisent-app-kimi-primary"
             ]

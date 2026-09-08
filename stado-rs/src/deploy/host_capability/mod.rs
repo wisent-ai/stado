@@ -17,10 +17,10 @@
 //! worker host.
 //!
 //! So the pair is issued through the same audited host channel the command
-//! already opens, exactly the way [`crate::cli::host::retag_vault_item`]
-//! reaches that host's Skarbiec: resolve the host's own
-//! `SKARBIEC_VAULT_FILE`/`GNUPGHOME` on the host, address the binary at
-//! `$HOME/.stado/bin/skarbiec`, and quote every word.
+//! already opens, exactly the way [`crate::cli::host`] reaches that host's
+//! Skarbiec: resolve the host's own `SKARBIEC_VAULT_FILE`/`GNUPGHOME` on the
+//! host, address the binary at `$HOME/.stado/bin/skarbiec`, and quote every
+//! word.
 //!
 //! Nothing secret crosses this channel in either direction. Issuing names an
 //! agent, a purpose and a resource; the answer is a capability id. The secret
@@ -32,14 +32,19 @@ use serde_json::Value;
 use super::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
+mod issue;
+mod routes;
+
+pub use issue::{apple_challenge_put, issue, Issuance};
+pub use routes::{items, route_add, routes, verify_routes};
+
 /// Which broker instance on the host to address.
 ///
 /// A host runs more than one. Skarbiec keeps a capability's state beside the
 /// vault by default, but `capability-serve` is started with whatever
 /// `SKARBIEC_CAPABILITY_FILE` and `SKARBIEC_CAPABILITY_ROUTES_FILE` its
 /// launcher exports, and the socket a consumer redeems on belongs to THAT
-/// instance. Weles's own launcher
-/// (`weles/scripts/worker/deploy/launch-weles-api-mac.sh:104-113`) exports
+/// instance. Weles's own launcher, `launch-weles-api-mac.sh`, exports
 /// `$HOME/.stado/weles-api-capabilities.json` and
 /// `$HOME/.stado/weles-api-capability-routes.json` and serves
 /// `$HOME/.stado/run/weles-api-capability.sock` from them. Issuing into the
@@ -162,6 +167,30 @@ impl RemoteBroker {
     }
 }
 
+/// The one sentence a broker too old for the `route` verb group gets.
+///
+/// Skarbiec renamed `routes list`, `routes add` and `routes verify` to
+/// `route resolve`, `route declare` and `route verify` in the merge that added
+/// declared route resolution, and brokers older than that merge are still
+/// installed across the fleet. Without this, such a host answers
+/// `Error: unknown command: route` and every reader above reports it as a
+/// routing failure — a credential outage that is really a delivery gap, and
+/// the one diagnosis that sends an operator to the route table instead of to
+/// the binary.
+fn stale_broker(target: &ComputeTarget, broker: &RemoteBroker, said: &str) -> Option<DeployError> {
+    said.contains("unknown command: route").then(|| {
+        DeployError(format!(
+            "{}: the Skarbiec at {} does not know the `route` verb group, so no capability route \
+             on that host can be resolved, declared or verified. `route resolve`, `route declare` \
+             and `route verify` replaced `routes list`, `routes add` and `routes verify`, and \
+             this broker is older than that. Build wisent-ai/skarbiec at origin/main with `cargo \
+             build --release --locked` and install target/release/skarbiec as {}. This is a \
+             delivery gap, not a routing failure.",
+            target.name, broker.vault, broker.skarbiec,
+        ))
+    })
+}
+
 /// Run one Skarbiec subcommand on the target and read its JSON answer.
 ///
 /// The remote sentence is carried through verbatim on failure: "no capability
@@ -175,12 +204,15 @@ async fn run_json(
 ) -> Result<Value, DeployError> {
     let output = host_channel::run_command(target, &broker.command(arguments), runner).await?;
     if !output.ok() {
+        let said = host_channel::last_error_line(&output, "the host gave no reason");
+        if let Some(stale) = stale_broker(target, broker, &said) {
+            return Err(stale);
+        }
         return Err(DeployError(format!(
-            "{}: `skarbiec {}` failed against {}: {}",
+            "{}: `skarbiec {}` failed against {}: {said}",
             target.name,
             arguments.join(" "),
             broker.vault,
-            host_channel::last_error_line(&output, "the host gave no reason")
         )));
     }
     serde_json::from_str(output.stdout.trim()).map_err(|error| {
@@ -190,204 +222,4 @@ async fn run_json(
             arguments.join(" ")
         ))
     })
-}
-
-/// The target's capability route table, with that host's own answer for each
-/// route.
-pub async fn routes(
-    target: &ComputeTarget,
-    broker: &RemoteBroker,
-    runner: &Runner,
-) -> Result<Value, DeployError> {
-    run_json(target, broker, &["routes", "list"], runner).await
-}
-
-/// Declare one capability route on the target.
-///
-/// Idempotent in Skarbiec itself: a route that already says exactly this is
-/// reported with `added: false` and nothing is written, and a resource already
-/// mapped elsewhere is refused rather than repointed. `--reason` is required
-/// there and so it is required here.
-pub async fn route_add(
-    target: &ComputeTarget,
-    broker: &RemoteBroker,
-    resource: &str,
-    item: &str,
-    field: &str,
-    reason: &str,
-    runner: &Runner,
-) -> Result<Value, DeployError> {
-    run_json(
-        target,
-        broker,
-        &[
-            "routes",
-            "add",
-            "--resource",
-            resource,
-            "--item",
-            item,
-            "--field",
-            field,
-            "--reason",
-            reason,
-        ],
-        runner,
-    )
-    .await
-}
-
-/// The target's own verification of its route table.
-///
-/// `routes list` reports two booleans per route and `routes verify` reports
-/// the SENTENCE behind a false one — which item would not open, and why. That
-/// distinction matters over a channel: a non-interactive session may be unable
-/// to open a vault the broker service on that host opens perfectly well, and
-/// without the sentence the two are indistinguishable.
-///
-/// Skarbiec prints the report and THEN exits non-zero when any route is
-/// broken, so a non-zero exit carrying a JSON report is the documented success
-/// shape here, not a failure.
-pub async fn verify_routes(
-    target: &ComputeTarget,
-    broker: &RemoteBroker,
-    runner: &Runner,
-) -> Result<Value, DeployError> {
-    let output =
-        host_channel::run_command(target, &broker.command(&["routes", "verify"]), runner).await?;
-    let said = output.stdout.trim();
-    if let Ok(report) = serde_json::from_str::<Value>(said) {
-        return Ok(report);
-    }
-    Err(DeployError(format!(
-        "{}: `skarbiec routes verify` gave no report against {}: {}",
-        target.name,
-        broker.vault,
-        host_channel::last_error_line(&output, "the host gave no reason")
-    )))
-}
-
-/// The nonsecret item inventory of the target's own vault.
-///
-/// `skarbiec list` reads the vault's envelope, the same way `fleet vaults`
-/// reads it to count vaults, so this answers on a host whose gpg a channel
-/// session cannot spawn. An item's name is its `id`; no field value is read.
-pub async fn items(
-    target: &ComputeTarget,
-    broker: &RemoteBroker,
-    runner: &Runner,
-) -> Result<Vec<Value>, DeployError> {
-    let answer = run_json(target, broker, &["list"], runner).await?;
-    answer.as_array().cloned().ok_or_else(|| {
-        DeployError(format!(
-            "{}: skarbiec list was not a JSON array",
-            target.name
-        ))
-    })
-}
-
-/// What one capability asks for, in Skarbiec's own vocabulary.
-pub struct Issuance<'a> {
-    pub agent: &'a str,
-    pub purpose: &'a str,
-    pub resource: &'a str,
-    /// The consumer the reference is for — `weles` for a browser fill.
-    pub capability_target: &'a str,
-    pub ttl_seconds: &'a str,
-    pub max_uses: &'a str,
-    /// Skarbiec binds a capability to an authorization id when one is given,
-    /// and redemption then requires the redeemer to present the same one.
-    /// Whether to bind is the CONSUMER's contract, not a preference: Weles's
-    /// Apple sign-in builds its expectation with its guard id, while
-    /// `wsFillCredential` builds `{ purpose, resource }` and nothing else, so
-    /// a browser fill must be issued and referenced WITHOUT one or every
-    /// redemption throws `capability operation mismatch`.
-    pub authorization_id: Option<&'a str>,
-}
-
-/// Issue one capability on the target and return its id.
-///
-/// Skarbiec's own bounds: `--ttl` is whole seconds up to 3600, `--max-uses`
-/// is 1..=16, and a resource with no route is refused at issue time rather
-/// than at redemption — which is the whole reason issuing happens here, in
-/// front of a flow that would otherwise spend its one fill discovering it.
-pub async fn issue(
-    target: &ComputeTarget,
-    broker: &RemoteBroker,
-    issuance: &Issuance<'_>,
-    runner: &Runner,
-) -> Result<String, DeployError> {
-    let mut arguments = vec![
-        "capability-issue",
-        "--agent",
-        issuance.agent,
-        "--purpose",
-        issuance.purpose,
-        "--resource",
-        issuance.resource,
-        "--target",
-        issuance.capability_target,
-        "--ttl",
-        issuance.ttl_seconds,
-        "--max-uses",
-        issuance.max_uses,
-    ];
-    if let Some(authorization_id) = issuance.authorization_id {
-        arguments.push("--authorization-id");
-        arguments.push(authorization_id);
-    }
-    let issued = run_json(target, broker, &arguments, runner).await?;
-    issued
-        .get("capability_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            DeployError(format!(
-                "{}: skarbiec issued no capability id for {}, so nothing could be redeemed",
-                target.name, issuance.resource
-            ))
-        })
-}
-
-/// Store one captured Apple code in the Weles broker that will redeem it.
-///
-/// The six digits travel on stdin only. They are never an argument, a registry
-/// value, a diagnostic, or part of this function's receipt.
-pub async fn apple_challenge_put(
-    target: &ComputeTarget,
-    broker: &RemoteBroker,
-    resource: &str,
-    code: &str,
-    runner: &Runner,
-) -> Result<Value, DeployError> {
-    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(DeployError(
-            "refusing to store an invalid Apple challenge".to_string(),
-        ));
-    }
-    let command = broker.command(&["apple-challenge-put", resource]);
-    let output =
-        host_channel::run_program_with_stdin(target, &["/bin/sh", "-c", &command], code, runner)
-            .await?;
-    if !output.ok() {
-        return Err(DeployError(format!(
-            "{}: `skarbiec apple-challenge-put` failed against {}: {}",
-            target.name,
-            broker.vault,
-            host_channel::last_error_line(&output, "the host gave no reason")
-        )));
-    }
-    let receipt: Value = serde_json::from_str(output.stdout.trim()).map_err(|error| {
-        DeployError(format!(
-            "{}: `skarbiec apple-challenge-put` did not answer with JSON: {error}",
-            target.name
-        ))
-    })?;
-    if receipt.get("status").and_then(Value::as_str) != Some("stored") {
-        return Err(DeployError(format!(
-            "{}: Skarbiec did not confirm that the Apple challenge was stored",
-            target.name
-        )));
-    }
-    Ok(receipt)
 }

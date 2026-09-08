@@ -86,7 +86,7 @@ fn decide(
             evidence: run.evidence.clone(),
             digests: run.digests.clone(),
             ground: HoldGround::Observed {
-                check: "skarbiec routes verify provider:kimi".to_string(),
+                check: "skarbiec route verify provider:kimi".to_string(),
                 detail: detail.unwrap_or_else(|| run.evidence.clone()),
                 at: Utc::now(),
             },
@@ -228,7 +228,7 @@ fn every_refusal_names_a_way_out() {
             "refusal must name the existing override and a real digest: {sentence}"
         );
         assert!(
-            sentence.contains("skarbiec routes verify"),
+            sentence.contains("skarbiec route verify"),
             "refusal must carry the cause's remedy: {sentence}"
         );
     }

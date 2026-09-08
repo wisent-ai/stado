@@ -1,9 +1,9 @@
-//! Reading `skarbiec routes verify` — the one predicate this fleet has.
+//! Reading `skarbiec route verify` — the one predicate this fleet has.
 
 use super::WallVerdict;
 use crate::release_cause::classify::bound;
 
-/// Read `skarbiec routes verify`'s answer, exit status and report together.
+/// Read `skarbiec route verify`'s answer, exit status and report together.
 ///
 /// The contract was confirmed by running the command, not inferred from its
 /// name, and it needs both halves because a bare exit status cannot carry it:
