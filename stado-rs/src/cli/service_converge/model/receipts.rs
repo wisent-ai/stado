@@ -66,6 +66,17 @@ impl Refused {
 
 pub(in crate::cli::service_converge) const COMPLETED: &str = "completed";
 pub(in crate::cli::service_converge) const FAILED: &str = "failed";
+/// A delivery leg that had nothing to do, said so, and did not run.
+///
+/// Distinct from both other statuses on purpose. `failed` is an attempt that
+/// did not work and belongs in a non-zero exit; `completed` is work that
+/// happened. The private-reader leg of a Stado delivery has neither on a host
+/// that declares no services, because reader trees are per service and there
+/// are none: it used to run anyway, ask the delivered CLI to read a registry
+/// the host does not have, and report `failed` on every single apply against
+/// such a host. A leased scratch account is one, and so is any host holding a
+/// managed binary and no units.
+pub(in crate::cli::service_converge) const SKIPPED: &str = "skipped";
 
 /// Everything one `--apply` pass did: the releases it ran, the `host-behind`
 /// binaries it could not run one for, and the downgrades it refused.

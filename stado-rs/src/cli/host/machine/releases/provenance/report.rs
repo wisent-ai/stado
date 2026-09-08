@@ -2,7 +2,9 @@ use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 
-use crate::cli::host::machine::releases::provenance::{CarriedArtifact, READ_PROVENANCE_BODY};
+use crate::cli::host::machine::releases::provenance::{
+    CarriedArtifact, DeliveryReceipt, READ_PROVENANCE_BODY,
+};
 
 /// `stado release provenance --host TARGET [--json]` — what TARGET carries,
 /// and who produced it.
@@ -41,6 +43,8 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
     let mut unreadable: Vec<String> = Vec::new();
     let mut helpers: usize = 0;
     let mut present: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut markers: usize = 0;
+    let mut receipts: Vec<DeliveryReceipt> = Vec::new();
     for line in output.stdout.lines() {
         if let Some(artifact) = line.strip_prefix("STADO-ARTIFACT ") {
             // `<kind> <digest> <name>`. A helper script has no release behind
@@ -54,6 +58,10 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             };
             if kind == "script" {
                 helpers += 1;
+                continue;
+            }
+            if kind == "marker" {
+                markers += 1;
                 continue;
             }
             if !digest.is_empty() && digest != "-" {
@@ -70,6 +78,17 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                 // something wrote a file there and it says nothing usable.
                 Err(error) => unreadable.push(error.to_string()),
             }
+        } else if let Some(document) = line.strip_prefix("STADO-RECEIPT ") {
+            match serde_json::from_str::<DeliveryReceipt>(document.trim()) {
+                // A receipt names an artefact the delivery path installed, so
+                // it is a population member as much as a record: a binary
+                // delivered and then deleted is a row worth seeing.
+                Ok(receipt) => {
+                    names.insert(receipt.binary.clone());
+                    receipts.push(receipt);
+                }
+                Err(error) => unreadable.push(error.to_string()),
+            }
         }
     }
 
@@ -79,27 +98,59 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         .into_iter()
         .map(|artifact| {
             let record = records.remove(&artifact);
-            let reachable = match (&record, &repository) {
-                (None, _) => Some(false),
-                (Some(record), _) if !record.names_a_commit() => Some(false),
-                (Some(_), None) => None,
-                (Some(record), Some(repository)) => Some(crate::provenance::reachable_in_repo(
-                    &record.commit,
-                    repository,
-                )),
+            let installed = present.get(&artifact);
+            // The receipt that describes the bytes in place, newest first when
+            // a host kept several. Matched on the digest, never on the name
+            // alone: a receipt for a version this file is not is a record of a
+            // different delivery, and answering with it would be the confident
+            // wrong answer this command exists to prevent.
+            let receipt = record.is_none().then(|| ()).and_then(|()| {
+                let mut candidates: Vec<&DeliveryReceipt> = receipts
+                    .iter()
+                    .filter(|receipt| receipt.binary == artifact)
+                    .filter(|receipt| {
+                        installed
+                            .map(|actual| receipt.artifact_sha256.eq_ignore_ascii_case(actual))
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                candidates.sort_by(|left, right| right.installed_at.cmp(&left.installed_at));
+                candidates.first().map(|receipt| (*receipt).clone())
+            });
+            let commit = match (&record, &receipt) {
+                (Some(record), _) => Some(record.commit.clone()),
+                (None, Some(receipt)) => Some(receipt.source_commit.clone()),
+                (None, None) => None,
             };
-            let age_seconds = record.as_ref().and_then(|record| {
-                chrono::DateTime::parse_from_rfc3339(&record.at)
+            let reachable = match (&commit, &repository) {
+                (None, _) => Some(false),
+                (Some(commit), _) if !crate::provenance::is_commit_id(commit) => Some(false),
+                (Some(_), None) => None,
+                (Some(commit), Some(repository)) => {
+                    Some(crate::provenance::reachable_in_repo(commit, repository))
+                }
+            };
+            let stamp = match (&record, &receipt) {
+                (Some(record), _) => Some(record.at.clone()),
+                (None, Some(receipt)) => Some(receipt.installed_at.clone()),
+                (None, None) => None,
+            };
+            let age_seconds = stamp.as_deref().and_then(|stamp| {
+                chrono::DateTime::parse_from_rfc3339(stamp)
                     .ok()
                     .map(|stamp| (now - stamp.with_timezone(&chrono::Utc)).num_seconds())
             });
-            let describes = match (&record, present.get(&artifact)) {
-                (Some(record), Some(actual)) => Some(record.sha256.eq_ignore_ascii_case(actual)),
+            let describes = match (&record, &receipt, installed) {
+                (Some(record), _, Some(actual)) => Some(record.sha256.eq_ignore_ascii_case(actual)),
+                // Digest-matched above, so a receipt-accounted row describes
+                // its bytes by construction.
+                (None, Some(_), Some(_)) => Some(true),
                 _ => None,
             };
             CarriedArtifact {
                 artifact,
                 record,
+                receipt,
                 reachable,
                 describes,
                 age_seconds,
@@ -107,16 +158,24 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         })
         .collect();
 
-    let commit_of = |item: &CarriedArtifact| {
-        item.record.as_ref().map_or_else(
-            || crate::provenance::UNPROVENANCED.to_string(),
-            |record| record.commit.clone(),
-        )
+    // Drift is an answer, not a missing one. `reachable == None` means no
+    // checkout here could resolve the commit, and counting it as drift made
+    // the trailer say "have no producer reachable from origin/main" about
+    // artifacts nobody had been able to ask about - the exact fold the
+    // `reachable` field exists to prevent.
+    let counts = super::trailers::Counts {
+        drifted: carried
+            .iter()
+            .filter(|item| item.reachable == Some(false))
+            .count(),
+        unresolved: carried
+            .iter()
+            .filter(|item| item.reachable.is_none())
+            .count(),
+        helpers,
+        markers,
     };
-    let drifted = carried
-        .iter()
-        .filter(|item| item.reachable != Some(true))
-        .count();
+    let drifted = counts.drifted;
 
     if json {
         let artifacts: Vec<Value> = carried
@@ -124,11 +183,28 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             .map(|item| {
                 json!({
                     "artifact": item.artifact,
+                    "accounted_by": item.accounted_by().as_str(),
                     "manifest": item.record.is_some(),
-                    "commit": commit_of(item),
-                    "sha256": item.record.as_ref().map(|record| record.sha256.clone()),
-                    "builder": item.record.as_ref().map(|record| record.builder.clone()),
-                    "at": item.record.as_ref().map(|record| record.at.clone()),
+                    "receipt": item.receipt.is_some(),
+                    "version": item.version(),
+                    "commit": item.commit(),
+                    "sha256": item
+                        .record
+                        .as_ref()
+                        .map(|record| record.sha256.clone())
+                        .or_else(|| {
+                            item.receipt
+                                .as_ref()
+                                .map(|receipt| receipt.artifact_sha256.clone())
+                        }),
+                    // The archive the delivery verified on the way in, for the
+                    // rows a receipt accounts for. Kept beside the artefact
+                    // digest rather than folded into it: one names the bytes
+                    // in place, the other names what they were unpacked from.
+                    "archive_sha256": item.receipt.as_ref().map(|receipt| receipt.sha256.clone()),
+                    "platform": item.receipt.as_ref().map(|receipt| receipt.platform.clone()),
+                    "builder": item.accounted().then(|| item.builder()),
+                    "at": item.stamp(),
                     "age_seconds": item.age_seconds,
                     "reachable": item.reachable,
                     "describes_artifact": item.describes,
@@ -143,6 +219,9 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                 "artifacts": artifacts,
                 "unreadable_manifests": unreadable,
                 "drifted": drifted,
+                "unresolved": counts.unresolved,
+                "helper_scripts": counts.helpers,
+                "delivery_markers": counts.markers,
             }))?
         );
         return Ok(());
@@ -151,14 +230,14 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
     let rows: Vec<Vec<String>> = carried
         .iter()
         .map(|item| {
-            let age = match (item.age_seconds, &item.record) {
+            let age = match (item.age_seconds, item.accounted()) {
                 (Some(seconds), _) => {
                     crate::cli::registry::human_age(chrono::TimeDelta::seconds(seconds))
                 }
-                // A manifest whose timestamp will not parse is a manifest
-                // somebody hand-edited; say so instead of showing an age.
-                (None, Some(_)) => "unknown".to_string(),
-                (None, None) => "never".to_string(),
+                // A record whose timestamp will not parse was hand-edited; say
+                // so instead of showing an age.
+                (None, true) => "unknown".to_string(),
+                (None, false) => "never".to_string(),
             };
             let reachable = match item.reachable {
                 Some(true) => "yes",
@@ -172,10 +251,9 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             };
             vec![
                 item.artifact.clone(),
-                commit_of(item),
-                item.record
-                    .as_ref()
-                    .map_or_else(|| "-".to_string(), |record| record.builder.clone()),
+                item.accounted_by().as_str().to_string(),
+                item.commit(),
+                item.builder(),
                 age,
                 reachable.to_string(),
                 describes.to_string(),
@@ -192,44 +270,17 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     crate::cli::table::print(
-        &["ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE", "BYTES"],
+        &[
+            "ARTIFACT",
+            "ACCOUNTED",
+            "COMMIT",
+            "BUILDER",
+            "AGE",
+            "REACHABLE",
+            "BYTES",
+        ],
         &rows,
     );
-    if repository.is_none() {
-        println!(
-            "\n{target}: no local checkout was found, so reachability is unknown rather than \
-             answered; run this from the stado source tree to resolve it"
-        );
-    }
-    if drifted != usize::default() {
-        println!(
-            "{target}: {drifted} of {} artifacts have no producer reachable from origin/main",
-            rows.len()
-        );
-    }
-    let replaced = carried
-        .iter()
-        .filter(|item| item.describes == Some(false))
-        .count();
-    if replaced != usize::default() {
-        // Louder than drift, because the manifest is not merely absent: it
-        // answers the provenance question, and its answer is about bytes that
-        // are gone. Every reader downstream inherits that wrong answer.
-        println!(
-            "{target}: {replaced} artifact(s) were replaced after their manifest was written, so \
-             the commit shown for them describes bytes that are no longer on the host"
-        );
-    }
-    if helpers != usize::default() {
-        // Not drift, and not nothing. Helpers are delivered one at a time to
-        // solve one incident and are never removed, so the population only
-        // grows; naming the count is what makes an operator notice that a
-
-        // directory of them accumulated while nobody decided to keep any.
-        println!(
-            "{target}: {helpers} installed helper script(s) alongside, which carry no release \
-             and are not counted above"
-        );
-    }
+    super::trailers::print(target, &carried, &counts, rows.len(), repository.is_none());
     Ok(())
 }
