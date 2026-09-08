@@ -19,6 +19,11 @@
 //!
 //! It reads the repository's own tracked file list and its tracked text, so it
 //! measures the commit under test and touches no operator state.
+//!
+//! The other direction — every path the published pages name has to be in this
+//! tree — is [`published_paths`], which reads the inventory the site publishes.
+
+mod published_paths;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
