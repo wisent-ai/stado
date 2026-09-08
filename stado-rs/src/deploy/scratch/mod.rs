@@ -73,7 +73,7 @@ pub async fn create(
     host_users::validate_username(&name)?;
 
     let home = host_channel::remote_home(&target, runner).await?;
-    let held = host_leases(&target, &home, runner).await?;
+    let (held, _read_code) = host_leases(&target, &home, runner).await?;
     let swept = reap_rows(&target, &home, &held, true, runner).await?;
     if let Some(row) = held
         .iter()
@@ -158,17 +158,42 @@ pub async fn create(
     Ok(report)
 }
 
+/// Which hosts a lease may be taken on, and why the others may not.
+///
+/// A caller that has to reach a real machine asks the fleet, never an
+/// environment variable: the registry and the profile declaration together
+/// decide, and both are already the fleet's own words.
+pub async fn hosts() -> Result<Map<String, Value>, DeployError> {
+    let verdicts = eligible_hosts().await?;
+    let mut report = Map::new();
+    report.insert(
+        "declaration".into(),
+        Value::from(declaration::DECLARATION_PATH),
+    );
+    report.insert(
+        "hosts".into(),
+        Value::Array(verdicts.iter().map(HostEligibility::to_json).collect()),
+    );
+    report.insert(
+        "eligible".into(),
+        json!(verdicts.iter().filter(|row| row.eligible()).count()),
+    );
+    report.insert("status".into(), Value::from("read"));
+    Ok(report)
+}
+
 /// Every lease a host holds, each with the account's real presence.
 pub async fn list(target_name: &str, runner: &Runner) -> Result<Map<String, Value>, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let home = host_channel::remote_home(&target, runner).await?;
-    let held = host_leases(&target, &home, runner).await?;
+    let (held, read_code) = host_leases(&target, &home, runner).await?;
     let now = Utc::now();
     let mut report = host_channel::base_report(&target);
     report.insert(
         "leases".into(),
         Value::Array(held.iter().map(|row| lease_json(row, now)).collect()),
     );
+    report.insert("exit_code".into(), Value::from(read_code));
     report.insert("status".into(), Value::from("read"));
     Ok(report)
 }
@@ -182,7 +207,7 @@ pub async fn destroy(
     lease::validate_name(name)?;
     let target = host_channel::canonical_target(target_name).await?;
     let home = host_channel::remote_home(&target, runner).await?;
-    let held = host_leases(&target, &home, runner).await?;
+    let (held, _read_code) = host_leases(&target, &home, runner).await?;
     let Some(row) = held.iter().find(|row| row.name == name) else {
         return Err(DeployError(format!(
             "no scratch lease named '{name}' on '{}'",
@@ -217,7 +242,7 @@ pub async fn reap_target(
     runner: &Runner,
 ) -> Result<Map<String, Value>, DeployError> {
     let home = host_channel::remote_home(target, runner).await?;
-    let held = host_leases(target, &home, runner).await?;
+    let (held, read_code) = host_leases(target, &home, runner).await?;
     let now = Utc::now();
     let swept = reap_rows(target, &home, &held, apply, runner).await?;
     let mut report = host_channel::base_report(target);
@@ -237,13 +262,16 @@ pub async fn reap_target(
     report.insert("destroyed".into(), json!(swept.destroyed.len()));
     report.insert("kept".into(), json!(swept.kept));
     report.insert("failures".into(), json!(swept.failures));
+    report.insert("exit_code".into(), Value::from(read_code));
     report.insert("status".into(), Value::from("reaped"));
     Ok(report)
 }
 
 mod ops;
 use ops::{destroy_row, open_account, reap_rows, row_for, scratch_ssh, settle};
-pub use ops::{host_leases, lease_json, probe_state, Entered, Swept};
+pub use ops::{
+    eligible_hosts, host_leases, lease_json, probe_state, Entered, HostEligibility, Swept,
+};
 
 /// A read of one lease's timestamps against a moment in time.
 pub fn expired_at(row: &HostLease, now: DateTime<Utc>) -> bool {

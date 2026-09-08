@@ -2,23 +2,33 @@
 //!
 //! Profiles, lifetimes and mechanisms live in
 //! `stado-rs/data/scratch-profiles.json`; this module is the command surface
-//! over [`crate::deploy::scratch`] and the only place its reports are rendered
-//! for a person. Adding a kind of disposable target is a declaration change,
-//! not another CLI verb.
+//! over [`crate::deploy::scratch`]. Adding a kind of disposable target is a
+//! declaration change, not another CLI verb.
 
 use std::path::PathBuf;
 
 use clap::Subcommand;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::CmdError;
 use crate::deploy::scratch::{self, declaration, LeaseRequest};
+
+mod render;
+
+use render::{count, field, flag, names, objects, print_json, remaining, text};
 
 #[derive(Subcommand)]
 pub enum ScratchCommands {
     /// Read every declared profile: mechanism, platforms and lifetimes.
     Profiles {
         /// Emit the declaration as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read which registry hosts a lease may be taken on, and why the others
+    /// may not.
+    Hosts {
+        /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -82,30 +92,8 @@ pub enum ScratchCommands {
 pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     match command {
-        ScratchCommands::Profiles { json } => {
-            let declared = declaration::declaration().map_err(|exc| CmdError::click(exc.0))?;
-            if json {
-                print_json(&serde_json::json!({
-                    "declaration": declaration::DECLARATION_PATH,
-                    "schema": declared.schema,
-                    "profiles": declared.profiles,
-                }))?;
-                return Ok(());
-            }
-            for profile in &declared.profiles {
-                println!(
-                    "{}\t{}\t{}\tshell {}\tttl {} (max {})",
-                    profile.name,
-                    profile.mechanism.as_str(),
-                    profile.platforms.join(", "),
-                    profile.shell,
-                    profile.default_ttl,
-                    profile.max_ttl
-                );
-                println!("\t{}", profile.summary);
-            }
-            Ok(())
-        }
+        ScratchCommands::Profiles { json } => profiles(json),
+        ScratchCommands::Hosts { json } => hosts(json).await,
         ScratchCommands::Create {
             host,
             profile,
@@ -162,7 +150,7 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
             if json {
                 return print_json(&Value::Object(report));
             }
-            let leases = rows(&report);
+            let leases = objects(&report, "leases");
             if leases.is_empty() {
                 println!("{} holds no scratch leases", text(&report, "target"));
                 return Ok(());
@@ -208,7 +196,7 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
             if json {
                 return print_json(&Value::Object(report));
             }
-            for lease in rows(&report) {
+            for lease in objects(&report, "leases") {
                 println!(
                     "{}\t{}\texpires {}\t{}",
                     field(lease, "action"),
@@ -224,21 +212,11 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
                 text(&report, "target"),
                 if apply { "" } else { " (preview)" }
             );
-            for failure in report
-                .get("failures")
-                .and_then(Value::as_array)
-                .unwrap_or(&Vec::new())
-            {
+            for failure in objects(&report, "failures") {
                 println!(
                     "failed\t{}\t{}",
-                    failure
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    failure
-                        .get("error")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
+                    field(failure, "name"),
+                    field(failure, "error")
                 );
             }
             Ok(())
@@ -246,79 +224,52 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
     }
 }
 
-fn print_json(value: &Value) -> Result<(), CmdError> {
-    let text = serde_json::to_string_pretty(value)
-        .map_err(|exc| CmdError::click(format!("report is not serializable: {exc}")))?;
-    println!("{text}");
+/// The declaration, as declared.
+fn profiles(json: bool) -> Result<(), CmdError> {
+    let declared = declaration::declaration().map_err(|exc| CmdError::click(exc.0))?;
+    if json {
+        return print_json(&serde_json::json!({
+            "declaration": declaration::DECLARATION_PATH,
+            "schema": declared.schema,
+            "profiles": declared.profiles,
+        }));
+    }
+    for profile in &declared.profiles {
+        println!(
+            "{}\t{}\t{}\tshell {}\tttl {} (max {})",
+            profile.name,
+            profile.mechanism.as_str(),
+            profile.platforms.join(", "),
+            profile.shell,
+            profile.default_ttl,
+            profile.max_ttl
+        );
+        println!("\t{}", profile.summary);
+    }
     Ok(())
 }
 
-fn text(report: &Map<String, Value>, key: &str) -> String {
-    report
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn count(report: &Map<String, Value>, key: &str) -> String {
-    report
-        .get(key)
-        .and_then(Value::as_u64)
-        .map_or_else(|| "0".to_string(), |value| value.to_string())
-}
-
-fn names(report: &Map<String, Value>, key: &str) -> Vec<String> {
-    report
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| entry.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn rows(report: &Map<String, Value>) -> Vec<&Map<String, Value>> {
-    report
-        .get("leases")
-        .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(Value::as_object).collect())
-        .unwrap_or_default()
-}
-
-fn field(row: &Map<String, Value>, key: &str) -> String {
-    match row.get(key) {
-        Some(Value::String(value)) => value.clone(),
-        Some(Value::Bool(value)) => value.to_string(),
-        Some(Value::Number(value)) => value.to_string(),
-        _ => String::new(),
+/// Where a lease can be taken, and why not everywhere.
+async fn hosts(json: bool) -> Result<(), CmdError> {
+    let report = scratch::hosts()
+        .await
+        .map_err(|exc| CmdError::click(exc.0))?;
+    if json {
+        return print_json(&Value::Object(report));
     }
-}
-
-/// How long one lease has left, in the operator's words rather than seconds:
-/// a negative number is the thing an operator has to translate, and translating
-/// it wrong is how an expired lease looks alive.
-fn remaining(row: &Map<String, Value>) -> String {
-    let expired = row
-        .get("expired")
-        .and_then(Value::as_bool)
-        .unwrap_or_default();
-    let seconds = row.get("seconds_remaining").and_then(Value::as_i64);
-    match (expired, seconds) {
-        (true, Some(value)) => format!("expired {} ago", age(-value)),
-        (true, None) => "expired (undatable record)".to_string(),
-        (false, Some(value)) => format!("{} left", age(value)),
-        (false, None) => "lifetime unknown".to_string(),
+    for host in objects(&report, "hosts") {
+        let eligible = flag(host, "eligible");
+        println!(
+            "{}\t{}\t{}\t{}",
+            if eligible { "leasable" } else { "refused" },
+            field(host, "target"),
+            field(host, "release_platform"),
+            if eligible {
+                format!("profile {}", field(host, "profile"))
+            } else {
+                field(host, "refusal")
+            }
+        );
     }
-}
-
-/// One spelling of a span, the registry's own.
-fn age(seconds: i64) -> String {
-    chrono::TimeDelta::try_seconds(seconds).map_or_else(
-        || "an unreadable span".to_string(),
-        super::registry::human_age,
-    )
+    Ok(())
 }

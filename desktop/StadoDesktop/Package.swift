@@ -64,5 +64,10 @@ let package = Package(
             dependencies: ["Stado"],
             path: "tests/memory"
         ),
+        .testTarget(
+            name: "ScratchTests",
+            dependencies: ["Stado"],
+            path: "tests/scratch"
+        ),
     ]
 )
