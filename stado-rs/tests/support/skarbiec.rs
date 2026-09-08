@@ -1,3 +1,7 @@
+// Shared by several test targets; each uses a subset, so unused-in-this-target
+// is the normal state rather than a finding.
+#![allow(dead_code)]
+
 use std::fs::{self, File};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -7,78 +11,82 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::Value;
-use sha2::{Digest, Sha256};
+use serde_json::{json, Value};
+
+/// Where declared route resolution landed, quoted as history rather than
+/// compared against: a test keyed to a foreign product's revision goes red
+/// the day that product moves, for a reason belonging to neither change.
+pub const ROUTE_RESOLUTION_ORIGIN: &str =
+    "Skarbiec PR #37, merged as 8e8b0ee44, which also deleted /v1/operator/routes/list";
 
 fn executable_file(path: &Path) -> bool {
     fs::metadata(path)
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
+/// The real `skarbiec` binary: `SKARBIEC_BIN`, then `PATH`, then
+/// `~/.stado/bin/skarbiec`, and deliberately no fourth branch. A test that
+/// downloads a release of its own choosing decides for itself which Skarbiec
+/// the fleet runs, and a test that skips when none is present goes green
+/// because a dependency was absent — the defect this change removes.
 pub fn real_skarbiec_binary() -> PathBuf {
-    if let Some(configured) = std::env::var_os("SKARBIEC_TEST_BIN") {
+    if let Some(configured) = std::env::var_os("SKARBIEC_BIN") {
         let configured = PathBuf::from(configured);
         assert!(
             executable_file(&configured),
-            "SKARBIEC_TEST_BIN is not an executable file: {}",
+            "SKARBIEC_BIN names {}, which is not an executable file",
             configured.display()
         );
         return configured;
     }
-
-    let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
-    let installed = home.join(".stado/bin/skarbiec");
-    if executable_file(&installed) {
-        return installed;
+    if let Some(paths) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&paths) {
+            let candidate = directory.join("skarbiec");
+            if executable_file(&candidate) {
+                return candidate;
+            }
+        }
     }
-
-    let (platform, asset, expected_sha256) = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => (
-            "darwin-arm64",
-            "skarbiec-v0.2.37-darwin-arm64.tar.gz",
-            "d113acc0d831bbefdce0308dbd311e5a6d14c8f9581c962abf380b3c2343743b",
-        ),
-        ("linux", "x86_64") => (
-            "linux-amd64",
-            "skarbiec-v0.2.37-linux-amd64.tar.gz",
-            "45dc3869f869c347038cc97f3d454bf40f889219152c92862652c0c9e1166c89",
-        ),
-        (os, arch) => panic!("no real Skarbiec release is pinned for {os}-{arch}"),
-    };
-    let cache = home.join(".cache/probierz/skarbiec/v0.2.37").join(platform);
-    let binary = cache.join("skarbiec");
-    if executable_file(&binary) {
-        return binary;
-    }
-    fs::create_dir_all(&cache).unwrap();
-
-    let url = format!("https://github.com/wisent-ai/skarbiec/releases/download/v0.2.37/{asset}");
-    let bytes = tokio::runtime::Runtime::new().unwrap().block_on(async {
-        reqwest::get(&url)
-            .await
-            .unwrap_or_else(|error| panic!("downloading real Skarbiec failed: {error}"))
-            .error_for_status()
-            .unwrap_or_else(|error| panic!("downloading real Skarbiec failed: {error}"))
-            .bytes()
-            .await
-            .unwrap_or_else(|error| panic!("reading real Skarbiec archive failed: {error}"))
-    });
-    assert_eq!(
-        hex::encode(Sha256::digest(&bytes)),
-        expected_sha256,
-        "downloaded real Skarbiec archive has the wrong digest"
-    );
-
-    let mut archive = tempfile::NamedTempFile::new_in(&cache).unwrap();
-    archive.write_all(&bytes).unwrap();
-    let decoder = flate2::read::GzDecoder::new(File::open(archive.path()).unwrap());
-    tar::Archive::new(decoder).unpack(&cache).unwrap();
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let installed =
+        PathBuf::from(std::env::var_os("HOME").expect("HOME is set")).join(".stado/bin/skarbiec");
     assert!(
-        executable_file(&binary),
-        "real Skarbiec archive contains no executable"
+        executable_file(&installed),
+        "no real skarbiec binary: SKARBIEC_BIN is unset, no directory on PATH holds `skarbiec`, \
+         and {} does not exist. Check out wisent-ai/skarbiec at origin/main, run `cargo build \
+         --release --locked`, and point SKARBIEC_BIN at target/release/skarbiec. This test does \
+         not run without the real broker and does not pretend to.",
+        installed.display()
     );
-    binary
+    installed
+}
+
+/// Fail unless the broker at `url` serves declared route resolution.
+///
+/// Behavioural, because `--version` cannot answer it: a source build reports
+/// a null commit and no release at all.
+pub fn require_route_resolution(url: &str) {
+    let endpoint = format!("{url}/v1/operator/route/resolve");
+    let answered = tokio::runtime::Runtime::new()
+        .expect("a runtime for the capability probe")
+        .block_on(async {
+            match reqwest::Client::new()
+                .post(&endpoint)
+                .json(&json!({}))
+                .send()
+                .await
+            {
+                Ok(response) => response.text().await.unwrap_or_default(),
+                Err(error) => panic!("the real Skarbiec broker did not answer {endpoint}: {error}"),
+            }
+        });
+    assert!(
+        !answered.contains("unknown operator route"),
+        "the resolved skarbiec binary does not serve declared route resolution: it answered \
+         {answered}. That capability arrived in {ROUTE_RESOLUTION_ORIGIN}, so an older broker \
+         serves neither surface. Build skarbiec at origin/main with `cargo build --release \
+         --locked` and point SKARBIEC_BIN at target/release/skarbiec. This is a delivery gap — \
+         the installed broker is older than a capability Stado already ships — not a Stado defect."
+    );
 }
 
 pub struct SkarbiecItem {
@@ -178,14 +186,22 @@ impl SkarbiecFixture {
             );
         }
         if let Some((consumer, capabilities)) = grant {
+            // `grant issue` is the current verb. It replaced `token-mint` in
+            // the same merge that added declared route resolution, so a
+            // fixture still spelling the old one is pinned to a broker older
+            // than the capability this suite requires.
             let minted = command(
-                &["token-mint", consumer, "--capabilities", capabilities],
+                &["grant", "issue", consumer, "--capabilities", capabilities],
                 None,
             );
             assert!(
                 minted.status.success(),
-                "real Skarbiec grant failed: {}",
-                String::from_utf8_lossy(&minted.stderr)
+                "real Skarbiec refused `grant issue`: {}. `grant issue` replaced `token-mint` in \
+                 the same merge that added declared route resolution ({ROUTE_RESOLUTION_ORIGIN}), \
+                 so a broker that does not know the verb is older than the capability this suite \
+                 requires. Build skarbiec at origin/main with `cargo build --release --locked` \
+                 and point SKARBIEC_BIN at target/release/skarbiec.",
+                String::from_utf8_lossy(&minted.stderr).trim()
             );
             let grant: Value = serde_json::from_slice(&minted.stdout).unwrap();
             fs::write(&token, grant["token"].as_str().unwrap()).unwrap();
