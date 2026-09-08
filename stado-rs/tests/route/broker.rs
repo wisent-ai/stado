@@ -22,7 +22,7 @@ use std::process::{Command, Stdio};
 use serde_json::json;
 
 use super::fleet::Fleet;
-use crate::skarbiec_support::real_skarbiec_binary;
+use super::source::real_skarbiec;
 
 pub const ITEM: &str = "route-real-login";
 pub const FIELD: &str = "username";
@@ -45,16 +45,18 @@ fn knows_route_group(binary: &Path) -> bool {
         .success()
 }
 
-/// The broker the fleet is supposed to be running.
+/// The broker the fleet is supposed to be running: named in `SKARBIEC_BIN`, or
+/// built from the sibling checkout at `origin/main`. Either way it is real,
+/// and either way it has to know the verb group Stado reads with.
 pub fn current() -> PathBuf {
-    let binary = real_skarbiec_binary();
+    let binary = real_skarbiec();
     assert!(
         knows_route_group(&binary),
         "the resolved skarbiec at {} does not know the `route` verb group, so it cannot resolve a \
          declared route. `route resolve`, `route declare` and `route verify` replaced `routes \
-         list`, `routes add` and `routes verify`. Check out wisent-ai/skarbiec at origin/main, run \
-         `cargo build --release --locked`, and point SKARBIEC_BIN at target/release/skarbiec. This \
-         test does not run without a current broker and does not pretend to.",
+         list`, `routes add` and `routes verify`, so this binary predates them. Unset SKARBIEC_BIN \
+         to have this area build the sibling checkout at origin/main, or point it at a broker \
+         built from there.",
         binary.display()
     );
     binary

@@ -18,12 +18,10 @@
 //! * the refusal for a declaration that names no resource —
 //!   [`a_declaration_naming_no_endpoint_is_refused_and_writes_nothing`].
 
-#[path = "../support/skarbiec.rs"]
-mod skarbiec_support;
-
 mod broker;
 mod capability;
 mod fleet;
+mod source;
 
 use std::os::unix::fs::PermissionsExt;
 
