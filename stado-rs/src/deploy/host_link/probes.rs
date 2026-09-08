@@ -24,8 +24,18 @@ pub(super) fn window_minutes(window: i64) -> i64 {
 /// Run one probe. `None` covers every way a probe can fail to answer:
 /// missing binary, spawn error, timeout, non-zero exit.
 pub(super) async fn probe(runner: &Runner, argv: Vec<String>) -> Option<CommandOutput> {
+    probe_within(runner, argv, PROBE_TIMEOUT).await
+}
+
+/// The same probe under the caller's own cap, for a read whose cost is the
+/// size of a log rather than the reachability of a tool.
+pub(super) async fn probe_within(
+    runner: &Runner,
+    argv: Vec<String>,
+    cap: std::time::Duration,
+) -> Option<CommandOutput> {
     let mut spec = CommandSpec::new(argv);
-    spec.timeout = Some(PROBE_TIMEOUT);
+    spec.timeout = Some(cap);
     match runner(spec).await {
         Ok(output) if output.ok() => Some(output),
         _ => None,
