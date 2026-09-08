@@ -172,11 +172,12 @@ impl Fleet {
 
 impl Drop for Fleet {
     fn drop(&mut self) {
-        for listener in [self.dashboard.as_mut(), self.skarbiec.as_mut()] {
-            if let Some(child) = listener {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+        for child in [self.dashboard.as_mut(), self.skarbiec.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
         }
         stop_key_agent(&self.gnupg);
     }
