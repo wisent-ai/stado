@@ -99,6 +99,10 @@ struct ScratchLeaseReceipt: Decodable, Sendable {
     let createdAt, expiresAt, ttl, storageRoot, registryPath: String
     let account: ScratchPresence
     let verifiedLogin: String
+    /// The account's home directory as the host's directory service reports
+    /// it, so a confirmation can name the directory instead of guessing
+    /// `/Users` or `/home` from a platform.
+    let homePath: String
     /// Expired leases this create destroyed on the same host before leasing.
     let reaped: [String]
     let exitCode: Int
@@ -109,6 +113,7 @@ struct ScratchLeaseReceipt: Decodable, Sendable {
         case createdAt = "created_at", expiresAt = "expires_at"
         case storageRoot = "storage_root", registryPath = "registry_path"
         case verifiedLogin = "verified_login", exitCode = "exit_code"
+        case homePath = "home_path"
     }
 }
 
@@ -116,16 +121,23 @@ struct ScratchLeaseReceipt: Decodable, Sendable {
 struct ScratchLease: Decodable, Identifiable, Sendable {
     let name, username, profile, createdAt, expiresAt: String
     let expired: Bool
-    let secondsRemaining: Int
+    /// Absent where the record carries no readable stamp. A leaked record is
+    /// exactly the row an operator needs to see, so it must decode: an
+    /// `Int` here made one unreadable record blind the whole section.
+    let secondsRemaining: Int?
     let account: ScratchPresence
+    let homePath: String?
     let requestedBy: String
+    /// Why the record could not be read, when it could not be.
+    let unreadable: String?
 
     var id: String { name }
 
     private enum CodingKeys: String, CodingKey {
-        case name, username, profile, expired, account
+        case name, username, profile, expired, account, unreadable
         case createdAt = "created_at", expiresAt = "expires_at"
         case secondsRemaining = "seconds_remaining", requestedBy = "requested_by"
+        case homePath = "home_path"
     }
 }
 
@@ -147,13 +159,16 @@ struct ScratchDestroyReceipt: Decodable, Sendable {
     let name, target, username: String
     let account, home, record: ScratchPresence
     let destroyedAt, storageRoot: String
+    /// The home directory that went with the account, when the read that
+    /// preceded the destroy knew it.
+    let homePath: String?
     let exitCode: Int
     let status: String
 
     private enum CodingKeys: String, CodingKey {
         case name, target, username, account, home, record, status
         case destroyedAt = "destroyed_at", storageRoot = "storage_root"
-        case exitCode = "exit_code"
+        case exitCode = "exit_code", homePath = "home_path"
     }
 }
 

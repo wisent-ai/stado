@@ -8,9 +8,11 @@
 //! This module holds what both halves read: the host's own account of what it
 //! holds.
 
+mod eligibility;
 mod open;
 mod teardown;
 
+pub use eligibility::{eligible_hosts, HostEligibility};
 pub use open::{open_account, settle, Entered};
 pub use teardown::{destroy_row, reap_rows, row_for, Swept};
 
@@ -21,12 +23,15 @@ use super::remote::{self, HostLease, HostState};
 use crate::deploy::{host_channel, host_users, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-/// Read every lease record a host holds, with each account's real presence.
+/// Read every lease record a host holds, with each account's real presence,
+/// and the exit status of the read itself: a report that states its own
+/// process verdict can be compared with one that failed, and the console
+/// decodes that field.
 pub async fn host_leases(
     target: &ComputeTarget,
     home: &str,
     runner: &Runner,
-) -> Result<Vec<HostLease>, DeployError> {
+) -> Result<(Vec<HostLease>, i32), DeployError> {
     let command = remote::list_command(home);
     let output =
         host_channel::run_program(target, &["/bin/sh", "-c", command.as_str()], runner).await?;
@@ -36,7 +41,7 @@ pub async fn host_leases(
             "the host did not answer the lease read",
         )));
     }
-    Ok(remote::parse_leases(&output.stdout))
+    Ok((remote::parse_leases(&output.stdout), output.code))
 }
 
 /// One lease as a report row: the record's own fields, the account presence and

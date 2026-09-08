@@ -70,11 +70,18 @@ struct ScratchLeasePanel: View {
             : "absent — this record names \(lease.username) and the host has no such account"
     }
 
+    /// A record with no readable stamp says exactly that: it is the row an
+    /// operator has to look at, and a fabricated span would hide it.
     private var remaining: String {
-        guard lease.expired else {
-            return "\(StadoFormat.duration(Double(lease.secondsRemaining))) left"
+        guard let seconds = lease.secondsRemaining else {
+            return lease.unreadable == nil
+                ? "lifetime unknown"
+                : "unreadable record — swept on the next pass"
         }
-        let over = -lease.secondsRemaining
+        guard lease.expired else {
+            return "\(StadoFormat.duration(Double(seconds))) left"
+        }
+        let over = -seconds
         return over > 0
             ? "expired \(StadoFormat.duration(Double(over))) ago"
             : "expired"
