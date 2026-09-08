@@ -56,7 +56,15 @@ static RESIDENT_LOCK_FD: OnceLock<i32> = OnceLock::new();
 static RESIDENT_TARGET: OnceLock<crate::targets::ComputeTarget> = OnceLock::new();
 static RESIDENT_NATIVE_MANAGER: OnceLock<Value> = OnceLock::new();
 
-const REMOTE_PYTHON: &str = include_str!("../host_storage_reconcile.py");
+const REMOTE_PYTHON: &str = concat!(
+    include_str!("../host_storage_reconcile_program/01_environment_and_immutable_json.py"),
+    include_str!("../host_storage_reconcile_program/02_clone_inventory_and_lock_phases.py"),
+    include_str!(
+        "../host_storage_reconcile_program/03_status_preflight_and_lifecycle_checkpoint.py"
+    ),
+    include_str!("../host_storage_reconcile_program/04_checkpoint_decisions_and_arming.py"),
+    include_str!("../host_storage_reconcile_program/05_apply_activate_and_finalize.py"),
+);
 
 const FENCE_SCHEMA: &str = "stado.storage-root-fence.v5";
 const READ_FENCE: &str = "read-fence";

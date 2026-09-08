@@ -155,7 +155,33 @@ fn main() {
     println!("cargo:rerun-if-changed={}", source.display());
     let script = std::fs::read_to_string(&source).unwrap_or_default();
     std::fs::write(out_dir.join("join.sh"), script).expect("write the embedded join script");
-    compile_python(Path::new("src/deploy/host_storage_reconcile.py"), out_dir);
+    // The embedded reconciliation program lives as contiguous fragments that
+    // `deploy::host_storage_reconcile` assembles with
+    // `concat!(include_str!(...))`. The directory listing is the only list of
+    // fragments: zero-padded ordinal prefixes make sorted order the assembly
+    // order, so adding a fragment needs no edit here. Every fragment begins at
+    // a top-level statement, so compiling each one alone proves the assembled
+    // program parses.
+    let fragments = Path::new("src")
+        .join("deploy")
+        .join("host_storage_reconcile_program");
+    println!("cargo:rerun-if-changed={}", fragments.display());
+    let mut fragment_files = std::fs::read_dir(&fragments)
+        .expect("read the embedded reconciliation program directory")
+        .map(|entry| {
+            entry
+                .expect("read an embedded reconciliation program fragment")
+                .path()
+        })
+        .collect::<Vec<_>>();
+    fragment_files.sort();
+    assert!(
+        !fragment_files.is_empty(),
+        "the embedded reconciliation program has no fragments"
+    );
+    for fragment in &fragment_files {
+        compile_python(fragment, out_dir);
+    }
     // Always set, in every build context, so the crate can read it with
     // `env!` and no consumer needs a fallback of its own.
     println!("cargo:rustc-env={REVISION_OVERRIDE}={}", source_revision());
