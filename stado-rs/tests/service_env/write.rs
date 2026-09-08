@@ -81,17 +81,13 @@ impl Drop for Reconciler {
 
 /// The file's mode as it stands on disk, in the spelling the product prints.
 fn mode_on_disk(path: &std::path::Path) -> String {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(path).unwrap().permissions().mode();
-        return format!("{:o}", mode & 0o7777);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        String::new()
-    }
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path)
+        .expect("the value file the product wrote is on disk")
+        .permissions()
+        .mode();
+    format!("{:o}", mode & 0o7777)
 }
 
 #[test]

@@ -243,11 +243,12 @@ fn assert_head_matches_disk(text: &str, path: &Path) {
 fn effective_on_disk(path: &Path, key: &str) -> String {
     let body = on_disk(path);
     body.lines()
+        .rev()
         .filter_map(|line| {
             let line = line.strip_prefix("export ").unwrap_or(line);
             line.strip_prefix(&format!("{key}="))
         })
-        .last()
+        .next()
         .unwrap_or_else(|| panic!("{key} is assigned nowhere in {}", path.display()))
         .trim_matches('\'')
         .to_string()
