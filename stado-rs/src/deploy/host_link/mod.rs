@@ -43,11 +43,21 @@ use platform::{
 use probes::window_seconds;
 use tailnet::tailnet_path;
 
-/// Wall-clock cap on one probe. `pmset -g log` parses the whole power log
-/// (measured 1.9 s over 36k lines on an M2 Max) and `log show` scans a log
-/// store, so the cap is generous enough to succeed on a busy host and short
-/// enough that a wedged tool costs the beacon one field, not the tick.
+/// Wall-clock cap on one probe. `log show` scans a log store, so the cap is
+/// generous enough to succeed on a busy host and short enough that a wedged
+/// tool costs the beacon one field, not the tick.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Wall-clock cap on reading the power log, which is a different measurement
+/// from the one above and was wrong for two years of log growth.
+///
+/// The comment on `PROBE_TIMEOUT` recorded `pmset -g log` at 1.9 s over 36k
+/// lines. On 2026-09-08 the same command on this workstation took 6.03 s, so
+/// the five second cap killed it and the beacon carried no sleep or wake at
+/// all — the two fields `host link` exists to answer with. The log only grows,
+/// so the cap has to leave room for that growth rather than sit beside the
+/// measurement it was taken from.
+pub const POWER_LOG_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Interface changes one beacon carries. The window is minutes long; a host
 /// flapping harder than this is telling its story with the first few lines,
