@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::deploy::host_link::probes::{probe, resolve_program, window_minutes};
+use crate::deploy::host_link::probes::{probe, probe_within, resolve_program, window_minutes};
 use crate::deploy::host_link::timestamps::{detail_of, iso, newest_changes, parse_stamp};
 use crate::deploy::host_link::InterfaceChange;
 use crate::deploy::Runner;
@@ -22,7 +22,12 @@ pub(in crate::deploy::host_link) async fn macos_sleep_wake(
     runner: &Runner,
 ) -> Option<(Option<String>, Option<String>)> {
     let program = resolve_program("pmset")?;
-    let output = probe(runner, vec![program, "-g".to_string(), "log".to_string()]).await?;
+    let output = probe_within(
+        runner,
+        vec![program, "-g".to_string(), "log".to_string()],
+        crate::deploy::host_link::POWER_LOG_TIMEOUT,
+    )
+    .await?;
 
     let mut sleep = None;
     let mut wake = None;

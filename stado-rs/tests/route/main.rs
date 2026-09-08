@@ -21,6 +21,7 @@
 mod broker;
 mod capability;
 mod fleet;
+mod leased;
 mod source;
 
 use std::os::unix::fs::PermissionsExt;

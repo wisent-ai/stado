@@ -18,6 +18,7 @@
 //! Every sentence asserted below was copied from a live run on 2026-09-08.
 
 mod fixture;
+mod leased;
 
 use fixture::{
     installed_binary, installed_version, report, reported_binary, stderr, Fixture, BINARY,
