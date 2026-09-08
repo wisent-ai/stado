@@ -10,20 +10,6 @@
 //! was too old to accept it. Both windows opened with no restart and no binary
 //! replacement, and both closed on an unrelated restart onto a newer build.
 //!
-//! That is why `stale-unit-image` (#336) fires nothing here: the installed
-//! file and the running image agreed, and the REGISTRY was what moved. The
-//! janitor learned to journal the refusal as `policy:NotImplementedError`
-//! (#341) and `resolver status` learned to publish it as a blocker for the
-//! resolver's own process (#345), but the surface that carries every other
-//! kind of drift said nothing.
-//!
-//! Measured on 2026-09-03 by asking each build on this machine to validate the
-//! live registry: 0.7.14, 0.7.15, 0.7.16, 0.7.17 and 0.7.22 refuse it with
-//! `registry.targets[0].disk_cleanup.cleaners: unknown cleaners
-//! ['backup_twins', 'queue_workdirs']`, 0.13.24 refuses it with
-//! `registry.targets[2].disk_cleanup: must contain exactly [...]`, and 0.13.46
-//! onward accept it. Three build eras, three sentences, one class.
-//!
 //! What is defended here: the condition fires from inside the refusing process
 //! — which is the whole case, and is only possible because `read_registry`
 //! does not gate on `validate_registry`; the row names the host, the build and
@@ -34,9 +20,15 @@
 //! rendered as clean is the defect this whole line of work exists to remove;
 //! and judging a document records and writes nothing, so a reporting surface
 //! may call it.
+//!
+//! The subject is which document a build accepts, so the two host names here
+//! are declaration rows and nothing contacts them. The refusal fixture was
+//! repaired on 2026-09-08: it declared an unknown cleaner name, which the
+//! product now skips deliberately, so six of these cases were failing on
+//! `main` while asserting a refusal this build no longer makes. It now
+//! declares a field inside a known cleaner, which the schema still refuses.
 
-use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+mod fixture;
 
 use serde_json::Value;
 use stado::targets::{
@@ -44,97 +36,10 @@ use stado::targets::{
     BuildVerdict, LastGoodRefusal, REGISTRY_LAST_GOOD_FILE, REGISTRY_LAST_GOOD_META_FILE,
 };
 
-/// The host this process is pretending to run on.
-const LOCAL: &str = "macbook-fake";
-/// A second declared machine, which no process here can ask.
-const REMOTE: &str = "mini-fake";
-
-const REFUSES: &str = "build-refuses-registry";
-const UNREAD: &str = "unread-build-verdict";
-
-/// Serializes `HOME`, which the no-write case has to own exclusively.
-static HOME_LOCK: Mutex<()> = Mutex::new(());
-
-/// A cache location this test owns, with `HOME` pointed at it for as long as
-/// the guard lives. Same shape as `tests/registry_cache_refusal`, for the same
-/// reason: `HOME` decides the cache location and is process-wide.
-struct Home {
-    _lock: MutexGuard<'static, ()>,
-    dir: tempfile::TempDir,
-    previous: Option<std::ffi::OsString>,
-}
-
-impl Home {
-    fn new() -> Self {
-        let lock = HOME_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = tempfile::tempdir().expect("temp HOME");
-        let previous = std::env::var_os("HOME");
-        std::env::set_var("HOME", dir.path());
-        Self {
-            _lock: lock,
-            dir,
-            previous,
-        }
-    }
-
-    fn cache(&self) -> PathBuf {
-        self.dir.path().join(".stado").join("cache")
-    }
-}
-
-impl Drop for Home {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(previous) => std::env::set_var("HOME", previous),
-            None => std::env::remove_var("HOME"),
-        }
-    }
-}
-
-/// One local host, the full `disk_cleanup` field set, one cleaner this build
-/// implements. `validate_registry` accepts it, which is what makes every
-/// mutation below attributable to the mutation.
-fn accepted() -> Value {
-    serde_json::from_str(
-        r#"{
-        "schema_version": 2,
-        "coordinators": [],
-        "targets": [
-            {
-                "name": "macbook-fake",
-                "kind": "local",
-                "ssh": "u@10.0.0.1",
-                "release_platform": "darwin-arm64",
-                "hostnames": ["macbook-fake.local"],
-                "disk_cleanup": {
-                    "mode": "report",
-                    "check_interval_seconds": 3600,
-                    "low_free_gb": 100,
-                    "target_free_gb": 200,
-                    "max_bytes_per_pass": 68719476736,
-                    "max_items_per_pass": 512,
-                    "max_scan_items": 4096,
-                    "cleaners": { "build_caches": { "min_age_seconds": 86400 } }
-                }
-            }
-        ]
-    }"#,
-    )
-    .expect("fixture parses")
-}
-
-/// The same document declaring one cleaner no build implements — the shape
-/// 0.7.14 through 0.7.22 refuse today's live registry with, reproduced against
-/// a name no build will ever implement so the case cannot decay into a pass
-/// the day the cleaner lands.
-fn declares_an_unimplemented_cleaner() -> Value {
-    let mut document = accepted();
-    document["targets"][0]["disk_cleanup"]["cleaners"]["queue_workdirs_fake"] =
-        serde_json::json!({ "min_age_seconds": 86400 });
-    document
-}
+use fixture::{
+    accepted, declares_a_field_no_build_implements, newer_cleaner_declaration, Home, LOCAL,
+    REFUSES, REMOTE, UNIMPLEMENTED_FIELD, UNREAD,
+};
 
 /// The refusal, or a panic naming what came back instead.
 fn refusal(skew: &BuildRegistrySkew) -> &LastGoodRefusal {
@@ -160,7 +65,8 @@ fn refusal(skew: &BuildRegistrySkew) -> &LastGoodRefusal {
 /// `registry doctor`, and can be asked directly what it thinks of it.
 #[test]
 fn a_build_that_refuses_the_document_reports_it_about_itself() {
-    let skews = builds_refusing_registry(LOCAL, &declares_an_unimplemented_cleaner(), Some(LOCAL));
+    let skews =
+        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
     assert_eq!(skews.len(), 1, "one row for the one host that was asked");
     let skew = &skews[0];
     assert_eq!(skew.kind(), REFUSES);
@@ -180,7 +86,7 @@ fn a_build_that_refuses_the_document_reports_it_about_itself() {
 /// has to carry the host, the build and the validator's own words.
 #[test]
 fn the_row_names_the_host_the_build_and_the_rejection() {
-    let document = declares_an_unimplemented_cleaner();
+    let document = declares_a_field_no_build_implements();
     let skews = builds_refusing_registry(LOCAL, &document, Some(LOCAL));
     let skew = &skews[0];
     let sentence = skew.sentence();
@@ -197,7 +103,7 @@ fn the_row_names_the_host_the_build_and_the_rejection() {
         "carries the validator's own sentence {produced:?}: {sentence}"
     );
     assert!(
-        sentence.contains("queue_workdirs_fake"),
+        sentence.contains(UNIMPLEMENTED_FIELD),
         "and therefore names what was refused: {sentence}"
     );
 }
@@ -207,7 +113,8 @@ fn the_row_names_the_host_the_build_and_the_rejection() {
 /// the same refusal.
 #[test]
 fn the_row_reuses_the_published_refusal_slug() {
-    let skews = builds_refusing_registry(LOCAL, &declares_an_unimplemented_cleaner(), Some(LOCAL));
+    let skews =
+        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
     let slug = refusal(&skews[0]).kind();
     assert_eq!(slug, "rejected-by-this-build");
     assert!(
@@ -224,9 +131,20 @@ fn a_build_that_accepts_the_document_is_silent() {
     assert!(builds_refusing_registry(LOCAL, &accepted(), Some(LOCAL)).is_empty());
 }
 
+/// An unknown cleaner name is skipped on purpose, so it must not be reported
+/// as a refusal: refusing a whole policy for one unfamiliar name is what
+/// switched every cleaner off on 2026-09-04.
+#[test]
+fn an_unknown_cleaner_name_is_not_a_refusal() {
+    assert!(
+        build_refusal(&newer_cleaner_declaration()).is_none(),
+        "a name this build does not know is a name a newer build does"
+    );
+}
+
 /// A document that is not a registry at all is still a refusal, not a pass:
-/// the fallback path treats `targets` it cannot model as an empty fleet, and
-/// this check must not inherit that tolerance.
+/// the tolerant read path treats `targets` it cannot model as an empty fleet,
+/// and this check must not inherit that tolerance.
 #[test]
 fn a_document_no_build_would_accept_is_refused_too() {
     let mut document = accepted();
@@ -241,7 +159,7 @@ fn a_document_no_build_would_accept_is_refused_too() {
 /// exactly as `unread-unit-image` does for a pid this kernel does not hold.
 #[test]
 fn a_host_this_process_cannot_ask_is_reported_unmeasured() {
-    for document in [accepted(), declares_an_unimplemented_cleaner()] {
+    for document in [accepted(), declares_a_field_no_build_implements()] {
         let skews = builds_refusing_registry(REMOTE, &document, Some(LOCAL));
         assert_eq!(skews.len(), 1, "one row, always, for a host not asked");
         let skew = &skews[0];
@@ -269,7 +187,7 @@ fn a_host_this_process_cannot_ask_is_reported_unmeasured() {
 /// silence it replaces.
 #[test]
 fn a_local_refusal_is_not_attributed_to_another_host() {
-    let document = declares_an_unimplemented_cleaner();
+    let document = declares_a_field_no_build_implements();
     let remote = builds_refusing_registry(REMOTE, &document, Some(LOCAL));
     assert_eq!(remote[0].kind(), UNREAD);
     assert!(matches!(remote[0].verdict, BuildVerdict::Unmeasured { .. }));
@@ -280,7 +198,7 @@ fn a_local_refusal_is_not_attributed_to_another_host() {
 /// words it.
 #[test]
 fn a_host_with_no_local_target_at_all_is_unmeasured() {
-    let skews = builds_refusing_registry(LOCAL, &declares_an_unimplemented_cleaner(), None);
+    let skews = builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), None);
     assert_eq!(skews.len(), 1);
     assert_eq!(skews[0].kind(), UNREAD);
     assert!(
@@ -298,19 +216,19 @@ fn a_host_with_no_local_target_at_all_is_unmeasured() {
 fn the_two_kinds_are_distinct() {
     assert_ne!(REFUSES, UNREAD);
     let refused =
-        builds_refusing_registry(LOCAL, &declares_an_unimplemented_cleaner(), Some(LOCAL));
+        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
     let unmeasured = builds_refusing_registry(REMOTE, &accepted(), Some(LOCAL));
     assert_ne!(refused[0].kind(), unmeasured[0].kind());
 }
 
 /// Judging a document is not caching one. This runs on a reporting surface, so
 /// it must leave no cache file behind and must not overwrite the recorded
-/// refusal `resolver status` and the fallback notice read.
+/// refusal `resolver status` and the tolerant read's notice both read.
 #[test]
 fn judging_a_document_writes_nothing_and_records_nothing() {
     let home = Home::new();
     let before = last_good_refusal();
-    assert!(build_refusal(&declares_an_unimplemented_cleaner()).is_some());
+    assert!(build_refusal(&declares_a_field_no_build_implements()).is_some());
     assert!(build_refusal(&accepted()).is_none());
     assert_eq!(
         last_good_refusal(),
@@ -332,7 +250,8 @@ fn judging_a_document_writes_nothing_and_records_nothing() {
 /// exists for.
 #[test]
 fn the_refusal_does_not_depend_on_the_cache_having_been_refreshed() {
-    let skews = builds_refusing_registry(LOCAL, &declares_an_unimplemented_cleaner(), Some(LOCAL));
+    let skews =
+        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
     assert_eq!(skews[0].kind(), REFUSES);
     assert!(matches!(
         refusal(&skews[0]),
