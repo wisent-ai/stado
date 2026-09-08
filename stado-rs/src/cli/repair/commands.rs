@@ -101,6 +101,22 @@ async fn show(args: &RepairArgs, services: &[CatalogService]) -> Result<(), CmdE
     Ok(())
 }
 
+/// A `--target` that names no registry host is a wrong request, not an
+/// observation about a host.
+///
+/// Every inventory failure used to land in the same `unavailable` report and
+/// the command still exited zero, so `repair stado --target nowhere-host`
+/// answered success while stating the host does not exist. An operator reading
+/// the exit status was told the repair had been considered. A host that is
+/// declared and merely unreachable keeps its `unavailable` observation, which
+/// is a real reading of a real host.
+async fn declared_target(target: &str) -> Result<(), CmdError> {
+    crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map(|_| ())
+        .map_err(|error| CmdError::click(error.to_string()))
+}
+
 async fn observe_target(target: &str) -> Value {
     match crate::deploy::host_inventory::inventory_host(target, &crate::deploy::production_runner())
         .await
@@ -153,6 +169,9 @@ async fn run(args: &RepairArgs, services: &[CatalogService]) -> Result<(), CmdEr
     }
     for step in &steps {
         implementation(&service.name, &step.name)?;
+    }
+    if let Some(target) = args.target.as_deref() {
+        declared_target(target).await?;
     }
 
     let mut reports = Vec::with_capacity(steps.len());
