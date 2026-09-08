@@ -110,7 +110,7 @@ pub(super) async fn transfer(
         argv.extend(["--".to_string(), source, stage_argument]);
     } else {
         let connection = host_channel::select_ssh_connection(target, runner).await?;
-        let key = ssh_key::materialize(&target.name).await?;
+        let key = ssh_key::materialize(target.channel_key()).await?;
         let mut ssh = host_channel::ssh_options(connection.destination);
         ssh.pop();
         let ssh = ssh_key::add_identity(ssh, &key)?;

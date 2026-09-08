@@ -7799,7 +7799,7 @@ async fn stream_file(
         argv.extend(options.into_iter().skip(usize::from(true)));
         argv.push(source.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
-        let key = crate::deploy::ssh_key::materialize(&resolved.name)
+        let key = crate::deploy::ssh_key::materialize(resolved.channel_key())
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         let argv = crate::deploy::ssh_key::add_identity(argv, &key)

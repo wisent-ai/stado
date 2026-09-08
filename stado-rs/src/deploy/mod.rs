@@ -121,6 +121,7 @@ pub mod local_install;
 pub mod mobile_runtime;
 pub mod products;
 pub mod reconcile;
+pub mod scratch;
 pub mod service;
 pub mod service_catalog;
 pub mod service_env_file;

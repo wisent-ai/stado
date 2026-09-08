@@ -23,6 +23,19 @@ pub struct ComputeTarget {
     /// operation is sent exactly once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ssh_fallbacks: Vec<SshConnectionPath>,
+    /// The target whose channel key authenticates to this one, when that is
+    /// not this target itself.
+    ///
+    /// The host channel materializes `stado-ssh-<target name>` from the
+    /// credential store, so a target's name IS its key coordinate — which
+    /// silently rules out two targets on one machine. A leased scratch target
+    /// is exactly that case: a second login on a box whose key was minted
+    /// once, under the box's name, and copied into the leased account's
+    /// `authorized_keys`. Declaring the key's owner keeps one key per machine
+    /// instead of minting a fresh identity for something that lives for an
+    /// hour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_key_target: Option<String>,
     #[serde(default)]
     pub region: Option<String>,
     #[serde(default)]
@@ -155,6 +168,12 @@ impl ComputeTarget {
 
     pub fn has_ssh_connection(&self) -> bool {
         self.ssh_connections().next().is_some()
+    }
+
+    /// The credential-store identity the host channel authenticates with:
+    /// the declared key owner, or this target's own name.
+    pub fn channel_key(&self) -> &str {
+        self.ssh_key_target.as_deref().unwrap_or(&self.name)
     }
     pub fn provider(&self) -> Option<crate::capabilities::ProviderId> {
         crate::capabilities::variant(crate::capabilities::RuntimeFacet::HostTarget, &self.kind)

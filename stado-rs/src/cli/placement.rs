@@ -1054,7 +1054,7 @@ async fn delegate_to_registry_authority(
     let mut ssh_argv = crate::deploy::host_channel::ssh_options(connection.destination);
     ssh_argv.insert(1, "-T".to_string());
     ssh_argv.push(remote_command);
-    let key = crate::deploy::ssh_key::materialize(&authority.name)
+    let key = crate::deploy::ssh_key::materialize(authority.channel_key())
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let ssh_argv = crate::deploy::ssh_key::add_identity(ssh_argv, &key)

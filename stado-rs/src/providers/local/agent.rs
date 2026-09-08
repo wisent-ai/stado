@@ -1093,6 +1093,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     let _janitor = janitor_reports.spawn_janitor(
         std::time::Duration::from_secs(crate::constants::POLL_INTERVAL_S),
         |active_jobs| async move {
+            // Off the critical path, beside the disk pass, for the same reason:
+            // an expired lease is host garbage, and the host is the only thing
+            // that always knows it holds one.
+            crate::providers::local::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
             disk_cleanup::run_cleanup_once(
                 active_jobs,
                 false,

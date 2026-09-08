@@ -63,6 +63,7 @@ pub mod results;
 pub mod route;
 pub mod runner;
 pub mod schedule;
+pub mod scratch;
 pub mod secrets;
 pub mod seed_freshness;
 pub mod service;
@@ -653,6 +654,10 @@ enum Commands {
     /// Inspect and operate service-directory routing without naming a product.
     #[command(subcommand)]
     Route(route::RouteCommands),
+    /// Lease a disposable target on a registered host, and destroy it when the
+    /// run ends.
+    #[command(subcommand)]
+    Scratch(scratch::ScratchCommands),
 }
 
 #[derive(Subcommand)]
@@ -2128,6 +2133,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Runner(sub) => runner::run(sub).await,
         Commands::Space(command) => space::dispatch(command).await,
         Commands::Route(sub) => route::dispatch(sub).await,
+        Commands::Scratch(sub) => scratch::dispatch(sub).await,
     }
 }
 

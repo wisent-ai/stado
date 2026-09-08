@@ -566,6 +566,7 @@ struct HostsView: View {
                     store: workloadStore
                 )
                 RepairSection(store: repairStore, host: host.targetName ?? host.displayName)
+                ScratchSection(host: host.targetName ?? host.displayName)
                 if host.status != .live {
                     WisentAlertPanel(
                         tone: tone(for: host.status),

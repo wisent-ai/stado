@@ -22,6 +22,7 @@ pub mod gpu_probe;
 pub mod helpers;
 pub mod hf_rate;
 pub mod host_memory;
+pub mod scratch_sweep;
 pub mod slots;
 pub mod version_check;
 
