@@ -33,7 +33,7 @@ fn validate(services: &[CatalogService]) -> Result<(), CmdError> {
                     && implementation.name == step.name
             }) {
                 return Err(CmdError::click(format!(
-                    "{} repair step {} declares no implementation; add it to stado-rs/src/cli/repair.rs.",
+                    "{} repair step {} declares no implementation; add it to stado-rs/src/cli/repair/steps.rs.",
                     service.name, step.name
                 )));
             }
@@ -47,7 +47,7 @@ fn validate(services: &[CatalogService]) -> Result<(), CmdError> {
     {
         if !implementations.insert((implementation.service, implementation.name)) {
             return Err(CmdError::click(format!(
-                "{} repair step {} has more than one implementation; keep one entry in stado-rs/src/cli/repair.rs.",
+                "{} repair step {} has more than one implementation; keep one entry in stado-rs/src/cli/repair/steps.rs.",
                 implementation.service, implementation.name
             )));
         }
@@ -99,7 +99,7 @@ pub(super) fn implementation(service: &str, name: &str) -> Result<&'static Repai
         })
         .ok_or_else(|| {
             CmdError::click(format!(
-                "{service} repair step {name} declares no implementation; add it to stado-rs/src/cli/repair.rs."
+                "{service} repair step {name} declares no implementation; add it to stado-rs/src/cli/repair/steps.rs."
             ))
         })
 }
