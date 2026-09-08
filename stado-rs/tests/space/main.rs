@@ -21,6 +21,7 @@
 //! and refuse to continue unless every one of them is inside that tempdir.
 
 mod fixture;
+mod leased;
 mod reclamation;
 mod refusals;
 mod system;
