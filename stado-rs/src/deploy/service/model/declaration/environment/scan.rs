@@ -76,15 +76,23 @@ pub fn unreachable_product_environments(
             path: service.path.clone(),
             gap,
         };
+        // What this pass may say about the unit's own bytes: read them when
+        // the unit is on the machine running this command, and otherwise say
+        // which of the two silences it is.
+        let reading = || {
+            if !readable_here {
+                return UnitReading::OtherHost;
+            }
+            local_unit_file(&service.path, &service.kind)
+                .map_or(UnitReading::Unreadable, UnitReading::Read)
+        };
         if !policy.targets.contains_key(&target.name) {
             let pinned_in_service = declared
                 .iter()
                 .all(|(name, value)| service.env.get(name) == Some(value));
             if pinned_in_service {
-                let observed = readable_here
-                    .then(|| local_unit_file(&service.path, &service.kind))
-                    .flatten();
-                let agrees = observed.as_ref().is_some_and(|unit| {
+                let observed = reading();
+                let agrees = observed.file().is_some_and(|unit| {
                     declared
                         .iter()
                         .all(|(name, value)| unit.env.get(name) == Some(value))
@@ -105,9 +113,7 @@ pub fn unreachable_product_environments(
         if service.program.is_empty() {
             rows.push(row(EnvironmentGap::UnrecordedDeclaration {
                 adopted_at: service.managed_since.clone(),
-                observed: readable_here
-                    .then(|| local_unit_file(&service.path, &service.kind))
-                    .flatten(),
+                observed: reading(),
             }));
         }
     }

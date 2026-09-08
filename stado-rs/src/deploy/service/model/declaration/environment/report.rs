@@ -6,12 +6,10 @@ impl UnreachableProductEnvironment {
         match self.gap {
             EnvironmentGap::UnrecordedDeclaration { .. } => "unrecorded-service-environment",
             EnvironmentGap::HostNamedByNoTarget { .. } => "untargeted-product-host",
-            EnvironmentGap::PinnedServiceEnvironment { observed: Some(_) } => {
-                "service-environment-drift"
-            }
-            EnvironmentGap::PinnedServiceEnvironment { observed: None } => {
-                "unread-service-environment"
-            }
+            EnvironmentGap::PinnedServiceEnvironment {
+                observed: UnitReading::Read(_),
+            } => "service-environment-drift",
+            EnvironmentGap::PinnedServiceEnvironment { .. } => "unread-service-environment",
         }
     }
 
@@ -56,7 +54,7 @@ impl UnreachableProductEnvironment {
                     self.declared_pairs(),
                 );
                 match observed {
-                    Some(unit) => {
+                    UnitReading::Read(unit) => {
                         let missing: Vec<&str> = self
                             .declared_names()
                             .into_iter()
@@ -95,11 +93,17 @@ impl UnreachableProductEnvironment {
                             ));
                         }
                     }
-                    None => sentence.push_str(&format!(
+                    UnitReading::OtherHost => sentence.push_str(&format!(
                         ". The unit file {} was not read: {} is not the host this ran on, and \
                          `registry doctor` answers from the store and never sshes. Read what \
                          it carries with `stado service env {} {}`",
                         self.path, self.host, self.host, self.unit
+                    )),
+                    UnitReading::Unreadable => sentence.push_str(&format!(
+                        ". The unit file {} does not exist on this host: {} is the host this \
+                         ran on and the recorded path holds no readable unit, so the record \
+                         points at a file that is not there",
+                        self.path, self.host
                     )),
                 }
                 sentence.push_str(&format!(
@@ -110,7 +114,7 @@ impl UnreachableProductEnvironment {
                 sentence
             }
             EnvironmentGap::PinnedServiceEnvironment { observed } => match observed {
-                Some(unit) => {
+                UnitReading::Read(unit) => {
                     let differences = self
                         .declared
                         .iter()
@@ -138,7 +142,7 @@ impl UnreachableProductEnvironment {
                         self.host
                     )
                 }
-                None => format!(
+                UnitReading::OtherHost => format!(
                     "{} pins {} in the service record for {}, so a delivery path exists, \
                      but the native unit {} could not be read here. Its environment is \
                      unverified; run `stado registry doctor` on {}",
@@ -146,6 +150,18 @@ impl UnreachableProductEnvironment {
                     self.declared_pairs(),
                     self.unit,
                     self.path,
+                    self.host
+                ),
+                UnitReading::Unreadable => format!(
+                    "{} pins {} in the service record for {}, so a delivery path exists, \
+                     but the native unit {} does not exist on this host: the pinned values \
+                     reach nothing until that unit is rendered with `stado service ensure {} \
+                     --host {}`",
+                    self.host,
+                    self.declared_pairs(),
+                    self.unit,
+                    self.path,
+                    self.unit,
                     self.host
                 ),
             },
@@ -199,8 +215,9 @@ impl UnreachableProductEnvironment {
             } => json!({
                 "kind": "unrecorded-declaration",
                 "adopted_at": adopted_at,
-                "unit_carries": observed.as_ref().map(|unit| unit.carries.clone()),
-                "unit_program": observed.as_ref().map(|unit| unit.program.clone()),
+                "unit_read": observed.label(),
+                "unit_carries": observed.file().map(|unit| unit.carries.clone()),
+                "unit_program": observed.file().map(|unit| unit.program.clone()),
             }),
             EnvironmentGap::HostNamedByNoTarget { named_hosts } => json!({
                 "kind": "host-named-by-no-target",
@@ -208,7 +225,8 @@ impl UnreachableProductEnvironment {
             }),
             EnvironmentGap::PinnedServiceEnvironment { observed } => json!({
                 "kind": "pinned-service-environment",
-                "observed": observed.as_ref().map(|unit| {
+                "unit_read": observed.label(),
+                "observed": observed.file().map(|unit| {
                     self.declared.iter().map(|(name, _)| {
                         (name.clone(), json!(unit.env.get(name)))
                     }).collect::<Map<String, Value>>()
