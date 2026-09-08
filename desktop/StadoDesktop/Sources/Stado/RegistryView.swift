@@ -1,51 +1,26 @@
 import SwiftUI
 import WisentDesignSystem
 
-private enum RegistryFacet: String, Hashable {
-    case all
-    case enforce
-    case report
-    case off
-    case undeclared
-    case pinned
-    case open
-}
-
-/// One pending policy write, held until the operator confirms it.
-private enum PolicyDecision: Identifiable {
-    case mode(target: String, mode: FleetCleanupMode, current: String)
-    case pinned(target: String, value: Bool)
-    case number(target: String, field: FleetCleanupNumericField, value: Int, current: Int?)
-    case clearNumber(target: String, field: FleetCleanupNumericField)
-
-    var id: String {
-        switch self {
-        case let .mode(target, mode, _): "mode-\(target)-\(mode.rawValue)"
-        case let .pinned(target, value): "pinned-\(target)-\(value)"
-        case let .number(target, field, value, _): "number-\(target)-\(field.rawValue)-\(value)"
-        case let .clearNumber(target, field): "clear-\(target)-\(field.rawValue)"
-        }
-    }
-
-    var target: String {
-        switch self {
-        case let .mode(target, _, _): target
-        case let .pinned(target, _): target
-        case let .number(target, _, _, _): target
-        case let .clearNumber(target, _): target
-        }
-    }
-}
-
+/// The canonical fleet policy, target by target, and the two fields of it this
+/// console may write.
+///
+/// The screen's own parts live in `Registry/`: the facet rail and the three
+/// zones in `Registry/RegistryFacets.swift`, the rows in
+/// `Registry/RegistryTable.swift`, the policy pane and its write buttons in
+/// `Registry/RegistryInspector.swift`, the confirmations in
+/// `Registry/RegistryDialogs.swift`, and the filter and the pending write in
+/// `Registry/RegistryPolicyDecision.swift`. The stored state stays here,
+/// because `@State` belongs to the view rather than to any one of its
+/// sections.
 struct RegistryView: View {
     @ObservedObject var fleetStore: FleetControlStore
     let scope: String
 
-    @State private var facet: RegistryFacet = .all
-    @State private var selection: String?
-    @State private var decision: PolicyDecision?
+    @State var facet: RegistryFacet = .all
+    @State var selection: String?
+    @State var decision: PolicyDecision?
     /// Typed values per target and field, kept until the write is confirmed.
-    @State private var drafts: [String: String] = [:]
+    @State var drafts: [String: String] = [:]
 
     var body: some View {
         WisentScreen(
@@ -60,7 +35,8 @@ struct RegistryView: View {
             scrolls: false,
             constrainsWidth: false
         ) {
-            VStack(spacing: 0) {
+            VStack(spacing:
+                0) {
                 if let message = fleetStore.errorMessage {
                     WisentErrorBanner(
                         title: fleetStore.isShowingStalePolicy
@@ -79,7 +55,8 @@ struct RegistryView: View {
                 } else {
                     placeholder
                         .padding(WisentDesign.Space.x6)
-                    Spacer(minLength: 0)
+                    Spacer(minLength:
+                        0)
                 }
 
                 WisentMutationBar(outcome: fleetStore.mutation) { fleetStore.clearMutation() }
@@ -124,417 +101,9 @@ struct RegistryView: View {
         }
     }
 
-    // MARK: Three zones
-
-    private var zones: some View {
-        HStack(spacing: 0) {
-            WisentFacetRail(
-                groups: facetGroups,
-                footerTitle: "Write surface",
-                footerDetail: "Cleanup mode and queue eligibility only"
-            )
-            table
-            inspector
-        }
-        .frame(maxHeight: .infinity)
-    }
-
-    private var facetGroups: [WisentFacetGroup] {
-        let targets = fleetStore.targets
-        return [
-            WisentFacetGroup(
-                "Cleanup mode",
-                facets: [
-                    facetRow(.all, "All targets", targets.count, .neutral),
-                    facetRow(.enforce, "Enforce", count(of: .enforce), count(of: .enforce) > 0 ? .warning : .neutral),
-                    facetRow(.report, "Report", count(of: .report), .neutral),
-                    facetRow(.off, "Off", count(of: .off), .neutral),
-                    facetRow(.undeclared, "No cleanup policy", targets.count { $0.cleanup?.mode == nil }, .neutral),
-                ]
-            ),
-            WisentFacetGroup(
-                "Queue eligibility",
-                facets: [
-                    facetRow(.pinned, "Routed jobs only", targets.count { $0.pinnedOnly == true }, .neutral),
-                    facetRow(.open, "Open to backlog", targets.count { $0.pinnedOnly != true }, .neutral),
-                ]
-            ),
-        ]
-    }
-
-    private func count(of mode: FleetCleanupMode) -> Int {
-        fleetStore.targets.count { $0.cleanup?.mode == mode.rawValue }
-    }
-
-    private func facetRow(_ value: RegistryFacet, _ label: String, _ count: Int, _ tone: WisentTone) -> WisentFacet {
-        WisentFacet(
-            id: value.rawValue,
-            label: label,
-            count: count,
-            tone: tone,
-            isSelected: facet == value,
-            select: {
-                facet = value
-                selection = nil
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var table: some View {
-        let rows = targets
-        if rows.isEmpty {
-            VStack {
-                if facet == .all {
-                    WisentEmptyPanel(
-                        title: "No declared targets",
-                        detail: "The canonical registry projection contains no target for this fleet.",
-                        symbol: "book.closed"
-                    )
-                } else {
-                    WisentEmptyPanel(
-                        title: "No targets in this filter",
-                        detail: "Targets exist in this projection, but none of them match the selected facet.",
-                        symbol: "line.3.horizontal.decrease.circle",
-                        action: WisentAction("Clear filters", kind: .primary) {
-                            facet = .all
-                            selection = nil
-                        }
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(WisentDesign.surface)
-        } else {
-            let minority = minorityMode(in: rows)
-            ConsoleTable(head: [
-                ConsoleHeaderCell("Target", width: 220),
-                ConsoleHeaderCell("Low free", width: 88, trailing: true),
-                ConsoleHeaderCell("Target free", width: 96, trailing: true),
-                ConsoleHeaderCell("Items / pass", width: 96, trailing: true),
-                ConsoleHeaderCell("Queue", width: 128, trailing: true),
-                ConsoleHeaderCell("Mode", width: 96, trailing: true),
-            ]) {
-                ForEach(rows) { target in
-                    ConsoleTableRow(isSelected: selection == target.name, select: { selection = target.name }) {
-                        ConsoleCell(text: target.name, width: 220, identifier: true, strong: true)
-                        ConsoleCell(text: gigabytes(target.cleanup?.lowFreeGB), width: 88, trailing: true, digits: true)
-                        ConsoleCell(text: gigabytes(target.cleanup?.targetFreeGB), width: 96, trailing: true, digits: true)
-                        ConsoleCell(
-                            text: target.cleanup?.maxItemsPerPass?.formatted(.number) ?? "—",
-                            width: 96,
-                            trailing: true,
-                            digits: true
-                        )
-                        ConsoleCell(
-                            text: target.pinnedOnly == true ? "Routed only" : "Open",
-                            width: 128,
-                            trailing: true
-                        )
-                        modeCell(target, minority: minority)
-                    }
-                }
-            }
-        }
-    }
-
-    /// The mode pill appears only where the mode is the minority; a fleet that
-    /// is uniformly in report mode says so once, in the facet rail.
-    @ViewBuilder
-    private func modeCell(_ target: FleetPolicyTarget, minority: String?) -> some View {
-        if let mode = target.cleanup?.mode, mode == minority {
-            HStack {
-                Spacer(minLength: 0)
-                WisentStatusChip(text: mode.capitalized, tone: mode == FleetCleanupMode.enforce.rawValue ? .warning : .neutral)
-            }
-            .frame(width: 96)
-        } else {
-            ConsoleCell(
-                text: target.cleanup?.mode?.capitalized ?? "Not declared",
-                width: 96,
-                trailing: true
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var inspector: some View {
-        if let target = fleetStore.targets.first(where: { $0.name == selection }) {
-            WisentInspector(
-                eyebrow: "Registry target",
-                title: target.name,
-                badges: badges(for: target)
-            ) {
-                WisentField(
-                    label: "Cleanup mode",
-                    value: target.cleanup?.mode?.capitalized ?? "Not declared",
-                    tone: target.cleanup?.mode == FleetCleanupMode.enforce.rawValue ? .warning : .neutral
-                )
-                WisentField(label: "Low free space", value: gigabytes(target.cleanup?.lowFreeGB))
-                WisentField(label: "Target free space", value: gigabytes(target.cleanup?.targetFreeGB))
-                WisentField(
-                    label: "Pass limits",
-                    value: limits(target.cleanup)
-                )
-                WisentField(
-                    label: "Check interval",
-                    value: target.cleanup?.checkIntervalSeconds.map { "\($0.formatted(.number)) s" } ?? "Not declared"
-                )
-                WisentField(
-                    label: "Queue eligibility",
-                    value: target.pinnedOnly == true ? "Routed jobs only (pinned_only)" : "Any eligible queued job"
-                )
-                WisentField(
-                    label: "Weles recordings",
-                    value: target.welesRecordingsDirectory ?? "Not declared"
-                )
-                policyActions(for: target)
-            }
-        } else {
-            WisentInspector(eyebrow: "Selection", title: "No target selected") {
-                Text("Select a target to read the policy it runs on. Cleanup mode and queue eligibility are the only fields this console may write; everything else in the registry document is read through the CLI.")
-                    .font(WisentTypeScale.body())
-                    .foregroundStyle(WisentDesign.secondary)
-            }
-        }
-    }
-
-    private func policyActions(for target: FleetPolicyTarget) -> some View {
-        let declared = target.cleanup?.mode
-        return VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-            Text("Change policy")
-                .font(WisentTypeScale.panelTitle())
-                .foregroundStyle(WisentDesign.ink)
-            if declared == nil {
-                Text(
-                    "This target declares no disk_cleanup policy. Setting a mode writes one, seeded from the fleet's reporting default."
-                )
-                .font(WisentTypeScale.caption())
-                .foregroundStyle(WisentDesign.secondary)
-            }
-            ForEach(FleetCleanupMode.allCases.filter { $0.rawValue != declared }) { mode in
-                WisentActionButton(
-                    action: WisentAction(
-                        "Set cleanup to \(mode.title)…",
-                        symbol: mode == .enforce ? "trash" : "pause.circle",
-                        isEnabled: !fleetStore.mutation.isWorking
-                    ) {
-                        decision = .mode(
-                            target: target.name,
-                            mode: mode,
-                            current: declared ?? "none declared"
-                        )
-                    }
-                )
-            }
-            ForEach(FleetCleanupNumericField.allCases) { field in
-                numericRow(for: target, field: field)
-            }
-            WisentActionButton(
-                action: WisentAction(
-                    target.pinnedOnly == true ? "Allow queued backlog…" : "Claim routed jobs only…",
-                    symbol: target.pinnedOnly == true ? "arrow.down.to.line" : "pin",
-                    isEnabled: !fleetStore.mutation.isWorking
-                ) {
-                    decision = .pinned(target: target.name, value: !(target.pinnedOnly == true))
-                }
-            )
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// One numeric field: what the registry says now, and one write for it.
-    ///
-    /// The value is typed rather than stepped because these span four orders
-    /// of magnitude — 8 GB free and 274 877 906 944 bytes per pass are both
-    /// live on this fleet.
-    @ViewBuilder
-    private func numericRow(for target: FleetPolicyTarget, field: FleetCleanupNumericField) -> some View {
-        let key = "\(target.name)/\(field.rawValue)"
-        let live = target.cleanup?.value(of: field)
-        let typed = Int(drafts[key]?.trimmingCharacters(in: .whitespaces) ?? "")
-        HStack(alignment: .firstTextBaseline, spacing: WisentDesign.Space.x2) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(field.title)
-                    .font(WisentTypeScale.caption())
-                    .foregroundStyle(WisentDesign.ink)
-                Text(live.map(String.init) ?? "not declared")
-                    .font(WisentTypeScale.caption())
-                    .foregroundStyle(WisentDesign.secondary)
-            }
-            .frame(width: 210, alignment: .leading)
-            TextField(
-                live.map(String.init) ?? "default",
-                text: Binding(
-                    get: { drafts[key] ?? "" },
-                    set: { drafts[key] = $0 }
-                )
-            )
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 140)
-            WisentActionButton(
-                action: WisentAction(
-                    "Set…",
-                    symbol: "arrow.right.circle",
-                    isEnabled: !fleetStore.mutation.isWorking
-                        && typed.map { $0 > 0 && $0 != live } == true
-                ) {
-                    guard let value = typed else { return }
-                    decision = .number(
-                        target: target.name,
-                        field: field,
-                        value: value,
-                        current: live
-                    )
-                }
-            )
-            if field.isClearable, live != nil {
-                WisentActionButton(
-                    action: WisentAction(
-                        "Use default…",
-                        symbol: "arrow.uturn.backward",
-                        isEnabled: !fleetStore.mutation.isWorking
-                    ) {
-                        decision = .clearNumber(target: target.name, field: field)
-                    }
-                )
-            }
-        }
-    }
-
-    // MARK: Decisions
-
-    @ViewBuilder
-    private func dialog(for pending: PolicyDecision) -> some View {
-        switch pending {
-        case let .mode(target, mode, current):
-            WisentDecisionDialog(
-                tone: mode == .enforce || mode == .off ? .danger : .warning,
-                title: "Set cleanup to \(mode.title) on \(target)?",
-                lines: [
-                    mode.effect,
-                    "The write is a compare-and-swap on the canonical registry. If the fleet's registry moved since generation \(fleetStore.policy?.generation ?? "unknown") was read, the dashboard refuses the write and nothing changes.",
-                ],
-                reasonCode: "current mode: \(current)",
-                listing: [
-                    "POST /api/registry/policy",
-                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"mode\": \"\(mode.rawValue)\"}}",
-                ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
-                actions: [
-                    WisentAction("Leave policy unchanged", kind: .primary) { decision = nil },
-                    WisentAction(
-                        mode == .enforce ? "Authorize deletion" : "Set \(mode.title)",
-                        kind: .destructive
-                    ) {
-                        decision = nil
-                        Task {
-                            await fleetStore.apply(
-                                .cleanupMode(mode),
-                                to: target,
-                                describedAs: "Set cleanup mode to \(mode.rawValue) on \(target)."
-                            )
-                        }
-                    },
-                ]
-            )
-        case let .pinned(target, value):
-            WisentDecisionDialog(
-                tone: .warning,
-                title: value
-                    ? "Restrict \(target) to routed jobs only?"
-                    : "Let \(target) claim queued backlog?",
-                lines: [
-                    value
-                        ? "The host's agent stops claiming stray queue backlog and takes only jobs explicitly routed to it. Queued work with no route waits for another host."
-                        : "The host's agent starts claiming any eligible queued job, including backlog that was never routed to it.",
-                    "The write is a compare-and-swap on the canonical registry; a concurrent registry change makes the dashboard refuse it.",
-                ],
-                listing: [
-                    "POST /api/registry/policy",
-                    "{\"target\": \"\(target)\", \"pinned_only\": \(value)}",
-                ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
-                actions: [
-                    WisentAction("Leave policy unchanged", kind: .secondary) { decision = nil },
-                    WisentAction(value ? "Restrict host" : "Allow backlog", kind: .primary) {
-                        decision = nil
-                        Task {
-                            await fleetStore.apply(
-                                .pinnedOnly(value),
-                                to: target,
-                                describedAs: value
-                                    ? "Restricted \(target) to routed jobs only."
-                                    : "Allowed \(target) to claim queued backlog."
-                            )
-                        }
-                    },
-                ]
-            )
-        case let .number(target, field, value, current):
-            WisentDecisionDialog(
-                tone: field == .lowFreeGB || field == .targetFreeGB ? .warning : .neutral,
-                title: "Set \(field.title) to \(value) on \(target)?",
-                lines: [
-                    field.effect,
-                    "The write is a compare-and-swap on the canonical registry, and the host reads it on its next pass. A concurrent registry change makes the dashboard refuse this write rather than overwrite it.",
-                ],
-                reasonCode: current.map { "current value: \($0)" } ?? "not declared",
-                listing: [
-                    "POST /api/registry/policy",
-                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"\(field.rawValue)\": \(value)}}",
-                ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
-                actions: [
-                    WisentAction("Leave policy unchanged", kind: .secondary) { decision = nil },
-                    WisentAction("Write \(value)", kind: .primary) {
-                        decision = nil
-                        drafts["\(target)/\(field.rawValue)"] = nil
-                        Task {
-                            await fleetStore.apply(
-                                .cleanupNumber(field, value),
-                                to: target,
-                                describedAs: "Set \(field.rawValue) to \(value) on \(target)."
-                            )
-                        }
-                    },
-                ]
-            )
-        case let .clearNumber(target, field):
-            WisentDecisionDialog(
-                tone: .warning,
-                title: "Return \(field.title) to the default on \(target)?",
-                lines: [
-                    field.effect,
-                    "Removing the key leaves the janitor's own built-in limit in force, and the registry then declares nothing about it.",
-                ],
-                reasonCode: "clears \(field.rawValue)",
-                listing: [
-                    "POST /api/registry/policy",
-                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"\(field.rawValue)\": null}}",
-                ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
-                actions: [
-                    WisentAction("Keep the declared value", kind: .secondary) { decision = nil },
-                    WisentAction("Use the default", kind: .destructive) {
-                        decision = nil
-                        drafts["\(target)/\(field.rawValue)"] = nil
-                        Task {
-                            await fleetStore.apply(
-                                .clearCleanupNumber(field),
-                                to: target,
-                                describedAs: "Cleared \(field.rawValue) on \(target)."
-                            )
-                        }
-                    },
-                ]
-            )
-        }
-    }
-
     // MARK: Values
 
-    private var targets: [FleetPolicyTarget] {
+    var targets: [FleetPolicyTarget] {
         let targets = fleetStore.targets
         switch facet {
         case .all: return targets
@@ -547,13 +116,13 @@ struct RegistryView: View {
         }
     }
 
-    private func minorityMode(in targets: [FleetPolicyTarget]) -> String? {
+    func minorityMode(in targets: [FleetPolicyTarget]) -> String? {
         let counts = Dictionary(grouping: targets.compactMap { $0.cleanup?.mode }, by: { $0 }).mapValues(\.count)
         guard counts.count > 1 else { return nil }
         return counts.min { $0.value == $1.value ? $0.key < $1.key : $0.value < $1.value }?.key
     }
 
-    private func badges(for target: FleetPolicyTarget) -> [(String, WisentTone)] {
+    func badges(for target: FleetPolicyTarget) -> [(String, WisentTone)] {
         var values: [(String, WisentTone)] = []
         if target.cleanup?.mode == FleetCleanupMode.enforce.rawValue {
             values.append(("Deletion authorized", .warning))
@@ -564,12 +133,12 @@ struct RegistryView: View {
         return values
     }
 
-    private func gigabytes(_ value: Int?) -> String {
+    func gigabytes(_ value: Int?) -> String {
         guard let value else { return "—" }
         return "\(value.formatted(.number)) GB"
     }
 
-    private func limits(_ cleanup: FleetCleanupPolicy?) -> String {
+    func limits(_ cleanup: FleetCleanupPolicy?) -> String {
         guard let cleanup else { return "Not declared" }
         let items = cleanup.maxItemsPerPass?.formatted(.number) ?? "—"
         let bytes = cleanup.maxBytesPerPass.map { DisplayFormat.bytes($0) } ?? "—"
