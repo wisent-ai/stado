@@ -35,7 +35,8 @@
 //! at its edge while the release origin answered 503 `dns_unresolved`, and
 //! neither had a declaration anything could refuse or report.
 
-mod build;
+// `builds`, not `build`: .gitignore excludes `build/`, so that folder would be untracked.
+mod builds;
 mod deploy;
 mod edge;
 mod origin;
@@ -112,7 +113,7 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
         WebCommands::Route { name, check, json } => route::route(&name, check, json).await,
         WebCommands::Edge(command) => edge::dispatch(command).await,
         WebCommands::Origin(command) => origin::dispatch(command).await,
-        WebCommands::Quality { root } => build::quality(root.as_deref()),
-        WebCommands::Build { root } => build::build(root.as_deref()),
+        WebCommands::Quality { root } => builds::quality(root.as_deref()),
+        WebCommands::Build { root } => builds::build(root.as_deref()),
     }
 }
