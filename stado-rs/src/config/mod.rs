@@ -19,7 +19,7 @@ fn resolve_binding(
     backup: bool,
     default: &str,
 ) -> String {
-    let (env, path, fallback) = if backup {
+    let (env, path, alternate) = if backup {
         (
             field
                 .backup_env
@@ -30,18 +30,18 @@ fn resolve_binding(
             default.to_string(),
         )
     } else {
-        let fallback = if field.fallback_env.is_some() || field.fallback_path.is_some() {
+        let alternate = if field.alternate_env.is_some() || field.alternate_path.is_some() {
             cfg(
-                field.fallback_env.unwrap_or(""),
-                field.fallback_path.unwrap_or(""),
+                field.alternate_env.unwrap_or(""),
+                field.alternate_path.unwrap_or(""),
                 default,
             )
         } else {
             default.to_string()
         };
-        (field.env, field.path, fallback)
+        (field.env, field.path, alternate)
     };
-    cfg(env, path, &fallback)
+    cfg(env, path, &alternate)
 }
 
 fn resolve_capability_binding(

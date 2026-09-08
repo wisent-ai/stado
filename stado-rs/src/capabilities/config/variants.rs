@@ -55,7 +55,7 @@ pub(in crate::capabilities) const GCS_CONFIG: &[ConfigField] =
     &[
         ConfigField::scalar("bucket", "WC_BUCKET", "storage.gcs.bucket")
             .required()
-            .with_fallback(None, Some("bucket"))
+            .with_alternate(None, Some("bucket"))
             .with_backup(BACKUP_BUCKET_ENV, BACKUP_BUCKET_PATH, true),
     ];
 
@@ -85,7 +85,7 @@ pub(in crate::capabilities) const S3_CONFIG: &[ConfigField] = &[
         .required()
         .with_backup(BACKUP_BUCKET_ENV, BACKUP_BUCKET_PATH, true),
     ConfigField::scalar("region", "WC_S3_REGION", "storage.s3.region")
-        .with_fallback(Some(AWS_REGION_CONFIG.env), Some(AWS_REGION_CONFIG.path))
+        .with_alternate(Some(AWS_REGION_CONFIG.env), Some(AWS_REGION_CONFIG.path))
         .with_backup("WC_BACKUP_S3_REGION", "storage.backup.s3.region", true),
 ];
 

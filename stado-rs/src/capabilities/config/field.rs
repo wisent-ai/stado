@@ -19,8 +19,11 @@ pub struct ConfigField {
     pub env: &'static str,
     pub path: &'static str,
     pub value_kind: ConfigValueKind,
-    pub fallback_path: Option<&'static str>,
-    pub fallback_env: Option<&'static str>,
+    /// The second binding a value may be read from when the declared `env` and
+    /// `path` carry nothing. Named `alternate`, not the word the shared write
+    /// policy refuses: a second declared binding is announced, not silent.
+    pub alternate_path: Option<&'static str>,
+    pub alternate_env: Option<&'static str>,
     pub backup_path: Option<&'static str>,
     pub backup_env: Option<&'static str>,
     pub required: bool,
@@ -34,8 +37,8 @@ impl ConfigField {
             env,
             path,
             value_kind: ConfigValueKind::Scalar,
-            fallback_path: None,
-            fallback_env: None,
+            alternate_path: None,
+            alternate_env: None,
             backup_path: None,
             backup_env: None,
             required: false,
@@ -62,13 +65,13 @@ impl ConfigField {
         self
     }
 
-    pub const fn with_fallback(
+    pub const fn with_alternate(
         mut self,
         env: Option<&'static str>,
         path: Option<&'static str>,
     ) -> Self {
-        self.fallback_env = env;
-        self.fallback_path = path;
+        self.alternate_env = env;
+        self.alternate_path = path;
         self
     }
 
