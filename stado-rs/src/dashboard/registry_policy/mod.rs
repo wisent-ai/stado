@@ -21,9 +21,11 @@ use serde_json::{json, Map, Value};
 use super::{constant_time_eq, http_status, send_json, Request, Response};
 use crate::config;
 
+mod cleanup;
 mod write;
 
-pub(super) use write::{get_cleanup, run_cleanup, set_policy};
+pub(super) use cleanup::{get_cleanup, run_cleanup};
+pub(super) use write::set_policy;
 
 /// Policy fields an operator client may read and write.
 ///
