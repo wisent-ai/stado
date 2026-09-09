@@ -190,6 +190,7 @@ impl Host {
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
             .env("WC_PROVIDERS", "local")
+            .env("WC_STADO_STORAGE_NAMESPACE", "space-fixture")
             .env("NO_COLOR", "1")
             .output()
             .expect("the built stado binary did not start")

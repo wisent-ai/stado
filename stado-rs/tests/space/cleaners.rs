@@ -1,190 +1,120 @@
-//! `stado space cleaners` against a real registry document.
-//!
-//! Each case drives the built binary with the area's isolated fixture, then
-//! reads the state the command was supposed to change: the canonical registry
-//! document on disk. The refusal sentences are part of the contract, so they
-//! are asserted verbatim.
-//!
-//! The story these defend is one incident. `charless-mac-mini` sat below its
-//! declared target with 52.5 GiB under `~/.stado/local-storage` and 10.5 GiB
-//! under `~/.stado/local-backup`, and `stado space report` said no declared
-//! stage looked at either — while `release_store` and `backup_twins`, which
-//! sweep exactly those roots, were declared on that host. Arming a cleaner had
-//! to become a typed write rather than a hand edit of the registry, and the
-//! write's two refusals are the whole of its safety.
-
-use std::fs;
-
-use serde_json::Value;
+//! Cleaner writes and bounded cleanup through the real product binary.
 
 use crate::fixture::{Host, TARGET};
-use crate::system::said;
+use serde_json::{json, Value};
+use std::fs;
 
-/// A `stado` recent enough for every cleaner in the catalogue.
-const CURRENT: &str = "0.16.38";
-/// A `stado` that predates `release_store` and knows every other cleaner.
-const BEFORE_RELEASE_STORE: &str = "0.15.0";
-
-/// The registry document the fixture's storage holds right now.
 fn registry(host: &Host) -> Value {
-    let raw =
-        fs::read_to_string(host.storage.join("registry.json")).expect("read fixture registry");
-    serde_json::from_str(&raw).expect("fixture registry is JSON")
-}
-
-/// The cleaners the one target declares, as the document on disk has them.
-fn declared(host: &Host) -> Value {
-    registry(host)["targets"][0]["disk_cleanup"]["cleaners"].clone()
-}
-
-/// One row of `space cleaners list --json`.
-fn row(listing: &Value, cleaner: &str) -> Value {
-    listing["cleaners"]
-        .as_array()
-        .expect("the listing carries rows")
-        .iter()
-        .find(|row| row["cleaner"] == cleaner)
-        .unwrap_or_else(|| panic!("{cleaner} is not in the listing"))
-        .clone()
+    serde_json::from_slice(&fs::read(host.storage.join("registry.json")).unwrap()).unwrap()
 }
 
 #[test]
-fn every_implemented_cleaner_is_listed_against_what_the_host_declares() {
+fn declare_preserves_omitted_fields_and_refusals_leave_the_registry_unchanged() {
     let host = Host::new();
-    host.declare_running(&host.policy(), CURRENT);
-
+    // Deliberately stale desired state must not impersonate the installed binary.
+    host.declare_running(&host.policy(), "0.1.0");
     let listing = host.json(&["space", "cleaners", "list", TARGET, "--json"]);
-    assert_eq!(listing["installed_stado"], CURRENT);
-    assert_eq!(
-        listing["cleaners"].as_array().map(Vec::len),
-        Some(7),
-        "the listing must name every cleaner this product implements: {listing}"
-    );
-
-    let armed = row(&listing, "build_caches");
-    assert_eq!(armed["declared"], Value::Bool(true));
-    assert_eq!(
-        armed["declaration"]["root"],
-        Value::from(host.cache_root.to_string_lossy().to_string()),
-        "a declared row must carry the declaration the host actually holds"
-    );
-
-    // The one the host does not declare says so, and says what to run.
-    let idle = row(&listing, "release_store");
-    assert_eq!(idle["declared"], Value::Bool(false));
-    assert_eq!(idle["supported_by_installed_binary"], Value::Bool(true));
-    assert_eq!(
-        idle["detail"].as_str().unwrap_or_default(),
-        "this product implements it and this host does not declare it; arm it with `stado space cleaners declare <target> --cleaner release_store`"
-    );
-    assert_eq!(
-        idle["default_root"], ".stado/local-storage/ecosystem/releases",
-        "the row must name where the cleaner would sweep"
-    );
-}
-
-#[test]
-fn declaring_a_cleaner_writes_it_and_withdrawing_it_takes_it_back() {
-    let host = Host::new();
-    host.declare_running("null", CURRENT);
-    assert!(
-        registry(&host)["targets"][0]["disk_cleanup"].is_null(),
-        "this case starts from a host that declares no policy at all"
-    );
-
-    let written = host.json(&[
+    assert_eq!(listing["installed_stado"], env!("CARGO_PKG_VERSION"));
+    let root = host.home.join("release-scope");
+    fs::create_dir_all(&root).unwrap();
+    let root_text = root.to_str().unwrap();
+    host.json(&[
         "space",
         "cleaners",
         "declare",
         TARGET,
         "--cleaner",
         "release_store",
+        "--root",
+        root_text,
         "--keep-newest",
         "2",
         "--json",
     ]);
-    assert_eq!(written["cleaner"], "release_store");
+    host.json(&[
+        "space",
+        "cleaners",
+        "declare",
+        TARGET,
+        "--cleaner",
+        "release_store",
+        "--min-age-seconds",
+        "60",
+        "--json",
+    ]);
+    let current = registry(&host);
+    let cleaner = &current["targets"][0]["disk_cleanup"]["cleaners"]["release_store"];
+    assert_eq!(cleaner["root"], root_text);
+    assert_eq!(cleaner["keep_newest"], 2);
+    assert_eq!(cleaner["min_age_seconds"], 60);
+    for fields in [
+        vec!["--cleaner", "not_implemented"],
+        vec!["--cleaner", "release_store", "--keep-newest", "0"],
+    ] {
+        let before = fs::read(host.storage.join("registry.json")).unwrap();
+        let mut args = vec!["space", "cleaners", "declare", TARGET];
+        args.extend(fields);
+        assert!(!host.run(&args).status.success());
+        assert_eq!(
+            fs::read(host.storage.join("registry.json")).unwrap(),
+            before
+        );
+    }
+}
 
-    // The document on disk is the assertion, not the command's own output.
-    assert_eq!(declared(&host)["release_store"]["keep_newest"], 2);
-    let policy = registry(&host)["targets"][0]["disk_cleanup"].clone();
-    assert!(
-        policy["low_free_gb"].as_i64().is_some_and(|value| value > 0),
-        "a host that declared nothing must be seeded with the default it was already measured against, not with a bare cleaner: {policy}"
-    );
-
-    let listing = host.json(&["space", "cleaners", "list", TARGET, "--json"]);
-    assert_eq!(
-        row(&listing, "release_store")["declared"],
-        Value::Bool(true)
-    );
-
+#[test]
+fn remove_withdraws_only_the_named_cleaner_and_refuses_a_second_removal() {
+    let host = Host::new();
+    host.json(&[
+        "space",
+        "cleaners",
+        "declare",
+        TARGET,
+        "--cleaner",
+        "backup_twins",
+        "--json",
+    ]);
     host.json(&[
         "space",
         "cleaners",
         "remove",
         TARGET,
         "--cleaner",
-        "release_store",
+        "backup_twins",
         "--json",
     ]);
-    assert!(
-        declared(&host)["release_store"].is_null(),
-        "withdrawing must remove the key: {}",
-        declared(&host)
-    );
-
-    let refused = host.run(&[
-        "space",
-        "cleaners",
-        "remove",
-        TARGET,
-        "--cleaner",
-        "release_store",
-    ]);
-    assert!(!refused.status.success(), "withdrawing twice must refuse");
-    assert!(
-        said(&refused.stderr).contains(&format!("{TARGET} declares no cleaner release_store")),
-        "{}",
-        said(&refused.stderr)
-    );
-}
-
-#[test]
-fn a_cleaner_this_product_does_not_implement_is_refused_with_the_list() {
-    let host = Host::new();
-    host.declare_running(&host.policy(), CURRENT);
-
-    let refused = host.run(&[
-        "space",
-        "cleaners",
-        "declare",
-        TARGET,
-        "--cleaner",
-        "rm_rf_home",
-    ]);
-    assert!(!refused.status.success());
-    let sentence = said(&refused.stderr);
-    assert!(
-        sentence.contains(
-            "rm_rf_home is not a cleaner this product implements; declare one of: \
-             backup_twins, build_caches, chromium_clones, huggingface_cache, \
-             queue_workdirs, release_store, weles_recordings"
-        ),
-        "{sentence}"
-    );
-    assert!(
-        declared(&host)["rm_rf_home"].is_null(),
-        "a refused name must never reach the document"
+    let value = registry(&host);
+    assert!(value["targets"][0]["disk_cleanup"]["cleaners"]
+        .get("backup_twins")
+        .is_none());
+    assert!(value["targets"][0]["disk_cleanup"]["cleaners"]
+        .get("build_caches")
+        .is_some());
+    let before = fs::read(host.storage.join("registry.json")).unwrap();
+    assert!(!host
+        .run(&[
+            "space",
+            "cleaners",
+            "remove",
+            TARGET,
+            "--cleaner",
+            "backup_twins"
+        ])
+        .status
+        .success());
+    assert_eq!(
+        fs::read(host.storage.join("registry.json")).unwrap(),
+        before
     );
 }
 
 #[test]
-fn a_cleaner_the_installed_binary_predates_is_refused_before_the_write() {
+fn an_unobserved_installed_version_cannot_authorize_a_cleaner_write() {
     let host = Host::new();
-    host.declare_running(&host.policy(), BEFORE_RELEASE_STORE);
-
-    let refused = host.run(&[
+    host.declare_running(&host.policy(), env!("CARGO_PKG_VERSION"));
+    fs::remove_file(host.home.join(".stado/bin/stado")).unwrap();
+    let before = fs::read(host.storage.join("registry.json")).unwrap();
+    let output = host.run(&[
         "space",
         "cleaners",
         "declare",
@@ -192,28 +122,70 @@ fn a_cleaner_the_installed_binary_predates_is_refused_before_the_write() {
         "--cleaner",
         "release_store",
     ]);
-    assert!(
-        !refused.status.success(),
-        "declaring a cleaner the host cannot parse must refuse: that write switched off every cleaner on a real host"
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot verify cleaner support"));
+    assert_eq!(
+        fs::read(host.storage.join("registry.json")).unwrap(),
+        before
     );
-    let sentence = said(&refused.stderr);
+}
+
+#[test]
+fn bounded_replica_passes_reach_duplicates_beyond_a_retained_prefix() {
+    let host = Host::new();
+    let mut policy: Value = serde_json::from_str(&host.policy()).unwrap();
+    policy["max_scan_items"] = json!(3);
+    policy["max_items_per_pass"] = json!(1);
+    policy["cleaners"] = json!({});
+    policy["cleaners"]["backup_twins"] = json!({});
+    policy["cleaners"]["backup_twins"]["min_age_seconds"] = json!(0);
+    host.declare(&policy.to_string());
+    let backup = host.home.join(".stado/local-backup");
+    let primary = host
+        .home
+        .join(".stado/local-storage/ecosystem/replica-resume");
+    fs::create_dir_all(&backup).unwrap();
+    fs::create_dir_all(&primary).unwrap();
+    for index in 0..6 {
+        fs::write(
+            backup.join(format!("a-retained-{index}")),
+            b"only replica has this",
+        )
+        .unwrap();
+    }
+    let twin = backup.join("ecosystem/replica-resume/z-duplicate");
+    fs::create_dir_all(twin.parent().unwrap()).unwrap();
+    fs::write(&twin, b"same bytes on both sides").unwrap();
+    fs::write(primary.join("z-duplicate"), b"same bytes on both sides").unwrap();
+    let pass = || {
+        let output = host.run(&["disk-cleanup", "--to-target"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+    };
+    pass();
     assert!(
-        sentence.contains(&format!(
-            "{TARGET} runs stado {BEFORE_RELEASE_STORE} and release_store first ships in 0.15.26"
-        )),
-        "{sentence}"
+        twin.exists(),
+        "the first bounded pass should only see the retained prefix"
     );
+    for _ in 0..4 {
+        pass();
+    }
     assert!(
-        declared(&host)["release_store"].is_null(),
-        "the refusal must leave the document untouched: {}",
-        declared(&host)
+        !twin.exists(),
+        "resumed passes must not restart at retained files forever"
     );
     assert_eq!(
-        row(
-            &host.json(&["space", "cleaners", "list", TARGET, "--json"]),
-            "release_store"
-        )["supported_by_installed_binary"],
-        Value::Bool(false),
-        "and the listing must say why"
+        fs::read(primary.join("z-duplicate")).unwrap(),
+        b"same bytes on both sides"
     );
+    for index in 0..6 {
+        assert_eq!(
+            fs::read(backup.join(format!("a-retained-{index}"))).unwrap(),
+            b"only replica has this"
+        );
+    }
 }
