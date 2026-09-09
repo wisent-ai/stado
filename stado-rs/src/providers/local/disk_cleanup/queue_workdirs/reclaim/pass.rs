@@ -7,7 +7,7 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::providers::local::disk_cleanup::queue_workdirs::roots::{job_id, open_work_root_in};
+use crate::providers::local::disk_cleanup::queue_workdirs::roots::{job_id, open_cleanup_root};
 use crate::providers::local::disk_cleanup::queue_workdirs::{CLEANER, WORKDIR_PREFIX};
 use crate::providers::local::disk_cleanup::weles::dir_size;
 use crate::providers::local::disk_cleanup::{
@@ -32,7 +32,7 @@ pub fn scan_queue_workdirs(
     live_jobs: Option<&[String]>,
     report: &mut CleanupReport,
 ) {
-    let Some(_configured) = policy.cleaners.get(CLEANER) else {
+    let Some(configured) = policy.cleaners.get(CLEANER) else {
         return;
     };
     if remaining_scan <= 0 {
@@ -49,7 +49,7 @@ pub fn scan_queue_workdirs(
         // the physically resolved home. Every component is O_DIRECTORY |
         // O_NOFOLLOW, so replacing `.stado`, `work`, or `jobs` with a symlink
         // cannot redirect this pass.
-        let (canonical_root, root_fd, home_device) = match open_work_root_in(home, false) {
+        let (canonical_root, root_fd, home_device) = match open_cleanup_root(home, configured.root.as_deref()) {
             Ok(opened) => opened,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 report.skip_workdirs("root_absent", 1);

@@ -9,7 +9,7 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::providers::local::disk_cleanup::queue_workdirs::roots::{job_id, open_work_root_in};
+use crate::providers::local::disk_cleanup::queue_workdirs::roots::{job_id, open_cleanup_root};
 use crate::providers::local::disk_cleanup::queue_workdirs::{LEGACY_WORK_ROOT, WORKDIR_PREFIX};
 use crate::providers::local::disk_cleanup::{safefs, JanitorError};
 
@@ -22,6 +22,7 @@ use crate::providers::local::disk_cleanup::{safefs, JanitorError};
 /// listing-only keep set.
 pub fn candidate_job_ids(
     home: &Path,
+    configured_root: Option<&str>,
     remaining_scan: i64,
     deadline: Instant,
 ) -> Result<BTreeSet<String>, JanitorError> {
@@ -29,7 +30,7 @@ pub fn candidate_job_ids(
     if remaining_scan <= 0 {
         return Ok(ids);
     }
-    let (_canonical_root, root_fd, home_device) = match open_work_root_in(home, false) {
+    let (_canonical_root, root_fd, home_device) = match open_cleanup_root(home, configured_root) {
         Ok(opened) => opened,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(ids),
         Err(error) => return Err(error.into()),

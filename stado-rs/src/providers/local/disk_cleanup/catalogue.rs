@@ -19,6 +19,8 @@ pub struct CleanerDeclaration {
     /// Existing per-cleaner retention floors. Lifecycle-owned cleaners prove
     /// terminal jobs, matching replicas or unreferenced versions instead.
     pub min_age_floor_seconds: i64,
+    /// Extra version requirement for roots previously accepted but not consumed.
+    pub root_override_since: Option<&'static str>,
 }
 
 /// Every cleaner, in the order the registry contract lists them.
@@ -29,6 +31,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: super::backup_twins::BACKUP_ROOT,
         sweeps: "same-disk replica objects whose primary copy is intact",
         min_age_floor_seconds: 0,
+        root_override_since: None,
     },
     CleanerDeclaration {
         name: "build_caches",
@@ -36,6 +39,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: "",
         sweeps: "directories carrying a build tool's own CACHEDIR.TAG",
         min_age_floor_seconds: 86_400,
+        root_override_since: None,
     },
     CleanerDeclaration {
         name: "chromium_clones",
@@ -43,6 +47,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: "",
         sweeps: "the operating system's per-launch code-signing clones",
         min_age_floor_seconds: 86_400,
+        root_override_since: None,
     },
     CleanerDeclaration {
         name: "huggingface_cache",
@@ -50,6 +55,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: ".cache/huggingface/hub",
         sweeps: "model blobs the hub can fetch again",
         min_age_floor_seconds: 3_600,
+        root_override_since: Some("0.17.0"),
     },
     CleanerDeclaration {
         name: "queue_workdirs",
@@ -57,6 +63,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: ".stado/work/jobs",
         sweeps: "work trees of jobs the queue reports terminal",
         min_age_floor_seconds: 0,
+        root_override_since: Some("0.17.0"),
     },
     CleanerDeclaration {
         name: "release_store",
@@ -64,6 +71,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: super::release_store::RELEASES_ROOT,
         sweeps: "published release versions past the rollback ladder this host keeps",
         min_age_floor_seconds: 0,
+        root_override_since: None,
     },
     CleanerDeclaration {
         name: "weles_recordings",
@@ -71,6 +79,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: "weles/recordings",
         sweeps: "recordings admitted by the declared age and upload-proof policy",
         min_age_floor_seconds: 86_400,
+        root_override_since: None,
     },
 ];
 
@@ -95,7 +104,8 @@ pub fn version_at_least(installed: &str, required: &str) -> bool {
         let bare = value.trim().trim_start_matches('v');
         let bare = bare.split('-').next().unwrap_or_default();
         let mut parts = bare.split('.').map(|part| part.parse::<u64>().ok());
-        Some((parts.next()??, parts.next()??, parts.next()??))
+        let version = (parts.next()??, parts.next()??, parts.next()??);
+        parts.next().is_none().then_some(version)
     };
     match (parse(installed), parse(required)) {
         (Some(installed), Some(required)) => installed >= required,

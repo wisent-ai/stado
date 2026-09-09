@@ -137,7 +137,7 @@ pub(crate) async fn run_cleaners(
         policy,
         attempted_at,
         share(remaining_after_weles, declared_after("build_caches")),
-        deadline,
+        time_share("build_caches"),
         report.builds_cursor.take(),
         report,
     );
@@ -183,7 +183,10 @@ pub(crate) async fn run_cleaners(
     );
     let workdir_deadline = time_share(queue_workdirs::CLEANER);
     let live_jobs = if workdir_budget > 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
-        match queue_workdirs::candidate_job_ids(home, workdir_budget, workdir_deadline) {
+        match queue_workdirs::candidate_job_ids(
+            home, policy.cleaners.get(queue_workdirs::CLEANER).and_then(|cleaner| cleaner.root.as_deref()),
+            workdir_budget, workdir_deadline,
+        ) {
             Ok(candidates) => {
                 let budget = workdir_deadline
                     .saturating_duration_since(Instant::now())

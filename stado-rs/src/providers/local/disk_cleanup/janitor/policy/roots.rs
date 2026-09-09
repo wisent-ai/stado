@@ -50,6 +50,25 @@ pub fn fixed_root(
     Ok(Some(resolved))
 }
 
+/// Resolve a configured, home-contained scan root through the same ownership
+/// and non-symlink checks as a fixed root.
+pub fn configured_root(
+    home: &Path,
+    configured: Option<&str>,
+    defaults: &[OsString],
+    required: bool,
+) -> Result<Option<PathBuf>, JanitorError> {
+    let Some(configured) = configured else { return fixed_root(home, defaults, required); };
+    let expanded = crate::config_file::expand_tilde(configured);
+    let relative = expanded.strip_prefix(home)
+        .map_err(|_| JanitorError::os("cleaner root must be beneath the host home"))?;
+    let parts = relative.components().map(|part| match part {
+        std::path::Component::Normal(name) => Ok(name.to_os_string()),
+        _ => Err(JanitorError::os("cleaner root must contain only normal path components")),
+    }).collect::<Result<Vec<_>, _>>()?;
+    fixed_root(home, &parts, required)
+}
+
 /// Python `_free_bytes` (`shutil.disk_usage(home).free`).
 pub fn free_bytes(home: &Path) -> Result<i64, JanitorError> {
     let stat = nix::sys::statvfs::statvfs(home)

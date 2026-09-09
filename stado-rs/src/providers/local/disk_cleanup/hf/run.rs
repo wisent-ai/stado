@@ -22,9 +22,10 @@ use crate::providers::local::disk_cleanup::hf::{
     check_info, identity, identity_from_metadata, os_error, Identity, RepoScan,
 };
 use crate::providers::local::disk_cleanup::{
-    fixed_root, free_bytes, safefs, CleanupReport, JanitorError, ScanBudget,
+    free_bytes, safefs, CleanupReport, JanitorError, ScanBudget,
 };
 use crate::targets::DiskCleanupPolicy;
+use crate::providers::local::disk_cleanup::janitor::policy::roots::configured_root;
 
 const GIB: i64 = 1024 * 1024 * 1024;
 
@@ -61,7 +62,7 @@ pub fn run_hf(
             OsString::from("huggingface"),
             OsString::from("hub"),
         ];
-        let Some(root) = fixed_root(home, &parts, false)? else {
+        let Some(root) = configured_root(home, configured.root.as_deref(), &parts, false)? else {
             report.skip_hf("root_absent", 1);
             return Ok(None);
         };
@@ -193,7 +194,7 @@ pub fn run_hf(
         // Python `_fixed_root(..., required=True)` and `.stat()` raise
         // straight out of _run_hf here.
         let current_root =
-            fixed_root(home, &parts, true)?.expect("required=true never yields None");
+            configured_root(home, configured.root.as_deref(), &parts, true)?.expect("required=true never yields None");
         let current_stat = std::fs::metadata(&current_root).map_err(JanitorError::from)?;
         if identity_from_metadata(&current_stat) != identity(&root_info) {
             report.skip_hf("root_changed", 1);
