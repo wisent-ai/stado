@@ -29,7 +29,7 @@ pub(crate) struct EdgeSelection {
     pub origin: Option<String>,
     pub detail: String,
     pub readback: Value,
-    pub diagnostic_probe: Value,
+    pub diagnosis: Value,
 }
 
 impl EdgeSelection {
@@ -59,7 +59,7 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
                 origin: None,
                 detail: format!("this Stado could not build its HTTPS client: {error}"),
                 readback: Value::Null,
-                diagnostic_probe: Value::Null,
+                diagnosis: Value::Null,
             }
         }
     };
@@ -71,7 +71,7 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
                 origin: None,
                 detail: format!("the public edge did not answer: {error}"),
                 readback: Value::Null,
-                diagnostic_probe: Value::Null,
+                diagnosis: Value::Null,
             }
         }
     };
@@ -85,10 +85,9 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
         .as_ref()
         .filter(|_| (200..300).contains(&status))
         .and_then(|value| value["origin"].as_str());
-    let diagnostic_probe = payload
+    let diagnosis = payload
         .as_ref()
         .and_then(|value| value.get("originDiagnosis"))
-        .and_then(|diagnosis| diagnosis.get("probe"))
         .cloned()
         .unwrap_or(Value::Null);
     let readback = gateway_readback(&client).await;
@@ -98,13 +97,13 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
             detail: format!("the public edge reports it fetches release objects from {origin}"),
             origin: Some(origin.to_string()),
             readback,
-            diagnostic_probe,
+            diagnosis,
         },
         None => EdgeSelection {
             endpoint,
             origin: None,
             readback,
-            diagnostic_probe,
+            diagnosis,
             detail: format!(
                 "the public edge answered HTTP {status} and named no selected origin: {}",
                 quoted_body(&body)
@@ -150,10 +149,14 @@ pub(crate) fn undeclared_row(
         return None;
     }
     let named = !selected.is_empty();
+    let hostname = reqwest::Url::parse(&selected)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_default();
     Some(json!({
         "schema": "stado.public-origin-report.v1",
         "name": Value::Null,
-        "hostname": if named { selected.trim_start_matches("https://") } else { "" },
+        "hostname": hostname,
         "origin": if named { selected.as_str() } else { "" },
         "target": Value::Null,
         "publication": Value::Null,
@@ -176,7 +179,7 @@ pub(crate) fn undeclared_row(
         "resolution": {
             "state": ResolutionState::Unavailable.word(),
             "resolver": public_origin::resolve::PUBLIC_RESOLVER,
-            "hostname": if named { selected.trim_start_matches("https://") } else { "" },
+            "hostname": hostname,
             "answers": [],
             "detail": "not asked: an origin nothing declares is repaired by declaring it, and resolving it would answer a question nobody has asked the fleet",
         },
@@ -195,7 +198,7 @@ pub(crate) fn undeclared_row(
             "endpoint": selection.endpoint,
             "detail": selection.detail,
             "readback": selection.readback,
-            "diagnostic_probe": selection.diagnostic_probe,
+            "diagnosis": selection.diagnosis,
         },
     }))
 }

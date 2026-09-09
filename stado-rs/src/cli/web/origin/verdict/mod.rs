@@ -51,7 +51,7 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection) ->
             "endpoint": selection.endpoint,
             "detail": selection.detail,
             "readback": selection.readback,
-            "diagnostic_probe": selection.diagnostic_probe,
+            "diagnosis": selection.diagnosis,
         }),
     );
     row
