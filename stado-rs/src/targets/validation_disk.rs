@@ -174,41 +174,15 @@ pub(crate) fn validate_disk_cleanup(
         let min_age = cleaner
             .get("min_age_seconds")
             .ok_or_else(|| verr(&cleaner_location, "must contain 'min_age_seconds'"))?;
-        // Per-cleaner floor on retention. The HF cache is content-addressed
-        // and re-downloadable within the hour, so an hour is enough there.
-        // A build tree and a weles run both need a day: a `target/` younger
-        // than that is the working set of a build someone is still waiting
-        // on, and its CACHEDIR.TAG says only that it is reproducible, not
-        // that it is idle. A Chromium code-sign clone needs the same day,
-        // for the reason that floor exists at all: macOS makes the clone at
-        // launch and records nothing about which process owns it, so age is
-        // most of what says the launch is over.
-        // `queue_workdirs` is the exception in the other direction, and it is
-        // not a weaker rule but a different one. A job workdir is safe to
-        // remove when its job is terminal, which the janitor establishes from
-        // the queue store's own `queue` and `running` listings. `space reclaim`
-        // delegates these directories to that same locked janitor rather than
-        // maintaining a second sweep. Age adds nothing to the terminal gate
-        // and a floor would subtract: on the always-on mac the workdirs that
-        // took the host under its watermark were minutes old, 4.3 GiB of
-        // `cargo` build output from jobs that had already finished, so a
-        // day-long floor would have left the one cleaner written for that
-        // failure unable to touch it.
-        let minimum = match name.as_str() {
-            "huggingface_cache" => 3600,
-            // `backup_twins` is the second cleaner with no age floor, and for
-            // the same kind of reason as `queue_workdirs`: what makes a replica
-            // object safe to remove is that the primary holds those exact bytes
-            // right now, which the janitor proves by hashing both copies in the
-            // pass that deletes. Age says nothing about that, and a floor would
-            // subtract — the replica that took charless-mac-mini from 51.8 to
-            // 34.5 GiB free was written in the seven minutes before it was
-            // measured.
-            // `release_store` keeps a version by who still names it, not by
-            // its age; the age gate only spares runs younger than it.
-            "queue_workdirs" | "backup_twins" | "release_store" => 0,
-            _ => 86400,
-        };
+        // Per-cleaner floor on retention, from the one place this product
+        // declares its cleaners: `disk_cleanup::catalogue`. It used to be a
+        // match arm here, beside a copy of the same names in `fleet_shape` and
+        // a third list in the CLI, and the reasoning for each floor is on the
+        // catalogue row it belongs to. A name this binary does not implement is
+        // already skipped above, so the unreachable arm is a day.
+        let minimum = crate::providers::local::disk_cleanup::catalogue::cleaner(name.as_str())
+            .map(|entry| entry.min_age_floor_seconds)
+            .unwrap_or(86_400);
         require_int(
             min_age,
             &format!("{cleaner_location}.min_age_seconds"),

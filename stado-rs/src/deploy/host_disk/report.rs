@@ -187,15 +187,67 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
     report
 }
 
+/// How long the attribution walk may take before this command stops waiting
+/// for it. The shared two-minute channel bound is right for a fixed-cost
+/// read and wrong for this one: the inventory section walks the whole
+/// selected tree, took over 180 seconds on `lukasz-macbook` on 2026-09-02,
+/// and still timed out on 2026-09-09 with the disk 46 GiB free — so the
+/// command that exists to answer "what is holding this disk" answered
+/// nothing at all, twice, on the machine that was asking.
+const INVENTORY_BUDGET: std::time::Duration = std::time::Duration::from_secs(900);
+
+/// Operator override for [`INVENTORY_BUDGET`], in whole seconds. A tree large
+/// enough to outlast fifteen minutes is a real shape — this host's own walk
+/// takes 220 seconds — and the alternative to raising the bound is a command
+/// that reports nothing. A value that does not parse is ignored rather than
+/// failing the read.
+const INVENTORY_BUDGET_ENV: &str = "STADO_INVENTORY_BUDGET_SECONDS";
+
+fn inventory_budget() -> std::time::Duration {
+    std::env::var(INVENTORY_BUDGET_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > u64::MIN)
+        .map_or(INVENTORY_BUDGET, std::time::Duration::from_secs)
+}
+
 /// Read the complete space report inputs for an already-resolved target.
+///
+/// Two reads, deliberately. The cheap sections — usage, janitor state,
+/// snapshots — cost under a second, and an operator must never lose them
+/// because the attribution walk behind them is slow. They are read first on
+/// the shared bound and always reported; the walk is then attempted on its
+/// own budget, and when it does not finish the report says so instead of the
+/// whole command failing.
 pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
-    let output = host_channel::run_script(target, &remote_script(), runner).await?;
     let interval = target
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.check_interval_seconds);
+    let gates = host_channel::run_script(
+        target,
+        &super::remote_script_for(super::DiskScope::GateInputs),
+        runner,
+    )
+    .await?;
+    let budget = inventory_budget();
+    let full =
+        host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await;
+    let (output, attribution) = match full {
+        Ok(output) => (output, None),
+        Err(error) => (
+            gates,
+            Some(format!(
+                "the attribution walk did not finish within {} seconds: {error}",
+                budget.as_secs()
+            )),
+        ),
+    };
     let reading = parse_output(&output.stdout, interval);
     let mut report = to_report(target, &reading);
+    if let Some(detail) = attribution {
+        report.insert("inventory_incomplete".to_string(), json!(detail));
+    }
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
     Ok(Value::Object(report))
 }

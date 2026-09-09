@@ -20,8 +20,10 @@
 //! the fixture's `HOME`, and the applying cases first read the dry run's paths
 //! and refuse to continue unless every one of them is inside that tempdir.
 
+mod cleaners;
 mod fixture;
 mod leased;
+mod mechanism;
 mod reclamation;
 mod refusals;
 mod system;

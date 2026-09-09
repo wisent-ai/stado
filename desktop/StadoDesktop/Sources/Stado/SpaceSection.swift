@@ -1,126 +1,6 @@
 import SwiftUI
 import WisentDesignSystem
 
-struct HostSpaceReport: Decodable, Sendable {
-    let target: String
-    let usage: Usage?
-    let memory: Memory
-    let freeSpace: FreeSpace
-    let buildCaches: BuildCaches
-    let cleanupState: CleanupState
-    let cleanupLock: CleanupLock
-    let inventory: [InventoryItem]
-    let reclaimStages: [ReclaimStage]
-
-    enum CodingKeys: String, CodingKey {
-        case target, usage, memory, inventory
-        case freeSpace = "free_space"
-        case buildCaches = "build_caches"
-        case cleanupState = "cleanup_state"
-        case cleanupLock = "cleanup_lock"
-        case reclaimStages = "reclaim_stages"
-    }
-
-    struct Usage: Decodable, Sendable {
-        let filesystem: String
-        let availableKB: String
-        let capacity: String
-        let mountedOn: String
-
-        enum CodingKeys: String, CodingKey {
-            case filesystem, capacity
-            case availableKB = "available_kb"
-            case mountedOn = "mounted_on"
-        }
-    }
-
-    struct Memory: Decodable, Sendable {
-        let freeKB: String?
-        let swap: String?
-
-        enum CodingKeys: String, CodingKey {
-            case freeKB = "free_kb"
-            case swap
-        }
-    }
-
-    struct FreeSpace: Decodable, Sendable {
-        let availableBytes: Int64?
-        let lowWatermarkBytes: Int64?
-        let targetWatermarkBytes: Int64?
-        let belowLowWatermark: Bool
-
-        enum CodingKeys: String, CodingKey {
-            case availableBytes = "available_bytes"
-            case lowWatermarkBytes = "low_watermark_bytes"
-            case targetWatermarkBytes = "target_watermark_bytes"
-            case belowLowWatermark = "below_low_watermark"
-        }
-    }
-
-    struct BuildCaches: Decodable, Sendable {
-        let declaration: Declaration
-        let entries: [Entry]
-        let error: String?
-
-        struct Declaration: Decodable, Sendable {
-            let root: String
-            let minAgeSeconds: Int64
-
-            enum CodingKeys: String, CodingKey {
-                case root
-                case minAgeSeconds = "min_age_seconds"
-            }
-        }
-
-        struct Entry: Decodable, Sendable {
-            let verdict: String
-            let path: String
-            let kib: String
-        }
-    }
-
-    struct CleanupState: Decodable, Sendable {
-        let present: Bool
-        let lastPassAt: String?
-        let lastSuccessAt: String?
-        let outcome: String?
-
-        enum CodingKeys: String, CodingKey {
-            case present, outcome
-            case lastPassAt = "last_pass_at"
-            case lastSuccessAt = "last_success_at"
-        }
-    }
-
-    struct CleanupLock: Decodable, Sendable {
-        let read: Bool
-        let held: Bool
-        let path: String?
-        let holders: [Holder]
-
-        struct Holder: Decodable, Sendable {
-            let pid: String
-            let command: String
-        }
-    }
-
-    struct InventoryItem: Decodable, Sendable {
-        let path: String
-        let sizeGB: Double
-
-        enum CodingKeys: String, CodingKey {
-            case path
-            case sizeGB = "size_gb"
-        }
-    }
-
-    struct ReclaimStage: Decodable, Sendable {
-        let name: String
-        let description: String
-    }
-}
-
 @MainActor
 final class HostSpaceReportStore: ObservableObject {
     @Published private(set) var report: HostSpaceReport?
@@ -216,10 +96,54 @@ struct SpaceSection: View {
                     tone: report.buildCaches.error == nil ? .neutral : .warning
                 )
                 WisentField(label: "Cache root", value: report.buildCaches.declaration.root)
-                WisentField(
-                    label: "Janitor",
-                    value: report.cleanupState.outcome ?? (report.cleanupState.present ? "No outcome" : "Never run")
-                )
+                // The verdict, the janitor's word beside the distance, and the
+                // paths nothing sweeps: the same three answers the terminal
+                // prints, in the same order. A build meeting an older `stado`
+                // shows the outcome alone, which is what that binary knows.
+                if let coverage = report.coverage {
+                    WisentField(
+                        label: "Pressure",
+                        value: "\(coverage.verdict) — \(coverage.detail)",
+                        tone: coverage.tone
+                    )
+                    WisentField(
+                        label: "Janitor",
+                        value: "\(coverage.janitor.outcome) — \(coverage.janitor.detail)"
+                    )
+                    WisentField(
+                        label: "Declared roots",
+                        value: coverage.covered.isEmpty
+                            ? "No stage declares a root on this platform"
+                            : coverage.covered
+                                .map { "\($0.stage): \($0.root) — \($0.measured ? bytes($0.bytes) : "not measured")" }
+                                .joined(separator: "\n")
+                    )
+                    WisentField(
+                        label: "Outside the stage roots",
+                        value: coverage.uncovered.isEmpty
+                            ? "Every measured occupant is under a declared root"
+                            : coverage.uncovered
+                                .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)" }
+                                .joined(separator: "\n"),
+                        tone: coverage.uncovered.isEmpty ? .neutral : coverage.tone
+                    )
+                    // A cleaner this product implements for those bytes, which
+                    // the host has not declared, is the repair the console
+                    // prints and the screen used to hide.
+                    if let unarmed = coverage.unarmed, !unarmed.isEmpty {
+                        WisentField(
+                            label: "Cleaners not declared here",
+                            value: unarmed.map(\.detail).joined(separator: "\n"),
+                            tone: .warning
+                        )
+                    }
+                } else {
+                    WisentField(
+                        label: "Janitor",
+                        value: report.cleanupState.outcome
+                            ?? (report.cleanupState.present ? "No outcome" : "Never run")
+                    )
+                }
                 WisentField(
                     label: "Janitor lock",
                     value: lockSummary(report.cleanupLock),

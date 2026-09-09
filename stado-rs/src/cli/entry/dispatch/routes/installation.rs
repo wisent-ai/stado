@@ -35,5 +35,6 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
             dry_run,
         } => disk_cleanup::run(once, watch, to_target, dry_run).await,
         InstallationCommands::InstallDiskCleanup => disk_cleanup::install().await,
+        InstallationCommands::Workdirs { apply, json } => workdirs::run(apply, json),
     }
 }

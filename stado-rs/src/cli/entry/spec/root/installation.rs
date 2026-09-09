@@ -92,4 +92,15 @@ pub(crate) enum InstallationCommands {
     /// Install the registry-controlled cleanup watch on this Mac.
     #[command(name = "install-disk-cleanup")]
     InstallDiskCleanup,
+
+    /// Report, and with --apply remove, the scratch working directories under
+    /// `~/.stado/work` that no owner declares.
+    Workdirs {
+        /// Remove them. Without this the command only reports.
+        #[arg(long)]
+        apply: bool,
+        /// Emit the machine-readable report.
+        #[arg(long)]
+        json: bool,
+    },
 }

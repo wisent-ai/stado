@@ -102,7 +102,16 @@ impl Host {
 
     /// The registry document with the enforcing policy and its one cleaner.
     pub fn declare_policy(&self) {
-        self.declare(&format!(
+        self.declare(&self.policy());
+    }
+
+    /// The enforcing policy this area declares: the tuning constants above and
+    /// one cleaner, `build_caches`, rooted inside this fixture's tempdir.
+    ///
+    /// One builder, because a case that restated these numbers would be a
+    /// second source for the watermarks the whole area is measured against.
+    pub fn policy(&self) -> String {
+        format!(
             r#"{{
         "mode": "enforce",
         "check_interval_seconds": {CHECK_INTERVAL_SECONDS},
@@ -114,13 +123,28 @@ impl Host {
         "cleaners": {{"build_caches": {{"min_age_seconds": {MIN_AGE_SECONDS}, "root": {root:?}}}}}
       }}"#,
             root = self.cache_root.to_string_lossy(),
-        ));
+        )
     }
 
     /// The same registry with `disk_cleanup` replaced by `declaration`, which
     /// is a JSON object or the literal `null`.
     pub fn declare(&self, declaration: &str) {
         self.write_registry(TARGET, &format!(r#","disk_cleanup": {declaration}"#));
+    }
+
+    /// The same registry with `disk_cleanup` replaced by `declaration` and the
+    /// target declaring the `stado` version installed on it.
+    ///
+    /// The version is part of the cleaner contract, not decoration: a cleaner
+    /// name is accepted for a host only when the binary running there can
+    /// parse it, so a fixture that declares no version can arm nothing.
+    pub fn declare_running(&self, declaration: &str, stado_version: &str) {
+        self.write_registry(
+            TARGET,
+            &format!(
+                r#","managed_versions": {{"stado": "{stado_version}"}},"disk_cleanup": {declaration}"#
+            ),
+        );
     }
 
     /// A registry whose only target names this machine and declares nothing

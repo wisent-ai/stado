@@ -188,7 +188,10 @@ impl Fixture {
             .args(args)
             .env("WC_STORAGE_BACKEND", "stado")
             .env("WC_STADO_STORAGE_URL", self.gateway.origin())
-            .env("WC_STADO_STORAGE_TOKEN_FILE", self.path().join("storage-token"))
+            .env(
+                "WC_STADO_STORAGE_TOKEN_FILE",
+                self.path().join("storage-token"),
+            )
             .env("WC_STADO_STORAGE_NAMESPACE", NAMESPACE)
             .env_remove("WC_LOCAL_STORAGE_PATH")
             .env("STADO_CONFIG", self.path().join("no-such-config.json"))

@@ -99,6 +99,14 @@ name = "host_delivery"
 path = "tests/host_delivery/main.rs"
 
 [[test]]
+name = "scratch_workdirs"
+path = "tests/scratch_workdirs/main.rs"
+
+[[test]]
+name = "space_report"
+path = "tests/space_report/main.rs"
+
+[[test]]
 name = "host_run"
 path = "tests/host_run/main.rs"
 
