@@ -62,10 +62,7 @@ use crate::queue::StorageError;
 
 use listener::{constant_time_eq, http_status, send_json, trusted_request_host, Request, Response};
 
-pub use listener::{
-    boundaries_without_a_reopening_route, join_script_source, release_coordinate_boundary_split,
-    serve, Dashboard, BOUNDARY_TIMEOUT_OVERRIDE_PATH,
-};
+pub use listener::{join_script_source, serve, Dashboard, BOUNDARY_TIMEOUT_OVERRIDE_PATH};
 
 /// Dashboard serve failure.
 #[derive(Debug, thiserror::Error)]
