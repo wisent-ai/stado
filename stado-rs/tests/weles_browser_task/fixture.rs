@@ -56,10 +56,7 @@ impl Fleet {
     /// A registry whose single row is this machine, declaring `actions` for
     /// Weles. Placement admits a plan whose action is one of them.
     pub fn declaring(actions: &[&str]) -> Self {
-        Self::seed(
-            TARGET,
-            Some(json!({ "enabled": true, "actions": actions })),
-        )
+        Self::seed(TARGET, Some(json!({ "enabled": true, "actions": actions })))
     }
 
     /// A registry whose single row is this machine and carries no `weles` key
@@ -142,7 +139,10 @@ impl Fleet {
             .env("NO_COLOR", "1")
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.store.path())
-            .env("STADO_CONFIG", self.store.path().join("no-such-config.json"))
+            .env(
+                "STADO_CONFIG",
+                self.store.path().join("no-such-config.json"),
+            )
             .env("WC_PROVIDERS", "local")
             .env("WC_VAST_AUTO_LIST", "false")
             .output()

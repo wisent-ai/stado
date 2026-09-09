@@ -37,13 +37,7 @@ fn a_plan_declaring_another_schema_is_refused_whole() {
 fn the_command_will_not_run_without_the_plan_it_declares() {
     let fleet = declared_fleet();
 
-    let out = fleet.stado(&[
-        "workload",
-        "run",
-        "weles-browser-task",
-        "--target",
-        TARGET,
-    ]);
+    let out = fleet.stado(&["workload", "run", "weles-browser-task", "--target", TARGET]);
 
     assert_eq!(out.status.code(), Some(2), "{}", said(&out));
     assert_eq!(

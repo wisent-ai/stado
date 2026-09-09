@@ -36,7 +36,9 @@ fn long_catalog(last: &str) -> String {
 #[test]
 fn an_action_the_hosts_catalog_omits_is_refused_naming_it_the_host_and_what_does_exist() {
     let fleet = Fleet::declaring(&[DEFAULT_ACTION, CAPTURE_ACTION]);
-    fleet.allowlist(&format!("{DEFAULT_ACTION}\n{SAVED_ACTION}\n{LOGIN_ACTION}\n"));
+    fleet.allowlist(&format!(
+        "{DEFAULT_ACTION}\n{SAVED_ACTION}\n{LOGIN_ACTION}\n"
+    ));
     let plan = fleet.plan(json!({ "action": CAPTURE_ACTION }));
 
     let out = fleet.run(Some(TARGET), &plan);
