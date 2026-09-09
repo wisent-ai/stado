@@ -255,7 +255,9 @@ async fn declare(args: DeclareArgs) -> Result<(), CmdError> {
             }
         }
         if !(root.starts_with('/') || root.starts_with("~/")) {
-            return Err(CmdError::usage("cleaner root must be absolute or begin with ~/"));
+            return Err(CmdError::usage(
+                "cleaner root must be absolute or begin with ~/",
+            ));
         }
         fields.insert("root".to_string(), Value::from(root.clone()));
     }

@@ -49,17 +49,18 @@ pub fn scan_queue_workdirs(
         // the physically resolved home. Every component is O_DIRECTORY |
         // O_NOFOLLOW, so replacing `.stado`, `work`, or `jobs` with a symlink
         // cannot redirect this pass.
-        let (canonical_root, root_fd, home_device) = match open_cleanup_root(home, configured.root.as_deref()) {
-            Ok(opened) => opened,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                report.skip_workdirs("root_absent", 1);
-                return Ok(());
-            }
-            Err(_) => {
-                report.skip_workdirs("unsafe_root", 1);
-                return Ok(());
-            }
-        };
+        let (canonical_root, root_fd, home_device) =
+            match open_cleanup_root(home, configured.root.as_deref()) {
+                Ok(opened) => opened,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    report.skip_workdirs("root_absent", 1);
+                    return Ok(());
+                }
+                Err(_) => {
+                    report.skip_workdirs("unsafe_root", 1);
+                    return Ok(());
+                }
+            };
         let root_info = safefs::fstat(root_fd.as_raw_fd())?;
         if root_info.st_dev != home_device {
             report.skip_workdirs("unsafe_root", 1);

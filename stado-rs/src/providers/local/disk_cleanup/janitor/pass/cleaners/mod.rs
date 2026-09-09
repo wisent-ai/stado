@@ -184,8 +184,13 @@ pub(crate) async fn run_cleaners(
     let workdir_deadline = time_share(queue_workdirs::CLEANER);
     let live_jobs = if workdir_budget > 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
         match queue_workdirs::candidate_job_ids(
-            home, policy.cleaners.get(queue_workdirs::CLEANER).and_then(|cleaner| cleaner.root.as_deref()),
-            workdir_budget, workdir_deadline,
+            home,
+            policy
+                .cleaners
+                .get(queue_workdirs::CLEANER)
+                .and_then(|cleaner| cleaner.root.as_deref()),
+            workdir_budget,
+            workdir_deadline,
         ) {
             Ok(candidates) => {
                 let budget = workdir_deadline
