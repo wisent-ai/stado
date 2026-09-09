@@ -9,11 +9,11 @@ use super::brama::{brama_identity_host, private_brama_route};
 use super::credentials::kronika_agent_credential;
 use super::declaration::{runner_profile, runner_target, RunnerProfile};
 use super::developer_id::bootstrap_developer_id;
-use super::github::{github_runner_is_online, github_runner_token};
+use super::github::{github_runner, github_runner_is_online, github_runner_token, RunnerRecord};
 use super::installer::{
-    installer_program, InstallerRequest, PROBIERZ_AGENT_ID, PROBIERZ_AGENT_RESOURCE,
+    installer_program, Decision, InstallerRequest, PROBIERZ_AGENT_ID, PROBIERZ_AGENT_RESOURCE,
 };
-use super::model_review::reconcile_model_review_secret;
+use super::model_review::MODEL_REVIEW_SECRET;
 use super::platform::Platform;
 use super::publisher::bootstrap_publisher_repository;
 use super::report::{command_failure, report};
@@ -98,10 +98,7 @@ async fn install_profile(
     } else {
         None
     };
-    let runner_root = match platform {
-        Platform::LinuxAmd64 => format!("/opt/wisent/{}-runner", profile.slug),
-        Platform::DarwinArm64 => format!("/Users/Shared/{}-runner", profile.slug),
-    };
+    let runner_root = platform.runner_root(profile);
     // Labels, group, and actual registration scope are fixed when config.sh
     // runs. Reconcile whenever the host record differs from this declaration.
     let registration = format!(
@@ -110,14 +107,29 @@ async fn install_profile(
         shlex_quote(scope.group(profile)),
         shlex_quote(&scope.label())
     );
-    let probe = format!(
-        "test -f {root}/.runner && test -f {root}/.stado/registered-runner && \
-         {registration} | /usr/bin/diff -q - {root}/.stado/registered-runner >/dev/null",
-        root = shlex_quote(&runner_root)
-    );
-    let already_registered = host_channel::run_script(&target, &probe, &production_runner())
-        .await?
-        .ok();
+    let record = format!("{runner_root}/.stado/registered-runner");
+    let configured = host_channel::run_script(
+        &target,
+        &format!("test -f {}/.runner", shlex_quote(&runner_root)),
+        &production_runner(),
+    )
+    .await?
+    .ok();
+    let record_matches = host_channel::run_script(
+        &target,
+        &format!(
+            "test -f {record} && {registration} | /usr/bin/diff -q - {record} >/dev/null",
+            record = shlex_quote(&record)
+        ),
+        &production_runner(),
+    )
+    .await?
+    .ok();
+    let already_registered = configured && record_matches;
+    // A host that carries a runner registered against something else is the
+    // case this lifecycle used to skip: it wrote files, restarted nothing and
+    // reported the profile installed while GitHub kept the old registration.
+    let reconfigure = configured && !record_matches;
     let token = if already_registered {
         String::new()
     } else {
@@ -126,7 +138,7 @@ async fn install_profile(
     let runner_name = format!("{}-{}", profile.slug, target.name);
     let restart_registered = already_registered
         && profile.needs_publisher_bootstrap()
-        && !github_runner_is_online(&runner_name).await?;
+        && !github_runner_is_online(scope, &runner_name).await?;
     let script = installer_program(
         &InstallerRequest {
             profile_name: &profile.name,
@@ -140,7 +152,10 @@ async fn install_profile(
         &token,
         &brama_url,
         brama_port,
-        restart_registered,
+        Decision {
+            restart_registered,
+            reconfigure,
+        },
     )?;
     let output = host_channel::run_script_with_timeout(
         &target,
@@ -171,6 +186,55 @@ async fn install_profile(
             "status": "installed",
         });
     }
+    // What the host did is not what GitHub holds. The registration is read
+    // back from the scope it was made against, and an install that produced
+    // no runner there is a failure however cleanly the program exited.
+    let status = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            match github_runner(scope, &runner_name).await {
+                RunnerRecord::Present { status } if status == "online" => return Ok(status),
+                RunnerRecord::Present { .. } => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                RunnerRecord::Absent { listed } => {
+                    return Err(DeployError(format!(
+                        "{}: {} installation exited successfully, but GitHub lists no runner \
+                         named {runner_name} under {}; listed runners: {listed:?}",
+                        target.name,
+                        profile.name,
+                        scope.label()
+                    )));
+                }
+                RunnerRecord::Unreadable { detail } => {
+                    return Err(DeployError(format!(
+                        "{}: {} installation cannot be verified at {}: {detail}",
+                        target.name,
+                        profile.name,
+                        scope.label()
+                    )));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        DeployError(format!(
+            "{}: {runner_name} did not report online at {} within 60 seconds",
+            target.name,
+            scope.label()
+        ))
+    })??;
+    value["registration"] = json!({
+        "scope": scope.label(),
+        "runner": runner_name,
+        "present": true,
+        "status": status,
+        "reconfigured": reconfigure,
+    });
+    value["listener"] = json!({
+        "connected": true,
+        "state": format!("GitHub reports {runner_name} online at {}", scope.label()),
+    });
     Ok(value)
 }
 
@@ -205,21 +269,31 @@ pub async fn install_declared(
     } else {
         None
     };
-    let model_review = if profile.needs_model_review() {
-        match repository {
-            Some(repository) => Some(reconcile_model_review_secret(target_name, repository).await?),
-            None => None,
-        }
-    } else {
-        None
-    };
-
     let mut value = install_profile(target_name, profile, &scope).await?;
     if let Some(repository_bootstrap) = repository_bootstrap {
         value["repository_bootstrap"] = repository_bootstrap;
     }
-    if let Some(model_review) = model_review {
-        value["model_review"] = model_review;
+    // The model-review bearer is a Brama capability for the repository's CI,
+    // not a property of the runner. Minting it inside `install` meant a Brama
+    // that refused a route — HTTP 401 on `PUT /v1/admin/routes`, measured on
+    // 2026-09-09 — stopped a repository from getting a runner at all, for a
+    // secret its checks never read. `runner model-review` reconciles it, and
+    // the report says so rather than leaving the capability unnamed.
+    if profile.needs_model_review() {
+        value["model_review"] = match repository {
+            Some(repository) => json!({
+                "secret": MODEL_REVIEW_SECRET,
+                "state": "declared",
+                "reconcile_with": format!(
+                    "stado runner model-review {target_name} --repository {repository}"
+                ),
+            }),
+            None => json!({
+                "secret": MODEL_REVIEW_SECRET,
+                "state": "repository-scoped",
+                "reconcile_with": Value::Null,
+            }),
+        };
     }
     Ok(value)
 }

@@ -32,7 +32,11 @@ pub(crate) fn prelude_with(
                 format!(
                     "  domain={}\n  domain_status={}\n  domain_reason='the exact loaded owner was observed before this lifecycle action'\n",
                     shlex_quote(domain),
-                    if domain.starts_with("gui/") { "graphical" } else { "fallback" },
+                    if domain.starts_with("gui/") {
+                        DOMAIN_STATUS_GRAPHICAL
+                    } else {
+                        DOMAIN_STATUS_BACKGROUND
+                    },
                 )
             }),
         )

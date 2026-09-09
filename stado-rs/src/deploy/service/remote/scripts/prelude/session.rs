@@ -118,7 +118,7 @@ impl HostSession {
         // graphical session, whatever the console says about who owns it.
         let kind = match status {
             DOMAIN_STATUS_GRAPHICAL => SESSION_GRAPHICAL,
-            DOMAIN_STATUS_FALLBACK | DOMAIN_STATUS_UNAVAILABLE => SESSION_HEADLESS,
+            DOMAIN_STATUS_BACKGROUND | DOMAIN_STATUS_UNAVAILABLE => SESSION_HEADLESS,
             _ => SESSION_UNKNOWN,
         };
         Self {

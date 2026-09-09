@@ -5,22 +5,27 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use super::credentials::admin_credential;
 use super::scope::RunnerScope;
 use crate::deploy::DeployError;
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
-pub const GITHUB_CREDENTIAL_ITEM: &str = "GITHUB_TOKEN";
 
 pub(crate) async fn github_credential() -> Result<String, DeployError> {
-    admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
+    crate::github_identity::credential()
+        .await
+        .map_err(DeployError)
 }
 
 pub(crate) async fn github_runner_token(
     scope: &RunnerScope,
     kind: &str,
 ) -> Result<String, DeployError> {
-    let credential = github_credential().await?;
+    let resolved = crate::github_identity::resolve()
+        .await
+        .map_err(DeployError)?;
+    let credential = crate::github_identity::read(&resolved)
+        .await
+        .map_err(DeployError)?;
     let response = reqwest::Client::new()
         .post(scope.token_endpoint(kind))
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
@@ -43,19 +48,19 @@ pub(crate) async fn github_runner_token(
         let remedy = if status == reqwest::StatusCode::FORBIDDEN
             || status == reqwest::StatusCode::UNAUTHORIZED
         {
+            let coordinate = format!("{}.{}", resolved.item, resolved.field);
             match scope {
                 RunnerScope::Organization => format!(
-                    ". Stado read this credential from Skarbiec item {GITHUB_CREDENTIAL_ITEM:?} \
-                     field \"value\"; that identity may not manage {GITHUB_ORGANIZATION} runners, \
-                     which is what an organization-wide runner needs. Either store a credential \
-                     with the organization's self-hosted-runner write permission in that item, or \
-                     register this host against one repository with --repository <NAME>, which \
-                     the same credential is allowed to do"
+                    ". Skarbiec route {:?} resolved to {coordinate}. GitHub refused organization \
+                     runner administration. Repository registration is a separate operation: \
+                     use --repository <NAME> when a runner for one repository is intended",
+                    resolved.route
                 ),
                 RunnerScope::Repository(repository) => format!(
-                    ". Stado read this credential from Skarbiec item {GITHUB_CREDENTIAL_ITEM:?} \
-                     field \"value\"; that identity is not an administrator of \
-                     {GITHUB_ORGANIZATION}/{repository}, so it cannot register a runner there"
+                    ". Skarbiec route {:?} resolved to {coordinate}. GitHub refused runner \
+                     administration for {GITHUB_ORGANIZATION}/{repository}; the response above \
+                     is the permission verdict for that repository",
+                    resolved.route
                 ),
             }
         } else {
@@ -83,7 +88,11 @@ pub(crate) async fn github_json(
     credential: &str,
     body: Option<&Value>,
 ) -> Result<Value, DeployError> {
-    let mut request = reqwest::Client::new()
+    let mut request = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| DeployError(format!("GitHub client could not start: {error}")))?
         .request(method, endpoint)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -119,31 +128,90 @@ pub(crate) async fn github_json(
     })
 }
 
-pub(crate) async fn github_runner_is_online(runner_name: &str) -> Result<bool, DeployError> {
-    let credential = github_credential().await?;
-    let endpoint =
-        format!("https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runners?per_page=100");
-    let document = github_json(reqwest::Method::GET, &endpoint, &credential, None).await?;
-    let runners = document
-        .get("runners")
-        .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("GitHub runner response has no runners array".to_string()))?;
-    let runner = runners
-        .iter()
-        .find(|runner| runner.get("name").and_then(Value::as_str) == Some(runner_name))
-        .ok_or_else(|| {
-            DeployError(format!(
-                "GitHub has no registered runner named {runner_name}; refusing to cycle a locally registered runner"
-            ))
-        })?;
-    match runner.get("status").and_then(Value::as_str) {
-        Some("online") => Ok(true),
-        Some("offline") => Ok(false),
-        Some(status) => Err(DeployError(format!(
+/// What GitHub says about one runner name at one scope.
+///
+/// `Unreadable` is its own answer on purpose. The fleet's credential is a
+/// repository administrator, not an organization administrator, so the
+/// organization list answers 403 while every repository list it owns answers
+/// 200. A refused read is a fact about the credential; it is not evidence
+/// that a runner is missing, and reporting it as missing is how five separate
+/// diagnoses concluded that runners could not be managed from here.
+#[derive(Debug, Clone)]
+pub(crate) enum RunnerRecord {
+    Present { status: String },
+    Absent { listed: Vec<String> },
+    Unreadable { detail: String },
+}
+
+pub(crate) async fn github_runner(scope: &RunnerScope, runner_name: &str) -> RunnerRecord {
+    let credential = match github_credential().await {
+        Ok(credential) => credential,
+        Err(DeployError(detail)) => return RunnerRecord::Unreadable { detail },
+    };
+    let mut listed = Vec::new();
+    let mut page = 1;
+    loop {
+        let endpoint = format!("{}&page={page}", scope.runners_endpoint());
+        let document = match github_json(reqwest::Method::GET, &endpoint, &credential, None).await {
+            Ok(document) => document,
+            Err(DeployError(detail)) => return RunnerRecord::Unreadable { detail },
+        };
+        let Some(runners) = document.get("runners").and_then(Value::as_array) else {
+            return RunnerRecord::Unreadable {
+                detail: format!("{endpoint} answered no runners array"),
+            };
+        };
+        if let Some(runner) = runners
+            .iter()
+            .find(|runner| runner.get("name").and_then(Value::as_str) == Some(runner_name))
+        {
+            return match runner.get("status").and_then(Value::as_str) {
+                Some(status @ ("online" | "offline")) => RunnerRecord::Present {
+                    status: status.to_string(),
+                },
+                status => RunnerRecord::Unreadable {
+                    detail: format!("GitHub runner {runner_name} has invalid status {status:?}"),
+                },
+            };
+        }
+        listed.extend(runners.iter().filter_map(|runner| {
+            runner
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }));
+        if runners.len() < 100 {
+            return RunnerRecord::Absent { listed };
+        }
+        page += 1;
+    }
+}
+
+/// Whether GitHub reports this registration online, asked at the scope that
+/// made it. An unreadable list is not an offline runner: cycling a service on
+/// a refused read is a production action taken on no evidence.
+pub(crate) async fn github_runner_is_online(
+    scope: &RunnerScope,
+    runner_name: &str,
+) -> Result<bool, DeployError> {
+    match github_runner(scope, runner_name).await {
+        RunnerRecord::Present { status } if status == "online" => Ok(true),
+        RunnerRecord::Present { status } if status == "offline" => Ok(false),
+        RunnerRecord::Present { status } => Err(DeployError(format!(
             "GitHub runner {runner_name} has unknown status {status:?}"
         ))),
-        None => Err(DeployError(format!(
-            "GitHub runner {runner_name} has no status"
+        RunnerRecord::Absent { listed } => Err(DeployError(format!(
+            "GitHub has no runner named {runner_name} under {}; it lists {}",
+            scope.label(),
+            if listed.is_empty() {
+                "none".to_string()
+            } else {
+                listed.join(", ")
+            }
+        ))),
+        RunnerRecord::Unreadable { detail } => Err(DeployError(format!(
+            "GitHub's runner list for {} could not be read, so this runner's state is unknown: {detail}",
+            scope.label()
         ))),
     }
 }

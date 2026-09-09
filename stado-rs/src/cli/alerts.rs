@@ -90,7 +90,7 @@ async fn channels(json: bool) -> Result<(), CmdError> {
 }
 
 /// Deliver one alert now. Every per-channel outcome is printed by the alert
-/// path itself as an `[alert]` line, so a silent failure is impossible.
+/// path itself as an `[alert]` line, so a failure nobody sees is impossible.
 async fn send(message: &str, subject: &str) -> Result<(), CmdError> {
     if message.trim().is_empty() {
         return Err(CmdError::click("alerts send needs a message"));

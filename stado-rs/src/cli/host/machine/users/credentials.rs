@@ -77,8 +77,8 @@ pub(crate) async fn credential_host(target: &str) -> Result<CredentialHost, CmdE
 
 /// The registry for `--registry-source` (Python `load_targets(source=...)`:
 /// "gcs" = the canonical remote registry only (whichever store
-/// `WC_STORAGE_BACKEND` selects), "local" = bundled file, "auto" = remote
-/// with bundled fallback).
+/// `WC_STORAGE_BACKEND` selects), "local" = bundled file, "auto" = remote,
+/// then the bundled file when the store does not answer).
 pub(super) async fn load_registry_by_source(source: &str) -> Result<Registry, CmdError> {
     match source {
         "gcs" => crate::targets::fetch_registry_remote()

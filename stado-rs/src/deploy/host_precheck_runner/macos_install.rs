@@ -9,6 +9,7 @@ token=__TOKEN__
 runner_name=__RUNNER_NAME__
 runner_group=__RUNNER_GROUP__
 restart_registered=__RESTART_REGISTERED__
+reconfigure=__RECONFIGURE__
 runner_user=stado-precheck
 runner_root=/Users/Shared/stado-precheck-runner
 mkdir -p "$HOME/.stado/work"
@@ -58,21 +59,53 @@ fi
 if [ "$runner_registered" -eq 0 ] || [ "$runtime_repaired" -eq 1 ]; then
   fetch_runner_archive
 fi
-if [ "$runner_registered" -eq 0 ]; then
-  root rm -rf "$runner_root"
-  root mkdir -p "$runner_root"
-  root tar -xzf "$archive" -C "$runner_root"
-  installer_user=$(id -un)
-  installer_group=$(id -gn)
-  root chown -R "$installer_user:$installer_group" "$runner_root"
-  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches" "$runner_root/.stado"
-  root chown "$installer_user:$installer_group" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library" "$runner_root/.stado"
+# Registration runs when this host holds no runner, and again whenever the
+# declaration moved: a runner configured against one scope, group or label set
+# is not the runner the caller asked for. Before 2026-09-09 only the first case
+# existed, so an install that moved the scope exited 0 and registered nothing.
+if [ "$runner_registered" -eq 0 ] || [ "$reconfigure" = 1 ]; then
+  if [ "$runner_registered" -eq 0 ]; then
+    root rm -rf "$runner_root"
+    root mkdir -p "$runner_root"
+    root tar -xzf "$archive" -C "$runner_root"
+    installer_user=$(id -un)
+    installer_group=$(id -gn)
+    root chown -R "$installer_user:$installer_group" "$runner_root"
+    root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches" "$runner_root/.stado"
+    root chown "$installer_user:$installer_group" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library" "$runner_root/.stado"
+  else
+    if root pgrep -u "$runner_user" -f 'Runner.Worker' >/dev/null; then
+      printf '%s\n' 'runner is executing a job; registration was not changed' >&2
+      exit 1
+    fi
+    if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
+      root launchctl bootout system/com.wisent.stado-precheck-runner
+    fi
+    root mkdir -m 700 "$staging/previous-registration"
+    for owned in .runner .runner_migrated .credentials .credentials_migrated .credentials_rsaparams .service .env .path; do
+      if [ -f "$runner_root/$owned" ]; then
+        root cp -p "$runner_root/$owned" "$staging/previous-registration/$owned"
+      fi
+    done
+    root rm -f "$runner_root/.runner" "$runner_root/.runner_migrated" \
+      "$runner_root/.credentials" "$runner_root/.credentials_migrated" \
+      "$runner_root/.credentials_rsaparams" "$runner_root/.service"
+    installer_user=$(id -un)
+    installer_group=$(id -gn)
+    root chown -R "$installer_user:$installer_group" "$runner_root"
+  fi
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
   if ! (cd "$runner_root" && /usr/bin/env \
     HOME="$runner_root" TMPDIR="$runner_root/.tmp" DOTNET_BUNDLE_EXTRACT_BASE_DIR="$runner_root/.dotnet" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin TOKEN_FILE="$token_file" \
     /bin/bash -c 'cd "$HOME"; read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__REGISTRATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; [ -n "$2" ] && export ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2"; exec ./config.sh --unattended --replace --disableupdate' \
     bash "$runner_name" "$runner_group"); then
+    if [ -d "$staging/previous-registration" ]; then
+      root cp -Rp "$staging/previous-registration"/. "$runner_root/"
+      root chown root:wheel "$runner_root"
+      root chmod go-w "$runner_root"
+      root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
+    fi
     for log in "$runner_root"/_diag/Runner_*.log; do
       [ -f "$log" ] || continue
       root tail -n 80 "$log" >&2 || true
@@ -86,7 +119,8 @@ if [ "$runner_registered" -eq 0 ]; then
   # needs an organization-admin token to read, so the record lives beside the
   # runner.
   printf '%s\n%s\n%s\n' __RUNNER_LABELS__ "$runner_group" __RUNNER_SCOPE__ | root tee "$runner_root/.stado/registered-runner" >/dev/null
-elif [ "$runtime_repaired" -eq 1 ]; then
+fi
+if [ "$runtime_repaired" -eq 1 ]; then
   restore_runner_apphosts
 fi
 

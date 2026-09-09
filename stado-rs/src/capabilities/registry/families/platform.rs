@@ -93,7 +93,7 @@ pub(in crate::capabilities::registry) const SECRETS: &[CapabilityVariant] = &[
         aliases: &[],
         provider: Some(ProviderId::Aws),
         implementation: "providers::aws::sdk_config",
-        summary: "AWS credential chain, IMDS and scoped Skarbiec fallback.",
+        summary: "AWS credential chain, IMDS and the scoped Skarbiec identity.",
         configurable: false,
         constructible: false,
         adapter: RuntimeAdapter::None,

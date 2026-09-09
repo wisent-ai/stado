@@ -99,7 +99,49 @@ extension FleetControlStore {
         fields.append("listener \(listener)")
         fields.append("labels \(report.runnerLabels)")
         fields.append("host job slot \(report.hostJobSlot)")
+        if let registration = report.registration {
+            fields.append("GitHub \(registration.status ?? "unknown") at \(registration.scope)")
+        }
         return fields.joined(separator: " · ")
+    }
+
+    func checkRunnerCredential(host: String) async {
+        await runRunnerAccount(arguments: ["runner", "credential", "--json"], host: host, mutates: false)
+    }
+
+    func configureRunnerModelReview(host: String, repository: String) async {
+        await runRunnerAccount(
+            arguments: [
+                "runner", "model-review", host,
+                "--repository", repository.trimmingCharacters(in: .whitespacesAndNewlines), "--json",
+            ],
+            host: host,
+            mutates: true
+        )
+    }
+
+    private func runRunnerAccount(arguments: [String], host: String, mutates: Bool) async {
+        guard !runnerMutation.isWorking else { return }
+        runnerHost = host
+        guard let address else {
+            runnerMutation = .failed("No Stado endpoint is configured; no runner account operation ran.")
+            return
+        }
+        let generation = requestGeneration
+        runnerMutation = .working(StadoCLI.commandLine(arguments))
+        do {
+            let result = try await client.run(
+                arguments: arguments, confirmsMutation: mutates, at: address,
+                authorizationToken: authorizationToken, timeoutSeconds: 1_200
+            )
+            guard requestGeneration == generation else { return }
+            runnerMutation = result.ok
+                ? .succeeded(result.standardOutput)
+                : .failed(result.message)
+        } catch {
+            guard requestGeneration == generation else { return }
+            runnerMutation = .failed(Self.describe(error))
+        }
     }
 
     func clearRunnerMutation() {

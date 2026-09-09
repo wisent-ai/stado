@@ -3,7 +3,7 @@
 //! Unlike the other stado entry points (click), the Python original uses
 //! argparse; the port reproduces argparse's usage/error text and exit
 //! codes (2 for argument errors, 0 for --help and a completed --once pass,
-//! 1 when the upload fails and the local fallback is written).
+//! 1 when the upload fails and the local copy is written instead).
 
 use tracing_subscriber::EnvFilter;
 
