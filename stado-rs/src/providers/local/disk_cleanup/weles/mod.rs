@@ -14,7 +14,7 @@
 
 mod eligibility;
 mod scan;
-mod tree_ops;
+pub mod tree_ops;
 
 pub use scan::scan_weles;
 

@@ -82,6 +82,7 @@ pub mod submit;
 pub mod table;
 pub mod vast;
 pub mod web;
+pub mod workdirs;
 pub mod workload;
 
 pub use entry::dispatch::main_entry;

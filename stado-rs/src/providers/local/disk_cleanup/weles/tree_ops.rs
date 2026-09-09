@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// Shared with [`super::super::chromium_clones`], which sizes the same shape of
 /// thing — one shallow directory of files under a fixed root — and would
 /// otherwise be a second walk with its own symlink judgement.
-pub(in crate::providers::local::disk_cleanup) fn dir_size(path: &Path) -> i64 {
+pub(in crate::providers::local) fn dir_size(path: &Path) -> i64 {
     let mut total = 0i64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(current) = stack.pop() {
@@ -46,7 +46,7 @@ pub(in crate::providers::local::disk_cleanup) fn dir_size(path: &Path) -> i64 {
 /// Shared with [`super::super::chromium_clones`] for the reason [`dir_size`] is:
 /// two spellings of "delete this tree, refusing symlinks" would be two
 /// safety models, and only one of them would be the tested one.
-pub(in crate::providers::local::disk_cleanup) fn remove_tree(path: &Path) -> io::Result<()> {
+pub(in crate::providers::local) fn remove_tree(path: &Path) -> io::Result<()> {
     let info = std::fs::symlink_metadata(path)?;
     if info.file_type().is_symlink() {
         return Err(io::Error::new(
