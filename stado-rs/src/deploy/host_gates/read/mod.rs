@@ -1,6 +1,7 @@
 //! Independent diagnostic reads retain their own result, source and duration.
 use chrono::Utc;
 use serde_json::Value;
+use std::future::Future;
 
 use super::gates::HostGates;
 use super::verdict::assemble;
