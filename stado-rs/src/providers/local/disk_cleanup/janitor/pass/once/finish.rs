@@ -58,6 +58,10 @@ pub(crate) fn preserve_previous_report(state_dir: &Path, report: &mut CleanupRep
         return;
     };
     report.builds_cursor = build_caches::BuildCachesCursor::from_state(&previous);
+    report.backup_cursor =
+        crate::providers::local::disk_cleanup::backup_twins::cursor::BackupCursor::from_state(
+            &previous,
+        );
     let Some(previous) = previous.get("report").and_then(Value::as_object) else {
         return;
     };

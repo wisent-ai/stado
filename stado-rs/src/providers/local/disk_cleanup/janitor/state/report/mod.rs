@@ -142,5 +142,7 @@ pub struct CleanupReport {
     /// The authoritative checkpoint, including all unvisited directories.
     pub(in crate::providers::local::disk_cleanup) builds_cursor:
         Option<build_caches::BuildCachesCursor>,
+    pub(in crate::providers::local::disk_cleanup) backup_cursor:
+        Option<crate::providers::local::disk_cleanup::backup_twins::cursor::BackupCursor>,
     pub errors: Vec<String>,
 }

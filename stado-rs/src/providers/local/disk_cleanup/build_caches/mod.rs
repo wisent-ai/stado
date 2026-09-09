@@ -41,7 +41,7 @@
 //! the depth limit that is also the descriptor budget, and the cleaner entry
 //! point [`scan_build_caches`].
 
-mod cursor;
+pub(super) mod cursor;
 mod remove;
 mod reserved;
 mod walk;

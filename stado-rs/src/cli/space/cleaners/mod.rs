@@ -1,22 +1,5 @@
-//! `stado space cleaners`: which janitor cleaners a host declares, and the
-//! typed write that arms one.
-//!
-//! The mechanism that holds a host above its watermark is a declared cleaner,
-//! and until this command the only way to arm one was to hand-edit the
-//! canonical registry document. That is why `charless-mac-mini` sat 7.6 GiB
-//! below its declared target on 2026-09-09 with 52.4 GiB of published release
-//! versions in `~/.stado/local-storage` and 10.4 GiB of replica objects in
-//! `~/.stado/local-backup`: this binary implements `release_store` and
-//! `backup_twins`, which sweep exactly those roots, and that host declared
-//! neither. Nothing was broken and nothing was missing except the declaration,
-//! which no command could write.
-//!
-//! Two refusals are the whole safety of the write. A name this product does
-//! not implement is refused with the list that may be declared, and a name the
-//! target's installed binary predates is refused with the version it needs —
-//! because a registry policy is one document read by every release at once,
-//! and a name an older binary cannot parse made that host read `cleaners:
-//! null` and switch off every cleaner it was already running.
+//! Read and update cleaner declarations. Installed support is observed on the
+//! target; `managed_versions` is desired state, not installed evidence.
 
 use clap::{Args, Subcommand};
 use serde_json::{json, Map, Value};
@@ -76,6 +59,7 @@ pub struct DeclareArgs {
 struct Declared {
     policy: Option<Value>,
     installed: String,
+    installed_error: Option<String>,
 }
 
 async fn declared_for(target: &str) -> Result<Declared, CmdError> {
@@ -85,17 +69,41 @@ async fn declared_for(target: &str) -> Result<Declared, CmdError> {
     let entry = registry
         .lookup(target)
         .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+    let runner = crate::deploy::production_runner();
+    let observed = crate::deploy::host_inventory::inventory_target(
+        entry,
+        registry.service_directory.as_ref(),
+        &runner,
+    )
+    .await;
+    let (installed, installed_error) = match observed {
+        Ok(report) => {
+            let version = report["managed_binaries"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["name"] == "stado"))
+                .and_then(|row| row["version"].as_str())
+                .and_then(|version| {
+                    crate::deploy::host_inventory::reported_version("stado", version)
+                })
+                .map(str::to_string);
+            let error = version.is_none().then(|| {
+                report["error"]
+                    .as_str()
+                    .unwrap_or("the host inventory reported no readable installed Stado version")
+                    .to_string()
+            });
+            (version.unwrap_or_default(), error)
+        }
+        Err(error) => (String::new(), Some(error.to_string())),
+    };
     Ok(Declared {
         policy: entry
             .disk_cleanup
             .as_ref()
             .map(serde_json::to_value)
             .transpose()?,
-        installed: entry
-            .managed_versions
-            .get("stado")
-            .cloned()
-            .unwrap_or_default(),
+        installed,
+        installed_error,
     })
 }
 
@@ -106,13 +114,11 @@ fn rows(declared: &Declared) -> Vec<Value> {
         .policy
         .as_ref()
         .and_then(|policy| policy.get("cleaners"))
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+        .and_then(Value::as_object);
     catalogue::CLEANERS
         .iter()
         .map(|entry| {
-            let declaration = cleaners.get(entry.name);
+            let declaration = cleaners.and_then(|rows| rows.get(entry.name));
             let supported = catalogue::version_at_least(&declared.installed, entry.since);
             json!({
                 "cleaner": entry.name,
@@ -121,6 +127,7 @@ fn rows(declared: &Declared) -> Vec<Value> {
                 "sweeps": entry.sweeps,
                 "default_root": entry.default_root,
                 "since": entry.since,
+                "min_age_floor_seconds": entry.min_age_floor_seconds,
                 "supported_by_installed_binary": supported,
                 "detail": detail(entry, declaration.is_some(), supported, &declared.installed),
             })
@@ -135,11 +142,17 @@ fn detail(
     installed: &str,
 ) -> String {
     if declared {
-        return format!("declared: this host sweeps {}", entry.sweeps);
+        return format!(
+            "declared scan scope: {}; policy mode determines whether it can delete",
+            entry.sweeps
+        );
+    }
+    if installed.is_empty() {
+        return "installed Stado version could not be observed; support is unknown".to_string();
     }
     if supported {
         return format!(
-            "this product implements it and this host does not declare it; arm it with `stado space cleaners declare <target> --cleaner {}`",
+            "not declared; inspect or add its policy with `stado space cleaners declare <target> --cleaner {}`",
             entry.name
         );
     }
@@ -173,9 +186,14 @@ async fn list(target: &str, json_output: bool) -> Result<(), CmdError> {
         return print_json(&json!({
             "target": target,
             "installed_stado": declared.installed,
+            "installed_read_error": declared.installed_error,
+            "policy_mode": declared.policy.as_ref().and_then(|policy| policy.get("mode")),
             "declares_policy": declared.policy.is_some(),
             "cleaners": rows,
         }));
+    }
+    if let Some(error) = &declared.installed_error {
+        println!("{target}: installed version unavailable: {error}");
     }
     if declared.policy.is_none() {
         println!(
@@ -206,9 +224,15 @@ async fn declare(args: DeclareArgs) -> Result<(), CmdError> {
         ))
     })?;
     let declared = declared_for(&args.target).await?;
+    if let Some(error) = declared.installed_error {
+        return Err(CmdError::click(format!(
+            "cannot verify cleaner support on {}: {error}",
+            args.target
+        )));
+    }
     if !catalogue::version_at_least(&declared.installed, entry.since) {
         return Err(CmdError::click(format!(
-            "{} runs stado {} and {} first ships in {}: declaring it now makes that host reject its whole policy, so deliver the binary first with `stado release host-state --host {} --apply`",
+            "{} reports installed stado {}; {} requires at least {}; no policy was changed",
             args.target,
             if declared.installed.is_empty() {
                 "an unreadable version".to_string()
@@ -217,20 +241,15 @@ async fn declare(args: DeclareArgs) -> Result<(), CmdError> {
             },
             args.cleaner,
             entry.since,
-            args.target
         )));
     }
     let mut fields = Map::new();
     if let Some(root) = args.root.as_ref() {
         fields.insert("root".to_string(), Value::from(root.clone()));
     }
-    // `min_age_seconds` is required by the registry contract and floored per
-    // cleaner, so a declaration that names none is written with that cleaner's
-    // own floor rather than refused for a field an operator cannot guess.
-    fields.insert(
-        "min_age_seconds".to_string(),
-        Value::from(args.min_age_seconds.unwrap_or(entry.min_age_floor_seconds)),
-    );
+    if let Some(seconds) = args.min_age_seconds {
+        fields.insert("min_age_seconds".to_string(), Value::from(seconds));
+    }
     if let Some(keep) = args.keep_newest {
         fields.insert("keep_newest".to_string(), Value::from(keep));
     }

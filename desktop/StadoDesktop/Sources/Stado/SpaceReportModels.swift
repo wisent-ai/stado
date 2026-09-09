@@ -21,6 +21,7 @@ struct HostSpaceReport: Decodable, Sendable {
     /// missing answer must leave the rest of the report readable rather than
     /// failing the whole screen.
     let coverage: Coverage?
+    let inventoryIncomplete: String?
 
     enum CodingKeys: String, CodingKey {
         case target, usage, memory, inventory, coverage
@@ -29,6 +30,7 @@ struct HostSpaceReport: Decodable, Sendable {
         case cleanupState = "cleanup_state"
         case cleanupLock = "cleanup_lock"
         case reclaimStages = "reclaim_stages"
+        case inventoryIncomplete = "inventory_incomplete"
     }
 
     /// What the host needs, what the declared stages sweep, and what nothing
@@ -78,10 +80,12 @@ struct HostSpaceReport: Decodable, Sendable {
             /// nothing in the product looks here.
             let mechanism: String?
             let mechanismDeclared: Bool?
+            let exclusiveOfMeasuredChildren: Bool?
 
             enum CodingKeys: String, CodingKey {
                 case path, bytes, mechanism
                 case mechanismDeclared = "mechanism_declared"
+                case exclusiveOfMeasuredChildren = "exclusive_of_measured_children"
             }
 
             var id: String { path }
@@ -102,19 +106,34 @@ struct HostSpaceReport: Decodable, Sendable {
             let cleaner: String
             let root: String
             let detail: String
-            let supported: Bool
 
             var id: String { cleaner }
 
-            enum CodingKeys: String, CodingKey {
-                case cleaner, root, detail
-                case supported = "supported_by_installed_binary"
-            }
         }
 
         struct Janitor: Decodable, Sendable {
             let outcome: String
             let detail: String
+            let report: Pass?
+        }
+
+        struct Pass: Decodable, Sendable {
+            let cleaners: [String: CleanerResult]?
+            let caps: [String: Bool]?
+            let errors: [String]?
+        }
+
+        struct CleanerResult: Decodable, Sendable {
+            let scannedItems: Int64
+            let eligibleItems: Int64
+            let deletedItems: Int64
+            let skipped: [String: Int64]
+            enum CodingKeys: String, CodingKey {
+                case skipped
+                case scannedItems = "scanned_items"
+                case eligibleItems = "eligible_items"
+                case deletedItems = "deleted_items"
+            }
         }
 
         /// The tone the verdict is read with: a host holding its declared free

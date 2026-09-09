@@ -102,6 +102,9 @@ pub struct CleanupState {
     pub low_bytes: Option<i64>,
     /// The state document was there but did not parse.
     pub error: Option<String>,
+    /// The pass as recorded by its writer, including per-cleaner refusals and
+    /// exhausted limits. Directory sizes cannot explain why a pass stopped.
+    pub report: Option<Value>,
 }
 
 /// The local APFS snapshots this host is holding, which nothing in this
@@ -165,6 +168,7 @@ pub type MemoryReading = crate::providers::local::host_memory::reading::MemoryRe
 pub struct DiskReading {
     pub usage: Option<DiskUsage>,
     pub clone_summaries: Vec<CloneSummary>,
+    pub clone_root: Option<String>,
     pub state: CleanupState,
     pub snapshots: LocalSnapshots,
     pub inventory: Vec<DiskItem>,
@@ -187,6 +191,9 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
     let mut meminfo: Vec<String> = Vec::new();
     for line in stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
+            ["STADO_CLONE_ROOT", path] => {
+                reading.clone_root = Some((*path).to_string());
+            }
             ["STADO_DISK", filesystem, blocks, used, available, capacity, mounted] => {
                 reading.usage = Some(DiskUsage {
                     filesystem: (*filesystem).to_string(),

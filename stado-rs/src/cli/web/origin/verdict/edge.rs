@@ -28,6 +28,24 @@ pub(crate) struct EdgeSelection {
     pub endpoint: String,
     pub origin: Option<String>,
     pub detail: String,
+    pub readback: Value,
+}
+
+impl EdgeSelection {
+    pub fn readback_answered(&self) -> bool {
+        // The deployment probes the real object route without a URI; its
+        // documented 400 is an answered request, not an upstream failure.
+        self.readback.get("error").is_none_or(Value::is_null)
+            && self.readback["status"]
+                .as_u64()
+                .is_some_and(|status| (200..300).contains(&status) || status == 400)
+    }
+
+    pub fn readback_detail(&self) -> &str {
+        self.readback["detail"]
+            .as_str()
+            .unwrap_or("the public edge supplied no origin read-back evidence")
+    }
 }
 
 pub(crate) async fn edge_selection() -> EdgeSelection {
@@ -42,6 +60,7 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
                 endpoint,
                 origin: None,
                 detail: format!("this Stado could not build its HTTPS client: {error}"),
+                readback: Value::Null,
             }
         }
     };
@@ -52,6 +71,7 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
                 endpoint,
                 origin: None,
                 detail: format!("the public edge did not answer: {error}"),
+                readback: Value::Null,
             }
         }
     };
@@ -60,18 +80,28 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
         Ok(body) => body,
         Err(error) => format!("the response body could not be read: {error}"),
     };
-    let selected = serde_json::from_str::<Value>(&body)
-        .ok()
-        .and_then(|value| value["origin"].as_str().map(str::to_string));
+    let payload = serde_json::from_str::<Value>(&body).ok();
+    let selected = payload
+        .as_ref()
+        .filter(|_| (200..300).contains(&status))
+        .and_then(|value| value["origin"].as_str());
+    let readback = payload
+        .as_ref()
+        .and_then(|value| value.get("originDiagnosis"))
+        .and_then(|diagnosis| diagnosis.get("probe"))
+        .cloned()
+        .unwrap_or(Value::Null);
     match selected {
         Some(origin) => EdgeSelection {
             endpoint,
             detail: format!("the public edge reports it fetches release objects from {origin}"),
-            origin: Some(origin),
+            origin: Some(origin.to_string()),
+            readback,
         },
         None => EdgeSelection {
             endpoint,
             origin: None,
+            readback,
             detail: format!(
                 "the public edge answered HTTP {status} and named no selected origin: {}",
                 quoted_body(&body)
@@ -161,6 +191,7 @@ pub(crate) fn undeclared_row(
             "origin": selection.origin,
             "endpoint": selection.endpoint,
             "detail": selection.detail,
+            "readback": selection.readback,
         },
     }))
 }

@@ -12,8 +12,8 @@ extension HostsView {
             ) {
                 gateSection(for: host)
                 if host.declared {
-                    SpaceSection(host: host.targetName ?? host.displayName)
-                    SpaceCleanersSection(host: host.targetName ?? host.displayName)
+                    SpaceSection(host: host.targetName ?? host.displayName, fleetStore: fleetStore)
+                    SpaceCleanersSection(host: host.targetName ?? host.displayName, fleetStore: fleetStore)
                 }
                 linkSection(for: host)
                 CredentialsHostSection(

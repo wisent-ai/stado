@@ -12,13 +12,13 @@ use serde::{Deserialize, Serialize};
 /// Ordinary names stay readable; non-UTF-8 Unix names retain their exact bytes.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
-pub(super) enum CursorPath {
+pub(in crate::providers::local::disk_cleanup) enum CursorPath {
     Text(String),
     Bytes(Vec<u8>),
 }
 
 impl CursorPath {
-    fn as_path(&self) -> &Path {
+    pub(in crate::providers::local::disk_cleanup) fn as_path(&self) -> &Path {
         match self {
             Self::Text(path) => Path::new(path),
             Self::Bytes(path) => Path::new(OsStr::from_bytes(path)),

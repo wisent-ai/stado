@@ -57,14 +57,19 @@ fn hostname() -> String {
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "stado-space-report-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|value| value.as_nanos())
-                .unwrap_or_default()
-        ));
+        let evidence = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.wisent-output/space-report");
+        fs::create_dir_all(&evidence).unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("run-")
+            .tempdir_in(evidence)
+            .unwrap()
+            .keep();
+        let revision = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .unwrap();
+        fs::write(root.join("revision.txt"), revision.stdout).unwrap();
         let home = root.join("home");
         let storage = root.join("storage");
         for directory in [&home, &storage, &root.join("tmp")] {
@@ -107,7 +112,7 @@ impl Fixture {
     fn report(&self, budget_seconds: &str, extra: &[&str]) -> Output {
         let mut args = vec!["space", "report", TARGET];
         args.extend_from_slice(extra);
-        Command::new(env!("CARGO_BIN_EXE_stado"))
+        let output = Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(&args)
             .env_clear()
             .env("HOME", &self.home)
@@ -120,11 +125,25 @@ impl Fixture {
             .env("NO_COLOR", "1")
             .env("STADO_INVENTORY_BUDGET_SECONDS", budget_seconds)
             .output()
-            .expect("run stado space report")
+            .expect("run stado space report");
+        let name = if extra.contains(&"--json") {
+            "json"
+        } else {
+            "text"
+        };
+        fs::write(self.root.join(format!("{name}.stdout")), &output.stdout).unwrap();
+        fs::write(self.root.join(format!("{name}.stderr")), &output.stderr).unwrap();
+        fs::write(
+            self.root.join(format!("{name}.exit")),
+            format!("{:?}", output.status.code()),
+        )
+        .unwrap();
+        output
     }
 
     fn cleanup(&self) {
-        let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.home);
+        let _ = fs::remove_dir_all(&self.storage);
     }
 }
 
@@ -152,6 +171,10 @@ fn a_walk_that_exceeds_its_budget_still_reports_free_space_and_the_janitor() {
         text.contains("janitor:"),
         "the janitor's own outcome survives the slow walk: {text}"
     );
+    assert!(
+        text.contains("inventory incomplete:"),
+        "the missing inventory was hidden: {text}"
+    );
     fixture.cleanup();
 }
 
@@ -167,8 +190,8 @@ fn the_report_names_the_walk_it_could_not_finish() {
         .unwrap_or_else(|| panic!("the report names the unfinished walk: {document}"));
 
     assert!(
-        detail.contains("did not finish within 1 seconds"),
-        "the detail carries the budget it exceeded: {detail}"
+        detail.contains("inventory read failed:") && detail.contains("1 seconds"),
+        "{detail}"
     );
     fixture.cleanup();
 }

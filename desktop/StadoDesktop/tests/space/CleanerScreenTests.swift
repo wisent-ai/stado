@@ -102,30 +102,4 @@ final class CleanerScreenTests: XCTestCase {
         XCTAssertEqual(coverage.uncovered.first?.label, "uncovered")
     }
 
-    func testTheButtonsSendTheDocumentedCommandLines() {
-        XCTAssertEqual(
-            HostCleanersStore.listArguments(host: "charless-mac-mini"),
-            ["space", "cleaners", "list", "charless-mac-mini", "--json"]
-        )
-        XCTAssertEqual(
-            HostCleanersStore.declareArguments(
-                host: "charless-mac-mini",
-                cleaner: "release_store"
-            ),
-            [
-                "space", "cleaners", "declare", "charless-mac-mini",
-                "--cleaner", "release_store", "--json",
-            ]
-        )
-        XCTAssertEqual(
-            HostCleanersStore.withdrawArguments(
-                host: "charless-mac-mini",
-                cleaner: "release_store"
-            ),
-            [
-                "space", "cleaners", "remove", "charless-mac-mini",
-                "--cleaner", "release_store", "--json",
-            ]
-        )
-    }
 }

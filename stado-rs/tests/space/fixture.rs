@@ -77,9 +77,11 @@ impl Host {
     /// A fixture declaring the enforcing cleanup policy, whose one cleaner is
     /// rooted at a build-cache directory inside this tempdir.
     pub fn new() -> Self {
+        let work = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/space-test-runs");
+        fs::create_dir_all(&work).expect("create repository test root");
         let dir = tempfile::Builder::new()
             .prefix("stado-space-")
-            .tempdir()
+            .tempdir_in(work)
             .expect("create the isolated space journey");
         let root = dir.path().to_path_buf();
         let home = root.join("home");
@@ -96,6 +98,10 @@ impl Host {
             cache_root,
             hostname: hostname(),
         };
+        let bin = host.home.join(".stado/bin");
+        fs::create_dir_all(&bin).expect("create isolated installed binary directory");
+        fs::hard_link(env!("CARGO_BIN_EXE_stado"), bin.join("stado"))
+            .expect("install the real product binary in the isolated host");
         host.declare_policy();
         host
     }
@@ -132,12 +138,8 @@ impl Host {
         self.write_registry(TARGET, &format!(r#","disk_cleanup": {declaration}"#));
     }
 
-    /// The same registry with `disk_cleanup` replaced by `declaration` and the
-    /// target declaring the `stado` version installed on it.
-    ///
-    /// The version is part of the cleaner contract, not decoration: a cleaner
-    /// name is accepted for a host only when the binary running there can
-    /// parse it, so a fixture that declares no version can arm nothing.
+    /// Desired versions are declarations. The installed executable above is
+    /// observed independently, including when this desired version is stale.
     pub fn declare_running(&self, declaration: &str, stado_version: &str) {
         self.write_registry(
             TARGET,
@@ -188,6 +190,7 @@ impl Host {
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
             .env("WC_PROVIDERS", "local")
+            .env("WC_STADO_STORAGE_NAMESPACE", "space-fixture")
             .env("NO_COLOR", "1")
             .output()
             .expect("the built stado binary did not start")

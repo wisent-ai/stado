@@ -6,19 +6,23 @@ final class HostSpaceReportStore: ObservableObject {
     @Published private(set) var report: HostSpaceReport?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var receipt: OperatorCommandResult?
 
-    private let cli: StadoCLI
     private var generation = 0
 
-    init(cli: StadoCLI = StadoCLI()) {
-        self.cli = cli
-    }
 
     nonisolated static func arguments(host: String) -> [String] {
         ["space", "report", host, "--json"]
     }
 
-    func load(host: String) async {
+    func load(host: String, fleet: FleetControlStore) async {
+        guard let address = fleet.address else {
+            errorMessage = "No Stado API is configured."
+            return
+        }
+        let sourceGeneration = fleet.requestGeneration
+        report = nil
+        receipt = nil
         generation += 1
         let requestedGeneration = generation
         isLoading = true
@@ -29,14 +33,19 @@ final class HostSpaceReportStore: ObservableObject {
             }
         }
         do {
-            let report = try await cli.json(
-                HostSpaceReport.self,
-                arguments: Self.arguments(host: host)
+            let result = try await fleet.client.run(
+                arguments: Self.arguments(host: host), confirmsMutation: false,
+                at: address, authorizationToken: fleet.authorizationToken,
+                timeoutSeconds: FleetControlClient.spaceCommandSeconds
             )
-            guard requestedGeneration == generation else { return }
-            self.report = report
+            guard requestedGeneration == generation,
+                  sourceGeneration == fleet.requestGeneration else { return }
+            receipt = result
+            report = try JSONDecoder().decode(HostSpaceReport.self, from: Data(result.standardOutput.utf8))
+            if !result.ok { errorMessage = result.message }
         } catch {
-            guard requestedGeneration == generation else { return }
+            guard requestedGeneration == generation,
+                  sourceGeneration == fleet.requestGeneration else { return }
             if let localized = error as? LocalizedError,
                let description = localized.errorDescription {
                 errorMessage = description
@@ -52,6 +61,7 @@ final class HostSpaceReportStore: ObservableObject {
 /// cache eligibility, or janitor state from separate endpoints.
 struct SpaceSection: View {
     let host: String
+    @ObservedObject var fleetStore: FleetControlStore
     @StateObject private var store = HostSpaceReportStore()
 
     var body: some View {
@@ -67,11 +77,19 @@ struct SpaceSection: View {
                     detail: message,
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise") {
-                            Task { await store.load(host: host) }
+                            Task { await store.load(host: host, fleet: fleetStore) }
                         },
                     ]
                 )
-            } else if let report = store.report {
+            }
+            if let report = store.report {
+                if let detail = report.inventoryIncomplete {
+                    WisentAlertPanel(
+                        tone: .warning,
+                        title: "Inventory incomplete",
+                        detail: "\(detail)\nMissing paths were not checked; the list is not a complete disk inventory."
+                    )
+                }
                 WisentField(
                     label: "Free disk",
                     value: bytes(report.freeSpace.availableBytes),
@@ -110,6 +128,24 @@ struct SpaceSection: View {
                         label: "Janitor",
                         value: "\(coverage.janitor.outcome) — \(coverage.janitor.detail)"
                     )
+                    if let pass = coverage.janitor.report {
+                        if let caps = pass.caps {
+                            WisentField(label: "Limits reached",
+                                value: caps.filter { $0.value }.keys.sorted().joined(separator: ", "))
+                        }
+                        if let cleaners = pass.cleaners {
+                            ForEach(cleaners.keys.sorted(), id: \.self) { name in
+                                if let result = cleaners[name] {
+                                    WisentField(label: name,
+                                        value: "Scanned \(result.scannedItems), eligible \(result.eligibleItems), deleted \(result.deletedItems).\n"
+                                            + result.skipped.keys.sorted().map { "\($0): \(result.skipped[$0] ?? 0)" }.joined(separator: ", "))
+                                }
+                            }
+                        }
+                        if let errors = pass.errors, !errors.isEmpty {
+                            WisentField(label: "Cleanup errors", value: errors.joined(separator: "\n"), tone: .danger)
+                        }
+                    }
                     WisentField(
                         label: "Declared roots",
                         value: coverage.covered.isEmpty
@@ -120,10 +156,12 @@ struct SpaceSection: View {
                     )
                     WisentField(
                         label: "Outside the stage roots",
-                        value: coverage.uncovered.isEmpty
+                        value: report.inventoryIncomplete != nil
+                            ? "Inventory incomplete — coverage of missing paths is unknown"
+                            : coverage.uncovered.isEmpty
                             ? "Every measured occupant is under a declared root"
                             : coverage.uncovered
-                                .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)" }
+                                .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)\($0.exclusiveOfMeasuredChildren == true ? " (excluding measured children)" : "")" }
                                 .joined(separator: "\n"),
                         tone: coverage.uncovered.isEmpty ? .neutral : coverage.tone
                     )
@@ -162,9 +200,15 @@ struct SpaceSection: View {
             } else {
                 WisentField(label: "Space report", value: "Reading…")
             }
+            if let receipt = store.receipt {
+                DisclosureGroup("Complete space report receipt") {
+                    Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    Text(receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                }
+            }
         }
-        .task(id: host) {
-            await store.load(host: host)
+        .task(id: "\(host)|\(fleetStore.requestGeneration)") {
+            await store.load(host: host, fleet: fleetStore)
         }
     }
 

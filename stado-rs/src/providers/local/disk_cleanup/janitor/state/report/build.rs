@@ -50,6 +50,7 @@ impl CleanupReport {
             unknown_cleaners: Vec::new(),
             builds_resume_from: None,
             builds_cursor: None,
+            backup_cursor: None,
             errors: Vec::new(),
         }
     }
@@ -57,7 +58,8 @@ impl CleanupReport {
     /// Python `_add_error`.
     pub fn add_error(&mut self, area: &str, exc: &JanitorError) {
         if self.errors.len() < MAX_ERRORS {
-            self.errors.push(format!("{area}:{}", exc.error_code()));
+            self.errors
+                .push(format!("{area}:{} ({exc})", exc.error_code()));
         }
     }
 
@@ -172,6 +174,7 @@ impl CleanupReport {
             "last_success_at": self.last_success_at,
             "build_caches_resume_from": self.builds_resume_from,
             "build_caches_pending_directories": self.builds_cursor.as_ref().map_or(0, build_caches::BuildCachesCursor::pending_directories),
+            "backup_twins_cursor": self.backup_cursor,
             "errors": self.errors,
         })
     }

@@ -65,6 +65,8 @@ struct SettingsView: View {
                 RegistryImportControl(store: fleetStore)
             }
 
+            WorkdirsSection(fleetStore: fleetStore)
+
             Section("First-run walkthrough") {
                 VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                     Text("See the walkthrough this product shows on a first run.")

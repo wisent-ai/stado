@@ -106,11 +106,6 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
                 .collect()
         })
         .unwrap_or_default();
-    let installed = target
-        .managed_versions
-        .get("stado")
-        .cloned()
-        .unwrap_or_default();
     let coverage = super::coverage::section(
         &report,
         stages,
@@ -118,7 +113,6 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         &target.release_platform,
         &free_space,
         &declared_cleaners,
-        &installed,
     );
     let mut document = report.as_object().cloned().unwrap_or_else(Map::new);
     document.insert("coverage".to_string(), coverage.clone());
@@ -133,6 +127,10 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
             .and_then(Value::as_str)
             .unwrap_or("never");
         println!("{} space", target.name);
+        if let Some(error) = report.get("inventory_incomplete").and_then(Value::as_str) {
+            println!("inventory incomplete: {error}");
+            println!("coverage lists only measured paths; missing paths have not been checked");
+        }
         println!(
             "disk: {} free KiB on {} ({})",
             usage
