@@ -84,12 +84,33 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         "build_caches".to_string(),
         cache_json(&cache_declaration, &cache_report),
     );
+    // The account's own home, so a declared `~/` root is expanded to the path
+    // the host's own `du` walked. Guessing `/Users` or `/home` from a platform
+    // is what makes a coverage report name a directory that does not exist.
+    let home = crate::deploy::host_channel::remote_home(&target, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let free_space = document.get("free_space").cloned().unwrap_or(Value::Null);
+    let report = Value::Object(document);
+    let coverage = super::coverage::section(
+        &report,
+        stages,
+        &home,
+        &target.release_platform,
+        &free_space,
+    );
+    let mut document = report.as_object().cloned().unwrap_or_else(Map::new);
+    document.insert("coverage".to_string(), coverage.clone());
     let report = Value::Object(document);
     if json_output {
         print_json(&report)?;
     } else {
         let usage = report.get("usage").unwrap_or(&Value::Null);
         let state = report.get("cleanup_state").unwrap_or(&Value::Null);
+        let last_pass = state
+            .get("last_pass_at")
+            .and_then(Value::as_str)
+            .unwrap_or("never");
         println!("{} space", target.name);
         println!(
             "disk: {} free KiB on {} ({})",
@@ -106,17 +127,8 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
                 .and_then(Value::as_str)
                 .unwrap_or("unknown capacity"),
         );
-        println!(
-            "janitor: {} (last pass {})",
-            state
-                .get("outcome")
-                .and_then(Value::as_str)
-                .unwrap_or("never_run"),
-            state
-                .get("last_pass_at")
-                .and_then(Value::as_str)
-                .unwrap_or("never"),
-        );
+        super::coverage::print_coverage(&coverage, &free_space);
+        println!("last pass: {last_pass}");
         print_memory(report.get("memory_reclaim").unwrap_or(&Value::Null));
         for entry in &cache_report.entries {
             println!("cache\t{}\t{}\t{}", entry.state, entry.kib, entry.path);

@@ -30,6 +30,39 @@ struct SpaceDeclaration {
 pub struct StageDeclaration {
     pub name: String,
     pub description: String,
+    /// Every path this stage sweeps, home-relative with a leading `~/` or
+    /// absolute.
+    ///
+    /// Declared because a stage that says what it covers is the only way the
+    /// disk can be measured against the declarations. `stado space report`
+    /// reads exactly this list to answer the question nothing could answer on
+    /// 2026-09-09, when `charless-mac-mini` sat at 282 MB free of 228 GB with
+    /// the janitor reporting `cap_reached`: which occupants of that disk no
+    /// stage can reach. It was `~/.stado/local-storage` at 52.4 GB and
+    /// `~/.stado/local-backup` at 10.4 GB, and every reading the fleet had
+    /// was true while none of them said so.
+    ///
+    /// Empty is legitimate, and then [`StageDeclaration::roots_from`] names
+    /// where the paths come from instead: the registry's cleaner set, the
+    /// product catalog, the operating system's own temporary container, or a
+    /// snapshot list that occupies no path at all.
+    #[serde(default)]
+    pub roots: Vec<String>,
+    /// Where this stage's paths come from when they are not a fixed list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roots_from: Option<String>,
+    /// The operating system this stage applies on, when it applies on only
+    /// one: `linux` or `darwin`, matched against the target's declared release
+    /// platform.
+    ///
+    /// `foreign_home_trees` is the case that made this a field. Its root is
+    /// `/Users`, and on a Mac that is the whole home: counting it as covered
+    /// told a coverage report that 142 GiB of a full mini was reachable by a
+    /// stage whose own program begins by refusing every host that is not
+    /// Linux. A declaration that does not carry its own condition is a
+    /// declaration a reader has to guess about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
 }
 
 static DECLARED_STAGES: LazyLock<Result<Vec<StageDeclaration>, String>> =
@@ -67,6 +100,25 @@ fn parse_stage_declaration(text: &str) -> Result<Vec<StageDeclaration>, String> 
                 "{DECLARATION_PATH} reclaim stage {} declares no description; add it to reclaim_stages",
                 crate::deploy::py_str_repr(&stage.name)
             ));
+        }
+        // A stage that names neither a path nor a source for its paths cannot
+        // be measured against a disk, and the coverage report would silently
+        // count everything it sweeps as covered by nothing. One of the two is
+        // required, exactly as a description is.
+        if stage.roots.is_empty() && stage.roots_from.is_none() {
+            return Err(format!(
+                "{DECLARATION_PATH} reclaim stage {} declares neither roots nor roots_from; add one to reclaim_stages",
+                crate::deploy::py_str_repr(&stage.name)
+            ));
+        }
+        for root in &stage.roots {
+            if !(root.starts_with("~/") || root.starts_with('/')) {
+                return Err(format!(
+                    "{DECLARATION_PATH} reclaim stage {} declares root {} that is neither home-relative nor absolute",
+                    crate::deploy::py_str_repr(&stage.name),
+                    crate::deploy::py_str_repr(root)
+                ));
+            }
         }
         if !names.insert(stage.name.clone()) {
             return Err(format!(
