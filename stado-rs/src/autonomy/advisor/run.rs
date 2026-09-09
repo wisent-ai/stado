@@ -1,35 +1,20 @@
-//! Rightsizing, scheduling, storage-lifecycle, and commitment recommendations.
+//! The advisory pass: one walk of the inventory, one publish per finding.
+//!
+//! `publish_recommendations` emits the rightsizing, schedule,
+//! storage-lifecycle and network advice each resource justifies plus the
+//! portfolio-wide commitment advice, and `publish` writes one decision,
+//! treating an already-written identity as nothing new to count.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
+use crate::autonomy::model::{DecisionKind, DecisionRecord, InventorySnapshot, ResourceRecord};
+use crate::autonomy::policy::{ActionRisk, AutonomyPolicy};
 use crate::queue::{JobStorage, StorageError};
 
-use super::model::{
-    DecisionKind, DecisionRecord, InventorySnapshot, ResourceRecord, SCHEMA_VERSION,
-};
-use super::policy::{ActionRisk, AutonomyPolicy};
-
-const TWO: u8 = (u16::BITS / u8::BITS) as u8;
-const QUARTER: f64 = (true as u8) as f64 / (TWO * TWO) as f64;
-const PERCENT: f64 = ((u8::BITS as u8 + TWO) * (u8::BITS as u8 + TWO)) as f64;
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdvisorSummary {
-    pub rightsizing: usize,
-    pub schedules: usize,
-    pub storage_lifecycle: usize,
-    pub network: usize,
-    pub commitments: usize,
-}
-
-struct RecommendationContext<'a> {
-    snapshot: &'a InventorySnapshot,
-    policy: &'a AutonomyPolicy,
-    now: DateTime<Utc>,
-}
+use super::decision::RecommendationContext;
+use super::signals::{cross_boundary_dependencies, storage_candidate, underutilized, utilization};
+use super::summary::AdvisorSummary;
 
 pub async fn publish_recommendations(
     store: &JobStorage,
@@ -170,146 +155,10 @@ pub async fn publish_recommendations(
     Ok(summary)
 }
 
-impl RecommendationContext<'_> {
-    fn recommendation(
-        &self,
-        resource: &ResourceRecord,
-        kind: DecisionKind,
-        selected: serde_json::Value,
-        explanation: &str,
-        risk: ActionRisk,
-    ) -> DecisionRecord {
-        let authorization = self.policy.authorize(
-            resource,
-            risk,
-            self.snapshot.complete,
-            resource.current_hourly_cost_usd,
-        );
-        let expires =
-            self.now + chrono::Duration::seconds(self.policy.limits.decision_ttl_seconds as i64);
-        DecisionRecord {
-            schema_version: SCHEMA_VERSION,
-            decision_id: deterministic_id(resource, self.policy, self.snapshot, kind),
-            kind,
-            subject_id: resource.resource_id.clone(),
-            created_at: self.now.to_rfc3339(),
-            expires_at: expires.to_rfc3339(),
-            inventory_snapshot_id: self.snapshot.snapshot_id.clone(),
-            policy_version: self.policy.policy_version.clone(),
-            selected: Some(selected),
-            candidates: Vec::new(),
-            constraints: vec![authorization.reason.clone()],
-            explanation: explanation.to_string(),
-            lease_token: None,
-            state: if authorization.allowed {
-                "authorized_recommendation".to_string()
-            } else {
-                "blocked_recommendation".to_string()
-            },
-        }
-    }
-}
-
 async fn publish(store: &JobStorage, decision: DecisionRecord) -> Result<bool, StorageError> {
     match super::storage::write_decision(store, &decision).await {
         Ok(()) => Ok(true),
         Err(StorageError::StorageConflict(_)) => Ok(false),
         Err(error) => Err(error),
     }
-}
-
-fn deterministic_id(
-    resource: &ResourceRecord,
-    policy: &AutonomyPolicy,
-    snapshot: &InventorySnapshot,
-    kind: DecisionKind,
-) -> String {
-    let payload = format!(
-        "{}|{}|{}|{:?}",
-        resource.resource_id, policy.policy_version, snapshot.snapshot_id, kind
-    );
-    format!("advice-{}", hex::encode(Sha256::digest(payload.as_bytes())))
-}
-
-fn cross_boundary_dependencies(
-    resource: &ResourceRecord,
-    snapshot: &InventorySnapshot,
-) -> Vec<Value> {
-    resource
-        .dependencies
-        .iter()
-        .filter_map(|dependency_id| {
-            snapshot
-                .resources
-                .iter()
-                .find(|candidate| candidate.resource_id == *dependency_id)
-        })
-        .filter(|dependency| {
-            dependency.provider != resource.provider
-                || resource
-                    .region
-                    .as_deref()
-                    .zip(dependency.region.as_deref())
-                    .is_some_and(|(left, right)| left != right)
-        })
-        .map(|dependency| {
-            json!({
-                "resource_id": dependency.resource_id,
-                "provider": dependency.provider,
-                "region": dependency.region,
-            })
-        })
-        .collect()
-}
-
-fn underutilized(resource: &ResourceRecord) -> bool {
-    let samples = [
-        utilization(resource, &["cpu_peak", "cpu", "cpu_max"]),
-        utilization(resource, &["memory_peak", "memory", "memory_max"]),
-        utilization(resource, &["gpu_peak", "gpu", "gpu_max"]),
-    ];
-    samples
-        .into_iter()
-        .flatten()
-        .all(|value| normalize_utilization(value) < QUARTER)
-        && samples.into_iter().any(|sample| sample.is_some())
-}
-
-fn utilization(resource: &ResourceRecord, keys: &[&str]) -> Option<f64> {
-    keys.iter()
-        .find_map(|key| resource.utilization.get(*key).copied())
-        .filter(|value| value.is_finite() && *value >= f64::default())
-}
-
-fn normalize_utilization(value: f64) -> f64 {
-    if value > (true as u8) as f64 {
-        value / PERCENT
-    } else {
-        value
-    }
-}
-
-fn storage_candidate(
-    resource: &ResourceRecord,
-    policy: &AutonomyPolicy,
-    now: DateTime<Utc>,
-) -> bool {
-    if resource.workload.is_some()
-        || !matches!(
-            resource.resource_type.as_str(),
-            "persistent_disk" | "managed_disk" | "volume"
-        )
-    {
-        return false;
-    }
-    resource
-        .created_at
-        .as_deref()
-        .and_then(|created| DateTime::parse_from_rfc3339(created).ok())
-        .is_some_and(|created| {
-            now.signed_duration_since(created.with_timezone(&Utc))
-                .num_seconds()
-                >= i64::try_from(policy.idle.disk_days * crate::monitor::billing::SECONDS_PER_DAY)
-                    .unwrap_or(i64::MAX)
-        })
 }
