@@ -58,14 +58,22 @@ pub fn configured_root(
     defaults: &[OsString],
     required: bool,
 ) -> Result<Option<PathBuf>, JanitorError> {
-    let Some(configured) = configured else { return fixed_root(home, defaults, required); };
+    let Some(configured) = configured else {
+        return fixed_root(home, defaults, required);
+    };
     let expanded = crate::config_file::expand_tilde(configured);
-    let relative = expanded.strip_prefix(home)
+    let relative = expanded
+        .strip_prefix(home)
         .map_err(|_| JanitorError::os("cleaner root must be beneath the host home"))?;
-    let parts = relative.components().map(|part| match part {
-        std::path::Component::Normal(name) => Ok(name.to_os_string()),
-        _ => Err(JanitorError::os("cleaner root must contain only normal path components")),
-    }).collect::<Result<Vec<_>, _>>()?;
+    let parts = relative
+        .components()
+        .map(|part| match part {
+            std::path::Component::Normal(name) => Ok(name.to_os_string()),
+            _ => Err(JanitorError::os(
+                "cleaner root must contain only normal path components",
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     fixed_root(home, &parts, required)
 }
 

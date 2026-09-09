@@ -137,6 +137,10 @@ pub fn scan_backup_twins(
                     report.skip_backup_twins("absent_from_primary", 1);
                     continue;
                 };
+                if counterpart.dev() == replica.dev() && counterpart.ino() == replica.ino() {
+                    report.skip_backup_twins("same_file_as_primary", 1);
+                    continue;
+                }
                 if !counterpart.is_file() || counterpart.file_type().is_symlink() {
                     report.skip_backup_twins("primary_not_a_plain_file", 1);
                     continue;

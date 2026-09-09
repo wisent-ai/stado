@@ -19,7 +19,7 @@ pub struct CleanerDeclaration {
     /// Existing per-cleaner retention floors. Lifecycle-owned cleaners prove
     /// terminal jobs, matching replicas or unreferenced versions instead.
     pub min_age_floor_seconds: i64,
-    /// Extra version requirement for roots previously accepted but not consumed.
+    /// Extra version requirement for corrected root-override behavior.
     pub root_override_since: Option<&'static str>,
 }
 
@@ -31,7 +31,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         default_root: super::backup_twins::BACKUP_ROOT,
         sweeps: "same-disk replica objects whose primary copy is intact",
         min_age_floor_seconds: 0,
-        root_override_since: None,
+        root_override_since: Some("0.17.1"),
     },
     CleanerDeclaration {
         name: "build_caches",

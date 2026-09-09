@@ -34,21 +34,21 @@ pub enum CleanerCommands {
 #[derive(Args)]
 pub struct DeclareArgs {
     pub target: String,
-    /// The cleaner to arm; `stado space cleaners list TARGET` names them.
+    /// The cleaner to declare or edit; `stado space cleaners list TARGET` names them.
     #[arg(long)]
     pub cleaner: String,
-    /// Where it sweeps, absolute or home-relative. Omitted leaves the
-    /// cleaner's own default root.
+    /// Absolute or ~/ root. Omission preserves an existing override, or uses
+    /// the cleaner's default for a new declaration.
     #[arg(long)]
     pub root: Option<String>,
-    /// Nothing younger than this many seconds is a candidate.
+    /// Minimum candidate age; omission preserves the existing age or uses the catalogue floor.
     #[arg(long = "min-age-seconds")]
     pub min_age_seconds: Option<i64>,
     /// How many newest items survive with no other reason; `release_store`
     /// reads it as the rollback ladder it keeps per product.
     #[arg(long = "keep-newest")]
     pub keep_newest: Option<i64>,
-    /// Permit taking an item whose upload to the object store is unproven.
+    /// For weles_recordings only: permit removal without durable upload proof.
     #[arg(long = "allow-missing-upload-proof", num_args = 1)]
     pub allow_missing_upload_proof: Option<bool>,
     #[arg(long)]
@@ -255,7 +255,9 @@ async fn declare(args: DeclareArgs) -> Result<(), CmdError> {
             }
         }
         if !(root.starts_with('/') || root.starts_with("~/")) {
-            return Err(CmdError::usage("cleaner root must be absolute or begin with ~/"));
+            return Err(CmdError::usage(
+                "cleaner root must be absolute or begin with ~/",
+            ));
         }
         fields.insert("root".to_string(), Value::from(root.clone()));
     }

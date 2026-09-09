@@ -35,7 +35,7 @@ pub async fn reap_undeclared_processes(
     command_match: &str,
     apply: bool,
     runner: &Runner,
-) -> Result<(Vec<ReapedProcess>, String), DeployError> {
+) -> Result<(Vec<ReapedProcess>, String, Vec<String>, Vec<Value>), DeployError> {
     if command_match.trim().is_empty() {
         return Err(DeployError(
             "a command substring is required: the reaper de-duplicates one named program, never \
@@ -68,8 +68,17 @@ pub async fn reap_undeclared_processes(
     }
     let mut kept = String::new();
     let mut reaped = Vec::new();
+    let mut scanned_roots = Vec::new();
+    let mut examined = Vec::new();
     for line in output.stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
+            ["STADO_REAP_ROOT", root] => scanned_roots.push(root.to_string()),
+            ["STADO_REAP_SCAN", root, code, output] => examined.push(json!({
+                "operation": "pgrep", "root": root, "exit_code": code, "output": output
+            })),
+            ["STADO_REAP_EXAMINED", pid, root, command] => examined.push(json!({
+                "pid": pid, "root": root, "command": command
+            })),
             ["STADO_REAP_KEEP", pids] => kept = (*pids).trim().to_string(),
             ["STADO_REAP", pid, outcome, started, command] => reaped.push(ReapedProcess {
                 host: target.name.clone(),
@@ -81,7 +90,7 @@ pub async fn reap_undeclared_processes(
             _ => {}
         }
     }
-    Ok((reaped, kept))
+    Ok((reaped, kept, scanned_roots, examined))
 }
 
 /// Every launchd job loaded on TARGET that the registry does not declare, with

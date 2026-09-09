@@ -34,10 +34,9 @@ const PUBLIC_OUTCOMES: [&str; 13] = [
     "no_eligible_items",
 ];
 
-/// Python `_PUBLIC_SKIP_REASONS`. NOTE: the weles-internal reasons
-/// `active_run`, `escapes_root`, and `item_cap` are deliberately absent
-/// (they never leave the host), exactly as in the Python source.
-const PUBLIC_SKIP_REASONS: [&str; 16] = [
+/// Public beacon reason codes. Private operator reports retain the complete
+/// recorded pass, including reasons absent from this legacy projection.
+const PUBLIC_SKIP_REASONS: [&str; 17] = [
     "active_jobs",
     "blob_link_count_uncertain",
     "byte_cap",
@@ -48,6 +47,7 @@ const PUBLIC_SKIP_REASONS: [&str; 16] = [
     "reserved_or_hidden",
     "root_absent",
     "root_changed",
+    "same_file_as_primary",
     "scan_cap",
     "scan_deadline",
     "stat_failed",

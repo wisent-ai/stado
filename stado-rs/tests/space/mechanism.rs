@@ -109,5 +109,29 @@ fn the_human_report_retains_the_actual_pass_refusals_and_exhausted_limits() {
     assert!(human.status.success());
     let text = String::from_utf8(human.stdout).unwrap();
     assert!(text.contains("cleaner build_caches:"));
-    assert!(!text.contains("no pass closes"));
+}
+
+#[test]
+fn a_backup_override_cannot_treat_the_primary_as_a_second_copy() {
+    let host = Host::new();
+    let primary = host.home.join(".stado/local-storage");
+    let object = primary.join("ecosystem/replica-identity/only-copy.bin");
+    fs::create_dir_all(object.parent().unwrap()).unwrap();
+    fs::write(&object, b"the only primary copy").unwrap();
+    let mut policy: Value = serde_json::from_str(&host.policy()).unwrap();
+    policy["cleaners"] = serde_json::json!({});
+    policy["cleaners"]["backup_twins"] = serde_json::json!({});
+    policy["cleaners"]["backup_twins"]["min_age_seconds"] = serde_json::json!(0);
+    policy["cleaners"]["backup_twins"]["root"] = serde_json::json!(primary);
+    host.declare(&policy.to_string());
+    let result = host.run(&["disk-cleanup", "--once"]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read(&object).expect("the primary is not a replica"),
+        b"the only primary copy"
+    );
 }

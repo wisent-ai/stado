@@ -3,9 +3,17 @@
 use super::super::render::gib;
 use serde_json::Value;
 
-pub(super) fn verdict(deficit: Option<i64>, observed: bool, outside: i64) -> &'static str {
+pub(super) fn verdict(
+    deficit: Option<i64>,
+    observed: bool,
+    outside: i64,
+    declared: bool,
+) -> &'static str {
+    if !declared {
+        return "undeclared";
+    }
     match deficit {
-        None => "undeclared",
+        None => "unmeasured",
         Some(0) => "holds",
         Some(_) if !observed => "unmeasured",
         Some(_) if outside > 0 => "uncovered",
@@ -17,10 +25,7 @@ pub(super) fn detail(word: &str, need: Option<i64>, covered: i64, outside: i64) 
     match word {
         "undeclared" => "this target declares no free-space watermark".to_string(),
         "holds" => "the host is at or above its declared low watermark".to_string(),
-        "unmeasured" => format!(
-            "{} below the target; the inventory could not be measured, so scan coverage and recoverable space are unknown",
-            need.map(gib).unwrap_or_else(|| "unknown distance".to_string())
-        ),
+        "unmeasured" => "a required free-space or inventory reading is unavailable; the declared watermark and deletion eligibility cannot be inferred from missing data".to_string(),
         _ => format!(
             "{} below the target; the measured inventory has {} inside declared scan roots and {} outside them. Scan coverage does not establish how much can be deleted; read the recorded cleaner results below",
             need.map(gib).unwrap_or_else(|| "unknown distance".to_string()),

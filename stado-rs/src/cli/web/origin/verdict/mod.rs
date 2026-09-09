@@ -133,8 +133,8 @@ fn verdict_for(
         ResolutionState::Resolved => match publication.state() {
             "unpublished" => "origin-unpublished",
             "unknown" => "origin-unreachable",
-            _ if edge != "agrees" => "origin-mismatch",
-            _ if !readback_answered => "origin-unreachable",
+            _ if edge == "differs" => "origin-mismatch",
+            _ if edge != "agrees" || !readback_answered => "origin-unreachable",
             _ => VERDICT_SERVING,
         },
     }

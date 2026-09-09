@@ -76,16 +76,25 @@ printf 'STADO_REAP_KEEP\\t%s\\n' \"$(printf '%s' \"$keep\" | /usr/bin/tr -s ' ')
 self=$$
 seen=''
 for root in \"$@\"; do
-  for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
+  printf 'STADO_REAP_ROOT\\t%s\\n' \"$root\"
+  pids=$(/usr/bin/pgrep -f \"$root\" 2>&1)
+  scan_code=$?
+  flat_pids=$(printf '%s' \"$pids\" | /usr/bin/tr '\\r\\n' ' ')
+  printf 'STADO_REAP_SCAN\\t%s\\t%s\\t%s\\n' \"$root\" \"$scan_code\" \"$flat_pids\"
+  if [ \"$scan_code\" -gt 1 ]; then exit \"$scan_code\"; fi
+  for pid in $pids; do
     case \" $seen \" in *\" $pid \"*) continue ;; esac
     if [ \"$pid\" = \"$self\" ]; then continue; fi
-    command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    command=$(/bin/ps -ww -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    printf 'STADO_REAP_EXAMINED\\t%s\\t%s\\t%s\\n' \"$pid\" \"$root\" \"$command\"
     if [ -z \"$command\" ]; then continue; fi
-    exe=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+    exe=$(/bin/ps -ww -p \"$pid\" -o comm= 2>/dev/null)
     entry=$(printf '%s' \"$command\" | /usr/bin/awk '{ print $2 }')
     under=no
-    case \"$exe\" in \"$root\"*) under=yes ;; esac
-    case \"$entry\" in \"$root\"*) under=yes ;; esac
+    # macOS comm can be truncated; command retains the launched argv path.
+    case \"$command\" in \"$root\"/*) under=yes ;; esac
+    case \"$exe\" in \"$root\"/*) under=yes ;; esac
+    case \"$entry\" in \"$root\"/*) under=yes ;; esac
     if [ \"$under\" = no ]; then continue; fi
     # The operator names the exact program being de-duplicated. Without this
     # the keep-set decides the blast radius, and launchd holds a pid for only
@@ -114,7 +123,8 @@ for root in \"$@\"; do
     fi
     /bin/kill \"$pid\" 2>/dev/null || true
     /bin/sleep 2
-    if /bin/ps -p \"$pid\" -o pid= >/dev/null 2>&1; then
+    state=$(/bin/ps -p \"$pid\" -o stat= 2>/dev/null | /usr/bin/tr -d ' ')
+    if [ -n \"$state\" ] && [ \"${state#Z}\" = \"$state\" ]; then
       printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'still_running' \"$started\" \"$command\"
     else
       printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'ended' \"$started\" \"$command\"

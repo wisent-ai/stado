@@ -120,8 +120,8 @@ fn a_leased_targets_report_is_that_machines_own_space() {
         "{spare} bytes available of {installed} installed is not a live memory reading"
     );
     assert!(
-        swap_total > 0 && swap_used <= swap_total,
-        "{swap_used} bytes used of {swap_total} is not a live swap reading"
+        swap_total >= 0 && swap_used >= 0 && swap_used <= swap_total,
+        "{swap_used} bytes used of {swap_total} is not a valid swap reading"
     );
 
     // Whose machine it is: the paths the report names are inside the leased

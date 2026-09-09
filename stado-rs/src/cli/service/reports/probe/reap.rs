@@ -18,43 +18,44 @@ pub(crate) async fn reap(
 ) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let runner = production_runner();
-    let (reaped, kept) = service::reap_undeclared_processes(&target, command, apply, &runner)
-        .await
-        .map_err(click)?;
+    let (reaped, kept, scanned_roots, examined) =
+        service::reap_undeclared_processes(&target, command, apply, &runner)
+            .await
+            .map_err(click)?;
     if json {
         let payload: Vec<Value> = reaped.iter().map(service::ReapedProcess::to_json).collect();
-        return print_json(&json!({
+        print_json(&json!({
             "host": target.name,
             "applied": apply,
             "kept_pids": kept,
+            "scanned_roots": scanned_roots,
+            "examined": examined,
             "reaped": payload,
-        }));
+        }))?;
+    } else {
+        let cells: Vec<Vec<String>> = reaped
+            .iter()
+            .map(|process| {
+                vec![
+                    process.pid.clone(),
+                    process.outcome.clone(),
+                    dash(&process.started_at),
+                    process.command.clone(),
+                ]
+            })
+            .collect();
+        table::print(&["PID", "OUTCOME", "STARTED_AT", "COMMAND"], &cells);
+        println!(
+            "{}: declared units hold pid(s) [{}]{}",
+            target.name,
+            if kept.is_empty() { "none" } else { &kept },
+            if apply {
+                ""
+            } else {
+                "; nothing was signalled (pass --apply)"
+            }
+        );
     }
-    let cells: Vec<Vec<String>> = reaped
-        .iter()
-        .map(|process| {
-            vec![
-                process.pid.clone(),
-                process.outcome.clone(),
-                dash(&process.started_at),
-                process.command.clone(),
-            ]
-        })
-        .collect();
-    table::print(&["PID", "OUTCOME", "STARTED_AT", "COMMAND"], &cells);
-    // The kept set is the other half of the verdict: an empty table with no
-    // kept pid means the declared units are not running either, which is a
-    // different problem from a clean host.
-    println!(
-        "{}: declared units hold pid(s) [{}]{}",
-        target.name,
-        if kept.is_empty() { "none" } else { &kept },
-        if apply {
-            ""
-        } else {
-            "; nothing was signalled (pass --apply)"
-        }
-    );
     let stubborn = reaped
         .iter()
         .filter(|process| process.outcome == "still_running")
