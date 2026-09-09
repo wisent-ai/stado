@@ -35,9 +35,7 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
     // not have, so `host-state --apply` refused every pipeline-signed version
     // with `registry declares no release trust keys`.
     if control.products.is_empty() && control.trusted_keys.is_empty() {
-        return Err(
-            "registry.release_control must declare trusted_keys or products".to_string(),
-        );
+        return Err("registry.release_control must declare trusted_keys or products".to_string());
     }
     for (key_id, public_key) in &control.trusted_keys {
         if !identifier(key_id)

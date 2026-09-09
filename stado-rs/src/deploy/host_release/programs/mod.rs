@@ -10,8 +10,8 @@ use crate::deploy::{shlex_quote, DeployError};
 use program::REMOTE_RECHECK_STAGE_BODY;
 
 pub use program::{REMOTE_ACTIVATE_BODY, REMOTE_PROBE_BODY, REMOTE_STAGE_BODY};
-pub use shared::{FETCH_PRELUDE, SANITIZE_PRELUDE};
 pub use receipt::{ACTIVATE_STEP_MARKER, RECEIPT_BODY};
+pub use shared::{FETCH_PRELUDE, SANITIZE_PRELUDE};
 pub use staging::{ensure_stado_reader_archive, stage_declared_release, StagedRelease};
 pub use tree::{TREE_ACTIVATE_BODY, TREE_DIR, TREE_PRELUDE, TREE_PROBE_BODY, TREE_STAGE_BODY};
 

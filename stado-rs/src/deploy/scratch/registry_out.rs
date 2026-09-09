@@ -74,18 +74,24 @@ pub fn document(lease: &ScratchLease, parent: &ComputeTarget, ssh: &str) -> Valu
 /// would name logical services this document does not declare. Trust travels;
 /// desired state does not.
 pub fn trust(document: &Value) -> (Option<Value>, String) {
+    // `none: ` prefixes every answer that is not a key list, so one field can
+    // carry both without a reader having to guess which it got. The CLI prints
+    // it verbatim and the Desktop keys its tone off the prefix.
     let mut control = match crate::release_control::control(document) {
         Ok(Some(control)) => control,
-        Ok(None) => return (None, "the fleet declares no release trust".to_string()),
+        Ok(None) => return (None, "none: the fleet declares no release trust".to_string()),
         Err(error) => {
             return (
                 None,
-                format!("the fleet's release trust does not parse: {error}"),
+                format!("none: the fleet's release trust does not parse: {error}"),
             )
         }
     };
     if control.trusted_keys.is_empty() {
-        return (None, "the fleet declares no release trust keys".to_string());
+        return (
+            None,
+            "none: the fleet declares no release trust keys".to_string(),
+        );
     }
     control.products.clear();
     let ids = control
@@ -98,7 +104,7 @@ pub fn trust(document: &Value) -> (Option<Value>, String) {
         Ok(value) => (Some(value), ids),
         Err(error) => (
             None,
-            format!("the fleet's release trust is not serializable: {error}"),
+            format!("none: the fleet's release trust is not serializable: {error}"),
         ),
     }
 }

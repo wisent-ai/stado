@@ -29,9 +29,7 @@
 mod fleet;
 mod lease;
 
-use fleet::{
-    channel_state, deliverable_versions, host_turn, leasable_host,
-};
+use fleet::{channel_state, deliverable_versions, host_turn, leasable_host};
 use lease::Lease;
 
 use crate::fixture::BINARY;
@@ -161,7 +159,11 @@ fn a_version_the_channel_does_not_carry_is_refused_and_changes_nothing() {
         "a refused delivery must not move the installed binary: {unchanged}"
     );
     let (_, row) = lease.host_state(&[]);
-    assert_eq!(row["installed_version"], installed_version.as_str(), "{row}");
+    assert_eq!(
+        row["installed_version"],
+        installed_version.as_str(),
+        "{row}"
+    );
     assert_eq!(row["attestation"], "no-delivery-history", "{row}");
     assert_eq!(row["receipt"], "none", "{row}");
 

@@ -104,7 +104,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             // alone: a receipt for a version this file is not is a record of a
             // different delivery, and answering with it would be the confident
             // wrong answer this command exists to prevent.
-            let receipt = record.is_none().then(|| ()).and_then(|()| {
+            let receipt = record.is_none().then_some(()).and_then(|()| {
                 let mut candidates: Vec<&DeliveryReceipt> = receipts
                     .iter()
                     .filter(|receipt| receipt.binary == artifact)

@@ -113,7 +113,10 @@ pub fn take_lease() -> Lease {
         })
         .unwrap_or_default();
     let chosen = eligible.swap_remove(remote);
-    let target = chosen["target"].as_str().expect("a target name").to_string();
+    let target = chosen["target"]
+        .as_str()
+        .expect("a target name")
+        .to_string();
     let profile = chosen["profile"].as_str().expect("a profile").to_string();
     let platform = chosen["release_platform"]
         .as_str()
@@ -121,7 +124,15 @@ pub fn take_lease() -> Lease {
         .to_string();
 
     let arguments = [
-        "scratch", "create", "--host", &target, "--profile", &profile, "--ttl", TTL, "--json",
+        "scratch",
+        "create",
+        "--host",
+        &target,
+        "--profile",
+        &profile,
+        "--ttl",
+        TTL,
+        "--json",
     ];
     let created = run(&arguments);
     let report = document(&created, &arguments);

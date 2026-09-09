@@ -121,7 +121,9 @@ fn a_leased_targets_report_is_that_machines_own_space() {
     );
     let reading = &report["memory_reclaim"]["reading"];
     let installed = reading["total_bytes"].as_i64().expect("installed memory");
-    let spare = reading["available_bytes"].as_i64().expect("available memory");
+    let spare = reading["available_bytes"]
+        .as_i64()
+        .expect("available memory");
     let swap_total = reading["swap_total_bytes"].as_i64().expect("swap total");
     let swap_used = reading["swap_used_bytes"].as_i64().expect("swap used");
     assert!(
@@ -202,7 +204,13 @@ fn applying_the_scratch_stage_frees_the_bytes_it_named_on_the_leased_host() {
     );
 
     let preview = lease.json(&[
-        "space", "reclaim", &lease.name, "--stage", "build_scratch", "--dry-run", "--json",
+        "space",
+        "reclaim",
+        &lease.name,
+        "--stage",
+        "build_scratch",
+        "--dry-run",
+        "--json",
     ]);
     assert_eq!(preview["mode"], "dry_run");
     assert_eq!(preview["selected_stages"], json!(["build_scratch"]));
@@ -217,7 +225,14 @@ fn applying_the_scratch_stage_frees_the_bytes_it_named_on_the_leased_host() {
     );
 
     let applied = lease.json(&[
-        "space", "reclaim", &lease.name, "--stage", "build_scratch", "--apply", "--reason", REASON,
+        "space",
+        "reclaim",
+        &lease.name,
+        "--stage",
+        "build_scratch",
+        "--apply",
+        "--reason",
+        REASON,
         "--json",
     ]);
     assert_eq!(applied["mode"], "apply");

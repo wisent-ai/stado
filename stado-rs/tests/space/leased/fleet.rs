@@ -164,7 +164,14 @@ impl Lease {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (host, profile) = leasable_host();
         let arguments = [
-            "scratch", "create", "--host", &host, "--profile", &profile, "--ttl", LEASE_TTL,
+            "scratch",
+            "create",
+            "--host",
+            &host,
+            "--profile",
+            &profile,
+            "--ttl",
+            LEASE_TTL,
             "--json",
         ];
         let report = document(&stado(&arguments), &arguments);

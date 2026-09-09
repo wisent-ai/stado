@@ -33,8 +33,8 @@ use serde_json::{json, Value};
 
 use super::fixture::{stderr, stdout, DECLARATION, SERVICE};
 use harness::{
-    assert_absences, declared_steps, document, leased, take_lease, DECLARED_TREE,
-    DECLARED_VERSION, HOST, REFUSED,
+    assert_absences, declared_steps, document, leased, take_lease, DECLARED_TREE, DECLARED_VERSION,
+    HOST, REFUSED,
 };
 
 /// The reads that say which account answered, and what that account's home
@@ -112,7 +112,9 @@ fn assert_observation(lease: &harness::Lease, seen: &Value) {
 
 #[test]
 fn a_declared_repair_is_reported_against_a_leased_target_from_its_own_registry() {
-    let _turn = HOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = HOST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut lease = take_lease();
     lease.declare_service();
 
@@ -174,7 +176,9 @@ fn a_declared_repair_is_reported_against_a_leased_target_from_its_own_registry()
 
 #[test]
 fn every_declared_repair_step_mutates_a_service_the_operator_owns() {
-    let _turn = HOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = HOST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut lease = take_lease();
     lease.declare_service();
 
@@ -204,7 +208,10 @@ fn every_declared_repair_step_mutates_a_service_the_operator_owns() {
         .args(["repair", SERVICE, "--target", &lease.name])
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", &lease.root)
-        .env("STADO_CONFIG", Path::new(&lease.root).join("no-config.json"))
+        .env(
+            "STADO_CONFIG",
+            Path::new(&lease.root).join("no-config.json"),
+        )
         .env("STADO_REPAIR_TEST_MISSING_IMPLEMENTATION", "stado:host")
         .output()
         .expect("the built stado binary runs");

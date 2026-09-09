@@ -25,6 +25,17 @@ struct ScratchLeaseReceiptPanel: View {
                 WisentField(label: "TTL", value: "\(receipt.ttl) · expires \(receipt.expiresAt)")
                 WisentField(label: "Storage root", value: receipt.storageRoot)
                 WisentField(label: "Registry", value: receipt.registryPath)
+                // A lease with no trust can be delivered only a
+                // legacy-manifest version, so the console says which keys
+                // travelled rather than leaving an operator to meet
+                // `registry declares no release trust keys` later. The CLI
+                // marks an absent answer with a `none:` prefix, which is what
+                // the tone reads — the console never parses the sentence.
+                WisentField(
+                    label: "Release trust",
+                    value: receipt.releaseTrust,
+                    tone: receipt.releaseTrust.hasPrefix("none:") ? .warning : .neutral
+                )
                 WisentField(
                     label: "Run against this target with",
                     value: "WC_STORAGE_BACKEND=local WC_LOCAL_STORAGE_PATH=\(receipt.storageRoot)"

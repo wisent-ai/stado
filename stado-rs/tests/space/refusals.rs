@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use crate::fixture::{Host, BUILD_WORK_ROOT, JANITOR_STATE, TARGET, UNDECLARED_TARGET};
+use crate::fixture::{Host, BUILD_WORK_ROOT, JANITOR_STATE, TARGET};
 use crate::system::said;
 
 /// `CmdError::click` — a refusal about the fleet's own state.

@@ -183,7 +183,9 @@ impl CarriedArtifact {
 
     /// The version a delivery receipt names, for the rows that have one.
     fn version(&self) -> Option<&str> {
-        self.receipt.as_ref().map(|receipt| receipt.version.as_str())
+        self.receipt
+            .as_ref()
+            .map(|receipt| receipt.version.as_str())
     }
 
     /// Is anything accounting for these bytes at all?

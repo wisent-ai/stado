@@ -218,4 +218,3 @@ pub fn parse_report(stdout: &str) -> Vec<CacheEntry> {
     }
     entries
 }
-

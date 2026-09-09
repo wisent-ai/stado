@@ -23,7 +23,15 @@ pub struct Lease {
 impl Lease {
     pub fn take(target: &str, profile: &str) -> Self {
         let arguments = [
-            "scratch", "create", "--host", target, "--profile", profile, "--ttl", "30m", "--json",
+            "scratch",
+            "create",
+            "--host",
+            target,
+            "--profile",
+            profile,
+            "--ttl",
+            "30m",
+            "--json",
         ];
         let report = document(&fleet(&arguments), &arguments);
         assert_eq!(report["status"], "leased", "{report}");

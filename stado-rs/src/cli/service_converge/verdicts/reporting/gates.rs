@@ -68,7 +68,10 @@ pub(in crate::cli::service_converge) fn report_gate_diagnostics(rows: &[Row], ex
              `stado release declare-version` moves it, --apply will not touch these hosts"
         );
     }
-    let missing = rows.iter().filter(|row| row.verdict == HOST_MISSING).count();
+    let missing = rows
+        .iter()
+        .filter(|row| row.verdict == HOST_MISSING)
+        .count();
     if missing != 0 {
         eprintln!(
             "{missing} declared binary/binaries are not on this host at all; \
