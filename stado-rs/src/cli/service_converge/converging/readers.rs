@@ -6,7 +6,9 @@ use serde_json::json;
 use crate::deploy::{host_channel, host_release, Runner};
 use crate::targets::ComputeTarget;
 
-use crate::cli::service_converge::model::receipts::{AppliedPass, Released, COMPLETED, FAILED};
+use crate::cli::service_converge::model::receipts::{
+    AppliedPass, Released, COMPLETED, FAILED, SKIPPED,
+};
 
 /// Finish the runtime half even when the installed Stado file was already
 /// attested and at the declared version.
@@ -29,6 +31,24 @@ pub(in crate::cli::service_converge) async fn converge_native_readers(
     else {
         return;
     };
+    // Reader trees are per service, so a host that declares none has none, and
+    // asking the delivered CLI to converge them makes it read a registry the
+    // host has no configuration for: `cannot read registry unit ownership: no
+    // registry document at :registry.json`, reported as a failed delivery on
+    // every apply against such a host. Recorded rather than silent, because a
+    // leg that did not run is a fact about the pass.
+    if declared_services(target) == usize::default() {
+        pass.releases.push(Released {
+            binary: "stado-readers".to_string(),
+            version,
+            status: SKIPPED,
+            detail: format!(
+                "{} declares no services, so it carries no private reader trees",
+                target.name
+            ),
+        });
+        return;
+    }
     let (reader_target, request, self_store) = match host_release::resolve_release_request(
         &target.name,
         "stado",
@@ -92,4 +112,16 @@ pub(in crate::cli::service_converge) async fn converge_native_readers(
         status,
         detail,
     });
+}
+
+/// How many services this target declares, read from the registry document's
+/// own `targets[].services` list — the same field the registry doctor and the
+/// service reconciler read.
+fn declared_services(target: &ComputeTarget) -> usize {
+    target
+        .extra
+        .get("services")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default()
 }

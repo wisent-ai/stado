@@ -243,29 +243,4 @@ say activated "$version"
 active_digest_line=$(/usr/bin/openssl dgst -sha256 -r "$active_path")
 active_sha256=${active_digest_line%% *}
 say active_sha256 "$active_sha256"
-
-# The receipt, beside the artefact it describes.
-#
-# `converge` can already prove WHETHER these bytes were delivered, by
-# comparing the installed file against this staged copy. It could not say
-# WHO, and on 2026-08-31 that is exactly where an investigation stopped: a
-# `stado` answering 0.13.19 appeared in `$HOME/.stado/bin` on the always-on
-# Mac at 21:25Z, the release channel was ruled out, both operator sessions
-# were ruled out, the repository's automation was ruled out, and nothing on
-# the host recorded who had installed it.
-#
-# It lives in the version/platform directory rather than beside the active
-# binary, so a receipt cannot outlive the artefact it describes or be read
-# for a different one. A delivery made before this format simply has none,
-# and its absence means "installed before receipts", never "suspicious":
-# `staged-match` and `no-staged-copy` answer correctly without it.
-receipt_dir="$stado_home/releases/$binary/$version/$platform"
-if [ -d "$receipt_dir" ]; then
-  printf '{"binary":"%s","version":"%s","platform":"%s","source_commit":"%s","sha256":"%s","installed_at":"%s","delivered_by":"%s"}\n' \
-    "$binary" "$version" "$platform" "${source_commit:-}" "${expected_sha256:-}" \
-    "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "${delivered_by:-}" \
-    > "$receipt_dir/release-receipt.json" 2>/dev/null || true
-  /bin/chmod 600 "$receipt_dir/release-receipt.json" 2>/dev/null || true
-fi
-say step activate
 "##;
