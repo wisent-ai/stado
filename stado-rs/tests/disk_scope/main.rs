@@ -30,6 +30,7 @@
 
 mod budget;
 mod fixture;
+mod gates;
 mod native;
 mod reads;
 
