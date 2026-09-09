@@ -1,19 +1,5 @@
-//! Every cleaner this binary implements, in one declaration.
-//!
-//! Three readers needed this list and each carried its own: the registry
-//! contract's allowed-name array, `fleet_shape`'s table of the release each
-//! cleaner first shipped in, and — until this module — nothing at all on the
-//! side that has to tell an operator which mechanism could reach the bytes
-//! filling a disk. On 2026-09-09 `charless-mac-mini` sat 7.6 GiB below its
-//! declared target with 52.4 GiB in `~/.stado/local-storage` and 10.4 GiB in
-//! `~/.stado/local-backup`, and `stado space report` said no declared stage
-//! looked there. Both statements were true and the useful one was missing:
-//! this binary implements `release_store` and `backup_twins`, which sweep
-//! exactly those two roots, and that host declared neither.
-//!
-//! So the catalogue is the answer to "what could hold this disk", and the
-//! command that arms one (`stado space cleaners declare`) and the report that
-//! measures coverage read the same rows.
+//! Cleaner names, supported releases and retention floors shared by readers
+//! and the registry validator. Scan roots describe scope, not removable bytes.
 
 /// One cleaner the janitor can run, and what an operator needs to know before
 /// declaring it.
@@ -21,32 +7,17 @@
 pub struct CleanerDeclaration {
     /// The key under `targets[].disk_cleanup.cleaners`.
     pub name: &'static str,
-    /// The first released `stado` that accepts this name in a registry policy.
-    ///
-    /// Declaring a name an older binary does not know made that host read
-    /// `cleaners: null` and switch off every cleaner it was already running,
-    /// which is why this is part of the declaration rather than folklore.
+    /// First release implementing this cleaner.
     pub since: &'static str,
-    /// Where it sweeps when the policy names no root, relative to the
-    /// account's home. `None` means the cleaner resolves its own root: the
-    /// account's home for build caches, the operating system's temporary
-    /// container for Chromium clones.
+    /// Home-relative default. An empty value requires the host's resolved
+    /// build-cache or macOS container reading.
     pub default_root: &'static str,
     /// What it takes, in one clause an operator can act on.
     pub sweeps: &'static str,
     /// The lowest `min_age_seconds` a policy may declare for it, and the value
     /// a declaration that names none is written with.
-    ///
-    /// The floor is per cleaner because what makes an item safe to take is per
-    /// cleaner. A build tree or a Chromium code-sign clone is only known to be
-    /// idle by age, so both need a day; the Hugging Face cache is
-    /// content-addressed and re-fetchable within the hour. `queue_workdirs`,
-    /// `backup_twins` and `release_store` have no floor and are not weaker for
-    /// it: a workdir is safe when its job is terminal, a replica when the
-    /// primary holds those exact bytes, a version when nobody still names it,
-    /// and all three are proved in the pass that deletes. A floor would only
-    /// subtract — the workdirs that took the always-on mac under its watermark
-    /// were minutes old, and so was the replica that gave it back 17 GiB.
+    /// Existing per-cleaner retention floors. Lifecycle-owned cleaners prove
+    /// terminal jobs, matching replicas or unreferenced versions instead.
     pub min_age_floor_seconds: i64,
 }
 
@@ -55,7 +26,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
     CleanerDeclaration {
         name: "backup_twins",
         since: "0.13.0",
-        default_root: ".stado/local-backup",
+        default_root: super::backup_twins::BACKUP_ROOT,
         sweeps: "same-disk replica objects whose primary copy is intact",
         min_age_floor_seconds: 0,
     },
@@ -76,7 +47,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
     CleanerDeclaration {
         name: "huggingface_cache",
         since: "0.9.5",
-        default_root: ".cache/huggingface",
+        default_root: ".cache/huggingface/hub",
         sweeps: "model blobs the hub can fetch again",
         min_age_floor_seconds: 3_600,
     },
@@ -90,15 +61,15 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
     CleanerDeclaration {
         name: "release_store",
         since: "0.15.26",
-        default_root: ".stado/local-storage/ecosystem/releases",
+        default_root: super::release_store::RELEASES_ROOT,
         sweeps: "published release versions past the rollback ladder this host keeps",
         min_age_floor_seconds: 0,
     },
     CleanerDeclaration {
         name: "weles_recordings",
         since: "0.9.5",
-        default_root: ".stado/weles/recordings",
-        sweeps: "session recordings already uploaded to the object store",
+        default_root: "weles/recordings",
+        sweeps: "recordings admitted by the declared age and upload-proof policy",
         min_age_floor_seconds: 86_400,
     },
 ];

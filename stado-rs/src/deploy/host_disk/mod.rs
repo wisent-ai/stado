@@ -178,6 +178,13 @@ fi
 /// `/home`, `/mnt`, `/var`, and `/opt` because a depth-two root report only
 /// named `/root/.stado` while leaving the directory consuming the disk hidden.
 const INVENTORY_SECTION: &str = r#"if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Darwin" ]; then
+  clone_temp=$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null)
+  if [ -n "$clone_temp" ]; then
+    clone_container=$(CDPATH= cd "$clone_temp/.." 2>/dev/null && /bin/pwd -P)
+    if [ -n "$clone_container" ]; then
+      printf 'STADO_CLONE_ROOT\t%s/__CLONE_CONTAINER__/__CLONE_ROOT__\n' "$clone_container"
+    fi
+  fi
   for spec in "$HOME:2" "/private/var:2" "/private/var/folders:5" "$HOME/.local/share:4" "$HOME/.local/state:4" "$HOME/Library/Caches:3" "$HOME/.cargo/git:3" "$HOME/.stado/local-storage:4" "$HOME/.stado/local-backup:4"; do
     root=${spec%:*}
     depth=${spec##*:}
@@ -243,6 +250,8 @@ pub fn remote_script_for(scope: DiskScope) -> String {
         script.push_str(INVENTORY_SECTION);
     }
     script
+        .replace("__CLONE_CONTAINER__", disk_cleanup::chromium_clones::CLONE_CONTAINER)
+        .replace("__CLONE_ROOT__", disk_cleanup::chromium_clones::CLONE_ROOT_NAME)
         .replace(
             STATE_PATH_MARK,
             &shlex_quote(&disk_cleanup::state_relative_path()),

@@ -53,9 +53,18 @@ pub(super) async fn write_cleaner(
             CmdError::click("registry target disk_cleanup.cleaners must be an object")
         })?;
     match declaration {
-        Some(fields) => {
-            cleaners.insert(cleaner.to_string(), fields);
+        Some(Value::Object(fields)) => {
+            let value = cleaners.entry(cleaner.to_string()).or_insert_with(|| json!({}));
+            let object = value.as_object_mut()
+                .ok_or_else(|| CmdError::click("declared cleaner must be an object"))?;
+            object.extend(fields);
+            if !object.contains_key("min_age_seconds") {
+                let spec = crate::providers::local::disk_cleanup::catalogue::cleaner(cleaner)
+                    .ok_or_else(|| CmdError::usage(format!("unknown cleaner: {cleaner}")))?;
+                object.insert("min_age_seconds".into(), json!(spec.min_age_floor_seconds));
+            }
         }
+        Some(_) => return Err(CmdError::usage("cleaner declaration must be an object")),
         None => {
             if cleaners.remove(cleaner).is_none() {
                 return Err(CmdError::click(format!(

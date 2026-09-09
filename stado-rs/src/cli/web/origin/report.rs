@@ -144,6 +144,9 @@ fn print_row(row: &Value) {
         nested("edge_selection", "state"),
         nested("edge_selection", "detail")
     );
+    if let Some(readback) = row["edge_selection"]["readback"]["detail"].as_str() {
+        println!("  read-back:   {readback}");
+    }
     if let Some(problem) = row["origin_error"].as_str() {
         println!("  origin:      {problem}");
     }

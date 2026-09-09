@@ -105,15 +105,6 @@ pub(crate) fn validate_disk_cleanup(
     let cleaners = map["cleaners"]
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
-    const ALLOWED: [&str; 7] = [
-        "backup_twins",
-        "build_caches",
-        "chromium_clones",
-        "huggingface_cache",
-        "queue_workdirs",
-        "release_store",
-        "weles_recordings",
-    ];
     // A cleaner this binary does not know is a cleaner a newer binary does:
     // the registry is one document read by every release in the fleet at
     // once. Refusing the whole policy for one unfamiliar name switched off
@@ -128,7 +119,7 @@ pub(crate) fn validate_disk_cleanup(
     let known: Vec<&str> = cleaners
         .keys()
         .map(String::as_str)
-        .filter(|k| ALLOWED.contains(k))
+        .filter(|name| crate::providers::local::disk_cleanup::catalogue::cleaner(name).is_some())
         .collect();
     // An armed policy with no cleaner is a declaration that cannot act. It
     // passes every other check here: the mode is legal, the thresholds are
@@ -174,15 +165,10 @@ pub(crate) fn validate_disk_cleanup(
         let min_age = cleaner
             .get("min_age_seconds")
             .ok_or_else(|| verr(&cleaner_location, "must contain 'min_age_seconds'"))?;
-        // Per-cleaner floor on retention, from the one place this product
-        // declares its cleaners: `disk_cleanup::catalogue`. It used to be a
-        // match arm here, beside a copy of the same names in `fleet_shape` and
-        // a third list in the CLI, and the reasoning for each floor is on the
-        // catalogue row it belongs to. A name this binary does not implement is
-        // already skipped above, so the unreachable arm is a day.
+        // Future cleaner names remain readable by older clients. Only a
+        // cleaner this binary implements has a retention floor it can enforce.
         let minimum = crate::providers::local::disk_cleanup::catalogue::cleaner(name.as_str())
-            .map(|entry| entry.min_age_floor_seconds)
-            .unwrap_or(86_400);
+            .map_or(0, |entry| entry.min_age_floor_seconds);
         require_int(
             min_age,
             &format!("{cleaner_location}.min_age_seconds"),

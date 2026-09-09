@@ -1,11 +1,6 @@
-//! Which measured paths a declared root covers, and which nothing covers.
-//!
-//! Only path arithmetic and the `du` rows the report already carries: no host
-//! is read here and no second measurement is taken. The rules that matter are
-//! the two that keep the arithmetic honest — a `du` walk reports a parent and
-//! its children, so nothing is ever counted twice, and a parent that CONTAINS
-//! a declared root is never reported as uncovered, because saying `~/.stado`
-//! is unreachable would be false about the bytes `~/.stado/services` reaches.
+//! Attribute measured bytes without charging a parent to one covered child.
+//! Nested inventory rows are partitioned only at declared scope boundaries;
+//! a parent's remaining bytes are explicitly exclusive of its measured children.
 
 use serde_json::Value;
 
@@ -22,6 +17,7 @@ pub(super) struct Covered {
 pub(super) struct Occupant {
     pub(super) path: String,
     pub(super) bytes: i64,
+    pub(super) exclusive: bool,
 }
 
 /// Every `du` row the host reported, as absolute path and bytes, largest first.
@@ -33,13 +29,8 @@ pub(super) fn occupants(report: &Value) -> Vec<Occupant> {
         .iter()
         .filter_map(|row| {
             let path = row.get("path").and_then(Value::as_str)?.to_string();
-            // The inventory reports gibibytes, rounded to one decimal, because
-            // that is the figure the report already published for every row.
-            // Reading `du`'s kibibytes instead would mean a second host read
-            // for numbers this report has already taken.
-            let size_gb = row.get("size_gb").and_then(Value::as_f64)?;
-            let bytes = (size_gb * 1024.0 * 1024.0 * 1024.0) as i64;
-            Some(Occupant { path, bytes })
+            let bytes = row.get("bytes").and_then(Value::as_i64)?;
+            Some(Occupant { path, bytes, exclusive: false })
         })
         .collect();
     // The inventory walks several specs and two of them can reach one path:
@@ -107,23 +98,17 @@ fn segment_matches(pattern: &str, segment: &str) -> bool {
     }
 }
 
-/// The largest measurement the inventory carries for one root: the row for the
-/// root itself when the walk reached it, otherwise the sum of the topmost rows
-/// inside it.
-///
-/// Summed only over rows that do not contain one another, because a `du` walk
-/// reports a parent and its children and adding both would double the root.
+/// Sum non-overlapping measurements within one scope.
 pub(super) fn measured(root: &str, occupants: &[Occupant]) -> Option<i64> {
-    if let Some(row) = occupants.iter().find(|row| row.path == root) {
-        return Some(row.bytes);
-    }
+    let mut rows: Vec<&Occupant> = occupants.iter().filter(|row| within(&row.path, root)).collect();
+    rows.sort_by(|left, right| left.path.cmp(&right.path));
     let mut total: Option<i64> = None;
-    let mut counted: Vec<&str> = Vec::new();
-    for row in occupants.iter().filter(|row| within(&row.path, root)) {
-        if counted.iter().any(|kept| within(&row.path, kept)) {
+    let mut previous: Option<&str> = None;
+    for row in rows {
+        if previous.is_some_and(|parent| within(&row.path, parent)) {
             continue;
         }
-        counted.push(&row.path);
+        previous = Some(&row.path);
         total = Some(total.unwrap_or_default().saturating_add(row.bytes));
     }
     total
@@ -163,38 +148,64 @@ pub(super) fn covered(
         .collect()
 }
 
-/// The measured paths no declared root covers: the outermost ones, largest
-/// first, capped at `limit` rows.
-///
-/// A path that contains a declared root is skipped for the reason in this
-/// module's header; its children outside every root are what appear instead,
-/// which is exactly how `local-storage` and `local-backup` surfaced while
-/// `services` did not.
-///
-/// Containment is resolved before size, not while walking a size-ordered list.
-/// A `du` walk reports `recordings` and `recordings/local` with the same
-/// figure, and the first pass over the sorted rows kept whichever the sort
-/// happened to put first, so an operator could be shown a subdirectory and its
-/// parent as two findings worth the same bytes.
-pub(super) fn uncovered(occupants: &[Occupant], roots: &[String], limit: usize) -> Vec<Occupant> {
-    let candidates: Vec<&Occupant> = occupants
-        .iter()
-        .filter(|row| !roots.iter().any(|root| within(&row.path, root)))
-        .filter(|row| !roots.iter().any(|root| within(root, &row.path)))
-        .collect();
-    let mut rows: Vec<Occupant> = candidates
-        .iter()
-        .filter(|row| {
-            !candidates
-                .iter()
-                .any(|other| other.path != row.path && within(&row.path, &other.path))
-        })
-        .map(|row| Occupant {
-            path: row.path.clone(),
-            bytes: row.bytes,
-        })
-        .collect();
-    rows.sort_by_key(|row| std::cmp::Reverse(row.bytes));
-    rows.truncate(limit);
-    rows
+/// Whether an observed parent contains a possibly wildcarded scope.
+fn contains_scope(path: &str, scope: &str) -> bool {
+    let mut pattern = scope.trim_end_matches('/').split('/');
+    for segment in path.trim_end_matches('/').split('/') {
+        if !pattern.next().is_some_and(|expected| segment_matches(expected, segment)) {
+            return false;
+        }
+    }
+    pattern.next().is_some()
+}
+
+/// Partition the complete inventory before applying any display limit.
+pub(super) fn partition(occupants: &[Occupant], scopes: &[String]) -> Vec<Occupant> {
+    let mut rows: Vec<&Occupant> = occupants.iter().collect();
+    rows.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut children = vec![Vec::new(); rows.len()];
+    let mut top = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        while stack.last().is_some_and(|parent| !within(&row.path, &rows[*parent].path)) {
+            stack.pop();
+        }
+        if let Some(parent) = stack.last() {
+            children[*parent].push(index);
+        } else {
+            top.push(index);
+        }
+        stack.push(index);
+    }
+    let mut output = Vec::new();
+    for index in top {
+        partition_node(index, &rows, &children, scopes, &mut output);
+    }
+    output.sort_by_key(|row| std::cmp::Reverse(row.bytes));
+    output
+}
+
+fn partition_node(
+    index: usize,
+    rows: &[&Occupant],
+    children: &[Vec<usize>],
+    scopes: &[String],
+    output: &mut Vec<Occupant>,
+) {
+    let row = rows[index];
+    let split = !children[index].is_empty()
+        && scopes.iter().any(|scope| contains_scope(&row.path, scope));
+    if !split {
+        output.push(Occupant { path: row.path.clone(), bytes: row.bytes, exclusive: false });
+        return;
+    }
+    let child_bytes = children[index].iter()
+        .fold(0_i64, |sum, child| sum.saturating_add(rows[*child].bytes));
+    let remainder = row.bytes.saturating_sub(child_bytes).max(0);
+    if remainder > 0 {
+        output.push(Occupant { path: row.path.clone(), bytes: remainder, exclusive: true });
+    }
+    for child in &children[index] {
+        partition_node(*child, rows, children, scopes, output);
+    }
 }

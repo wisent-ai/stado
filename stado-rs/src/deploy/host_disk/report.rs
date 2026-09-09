@@ -58,6 +58,7 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
         next_pass_at,
         low_bytes: report.and_then(disk_cleanup::validated_report_low_bytes),
         error: None,
+        report: report.cloned(),
     }
 }
 
@@ -119,6 +120,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "next_pass_at": state.next_pass_at,
             "low_bytes": state.low_bytes,
             "error": state.error,
+            "report": state.report,
         }),
     );
     // The other half of every `lock_busy` and `cleanup_in_progress` an
@@ -161,12 +163,14 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
                 .map(|item| {
                     json!({
                         "path": item.path,
+                        "bytes": item.blocks_kb.saturating_mul(1024),
                         "size_gb": gib_from_blocks(item.blocks_kb as f64),
                     })
                 })
                 .collect(),
         ),
     );
+    report.insert("chromium_clone_root".to_string(), json!(reading.clone_root));
     report.insert(
         "chromium_clones".to_string(),
         Value::Array(
@@ -187,28 +191,18 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
     report
 }
 
-/// How long the attribution walk may take before this command stops waiting
-/// for it. The shared two-minute channel bound is right for a fixed-cost
-/// read and wrong for this one: the inventory section walks the whole
-/// selected tree, took over 180 seconds on `lukasz-macbook` on 2026-09-02,
-/// and still timed out on 2026-09-09 with the disk 46 GiB free — so the
-/// command that exists to answer "what is holding this disk" answered
-/// nothing at all, twice, on the machine that was asking.
+/// The inventory traverses whole filesystems; it has an independent bound.
 const INVENTORY_BUDGET: std::time::Duration = std::time::Duration::from_secs(900);
-
-/// Operator override for [`INVENTORY_BUDGET`], in whole seconds. A tree large
-/// enough to outlast fifteen minutes is a real shape — this host's own walk
-/// takes 220 seconds — and the alternative to raising the bound is a command
-/// that reports nothing. A value that does not parse is ignored rather than
-/// failing the read.
 const INVENTORY_BUDGET_ENV: &str = "STADO_INVENTORY_BUDGET_SECONDS";
 
-fn inventory_budget() -> std::time::Duration {
-    std::env::var(INVENTORY_BUDGET_ENV)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|seconds| *seconds > u64::MIN)
-        .map_or(INVENTORY_BUDGET, std::time::Duration::from_secs)
+fn inventory_budget() -> Result<std::time::Duration, DeployError> {
+    match std::env::var(INVENTORY_BUDGET_ENV) {
+        Err(std::env::VarError::NotPresent) => Ok(INVENTORY_BUDGET),
+        Ok(value) => value.parse::<u64>().ok().filter(|seconds| *seconds > 0)
+            .map(std::time::Duration::from_secs)
+            .ok_or_else(|| DeployError(format!("{INVENTORY_BUDGET_ENV} must be a positive whole number of seconds"))),
+        Err(error) => Err(DeployError(format!("cannot read {INVENTORY_BUDGET_ENV}: {error}"))),
+    }
 }
 
 /// Read the complete space report inputs for an already-resolved target.
@@ -220,6 +214,7 @@ fn inventory_budget() -> std::time::Duration {
 /// own budget, and when it does not finish the report says so instead of the
 /// whole command failing.
 pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
+    let budget = inventory_budget()?;
     let interval = target
         .disk_cleanup
         .as_ref()
@@ -230,18 +225,14 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
         runner,
     )
     .await?;
-    let budget = inventory_budget();
     let full =
         host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await;
     let (output, attribution) = match full {
-        Ok(output) => (output, None),
-        Err(error) => (
-            gates,
-            Some(format!(
-                "the attribution walk did not finish within {} seconds: {error}",
-                budget.as_secs()
-            )),
-        ),
+        Ok(output) if output.code == 0 => (output, None),
+        Ok(output) => (gates, Some(format!(
+            "inventory command exited {}: {}", output.code, output.stderr.trim()
+        ))),
+        Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
     };
     let reading = parse_output(&output.stdout, interval);
     let mut report = to_report(target, &reading);

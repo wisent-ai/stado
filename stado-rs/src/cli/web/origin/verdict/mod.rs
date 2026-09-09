@@ -23,7 +23,7 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection) ->
     let resolution = public_origin::resolve(&origin.hostname).await;
     let publication = publication_of(origin).await;
     let edge = edge::edge_state(origin, selection);
-    let word = verdict_for(resolution.state, &publication, edge);
+    let word = verdict_for(resolution.state, &publication, edge, selection.readback_answered());
     let mut row = declaration_row(origin);
     let object = row.as_object_mut().expect("a JSON object was just built");
     object.insert("schema".into(), json!("stado.public-origin-report.v1"));
@@ -45,6 +45,7 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection) ->
             "origin": selection.origin,
             "endpoint": selection.endpoint,
             "detail": selection.detail,
+            "readback": selection.readback,
         }),
     );
     row
@@ -119,6 +120,7 @@ fn verdict_for(
     resolution: ResolutionState,
     publication: &PublicationReading,
     edge: &'static str,
+    readback_answered: bool,
 ) -> &'static str {
     match resolution {
         ResolutionState::Unavailable => "resolver-unavailable",
@@ -126,8 +128,9 @@ fn verdict_for(
         ResolutionState::Resolved => match publication.state() {
             "unpublished" => "origin-unpublished",
             "unknown" => "origin-unreachable",
-            _ if edge == "agrees" => VERDICT_SERVING,
-            _ => "origin-mismatch",
+            _ if edge != "agrees" => "origin-mismatch",
+            _ if !readback_answered => "origin-unreachable",
+            _ => VERDICT_SERVING,
         },
     }
 }
@@ -145,6 +148,9 @@ fn origin_error(
                 "{} publishes every declared path, but {}",
                 resolution.hostname, selection.detail
             ),
+            "published" if edge == "agrees" && !selection.readback_answered() => {
+                selection.readback_detail().to_string()
+            }
             "published" => selection.detail.clone(),
             _ => publication.detail(),
         },
