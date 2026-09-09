@@ -79,7 +79,12 @@ pub fn trust(document: &Value) -> (Option<Value>, String) {
     // it verbatim and the Desktop keys its tone off the prefix.
     let mut control = match crate::release_control::control(document) {
         Ok(Some(control)) => control,
-        Ok(None) => return (None, "none: the fleet declares no release trust".to_string()),
+        Ok(None) => {
+            return (
+                None,
+                "none: the fleet declares no release trust".to_string(),
+            )
+        }
         Err(error) => {
             return (
                 None,
