@@ -92,7 +92,10 @@ private final class NativeSpaceHost {
         document["coordinators"] = []
         try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]).write(to: registry)
         let config = root.appendingPathComponent("config.json")
-        try Data("{}\n".utf8).write(to: config)
+        // Operator children intentionally drop server-only environment overrides;
+        // their ordinary profile must select this same isolated local store.
+        let profile: [String: Any] = ["storage": ["backend": "local", "local": ["path": storage.path]]]
+        try JSONSerialization.data(withJSONObject: profile).write(to: config)
         let port = try Self.availablePort()
         endpoint = "http://127.0.0.1:\(port)"
         let out = root.appendingPathComponent("server.stdout")
