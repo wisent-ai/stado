@@ -149,7 +149,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         }
     };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
-    let enqueue_failure = enqueue_platforms(
+    let mut enqueue_failure = enqueue_platforms(
         &store,
         &mut run,
         &m,
@@ -182,6 +182,19 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         })
         .cloned()
         .collect();
+    // Nothing was submitted and the walk stopped: that failure IS the
+    // diagnosis, so it is reported before this run reaches for signing
+    // material. Reaching for it first replaces the reason nothing was built
+    // with an unrelated one -- on a machine without the release signing
+    // grant, `no live fleet builder can CLAIM release_platform ...` became
+    // `cannot read signing key ...` in both the operator's error and the
+    // durable run document, which is the same defect the comment above
+    // describes, one stage later.
+    if submitted_platforms.is_empty() {
+        if let Some(error) = enqueue_failure.take() {
+            return Err(persist_failure(&mut run, error).await);
+        }
+    }
     run.state = ReleaseRunState::Waiting;
     save(&mut run).await?;
     let (key, private) = match signing(&run.product).await {
