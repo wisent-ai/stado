@@ -134,7 +134,19 @@ pub async fn run_attached(
         let key = ssh_key::materialize(target.channel_key()).await?;
         let mut argv = host_channel::ssh_options(connection.destination);
         argv.insert(1, "-T".to_string());
-        argv.push(script);
+        // One quoted word for the login shell, and the script itself under the
+        // same interpreter the local branch above uses. Pushing the script
+        // bare made the account's login shell the interpreter, and this is the
+        // only channel that did: every other one sends `/bin/bash -s` or
+        // `/bin/sh -c` and keeps the script off the login shell's grammar.
+        // On 2026-09-08 a real run against a zsh account reported
+        // `exit_code: 1, status: failed` for an install that succeeded --
+        // `status` is read-only in zsh, so the wrapper's own bookkeeping
+        // assignment failed on a line the program never reached. Any shell
+        // whose reserved names differ from bash's had the same power over
+        // this outcome, which is why the repair is the interpreter and not
+        // the variable name.
+        argv.push(format!("/bin/bash -c {}", shlex_quote(&script)));
         let argv = ssh_key::add_identity(argv, &key)?;
         (argv, Some(key), Some(connection.destination.to_string()))
     };

@@ -12,7 +12,9 @@ use crate::deploy::{host_release, Runner};
 use crate::cli::service_converge::model::receipts::{
     AppliedPass, Refused, Released, Undeliverable, COMPLETED, FAILED,
 };
-use crate::cli::service_converge::model::vocabulary::{Row, HOST_AHEAD, HOST_BEHIND, UNATTESTED};
+use crate::cli::service_converge::model::vocabulary::{
+    Row, HOST_AHEAD, HOST_BEHIND, HOST_MISSING, UNATTESTED,
+};
 use crate::cli::service_converge::verdicts::ordering::version_order;
 
 // ---------------------------------------------------------------------------
@@ -37,7 +39,9 @@ use crate::cli::service_converge::verdicts::ordering::version_order;
 /// `unknown` rows are deliberately not delivered. Nothing is known to be wrong
 /// with them, delivery ends in a unit restart, and restarting a working service
 /// on the strength of a reporter that failed to answer is how a healthy host
-/// goes down because a report was missing.
+/// goes down because a report was missing. `host-missing` is the other half of
+/// that sentence and is delivered: there the reporter answered and the answer
+/// was that the host holds no copy of the binary it declares.
 ///
 /// `host-ahead` rows are refused outright: the host runs NEWER than the
 /// declaration, so delivering the declared version is a downgrade of a live
@@ -104,6 +108,18 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
             row.binary,
             row.declared,
             row.installed_cell()
+        );
+        deliver(target, row, runner, &mut pass).await;
+    }
+    // A host that declares a binary and carries none. The first install is a
+    // delivery like any other: nothing is replaced, no process is running the
+    // declared binary, and the alternative - what this command did until
+    // 2026-09-08 - is that a host with no copy could never be given one by
+    // the product at all, so the first copy arrived by hand.
+    for row in rows.iter().filter(|row| row.verdict == HOST_MISSING) {
+        eprintln!(
+            "{}: declared {} and this host carries no copy of it",
+            row.binary, row.declared
         );
         deliver(target, row, runner, &mut pass).await;
     }

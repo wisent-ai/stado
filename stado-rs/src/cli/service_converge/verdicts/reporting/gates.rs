@@ -2,7 +2,7 @@
 
 use crate::cli::service_converge::model::receipts::{AppliedPass, FAILED};
 use crate::cli::service_converge::model::vocabulary::{
-    Row, HOST_AHEAD, HOST_BEHIND, IN_SYNC, UNATTESTED, UNKNOWN,
+    Row, HOST_AHEAD, HOST_BEHIND, HOST_MISSING, IN_SYNC, UNATTESTED, UNKNOWN,
 };
 use crate::cli::CLICK_ERROR_CODE;
 
@@ -19,7 +19,10 @@ use crate::cli::CLICK_ERROR_CODE;
 /// product must never be is quiet.
 pub(in crate::cli::service_converge) fn report_exit_code(rows: &[Row]) -> i32 {
     if rows.iter().any(|row| {
-        row.verdict == HOST_BEHIND || row.verdict == HOST_AHEAD || row.verdict == UNATTESTED
+        row.verdict == HOST_BEHIND
+            || row.verdict == HOST_AHEAD
+            || row.verdict == UNATTESTED
+            || row.verdict == HOST_MISSING
     }) {
         CLICK_ERROR_CODE
     } else {
@@ -63,6 +66,16 @@ pub(in crate::cli::service_converge) fn report_gate_diagnostics(rows: &[Row], ex
             "{ahead} declared binary/binaries run a version NEWER than the \
              registry declares: the declaration is stale, not the host; \
              `stado release declare-version` moves it, --apply will not touch these hosts"
+        );
+    }
+    let missing = rows
+        .iter()
+        .filter(|row| row.verdict == HOST_MISSING)
+        .count();
+    if missing != 0 {
+        eprintln!(
+            "{missing} declared binary/binaries are not on this host at all; \
+             re-run with --apply to deliver the first copy"
         );
     }
 }

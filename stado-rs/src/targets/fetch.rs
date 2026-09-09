@@ -1,5 +1,27 @@
 use super::*;
 
+/// Whether this read is answering from a local filesystem store.
+///
+/// The last-known-good copy exists for one situation: the authority is on the
+/// other side of a network that is not answering. A store that is a directory
+/// on this disk has no such state — if the path is gone, so is the copy beside
+/// it — and treating one as the fleet's authority costs the operator the
+/// fallback the fleet does depend on.
+///
+/// That is not hypothetical. `stado scratch` emits a one-target registry into a
+/// storage root of its own, so every command a test drives through that lease
+/// used to record it as the last-known-good registry of this machine: fifty
+/// seven declared hosts replaced by one, in the copy every host command falls
+/// back to when the store goes quiet. `may_replace_last_good` refuses only a
+/// document naming zero hosts, so one host sailed through. Reading is scoped
+/// the same way and for the sharper reason: a lease whose own document was
+/// missing would otherwise be served the operator's fleet and drive real
+/// commands at it.
+fn store_is_local_filesystem() -> bool {
+    crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+        == Some(crate::capabilities::StorageAdapter::Local)
+}
+
 /// What a degraded registry read is answering from: the authority's own
 /// refusal and the identity of the cached copy being served. Carried
 /// structured so a caller can word its own one-line notice
@@ -47,7 +69,7 @@ pub async fn fetch_registry_or_last_good_detail(
         Ok(registry) => return Ok((registry, None)),
         Err(error) => error,
     };
-    match load_last_good() {
+    match load_last_good().filter(|_| !store_is_local_filesystem()) {
         Some((registry, meta, age)) => {
             let mut notice = format!(
                 "reading the last-known-good registry copy from {age}s ago ({}, read_at {}, generation {}) because the authority did not answer: {authority}",
@@ -115,8 +137,10 @@ async fn fetch_registry_remote_uncached() -> Result<Registry, RegistryFetchError
                 // just served, and the sentence this process prints when it
                 // later falls back to that copy is the one place an operator
                 // sees the consequence.
-                if let Err(refusal) = store_last_good(&document.content, &document.version) {
-                    note_last_good_refusal(&refusal);
+                if !store_is_local_filesystem() {
+                    if let Err(refusal) = store_last_good(&document.content, &document.version) {
+                        note_last_good_refusal(&refusal);
+                    }
                 }
                 Ok(registry)
             }
