@@ -7,6 +7,7 @@ expected=__SHA256__
 token=__TOKEN__
 runner_name=__RUNNER_NAME__
 restart_registered=__RESTART_REGISTERED__
+reconfigure=__RECONFIGURE__
 runner_group=__RUNNER_GROUP__
 runner_user=stado-precheck
 runner_root=/opt/wisent/stado-precheck-runner
@@ -30,18 +31,44 @@ for privileged in sudo wheel admin; do
   fi
 done
 
-if [ ! -f "$runner_root/.runner" ]; then
-  curl --fail --silent --show-error --location --max-time 120 \
-    "https://github.com/actions/runner/releases/download/v$version/actions-runner-linux-x64-$version.tar.gz" \
-    -o "$archive"
-  actual=$(sha256sum "$archive" | cut -d' ' -f1)
-  [ "$actual" = "$expected" ] || { printf '%s\n' "runner checksum mismatch: $actual" >&2; exit 1; }
-  root rm -rf "$runner_root"
-  root mkdir -p "$runner_root"
-  root tar -xzf "$archive" -C "$runner_root" --no-same-owner
-  root chown -R "$runner_user:$runner_user" "$runner_root"
-  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
-  root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
+# Registration happens when this host holds no runner, and again whenever the
+# declaration moved: a runner already configured against one scope, group or
+# label set is not the runner the caller asked for. Before 2026-09-09 this
+# branch tested only `.runner`, so `install --repository X` on a host that
+# already carried a runner exited 0, reported the profile as installed, and
+# registered nothing at all.
+if [ ! -f "$runner_root/.runner" ] || [ "$reconfigure" = 1 ]; then
+  if [ ! -f "$runner_root/.runner" ]; then
+    curl --fail --silent --show-error --location --max-time 120 \
+      "https://github.com/actions/runner/releases/download/v$version/actions-runner-linux-x64-$version.tar.gz" \
+      -o "$archive"
+    actual=$(sha256sum "$archive" | cut -d' ' -f1)
+    [ "$actual" = "$expected" ] || { printf '%s\n' "runner checksum mismatch: $actual" >&2; exit 1; }
+    root rm -rf "$runner_root"
+    root mkdir -p "$runner_root"
+    root tar -xzf "$archive" -C "$runner_root" --no-same-owner
+    root chown -R "$runner_user:$runner_user" "$runner_root"
+    root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
+    root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
+  else
+    # Reconfigure only an idle runner. Retain its previous local registration
+    # inside the protected staging directory until the replacement is accepted.
+    if root pgrep -u "$runner_user" -f 'Runner.Worker' >/dev/null; then
+      printf '%s\n' 'runner is executing a job; registration was not changed' >&2
+      exit 1
+    fi
+    root systemctl stop wisent-stado-precheck-runner.service
+    root mkdir -m 700 "$staging/previous-registration"
+    for owned in .runner .runner_migrated .credentials .credentials_migrated .credentials_rsaparams .service .env .path; do
+      if [ -f "$runner_root/$owned" ]; then
+        root cp -p "$runner_root/$owned" "$staging/previous-registration/$owned"
+      fi
+    done
+    root rm -f "$runner_root/.runner" "$runner_root/.runner_migrated" \
+      "$runner_root/.credentials" "$runner_root/.credentials_migrated" \
+      "$runner_root/.credentials_rsaparams" "$runner_root/.service"
+    root chown -R "$runner_user:$runner_user" "$runner_root"
+  fi
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
   root install -o "$runner_user" -g "$runner_user" -m 0600 "$token_file" "$runner_root/.registration-token"
@@ -50,6 +77,12 @@ if [ ! -f "$runner_root/.runner" ]; then
     HOME="$runner_root" PATH=/usr/local/bin:/usr/bin:/bin TOKEN_FILE="$token_file" \
     /bin/bash -c 'read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__REGISTRATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; [ -n "$2" ] && export ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2"; exec ./config.sh --unattended --replace --disableupdate' \
     bash "$runner_name" "$runner_group"); then
+    if [ -d "$staging/previous-registration" ]; then
+      root cp -Rp "$staging/previous-registration"/. "$runner_root/"
+      root chown root:root "$runner_root"
+      root chmod go-w "$runner_root"
+      root systemctl start wisent-stado-precheck-runner.service
+    fi
     for log in "$runner_root"/_diag/Runner_*.log; do
       [ -f "$log" ] || continue
       root tail -n 80 "$log" >&2 || true
@@ -69,6 +102,13 @@ root chown -R root:root "$runner_root"
 root chmod -R go-w "$runner_root"
 root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
 root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado" "$runner_root/.tmp" "$runner_root/.dotnet"
+# The one writable file in an otherwise read-only home: a toolchain a
+# repository's checks install amends it, and `ReadWritePaths` below carries it
+# for exactly that. It has to exist before the unit starts, because systemd
+# binds the path it is given.
+root touch "$runner_root/.profile"
+root chown "$runner_user:$runner_user" "$runner_root/.profile"
+root chmod 600 "$runner_root/.profile"
 # The four files `config.sh` wrote as the runner account, handed back to it.
 #
 # `chown -R root:root` above is what keeps the account from rewriting the
@@ -162,9 +202,9 @@ RestartSec=5
 # Where the single-file .NET host unpacks itself, and where the runner puts
 # temporary files: inside this profile's own runner root, exactly as the darwin
 # installer already pins them. Without this the listener answered
-# `System.IO.IOException: Permission denied` and never reported listening,
-# because `ProtectSystem=strict` leaves the filesystem read-only apart from
-# `ReadWritePaths` and the extract directory was neither.
+# 'System.IO.IOException: Permission denied' and never reported listening,
+# because ProtectSystem=strict leaves the filesystem read-only apart from
+# ReadWritePaths and the extract directory was neither.
 Environment=HOME=$runner_root
 Environment=TMPDIR=$runner_root/.tmp
 Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet
@@ -182,21 +222,28 @@ ProtectControlGroups=true
 ProtectClock=true
 RestrictSUIDSGID=true
 LockPersonality=true
-# The runner's own writable set, and nothing else. Line 68 chowns the whole
+# The runner's own writable set, and nothing else. The install chowns the whole
 # root to root and drops group write so the account cannot rewrite the
 # binaries it executes, then hands back exactly the directories it must write.
-# `.tmp` and `.dotnet` are on that list because the single-file .NET host
-# unpacks itself into `DOTNET_BUNDLE_EXTRACT_BASE_DIR` before it can run at
-# all: without them the listener answered `System.IO.IOException: Permission
-# denied` and never reported listening, which is how the first second-profile
+# '.tmp' and '.dotnet' are on that list because the single-file .NET host
+# unpacks itself into DOTNET_BUNDLE_EXTRACT_BASE_DIR before it can run at
+# all: without them the listener answered 'System.IO.IOException: Permission
+# denied' and never reported listening, which is how the first second-profile
 # install on a host failed.
+#
+# '.profile' is a file rather than a directory, and it is here because a
+# toolchain a repository's checks install writes it: rustup-init refused with
+# "could not amend shell profile: '<root>/.profile': Read-only file system"
+# and failed probierz-landing's documentation check on 2026-09-09. HOME is
+# this root, so a job that installs any toolchain needs that one file and
+# nothing else around it.
 #
 # The job gate stays shared on purpose. One job at a time is a host-wide
 # invariant, not a per-runner one, so every profile account writes its marker
 # into the same sticky 1777 directory; giving each profile its own gate path
 # would let two runners on one host build at once, which is the failure the
 # gate exists to prevent.
-ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup $runner_root/.tmp $runner_root/.dotnet /opt/wisent/.stado-runner-jobs
+ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup $runner_root/.tmp $runner_root/.dotnet $runner_root/.profile /opt/wisent/.stado-runner-jobs
 
 [Install]
 WantedBy=multi-user.target
@@ -210,7 +257,7 @@ root install -o root -g root -m 0644 "$unit" /etc/systemd/system/wisent-stado-pr
 rm -f "$unit"
 root systemctl daemon-reload
 if root systemctl is-active --quiet wisent-stado-precheck-runner.service; then
-  if [ "$service_changed" -eq 1 ] || [ "$restart_registered" -eq 1 ]; then
+  if [ "$service_changed" -eq 1 ] || [ "$restart_registered" -eq 1 ] || [ "$reconfigure" = 1 ]; then
     root systemctl restart wisent-stado-precheck-runner.service
   fi
 else

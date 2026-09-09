@@ -22,7 +22,7 @@ fn linux_installer(
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
-    restart_registered: bool,
+    decision: Decision,
     profile: &RunnerProfile,
     scope: &RunnerScope,
 ) -> String {
@@ -38,7 +38,11 @@ fn linux_installer(
             ("__RUNNER_LABELS__", profile.labels_text()),
             (
                 "__RESTART_REGISTERED__",
-                u8::from(restart_registered).to_string(),
+                u8::from(decision.restart_registered).to_string(),
+            ),
+            (
+                "__RECONFIGURE__",
+                u8::from(decision.reconfigure).to_string(),
             ),
             ("__REGISTRATION_URL__", scope.registration_url()),
             ("__RUNNER_SCOPE__", shlex_quote(&scope.label())),
@@ -57,7 +61,7 @@ fn macos_installer(
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
-    restart_registered: bool,
+    decision: Decision,
     profile: &RunnerProfile,
     scope: &RunnerScope,
 ) -> String {
@@ -77,7 +81,11 @@ fn macos_installer(
             ("__RUNNER_LABELS__", profile.labels_text()),
             (
                 "__RESTART_REGISTERED__",
-                u8::from(restart_registered).to_string(),
+                u8::from(decision.restart_registered).to_string(),
+            ),
+            (
+                "__RECONFIGURE__",
+                u8::from(decision.reconfigure).to_string(),
             ),
             ("__REGISTRATION_URL__", scope.registration_url()),
             ("__RUNNER_SCOPE__", shlex_quote(&scope.label())),
@@ -110,6 +118,21 @@ pub struct InstallerRequest<'a> {
     pub repository: Option<&'a str>,
 }
 
+/// What this run has to do beyond installing files, decided by reading the
+/// host rather than by guessing from the declaration.
+///
+/// `reconfigure` is the one that used to be missing. The host programs only
+/// registered a runner when none was configured, so an install that moved the
+/// scope, the group or the labels wrote files, restarted nothing, registered
+/// nothing, and exited 0 — the shape a report cannot distinguish from work.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Decision {
+    /// GitHub reports this registered runner offline, so the service is cycled.
+    pub restart_registered: bool,
+    /// The host's own registration record disagrees with what was asked for.
+    pub reconfigure: bool,
+}
+
 /// Render the exact installer program the host channel will execute.
 ///
 /// Keeping this boundary pure makes registration scope reviewable without a
@@ -119,7 +142,7 @@ pub fn installer_program(
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
-    restart_registered: bool,
+    decision: Decision,
 ) -> Result<String, DeployError> {
     let &InstallerRequest {
         profile_name,
@@ -137,7 +160,7 @@ pub fn installer_program(
             registration_token,
             brama_url,
             brama_port,
-            restart_registered,
+            decision,
             profile,
             &scope,
         ),
@@ -146,7 +169,7 @@ pub fn installer_program(
             registration_token,
             brama_url,
             brama_port,
-            restart_registered,
+            decision,
             profile,
             &scope,
         ),

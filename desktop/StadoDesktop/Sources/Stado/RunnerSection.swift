@@ -37,6 +37,7 @@ struct RunnerSection: View {
         ) {
             Picker("Profile", selection: $profile) {
                 Text("Precheck").tag("precheck")
+                Text("Repository precheck").tag("repository-precheck")
                 Text("Publisher").tag("publisher")
             }
             .pickerStyle(.segmented)
@@ -46,6 +47,16 @@ struct RunnerSection: View {
             WisentField(label: "Listener", value: listenerLabel)
             WisentField(label: "Host job slot", value: report?.hostJobSlot ?? "Not read")
             WisentField(label: "Labels", value: report?.runnerLabels ?? "Not read")
+            if let registration = report?.registration {
+                WisentField(label: "GitHub runner", value: registration.runner)
+                WisentField(label: "GitHub scope", value: registration.scope)
+                WisentField(label: "GitHub status", value: registration.status ?? "Unknown")
+                WisentField(label: "Registration changed", value: registration.reconfigured ? "Yes" : "No")
+            }
+            if let review = report?.modelReview {
+                WisentField(label: "Model review", value: review.state)
+                WisentField(label: "Repository secret", value: review.secret)
+            }
 
             WisentField(
                 label: "Read-only command",
@@ -119,6 +130,25 @@ struct RunnerSection: View {
                             repository: repository
                         )
                     }
+                }
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Check GitHub credential",
+                    symbol: "key",
+                    isEnabled: !fleetStore.runnerMutation.isWorking
+                ) {
+                    Task { await fleetStore.checkRunnerCredential(host: target) }
+                }
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Configure model review",
+                    symbol: "text.badge.checkmark",
+                    isEnabled: !fleetStore.runnerMutation.isWorking
+                        && !repository.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ) {
+                    Task { await fleetStore.configureRunnerModelReview(host: target, repository: repository) }
                 }
             )
 

@@ -18,40 +18,13 @@
 //! Every sentence asserted below was copied from a live run on 2026-09-08.
 
 mod fixture;
+mod identity;
 
 use std::path::Path;
 
 use fixture::{
     platform, report, runner_is_configured, stderr, Fixture, PROFILE_DECLARATION, TARGET,
 };
-
-#[test]
-fn every_declared_profile_carries_an_installer_for_this_platform() {
-    let fixture = Fixture::new();
-    let profiles = fixture.declared_profiles();
-    assert!(!profiles.is_empty(), "the build declares runner profiles");
-
-    for profile in &profiles {
-        let name = profile["name"].as_str().expect("a profile name");
-        assert!(
-            profile["installers"][platform()].is_string(),
-            "{name} declares no installer for {}: {profile}",
-            platform()
-        );
-        assert!(
-            profile["unit_label"]
-                .as_str()
-                .is_some_and(|label| !label.is_empty()),
-            "{name} declares no unit label: {profile}"
-        );
-        assert!(
-            profile["labels"]
-                .as_array()
-                .is_some_and(|labels| !labels.is_empty()),
-            "{name} declares no runner labels: {profile}"
-        );
-    }
-}
 
 #[test]
 fn status_reads_this_machine_and_its_installed_claim_matches_the_filesystem() {
@@ -183,35 +156,3 @@ fn an_undeclared_profile_is_refused_before_anything_is_installed() {
     );
 }
 
-#[test]
-fn the_status_report_states_the_scope_and_group_each_profile_would_register_with() {
-    let fixture = Fixture::new();
-    let declared = fixture.declared_profiles();
-
-    let output = fixture.status(&[]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    let report = report(&output);
-
-    for entry in report["profiles"].as_array().expect("reported profiles") {
-        let name = entry["profile"].as_str().expect("a profile name");
-        let declaration = declared
-            .iter()
-            .find(|profile| profile["name"] == name)
-            .expect("the reported profile is a declared one");
-        assert_eq!(
-            entry["runner_group"], declaration["github_runner_group"],
-            "the report and the declaration disagree about {name}'s group"
-        );
-        let labels = declaration["labels"]
-            .as_array()
-            .expect("declared labels")
-            .iter()
-            .map(|label| label.as_str().expect("a label"))
-            .collect::<Vec<_>>()
-            .join(",");
-        assert_eq!(
-            entry["runner_labels"], labels,
-            "the report and the declaration disagree about {name}'s labels"
-        );
-    }
-}

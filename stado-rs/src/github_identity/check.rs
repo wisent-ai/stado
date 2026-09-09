@@ -41,6 +41,13 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
         identity
             .reality_check
             .replace("{organization}", organization)
+            .replace(
+                "{repository}",
+                identity
+                    .reality_check_repository
+                    .as_deref()
+                    .unwrap_or_default()
+            )
     );
     let response = reqwest::Client::new()
         .get(&endpoint)
@@ -99,8 +106,8 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
     Err(click(format!(
         "the credential the declared GitHub route {:?} names, {}.{}, is not allowed on \
          {endpoint}: GitHub answered HTTP {} — {message}. That identity grants {}, and the \
-         endpoint answers {}. Point {:?} at a credential carrying {} with `skarbiec route \
-         declare --resource {} --item <item> --field <field> --reason <text>`; the route is \
+         endpoint answers {}. Point {:?} at the intended credential with `skarbiec routes \
+         add --resource {} --item <item> --field <field> --reason <text>`; the route is \
          declared in {DECLARATION_PATH}",
         resolved.route,
         resolved.item,
@@ -109,7 +116,6 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
         named(&granted, "no listed permission"),
         named(&accepted, "an unstated permission"),
         resolved.route,
-        identity.required_permission,
         resolved.route,
     )))
 }

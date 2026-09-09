@@ -36,7 +36,13 @@ pub use check::report;
 pub const DECLARATION_PATH: &str = "stado-rs/data/github-identity.json";
 const DECLARATION: &str = include_str!("../../data/github-identity.json");
 const SCHEMA: &str = "stado.github-identity.v1";
-const RESOLVE_ENDPOINT: &str = "/v1/operator/route/resolve";
+/// Skarbiec's own operator route for its route table. It used to read
+/// `/v1/operator/route/resolve`, an endpoint Skarbiec has never served: the
+/// resolution answered HTTP 404 and the report blamed the vault for a question
+/// this caller invented. `POST /v1/operator/routes/list` is the published one,
+/// and it answers `{consumer, routes:[{resource,item,item_present,field,
+/// field_present}]}` — the shape read below.
+const RESOLVE_ENDPOINT: &str = "/v1/operator/routes/list";
 const SELF_DECLARING_PREFIXES: &[&str] = &["provider:", "agent:", "login:"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -47,8 +53,18 @@ pub struct GithubIdentity {
     pub credential_route: String,
     /// What GitHub must allow that identity to do, in GitHub's own vocabulary.
     pub required_permission: String,
-    /// The endpoint that confronts the declaration with GitHub.
+    /// The endpoint that confronts the declaration with GitHub. `{organization}`
+    /// and `{repository}` are substituted; a check that names a repository
+    /// needs `reality_check_repository` to say which one.
     pub reality_check: String,
+    /// The repository the check reads, when the check is a repository one.
+    ///
+    /// The fleet registers repository-scoped runners, so the door it needs is
+    /// a repository's runner list, not the organization's. Naming the
+    /// repository here keeps the check on that door instead of demanding an
+    /// organization-administrator credential nobody asked to exist.
+    #[serde(default)]
+    pub reality_check_repository: Option<String>,
 }
 
 /// One resolved coordinate. The value is absent on purpose: this is the answer
@@ -111,6 +127,19 @@ fn parse_declaration() -> Result<GithubIdentity, String> {
             "{DECLARATION_PATH} reality_check must be an api.github.com path beginning with \"/\""
         ));
     }
+    if identity.reality_check.contains("{repository}") {
+        let repository = identity
+            .reality_check_repository
+            .as_deref()
+            .unwrap_or_default();
+        exact(repository, "reality_check_repository")?;
+        if repository.contains('/') {
+            return Err(format!(
+                "{DECLARATION_PATH} reality_check_repository {repository:?} must be one \
+                 repository name inside the organization"
+            ));
+        }
+    }
     Ok(identity)
 }
 
@@ -125,7 +154,7 @@ fn unanswered(route: &str, detail: &str) -> String {
     format!(
         "Skarbiec answers no credential for the declared GitHub route {route:?}: {detail}. Stado \
          reads its GitHub identity through that route, declared in {DECLARATION_PATH}; declare it \
-         with `skarbiec route declare --resource {route} --item <item> --field <field> --reason \
+         with `skarbiec routes add --resource {route} --item <item> --field <field> --reason \
          <text>`"
     )
 }
@@ -143,7 +172,7 @@ pub async fn resolve() -> Result<ResolvedCredential, String> {
     );
     let response = reqwest::Client::new()
         .post(&endpoint)
-        .json(&json!({"names": [route]}))
+        .json(&json!({}))
         .send()
         .await
         .map_err(|error| {
@@ -193,7 +222,12 @@ pub async fn resolve() -> Result<ResolvedCredential, String> {
         route: route.to_string(),
         item: text("item")?,
         field: text("field")?,
-        declared_by: text("declared_by")?,
+        // Skarbiec's route report names the coordinate, not the reader: its
+        // rows carry `resource`, `item`, `item_present`, `field` and
+        // `field_present`. Who declared that Stado reads its GitHub identity
+        // through this route is this file, so the declaration says so instead
+        // of a field the vault was expected to invent.
+        declared_by: DECLARATION_PATH.to_string(),
     })
 }
 
