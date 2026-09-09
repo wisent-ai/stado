@@ -1,0 +1,260 @@
+//! Field declarations of the job record: the serde defaults that stand in for
+//! the Python dataclass defaults, the workload secret reference and the
+//! central `Job` struct whose field order fixes the JSON key order.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+use crate::models::job_state;
+
+fn default_provider() -> String {
+    "gcp".into()
+}
+fn default_state() -> String {
+    job_state::QUEUED.into()
+}
+fn default_max_restarts() -> i64 {
+    20
+}
+fn default_image() -> String {
+    "pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20260408".into()
+}
+fn default_image_project() -> String {
+    "deeplearning-platform-release".into()
+}
+fn default_boot_disk_gb() -> i64 {
+    500
+}
+fn default_max_preempts() -> i64 {
+    3
+}
+fn default_repo_extras() -> String {
+    "train".into()
+}
+fn default_yield_grace() -> i64 {
+    120
+}
+fn default_max_yields() -> i64 {
+    5
+}
+fn default_executor() -> String {
+    "stado-agent".into()
+}
+
+/// A named workload secret resolved by the agent immediately before spawn.
+/// Queue records contain only this reference; plaintext never enters storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobSecretRef {
+    pub item: String,
+    pub field: String,
+}
+
+/// The central job record. Field order matches the Python dataclass so
+/// serialized JSON is key-order identical.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Job {
+    #[serde(default)]
+    pub job_id: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub gpu_mem_gb: i64,
+    #[serde(default)]
+    pub gpu_type: String,
+    #[serde(default)]
+    pub machine_type: String,
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub batch_id: String,
+    #[serde(default = "default_state")]
+    pub state: String,
+    /// ISO-8601 UTC; filled by [`Job::finalize_new`] when empty (Python
+    /// `__post_init__`).
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub failed_at: Option<String>,
+    #[serde(default)]
+    pub instance_ref: Option<String>,
+    /// When the worker that holds this running job stops being trusted to own
+    /// it, renewed in the job document ITSELF.
+    ///
+    /// A heartbeat written beside the job (`status/<job_id>/heartbeat`) could
+    /// never fence a reaper: the reaper reads the running blob, reads the
+    /// heartbeat, and moves the blob at the version it read — a worker that
+    /// refreshes its pulse in between changes nothing the reaper is holding, so
+    /// a live execution is requeued and runs twice. Renewing the lease is a
+    /// compare-and-swap on this document, so a renewal during a reap changes
+    /// the version the reaper pinned and the reaper loses the race instead of
+    /// silently winning it.
+    ///
+    /// Absent on jobs written before the lease existed, and on every job
+    /// outside `running/`; the reaper falls back to the heartbeat blob and
+    /// `started_at` for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at: Option<String>,
+    #[serde(default)]
+    pub restarts: i64,
+    #[serde(default = "default_max_restarts")]
+    pub max_restarts: i64,
+    #[serde(default)]
+    pub last_restart: Option<String>,
+    #[serde(default = "default_image")]
+    pub image: String,
+    #[serde(default = "default_image_project")]
+    pub image_project: String,
+    #[serde(default = "default_boot_disk_gb")]
+    pub boot_disk_gb: i64,
+    #[serde(default)]
+    pub startup_script_uri: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// If true, dispatch on Spot.
+    #[serde(default)]
+    pub preemptible: bool,
+    /// If true, only the named provider claims.
+    #[serde(default)]
+    pub pin_to_provider: bool,
+    /// 0 = no cap.
+    #[serde(default)]
+    pub max_cost_per_hour_usd: f64,
+    /// # times this job was preempted on Spot.
+    #[serde(default)]
+    pub preempt_count: i64,
+    /// After N preempts, fall back to on-demand.
+    #[serde(default = "default_max_preempts")]
+    pub max_preempts_before_ondemand: i64,
+    /// Higher = scheduled first within FIFO bucket.
+    #[serde(default)]
+    pub priority: i64,
+    /// Failed create_instance calls; backs off dispatch. Resets on success.
+    #[serde(default)]
+    pub dispatch_attempts: i64,
+    #[serde(default)]
+    pub last_dispatch_attempt: Option<String>,
+    // Submitter provenance ($USER + hostname at submit time).
+    #[serde(default)]
+    pub submitted_by: String,
+    #[serde(default)]
+    pub submitted_from: String,
+    /// cli | api | other
+    #[serde(default)]
+    pub submitted_via: String,
+    /// One `stado submit` invocation = one run (runs/<run_id>.json).
+    #[serde(default)]
+    pub run_id: String,
+    /// Orchestrator name from $WC_SUBMITTER_APP.
+    #[serde(default)]
+    pub submitter_app: String,
+    /// Stable digest of the complete semantic submission request.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submission_request_digest: String,
+    /// Stable command position inside the immutable run request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_command_index: Option<usize>,
+    // Optional source repo to git clone before running command.
+    #[serde(default)]
+    pub repo: String,
+    /// Exact source commit. Repository workloads must pin a full lowercase SHA-1.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repo_ref: String,
+    #[serde(default)]
+    pub repo_workdir: String,
+    /// pip-install extras name; "" to skip install.
+    #[serde(default = "default_repo_extras")]
+    pub repo_extras: String,
+    /// Post-exit-0 verification hook; non-zero reverses COMPLETED -> FAILED.
+    #[serde(default)]
+    pub verify_command: String,
+    /// Coordinator assignment hint (rewritten every tick).
+    #[serde(default)]
+    pub assigned_to: String,
+    /// Operator hard-pin to one consumer_id; the makespan matcher never
+    /// touches it.
+    #[serde(default)]
+    pub pinned_host: String,
+    /// Runtime hint (seconds); 0 = fall back to historical means.
+    #[serde(default)]
+    pub runtime_seconds_estimate: f64,
+    /// Shell snippet prefixed to job.command at agent runtime.
+    #[serde(default)]
+    pub pre_command: String,
+    /// Apt packages (cloud-kind agents only).
+    #[serde(default)]
+    pub apt_packages: Vec<String>,
+    /// Additive output mirror URI (default location always written).
+    #[serde(default)]
+    pub output_uri: String,
+    /// Exclusive GPU use: the agent admits it only with no other active workload.
+    #[serde(default)]
+    pub exclusive: bool,
+    /// Measured peak GPU memory (GiB); 0 = not measured.
+    #[serde(default)]
+    pub peak_vram_gb: i64,
+    /// True iff peak_vram_gb came from the per-GPU probe (0.4.241+).
+    #[serde(default)]
+    pub peak_vram_per_gpu: bool,
+    /// Set when submitted by a recurring schedule.
+    #[serde(default)]
+    pub schedule_id: String,
+    /// Original failed job_id when this is a re-submission.
+    #[serde(default)]
+    pub re_submission_of: String,
+    // Cooperative-yield (background) job contract.
+    #[serde(default)]
+    pub yieldable: bool,
+    #[serde(default)]
+    pub yield_command: String,
+    #[serde(default = "default_yield_grace")]
+    pub yield_grace_seconds: i64,
+    #[serde(default)]
+    pub yield_count: i64,
+    #[serde(default = "default_max_yields")]
+    pub max_yields_before_protected: i64,
+    // Provider-neutral placement and execution requirements.
+    #[serde(default = "default_executor")]
+    pub executor: String,
+    #[serde(default)]
+    pub platform_os: String,
+    #[serde(default)]
+    pub architecture: String,
+    #[serde(default)]
+    pub cpu_cores: i64,
+    #[serde(default)]
+    pub memory_gb: i64,
+    #[serde(default)]
+    pub disk_gb: i64,
+    #[serde(default)]
+    pub region: String,
+    // Structured provider execution (box-prompt etc.).
+    #[serde(default)]
+    pub box_ttl_seconds: i64,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub prompt_provider: String,
+    #[serde(default)]
+    pub prompt_model: String,
+    #[serde(default)]
+    pub prompt_reasoning_effort: String,
+    /// Explicit per-job environment variables backed by scoped Skarbiec fields.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secret_env: BTreeMap<String, JobSecretRef>,
+    // Named, reproducible artifact inputs.
+    #[serde(default)]
+    pub input_artifacts: Map<String, Value>,
+    #[serde(default)]
+    pub resolved_input_artifacts: Map<String, Value>,
+    #[serde(default)]
+    pub artifact_paths: Vec<String>,
+    /// Hard completion deadline for autonomous placement (RFC 3339 UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at: Option<String>,
+}
