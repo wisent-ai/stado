@@ -24,17 +24,25 @@ fn executable_file(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
-/// The real `skarbiec` binary: `SKARBIEC_BIN`, then `PATH`, then
-/// `~/.stado/bin/skarbiec`, and deliberately no fourth branch. A test that
-/// downloads a release of its own choosing decides for itself which Skarbiec
-/// the fleet runs, and a test that skips when none is present goes green
-/// because a dependency was absent — the defect this change removes.
+/// The real `skarbiec` binary: `SKARBIEC_TEST_BIN`, then `SKARBIEC_BIN`, then
+/// `PATH`, then `~/.stado/bin/skarbiec`, and deliberately no fifth branch. A
+/// test that downloads a release of its own choosing decides for itself which
+/// Skarbiec the fleet runs, and a test that skips when none is present goes
+/// green because a dependency was absent — the defect this change removes.
+///
+/// `SKARBIEC_TEST_BIN` is read first because
+/// `src/cli/host/machine/releases/platform.rs` exports that name for the test
+/// run it prepares; `SKARBIEC_BIN` is what the shipped credential path reads
+/// in `src/credential_store/owner/discovery.rs`.
 pub fn real_skarbiec_binary() -> PathBuf {
-    if let Some(configured) = std::env::var_os("SKARBIEC_BIN") {
+    for declared in ["SKARBIEC_TEST_BIN", "SKARBIEC_BIN"] {
+        let Some(configured) = std::env::var_os(declared) else {
+            continue;
+        };
         let configured = PathBuf::from(configured);
         assert!(
             executable_file(&configured),
-            "SKARBIEC_BIN names {}, which is not an executable file",
+            "{declared} names {}, which is not an executable file",
             configured.display()
         );
         return configured;
@@ -51,13 +59,26 @@ pub fn real_skarbiec_binary() -> PathBuf {
         PathBuf::from(std::env::var_os("HOME").expect("HOME is set")).join(".stado/bin/skarbiec");
     assert!(
         executable_file(&installed),
-        "no real skarbiec binary: SKARBIEC_BIN is unset, no directory on PATH holds `skarbiec`, \
-         and {} does not exist. Check out wisent-ai/skarbiec at origin/main, run `cargo build \
-         --release --locked`, and point SKARBIEC_BIN at target/release/skarbiec. This test does \
-         not run without the real broker and does not pretend to.",
+        "no real skarbiec binary: neither SKARBIEC_TEST_BIN nor SKARBIEC_BIN is set, no directory \
+         on PATH holds `skarbiec`, and {} does not exist. Check out wisent-ai/skarbiec at \
+         origin/main, run `cargo build --release --locked`, and point SKARBIEC_TEST_BIN at \
+         target/release/skarbiec. This test does not run without the real broker and does not \
+         pretend to.",
         installed.display()
     );
     installed
+}
+
+/// The version the resolved broker reports, so a refusal can name it.
+pub fn skarbiec_version(binary: &Path) -> String {
+    let unnamed = || "no version answer".to_string();
+    let Ok(reported) = Command::new(binary).arg("version").output() else {
+        return unnamed();
+    };
+    serde_json::from_slice::<Value>(&reported.stdout)
+        .ok()
+        .and_then(|document| document["version"].as_str().map(str::to_string))
+        .unwrap_or_else(unnamed)
 }
 
 /// Fail unless the broker at `url` serves declared route resolution.
@@ -196,11 +217,13 @@ impl SkarbiecFixture {
             );
             assert!(
                 minted.status.success(),
-                "real Skarbiec refused `grant issue`: {}. `grant issue` replaced `token-mint` in \
-                 the same merge that added declared route resolution ({ROUTE_RESOLUTION_ORIGIN}), \
-                 so a broker that does not know the verb is older than the capability this suite \
-                 requires. Build skarbiec at origin/main with `cargo build --release --locked` \
-                 and point SKARBIEC_BIN at target/release/skarbiec.",
+                "the resolved skarbiec reports version {} and refused `grant issue`: {}. `grant \
+                 issue` replaced `token-mint` in the same merge that added declared route \
+                 resolution ({ROUTE_RESOLUTION_ORIGIN}), so a broker that does not know the verb \
+                 is older than the capability this suite requires. Build skarbiec at origin/main \
+                 with `cargo build --release --locked` and point SKARBIEC_TEST_BIN at \
+                 target/release/skarbiec.",
+                skarbiec_version(&binary),
                 String::from_utf8_lossy(&minted.stderr).trim()
             );
             let grant: Value = serde_json::from_slice(&minted.stdout).unwrap();
