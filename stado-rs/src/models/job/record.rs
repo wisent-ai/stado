@@ -1,52 +1,13 @@
-//! Job data model and state definitions.
-//!
-//! Port of `stado/models.py`. The JSON representation is byte-compatible with
-//! the Python `Job.to_json()` (`json.dumps(asdict(job), indent=2)` with
-//! `ensure_ascii=True`), including field declaration order. `from_dict`
-//! tolerance maps to serde: unknown keys are ignored, missing keys fall back
-//! to the Python dataclass defaults via `#[serde(default = ...)]`.
+//! Field declarations of the job record: the serde defaults that stand in for
+//! the Python dataclass defaults, the workload secret reference and the
+//! central `Job` struct whose field order fixes the JSON key order.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Job lifecycle states. Serialized as plain strings; the state is also
-/// redundantly encoded in the blob prefix (see `queue::storage`).
-pub mod job_state {
-    pub const QUEUED: &str = "queued";
-    /// COMPLETED = extraction finished + handed off to the detached upload
-    /// worker; NOT yet confirmed on HF. Kept named "completed" so the
-    /// coordinator and dashboard stay unchanged.
-    pub const COMPLETED: &str = "completed";
-    /// UPLOADED = the upload worker confirmed the dir landed on HF (terminal).
-    pub const UPLOADED: &str = "uploaded";
-    pub const RUNNING: &str = "running";
-    pub const FAILED: &str = "failed";
-    pub const CANCELLED: &str = "cancelled";
-
-    pub const ALL: [&str; 6] = [QUEUED, RUNNING, COMPLETED, UPLOADED, FAILED, CANCELLED];
-
-    pub fn is_terminal(state: &str) -> bool {
-        matches!(state, COMPLETED | UPLOADED | FAILED | CANCELLED)
-    }
-}
-
-pub const DEPRECATED_ACTIVATION_ENTRYPOINT: &str = "wisent.scripts.activations.extract_and_upload";
-
-pub fn deprecated_activation_command_reason(command: &str) -> &'static str {
-    if !command.contains(DEPRECATED_ACTIVATION_ENTRYPOINT) {
-        return "";
-    }
-    "refusing deprecated foreground activation uploader; use \
-     wisent.scripts.activations.raw.extract_and_upload so extraction \
-     hands upload to the detached worker pool"
-}
-
-/// Activation extraction jobs are VRAM-sized, not whole-GPU-exclusive.
-pub fn activation_extraction_must_share_gpu(command: &str) -> bool {
-    command.contains("wisent.scripts.activations.raw.extract_and_upload")
-}
+use crate::models::job_state;
 
 fn default_provider() -> String {
     "gcp".into()
@@ -296,124 +257,4 @@ pub struct Job {
     /// Hard completion deadline for autonomous placement (RFC 3339 UTC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_at: Option<String>,
-}
-
-impl Job {
-    /// Python `__post_init__`: stamp `created_at` when empty.
-    pub fn finalize_new(&mut self) {
-        if self.created_at.is_empty() {
-            self.created_at = chrono::Utc::now().to_rfc3339();
-        }
-    }
-
-    /// Python `Job.new(job_id=..., command=...)` equivalent with defaults.
-    pub fn new(job_id: impl Into<String>, command: impl Into<String>) -> Self {
-        let mut job: Job = serde_json::from_value(Value::Object(Map::new()))
-            .expect("all fields have serde defaults");
-        job.job_id = job_id.into();
-        job.command = command.into();
-        job.finalize_new();
-        job
-    }
-
-    /// Byte-compatible with Python `json.dumps(asdict(job), indent=2)`
-    /// (ensure_ascii=True: non-ASCII escaped as \uXXXX).
-    pub fn to_json(&self) -> String {
-        let pretty = serde_json::to_string_pretty(self).expect("Job serialization is infallible");
-        ensure_ascii(&pretty)
-    }
-
-    /// Python `Job.from_json` / `from_dict`: unknown keys ignored, missing
-    /// keys defaulted.
-    pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
-        let mut job: Self = serde_json::from_str(s)?;
-        job.finalize_new();
-        Ok(job)
-    }
-}
-
-impl Default for Job {
-    fn default() -> Self {
-        Self::new("", "")
-    }
-}
-
-/// Python `datetime.isoformat()` for a UTC datetime: `+00:00` suffix, with
-/// 6-digit microseconds only when nonzero (Python omits the fraction when
-/// `microsecond == 0`).
-pub(crate) fn isoformat_utc(dt: chrono::DateTime<chrono::Utc>) -> String {
-    if dt.timestamp_subsec_micros() == 0 {
-        dt.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
-    } else {
-        dt.format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string()
-    }
-}
-
-/// Replicates Python's `ensure_ascii=True`: escapes every non-ASCII char as
-/// \uXXXX (with surrogate pairs for astral planes). Already-escaped sequences
-/// and structural characters are untouched.
-pub(crate) fn ensure_ascii(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        if (ch as u32) < 0x7f {
-            out.push(ch);
-        } else {
-            let mut buf = [0u16; 2];
-            for unit in ch.encode_utf16(&mut buf) {
-                out.push_str(&format!("\\u{:04x}", unit));
-            }
-        }
-    }
-    out
-}
-
-/// Recursively sort object keys (Python `sort_keys=True`).
-pub(crate) fn sort_keys(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let btree: std::collections::BTreeMap<String, Value> =
-                map.iter().map(|(k, v)| (k.clone(), sort_keys(v))).collect();
-            Value::Object(btree.into_iter().collect())
-        }
-        Value::Array(items) => Value::Array(items.iter().map(sort_keys).collect()),
-        other => other.clone(),
-    }
-}
-
-/// Python `json.dumps(value, indent=2, sort_keys=True)` (ensure_ascii=True).
-pub(crate) fn json_dumps_pretty_sorted(value: &Value) -> String {
-    let pretty =
-        serde_json::to_string_pretty(&sort_keys(value)).expect("JSON serialization is infallible");
-    ensure_ascii(&pretty)
-}
-
-/// Python `repr()` of a string: single quotes by default, double quotes when
-/// the string contains a single quote (and no double quote); backslash-escapes
-/// for the quote, backslash, and the usual control characters.
-pub(crate) fn py_str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push(quote);
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
 }
