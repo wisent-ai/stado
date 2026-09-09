@@ -163,7 +163,9 @@ fn a_beacon_stamped_in_the_future_is_not_an_outage() {
     let row = report(&out);
 
     assert!(
-        row["beacon_age_seconds"].as_i64().is_some_and(|age| age < 0),
+        row["beacon_age_seconds"]
+            .as_i64()
+            .is_some_and(|age| age < 0),
         "{row}"
     );
     assert_eq!(row["verdict"], "healthy", "{row}");

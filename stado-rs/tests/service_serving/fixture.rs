@@ -182,7 +182,9 @@ fn kernel_hostname() -> String {
     let out = Command::new("/bin/hostname")
         .output()
         .expect("hostname(1) runs");
-    String::from_utf8_lossy(&out.stdout).trim().to_ascii_lowercase()
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// What the service directory declares its authority runs.
