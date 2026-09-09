@@ -173,7 +173,7 @@ define_capabilities! {
             ProviderId::Skarbiec => (Implemented, "dashboard authorization + skarbiec::Client", "Scoped bearer resolution for Stado APIs"),
             ProviderId::Gcp => (Implemented, "skarbiec::gcp_provider", "Application Default Credentials and workload identity"),
             ProviderId::Azure => (Implemented, "azure_token", "Managed identity and operator token chain"),
-            ProviderId::Aws => (Implemented, "providers::aws::sdk_config", "AWS credential chain, IMDS, and scoped fallback"),
+            ProviderId::Aws => (Implemented, "providers::aws::sdk_config", "AWS credential chain, IMDS, and the scoped Skarbiec identity"),
             ProviderId::Local => (Partial, "deploy::host_channel", "Local account and SSH identity"),
         ]
     },

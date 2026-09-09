@@ -31,8 +31,8 @@ use tracing_subscriber::EnvFilter;
 const ENTRY_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 fn main() {
-    // Log filter from $RUST_LOG, defaulting to warn (Python logs to stderr
-    // at WARNING by default). Installed on the real main thread: the writer is
+    // Log filter from $RUST_LOG, warn when it says nothing (Python logs to
+    // stderr at WARNING). Installed on the real main thread: the writer is
     // process-global and outlives the entry thread.
     tracing_subscriber::fmt()
         .with_env_filter(
