@@ -11,15 +11,21 @@ use crate::deploy::DeployError;
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
 
 pub(crate) async fn github_credential() -> Result<String, DeployError> {
-    crate::github_identity::credential().await.map_err(DeployError)
+    crate::github_identity::credential()
+        .await
+        .map_err(DeployError)
 }
 
 pub(crate) async fn github_runner_token(
     scope: &RunnerScope,
     kind: &str,
 ) -> Result<String, DeployError> {
-    let resolved = crate::github_identity::resolve().await.map_err(DeployError)?;
-    let credential = crate::github_identity::read(&resolved).await.map_err(DeployError)?;
+    let resolved = crate::github_identity::resolve()
+        .await
+        .map_err(DeployError)?;
+    let credential = crate::github_identity::read(&resolved)
+        .await
+        .map_err(DeployError)?;
     let response = reqwest::Client::new()
         .post(scope.token_endpoint(kind))
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
@@ -169,7 +175,10 @@ pub(crate) async fn github_runner(scope: &RunnerScope, runner_name: &str) -> Run
             };
         }
         listed.extend(runners.iter().filter_map(|runner| {
-            runner.get("name").and_then(Value::as_str).map(str::to_string)
+            runner
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
         }));
         if runners.len() < 100 {
             return RunnerRecord::Absent { listed };

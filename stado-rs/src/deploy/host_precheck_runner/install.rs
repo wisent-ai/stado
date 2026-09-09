@@ -200,23 +200,30 @@ async fn install_profile(
                     return Err(DeployError(format!(
                         "{}: {} installation exited successfully, but GitHub lists no runner \
                          named {runner_name} under {}; listed runners: {listed:?}",
-                        target.name, profile.name, scope.label()
+                        target.name,
+                        profile.name,
+                        scope.label()
                     )));
                 }
                 RunnerRecord::Unreadable { detail } => {
                     return Err(DeployError(format!(
                         "{}: {} installation cannot be verified at {}: {detail}",
-                        target.name, profile.name, scope.label()
+                        target.name,
+                        profile.name,
+                        scope.label()
                     )));
                 }
             }
         }
     })
     .await
-    .map_err(|_| DeployError(format!(
-        "{}: {runner_name} did not report online at {} within 60 seconds",
-        target.name, scope.label()
-    )))??;
+    .map_err(|_| {
+        DeployError(format!(
+            "{}: {runner_name} did not report online at {} within 60 seconds",
+            target.name,
+            scope.label()
+        ))
+    })??;
     value["registration"] = json!({
         "scope": scope.label(),
         "runner": runner_name,

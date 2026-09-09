@@ -155,4 +155,3 @@ fn an_undeclared_profile_is_refused_before_anything_is_installed() {
         "the refusal created a runner root: {root}"
     );
 }
-

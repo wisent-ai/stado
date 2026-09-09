@@ -40,6 +40,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "release",
     "resources",
     "results",
+    "runner",
     "schedule",
     "secrets",
     "service",
@@ -128,6 +129,10 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             )
             | ("release", "catalog" | "status")
             | ("resources", "show" | "verify" | "operations")
+            | (
+                "runner",
+                "list" | "status" | "report" | "credential" | "diagnostics"
+            )
             | ("schedule", "list" | "show")
             | ("secrets", "ls" | "doctor" | "inspect-vault")
             | (
