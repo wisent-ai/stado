@@ -60,24 +60,40 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         registry_read.state = ReadState::Cached;
         registry_read.detail = Some(notice);
     }
-    let target = host_channel::resolve_target(&registry, host)?;
+    let route = host_channel::resolve_target(&registry, host);
+    // A declared host without a usable route still has independently readable
+    // capacity and queue state. Preserve the route refusal on each host read;
+    // never execute that read or acquire credentials after the refusal.
+    let target = match &route {
+        Ok(target) => *target,
+        Err(error) => registry
+            .lookup(host)
+            .filter(|target| target.is_provider(crate::capabilities::ProviderId::Local))
+            .ok_or_else(|| DeployError(error.to_string()))?,
+    };
     // Free space must survive a slow janitor, snapshot, or configuration read.
     // These scopes reuse the same producer sections as the normal disk report.
     let (usage, state, agent, storage) = tokio::join!(
         observe(
             "disk_usage",
             format!("{}: df -Pk /", target.name),
-            disk_read(target, host_disk::DiskScope::UsageOnly, runner)
+            host_read(
+                &route,
+                disk_read(target, host_disk::DiskScope::UsageOnly, runner)
+            )
         ),
         observe(
             "host_state",
             format!("{}: janitor state and snapshots", target.name),
-            disk_read(target, host_disk::DiskScope::StateOnly, runner)
+            host_read(
+                &route,
+                disk_read(target, host_disk::DiskScope::StateOnly, runner)
+            )
         ),
         observe(
             "agent_store",
             format!("{}: effective storage configuration", target.name),
-            agent_store_backend(target, runner)
+            host_read(&route, agent_store_backend(target, runner))
         ),
         observe("storage", backend.clone(), async {
             JobStorage::new()
@@ -147,6 +163,16 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         gates.blockers.push(HOST_DIAGNOSTIC_INCOMPLETE.to_string());
     }
     Ok(gates)
+}
+
+async fn host_read<T>(
+    route: &Result<&ComputeTarget, DeployError>,
+    read: impl Future<Output = Result<T, DeployError>>,
+) -> Result<T, DeployError> {
+    route
+        .as_ref()
+        .map_err(|error| DeployError(error.to_string()))?;
+    read.await
 }
 
 async fn disk_read(
