@@ -112,8 +112,9 @@ pub enum ImageState {
     /// A finding and never a silence. The defect this check exists to remove
     /// is an unread state rendered as a passing one, and `registry doctor`
     /// already applies the same rule to unit files it cannot open:
-    /// [`EnvironmentGap::UnrecordedDeclaration`] carries `observed: None` and
-    /// says the file was not read rather than printing an empty environment.
+    /// [`EnvironmentGap::UnrecordedDeclaration`] carries a non-`Read`
+    /// [`UnitReading`] and says the file was not read rather than printing
+    /// an empty environment.
     Unread {
         /// What could not be read, named the way an operator would name it.
         subject: String,

@@ -1,5 +1,46 @@
 use crate::deploy::service::*;
 
+/// What a unit file's own bytes said, when this pass was in a position to
+/// look at them.
+///
+/// Three states and not `Option`, because "nothing came back" has two
+/// causes that call for opposite operator actions and the sentence used to
+/// print the wrong one for the second: a unit on another host was never
+/// opened, while a unit on this host whose recorded path holds no file is a
+/// record pointing at something that is not there. Collapsing them told an
+/// operator standing on the affected machine that the machine was not the
+/// one the command ran on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnitReading {
+    /// Read off this machine's filesystem.
+    Read(LocalUnitFile),
+    /// Not attempted: the unit belongs to another host, and `registry
+    /// doctor` answers from the store and never sshes.
+    OtherHost,
+    /// Attempted here and nothing came back: the recorded path holds no
+    /// file, or holds one this reader cannot parse.
+    Unreadable,
+}
+
+impl UnitReading {
+    /// The unit file, when there is one.
+    pub fn file(&self) -> Option<&LocalUnitFile> {
+        match self {
+            Self::Read(unit) => Some(unit),
+            Self::OtherHost | Self::Unreadable => None,
+        }
+    }
+
+    /// Machine-readable state, for the JSON row.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Read(_) => "unit-file",
+            Self::OtherHost => "other-host",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
 /// Why a product's declared environment does not reach the unit serving it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvironmentGap {
@@ -13,9 +54,8 @@ pub enum EnvironmentGap {
     UnrecordedDeclaration {
         /// `managed_since`: how long the stub has stood.
         adopted_at: String,
-        /// The unit file as this machine holds it, or `None` when the unit
-        /// is on another host and was therefore not read.
-        observed: Option<LocalUnitFile>,
+        /// The unit file as this machine holds it, or why it does not.
+        observed: UnitReading,
     },
     /// This product has no release target for the host and its required
     /// environment is not pinned in the managed service declaration.
@@ -26,7 +66,7 @@ pub enum EnvironmentGap {
     },
     /// The service records the required values, but its native definition
     /// either disagrees or could not be read on this host.
-    PinnedServiceEnvironment { observed: Option<LocalUnitFile> },
+    PinnedServiceEnvironment { observed: UnitReading },
 }
 
 /// One product whose declared environment cannot reach the unit that serves
