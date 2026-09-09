@@ -81,6 +81,11 @@ async fn coordinator_loop(
     log: fn(&str),
 ) {
     loop {
+        // Before `run_tick`, which ends with the by-run reaper: the reaper
+        // retires a finished build's run and deletes both its terminal record
+        // and the output it uploaded, so the pass that records what a build
+        // produced has to run first. See `coordinator::daemon`.
+        crate::scheduler::builds::poll_build_recipes(&|msg: &str| log(msg)).await;
         let providers = resolve_providers();
         match run_tick(&store, &secrets, &providers, with_billing, &|msg: &str| {
             log(msg)
@@ -90,10 +95,6 @@ async fn coordinator_loop(
             Ok(scheduled) => log(&format!("tick scheduled={scheduled}")),
             Err(exc) => log(&format!("tick failed: {exc}")),
         }
-        // Native-build poller: watch registry build recipes for new commits
-        // and enqueue build jobs. Self-rate-limited to one pass per minute;
-        // per-recipe failures are logged inside, never raised.
-        crate::scheduler::builds::poll_build_recipes(&|msg: &str| log(msg)).await;
         match crate::queue::copy::replicate_configured_backup().await {
             Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
             Ok(Some(report)) => log(&format!(

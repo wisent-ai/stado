@@ -132,6 +132,18 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
                 ));
             }
         }
+        // Native-build poller: watch registry build recipes for new commits,
+        // enqueue build jobs, and record what the finished ones produced.
+        // Self-rate-limited to one pass per minute; per-recipe failures are
+        // logged inside, never raised.
+        //
+        // BEFORE `run_tick`, because `run_tick` ends with the by-run reaper.
+        // A build job belongs to a `runs/` manifest, so the reaper retires it
+        // and deletes both its `completed/` record and the output it uploaded.
+        // Reconciling afterwards read a finished build as a job that vanished
+        // and recorded it as failed with no artifacts. The consumer of a
+        // terminal outcome runs before the pass that cleans it up.
+        crate::scheduler::builds::poll_build_recipes(&log).await;
         let providers = resolve_providers();
         let n = run_tick(&store, &secrets, &providers, true, &log)
             .await
@@ -148,10 +160,6 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         {
             log(&format!("fleet queue namespace record failed: {exc}"));
         }
-        // Native-build poller: watch registry build recipes for new commits
-        // and enqueue build jobs. Self-rate-limited to one pass per minute;
-        // per-recipe failures are logged inside, never raised.
-        crate::scheduler::builds::poll_build_recipes(&log).await;
         match crate::queue::copy::replicate_configured_backup().await {
             Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
             Ok(Some(report)) => log(&format!(
