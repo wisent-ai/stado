@@ -86,6 +86,18 @@ impl BlobBackend for StadoObjectBackend {
     /// artifact absent — which is how every fleet delivery of 0.7.6 failed
     /// while the archive sat published. `/api/release/object` is the route
     /// the channel itself serves those bytes on.
+    ///
+    /// The body goes through [`Self::whole_body`] for the same reason the
+    /// object route's does. This route answers with a `Content-Length` too,
+    /// and this reader used to return `response.bytes()` without ever
+    /// comparing the two — so an answer that ended cleanly at a size its own
+    /// declaration contradicted became the archive. A short document is
+    /// journalled as a document that does not parse; a short archive is
+    /// worse, because it unpacks, and the declared length was the only thing
+    /// on the wire that could have said it was not the whole thing.
+    ///
+    /// No ceiling: a software artifact is legitimately large and is on its
+    /// way to a file.
     async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
         let mut url = self.url("/api/release/object");
         url.query_pairs_mut().append_pair("uri", uri);
@@ -96,7 +108,7 @@ impl BlobBackend for StadoObjectBackend {
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        Ok(Some(response.bytes().await?.to_vec()))
+        Ok(Some(Self::whole_body(response, uri, None).await?))
     }
 
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {

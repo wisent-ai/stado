@@ -15,10 +15,16 @@ pub use table::{routed_item, RoutedField};
 ///
 /// Weles builds its expectation from `new URL(page.url()).origin`, so anything
 /// carrying a path, a query, a fragment or userinfo could never match and would
-/// be spent finding that out. The HTTP(S) sentence is the worker's own.
+/// be spent finding that out. The HTTP(S) sentence is the worker's own; the
+/// others name `sign_in_origin`, the plan field an operator can actually edit,
+/// because `stado workload run weles-browser-task --plan FILE` is the only
+/// surface that reaches here and no command takes a `--sign-in-origin` flag.
 pub fn exact_origin(raw: &str) -> Result<String, DeployError> {
-    let parsed = url::Url::parse(raw)
-        .map_err(|error| DeployError(format!("--sign-in-origin is not a URL: {error}")))?;
+    let parsed = url::Url::parse(raw).map_err(|error| {
+        DeployError(format!(
+            "weles-browser-task plan sign_in_origin is not a URL: {error}"
+        ))
+    })?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(DeployError(
             "credential fill requires an HTTP(S) origin".to_string(),
@@ -26,7 +32,8 @@ pub fn exact_origin(raw: &str) -> Result<String, DeployError> {
     }
     if parsed.username() != "" || parsed.password().is_some() {
         return Err(DeployError(
-            "--sign-in-origin must not carry embedded credentials".to_string(),
+            "weles-browser-task plan sign_in_origin must not carry embedded credentials"
+                .to_string(),
         ));
     }
     if parsed.host_str().is_none_or(str::is_empty) {
@@ -37,8 +44,8 @@ pub fn exact_origin(raw: &str) -> Result<String, DeployError> {
     if !matches!(parsed.path(), "" | "/") || parsed.query().is_some() || parsed.fragment().is_some()
     {
         return Err(DeployError(format!(
-            "--sign-in-origin must be a bare origin such as https://accounts.google.com, \
-             with no path, query or fragment: {raw}"
+            "weles-browser-task plan sign_in_origin must be a bare origin such as \
+             https://accounts.google.com, with no path, query or fragment: {raw}"
         )));
     }
     Ok(parsed.origin().ascii_serialization())

@@ -1,4 +1,5 @@
 mod program;
+mod receipt;
 mod shared;
 mod staging;
 mod tree;
@@ -9,6 +10,7 @@ use crate::deploy::{shlex_quote, DeployError};
 use program::REMOTE_RECHECK_STAGE_BODY;
 
 pub use program::{REMOTE_ACTIVATE_BODY, REMOTE_PROBE_BODY, REMOTE_STAGE_BODY};
+pub use receipt::{ACTIVATE_STEP_MARKER, RECEIPT_BODY};
 pub use shared::{FETCH_PRELUDE, SANITIZE_PRELUDE};
 pub use staging::{ensure_stado_reader_archive, stage_declared_release, StagedRelease};
 pub use tree::{TREE_ACTIVATE_BODY, TREE_DIR, TREE_PRELUDE, TREE_PROBE_BODY, TREE_STAGE_BODY};
@@ -147,12 +149,16 @@ pub fn recheck_staged_script(plan: &ReleasePlan) -> Result<String, DeployError> 
 
 /// The activation program for one plan.
 pub fn activate_script(plan: &ReleasePlan) -> String {
+    // The receipt and the closing marker are appended here rather than inside
+    // either body: both shapes owe the same record, and the two bodies used to
+    // carry their own copy of it.
     match &plan.product.install {
-        Install::Program { .. } => {
-            format!("{}{SANITIZE_PRELUDE}{REMOTE_ACTIVATE_BODY}", bindings(plan))
-        }
+        Install::Program { .. } => format!(
+            "{}{SANITIZE_PRELUDE}{REMOTE_ACTIVATE_BODY}{RECEIPT_BODY}{ACTIVATE_STEP_MARKER}",
+            bindings(plan)
+        ),
         Install::Tree { .. } => format!(
-            "{}{SANITIZE_PRELUDE}{TREE_PRELUDE}{TREE_ACTIVATE_BODY}",
+            "{}{SANITIZE_PRELUDE}{TREE_PRELUDE}{TREE_ACTIVATE_BODY}{RECEIPT_BODY}{ACTIVATE_STEP_MARKER}",
             bindings(plan)
         ),
     }
