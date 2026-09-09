@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 
 use crate::queue::{json_str, BlobBackend, BlobInfo, StorageError, VersionedText};
 
-use super::paths::remove_missing_ok;
+use super::paths::{local_io, remove_missing_ok};
 use super::LocalBackend;
 
 #[async_trait]
@@ -115,8 +115,25 @@ impl BlobBackend for LocalBackend {
         remove_missing_ok(&self.metadata_path(path))
     }
 
+    /// Whether the blob is there, or the reason this store could not tell.
+    ///
+    /// Deliberately not `Path::is_file`, which is
+    /// `fs::metadata(..).map(..).unwrap_or(false)`: it answers `false` for a
+    /// directory this process may not traverse, a device that is refusing
+    /// reads, and a file that genuinely is not there, so a store that could
+    /// not answer became an object that is absent. The one caller of this
+    /// method is `PUT /api/object?...&metadata_only=true`, which turned that
+    /// `false` into `404 {"state":"absent"}` — telling a WRITER that the
+    /// object was gone while it sat on disk. Only `NotFound` is an absence;
+    /// every other refusal is reported with the operation and the path, the
+    /// way every other local read reports one.
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
-        Ok(self.path(path)?.is_file())
+        let target = self.path(path)?;
+        match fs::metadata(&target) {
+            Ok(metadata) => Ok(metadata.is_file()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(local_io("exists", &target, error)),
+        }
     }
 
     async fn list_paths(

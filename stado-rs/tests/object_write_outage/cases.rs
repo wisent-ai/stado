@@ -1,6 +1,6 @@
 //! The three answers the metadata write plane owes its caller.
 
-use crate::dashboard::{harness, Unreadable, NAMESPACE};
+use crate::dashboard::{harness, Unreadable, NAMESPACE, STORE_PREFIX};
 use crate::vault::namespace_token;
 
 /// The object the outage case asks about, inside its own directory so the
@@ -48,19 +48,33 @@ fn a_store_that_could_not_answer_is_not_reported_absent() {
         answer.body
     );
     assert_eq!(
-        answer.status,
-        500,
+        answer.status, 500,
         "the refusal did not reach the caller as a failure: {}",
         answer.body
     );
+    // The whole sentence, around the one part that is this run's temp
+    // directory — macOS hands the store back its canonical `/private` path —
+    // so what is pinned is the operation that could not answer, the object it
+    // was about, and the reason this kernel gave.
     assert!(
-        answer.body.contains("Permission denied"),
-        "the answer did not name what the store said: {}",
+        answer
+            .body
+            .contains(&format!("/{STORE_PREFIX}/{NAMESPACE}/{CLOSED_KEY}:")),
+        "the answer did not name the object it could not read: {}",
         answer.body
     );
     assert!(
-        answer.body.contains("exists"),
+        answer
+            .body
+            .starts_with(r#"{"error":"local storage exists "#),
         "the answer did not name the read that failed: {}",
+        answer.body
+    );
+    assert!(
+        answer
+            .body
+            .ends_with(r#": Permission denied (os error 13)"}"#),
+        "the answer did not name what this kernel said: {}",
         answer.body
     );
 

@@ -79,6 +79,36 @@ impl Harness {
         Answer::parse(&String::from_utf8_lossy(&raw))
     }
 
+    /// Wait until the object authorization boundary is open.
+    ///
+    /// The boundary carries a startup verdict, and a request that arrives
+    /// while it is closed is answered `503 {"error":"object authorization
+    /// unavailable"}` before any route runs. Revalidation happens inline on
+    /// request, so this asks until the answer is a route's answer rather than
+    /// the boundary's — otherwise a case would be measuring the boundary.
+    fn wait_for_an_open_boundary(&self, bearer: &str) {
+        let mut refusals = usize::MIN;
+        loop {
+            let answer = self.put(
+                &format!(
+                    "/api/object?uri=stado://{NAMESPACE}/data/boundary/probe.json&metadata_only=true"
+                ),
+                bearer,
+                r#"{"probe":"boundary"}"#,
+            );
+            if !answer.body.contains("object authorization unavailable") {
+                return;
+            }
+            refusals += usize::from(true);
+            assert!(
+                refusals < ATTEMPTS,
+                "the object authorization boundary never opened in {refusals} requests: {}",
+                answer.body
+            );
+            std::thread::yield_now();
+        }
+    }
+
     /// Connect, retrying while the listener is still coming up. The dashboard
     /// accepts only after its startup validation has recorded every boundary
     /// verdict, so the first connection of the area waits for that.
@@ -212,6 +242,9 @@ fn start() -> Harness {
     std::env::set_var("WC_OBJECT_SKARBIEC_TOKEN_FILE", &object_grant);
     std::env::set_var("WC_OBJECT_API_NAMESPACES", vault::namespaces_document());
     std::env::set_var("WC_DASHBOARD_BOUNDARY_ATTEMPTS", "1");
+    // Revalidate on the next request rather than after a cooldown, so the
+    // startup verdict cannot decide what a case measures.
+    std::env::set_var("WC_DASHBOARD_BOUNDARY_RECHECK_SECONDS", "0");
 
     // The dashboard binds a fixed port, so the port is chosen here and
     // released; the listener claims it immediately.
@@ -237,5 +270,7 @@ fn start() -> Harness {
             }
         })
         .expect("dashboard thread starts");
-    Harness { root, addr }
+    let harness = Harness { root, addr };
+    harness.wait_for_an_open_boundary(&vault::namespace_token(NAMESPACE));
+    harness
 }

@@ -33,12 +33,27 @@ pub fn namespace_token(namespace: &str) -> String {
 /// The `WC_OBJECT_API_NAMESPACES` document: every active namespace with its
 /// own item and its `data/` subtree. A missing active namespace is a
 /// configuration problem the verifier reports instead of reaching the vault.
+///
+/// The queue's own namespace additionally grants every canonical queue
+/// prefix. That is not decoration: startup validation refuses a policy which
+/// leaves the queue's prefixes ungranted — an object API whose own queue
+/// cannot be read answers 401 to every agent claim — and the refusal shuts the
+/// object boundary before any route runs.
 pub fn namespaces_document() -> String {
     let entries = stado::config::ACTIVE_OBJECT_NAMESPACES
         .iter()
         .map(|namespace| {
+            let mut prefixes = vec!["data/"];
+            if *namespace == stado::config::QUEUE_OBJECT_NAMESPACE {
+                prefixes.extend_from_slice(stado::queue::copy::CANONICAL_PREFIXES);
+            }
+            let prefixes = prefixes
+                .iter()
+                .map(|prefix| format!("\"{prefix}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(
-                r#""{namespace}": {{"item": "{}", "prefixes": ["data/"]}}"#,
+                r#""{namespace}": {{"item": "{}", "prefixes": [{prefixes}]}}"#,
                 verifier_item(namespace)
             )
         })
