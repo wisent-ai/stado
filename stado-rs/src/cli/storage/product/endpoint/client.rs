@@ -59,26 +59,18 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
 }
 
 fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
-    // Bound DNS/TCP establishment and an actually stalled body, not the total
-    // lifetime of an active immutable transfer. The former total 60-second
-    // timeout cut healthy 70 MB writer read-backs off at 42–56 MB; retries
-    // restarted from byte zero and could therefore never satisfy publication.
-    // A 60-second read timeout retains the fail-fast control-plane contract
-    // while allowing a body that keeps making progress to finish.
-    //
-    // Those two bound a phase each and together still bounded nothing. On
-    // 2026-09-03 three processes on charless-mac-mini were alive 9h34m, 9h58m
-    // and 9h58m against this API, holding 11, 10 and 19 sockets, and one of
-    // them held the disk janitor's exclusive run lock for its whole life --
-    // so cleanup completed no pass, `disk_cleanup_stalled` latched, and the
-    // host claimed nothing for the rest of the day. A connect that succeeds
-    // and a body that trickles are both inside the two bounds above; a peer
-    // that stops answering without ever sending FIN or RST is outside all of
-    // them, and nothing here would ever have given up.
+    // One bound, on the whole request. Two earlier bounds each covered a
+    // phase — establishment, and a body that had gone quiet — and together
+    // they still bounded nothing. On 2026-09-03 three processes on
+    // charless-mac-mini were alive 9h34m, 9h58m and 9h58m against this API,
+    // holding 11, 10 and 19 sockets, and one of them held the disk janitor's
+    // exclusive run lock for its whole life -- so cleanup completed no pass,
+    // `disk_cleanup_stalled` latched, and the host claimed nothing for the
+    // rest of the day. A peer that stops answering without ever sending FIN
+    // or RST was outside both phase bounds, and nothing here would ever have
+    // given up. The ceiling below is outside no phase: it covers the call.
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(60))
         // A ceiling on the WHOLE request, so no single call can outlive the
         // work it was issued for. Generous on purpose: it has to clear the
         // largest immutable transfer this client performs, which is why the
