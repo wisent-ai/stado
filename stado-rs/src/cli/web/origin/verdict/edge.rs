@@ -29,16 +29,14 @@ pub(crate) struct EdgeSelection {
     pub origin: Option<String>,
     pub detail: String,
     pub readback: Value,
+    pub diagnostic_probe: Value,
 }
 
 impl EdgeSelection {
     pub fn readback_answered(&self) -> bool {
-        // The deployment probes the real object route without a URI; its
-        // documented 400 is an answered request, not an upstream failure.
-        self.readback.get("error").is_none_or(Value::is_null)
-            && self.readback["status"]
-                .as_u64()
-                .is_some_and(|status| (200..300).contains(&status) || status == 400)
+        // A separate socket probe may succeed while the gateway's real fetch
+        // fails. Only a request through that public route proves its response.
+        self.readback["state"].as_str() == Some("answered")
     }
 
     pub fn readback_detail(&self) -> &str {
@@ -61,6 +59,7 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
                 origin: None,
                 detail: format!("this Stado could not build its HTTPS client: {error}"),
                 readback: Value::Null,
+                diagnostic_probe: Value::Null,
             }
         }
     };
@@ -72,6 +71,7 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
                 origin: None,
                 detail: format!("the public edge did not answer: {error}"),
                 readback: Value::Null,
+                diagnostic_probe: Value::Null,
             }
         }
     };
@@ -85,23 +85,26 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
         .as_ref()
         .filter(|_| (200..300).contains(&status))
         .and_then(|value| value["origin"].as_str());
-    let readback = payload
+    let diagnostic_probe = payload
         .as_ref()
         .and_then(|value| value.get("originDiagnosis"))
         .and_then(|diagnosis| diagnosis.get("probe"))
         .cloned()
         .unwrap_or(Value::Null);
+    let readback = gateway_readback(&client).await;
     match selected {
         Some(origin) => EdgeSelection {
             endpoint,
             detail: format!("the public edge reports it fetches release objects from {origin}"),
             origin: Some(origin.to_string()),
             readback,
+            diagnostic_probe,
         },
         None => EdgeSelection {
             endpoint,
             origin: None,
             readback,
+            diagnostic_probe,
             detail: format!(
                 "the public edge answered HTTP {status} and named no selected origin: {}",
                 quoted_body(&body)
@@ -192,6 +195,70 @@ pub(crate) fn undeclared_row(
             "endpoint": selection.endpoint,
             "detail": selection.detail,
             "readback": selection.readback,
+            "diagnostic_probe": selection.diagnostic_probe,
         },
     }))
+}
+
+/// A fresh valid coordinate forces the actual public proxy to contact its
+/// object backend. Its authoritative 404 proves a protocol response, not that
+/// any particular software artifact exists or can be downloaded.
+async fn gateway_readback(client: &reqwest::Client) -> Value {
+    let uri = format!(
+        "stado://releases/stado-probe/0.0.0/web/{}.json",
+        uuid::Uuid::new_v4()
+    );
+    let url = format!(
+        "{}/api/release/object",
+        crate::config::stado_api_url().trim_end_matches('/')
+    );
+    let started = std::time::Instant::now();
+    let response = match client.get(&url).query(&[("uri", &uri)]).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            return json!({
+                "state": "unavailable", "method": "GET", "url": url, "uri": uri,
+                "ms": started.elapsed().as_millis(),
+                "detail": format!("public release read failed: {error:#}"),
+            })
+        }
+    };
+    let status = response.status().as_u16();
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            return json!({
+                "state": "unavailable", "method": "GET", "url": url, "uri": uri, "status": status,
+                "ms": started.elapsed().as_millis(),
+                "detail": format!("public release response body failed: {error:#}"),
+            })
+        }
+    };
+    let payload = serde_json::from_str::<Value>(&body).ok();
+    let answered = status == 404
+        && payload.as_ref().is_some_and(|payload| {
+            payload["state"].as_str() == Some("absent")
+                && payload["uri"].as_str() == Some(uri.as_str())
+        });
+    let detail = if answered {
+        "the public release route authoritatively answered the probe coordinate; artifact availability must be checked by its exact URI".to_string()
+    } else {
+        let cause = payload
+            .as_ref()
+            .and_then(|payload| {
+                ["underlyingCause", "cause", "error"]
+                    .iter()
+                    .find_map(|key| payload[*key].as_str())
+            })
+            .map(str::to_string)
+            .unwrap_or_else(|| quoted_body(&body));
+        format!("public release route answered HTTP {status}: {cause}")
+    };
+    let mut result = json!({
+        "state": if answered { "answered" } else { "unavailable" },
+        "method": "GET", "url": url, "uri": uri, "status": status,
+        "ms": started.elapsed().as_millis(), "detail": detail,
+    });
+    result["response"] = payload.unwrap_or(Value::String(body));
+    result
 }
