@@ -114,7 +114,8 @@ pub(in crate::capabilities::registry) const ARTIFACTS: &[CapabilityVariant] = &[
         aliases: &[],
         provider: Some(ProviderId::Stado),
         implementation: "artifacts::registry + artifacts::validation",
-        summary: "Generic manifest registration and validation for a kind with no adapter of its own.",
+        summary:
+            "Generic manifest registration and validation for a kind with no adapter of its own.",
         configurable: false,
         constructible: false,
         adapter: RuntimeAdapter::None,
