@@ -7,41 +7,13 @@ use super::super::{Finding, DISK_CHECK};
 use crate::deploy::{host_disk, Runner};
 use crate::targets::ComputeTarget;
 
-/// Each janitor cleaner and the first released `stado` that accepts it in a
-/// registry policy.
-///
-/// Derived from the tags, not guessed: `git tag --contains` on the commit that
-/// added each name to `crate::targets`'s allowed list answers `stado-v0.12.0`
-/// for `queue_workdirs` (#154) and `stado-v0.13.0` for `backup_twins`.
-/// `release_store` first ships in 0.15.26; declaring it against an older host
-/// makes that host reject the entire policy instead of merely skipping the
-/// unknown cleaner. The four cleaners already in 0.9.5 — `build_caches`,
-/// `chromium_clones`, `huggingface_cache`, `weles_recordings` — need no entry,
-/// because no host in this fleet runs anything older.
-const CLEANERS_BY_VERSION: &[(&str, &str)] = &[
-    ("queue_workdirs", "0.12.0"),
-    ("backup_twins", "0.13.0"),
-    ("release_store", "0.15.26"),
-];
-
-/// Whether `installed` is at least `required`, comparing `X.Y.Z` numerically.
-///
-/// An unreadable or absent version answers false, so an unknown host is treated
-/// as unable to take a new cleaner rather than assumed able: the cost of being
-/// wrong that way is a note, and the cost of being wrong the other way is a
-/// policy that stops every cleaner the host runs.
-fn version_at_least(installed: &str, required: &str) -> bool {
-    let parse = |value: &str| -> Option<(u64, u64, u64)> {
-        let bare = value.trim().trim_start_matches('v');
-        let bare = bare.split('-').next().unwrap_or_default();
-        let mut parts = bare.split('.').map(|part| part.parse::<u64>().ok());
-        Some((parts.next()??, parts.next()??, parts.next()??))
-    };
-    match (parse(installed), parse(required)) {
-        (Some(installed), Some(required)) => installed >= required,
-        _ => false,
-    }
-}
+/// Which cleaner each host could declare comes from
+/// [`crate::providers::local::disk_cleanup::catalogue`], the one place this
+/// product declares what it implements and the release each name first ships
+/// in. This check used to carry its own copy of that table; the copy and the
+/// registry contract's allowed-name list were the same facts written twice,
+/// and the command an operator was told to run was "hand-edit the registry".
+use crate::providers::local::disk_cleanup::catalogue;
 
 /// Free space against the watermark the registry declares, and a finding when
 /// a managed host declares no policy at all.
@@ -130,11 +102,12 @@ pub(in crate::fleet_shape) async fn disk_headroom(
         .get("stado")
         .map(String::as_str)
         .unwrap_or_default();
-    for (expected, since) in CLEANERS_BY_VERSION {
-        if declared_cleaners.contains(expected) {
+    for entry in catalogue::CLEANERS {
+        let (expected, since) = (entry.name, entry.since);
+        if declared_cleaners.contains(&expected) {
             continue;
         }
-        if !version_at_least(installed, since) {
+        if !catalogue::version_at_least(installed, since) {
             notes.push(format!(
                 "{}: {expected} undeclared and unsupported by installed stado {} (needs {since}) \
                  — deliver first, declare second",
@@ -159,7 +132,7 @@ pub(in crate::fleet_shape) async fn disk_headroom(
                  cannot reclaim what it owns"
             ),
             command: format!(
-                "add {expected} to targets[{}].disk_cleanup.cleaners, then stado registry validate and push",
+                "stado space cleaners declare {} --cleaner {expected}",
                 target.name
             ),
         });

@@ -3,6 +3,7 @@ use serde_json::{json, Map, Value};
 
 use super::{host, CmdError};
 
+mod cleaners;
 mod coverage;
 mod ops;
 mod read;
@@ -25,6 +26,11 @@ pub enum SpaceCommands {
     /// rewrites `targets[].memory_reclaim` through the canonical registry's
     /// compare-and-swap, validating the whole document first.
     Watermark(watermark::WatermarkArgs),
+    /// Read which janitor cleaners TARGET declares, and declare or withdraw one.
+    Cleaners {
+        #[command(subcommand)]
+        command: cleaners::CleanerCommands,
+    },
     /// Reclaim only fleet-declared stages, previewing unless --apply is present.
     Reclaim {
         target: String,
@@ -123,6 +129,7 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
     match command {
         SpaceCommands::Report { target, json } => report(&target, json).await,
         SpaceCommands::Watermark(args) => watermark::dispatch(args).await,
+        SpaceCommands::Cleaners { command } => cleaners::dispatch(command).await,
         SpaceCommands::Reclaim {
             target,
             stages,

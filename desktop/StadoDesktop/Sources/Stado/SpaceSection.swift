@@ -119,14 +119,24 @@ struct SpaceSection: View {
                                 .joined(separator: "\n")
                     )
                     WisentField(
-                        label: "Covered by no stage",
+                        label: "Outside the stage roots",
                         value: coverage.uncovered.isEmpty
                             ? "Every measured occupant is under a declared root"
                             : coverage.uncovered
-                                .map { "\(bytes($0.bytes))\t\($0.path)" }
+                                .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)" }
                                 .joined(separator: "\n"),
                         tone: coverage.uncovered.isEmpty ? .neutral : coverage.tone
                     )
+                    // A cleaner this product implements for those bytes, which
+                    // the host has not declared, is the repair the console
+                    // prints and the screen used to hide.
+                    if let unarmed = coverage.unarmed, !unarmed.isEmpty {
+                        WisentField(
+                            label: "Cleaners not declared here",
+                            value: unarmed.map(\.detail).joined(separator: "\n"),
+                            tone: .warning
+                        )
+                    }
                 } else {
                     WisentField(
                         label: "Janitor",

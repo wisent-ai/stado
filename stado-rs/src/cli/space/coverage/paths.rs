@@ -58,7 +58,7 @@ pub(super) fn occupants(report: &Value) -> Vec<Occupant> {
 }
 
 /// The declared root as an absolute path on the target.
-fn absolute(root: &str, home: &str) -> String {
+pub(super) fn absolute(root: &str, home: &str) -> String {
     match root.strip_prefix("~/") {
         Some(relative) => format!("{}/{relative}", home.trim_end_matches('/')),
         None => root.to_string(),
@@ -73,7 +73,7 @@ fn absolute(root: &str, home: &str) -> String {
 /// would have told a coverage report that everything an operator keeps there
 /// is reclaimable. The wildcard matches inside one segment only, never across
 /// a `/`.
-fn within(path: &str, root: &str) -> bool {
+pub(super) fn within(path: &str, root: &str) -> bool {
     let root = root.trim_end_matches('/');
     let mut expected = root.split('/');
     let mut actual = path.split('/');
@@ -113,7 +113,7 @@ fn segment_matches(pattern: &str, segment: &str) -> bool {
 ///
 /// Summed only over rows that do not contain one another, because a `du` walk
 /// reports a parent and its children and adding both would double the root.
-fn measured(root: &str, occupants: &[Occupant]) -> Option<i64> {
+pub(super) fn measured(root: &str, occupants: &[Occupant]) -> Option<i64> {
     if let Some(row) = occupants.iter().find(|row| row.path == root) {
         return Some(row.bytes);
     }

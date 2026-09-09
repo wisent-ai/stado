@@ -32,7 +32,10 @@ pub const SCRATCH_ROOT: &str = ".stado/work";
 /// which this sweep therefore never touches. Kept beside the sweep because a
 /// name that moves out of this list becomes removable in the same edit.
 pub const DECLARED_AREAS: [(&str, &str); 3] = [
-    ("jobs", "queue job trees; swept by the queue_workdirs cleaner"),
+    (
+        "jobs",
+        "queue job trees; swept by the queue_workdirs cleaner",
+    ),
     ("runs", "host run area; owned by deploy::host_run"),
     ("run-signals", "host run signals; owned by deploy::host_run"),
 ];

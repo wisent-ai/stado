@@ -63,13 +63,29 @@ pub fn print_coverage(coverage: &Value, free_space: &Value) {
         );
     }
     let empty = Vec::new();
+    // The first word of each row is the mechanism, not a verdict about the
+    // path: a declared cleaner's name when one sweeps it, `unarmed` when this
+    // product implements a cleaner nobody declared, and `uncovered` only when
+    // nothing in the product looks there at all. Printing `uncovered` beside
+    // `~/.stado/local-storage` while `release_store` was declared for it is
+    // the sentence this row shape exists to stop.
     for row in coverage
         .get("uncovered")
         .and_then(Value::as_array)
         .unwrap_or(&empty)
     {
+        let mechanism = row.get("mechanism").and_then(Value::as_str);
+        let declared = row
+            .get("mechanism_declared")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let label = match (mechanism, declared) {
+            (Some(name), true) => name.to_string(),
+            (Some(name), false) => format!("unarmed:{name}"),
+            (None, _) => "uncovered".to_string(),
+        };
         println!(
-            "uncovered\t{}\t{}",
+            "{label}\t{}\t{}",
             gib(row.get("bytes").and_then(Value::as_i64).unwrap_or_default()),
             row.get("path").and_then(Value::as_str).unwrap_or("unknown"),
         );

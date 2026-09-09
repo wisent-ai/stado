@@ -20,8 +20,10 @@
 //! the fixture's `HOME`, and the applying cases first read the dry run's paths
 //! and refuse to continue unless every one of them is inside that tempdir.
 
+mod cleaners;
 mod fixture;
 mod leased;
+mod mechanism;
 mod reclamation;
 mod refusals;
 mod system;
@@ -266,47 +268,5 @@ fn a_host_that_declares_no_policy_is_read_against_the_reporting_default() {
     assert!(
         tagged.join("payload.bin").is_file(),
         "reading an undeclared host's caches removed one"
-    );
-}
-
-/// The report names what a declared stage root covers and what nothing
-/// covers, measured against payloads this case wrote.
-///
-/// The defect: on 2026-09-09 a full mini printed `99%` and `cap_reached`
-/// while 52.4 GiB under `~/.stado/local-storage` sat where no stage looks,
-/// and no reading said so. Both trees below carry the same bytes, so a report
-/// that counted the undeclared one as covered fails here.
-#[test]
-fn the_report_names_covered_roots_and_what_nothing_covers() {
-    let host = Host::new();
-    let scratch = host.under_home(".stado/build-work");
-    fs::create_dir_all(&scratch).expect("create the declared scratch root");
-    host.seed_tree(&scratch, "release-tree", 200, false);
-    let stranded = host.seed_tree(&host.home, "nothing-declares-this", 200, false);
-
-    let coverage = host.json(&["space", "report", TARGET, "--json"])["coverage"].clone();
-    let covered = coverage["covered"]
-        .as_array()
-        .expect("the coverage names the declared roots")
-        .iter()
-        .find(|row| row["root"] == scratch.to_string_lossy().as_ref())
-        .unwrap_or_else(|| panic!("the scratch root is not covered: {coverage}"));
-    assert_eq!(covered["stage"], "build_scratch");
-    assert_eq!(covered["measured"], true, "{covered}");
-    assert!(
-        covered["bytes"].as_i64().unwrap_or_default() > 0,
-        "{covered}"
-    );
-
-    let named = coverage["uncovered"]
-        .as_array()
-        .expect("the coverage names its uncovered rows")
-        .iter()
-        .find(|row| row["path"] == stranded.to_string_lossy().as_ref())
-        .unwrap_or_else(|| panic!("the stranded tree is not named: {coverage}"));
-    assert!(named["bytes"].as_i64().unwrap_or_default() > 0, "{named}");
-    assert!(
-        !coverage["verdict"].as_str().unwrap_or_default().is_empty(),
-        "the coverage carries no verdict: {coverage}"
     );
 }

@@ -40,16 +40,28 @@ struct HostSpaceReport: Decodable, Sendable {
         let coveredBytes: Int64
         let uncovered: [UncoveredPath]
         let uncoveredBytes: Int64
+        /// Of the bytes outside every stage root, what a cleaner this host
+        /// DECLARES sweeps, and what nothing sweeps at all. Both are optional
+        /// because a Desktop build can meet an installed `stado` that predates
+        /// them, and a missing answer must leave the rest of the report
+        /// readable rather than failing the whole screen.
+        let cleanerBytes: Int64?
+        let unsweptBytes: Int64?
+        /// The cleaners this product implements whose roots hold unswept bytes
+        /// and which this host does not declare.
+        let unarmed: [Unarmed]?
         let verdict: String
         let detail: String
         let janitor: Janitor
 
         enum CodingKeys: String, CodingKey {
-            case covered, uncovered, verdict, detail, janitor
+            case covered, uncovered, verdict, detail, janitor, unarmed
             case needBytes = "need_bytes"
             case deficitBytes = "deficit_bytes"
             case coveredBytes = "covered_bytes"
             case uncoveredBytes = "uncovered_bytes"
+            case cleanerBytes = "cleaner_bytes"
+            case unsweptBytes = "unswept_bytes"
         }
 
         struct CoveredRoot: Decodable, Sendable {
@@ -62,8 +74,42 @@ struct HostSpaceReport: Decodable, Sendable {
         struct UncoveredPath: Decodable, Sendable, Identifiable {
             let path: String
             let bytes: Int64
+            /// The cleaner that reaches this path, when one does. `nil` means
+            /// nothing in the product looks here.
+            let mechanism: String?
+            let mechanismDeclared: Bool?
+
+            enum CodingKeys: String, CodingKey {
+                case path, bytes, mechanism
+                case mechanismDeclared = "mechanism_declared"
+            }
 
             var id: String { path }
+
+            /// The word an operator reads first: the cleaner sweeping it, the
+            /// same name marked unarmed, or `uncovered` when nothing reaches
+            /// it. Printing `uncovered` beside a path a declared cleaner
+            /// sweeps is the sentence this label exists to stop.
+            var label: String {
+                guard let mechanism else { return "uncovered" }
+                return mechanismDeclared == true ? mechanism : "unarmed:\(mechanism)"
+            }
+        }
+
+        /// One cleaner this product implements, undeclared, whose root holds
+        /// bytes nothing is sweeping.
+        struct Unarmed: Decodable, Sendable, Identifiable {
+            let cleaner: String
+            let root: String
+            let detail: String
+            let supported: Bool
+
+            var id: String { cleaner }
+
+            enum CodingKeys: String, CodingKey {
+                case cleaner, root, detail
+                case supported = "supported_by_installed_binary"
+            }
         }
 
         struct Janitor: Decodable, Sendable {

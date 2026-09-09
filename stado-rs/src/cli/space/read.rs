@@ -92,12 +92,33 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         .map_err(|error| CmdError::click(error.to_string()))?;
     let free_space = document.get("free_space").cloned().unwrap_or(Value::Null);
     let report = Value::Object(document);
+    let declared_cleaners: Vec<super::coverage::DeclaredCleaner> = target
+        .disk_cleanup
+        .as_ref()
+        .map(|policy| {
+            policy
+                .cleaners
+                .iter()
+                .map(|(name, cleaner)| super::coverage::DeclaredCleaner {
+                    name: name.clone(),
+                    root: cleaner.root.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let installed = target
+        .managed_versions
+        .get("stado")
+        .cloned()
+        .unwrap_or_default();
     let coverage = super::coverage::section(
         &report,
         stages,
         &home,
         &target.release_platform,
         &free_space,
+        &declared_cleaners,
+        &installed,
     );
     let mut document = report.as_object().cloned().unwrap_or_else(Map::new);
     document.insert("coverage".to_string(), coverage.clone());

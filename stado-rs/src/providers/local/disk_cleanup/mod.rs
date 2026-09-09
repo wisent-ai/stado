@@ -16,6 +16,7 @@
 
 pub mod backup_twins;
 pub mod build_caches;
+pub mod catalogue;
 pub mod chromium_clones;
 pub mod hf;
 mod janitor;
