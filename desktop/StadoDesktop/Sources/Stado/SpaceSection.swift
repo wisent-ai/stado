@@ -128,6 +128,24 @@ struct SpaceSection: View {
                         label: "Janitor",
                         value: "\(coverage.janitor.outcome) — \(coverage.janitor.detail)"
                     )
+                    if let pass = coverage.janitor.report {
+                        if let caps = pass.caps {
+                            WisentField(label: "Limits reached",
+                                value: caps.filter { $0.value }.keys.sorted().joined(separator: ", "))
+                        }
+                        if let cleaners = pass.cleaners {
+                            ForEach(cleaners.keys.sorted(), id: \.self) { name in
+                                if let result = cleaners[name] {
+                                    WisentField(label: name,
+                                        value: "Scanned \(result.scannedItems), eligible \(result.eligibleItems), deleted \(result.deletedItems).\n"
+                                            + result.skipped.keys.sorted().map { "\($0): \(result.skipped[$0] ?? 0)" }.joined(separator: ", "))
+                                }
+                            }
+                        }
+                        if let errors = pass.errors, !errors.isEmpty {
+                            WisentField(label: "Cleanup errors", value: errors.joined(separator: "\n"), tone: .danger)
+                        }
+                    }
                     WisentField(
                         label: "Declared roots",
                         value: coverage.covered.isEmpty
@@ -143,7 +161,7 @@ struct SpaceSection: View {
                             : coverage.uncovered.isEmpty
                             ? "Every measured occupant is under a declared root"
                             : coverage.uncovered
-                                .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)" }
+                                .map { "\($0.label)\t\(bytes($0.bytes))\t\($0.path)\($0.exclusiveOfMeasuredChildren == true ? " (excluding measured children)" : "")" }
                                 .joined(separator: "\n"),
                         tone: coverage.uncovered.isEmpty ? .neutral : coverage.tone
                     )

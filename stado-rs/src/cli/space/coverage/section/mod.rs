@@ -54,6 +54,10 @@ pub fn section(
     json!({
         "need_bytes": need,
         "deficit_bytes": deficit,
+        "cleaner_scopes": scopes.iter().map(|scope| json!({
+            "cleaner": scope.cleaner.name, "root": scope.root, "declared": scope.declared,
+            "bytes": paths::measured(&scope.root, &occupants),
+        })).collect::<Vec<_>>(),
         "covered": covered.iter().map(|row| json!({
             "stage": row.stage,
             "root": row.root,
