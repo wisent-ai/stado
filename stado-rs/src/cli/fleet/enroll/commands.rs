@@ -1,0 +1,256 @@
+//! The four operator-facing enrollment commands: `join` on the machine being
+//! added, then `pending`, `approve` and `reject` on the control plane.
+
+use crate::cli::registry::{commit_document, fetch_document};
+use crate::queue::JobStorage;
+use crate::targets::normalize_hostname;
+use serde_json::{json, Value};
+
+use crate::cli::fleet::ops::register_target;
+
+use super::catalog;
+use super::request::{
+    build_request, pending_request, release_platform, request_destination, request_invite_id,
+    request_path, request_target_name, target_name_for,
+};
+use super::request::{REQUESTS_PREFIX, STATUS_APPROVED, STATUS_PENDING};
+
+/// `stado fleet join` — run on the machine being added. Announces itself
+/// in the store and prints the request for carry-over setups.
+pub async fn join() -> Result<bool, String> {
+    let hostname = normalize_hostname(&crate::providers::vast::system_hostname());
+    // The catalog gates join wherever the registry is readable from here;
+    // on carry-over setups the control plane gates at approve instead.
+    match fetch_document().await {
+        Ok(document) => catalog::require_join_allowed(&document)?,
+        Err(_) => println!("note: registry not readable here; the catalog gates at approve"),
+    }
+    release_platform(std::env::consts::OS, std::env::consts::ARCH)?;
+    let request = build_request(&hostname, std::env::consts::OS, std::env::consts::ARCH);
+    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+    let created = store
+        .create_text_if_absent(
+            &request_path(&hostname),
+            &serde_json::to_string_pretty(&request).map_err(|exc| exc.to_string())?,
+        )
+        .await
+        .map_err(|exc| exc.to_string())?;
+    if created {
+        println!("join request recorded for '{hostname}'");
+    } else {
+        println!("a join request for '{hostname}' already exists");
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&request).map_err(|exc| exc.to_string())?
+    );
+    println!(
+        "next step, on the control plane: stado fleet approve '{}'",
+        target_name_for(&hostname)
+    );
+    Ok(true)
+}
+
+/// One pending request as `pending` reports it: the machine's own facts plus
+/// whatever an invite added. Pure.
+fn pending_row(document: &Value) -> Value {
+    let text = |name: &str| document.get(name).and_then(Value::as_str);
+    json!({
+        "hostname": text("hostname"),
+        "os": text("os"),
+        "arch": text("arch"),
+        "kind": text("kind").unwrap_or("local"),
+        "target_name": request_target_name(document),
+        "status": STATUS_PENDING,
+        "requested_at": text("requested_at"),
+        "destination": request_destination(document),
+        "invite_id": request_invite_id(document),
+        "installed_key_fingerprint": text("installed_key_fingerprint"),
+        "ssh_listening": document.get("ssh_listening").and_then(Value::as_bool),
+    })
+}
+
+/// `stado fleet pending` — every unanswered join request in the store.
+///
+/// An invited machine's request carries the channel it asked the fleet to come
+/// back on, so the destination is shown: it is the difference between a request
+/// `approve` can verify by probing and one it can only take on trust.
+pub async fn pending(as_json: bool) -> Result<bool, String> {
+    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+    let blobs = store
+        .list_blobs_with_meta(REQUESTS_PREFIX)
+        .await
+        .map_err(|exc| exc.to_string())?;
+    let mut shown = Vec::new();
+    for blob in &blobs {
+        let Some(text) = store
+            .download_text(&blob.name)
+            .await
+            .map_err(|exc| exc.to_string())?
+        else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        if pending_request(&document).is_ok() {
+            shown.push(pending_row(&document));
+        }
+    }
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "pending": shown }))
+                .map_err(|exc| exc.to_string())?
+        );
+        return Ok(true);
+    }
+    if shown.is_empty() {
+        println!("no pending join requests");
+        return Ok(true);
+    }
+    for row in &shown {
+        let text = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or("-");
+        println!("{}", text("hostname"));
+        if let Some(target) = row.get("target_name").and_then(Value::as_str) {
+            println!("  target:   {target} (the name the invite reserved)");
+        }
+        match row.get("destination").and_then(Value::as_str) {
+            Some(destination) => {
+                println!("  channel:  {destination} (approve verifies it by probing)")
+            }
+            None => println!("  channel:  none declared; approve registers without probing"),
+        }
+        if let Some(invite) = row.get("invite_id").and_then(Value::as_str) {
+            println!("  invite:   {invite}");
+            println!("  key:      {}", text("installed_key_fingerprint"));
+        }
+        if row.get("ssh_listening").and_then(Value::as_bool) == Some(false) {
+            println!("  warning:  the machine reported that nothing answers on its ssh port yet");
+        }
+    }
+    Ok(true)
+}
+
+/// `stado fleet approve HOSTNAME [--fleet FLEET]` — turn a pending request
+/// into a registered target.
+///
+/// Two kinds of request arrive here. One carries a `destination` (an invited
+/// machine, which has already installed the fleet's public key): that one takes
+/// the ordinary probing [`crate::cli::fleet::ops::enroll`] path verbatim —
+/// probe first, write second, roll the entry back if the agent will not
+/// install. Approval does not get its own, weaker registration path just
+/// because the request came in from outside. The other kind has no channel at
+/// all (today's `join`), and is registered from the machine's own report as
+/// before.
+///
+/// The registry name comes from the request, not from this command: an invited
+/// machine is registered under the name its invite reserved (and minted the
+/// channel key for, and showed its owner), while a plain `join` request is
+/// registered under the machine's own hostname as before.
+pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, String> {
+    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+    let text = store
+        .download_text(&request_path(hostname))
+        .await
+        .map_err(|exc| exc.to_string())?
+        .ok_or_else(|| format!("no join request for '{hostname}'"))?;
+    let request: Value = serde_json::from_str(&text).map_err(|exc| exc.to_string())?;
+    let request_hostname = pending_request(&request)?.to_string();
+    // An invited request names the target the invite reserved and minted the
+    // channel key for; only a request without one falls back to the machine's
+    // own hostname.
+    let name = request_target_name(&request)
+        .map(str::to_string)
+        .unwrap_or_else(|| target_name_for(&request_hostname));
+    let kind = request
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("local")
+        .to_string();
+    let destination = request_destination(&request).map(str::to_string);
+    let invite_id = request_invite_id(&request).map(str::to_string);
+    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    match &destination {
+        Some(destination) => {
+            if invite_id.is_some() {
+                catalog::require_invite_allowed(&document)?;
+            } else {
+                catalog::require_join_allowed(&document)?;
+            }
+            // `install_key` is false: an invited machine put the fleet's public
+            // key in its own authorized_keys as the invite's first act, so
+            // there is nothing to install and no second channel to do it over.
+            crate::cli::fleet::ops::enroll(
+                &name,
+                Some(destination),
+                &kind,
+                fleet_name,
+                true,
+                false,
+            )
+            .await?;
+        }
+        None => {
+            catalog::require_join_allowed(&document)?;
+            let request_os = request
+                .get("os")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "join request has no operating system".to_string())?;
+            let request_arch = request
+                .get("arch")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "join request has no architecture".to_string())?;
+            let release_platform = release_platform(request_os, request_arch)?;
+            // Pure: the entry is a function of the document it is appended to
+            // and of the join request, which is already decided. A lost race
+            // is answered by appending it to the newer document.
+            let generation = commit_document(|document| {
+                register_target(
+                    document,
+                    &name,
+                    &kind,
+                    std::slice::from_ref(&request_hostname),
+                    release_platform,
+                )
+                .map_err(crate::cli::CmdError::click)
+            })
+            .await
+            .map_err(|exc| exc.to_string())?;
+            println!("approved '{request_hostname}' as target '{name}' (generation {generation})");
+            if let Some(fleet) = fleet_name {
+                crate::cli::fleet::ops::assign(&name, fleet).await?;
+            }
+        }
+    }
+    let mut decided = request;
+    decided["status"] = Value::String(STATUS_APPROVED.to_string());
+    store
+        .upload_text(
+            &request_path(hostname),
+            &serde_json::to_string_pretty(&decided).map_err(|exc| exc.to_string())?,
+        )
+        .await
+        .map_err(|exc| exc.to_string())?;
+    // The invite has produced a registered machine; nothing is left for it to
+    // do, whatever allowance it had left.
+    if let Some(invite_id) = &invite_id {
+        crate::cli::fleet::invite::mark_spent(&store, invite_id).await?;
+        println!("invite {invite_id} is spent");
+    }
+    if destination.is_none() {
+        println!("install the agent on the machine: stado bootstrap --local --target '{name}'");
+    }
+    Ok(true)
+}
+
+/// `stado fleet reject HOSTNAME` — drop a pending join request.
+pub async fn reject(hostname: &str) -> Result<bool, String> {
+    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+    store
+        .delete_blob(&request_path(hostname))
+        .await
+        .map_err(|exc| exc.to_string())?;
+    println!("rejected join request for '{hostname}'");
+    Ok(true)
+}
