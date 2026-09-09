@@ -79,7 +79,7 @@ enum PublicOriginVerdict: Hashable, Sendable {
         case .originUnpublished:
             "The host is not publishing every declared path, so the edge would fetch a path this origin does not answer."
         case .originUnreachable:
-            "The separate origin request failed. Its recorded phase and error show what failed; DNS resolution alone does not establish the cause."
+            "The actual public release request failed or supplied no usable response. Its recorded error and the separate diagnostic probe remain distinct."
         case .originMismatch:
             "The edge selects a different origin than the one declared here, so converging this declaration would not change what a release client reads."
         case .diagnosticIncomplete:

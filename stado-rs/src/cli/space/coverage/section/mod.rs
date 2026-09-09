@@ -48,7 +48,12 @@ pub fn section(
         .filter(|row| mechanisms::reach(&row.path, &scopes).is_some_and(|scope| scope.declared))
         .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
     let unswept_bytes = outside_bytes.saturating_sub(cleaner_bytes);
-    let word = verdict::verdict(deficit, !occupants.is_empty(), unswept_bytes);
+    let word = verdict::verdict(
+        deficit,
+        !occupants.is_empty(),
+        unswept_bytes,
+        report["policy"].is_object(),
+    );
     let unarmed = mechanisms::unarmed(&occupants, &scopes);
     let state = &report["cleanup_state"];
     json!({

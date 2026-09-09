@@ -73,12 +73,12 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Why HOST is claiming nothing: its own agent's published gates, the
-    /// disk policy behind them, and what it declared against what it has.
+    /// Report HOST's measured disk space, published admission decision and
+    /// the source, duration and error of every diagnostic read.
     ///
-    /// Read-only and safe against a live host. The Mac mini claimed nothing
-    /// for hours at 2 GiB free against a 55 GiB policy, publishing
-    /// `disk_pressure_unresolved` every tick, and no command said so.
+    /// Read-only. Each registry, host, storage, capacity and queue read has a
+    /// ten-second budget. Completed readings survive failures; incomplete
+    /// reports use claiming=null and never turn missing space into a full disk.
     Gates {
         host: String,
         /// Emit the gates as JSON.

@@ -69,10 +69,14 @@ struct PublicOriginEdgeSelection: Decodable, Sendable {
     let detail: String?
     let diagnosis: StorageReconciliationJSON?
     let observation: StorageReconciliationJSON?
+    let readback: StorageReconciliationJSON?
+    let readbackObservation: StorageReconciliationJSON?
 
     enum CodingKeys: String, CodingKey {
         case state, origin, endpoint, detail
         case diagnosis, observation
+        case readback
+        case readbackObservation = "readback_observation"
     }
 
     init(from decoder: Decoder) throws {
@@ -85,6 +89,8 @@ struct PublicOriginEdgeSelection: Decodable, Sendable {
         detail = try values.decodeIfPresent(String.self, forKey: .detail)
         diagnosis = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .diagnosis)
         observation = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .observation)
+        readback = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .readback)
+        readbackObservation = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .readbackObservation)
     }
 }
 

@@ -41,7 +41,8 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection, re
         Some(publication) => PublicationReading::Read(publication),
         None => PublicationReading::Unknown(publication_read.detail.clone().unwrap_or_default()),
     };
-    let complete = dns_read.complete() && publication_read.complete() && selection.observation.complete();
+    let complete = dns_read.complete() && publication_read.complete()
+        && selection.observation.complete() && selection.readback_observation.complete();
     let edge = edge::edge_state(origin, selection);
     let word = if complete {
         verdict_for(resolution.state, &publication, edge, selection.readback_answered())
@@ -51,7 +52,7 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection, re
     let problem = if complete {
         origin_error(&resolution, &publication, edge, selection)
     } else {
-        [&dns_read, &publication_read, &selection.observation].into_iter()
+        [&dns_read, &publication_read, &selection.observation, &selection.readback_observation].into_iter()
             .filter_map(|read| read.detail.as_deref()).collect::<Vec<_>>().join("; ")
     };
     let mut row = declaration_row(origin);
@@ -133,8 +134,8 @@ fn verdict_for(
         ResolutionState::Resolved => match publication.state() {
             "unpublished" => "origin-unpublished",
             "unknown" => "origin-unreachable",
-            _ if edge != "agrees" => "origin-mismatch",
-            _ if !readback_answered => "origin-unreachable",
+            _ if edge == "differs" => "origin-mismatch",
+            _ if edge != "agrees" || !readback_answered => "origin-unreachable",
             _ => VERDICT_SERVING,
         },
     }

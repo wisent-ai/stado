@@ -50,6 +50,12 @@ fn declare_preserves_omitted_fields_and_refusals_leave_the_registry_unchanged() 
     for fields in [
         vec!["--cleaner", "not_implemented"],
         vec!["--cleaner", "release_store", "--keep-newest", "0"],
+        vec![
+            "--cleaner",
+            "release_store",
+            "--allow-missing-upload-proof",
+            "true",
+        ],
     ] {
         let before = fs::read(host.storage.join("registry.json")).unwrap();
         let mut args = vec!["space", "cleaners", "declare", TARGET];
@@ -188,4 +194,86 @@ fn bounded_replica_passes_reach_duplicates_beyond_a_retained_prefix() {
             b"only replica has this"
         );
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_named_reaper_stops_a_program_running_from_a_scratch_directory() {
+    use std::process::{Child, Command};
+    struct Program(Child);
+    impl Drop for Program {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let host = Host::new();
+    let directory = host.home.join(".stado/work/process-probe");
+    fs::create_dir_all(&directory).unwrap();
+    let program = directory.join("stado");
+    fs::hard_link(env!("CARGO_BIN_EXE_stado"), &program).unwrap();
+    let mut child = Program(
+        Command::new(&program)
+            .args(["agent", "--target", TARGET])
+            .env_clear()
+            .env("HOME", &host.home)
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env("WC_STORAGE_BACKEND", "local")
+            .env("WC_LOCAL_STORAGE_PATH", &host.storage)
+            .env("WC_STADO_STORAGE_NAMESPACE", "space-fixture")
+            .env("WC_PROVIDERS", "local")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let pattern = program.to_str().unwrap();
+    let pid = child.0.id().to_string();
+    let preview = host.json(&[
+        "service",
+        "reap",
+        "--host",
+        TARGET,
+        "--command",
+        pattern,
+        "--json",
+    ]);
+    assert!(
+        preview["reaped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["pid"].as_str() == Some(pid.as_str()) && row["outcome"] == "would_end"),
+        "{preview}"
+    );
+    assert!(
+        child.0.try_wait().unwrap().is_none(),
+        "preview terminated the process"
+    );
+    let applied = host.json(&[
+        "service",
+        "reap",
+        "--host",
+        TARGET,
+        "--command",
+        pattern,
+        "--apply",
+        "--json",
+    ]);
+    assert!(
+        applied["reaped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["pid"].as_str() == Some(pid.as_str()) && row["outcome"] == "ended"),
+        "{applied}"
+    );
+    assert!(
+        !child.0.wait().unwrap().success(),
+        "the running program was not terminated"
+    );
+    assert!(
+        program.is_file(),
+        "process retirement should not remove files itself"
+    );
 }

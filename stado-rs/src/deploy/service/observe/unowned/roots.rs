@@ -10,19 +10,25 @@ use crate::deploy::service::*;
 /// running out of it is this fleet's program all the same.
 pub const DEPLOYED_SERVICES_ROOT: &str = "$HOME/.stado/services";
 
+/// Scratch programs remain visible after their directory has been unlinked.
+/// The existing named reaper still protects declared units and their descendants.
+pub const SCRATCH_PROGRAM_ROOT: &str = "$HOME/.stado/work";
+
 /// What [`product_guess`] says about a command line that matches a managed
 /// root and no product in the declaration.
 pub const UNKNOWN_PRODUCT: &str = "unknown";
 
-/// The `$HOME`-relative roots a managed program can execute out of: every
-/// declared product's install root, plus [`DEPLOYED_SERVICES_ROOT`].
+/// Product install roots, deployed services and disposable scratch programs.
 ///
 /// This is the whole definition of "a product process" for
 /// [`unowned_processes`]. It comes off the shipped product declaration rather
 /// than a list in this file, so a product added there is scanned for without a
 /// matching edit here.
 pub fn managed_roots() -> Result<Vec<String>, DeployError> {
-    let mut roots = vec![DEPLOYED_SERVICES_ROOT.to_string()];
+    let mut roots = vec![
+        DEPLOYED_SERVICES_ROOT.to_string(),
+        SCRATCH_PROGRAM_ROOT.to_string(),
+    ];
     for product in crate::deploy::products::declared()? {
         let root = product.root().to_string();
         if !roots.contains(&root) {

@@ -138,6 +138,12 @@ struct PublicOriginRowPanel: View {
                     ("Origin the edge selects", selection.origin ?? "Not reported"),
                 ]
             )
+            if let readback = selection.readback {
+                diagnostic("Actual public release request", readback)
+            }
+            if let observation = selection.readbackObservation {
+                diagnostic("Public release request reading", observation)
+            }
             if let observation = selection.observation {
                 diagnostic("Public edge reading", observation)
             }

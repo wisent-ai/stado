@@ -18,6 +18,14 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               host's own findings without treating an unread image as agreement",
     },
     ApprovedCommand {
+        argv: &[STADO_CLI, "release", "active-binary", "skarbiec", "--json"],
+        why: "reads the exact signed Skarbiec executable and the local release process \
+              and proxy that attest it. Weles uses this lookup before starting, and \
+              a workstation cannot inspect those host-local records. The fixed \
+              provider and JSON output expose the actual refusal without accepting \
+              a path, another product, a lifecycle verb, or a repair flag",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/uptime"],
         why: "reads kernel uptime and load counters; takes no argument and writes nothing",
     },

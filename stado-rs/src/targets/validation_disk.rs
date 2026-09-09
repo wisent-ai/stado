@@ -182,6 +182,15 @@ pub(crate) fn validate_disk_cleanup(
                     "must be a boolean",
                 ));
             }
+            if proof.as_bool() == Some(true)
+                && name != "weles_recordings"
+                && crate::providers::local::disk_cleanup::catalogue::cleaner(name).is_some()
+            {
+                return Err(verr(
+                    &format!("{cleaner_location}.allow_missing_upload_proof"),
+                    "only the weles_recordings cleaner accepts missing upload proof",
+                ));
+            }
         }
         if let Some(root) = cleaner.get("root") {
             if root.as_str().is_none_or(|r| r.trim().is_empty()) {
