@@ -78,10 +78,6 @@ pub fn scan_backup_twins(
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        if namespace.trim().is_empty() {
-            report.skip_backup_twins("namespace_unconfigured", 1);
-            return Ok(());
-        }
         let backup = match &configured.root {
             Some(root) => crate::config_file::expand_tilde(root),
             None => home.join(BACKUP_ROOT),
@@ -112,6 +108,10 @@ pub fn scan_backup_twins(
                     report.skip_backup_twins("escapes_root", 1);
                     continue;
                 };
+                if namespace.trim().is_empty() && !relative.starts_with("ecosystem") {
+                    report.skip_backup_twins("namespace_unconfigured", 1);
+                    continue;
+                }
                 let replica = match std::fs::symlink_metadata(&path) {
                     Ok(info) => info,
                     Err(_) => {

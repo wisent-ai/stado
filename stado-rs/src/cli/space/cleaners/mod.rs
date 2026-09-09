@@ -129,6 +129,7 @@ fn rows(declared: &Declared) -> Vec<Value> {
                 "since": entry.since,
                 "min_age_floor_seconds": entry.min_age_floor_seconds,
                 "supported_by_installed_binary": supported,
+                "root_override_since": entry.root_override_since,
                 "detail": detail(entry, declaration.is_some(), supported, &declared.installed),
             })
         })
@@ -245,6 +246,17 @@ async fn declare(args: DeclareArgs) -> Result<(), CmdError> {
     }
     let mut fields = Map::new();
     if let Some(root) = args.root.as_ref() {
+        if let Some(required) = entry.root_override_since {
+            if !catalogue::version_at_least(&declared.installed, required) {
+                return Err(CmdError::click(format!(
+                    "{} root overrides require stado {required}; {} reports {}; no policy was changed",
+                    args.cleaner, args.target, declared.installed
+                )));
+            }
+        }
+        if !(root.starts_with('/') || root.starts_with("~/")) {
+            return Err(CmdError::usage("cleaner root must be absolute or begin with ~/"));
+        }
         fields.insert("root".to_string(), Value::from(root.clone()));
     }
     if let Some(seconds) = args.min_age_seconds {

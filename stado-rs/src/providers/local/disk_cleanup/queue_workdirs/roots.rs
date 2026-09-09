@@ -89,6 +89,35 @@ pub(super) fn open_work_root_in(
     Ok((path, parent, home_info.st_dev))
 }
 
+pub(super) fn open_cleanup_root(
+    home: &Path,
+    configured: Option<&str>,
+) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
+    let Some(configured) = configured else { return open_work_root_in(home, false); };
+    let home = resolved_home(home)?;
+    let expanded = crate::config_file::expand_tilde(configured);
+    let relative = expanded.strip_prefix(&home)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "queue cleanup root must be beneath the host home"))?;
+    if relative.as_os_str().is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "queue cleanup root cannot be the home itself"));
+    }
+    let mut fd = safefs::open_dir_path(&home)?;
+    let home_info = validate_owned_directory(fd.as_raw_fd(), &home)?;
+    let mut path = home.clone();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid queue cleanup root component"));
+        };
+        path.push(name);
+        fd = safefs::open_dir_at(fd.as_raw_fd(), name)?;
+        let info = validate_owned_directory(fd.as_raw_fd(), &path)?;
+        if info.st_dev != home_info.st_dev {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "queue cleanup root crosses the home device"));
+        }
+    }
+    Ok((path, fd, home_info.st_dev))
+}
+
 /// Canonical workdir for one validated local queue job.
 pub fn work_dir(job_id: &str) -> io::Result<PathBuf> {
     if !valid_job_id(job_id) {
