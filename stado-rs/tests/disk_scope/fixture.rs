@@ -92,6 +92,12 @@ impl Host {
         for directory in [&home, &storage, &cache_root, &root.join("tmp")] {
             fs::create_dir_all(directory).expect("create isolated fixture directory");
         }
+        // The host configuration reader executes the same installed product
+        // path its services use, not a replacement command or a PATH lookup.
+        let bin = home.join(".stado/bin");
+        fs::create_dir_all(&bin).expect("create isolated product installation");
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_stado"), bin.join("stado"))
+            .expect("install the real product binary in the isolated host");
         let host = Self {
             _dir: dir,
             root,

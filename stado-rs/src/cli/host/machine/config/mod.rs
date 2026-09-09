@@ -94,14 +94,11 @@ pub async fn config_unset(
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
     let script = format!(
-        "set -euo pipefail\n\
-         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
-         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
-         binary=\"$HOME/.stado/bin/stado\"\n\
-         test -x \"$binary\"\n\
+        "{}\
          key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
          \"$binary\" config unset \"$key\"\n\
          \"$binary\" config show\n",
+        remote::CONFIG_SCRIPT_PREFIX,
         STANDARD.encode(key.as_bytes())
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(
