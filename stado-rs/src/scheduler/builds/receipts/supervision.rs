@@ -2,8 +2,9 @@
 //! when silence has lasted long enough to be a failure.
 
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 
-use crate::queue::runs::TERMINAL_PREFIXES;
+use crate::queue::runs::{RUN_PREFIX, TERMINAL_PREFIXES};
 use crate::queue::storage::JobStorage;
 use crate::targets::BuildRun;
 
@@ -20,24 +21,72 @@ const QUEUE_CLAIM_THRESHOLD_SECONDS: i64 = 600;
 /// longer needs a recipe field, not a longer silence.
 const BUILD_CEILING_SECONDS: i64 = 3600;
 
-/// The terminal prefix `job_id` has landed in, or `None` while it is still
-/// queued or running — or has been swept out of the queue entirely. The
+/// The terminal prefix this run's job has landed in, or `None` while it is
+/// still queued or running — or has been swept out of the queue entirely. The
 /// caller distinguishes "still in flight" from "vanished" with
 /// [`stuck_reason`]: absence alone is not a verdict.
+///
+/// Two places hold that fact, and both are authoritative in turn. While the
+/// job blob is live, the prefix it sits in is the answer. Once the by-run
+/// reaper has retired the run, the blob is gone and the answer is the outcome
+/// the reaper retained into the durable manifest — which it writes before it
+/// deletes anything. Reading only the live prefixes is how a build that
+/// really completed was recorded as a job that disappeared, in the very tick
+/// that retired it.
 pub(super) async fn terminal_prefix(
     store: &JobStorage,
-    job_id: &str,
+    run: &BuildRun,
 ) -> Result<Option<&'static str>, String> {
     for prefix in TERMINAL_PREFIXES {
         let found = store
-            .read_job(prefix, job_id)
+            .read_job(prefix, &run.job_id)
             .await
-            .map_err(|exc| format!("reading {prefix}/{job_id}: {exc}"))?;
+            .map_err(|exc| format!("reading {prefix}/{}: {exc}", run.job_id))?;
         if found.is_some() {
             return Ok(Some(prefix));
         }
     }
-    Ok(None)
+    retained_prefix(store, run).await
+}
+
+/// The prefix the by-run reaper retained for this job inside its durable
+/// submission manifest, or `None` when the run declares no manifest, the
+/// manifest is gone, or the entry that names this job carries no outcome yet.
+///
+/// The manifest is addressed by the id the run recorded at submission, so this
+/// is one read, never a scan of every run the store holds.
+async fn retained_prefix(
+    store: &JobStorage,
+    run: &BuildRun,
+) -> Result<Option<&'static str>, String> {
+    if run.run_id.is_empty() {
+        return Ok(None);
+    }
+    let path = format!("{RUN_PREFIX}/{}.json", run.run_id);
+    let Some(text) = store
+        .download_text(&path)
+        .await
+        .map_err(|exc| format!("reading {path}: {exc}"))?
+    else {
+        return Ok(None);
+    };
+    let manifest: Value =
+        serde_json::from_str(&text).map_err(|error| format!("{path} is not JSON: {error}"))?;
+    let retained = manifest
+        .get("entries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|entry| entry.get("job_id").and_then(Value::as_str) == Some(run.job_id.as_str()))
+        .and_then(|entry| entry.get("outcome"))
+        .and_then(|outcome| outcome.get("prefix"))
+        .and_then(Value::as_str);
+    Ok(retained.and_then(|prefix| {
+        TERMINAL_PREFIXES
+            .iter()
+            .copied()
+            .find(|known| *known == prefix)
+    }))
 }
 
 /// The supervision verdict for a run whose job sits in no terminal prefix:
@@ -49,8 +98,10 @@ pub(super) async fn terminal_prefix(
 /// says no worker took the work; a claimed job past [`BUILD_CEILING_SECONDS`]
 /// says the build — or the worker running it — is wedged; a job record gone
 /// from every prefix says the record was lost with no outcome ever reported.
-/// Build jobs carry no `runs/` manifest, so the by-run reaper never sweeps
-/// their records: absence here is disappearance, not housekeeping.
+/// A build job does belong to a `runs/` manifest, so the by-run reaper does
+/// sweep its record — which is why [`terminal_prefix`] reads the outcome that
+/// reaper retained before this verdict is ever reached. Reaching it means no
+/// live prefix and no retained outcome hold the job.
 pub(super) async fn stuck_reason(
     store: &JobStorage,
     run: &BuildRun,

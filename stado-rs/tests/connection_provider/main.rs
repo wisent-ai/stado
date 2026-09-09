@@ -9,6 +9,10 @@
 //! What is defended: a receipt used to publish only the declared routes and
 //! never which one carried the command, so a host whose preferred route was
 //! dead read like a healthy one. `used_connection` is that missing fact.
+//!
+//! [`lease`] holds the journey that needs a real fleet host over ssh. It takes
+//! one with `stado scratch` instead of asking an operator to name a host in an
+//! environment variable, so it runs by default and destroys what it took.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -16,19 +20,16 @@ use std::process::{Command, Output};
 use serde_json::{json, Value};
 use stado::targets::REGISTRY_SCHEMA_VERSION;
 
-/// The host whose real journey is exercised. Supplied explicitly: a test that
-/// chose a fleet host itself would send ssh traffic at whatever the
-/// developer's registry happens to hold.
-const HOST_VARIABLE: &str = "STADO_CONNECTION_PROVIDER_HOST";
+mod lease;
 
 /// RFC 2606 reserves `.invalid`, so the preferred path cannot resolve and the
 /// second declared route is the only one left. The host is not touched.
-const UNROUTABLE_SUFFIX: &str = ".invalid";
+pub(crate) const UNROUTABLE_SUFFIX: &str = ".invalid";
 
 /// The second declared route these tests add.
-const SECOND_PATH: &str = "journey-alternate";
+pub(crate) const SECOND_PATH: &str = "journey-alternate";
 
-fn stado(storage: &Path, isolated_config: bool, args: &[&str]) -> Output {
+pub(crate) fn stado(storage: &Path, isolated_config: bool, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
     command
         .args(args)
@@ -46,15 +47,15 @@ fn stado(storage: &Path, isolated_config: bool, args: &[&str]) -> Output {
     command.output().expect("stado binary runs")
 }
 
-fn stdout(output: &Output) -> String {
+pub(crate) fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-fn stderr(output: &Output) -> String {
+pub(crate) fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn document(output: &Output) -> Value {
+pub(crate) fn document(output: &Output) -> Value {
     serde_json::from_str(&stdout(output)).unwrap_or_else(|error| {
         panic!(
             "expected one JSON document, got {error}\nstdout: {}\nstderr: {}",
@@ -64,7 +65,7 @@ fn document(output: &Output) -> Value {
     })
 }
 
-fn seed(registry: &Value) -> tempfile::TempDir {
+pub(crate) fn seed(registry: &Value) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
         directory.path().join("registry.json"),
@@ -83,7 +84,7 @@ fn this_hostname() -> String {
 
 /// One `registry host path set`, in the shape all four call sites need: a
 /// route name, its destination, an optional rank, and the typed receipt.
-fn declare_path(
+pub(crate) fn declare_path(
     storage: &Path,
     isolated_config: bool,
     host: &str,
@@ -101,7 +102,7 @@ fn declare_path(
 }
 
 /// The one approved read these tests run on a host.
-fn exec_uptime(storage: &Path, isolated_config: bool, host: &str) -> Output {
+pub(crate) fn exec_uptime(storage: &Path, isolated_config: bool, host: &str) -> Output {
     let args = ["host", "exec", "--json", host, "--", "uptime"];
     stado(storage, isolated_config, &args)
 }
@@ -225,71 +226,3 @@ fn a_duplicate_route_is_a_typed_refusal_that_changes_nothing() {
     );
 }
 
-/// The real journey: a registered fleet host whose preferred path cannot
-/// resolve, reached over its second declared route, with the receipt naming
-/// that route and carrying the host's own output.
-///
-/// Ignored by default because it needs a registered host and its brokered
-/// key. It writes nothing on the host and nothing to the canonical registry:
-/// the fixture lives in a temp store, and `uptime` is a read.
-#[test]
-#[ignore = "needs STADO_CONNECTION_PROVIDER_HOST, a registered fleet host reachable over ssh"]
-fn a_dead_preferred_path_hands_over_and_the_receipt_names_the_route() {
-    let host = std::env::var(HOST_VARIABLE)
-        .unwrap_or_else(|_| panic!("{HOST_VARIABLE} must name a registered fleet host"));
-
-    // The real destination comes from the canonical registry through the
-    // product itself, never from a literal in this file.
-    let pulled = Command::new(env!("CARGO_BIN_EXE_stado"))
-        .args(["registry", "pull"])
-        .output()
-        .expect("stado registry pull runs");
-    let canonical: Value = serde_json::from_slice(&pulled.stdout)
-        .unwrap_or_else(|_| panic!("registry pull: {}", stderr(&pulled)));
-    let target = canonical["targets"]
-        .as_array()
-        .expect("registry.targets is an array")
-        .iter()
-        .find(|entry| entry["name"] == host.as_str())
-        .unwrap_or_else(|| panic!("{host} is not a registry target"))
-        .clone();
-    let reachable = target["ssh"]
-        .as_str()
-        .unwrap_or_else(|| panic!("{host} declares no ssh destination"))
-        .to_string();
-    let (account, _) = reachable.split_once('@').expect("an ssh destination");
-
-    let directory = seed(&json!({
-        "schema_version": canonical["schema_version"],
-        "targets": [target],
-        "coordinators": [],
-    }));
-    let storage = directory.path();
-
-    // Preferred path first, so the real destination is never declared twice.
-    let unroutable = format!("{account}@{host}{UNROUTABLE_SUFFIX}");
-    let preferred = declare_path(storage, false, &host, "primary", &unroutable, None);
-    assert!(preferred.status.success(), "{}", stderr(&preferred));
-    let second = declare_path(storage, false, &host, SECOND_PATH, &reachable, Some("1"));
-    assert!(second.status.success(), "{}", stderr(&second));
-
-    let output = exec_uptime(storage, false, &host);
-    let receipt = document(&output);
-    assert_eq!(receipt["status"], "ok", "stderr: {}", stderr(&output));
-    assert_eq!(receipt["ssh"], unroutable.as_str());
-    assert_eq!(receipt["used_connection"]["kind"], "ssh");
-    assert_eq!(
-        receipt["used_connection"]["name"], SECOND_PATH,
-        "the receipt must name the route that answered, not a declaration"
-    );
-    assert_eq!(
-        receipt["used_connection"]["destination"],
-        reachable.as_str()
-    );
-    assert!(
-        receipt["stdout"].as_str().unwrap().contains("load average"),
-        "the host's own uptime output is missing: {}",
-        receipt["stdout"]
-    );
-    assert_eq!(output.status.code(), Some(0));
-}

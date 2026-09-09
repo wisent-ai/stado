@@ -1,11 +1,17 @@
 //! Public release-channel journey through the real production ingress.
 //!
-//! This one case is deliberately ignored by a plain `cargo test`: it needs the
-//! public control origin and one immutable release coordinate, which the
-//! repository's test runner supplies directly. No stand-in server, loopback
-//! override, dry run or fixture replaces the channel. The built Stado binary
-//! performs every network operation; the case retains, verifies and executes
-//! the fetched bytes.
+//! This one case stays ignored by a plain `cargo test`, and the reason is a
+//! fact about the origin rather than a preference: the public control origin is
+//! served through a Tailscale Funnel in front of one workstation, and it
+//! answers `HTTP 503 Service Unavailable` with `release origin is unreachable`
+//! whenever that machine is not serving. A coordinate that reads `present` one
+//! minute reads `unavailable` the next, so this cannot be a case the suite runs
+//! unconditionally without turning somebody's laptop into a gate.
+//!
+//! What it needs, and what runs it, is written on the `#[ignore]` below. No
+//! stand-in server, loopback override, dry run or fixture replaces the channel.
+//! The built Stado binary performs every network operation; the case retains,
+//! verifies and executes the fetched bytes.
 
 use std::fs;
 use std::io::Write;
@@ -128,7 +134,16 @@ fn release_binary(archive: &Path, destination: &Path) -> PathBuf {
 }
 
 #[test]
-#[ignore = "requires a real public release origin and immutable coordinate"]
+#[ignore = "needs a public release origin that is serving and one immutable coordinate already \
+            published into it: STADO_RELEASE_CHANNEL_URL is the HTTPS origin, \
+            STADO_RELEASE_CHANNEL_VERSION and STADO_RELEASE_CHANNEL_PLATFORM name the coordinate. \
+            Ask the origin which coordinates it holds with `stado storage stat \
+            stado://releases/stado/<version>/<platform>/release.json --json` (state must read \
+            `present`, not `unavailable`), then run it with \
+            STADO_RELEASE_CHANNEL_URL=https://stado.wisent.com \
+            STADO_RELEASE_CHANNEL_VERSION=<version> STADO_RELEASE_CHANNEL_PLATFORM=<platform> \
+            cargo test --test channel -- --ignored \
+            release::public_release_channel_serves_a_verified_executable_native_release"]
 fn public_release_channel_serves_a_verified_executable_native_release() {
     let origin = required("STADO_RELEASE_CHANNEL_URL");
     assert!(

@@ -86,7 +86,7 @@ pub(super) async fn reconcile_build_runs(
     };
     let mut outcomes: Vec<RunOutcome> = Vec::new();
     for (recipe, platform, run) in pending {
-        let prefix = match terminal_prefix(&store, &run.job_id).await {
+        let prefix = match terminal_prefix(&store, run).await {
             Ok(prefix) => prefix,
             Err(exc) => {
                 log(&format!("build {}: {exc}", recipe.name));
@@ -100,6 +100,7 @@ pub(super) async fn reconcile_build_runs(
                     status: if succeeded { "succeeded" } else { "failed" }.to_string(),
                     at: isoformat_utc(chrono::Utc::now()),
                     job_id: run.job_id.clone(),
+                    run_id: run.run_id.clone(),
                     artifact_uris: if succeeded {
                         uploaded_artifacts(&store, &run.job_id, log).await
                     } else {
@@ -158,6 +159,7 @@ pub(super) async fn reconcile_build_runs(
                     status: "failed".to_string(),
                     at: isoformat_utc(chrono::Utc::now()),
                     job_id: run.job_id.clone(),
+                    run_id: run.run_id.clone(),
                     artifact_uris: Vec::new(),
                     version: None,
                     declared: false,

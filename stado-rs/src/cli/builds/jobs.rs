@@ -63,6 +63,7 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
                 status: "running".to_string(),
                 at: at.clone(),
                 job_id: job.job_id,
+                run_id: options.run_id.clone(),
                 artifact_uris: Vec::new(),
                 version: None,
                 declared: false,

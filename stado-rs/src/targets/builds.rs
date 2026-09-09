@@ -106,6 +106,17 @@ pub struct BuildRun {
     /// before submission (`unclaimable`): there is no job to point at, and
     /// an id that names no job must not be offered as one.
     pub job_id: String,
+    /// Durable submission-manifest id (`runs/<run_id>.json`) this build job
+    /// belongs to. Empty for an `unclaimable` run, and for a run recorded by
+    /// a predecessor that did not write it down.
+    ///
+    /// It is the only way back to the job's settled outcome once the by-run
+    /// reaper has retired the run: the reaper retains
+    /// `entries[].outcome.prefix` into the manifest and then deletes the
+    /// `completed/` blob, so a reconciliation that reads live prefixes alone
+    /// sees a finished build as a job that vanished.
+    #[serde(default)]
+    pub run_id: String,
     /// Store-relative URIs of the uploaded artifacts, empty while running.
     #[serde(default)]
     pub artifact_uris: Vec<String>,

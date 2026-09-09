@@ -5,6 +5,19 @@
 //! worker claims the platform-constrained job. The assertion reads the uploaded
 //! artifact and the reconciled recipe state; no scheduler, Git, worker, or
 //! storage stand-in is used.
+//!
+//! It runs by default. Both dependencies are reachable from anywhere the suite
+//! runs: the repository it polls is `https://github.com/wisent-ai/stado.git`,
+//! which is public, and the worker is a `stado agent` this case starts itself
+//! against its own store, on the machine running the case.
+//!
+//! Running it is what exposed the defect it now also defends against. The
+//! coordinator's by-run reaper retires a finished build's run inside the same
+//! tick that reconciles the recipe, deleting the `completed/` job blob; a
+//! reconciliation that read only the live job prefixes therefore recorded a
+//! build that had really succeeded as `failed`, with the reason "job record
+//! disappeared; the worker never reported" and no artifacts. The run this case
+//! asserts on is the durable one, so the retained outcome is what decides.
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -182,7 +195,6 @@ impl Drop for Journey {
 }
 
 #[test]
-#[ignore = "Probierz records the real public Git and Stado worker journey"]
 fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact() {
     let platform = build_platform();
     let mut journey = Journey::new();
@@ -263,7 +275,27 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     let completed = journey.status();
     let run = &completed["recipe"]["runs"][platform];
     assert_eq!(run["status"], "succeeded", "{completed}");
-    assert_eq!(completed["job_states"][platform], "completed");
+    // Not `job_states`: by this point the coordinator's by-run reaper has
+    // retired the run and swept the live `completed/` blob, so the only record
+    // of the outcome is the durable manifest the run names.
+    let run_id = run["run_id"]
+        .as_str()
+        .expect("a submitted build records the durable run it belongs to");
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(journey.storage.join(format!("runs/{run_id}.json")))
+            .expect("the durable run manifest is readable"),
+    )
+    .expect("the durable run manifest is JSON");
+    let entry = manifest["entries"]
+        .as_array()
+        .expect("the manifest carries its entries")
+        .iter()
+        .find(|entry| entry["job_id"].as_str() == Some(job_id))
+        .unwrap_or_else(|| panic!("run {run_id} has no entry for {job_id}: {manifest}"));
+    assert_eq!(
+        entry["outcome"]["prefix"], "completed",
+        "the retained outcome must say where the job landed: {manifest}"
+    );
     assert_eq!(run["declared"], false);
     assert!(run["artifact_uris"]
         .as_array()
