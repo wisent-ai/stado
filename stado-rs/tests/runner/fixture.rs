@@ -60,9 +60,16 @@ impl Fixture {
         Self { root }
     }
 
+    /// Every case runs through here, so the `HOME` override belongs here too:
+    /// the product records its last-known-good registry copy under `HOME`, and
+    /// a spawn inheriting the operator's home writes the operator's own
+    /// `~/.stado/cache`.
     pub fn stado(&self, args: &[&str]) -> Output {
+        let home = self.root.path().join("home");
+        std::fs::create_dir_all(&home).expect("an isolated home");
         Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(args)
+            .env("HOME", &home)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.root.path())
             .env("STADO_CONFIG", self.root.path().join("no-such-config.json"))

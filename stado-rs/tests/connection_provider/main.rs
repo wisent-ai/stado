@@ -2,19 +2,27 @@
 //! `stado` binary.
 //!
 //! Every test drives `CARGO_BIN_EXE_stado` against an isolated registry
-//! (`WC_STORAGE_BACKEND=local` + `WC_LOCAL_STORAGE_PATH=<TempDir>`), and each
-//! route is added through `registry host path set`, so the document under
-//! test is the one the product wrote and the canonical registry is untouched.
+//! (`WC_STORAGE_BACKEND=local` + `WC_LOCAL_STORAGE_PATH=<TempDir>`) with `HOME`
+//! inside that same tempdir, and each route is added through `registry host
+//! path set`, so the document under test is the one the product wrote and the
+//! canonical registry — and the operator's own `~/.stado` cache — are
+//! untouched.
 //!
 //! What is defended: a receipt used to publish only the declared routes and
 //! never which one carried the command, so a host whose preferred route was
 //! dead read like a healthy one. `used_connection` is that missing fact.
 
+mod fixture;
+#[path = "../support/owned_home.rs"]
+mod owned_home;
+
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use serde_json::{json, Value};
 use stado::targets::REGISTRY_SCHEMA_VERSION;
+
+use fixture::{document, pull_canonical, seed, stado, stderr, this_hostname};
 
 /// The host whose real journey is exercised. Supplied explicitly: a test that
 /// chose a fleet host itself would send ssh traffic at whatever the
@@ -27,59 +35,6 @@ const UNROUTABLE_SUFFIX: &str = ".invalid";
 
 /// The second declared route these tests add.
 const SECOND_PATH: &str = "journey-alternate";
-
-fn stado(storage: &Path, isolated_config: bool, args: &[&str]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
-    command
-        .args(args)
-        .env("WC_STORAGE_BACKEND", "local")
-        .env("WC_LOCAL_STORAGE_PATH", storage)
-        .env_remove("COMPUTE_API_KEY")
-        .env_remove("COMPUTE_API_URL")
-        .env_remove("WC_PROFILES_DIR");
-    if isolated_config {
-        // A set-but-missing STADO_CONFIG disables config discovery. The real
-        // host journey keeps the operator's config, because the host key is
-        // brokered through it.
-        command.env("STADO_CONFIG", storage.join("no-such-config.json"));
-    }
-    command.output().expect("stado binary runs")
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn document(output: &Output) -> Value {
-    serde_json::from_str(&stdout(output)).unwrap_or_else(|error| {
-        panic!(
-            "expected one JSON document, got {error}\nstdout: {}\nstderr: {}",
-            stdout(output),
-            stderr(output)
-        )
-    })
-}
-
-fn seed(registry: &Value) -> tempfile::TempDir {
-    let directory = tempfile::tempdir().unwrap();
-    std::fs::write(
-        directory.path().join("registry.json"),
-        format!("{}\n", serde_json::to_string_pretty(registry).unwrap()),
-    )
-    .unwrap();
-    directory
-}
-
-/// This machine's hostname, which is what the product matches a local target
-/// against.
-fn this_hostname() -> String {
-    let output = Command::new("hostname").output().expect("hostname runs");
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
 
 /// One `registry host path set`, in the shape all four call sites need: a
 /// route name, its destination, an optional rank, and the typed receipt.
@@ -240,10 +195,7 @@ fn a_dead_preferred_path_hands_over_and_the_receipt_names_the_route() {
 
     // The real destination comes from the canonical registry through the
     // product itself, never from a literal in this file.
-    let pulled = Command::new(env!("CARGO_BIN_EXE_stado"))
-        .args(["registry", "pull"])
-        .output()
-        .expect("stado registry pull runs");
+    let pulled = pull_canonical();
     let canonical: Value = serde_json::from_slice(&pulled.stdout)
         .unwrap_or_else(|_| panic!("registry pull: {}", stderr(&pulled)));
     let target = canonical["targets"]

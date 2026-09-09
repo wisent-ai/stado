@@ -29,7 +29,10 @@ fn unused_loopback_port() -> u16 {
         .port()
 }
 
-fn start_proxy(interface: &str, port: u16) -> Child {
+/// `home` is the directory this journey owns for the proxy process: the built
+/// binary reads and records its own state under `HOME`, and a journey that let
+/// it inherit the operator's would write the operator's `~/.stado` cache.
+fn start_proxy(home: &std::path::Path, interface: &str, port: u16) -> Child {
     let mut child = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args([
             "egress",
@@ -40,6 +43,7 @@ fn start_proxy(interface: &str, port: u16) -> Child {
             "--port",
             &port.to_string(),
         ])
+        .env("HOME", home)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -87,7 +91,8 @@ fn request_through_proxy(proxy: SocketAddr) -> Value {
 fn mobile_egress_uses_the_phone_interface_and_public_ip_is_mobile() {
     let interface = required("STADO_MOBILE_EGRESS_INTERFACE");
     let port = unused_loopback_port();
-    let mut proxy = start_proxy(&interface, port);
+    let home = tempfile::tempdir().expect("a home this journey owns");
+    let mut proxy = start_proxy(home.path(), &interface, port);
     let assessment = request_through_proxy(format!("127.0.0.1:{port}").parse().unwrap());
     let _ = proxy.kill();
     let status = proxy.wait().expect("the proxy process is reaped");

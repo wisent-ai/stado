@@ -20,23 +20,20 @@
 mod fixture;
 mod leased;
 
-use fixture::{
-    installed_binary, installed_version, report, reported_binary, stderr, Fixture, BINARY,
-    STALE_VERSION, TARGET,
-};
+use fixture::{report, reported_binary, stderr, Fixture, BINARY, STALE_VERSION, TARGET};
 
 #[test]
 fn a_declaration_matching_this_machine_reads_back_as_in_sync() {
-    let Some(version) = installed_version() else {
+    let fixture = Fixture::new();
+    let Some(version) = fixture.installed_version() else {
         // A machine without the managed binary is a real state, and the case
         // that covers it is the undeclared one below; there is nothing to
         // compare here, so fail loudly rather than pass quietly.
         panic!(
             "no managed binary at {} to read a version from",
-            installed_binary().display()
+            fixture.installed_binary().display()
         );
     };
-    let fixture = Fixture::new();
 
     let declared = fixture.declare(&version);
     assert!(declared.status.success(), "{}", stderr(&declared));
@@ -64,17 +61,17 @@ fn a_declaration_matching_this_machine_reads_back_as_in_sync() {
     assert_eq!(binary["verdict"], "in-sync");
     assert_eq!(
         binary["root"],
-        installed_binary().to_string_lossy().as_ref(),
+        fixture.installed_binary().to_string_lossy().as_ref(),
         "the report names the binary it read"
     );
 }
 
 #[test]
 fn a_stale_declaration_is_reported_as_the_host_being_ahead() {
-    let Some(version) = installed_version() else {
+    let fixture = Fixture::new();
+    let Some(version) = fixture.installed_version() else {
         panic!("no managed binary to compare a stale declaration against");
     };
-    let fixture = Fixture::new();
     assert!(fixture.declare(STALE_VERSION).status.success());
 
     let output = fixture.host_state(&[]);
@@ -114,10 +111,10 @@ fn a_stale_declaration_is_reported_as_the_host_being_ahead() {
 
 #[test]
 fn apply_refuses_to_downgrade_an_ahead_host_and_changes_nothing() {
-    let Some(version) = installed_version() else {
+    let fixture = Fixture::new();
+    let Some(version) = fixture.installed_version() else {
         panic!("no managed binary to protect from a downgrade");
     };
-    let fixture = Fixture::new();
     assert!(fixture.declare(STALE_VERSION).status.success());
 
     let output = fixture.host_state(&["--apply"]);
@@ -143,7 +140,10 @@ fn apply_refuses_to_downgrade_an_ahead_host_and_changes_nothing() {
 
     // Nothing was delivered: the binary on this machine still prints the same
     // version, and the stale declaration is still the stale one.
-    assert_eq!(installed_version().as_deref(), Some(version.as_str()));
+    assert_eq!(
+        fixture.installed_version().as_deref(),
+        Some(version.as_str())
+    );
     assert_eq!(fixture.declared_version().as_deref(), Some(STALE_VERSION));
 }
 

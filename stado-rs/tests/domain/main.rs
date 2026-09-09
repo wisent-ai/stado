@@ -65,9 +65,16 @@ fn storage() -> tempfile::TempDir {
     directory
 }
 
+/// Every case drives the built binary against `storage`, with `HOME` on a
+/// directory this test owns inside the same tempdir. Without that override the
+/// product records its last-known-good registry cache under the operator's own
+/// `~/.stado`, which is state no test may write.
 fn stado(storage: &Path, args: &[&str]) -> Output {
+    let home = storage.join("home");
+    std::fs::create_dir_all(&home).expect("an isolated home");
     Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(args)
+        .env("HOME", &home)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
         .env("STADO_CONFIG", storage.join("no-such-config.json"))

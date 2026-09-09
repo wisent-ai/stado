@@ -35,22 +35,22 @@ pub fn hostname() -> String {
         .to_lowercase()
 }
 
-/// The managed binary this machine really carries, and the version it prints.
+/// The managed binary this machine really carries.
 ///
-/// The product reads the same file, so this is the fact the report is checked
-/// against. A machine without it is a real state too: the report has to say
-/// the binary is not installed.
-pub fn installed_binary() -> PathBuf {
+/// The copy taken from here is what the product reads, and the version it
+/// prints is the fact every report is checked against. A machine without one
+/// is a real state too: the report has to say the binary is not installed.
+fn operator_binary() -> PathBuf {
     let home = std::env::var("HOME").expect("the test process has a home");
     Path::new(&home).join(".stado/bin").join(BINARY)
 }
 
-pub fn installed_version() -> Option<String> {
-    let path = installed_binary();
+/// The version a managed binary at `path` prints, when there is one there.
+fn version_of(path: &Path) -> Option<String> {
     if !path.is_file() {
         return None;
     }
-    let output = Command::new(&path).arg("--version").output().ok()?;
+    let output = Command::new(path).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -66,7 +66,16 @@ pub struct Fixture {
 
 impl Fixture {
     /// An isolated registry naming this machine, so the release code takes its
-    /// current-host path instead of reaching for a remote destination.
+    /// current-host path instead of reaching for a remote destination — and a
+    /// home this fixture owns, carrying a copy of the managed binary this
+    /// machine really runs.
+    ///
+    /// The copy is the whole point of the owned home. The product resolves the
+    /// managed binary and records its registry cache under `HOME`, so a run
+    /// that inherited the operator's home read the operator's installed Stado
+    /// and wrote the operator's `~/.stado/cache` — and the `--apply` case,
+    /// which exists to prove a downgrade is refused, was one product bug away
+    /// from replacing the operator's own binary.
     pub fn new() -> Self {
         let root = tempfile::tempdir().expect("an isolated storage root");
         let registry = json!({
@@ -86,16 +95,42 @@ impl Fixture {
             serde_json::to_vec_pretty(&registry).expect("registry serialises"),
         )
         .expect("seed the isolated registry");
-        Self { root }
+        let fixture = Self { root };
+        let source = operator_binary();
+        if source.is_file() {
+            let destination = fixture.installed_binary();
+            std::fs::create_dir_all(destination.parent().expect("the copy has a directory"))
+                .expect("a managed binary directory in the owned home");
+            std::fs::copy(&source, &destination).expect("copy this machine's managed binary");
+        }
+        fixture
     }
 
     pub fn path(&self) -> &Path {
         self.root.path()
     }
 
+    /// The home every command here runs with.
+    pub fn home(&self) -> PathBuf {
+        self.path().join("home")
+    }
+
+    /// Where the managed binary lives for these cases: inside the owned home,
+    /// on the path the product itself resolves.
+    pub fn installed_binary(&self) -> PathBuf {
+        self.home().join(".stado/bin").join(BINARY)
+    }
+
+    /// The version that binary prints, or `None` when this machine carries no
+    /// managed binary to have copied.
+    pub fn installed_version(&self) -> Option<String> {
+        version_of(&self.installed_binary())
+    }
+
     pub fn stado(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(args)
+            .env("HOME", self.home())
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.path())
             .env("STADO_CONFIG", self.path().join("no-such-config.json"))

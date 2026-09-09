@@ -26,6 +26,9 @@
 //!   cargo test --test scratch
 //! ```
 
+#[path = "../support/owned_home.rs"]
+mod owned_home;
+
 mod fleet;
 mod lifecycle;
 mod refusals;

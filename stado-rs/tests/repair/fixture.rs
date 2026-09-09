@@ -64,9 +64,15 @@ pub fn storage(declared_platform: &str) -> tempfile::TempDir {
     directory
 }
 
+/// `HOME` sits inside the same tempdir as the store: the product records a
+/// last-known-good registry copy under `HOME`, so a spawn that inherited the
+/// operator's home would write the operator's own `~/.stado/cache`.
 pub fn stado(storage: &Path, args: &[&str]) -> Output {
+    let home = storage.join("home");
+    std::fs::create_dir_all(&home).expect("an isolated home");
     Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(args)
+        .env("HOME", &home)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
         .env("STADO_CONFIG", storage.join("no-such-config.json"))

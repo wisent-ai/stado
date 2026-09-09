@@ -6,9 +6,16 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// Every case drives the built binary against `storage`, with `HOME` on a
+/// directory this test owns inside the same tempdir. Without that override the
+/// product records its last-known-good registry cache under the operator's own
+/// `~/.stado`, which is state no test may write.
 fn stado(storage: &Path, args: &[&str]) -> Output {
+    let home = storage.join("home");
+    std::fs::create_dir_all(&home).expect("an isolated home");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_stado"));
     cmd.args(args)
+        .env("HOME", &home)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
         .env("STADO_CONFIG", storage.join("no-such-config.json"))
@@ -36,6 +43,7 @@ fn the_catalog_lists_the_wisent_services() {
         "brama",
         "weles",
         "stado",
+        "stado-control-plane",
         "oko",
         "transcript-lake",
     ] {
@@ -51,7 +59,9 @@ fn the_json_catalog_carries_program_and_args() {
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("catalog --json emits JSON");
     let services = document["services"].as_array().expect("services array");
-    assert_eq!(services.len(), 6);
+    // Seven since 65dd4fec declared the control plane on the managed binary;
+    // this count was left at six and the area has been red on `main` since.
+    assert_eq!(services.len(), 7);
     let skarbiec = services
         .iter()
         .find(|entry| entry["name"] == "skarbiec")

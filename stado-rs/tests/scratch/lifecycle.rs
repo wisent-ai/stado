@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use super::fleet::{document, host_turn, leasable_host, lease_row, run, stderr, stdout};
+use super::fleet::{document, home, host_turn, leasable_host, lease_row, run, stderr, stdout};
 
 /// How long the expiry story waits for a minute-long lease to be over. The
 /// lease's own lifetime is the minute; this is the margin plus the polling
@@ -78,6 +78,7 @@ fn a_lease_is_created_entered_and_destroyed_on_a_leasable_host() {
     // A capability, driven against the disposable target through that document.
     let uptime = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(["host", "uptime", &name])
+        .env("HOME", home())
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", &root)
         .env("STADO_CONFIG", Path::new(&root).join("no-such-config.json"))

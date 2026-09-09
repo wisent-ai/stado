@@ -22,7 +22,12 @@
 //!
 //! The other direction — every path the published pages name has to be in this
 //! tree — is [`published_paths`], which reads the inventory the site publishes.
+//!
+//! [`owned_test_homes`] reads the same tracked sources for a different rule:
+//! no test in this repository may spawn the product against the operator's own
+//! home.
 
+mod owned_test_homes;
 mod published_paths;
 
 use std::path::{Path, PathBuf};

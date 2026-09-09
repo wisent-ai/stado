@@ -1,17 +1,23 @@
 //! Fleet lifecycle tests against the local storage backend.
 //!
 //! Every test drives the built `stado` binary (`CARGO_BIN_EXE_stado`) with
-//! WC_STORAGE_BACKEND=local + WC_LOCAL_STORAGE_PATH=<TempDir>. STADO_CONFIG
-//! points at a nonexistent path so the developer's real config can never
-//! leak into a test. The registry document lives and dies inside the temp
-//! dir; nothing here touches the operator's real registry or vault.
+//! WC_STORAGE_BACKEND=local + WC_LOCAL_STORAGE_PATH=<TempDir>, and HOME on a
+//! directory inside that same tempdir. STADO_CONFIG points at a nonexistent
+//! path so the developer's real config can never leak into a test. The
+//! registry document lives and dies inside the temp dir; nothing here touches
+//! the operator's real registry, cache or vault.
 
 use std::path::Path;
 use std::process::{Command, Output};
 
 fn stado(storage: &Path, args: &[&str]) -> Output {
+    // The product records a last-known-good registry copy under HOME, so a
+    // spawn that inherits the operator's home writes the operator's cache.
+    let home = storage.join("home");
+    std::fs::create_dir_all(&home).expect("an isolated home");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_stado"));
     cmd.args(args)
+        .env("HOME", &home)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
         // A set-but-missing STADO_CONFIG disables config-file discovery.

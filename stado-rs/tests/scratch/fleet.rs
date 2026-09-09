@@ -1,10 +1,13 @@
 //! What the stories share: the binary, the fleet's own host list, and the lock
 //! that keeps two host-mutating stories out of each other's way.
 
+use std::path::Path;
 use std::process::{Command, Output};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use serde_json::Value;
+
+use crate::owned_home::{copy_ssh_identity, copy_stado_config};
 
 /// One host at a time. The stories that create and destroy leases run in one
 /// process, and `create` reaps the host's expired leases before taking a new
@@ -18,11 +21,33 @@ pub fn host_turn() -> MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The built binary, with the caller's environment intact: the fleet
-/// configuration a lease needs to resolve its host is the operator's, and this
-/// area deliberately does not fake it.
+/// The home this area owns, shared by every story in the process.
+///
+/// The fleet configuration a lease needs to resolve its host stays the
+/// operator's, and the ssh identity the host answers to stays the operator's
+/// too — but both are copied in rather than reached for, because the product
+/// records its last-known-good registry copy and the lease's own storage root
+/// under `HOME`, and a spawn that inherited the operator's home would write
+/// the operator's `~/.stado`. Every story reads its storage root out of the
+/// product's report, so an owned home moves that state into this directory and
+/// nothing else changes.
+static HOME: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
+    let owned = tempfile::tempdir().expect("a home this area owns");
+    copy_ssh_identity(owned.path());
+    copy_stado_config(owned.path());
+    owned
+});
+
+pub fn home() -> &'static Path {
+    HOME.path()
+}
+
+/// The built binary, with the caller's fleet configuration intact and `HOME`
+/// on the directory this area owns.
 pub fn stado() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_stado"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    command.env("HOME", home());
+    command
 }
 
 /// Run one command and hand back everything it said.
