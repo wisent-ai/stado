@@ -3,39 +3,61 @@
   "reclaim_stages": [
     {
       "name": "registry_cleanup",
-      "description": "The host janitor runs the cleaners declared in targets[].disk_cleanup.cleaners."
+      "description": "The host janitor runs the cleaners declared in targets[].disk_cleanup.cleaners.",
+      "roots": [],
+      "roots_from": "registry targets[].disk_cleanup.cleaners"
     },
     {
       "name": "build_scratch",
-      "description": "Stale release-build work beneath $HOME/.stado/build-work."
+      "description": "Stale release-build work beneath $HOME/.stado/build-work.",
+      "roots": ["~/.stado/build-work"]
     },
     {
       "name": "queue_workdirs",
-      "description": "Terminal queue work trees proved unused by the queue authority or conservative local evidence."
+      "description": "Terminal queue work trees proved unused by the queue authority or conservative local evidence.",
+      "roots": ["~/.stado/work/jobs", "/tmp/wc-*", "/tmp/stado-bootstrap-*"],
+      "roots_from": "the account's own temporary container, as the operating system reports it"
     },
     {
       "name": "foreign_home_trees",
-      "description": "macOS-style /Users trees left on Linux hosts."
+      "description": "macOS-style /Users trees left on Linux hosts.",
+      "roots": ["/Users"],
+      "os": "linux"
     },
     {
       "name": "delivered_trees",
-      "description": "Stale product versions under the service root and product-catalog superseded roots."
+      "description": "Stale product versions under the service root and product-catalog superseded roots.",
+      "roots": ["~/.stado/services"],
+      "roots_from": "stado-rs/data/products.json superseded_roots"
     },
     {
       "name": "rebuildable_caches",
-      "description": "Declared product-owned package, browser, probe, download, and build caches."
+      "description": "Declared product-owned package, browser, probe, download, and build caches.",
+      "roots": [
+        "~/.cargo/git/checkouts",
+        "~/Library/Caches/ms-playwright",
+        "~/.local/share/weles-release-probe",
+        "~/.npm/_cacache",
+        "~/.local/share/weles-worker/.worker-download.*",
+        "~/.stado/work/platform-matrix-cargo-target"
+      ]
     },
     {
       "name": "chromium_clones",
-      "description": "Stale macOS Chromium code-signing clones."
+      "description": "Stale macOS Chromium code-signing clones.",
+      "roots": [],
+      "roots_from": "the account's own temporary container, as macOS reports it"
     },
     {
       "name": "local_apfs_snapshots",
-      "description": "Eligible local Time Machine APFS snapshots below the declared free-space target."
+      "description": "Eligible local Time Machine APFS snapshots below the declared free-space target.",
+      "roots": [],
+      "roots_from": "tmutil listlocalsnapshots, which occupies no path a du walk can attribute"
     },
     {
       "name": "runner_work_trees",
-      "description": "Inactive GitHub runner _work trees outside runner bookkeeping directories."
+      "description": "Inactive GitHub runner _work trees outside runner bookkeeping directories.",
+      "roots": ["/Users/Shared/*-runner/_work", "/opt/wisent/*-runner/_work"]
     }
   ]
 }

@@ -3,6 +3,7 @@ use serde_json::{json, Map, Value};
 
 use super::{host, CmdError};
 
+mod coverage;
 mod ops;
 mod read;
 pub mod watermark;
