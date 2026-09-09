@@ -21,6 +21,7 @@
 //! and refuse to continue unless every one of them is inside that tempdir.
 
 mod fixture;
+mod leased;
 mod reclamation;
 mod refusals;
 mod system;
@@ -28,7 +29,7 @@ mod system;
 use std::collections::BTreeSet;
 use std::fs;
 
-use fixture::{Host, TARGET};
+use fixture::{Host, TARGET, UNDECLARED_TARGET};
 use system::{df_root, du_bytes, local_snapshots};
 
 /// `df`'s available figure moves while the test runs — this machine builds
@@ -219,5 +220,51 @@ fn the_declared_cache_scope_is_measured_with_the_hosts_own_du() {
     assert!(
         untagged.join("payload.bin").is_file(),
         "reading the scope removed an untagged directory"
+    );
+}
+
+/// A host that declares no cleanup policy is measured against the reporting
+/// default, not refused.
+///
+/// One declaration cannot have two answers. The janitor has resolved an
+/// undeclared host against `DiskCleanupPolicy::reporting_default` since the
+/// `lukasz-macbook` space incident — silence in the registry means "nobody has
+/// said", not "do not look" — while this reader refused with `declares no disk
+/// cleanup policy`, so the same host was both reported on and unreadable
+/// depending on which command asked. Nothing here arms a cleaner: the default
+/// is `mode: report`, and the case proves the read happened by finding this
+/// machine's own filesystem in the answer.
+#[test]
+fn a_host_that_declares_no_policy_is_read_against_the_reporting_default() {
+    let host = Host::new();
+    host.declare_no_scope();
+    let tagged = host.seed_tree(&host.home.join("target"), "target-tree", 4, true);
+
+    let report = host.json(&["space", "report", UNDECLARED_TARGET, "--json"]);
+    assert_eq!(
+        report["build_caches"]["declaration"]["root"].as_str(),
+        Some(&*host.home.to_string_lossy()),
+        "an undeclared host's cache scope is its home: {report}"
+    );
+    assert_eq!(
+        report["usage"]["filesystem"].as_str(),
+        Some(&*df_root().filesystem),
+        "the read did not reach this machine's filesystem: {report}"
+    );
+    let entries = report["build_caches"]["entries"]
+        .as_array()
+        .expect("the report carries entries");
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"].as_str() == Some(&*tagged.to_string_lossy())),
+        "the default scope did not reach the tagged cache under this home: {entries:?}"
+    );
+    // Reporting, never deleting: the default the fleet resolves an undeclared
+    // host against says `report`, and an operator who declared nothing has not
+    // asked for a janitor.
+    assert!(
+        tagged.join("payload.bin").is_file(),
+        "reading an undeclared host's caches removed one"
     );
 }

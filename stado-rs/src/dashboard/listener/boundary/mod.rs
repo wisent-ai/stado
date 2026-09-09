@@ -18,7 +18,6 @@ use budget::{boundary_recheck_cooldown, boundary_timeout};
 use state::{BoundaryVerdict, Recheck};
 
 pub use budget::BOUNDARY_TIMEOUT_OVERRIDE_PATH;
-pub use plan::{boundaries_without_a_reopening_route, release_coordinate_boundary_split};
 
 pub(crate) use kind::Boundary;
 pub(crate) use plan::{boundary_plan, requires_object_boundary, BoundaryPlan};

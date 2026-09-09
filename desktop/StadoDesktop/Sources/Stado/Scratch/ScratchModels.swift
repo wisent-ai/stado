@@ -103,6 +103,12 @@ struct ScratchLeaseReceipt: Decodable, Sendable {
     /// it, so a confirmation can name the directory instead of guessing
     /// `/Users` or `/home` from a platform.
     let homePath: String
+    /// What the lease's own registry declares as release trust: the fleet's
+    /// trusted signing key ids, or the sentence saying why there are none. A
+    /// lease that carries no trust can be delivered only a legacy-manifest
+    /// version, and that is the field an operator reads before wondering why a
+    /// signed release refused.
+    let releaseTrust: String
     /// Expired leases this create destroyed on the same host before leasing.
     let reaped: [String]
     let exitCode: Int
@@ -113,7 +119,7 @@ struct ScratchLeaseReceipt: Decodable, Sendable {
         case createdAt = "created_at", expiresAt = "expires_at"
         case storageRoot = "storage_root", registryPath = "registry_path"
         case verifiedLogin = "verified_login", exitCode = "exit_code"
-        case homePath = "home_path"
+        case homePath = "home_path", releaseTrust = "release_trust"
     }
 }
 

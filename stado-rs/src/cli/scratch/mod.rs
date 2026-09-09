@@ -133,6 +133,10 @@ pub async fn dispatch(command: ScratchCommands) -> Result<(), CmdError> {
                 text(&report, "ttl")
             );
             println!("  registry     {}", text(&report, "registry_path"));
+            // Before the run line, because it decides what can be delivered
+            // to this lease: a `none:` answer means only a legacy-manifest
+            // version will install here.
+            println!("  trust        {}", text(&report, "release_trust"));
             println!(
                 "  use it with  WC_STORAGE_BACKEND=local WC_LOCAL_STORAGE_PATH={}",
                 text(&report, "storage_root")
