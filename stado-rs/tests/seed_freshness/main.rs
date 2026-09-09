@@ -1,18 +1,31 @@
-//! `stado host authenticator-seed-freshness` — the four conditions it must
-//! never collapse into one another.
+//! `stado credentials seed-freshness --host TARGET` — is each login row's
+//! stored authenticator seed still one its account accepts, and is what the
+//! host recorded fresh enough to act on?
 //!
-//! Nothing in this fleet could answer "is the stored authenticator seed still
-//! the one this account has enrolled". The only signal was a login failing,
-//! weeks later, in a loop nobody read: on charless-mac-mini Brama drove a
-//! browser sign-in for three providers every thirty minutes for six days,
-//! resubmitting a code two Google accounts had already rejected, until Google
-//! answered "Too many failed attempts" and locked the authenticator method —
-//! destroying the operator's own ability to repair it by hand.
+//! # What happened
 //!
-//! The check joins the vault's half (does a seed exist) with the recorded
-//! sign-in history's half (were codes from it accepted, and since when were
-//! they refused). What is defended here is exactly the discrimination, because
-//! a verdict that cannot tell these apart names the wrong repair:
+//! Nothing in this fleet could answer that question. The only signal was a
+//! login failing, weeks later, in a loop nobody read: on charless-mac-mini
+//! Brama drove a browser sign-in for three providers every thirty minutes for
+//! six days, resubmitting a code two Google accounts had already rejected,
+//! until Google answered "Too many failed attempts" and locked the
+//! authenticator method — destroying the operator's own ability to repair it
+//! by hand.
+//!
+//! # What is defended here, and through what
+//!
+//! The command joins two host reads: the vault's half (does a seed exist),
+//! answered by the released Skarbiec on the host, and the recorded sign-in
+//! history's half (were codes from it accepted, and since when were they
+//! refused), read out of Brama's journal by a program the command sends to the
+//! host. Every case here drives the built binary against this machine with
+//! both halves real: a Skarbiec vault this fixture creates and fills through
+//! the released Skarbiec, and a journal it writes at instants it chose. The
+//! verdicts are then read back out of the command's own report, and the
+//! instant a verdict names is compared against the instant the case wrote.
+//!
+//! A verdict that cannot tell these apart names the wrong repair, so the
+//! discrimination is what is asserted:
 //!
 //! * a seed whose codes were accepted is `seed_last_known_good` and carries no
 //!   repair;
@@ -20,130 +33,103 @@
 //!   `seed_rejected_since`, names that instant, and names the exact command
 //!   that stores a new seed;
 //! * a `totp_secret` field declared and carrying nothing is `seed_field_empty`
-//!   — the condition earlier probing saw as `has_seed: false` on accounts that
-//!   declare the field;
-//! * a row whose kind has no `totp_secret` field at all is `seed_field_absent`
-//!   and its repair is not "store a seed";
+//!   — not a stale seed;
 //! * sign-ins failing before the authenticator step — a crash-looping Weles
-//!   runtime, an unreachable worker — are `seed_present_failing_elsewhere` and
-//!   must NEVER be reported as a stale seed, because the repair is to fix the
-//!   release, not to re-enrol;
+//!   runtime — are `seed_present_failing_elsewhere` and must NEVER be reported
+//!   as a stale seed, because the repair is to fix the release;
 //! * an accepted code AFTER a run of refusals means the seed was replaced, so
-//!   the row is good again and the streak is over.
+//!   the row is good again and the streak is over;
+//! * a seed nothing has exercised is untested, not good.
 //!
 //! And the safety property the whole design turns on: no seed, password or
-//! one-time code appears anywhere in the report, and the host-side reader
-//! carries out marker names rather than the journal's raw `detail`, which
-//! holds up to 1800 characters of rendered page text.
-//!
-//! These are library-level tests: `classify` and `build_report` are the
-//! discriminator, and they take the two host answers as data, so the whole
-//! verdict table is exercised without a host, a vault or a browser.
+//! one-time code appears anywhere in the report, which is now checked against
+//! a report produced from a vault that really holds one.
 
-use serde_json::{json, Value};
+mod fixture;
+mod journal;
+mod safety;
 
-use stado::cli::seed_freshness::{
-    attempts_of, build_report, classify, Attempt, Verdict, SEED_DECLARED_EMPTY, SEED_FIELD_ABSENT,
-    SEED_PRESENT, SEED_READ_UNSUPPORTED, SEED_UNREADABLE,
+use crate::fixture::{
+    finding, mentions, stdout, Fixture, EMPTY_FIELD_ITEM, HEALTHY_ITEM, LOCKED_ITEM, OTHER_SEED,
+    STORED_SEED,
 };
+use crate::journal::{attempt, CODE_ACCEPTED, CODE_REFUSED, FAILED, LOCKED_OUT, SIGNED_IN};
 
-/// The account the six-day loop locked out.
-const LOCKED_ITEM: &str = "codex-wisent-google-sso";
+/// An hour is well inside anything, and ten days is the age the six-day loop
+/// reached. Both are instants this case writes and then reads back.
+const AN_HOUR: i64 = 3600;
+const TEN_DAYS: i64 = 864_000;
 
-/// One recorded attempt. `at_ms` is derived from the instant so a test cannot
-/// accidentally order its own evidence differently from the way the host does.
-fn attempt(at: &str, result: &str, markers: &[&str]) -> Attempt {
-    let has = |name: &str| markers.contains(&name);
-    let rejected = has("authenticator_wrong_code_after_retries")
-        || has("google_said_wrong_code")
-        || has("google_said_too_many_failed_attempts");
-    let submitted = has("code_submitted") || rejected;
-    Attempt {
-        at: at.to_string(),
-        at_ms: chrono::DateTime::parse_from_rfc3339(at)
-            .expect("test instants must be RFC 3339")
-            .timestamp_millis(),
-        result: result.to_string(),
-        code_submitted: submitted,
-        code_rejected: rejected,
-        locked_out: has("google_said_too_many_failed_attempts"),
-        authenticator_unreached: !submitted
-            && (has("authenticator_code_input_missing")
-                || has("authenticator_option_not_clickable")
-                || has("authenticator_method_not_reached")),
-        markers: markers.iter().map(|name| name.to_string()).collect(),
-    }
-}
-
-/// A seed whose code the provider accepted is good, and says when.
+/// The two halves, joined, over two accounts at once: one whose codes the
+/// provider accepted and one refused on every attempt since an instant. The
+/// evidence is attributed per account, so one account's history must never
+/// decide another's verdict.
 #[test]
-fn an_accepted_code_is_last_known_good_and_names_the_instant() {
-    let verdict = classify(
-        SEED_PRESENT,
+fn accepted_and_refused_codes_are_told_apart_per_account() {
+    let host = Fixture::new();
+    host.store_login(LOCKED_ITEM, STORED_SEED);
+    host.store_login(HEALTHY_ITEM, OTHER_SEED);
+    let refused_since = attempt(LOCKED_ITEM, TEN_DAYS, FAILED, CODE_REFUSED);
+    let accepted_at = attempt(HEALTHY_ITEM, AN_HOUR, SIGNED_IN, CODE_ACCEPTED);
+    journal::write(
+        &host.journal(),
         &[
-            attempt("2026-08-20T10:00:00Z", "signed_in", &["code_submitted"]),
-            attempt("2026-08-26T10:00:00Z", "signed_in", &["code_submitted"]),
+            attempt(LOCKED_ITEM, TEN_DAYS * 2, SIGNED_IN, CODE_ACCEPTED),
+            attempt(HEALTHY_ITEM, TEN_DAYS, SIGNED_IN, CODE_ACCEPTED),
+            journal::attempt(LOCKED_ITEM, TEN_DAYS, FAILED, CODE_REFUSED),
+            journal::attempt(LOCKED_ITEM, AN_HOUR, FAILED, LOCKED_OUT),
+            journal::attempt(HEALTHY_ITEM, AN_HOUR, SIGNED_IN, CODE_ACCEPTED),
         ],
     );
-    assert_eq!(
-        verdict,
-        Verdict::LastKnownGood {
-            at: "2026-08-26T10:00:00Z".to_string()
-        }
-    );
-    assert!(!verdict.needs_reenrolment());
-    assert!(verdict.repair(LOCKED_ITEM).is_empty());
-}
 
-/// The condition the fleet could not name: accepted once, refused ever since.
-/// The verdict must be the streak's start, not the first attempt ever.
-#[test]
-fn codes_refused_on_every_attempt_since_a_date_name_that_date() {
-    let verdict = classify(
-        SEED_PRESENT,
-        &[
-            attempt("2026-08-20T10:00:00Z", "signed_in", &["code_submitted"]),
-            attempt(
-                "2026-08-27T12:00:00Z",
-                "failed",
-                &["code_submitted", "google_said_wrong_code"],
-            ),
-            attempt(
-                "2026-08-28T12:00:00Z",
-                "failed",
-                &["code_submitted", "authenticator_wrong_code_after_retries"],
-            ),
-            attempt(
-                "2026-09-01T12:00:00Z",
-                "failed",
-                &["google_said_too_many_failed_attempts"],
-            ),
-        ],
+    let (report, output) = host.freshness(None);
+
+    assert!(output.status.success(), "{}", fixture::stderr(&output));
+    let locked = finding(&report, LOCKED_ITEM);
+    assert_eq!(locked["verdict"], serde_json::json!("seed_rejected_since"));
+    assert_eq!(
+        locked["rejected_since"],
+        serde_json::json!(refused_since.at),
+        "the streak starts at the first refusal after the last acceptance, not at the first \
+         attempt ever: {locked:#}"
+    );
+    assert_eq!(locked["locked_out"], serde_json::json!(true));
+    assert_eq!(locked["needs_reenrolment"], serde_json::json!(true));
+
+    let healthy = finding(&report, HEALTHY_ITEM);
+    assert_eq!(
+        healthy["verdict"],
+        serde_json::json!("seed_last_known_good")
     );
     assert_eq!(
-        verdict,
-        Verdict::RejectedSince {
-            since: "2026-08-27T12:00:00Z".to_string(),
-            attempts: 3,
-            locked_out: true,
-        }
+        healthy["last_known_good_at"],
+        serde_json::json!(accepted_at.at),
+        "the good row names the instant its code was accepted: {healthy:#}"
     );
-    assert!(verdict.needs_reenrolment());
+    assert_eq!(healthy["repair"], serde_json::Value::Null);
+    assert_eq!(healthy["needs_reenrolment"], serde_json::json!(false));
 }
 
 /// The repair has to be actionable: the exact command, the real login item,
 /// and the fact that Google's lockout blocks re-enrolment until it clears.
 #[test]
 fn the_repair_names_the_exact_command_and_the_account() {
-    let verdict = classify(
-        SEED_PRESENT,
-        &[attempt(
-            "2026-09-01T12:00:00Z",
-            "failed",
-            &["google_said_too_many_failed_attempts"],
-        )],
+    let host = Fixture::new();
+    host.store_login(LOCKED_ITEM, STORED_SEED);
+    journal::write(
+        &host.journal(),
+        &[
+            attempt(LOCKED_ITEM, TEN_DAYS * 2, SIGNED_IN, CODE_ACCEPTED),
+            attempt(LOCKED_ITEM, AN_HOUR, FAILED, LOCKED_OUT),
+        ],
     );
-    let repair = verdict.repair(LOCKED_ITEM);
+
+    let (report, output) = host.freshness(Some(LOCKED_ITEM));
+
+    let repair = finding(&report, LOCKED_ITEM)["repair"]
+        .as_str()
+        .expect("a row that needs re-enrolment carries its repair")
+        .to_string();
     assert!(repair.contains("store-login-totp-seed.sh"), "{repair}");
     assert!(
         repair.contains(&format!("ACCOUNT={LOCKED_ITEM}")),
@@ -154,6 +140,13 @@ fn the_repair_names_the_exact_command_and_the_account() {
         repair.contains("locked the authenticator method"),
         "{repair}"
     );
+    // The operator reads this on a terminal, not as JSON.
+    let lines = stdout(&host.freshness_lines());
+    assert!(
+        lines.contains("seed_rejected_since") && lines.contains("store-login-totp-seed.sh"),
+        "the console hands over the verdict and the repair: {lines}"
+    );
+    assert!(output.status.success());
 }
 
 /// A seed stored after a run of refusals ends the streak. Without this the
@@ -161,311 +154,108 @@ fn the_repair_names_the_exact_command_and_the_account() {
 /// repaired.
 #[test]
 fn an_accepted_code_after_refusals_clears_the_streak() {
-    let verdict = classify(
-        SEED_PRESENT,
+    let host = Fixture::new();
+    host.store_login(LOCKED_ITEM, STORED_SEED);
+    let repaired_at = attempt(LOCKED_ITEM, AN_HOUR, SIGNED_IN, CODE_ACCEPTED);
+    journal::write(
+        &host.journal(),
         &[
-            attempt(
-                "2026-08-27T12:00:00Z",
-                "failed",
-                &["code_submitted", "google_said_wrong_code"],
-            ),
-            attempt("2026-09-02T12:00:00Z", "signed_in", &["code_submitted"]),
+            attempt(LOCKED_ITEM, TEN_DAYS, FAILED, CODE_REFUSED),
+            attempt(LOCKED_ITEM, AN_HOUR, SIGNED_IN, CODE_ACCEPTED),
         ],
     );
+
+    let (report, _) = host.freshness(None);
+
+    let row = finding(&report, LOCKED_ITEM);
+    assert_eq!(row["verdict"], serde_json::json!("seed_last_known_good"));
     assert_eq!(
-        verdict,
-        Verdict::LastKnownGood {
-            at: "2026-09-02T12:00:00Z".to_string()
-        }
+        row["last_known_good_at"],
+        serde_json::json!(repaired_at.at),
+        "the answer is dated by the attempt that repaired it: {row:#}"
     );
+    assert_eq!(row["rejected_since"], serde_json::Value::Null);
 }
 
-/// A declared field carrying nothing, and a kind with no such field, are two
-/// conditions with two repairs. Neither is "the seed is stale".
+/// A declared field carrying nothing is its own condition, and the vault's
+/// answer outranks the run history: a row with no usable seed cannot have had
+/// a code accepted, however many acceptances the journal records against it.
 #[test]
-fn an_empty_field_and_an_absent_field_are_different_conditions() {
-    let empty = classify(SEED_DECLARED_EMPTY, &[]);
-    assert_eq!(empty, Verdict::FieldEmpty);
-    assert!(empty.needs_reenrolment());
-    assert!(empty
-        .repair(LOCKED_ITEM)
-        .contains("store-login-totp-seed.sh"));
-
-    let absent = classify(SEED_FIELD_ABSENT, &[]);
-    assert_eq!(absent, Verdict::FieldAbsent);
-    assert!(!absent.needs_reenrolment());
-    let repair = absent.repair(LOCKED_ITEM);
-    assert!(repair.contains("declares no totp_secret field"), "{repair}");
-    assert!(
-        !repair.contains("store-login-totp-seed.sh"),
-        "storing a seed is refused by the schema for this kind: {repair}"
+fn a_declared_field_carrying_nothing_is_not_a_stale_seed() {
+    let host = Fixture::new();
+    host.store_login(EMPTY_FIELD_ITEM, "");
+    journal::write(
+        &host.journal(),
+        &[attempt(EMPTY_FIELD_ITEM, AN_HOUR, SIGNED_IN, CODE_ACCEPTED)],
     );
-}
 
-/// The vault state decides these two regardless of how much sign-in history
-/// exists, because a row with no usable seed cannot have had a code accepted.
-#[test]
-fn vault_state_outranks_run_history_when_there_is_no_seed() {
-    let history = [attempt(
-        "2026-09-01T12:00:00Z",
-        "signed_in",
-        &["code_submitted"],
-    )];
-    assert_eq!(classify(SEED_DECLARED_EMPTY, &history), Verdict::FieldEmpty);
-    assert_eq!(classify(SEED_FIELD_ABSENT, &history), Verdict::FieldAbsent);
+    let (report, _) = host.freshness(None);
+
+    let row = finding(&report, EMPTY_FIELD_ITEM);
     assert_eq!(
-        classify(SEED_UNREADABLE, &history),
-        Verdict::VaultRowUnreadable
+        row["seed_state"],
+        serde_json::json!("declared_empty"),
+        "the vault says the field is there and empty: {row:#}"
     );
-}
-
-/// The failure mode that made this diagnostic necessary in reverse: a Weles
-/// runtime crash-looping on `ERR_MODULE_NOT_FOUND` fails every reauth forever
-/// and looks exactly like a stale seed. Reporting it as one would send an
-/// operator to re-enrol Google while the real repair is a release.
-#[test]
-fn failures_before_the_authenticator_step_are_not_a_stale_seed() {
-    let verdict = classify(
-        SEED_PRESENT,
-        &[
-            attempt("2026-09-02T20:02:55Z", "failed", &["weles_runtime_broken"]),
-            attempt("2026-09-02T19:50:42Z", "failed", &["weles_unreachable"]),
-        ],
-    );
-    assert_eq!(verdict, Verdict::PresentFailingElsewhere { attempts: 2 });
-    assert!(!verdict.needs_reenrolment());
-    let repair = verdict.repair(LOCKED_ITEM);
+    assert_eq!(row["verdict"], serde_json::json!("seed_field_empty"));
+    assert_eq!(row["needs_reenrolment"], serde_json::json!(true));
     assert!(
-        repair.contains("failing before the authenticator step"),
-        "{repair}"
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("store-login-totp-seed.sh")),
+        "the repair is to store a seed: {row:#}"
     );
-    assert!(!repair.contains("store-login-totp-seed.sh"), "{repair}");
 }
 
-/// A seed nothing has ever exercised is untested, not good. Calling it good
-/// is how a seed stored years ago and never used reads as healthy.
+/// A seed nothing has ever exercised is untested, not good. Calling it good is
+/// how a seed stored years ago and never used reads as healthy.
 #[test]
 fn a_seed_no_attempt_ever_exercised_is_untested_not_good() {
-    assert_eq!(classify(SEED_PRESENT, &[]), Verdict::PresentUntested);
+    let host = Fixture::new();
+    host.store_login(LOCKED_ITEM, STORED_SEED);
+    host.store_login(HEALTHY_ITEM, OTHER_SEED);
+    journal::write(
+        &host.journal(),
+        &[attempt(HEALTHY_ITEM, AN_HOUR, SIGNED_IN, CODE_ACCEPTED)],
+    );
+
+    let (report, _) = host.freshness(None);
+
     assert_eq!(
-        classify(
-            SEED_PRESENT,
-            &[attempt("2026-09-01T12:00:00Z", "signed_in", &[])]
-        ),
-        Verdict::PresentUntested
+        finding(&report, LOCKED_ITEM)["verdict"],
+        serde_json::json!("seed_present_untested"),
+        "no attempt names this account: {report:#}"
+    );
+    assert_eq!(
+        finding(&report, HEALTHY_ITEM)["verdict"],
+        serde_json::json!("seed_last_known_good")
     );
 }
 
-/// Evidence is attributed per account. The six-day loop drove three providers
-/// interleaved, so an attempt against one login item must never decide
-/// another's verdict.
+/// One account asked about is one account answered about. A fleet-wide sweep
+/// of a vault is a different operation from a question about one login.
 #[test]
-fn attempts_are_attributed_to_their_own_login_item() {
-    let evidence = json!({
-        "attempts": [
-            {
-                "login_item": LOCKED_ITEM,
-                "at": "2026-08-27T12:00:00Z",
-                "at_ms": 1_756_296_000_000_i64,
-                "result": "failed",
-                "code_submitted": true,
-                "code_rejected": true,
-                "locked_out": false,
-                "authenticator_unreached": false,
-                "markers": ["code_submitted", "google_said_wrong_code"],
-            },
-            {
-                "login_item": "kimi-lukasz-google-sso",
-                "at": "2026-08-27T12:30:00Z",
-                "at_ms": 1_756_297_800_000_i64,
-                "result": "signed_in",
-                "code_submitted": true,
-                "code_rejected": false,
-                "locked_out": false,
-                "authenticator_unreached": false,
-                "markers": ["code_submitted"],
-            }
-        ]
-    });
-    assert_eq!(attempts_of(&evidence, LOCKED_ITEM).len(), 1);
-    assert!(matches!(
-        classify(SEED_PRESENT, &attempts_of(&evidence, LOCKED_ITEM)),
-        Verdict::RejectedSince { .. }
-    ));
-    assert!(matches!(
-        classify(
-            SEED_PRESENT,
-            &attempts_of(&evidence, "kimi-lukasz-google-sso")
-        ),
-        Verdict::LastKnownGood { .. }
-    ));
-}
-
-/// The whole report, over the real mix of rows this fleet holds: the joined
-/// document has to keep the conditions apart, put what needs repair first, and
-/// drop rows that are neither seed-bearing nor seed-declaring so the two that
-/// matter are not buried.
-#[test]
-fn the_report_keeps_the_conditions_apart_and_leads_with_what_needs_repair() {
-    let vault = json!({"rows": [
-        {"item": "claude-wisent-google-sso", "kind": "login", "seed_state": SEED_PRESENT},
-        {"item": LOCKED_ITEM, "kind": "login", "seed_state": SEED_PRESENT},
-        {"item": "codex-zuzanna-google-sso", "kind": "login", "seed_state": SEED_DECLARED_EMPTY},
-        {"item": "some-api-key", "kind": "api-key", "seed_state": SEED_FIELD_ABSENT},
-    ]});
-    let evidence = json!({
-        "journal": {"path_present": true, "sign_in_records": 1111, "attributed_attempts": 2},
-        "reauth_runs_seen": 1111,
-        "attempts": [
-            {
-                "login_item": LOCKED_ITEM,
-                "at": "2026-08-27T12:00:00Z",
-                "at_ms": 1_756_296_000_000_i64,
-                "result": "failed",
-                "code_submitted": true,
-                "code_rejected": true,
-                "locked_out": true,
-                "authenticator_unreached": false,
-                "markers": ["code_submitted", "google_said_too_many_failed_attempts"],
-            },
-            {
-                "login_item": "claude-wisent-google-sso",
-                "at": "2026-08-26T12:00:00Z",
-                "at_ms": 1_756_209_600_000_i64,
-                "result": "signed_in",
-                "code_submitted": true,
-                "code_rejected": false,
-                "locked_out": false,
-                "authenticator_unreached": false,
-                "markers": ["code_submitted"],
-            }
-        ]
-    });
-    let report = build_report("charless-mac-mini", &vault, &evidence);
-    let findings = report["findings"].as_array().expect("findings is a list");
-
-    // The api-key row has no seed field and no history: dropped, not reported.
-    assert_eq!(findings.len(), 3, "{findings:#?}");
-    assert!(findings
-        .iter()
-        .all(|finding| finding["login_item"] != json!("some-api-key")));
-
-    // What needs a repair leads.
-    assert!(findings[0]["needs_reenrolment"].as_bool().unwrap());
-    assert!(findings[1]["needs_reenrolment"].as_bool().unwrap());
-    assert!(!findings[2]["needs_reenrolment"].as_bool().unwrap());
-
-    let by_item = |item: &str| -> Value {
-        findings
-            .iter()
-            .find(|finding| finding["login_item"] == json!(item))
-            .cloned()
-            .unwrap_or_else(|| panic!("no finding for {item}"))
-    };
-    let locked = by_item(LOCKED_ITEM);
-    assert_eq!(locked["verdict"], json!("seed_rejected_since"));
-    assert_eq!(locked["rejected_since"], json!("2026-08-27T12:00:00Z"));
-    assert_eq!(locked["locked_out"], json!(true));
-
-    let good = by_item("claude-wisent-google-sso");
-    assert_eq!(good["verdict"], json!("seed_last_known_good"));
-    assert_eq!(good["last_known_good_at"], json!("2026-08-26T12:00:00Z"));
-    assert_eq!(good["repair"], Value::Null);
-
-    assert_eq!(
-        by_item("codex-zuzanna-google-sso")["verdict"],
-        json!("seed_field_empty")
+fn asking_about_one_login_item_answers_about_that_one() {
+    let host = Fixture::new();
+    host.store_login(LOCKED_ITEM, STORED_SEED);
+    host.store_login(HEALTHY_ITEM, OTHER_SEED);
+    journal::write(
+        &host.journal(),
+        &[
+            attempt(LOCKED_ITEM, TEN_DAYS, FAILED, CODE_REFUSED),
+            attempt(HEALTHY_ITEM, AN_HOUR, SIGNED_IN, CODE_ACCEPTED),
+        ],
     );
-}
 
-/// The safety property. A report that leaked a seed, a password or a live code
-/// would be worse than no diagnostic, and the host-side reader deliberately
-/// carries marker names instead of the journal's raw `detail`.
-#[test]
-fn no_secret_material_reaches_the_report() {
-    let seed = "JBSWY3DPEHPK3PXP";
-    let vault = json!({"rows": [
-        {"item": LOCKED_ITEM, "kind": "login", "seed_state": SEED_PRESENT},
-    ]});
-    // A journal `detail` on this host really does carry trajectory tail and
-    // page text; the reader is what strips it. Feed the shape a leaky reader
-    // would have produced and prove none of it is echoed.
-    let evidence = json!({
-        "attempts": [{
-            "login_item": LOCKED_ITEM,
-            "at": "2026-08-27T12:00:00Z",
-            "at_ms": 1_756_296_000_000_i64,
-            "result": "failed",
-            "code_submitted": true,
-            "code_rejected": true,
-            "locked_out": true,
-            "authenticator_unreached": false,
-            "markers": ["code_submitted", "google_said_too_many_failed_attempts"],
-            "detail": format!("secret={seed} code=123456 password=hunter2"),
-        }]
-    });
-    let rendered = serde_json::to_string(&build_report("charless-mac-mini", &vault, &evidence))
-        .expect("the report serializes");
-    for forbidden in [seed, "123456", "hunter2", "password="] {
-        assert!(
-            !rendered.contains(forbidden),
-            "the report must never carry {forbidden}: {rendered}"
-        );
-    }
-}
+    let (report, _) = host.freshness(Some(LOCKED_ITEM));
 
-/// Degrading honestly is a property to rely on, not a note.
-///
-/// A host whose released Skarbiec predates `totp-seed-state` cannot answer the
-/// vault half at all — charless-mac-mini is in exactly that state. The check
-/// must then still report the run-history half, keep every account's recorded
-/// attempts, and say plainly that seed presence is unknown rather than either
-/// dying or guessing "present". Guessing would be the worse failure: it would
-/// let a row be called `seed_last_known_good` on a host that never read a
-/// vault.
-#[test]
-fn a_host_that_cannot_answer_the_vault_half_still_reports_the_history_half() {
-    let vault = json!({"rows": [
-        {"item": LOCKED_ITEM, "kind": "login", "seed_state": SEED_READ_UNSUPPORTED},
-    ]});
-    let evidence = json!({
-        "attempts": [{
-            "login_item": LOCKED_ITEM,
-            "at": "2026-08-27T12:00:00Z",
-            "at_ms": 1_756_296_000_000_i64,
-            "result": "failed",
-            "code_submitted": true,
-            "code_rejected": true,
-            "locked_out": true,
-            "authenticator_unreached": false,
-            "markers": ["code_submitted", "google_said_too_many_failed_attempts"],
-        }]
-    });
-
-    // The verdict never claims a seed state the host could not read.
-    assert_eq!(
-        classify(SEED_READ_UNSUPPORTED, &attempts_of(&evidence, LOCKED_ITEM)),
-        Verdict::VaultReadUnsupported
-    );
-    let unsupported = Verdict::VaultReadUnsupported;
-    assert!(!unsupported.needs_reenrolment());
-    let repair = unsupported.repair(LOCKED_ITEM);
-    assert!(repair.contains("no `totp-seed-state`"), "{repair}");
+    assert_eq!(report["login_rows_read"], serde_json::json!(1));
     assert!(
-        !repair.contains("store-login-totp-seed.sh"),
-        "a host that cannot read the vault must not be told to re-enrol: {repair}"
+        !mentions(&report, HEALTHY_ITEM),
+        "the account nobody asked about is not in the answer: {report:#}"
     );
-
-    // The recorded history survives the degradation: the row is still reported
-    // and still carries its evidence.
-    let report = build_report("charless-mac-mini", &vault, &evidence);
-    let findings = report["findings"].as_array().expect("findings is a list");
-    assert_eq!(findings.len(), 1, "{findings:#?}");
-    assert_eq!(findings[0]["verdict"], json!("vault_read_unsupported"));
-    assert_eq!(findings[0]["attempts_recorded"], json!(1));
-    assert_eq!(findings[0]["code_submitting_attempts"], json!(1));
-    assert!(findings[0]["markers"]
-        .as_array()
-        .expect("markers is a list")
-        .contains(&json!("google_said_too_many_failed_attempts")));
+    assert_eq!(
+        finding(&report, LOCKED_ITEM)["verdict"],
+        serde_json::json!("seed_rejected_since")
+    );
 }
