@@ -6,6 +6,8 @@
 //! asking the world about a name.
 
 use serde_json::{json, Value};
+use crate::deploy::host_gates::{observe, DiagnosticRead};
+use crate::deploy::DeployError;
 
 use crate::public_origin::{self, PublicOrigin, ResolutionState};
 
@@ -28,23 +30,32 @@ pub(crate) struct EdgeSelection {
     pub endpoint: String,
     pub origin: Option<String>,
     pub detail: String,
-    pub readback: Value,
+    pub diagnosis: Value,
+    pub observation: DiagnosticRead,
 }
 
 impl EdgeSelection {
     pub fn readback_answered(&self) -> bool {
         // The deployment probes the real object route without a URI; its
         // documented 400 is an answered request, not an upstream failure.
-        self.readback.get("error").is_none_or(Value::is_null)
-            && self.readback["status"]
+        self.diagnosis["probe"].get("error").is_none_or(Value::is_null)
+            && self.diagnosis["probe"]["status"]
                 .as_u64()
                 .is_some_and(|status| (200..300).contains(&status) || status == 400)
     }
 
     pub fn readback_detail(&self) -> &str {
-        self.readback["detail"]
+        self.diagnosis["probe"]["detail"]
             .as_str()
             .unwrap_or("the public edge supplied no origin read-back evidence")
+    }
+
+    pub fn report(&self, state: &str) -> Value {
+        json!({
+            "state": state, "origin": self.origin, "endpoint": self.endpoint,
+            "detail": self.detail, "diagnosis": self.diagnosis,
+            "observation": self.observation,
+        })
     }
 }
 
@@ -53,61 +64,37 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
         "{}{SELECTION_PATH}",
         crate::config::stado_api_url().trim_end_matches('/')
     );
-    let client = match crate::cli::storage::fleet_https_client() {
-        Ok(client) => client,
-        Err(error) => {
-            return EdgeSelection {
-                endpoint,
-                origin: None,
-                detail: format!("this Stado could not build its HTTPS client: {error}"),
-                readback: Value::Null,
-            }
-        }
+    let (answer, observation) = observe(
+        "edge_selection", endpoint.clone(), read_selection(&endpoint),
+    ).await;
+    let (origin, detail, diagnosis) = match answer {
+        Some(answer) => answer,
+        None => (None, observation.detail.clone().unwrap_or_default(), Value::Null),
     };
-    let response = match client.get(&endpoint).send().await {
-        Ok(response) => response,
-        Err(error) => {
-            return EdgeSelection {
-                endpoint,
-                origin: None,
-                detail: format!("the public edge did not answer: {error}"),
-                readback: Value::Null,
-            }
-        }
-    };
+    EdgeSelection { endpoint, origin, detail, diagnosis, observation }
+}
+
+async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value), DeployError> {
+    let client = crate::cli::storage::fleet_https_client()
+        .map_err(|error| DeployError(format!("could not build HTTPS client: {error}")))?;
+    let response = client.get(endpoint).send().await
+        .map_err(|error| DeployError(format!("public edge request failed: {error:?}")))?;
     let status = response.status().as_u16();
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(error) => format!("the response body could not be read: {error}"),
-    };
-    let payload = serde_json::from_str::<Value>(&body).ok();
-    let selected = payload
-        .as_ref()
-        .filter(|_| (200..300).contains(&status))
-        .and_then(|value| value["origin"].as_str());
-    let readback = payload
-        .as_ref()
-        .and_then(|value| value.get("originDiagnosis"))
-        .and_then(|diagnosis| diagnosis.get("probe"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    match selected {
-        Some(origin) => EdgeSelection {
-            endpoint,
-            detail: format!("the public edge reports it fetches release objects from {origin}"),
-            origin: Some(origin.to_string()),
-            readback,
-        },
-        None => EdgeSelection {
-            endpoint,
-            origin: None,
-            readback,
-            detail: format!(
-                "the public edge answered HTTP {status} and named no selected origin: {}",
-                quoted_body(&body)
-            ),
-        },
+    let body = response.text().await
+        .map_err(|error| DeployError(format!("public edge response body failed: {error:?}")))?;
+    let payload: Value = serde_json::from_str(&body).map_err(|error| DeployError(format!(
+        "public edge answered HTTP {status} with invalid JSON: {error}; {}", quoted_body(&body)
+    )))?;
+    if !(200..300).contains(&status) {
+        return Err(DeployError(format!("public edge answered HTTP {status}: {}", quoted_body(&body))));
     }
+    let origin = payload["origin"].as_str().map(str::to_string);
+    let detail = match &origin {
+        Some(origin) => format!("the public edge reports it fetches release objects from {origin}"),
+        None => format!("the public edge answered HTTP {status} and named no selected origin"),
+    };
+    let diagnosis = payload.get("originDiagnosis").cloned().unwrap_or(Value::Null);
+    Ok((origin, detail, diagnosis))
 }
 
 fn quoted_body(body: &str) -> String {
@@ -186,12 +173,6 @@ pub(crate) fn undeclared_row(
             "undeclared_paths": [],
             "detail": "no declaration names a target for this origin, so there is no publication to read",
         },
-        "edge_selection": {
-            "state": if named { "undeclared" } else { "unreadable" },
-            "origin": selection.origin,
-            "endpoint": selection.endpoint,
-            "detail": selection.detail,
-            "readback": selection.readback,
-        },
+        "edge_selection": selection.report(if named { "undeclared" } else { "unreadable" }),
     }))
 }

@@ -8,8 +8,17 @@ use crate::deploy::host_gates::gates::HostGates;
 /// The `--json` report, in the exact shape the operator console consumes.
 pub fn to_report(gates: &HostGates) -> Map<String, Value> {
     let mut report = Map::new();
+    let disk_read = gates.observations.iter().find(|read| read.operation == "disk_usage");
+    let state_read = gates.observations.iter().find(|read| read.operation == "host_state");
+    let queue_read = gates.observations.iter().find(|read| read.operation == "queue");
+    let state_known = state_read.is_some_and(|read| read.complete());
+    let low_bytes = gates.low_watermark_gb
+        .and_then(|gb| gb.checked_mul(crate::providers::local::disk_cleanup::GIB))
+        .and_then(|bytes| u64::try_from(bytes).ok());
+    report.insert("complete".to_string(), json!(gates.complete));
+    report.insert("observations".to_string(), json!(gates.observations));
     report.insert("host".to_string(), Value::String(gates.host.clone()));
-    report.insert("claiming".to_string(), Value::Bool(gates.claiming));
+    report.insert("claiming".to_string(), json!(gates.complete.then_some(gates.claiming)));
     report.insert(
         "blockers".to_string(),
         Value::Array(
@@ -33,6 +42,12 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
     report.insert(
         "disk".to_string(),
         json!({
+            "free_bytes": gates.free_bytes,
+            "observed_at": disk_read.filter(|read| read.complete()).map(|read| &read.finished_at),
+            "read_state": disk_read.map(|read| read.state),
+            "pressure_source": gates.pressure_source,
+            "pressure_unresolved": gates.pressure_source.map(|_| gates.disk_pressure_unresolved),
+            "below_watermark": gates.free_bytes.zip(low_bytes).map(|(free, low)| free < low),
             "free_gb": gates.free_gb,
             "low_watermark_gb": gates.low_watermark_gb,
             "target_free_gb": gates.target_free_gb,
@@ -43,11 +58,11 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "local_snapshots": gates.local_snapshots,
             // Whether anything is still trying to keep the two numbers above
             // apart, and how long since it last managed to.
-            "cleanup_stalled": gates.disk_cleanup_stalled,
+            "cleanup_stalled": state_known.then_some(gates.disk_cleanup_stalled),
             "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
             // ...and whether it is not trying because it cannot get the lock,
             // which points at a process and not at this disk.
-            "cleanup_lock_held": gates.disk_cleanup_lock_held,
+            "cleanup_lock_held": state_known.then_some(gates.disk_cleanup_lock_held),
             "cleanup_prevented_age_seconds": gates.cleanup_prevented_age_seconds,
         }),
     );
@@ -55,6 +70,7 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
         "capacity".to_string(),
         json!({
             "published_at": gates.published_at,
+            "diagnostics": gates.published_diagnostics,
             "age_seconds": gates.age_seconds,
             "accepting_jobs": gates.accepting_jobs,
             "running_jobs": gates.running_jobs,
@@ -94,6 +110,9 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
                 .collect(),
         ),
     );
+    if queue_read.is_none_or(|read| !read.complete()) {
+        report.insert("waiting_jobs".to_string(), Value::Null);
+    }
     report
 }
 
@@ -112,11 +131,16 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
 /// janitor which was supposed to resolve them had not completed a pass since
 /// 2026-08-18.
 pub fn gates_section(gates: &HostGates) -> Value {
+    let state_known = gates.observations.iter().any(|read| read.operation == "host_state" && read.complete());
     json!({
-        "disk_pressure_unresolved": gates.disk_pressure_unresolved,
-        "disk_cleanup_stalled": gates.disk_cleanup_stalled,
-        "disk_cleanup_lock_held": gates.disk_cleanup_lock_held,
+        "complete": gates.complete,
+        "observations": gates.observations,
+        "pressure_source": gates.pressure_source,
+        "disk_pressure_unresolved": gates.pressure_source.map(|_| gates.disk_pressure_unresolved),
+        "disk_cleanup_stalled": state_known.then_some(gates.disk_cleanup_stalled),
+        "disk_cleanup_lock_held": state_known.then_some(gates.disk_cleanup_lock_held),
         "cleanup_success_age_seconds": gates.cleanup_success_age_seconds,
+        "free_bytes": gates.free_bytes,
         "free_gb": gates.free_gb,
         "low_watermark_gb": gates.low_watermark_gb,
     })

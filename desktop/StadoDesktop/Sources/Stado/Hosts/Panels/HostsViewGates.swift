@@ -8,7 +8,7 @@ extension HostsView {
     @ViewBuilder
     func gateSection(for host: WorkerNode) -> some View {
         if let gates = hostGates(host) {
-            if !gates.claiming, !(gates.pinnedByDesign && gates.waitingJobs.isEmpty) {
+            if gates.complete == true, gates.claiming == false, !(gates.pinnedByDesign && gates.waitingJobs.isEmpty) {
                 WisentAlertPanel(
                     tone: .danger,
                     title: "This host is claiming no work",
@@ -19,10 +19,8 @@ extension HostsView {
             }
             WisentField(
                 label: "Claiming work",
-                value: gates.claiming
-                    ? "Yes"
-                    : (gates.pinnedByDesign ? "Only work addressed to this host" : "No"),
-                tone: gates.claiming || gates.pinnedByDesign ? .success : .danger
+                value: claimingLabel(host),
+                tone: claimingTone(host)
             )
             if gates.pinnedByDesign {
                 // The pin is the explanation, not a failure: say in one place
@@ -51,7 +49,9 @@ extension HostsView {
             )
             WisentField(
                 label: "Waiting pinned jobs",
-                value: gates.waitingJobs.isEmpty
+                value: gates.observations.first(where: { $0.operation == "queue" })?.complete != true
+                    ? "Not observed"
+                    : gates.waitingJobs.isEmpty
                     ? "None"
                     : gates.waitingJobs
                         .map { job in
@@ -59,15 +59,36 @@ extension HostsView {
                             return "\(String(job.jobID.prefix(8))) — in queue \(age)"
                         }
                         .joined(separator: "\n"),
-                tone: gates.waitingJobs.isEmpty || gates.claiming ? .neutral : .danger
+                tone: gates.waitingJobs.isEmpty || gates.claiming == true ? .neutral : .danger
             )
             WisentField(
                 label: "Free space",
                 value: diskDescription(gates.disk),
                 tone: gates.disk?.isBelowWatermark == true ? .danger : .neutral
             )
+            WisentField(label: "Disk reading time", value: gates.disk?.observedAt ?? "Not observed")
+            WisentField(label: "Disk pressure evidence", value: gates.disk?.pressureSource ?? "Not observed")
+            if let bytes = gates.disk?.freeBytes {
+                WisentField(label: "Measured available bytes", value: bytes.formatted(.number))
+            }
+            ForEach(gates.observations) { read in
+                WisentSectionBox(title: read.operation, detail: read.source) {
+                    WisentField(label: "Read result", value: read.state, tone: read.complete ? .neutral : .warning)
+                    WisentField(label: "Elapsed", value: "\(read.elapsedMs.formatted(.number)) ms")
+                    WisentField(label: "Read budget", value: "\(read.budgetMs.formatted(.number)) ms")
+                    WisentField(label: "Finished", value: read.finishedAt)
+                    if let detail = read.detail {
+                        Text(detail).textSelection(.enabled).font(WisentTypeScale.body())
+                    }
+                }
+            }
+            if let diagnostics = gates.capacity?.diagnostics {
+                DisclosureGroup("Published agent diagnostics — separate from measured disk space") {
+                    Text(diagnostics.prettyJSON).font(WisentTypeScale.identifierSmall()).textSelection(.enabled)
+                }
+            }
             WisentField(label: "Cleanup policy mode", value: gates.disk?.policyMode ?? "Not reported")
-            WisentField(label: "Capacity published", value: gates.capacity?.publishedAt ?? "Never")
+            WisentField(label: "Capacity published", value: gates.capacity?.publishedAt ?? "Not observed")
             WisentField(
                 label: "Capacity report age",
                 value: ConsoleFormat.age(gates.capacity?.ageSeconds),

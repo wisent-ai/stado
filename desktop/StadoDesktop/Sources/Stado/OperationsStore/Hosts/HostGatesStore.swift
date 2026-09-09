@@ -57,7 +57,7 @@ final class HostGatesStore: ObservableObject {
     /// state that stalled every release build for hours while the fleet looked
     /// healthy from every other angle.
     var notClaiming: [HostGates] {
-        gates.filter { !$0.claiming }
+        gates.filter { $0.complete == true && $0.claiming == false }
     }
 
     func gates(for host: String) -> HostGates? {
@@ -103,7 +103,9 @@ final class HostGatesStore: ObservableObject {
         let reads = await Self.read(hosts: hosts, using: cli)
         guard generation == refreshGeneration else { return }
         gates = reads.compactMap(\.gates).sorted { lhs, rhs in
-            lhs.claiming == rhs.claiming ? lhs.host < rhs.host : !lhs.claiming
+            let left = lhs.claiming == true
+            let right = rhs.claiming == true
+            return left == right ? lhs.host < rhs.host : !left
         }
         failures = reads.reduce(into: [:]) { table, read in
             if let problem = read.problem { table[read.host] = problem }
@@ -185,13 +187,16 @@ final class HostGatesStore: ObservableObject {
             for host in hosts {
                 group.addTask {
                     do {
-                        return HostGatesRead(
-                            host: host,
-                            gates: try await cli.json(
-                                HostGates.self,
-                                arguments: gatesArguments(host: host)
-                            )
+                        let answer = try await cli.jsonResult(
+                            HostGates.self, arguments: gatesArguments(host: host)
                         )
+                        let problem: String?
+                        if answer.value.complete == true {
+                            problem = nil
+                        } else {
+                            problem = answer.refusal ?? "The source did not provide a complete diagnostic reading."
+                        }
+                        return HostGatesRead(host: host, gates: answer.value, problem: problem)
                     } catch {
                         return HostGatesRead(host: host, problem: message(for: error))
                     }

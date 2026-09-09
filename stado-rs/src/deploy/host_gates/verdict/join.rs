@@ -13,6 +13,7 @@ use crate::deploy::host_gates::words::{
     DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED, LOCAL_SNAPSHOTS_UNRECLAIMABLE,
     NO_CAPACITY_PUBLICATION, PINNED_ONLY, QUEUE_PAUSED, STALL_INTERVALS,
 };
+use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
 use crate::providers::local::disk_cleanup;
 use crate::queue::capacity::{self, Publication};
 use crate::targets::ComputeTarget;
@@ -32,13 +33,16 @@ pub fn assemble(
     publication: Option<&Publication>,
     agent_store: Option<&str>,
     now: DateTime<Utc>,
+    state_observed: bool,
+    publication_observed: bool,
 ) -> HostGates {
     let policy = target.disk_cleanup.as_ref();
     let free_kb = reading
         .usage
         .as_ref()
-        .and_then(|usage| usage.available_kb.parse::<f64>().ok());
-    let free_gb = free_kb.map(host_disk::gib_from_blocks);
+        .and_then(|usage| usage.available_kb.parse::<u64>().ok());
+    let free_bytes = free_kb.and_then(|blocks| blocks.checked_mul(1024));
+    let free_gb = free_kb.map(|blocks| host_disk::gib_from_blocks(blocks as f64));
     // The registry's declared watermark first, and the janitor's state file
     // only where the registry declares no policy at all.
     //
@@ -73,6 +77,7 @@ pub fn assemble(
         .and_then(|row| row.stamp)
         .map(|stamp| (now - stamp).num_seconds());
     let stale = age_seconds.is_some_and(|age| age > capacity::CAPACITY_STALE_SECONDS as i64);
+    let publication_current = age_seconds.is_some() && !stale;
 
     // The published verdict while the row is live — that IS the decision the
     // agent is making right now. Once the row is stale or absent the agent is
@@ -80,11 +85,16 @@ pub fn assemble(
     // numbers this command just measured itself.
     let published_pressure = diag_flag(payload, DISK_PRESSURE_UNRESOLVED);
     let disk_pressure_unresolved = match published_pressure {
-        Some(published) if !stale => published,
+        Some(published) if publication_current => published,
         _ => disk_cleanup::disk_pressure_unresolved(
             low_watermark_gb.map(|gb| gb * disk_cleanup::GIB),
-            free_kb.map(|blocks| (blocks * 1024.0) as i64),
+            free_bytes.and_then(|bytes| i64::try_from(bytes).ok()),
         ),
+    };
+    let pressure_source = match published_pressure {
+        Some(_) if publication_current => Some("capacity_publication"),
+        _ if low_watermark_gb.is_some() && free_kb.is_some() => Some("host_disk_measurement"),
+        _ => None,
     };
 
     // How late the janitor is against the interval IT declares, measured from
@@ -136,13 +146,13 @@ pub fn assemble(
     // held, and it has a different remedy from every other condition here:
     // find the holder (`space report`'s `cleanup_lock.holders` names the pid) and
     // deal with THAT process. See [`DISK_CLEANUP_LOCK_HELD`].
-    let disk_cleanup_lock_held = cleanup_prevented
+    let disk_cleanup_lock_held = state_observed && cleanup_prevented
         && match (stall_after_seconds, cleanup_success_age_seconds) {
             (None, _) => false,
             (Some(_), None) => true,
             (Some(limit), Some(age)) => age > limit,
         };
-    let disk_cleanup_stalled = !cleanup_prevented
+    let disk_cleanup_stalled = state_observed && !cleanup_prevented
         && match (stall_after_seconds, cleanup_success_age_seconds) {
             (None, _) => false,
             // Declared, armed, and no completed pass on record at all. Reported
@@ -164,10 +174,13 @@ pub fn assemble(
         Some(Some(StorageReach::Device)) => blockers.push(AGENT_STORE_DEVICE_ONLY.to_string()),
         Some(None) => blockers.push(AGENT_STORE_UNKNOWN.to_string()),
     }
-    if publication.is_none() {
+    if publication_observed && publication.is_none() {
         blockers.push(NO_CAPACITY_PUBLICATION.to_string());
     } else if stale {
         blockers.push(CAPACITY_PUBLICATION_STALE.to_string());
+    }
+    if publication_current && diag_flag(payload, DISK_PRESSURE_ACTIVE) == Some(true) {
+        blockers.push(DISK_PRESSURE_ACTIVE.to_string());
     }
     if disk_pressure_unresolved {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
@@ -237,6 +250,7 @@ pub fn assemble(
         claiming: blockers.is_empty(),
         blockers,
         disk_pressure_unresolved,
+        free_bytes,
         disk_cleanup_stalled,
         disk_cleanup_lock_held,
         cleanup_success_age_seconds,
@@ -277,5 +291,9 @@ pub fn assemble(
         notes,
         local_snapshots,
         waiting_jobs: Vec::new(),
+        complete: true,
+        observations: Vec::new(),
+        pressure_source,
+        published_diagnostics: payload.and_then(|value| value.get("diag")).cloned(),
     }
 }
