@@ -8,7 +8,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
 
 use serde_json::Value;
 
@@ -56,11 +55,8 @@ fn start_proxy(interface: &str, port: u16) -> Child {
 }
 
 fn request_through_proxy(proxy: SocketAddr) -> Value {
-    let mut stream = TcpStream::connect_timeout(&proxy, Duration::from_secs(10))
-        .expect("the Stado mobile proxy accepts a connection");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .expect("the proxy read timeout is set");
+    let mut stream =
+        TcpStream::connect(proxy).expect("the Stado mobile proxy accepts a connection");
     write!(
         stream,
         "GET http://{INTELLIGENCE_HOST}{INTELLIGENCE_PATH} HTTP/1.1\r\nHost: {INTELLIGENCE_HOST}\r\nConnection: close\r\n\r\n"
