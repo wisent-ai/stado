@@ -12,7 +12,7 @@ use crate::targets::ComputeTarget;
 
 use crate::cli::service_converge::model::vocabulary::{
     Installed, Row, ATTEST_ABSENT, ATTEST_DIFFERS, ATTEST_NEVER_DELIVERED, ATTEST_UNKNOWN,
-    HOST_AHEAD, HOST_BEHIND, IN_SYNC, NONE, UNATTESTED, UNKNOWN, VERSION_HELPER,
+    HOST_AHEAD, HOST_BEHIND, HOST_MISSING, IN_SYNC, NONE, UNATTESTED, UNKNOWN, VERSION_HELPER,
 };
 use crate::cli::service_converge::verdicts::ordering::version_order;
 
@@ -131,17 +131,29 @@ pub(super) fn verdict_rows(
                     ),
                 },
                 (None, Err(failure)) => (UNKNOWN, failure.clone()),
+                // The reporter answered and found no artefact at all. Its own
+                // verdict, not `unknown`: this measurement succeeded, and what
+                // it measured is a host that declares a binary it does not
+                // carry. `--apply` delivers it, because there is nothing here
+                // to downgrade and no process running the declared binary to
+                // interrupt.
+                (None, Ok(_))
+                    if entry
+                        .map(|entry| entry.root.is_empty() || entry.root == NONE)
+                        .unwrap_or_default() =>
+                {
+                    (
+                        HOST_MISSING,
+                        format!(
+                            "{VERSION_HELPER} found no installed artefact for this \
+                             binary on this host; --apply delivers the declared \
+                             version through `stado release host-state`"
+                        ),
+                    )
+                }
                 (None, Ok(_)) => (
                     UNKNOWN,
                     match entry {
-                        // Nothing to read a version out of. A different fact
-                        // from an artefact that carries none, and a different
-                        // remedy: install the product, rather than make it
-                        // stamp itself.
-                        Some(entry) if entry.root.is_empty() || entry.root == NONE => format!(
-                            "{VERSION_HELPER} found no installed artefact for this \
-                             binary on this host"
-                        ),
                         // The reporter found the artefact and could not read a
                         // version out of it. Said in full, because the remedy
                         // is to make the product stamp its own artefact, not
@@ -152,6 +164,10 @@ pub(super) fn verdict_rows(
                              host cannot be shown to run the declared version",
                             entry.root
                         ),
+                        // Nothing came back for this binary at all, which is
+                        // not the same as an answer of "absent": the reporter
+                        // may never have looked. Unmeasured, and never
+                        // delivered on that basis.
                         None => format!(
                             "{VERSION_HELPER} reported nothing for this binary; it is \
                              not installed on this host, or the reporter could not find it"

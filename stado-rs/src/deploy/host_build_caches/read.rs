@@ -1,5 +1,5 @@
-//! The build-cache reader: resolve one host's declared cleaner, refuse a host
-//! that declares none, and read the verdicts back.
+//! The build-cache reader: resolve one host's cleaner from its declaration or
+//! from the reporting default, and read the verdicts back.
 
 use std::time::Duration;
 
@@ -14,17 +14,34 @@ use super::report::{parse_report, BuildCacheDeclaration, BuildCacheReport};
 /// definition of "this machine" the whole deploy family shares.
 use crate::deploy::host_channel::target_is_this_host as target_is_local;
 
-/// Resolve the build-cache cleaner from the target's own cleanup declaration.
+/// Resolve the build-cache cleaner from the target's own cleanup declaration,
+/// or from the reporting default a target that declares nothing is measured
+/// against.
+///
+/// The default is not this function's invention: it is
+/// [`crate::targets::DiskCleanupPolicy::reporting_default`], which the janitor
+/// has resolved undeclared hosts against since the `lukasz-macbook` space
+/// incident, and whose whole point is that silence in the registry means
+/// "nobody has said", not "do not look". This reader refused instead, so one
+/// declaration had two answers: the janitor reported an undeclared host's
+/// reclaimable caches while `stado space report` and `stado host build-caches`
+/// said the host declares no policy at all. A leased scratch target meets it
+/// every time — the registry `stado scratch create` emits declares no
+/// `disk_cleanup` — and a capability test had to write a policy into its own
+/// document before it could read anything back.
+///
+/// Nothing here arms a cleaner. The default's mode is `report`, deleting stays
+/// an explicit registry declaration, and the two refusals below are unchanged:
+/// a declared policy naming no `build_caches` cleaner, and a root that is
+/// neither absolute nor home-relative.
 pub async fn declared_for_target(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<BuildCacheDeclaration, DeployError> {
-    let policy = target.disk_cleanup.as_ref().ok_or_else(|| {
-        DeployError(format!(
-            "{} declares no disk cleanup policy; add it to registry targets[].disk_cleanup",
-            target.name
-        ))
-    })?;
+    let policy = match target.disk_cleanup.clone() {
+        Some(policy) => policy,
+        None => crate::targets::DiskCleanupPolicy::reporting_default(),
+    };
     let cleaner = policy.cleaners.get("build_caches").ok_or_else(|| {
         DeployError(format!(
             "{} declares no build cache cleaner; add it to registry targets[].disk_cleanup.cleaners.build_caches",

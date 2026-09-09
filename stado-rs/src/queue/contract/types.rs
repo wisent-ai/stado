@@ -43,8 +43,15 @@ pub enum StorageError {
     /// Stado object API returned a non-success status.
     #[error("Stado object API error HTTP {status}: {body}")]
     Stado { status: u16, body: String },
-    /// GCP authentication could not be established (no gsutil backup route).
-    #[error("GCP authentication failed: {0}")]
+    /// Authentication could not be established for the configured store.
+    ///
+    /// Every backend that authenticates raises this: the Stado object API's
+    /// token file, Azure's token exchange and GCS's application credentials.
+    /// It said "GCP authentication failed" for all three, so a machine with no
+    /// GCP configuration at all reported a refused Stado storage token file as
+    /// a Google credential failure, and the operator reading it looked for a
+    /// service account that was never involved.
+    #[error("storage authentication failed: {0}")]
     Auth(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),

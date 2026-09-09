@@ -167,13 +167,22 @@ pub async fn resolve(hostname: &str) -> Resolution {
             ),
         };
     }
+    // What was observed, and nothing about why some other read failed. The
+    // sentence here used to conclude "so a failure to read it is the
+    // connection or the TLS handshake to a name that does exist", and the
+    // public edge printed the same conclusion in its own diagnosis. On
+    // 2026-09-09 that sentence sent a reader to the network for an hour while
+    // the origin answered HTTP 200 on those very addresses to a different
+    // client: the failing read was the edge's own fetch. A resolver answers
+    // one question, and the answer is a list of records.
+    let found = answers.join(", ");
     Resolution {
         state: ResolutionState::Resolved,
         hostname: hostname.to_string(),
         answers,
         detail: format!(
-            "{hostname} resolves publicly, so a failure to read it is the connection or the TLS \
-             handshake to a name that does exist"
+            "{PUBLIC_RESOLVER} answers for {hostname} with {found}, so the name is publicly \
+             resolvable; whether a client can read it is what that client's own read reports"
         ),
     }
 }
