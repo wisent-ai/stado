@@ -1,13 +1,9 @@
-//! Dedicated verifier-grant constructors. Each verifier is an auth boundary:
-//! it enforces its exact consumer name and a token file distinct from every
-//! other grant, and it never routes through the credential store selector.
-//!
-//! Every grant here is provisioned on disk by the fleet and stays there, so
-//! each one declares `GrantMode::RereadPerRequest`: a rotated verifier grant is
-//! picked up without restarting, and none of these files is ever erased.
+//! One constructor per API verifier boundary. Each one enforces its exact
+//! consumer name and a token file distinct from every other grant before it
+//! builds a direct client, so no verifier can read another boundary's items.
 
-use super::client::Client;
-use super::{GrantMode, SkarbiecError};
+use super::super::client::Client;
+use super::super::{GrantMode, SkarbiecError};
 
 impl Client {
     /// Dedicated verifier used only for namespace-scoped product object
@@ -30,55 +26,6 @@ impl Client {
             crate::config::object_skarbiec_url(),
             crate::config::object_skarbiec_consumer(),
             crate::config::object_skarbiec_token_file(),
-            GrantMode::RereadPerRequest,
-        )
-    }
-
-    /// Dedicated reader for the one credential the alert path needs.
-    ///
-    /// Alerts used the coordinator's own grant, which does not carry the
-    /// resend key, so the only configured channel resolved to nothing and
-    /// `doctor` reported that nothing anywhere would page an operator -- while
-    /// the fleet had already provisioned a least-privilege consumer for
-    /// exactly this key, with exactly one read on it, and put its token on
-    /// disk. Paging is the last thing that should need a broad grant.
-    pub fn alert_key_reader() -> Result<Self, SkarbiecError> {
-        if crate::config::alert_skarbiec_token_file() == crate::config::skarbiec_token_file() {
-            return Err(SkarbiecError::Deployment(
-                "alert key reader token file must be distinct from the coordinator grant"
-                    .to_string(),
-            ));
-        }
-        Self::direct(
-            crate::config::skarbiec_url(),
-            crate::config::alert_skarbiec_consumer(),
-            crate::config::alert_skarbiec_token_file(),
-            GrantMode::RereadPerRequest,
-        )
-    }
-
-    /// Dedicated reader for the release authority's private key.
-    ///
-    /// `release submit` read it through the coordinator grant, exactly as alerts
-    /// once read the resend key, and the vault refused with `403 consumer not
-    /// authorized to read item field`. The fleet had already provisioned a
-    /// least-privilege consumer holding one capability --
-    /// `read:stado-release-signing#private_key` -- so the policy was right and
-    /// the caller was reaching for the wrong identity. Signing material is the
-    /// last thing that should travel on a broad grant.
-    pub fn release_signing_reader() -> Result<Self, SkarbiecError> {
-        if crate::config::release_signing_skarbiec_token_file()
-            == crate::config::skarbiec_token_file()
-        {
-            return Err(SkarbiecError::Deployment(
-                "release signing reader token file must be distinct from the coordinator grant"
-                    .to_string(),
-            ));
-        }
-        Self::direct(
-            crate::config::release_skarbiec_url(),
-            crate::config::release_signing_skarbiec_consumer(),
-            crate::config::release_signing_skarbiec_token_file(),
             GrantMode::RereadPerRequest,
         )
     }
@@ -267,39 +214,6 @@ impl Client {
         Self::direct(
             crate::config::integration_skarbiec_url(),
             crate::config::integration_skarbiec_consumer(),
-            token_file,
-            GrantMode::RereadPerRequest,
-        )
-    }
-
-    /// Exact provider grant for one finite integration domain.
-    pub fn integration_provider(domain: &str) -> Result<Self, SkarbiecError> {
-        let provider = crate::config::integration_provider(domain).ok_or_else(|| {
-            SkarbiecError::Deployment(format!(
-                "integration provider domain {domain:?} is not configured"
-            ))
-        })?;
-        let token_file = provider.token_file();
-        if [
-            crate::config::skarbiec_token_file(),
-            crate::config::agent_skarbiec_token_file(),
-            crate::config::integration_skarbiec_token_file(),
-            crate::config::object_skarbiec_token_file(),
-            crate::config::release_skarbiec_token_file(),
-            crate::config::machine_skarbiec_token_file(),
-            crate::config::service_skarbiec_token_file(),
-            crate::config::rate_limit_skarbiec_token_file(),
-            crate::config::backend_messaging_skarbiec_token_file(),
-        ]
-        .contains(&token_file)
-        {
-            return Err(SkarbiecError::Deployment(format!(
-                "integration provider token file for domain {domain:?} is not isolated"
-            )));
-        }
-        Self::direct(
-            crate::config::integration_provider_skarbiec_url(),
-            provider.consumer(),
             token_file,
             GrantMode::RereadPerRequest,
         )
