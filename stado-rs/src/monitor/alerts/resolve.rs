@@ -1,117 +1,15 @@
-//! Optional Slack, Telegram, SendGrid, Resend, most (SMS), and GCP Pub/Sub
-//! alert delivery. `alerts.channels` is the explicit enablement fence: with no
-//! enabled channels, dispatch performs no credential or network lookup, and
-//! each delivery is fault-isolated with a bounded structured failure line.
+//! Channel resolution. [`AlertChannels::from_env`] reads the enablement
+//! fence, asks Skarbiec for exactly the fields the enabled channels need,
+//! and hands every gap to `channel_failed` instead of a panic. The two
+//! resolvers with a story of their own — Resend's config-or-vault
+//! destination and most's provider-grant Twilio material — sit beside it,
+//! together with the Pub/Sub OAuth fetch.
 
-mod send;
-
-pub(crate) use send::resend_verified_domains;
-use send::{
-    email_subject, send_email, send_most, send_pubsub, send_resend_email, send_slack, send_telegram,
+use super::{
+    channel_failed, AlertChannels, MostChannel, PubSubChannel, ResendChannel, SendgridChannel,
+    TelegramChannel, CLOUD_PLATFORM_SCOPE, DEFAULT_EMAIL_FROM, PUBSUB_BASE, RESEND_URL,
+    SENDGRID_URL, TELEGRAM_API_BASE, TWILIO_API_BASE,
 };
-
-/// GCP OAuth scope for the Pub/Sub publish call.
-const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
-/// Telegram Bot API base (overridable per-channel for tests).
-const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
-/// SendGrid mail-send endpoint.
-const SENDGRID_URL: &str = "https://api.sendgrid.com/v3/mail/send";
-/// Resend mail-send endpoint.
-const RESEND_URL: &str = "https://api.resend.com/emails";
-/// Pub/Sub REST base.
-const PUBSUB_BASE: &str = "https://pubsub.googleapis.com";
-/// Twilio REST base for the most (SMS) channel.
-const TWILIO_API_BASE: &str = "https://api.twilio.com";
-/// Python `WC_EMAIL_FROM` default.
-const DEFAULT_EMAIL_FROM: &str = "compute@example.com";
-
-fn log(msg: &str) {
-    eprintln!("[alert] {msg}");
-}
-
-/// One channel could not deliver. Logged twice on purpose and fatal never:
-/// the `[alert]` line is what a human tailing the monitor reads, and the
-/// structured line is what a log query finds a week later.
-fn channel_failed(channel: &str, error: &str) {
-    let code = crate::failure::classify_message(error);
-    tracing::error!(
-        failure_point = "monitor.alerts.deliver",
-        error_code = code.as_str(),
-        service = "alerts",
-        retryable = code.retryable(),
-        severity = code.severity().as_str(),
-        channel = channel,
-        detail = %crate::failure::bounded_detail(error),
-        "alert channel delivery failed; the remaining channels still fire"
-    );
-    log(&format!("{channel} failed: {error}"));
-}
-
-/// Telegram channel config (Skarbiec bot token + configured chat id).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TelegramChannel {
-    pub token: String,
-    pub chat_id: String,
-    /// Bot API base URL; the request path is `/bot{token}/sendMessage`.
-    pub api_base: String,
-}
-
-/// SendGrid channel config (`sendgrid_api_key` from Skarbiec plus non-secret
-/// recipient/sender configuration).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SendgridChannel {
-    pub api_key: String,
-    pub to: String,
-    pub from: String,
-    pub url: String,
-}
-
-/// Resend channel config. The key is this deployment's own `RESEND_API_KEY`
-/// vault item rather than a copy inside `stado-alerts`: one secret, one place.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResendChannel {
-    pub api_key: String,
-    pub to: String,
-    pub from: String,
-    pub url: String,
-}
-
-/// Pub/Sub channel config: full `projects/{p}/topics/{t}` topic path plus a
-/// pre-fetched OAuth token.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PubSubChannel {
-    pub topic: String,
-    pub base_url: String,
-    pub token: String,
-}
-
-/// most (SMS) channel: destination from `stado-alerts/most_phone`, Twilio
-/// credentials resolved from `most-twilio` through the `most` integration
-/// provider grant, delivered in-process so the alert path never depends on
-/// the dashboard it may be alerting about.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MostChannel {
-    pub phone: String,
-    pub account_sid: String,
-    pub auth_token: String,
-    pub api_version: String,
-    pub messaging_service_sid: Option<String>,
-    pub from_number: Option<String>,
-    /// Twilio REST base; tests point it at the loopback mock.
-    pub api_base: String,
-}
-
-/// Resolved alert-channel configuration; channels with no config are skipped.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AlertChannels {
-    /// Slack webhook URL from `stado-alerts/slack_webhook` in Skarbiec.
-    pub slack_webhook: Option<String>,
-    pub telegram: Option<TelegramChannel>,
-    pub sendgrid: Option<SendgridChannel>,
-    pub resend: Option<ResendChannel>,
-    pub pubsub: Option<PubSubChannel>,
-    pub most: Option<MostChannel>,
-}
 
 impl AlertChannels {
     /// Resolve only explicitly enabled alert channels.
@@ -375,57 +273,4 @@ async fn gcp_token() -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(token.as_str().to_string())
-}
-
-/// Send an alert to every configured channel. Each channel is fault-isolated
-/// (see module docs): a failure goes through [`channel_failed`] and the
-/// remaining channels still fire.
-pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &str) {
-    log(message);
-    let client = reqwest::Client::new();
-
-    if let Some(url) = &channels.slack_webhook {
-        match send_slack(&client, url, message).await {
-            Ok(()) => log("Slack sent"),
-            Err(err) => channel_failed("slack", &err),
-        }
-    }
-    if let Some(telegram) = &channels.telegram {
-        match send_telegram(&client, telegram, message).await {
-            Ok(()) => log("Telegram sent"),
-            Err(err) => channel_failed("telegram", &err),
-        }
-    }
-    if let Some(sendgrid) = &channels.sendgrid {
-        let subject = email_subject(subject, message);
-        match send_email(&client, sendgrid, &subject, message).await {
-            Ok(()) => log("Email sent"),
-            Err(err) => channel_failed("email", &err),
-        }
-    }
-    if let Some(resend) = &channels.resend {
-        let subject = email_subject(subject, message);
-        match send_resend_email(&client, resend, &subject, message).await {
-            Ok(()) => log("Email sent"),
-            Err(err) => channel_failed("resend", &err),
-        }
-    }
-    if let Some(most) = &channels.most {
-        match send_most(&client, most, message).await {
-            Ok(()) => log("SMS sent"),
-            Err(err) => channel_failed("most", &err),
-        }
-    }
-    if let Some(pubsub) = &channels.pubsub {
-        match send_pubsub(&client, pubsub, message).await {
-            Ok(()) => log("Pub/Sub sent"),
-            Err(err) => channel_failed("pubsub", &err),
-        }
-    }
-}
-
-/// Send an alert to all explicitly enabled channels.
-pub async fn send_alert(topic: &str, message: &str, subject: &str) {
-    let channels = AlertChannels::from_env(topic).await;
-    send_alert_with(&channels, message, subject).await;
 }

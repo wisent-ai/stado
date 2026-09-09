@@ -1,7 +1,7 @@
-//! Channel delivery functions, split from `alerts.rs` to keep both files
+//! Channel delivery functions, split from `alerts/mod.rs` to keep every file
 //! under the repository's per-file line budget. Resolution (Skarbiec reads)
-//! stays in `alerts.rs::AlertChannels::from_env`; everything here is pure
-//! HTTP against an already-resolved channel struct.
+//! stays in `alerts/resolve.rs`'s `AlertChannels::from_env`; everything here
+//! is pure HTTP against an already-resolved channel struct.
 
 use serde_json::json;
 
