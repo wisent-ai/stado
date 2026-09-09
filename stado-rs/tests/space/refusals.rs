@@ -110,31 +110,22 @@ fn an_undeclared_stage_and_a_missing_reason_stop_before_the_host() {
     );
 }
 
-/// A host that declares no cleanup scope, no cache cleaner, or a root outside
-/// an absolute or home-relative path is refused with its own sentence, and the
-/// registry it was refused over is left exactly as it was.
+/// A host that declares a cleanup policy with no cache cleaner, or a cleaner
+/// root outside an absolute or home-relative path, is refused with its own
+/// sentence, and the registry it was refused over is left exactly as it was.
+///
+/// A host that declares NOTHING is not here any more: it is read against the
+/// reporting default, which
+/// `main::a_host_that_declares_no_policy_is_read_against_the_reporting_default`
+/// defends. These two refusals are about a policy that exists and is wrong,
+/// which no default can stand in for.
 #[test]
-fn a_scope_nobody_declared_is_refused_with_its_own_sentence() {
+fn a_scope_declared_wrongly_is_refused_with_its_own_sentence() {
     let host = Host::new();
     let registry = host.storage.join("registry.json");
 
-    host.declare_no_scope();
-    let declared = fs::read_to_string(&registry).expect("read the fixture registry");
-    refused(
-        &host.run(&["space", "report", UNDECLARED_TARGET, "--json"]),
-        CLICK_EXIT,
-        &format!(
-            "{UNDECLARED_TARGET} declares no disk cleanup policy; add it to registry \
-             targets[].disk_cleanup"
-        ),
-    );
-    assert_eq!(
-        fs::read_to_string(&registry).expect("read the fixture registry"),
-        declared,
-        "a refusal rewrote the registry"
-    );
-
     host.declare(&policy(r#"{}"#));
+    let declared = fs::read_to_string(&registry).expect("read the fixture registry");
     refused(
         &host.run(&["space", "report", TARGET, "--json"]),
         CLICK_EXIT,
@@ -142,6 +133,11 @@ fn a_scope_nobody_declared_is_refused_with_its_own_sentence() {
             "{TARGET} declares no build cache cleaner; add it to registry \
              targets[].disk_cleanup.cleaners.build_caches"
         ),
+    );
+    assert_eq!(
+        fs::read_to_string(&registry).expect("read the fixture registry"),
+        declared,
+        "a refusal rewrote the registry"
     );
 
     host.declare(&policy(
