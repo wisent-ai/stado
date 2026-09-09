@@ -8,17 +8,30 @@ use crate::deploy::host_gates::gates::HostGates;
 /// The `--json` report, in the exact shape the operator console consumes.
 pub fn to_report(gates: &HostGates) -> Map<String, Value> {
     let mut report = Map::new();
-    let disk_read = gates.observations.iter().find(|read| read.operation == "disk_usage");
-    let state_read = gates.observations.iter().find(|read| read.operation == "host_state");
-    let queue_read = gates.observations.iter().find(|read| read.operation == "queue");
+    let disk_read = gates
+        .observations
+        .iter()
+        .find(|read| read.operation == "disk_usage");
+    let state_read = gates
+        .observations
+        .iter()
+        .find(|read| read.operation == "host_state");
+    let queue_read = gates
+        .observations
+        .iter()
+        .find(|read| read.operation == "queue");
     let state_known = state_read.is_some_and(|read| read.complete());
-    let low_bytes = gates.low_watermark_gb
+    let low_bytes = gates
+        .low_watermark_gb
         .and_then(|gb| gb.checked_mul(crate::providers::local::disk_cleanup::GIB))
         .and_then(|bytes| u64::try_from(bytes).ok());
     report.insert("complete".to_string(), json!(gates.complete));
     report.insert("observations".to_string(), json!(gates.observations));
     report.insert("host".to_string(), Value::String(gates.host.clone()));
-    report.insert("claiming".to_string(), json!(gates.complete.then_some(gates.claiming)));
+    report.insert(
+        "claiming".to_string(),
+        json!(gates.complete.then_some(gates.claiming)),
+    );
     report.insert(
         "blockers".to_string(),
         Value::Array(
@@ -131,7 +144,10 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
 /// janitor which was supposed to resolve them had not completed a pass since
 /// 2026-08-18.
 pub fn gates_section(gates: &HostGates) -> Value {
-    let state_known = gates.observations.iter().any(|read| read.operation == "host_state" && read.complete());
+    let state_known = gates
+        .observations
+        .iter()
+        .any(|read| read.operation == "host_state" && read.complete());
     json!({
         "complete": gates.complete,
         "observations": gates.observations,

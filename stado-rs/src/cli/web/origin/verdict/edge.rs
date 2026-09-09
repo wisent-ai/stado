@@ -5,9 +5,9 @@
 //! readings that asks the deployment about its own configuration rather than
 //! asking the world about a name.
 
-use serde_json::{json, Value};
 use crate::deploy::host_gates::{observe, DiagnosticRead};
 use crate::deploy::DeployError;
+use serde_json::{json, Value};
 
 use crate::public_origin::{self, PublicOrigin, ResolutionState};
 
@@ -64,44 +64,82 @@ pub(crate) async fn edge_selection() -> EdgeSelection {
         crate::config::stado_api_url().trim_end_matches('/')
     );
     let ((answer, observation), (readback, readback_observation)) = tokio::join!(
-        observe("edge_selection", endpoint.clone(), read_selection(&endpoint)),
-        observe("release_proxy", format!("{}/api/release/object", crate::config::stado_api_url().trim_end_matches('/')),
+        observe(
+            "edge_selection",
+            endpoint.clone(),
+            read_selection(&endpoint)
+        ),
+        observe(
+            "release_proxy",
+            format!(
+                "{}/api/release/object",
+                crate::config::stado_api_url().trim_end_matches('/')
+            ),
             async {
                 let client = crate::cli::storage::fleet_https_client()
                     .map_err(|error| DeployError(error.to_string()))?;
                 Ok::<_, DeployError>(gateway_readback(&client).await)
-            }),
+            }
+        ),
     );
-    let readback = readback.unwrap_or_else(|| json!({
-        "state": "unavailable", "detail": readback_observation.detail,
-    }));
+    let readback = readback.unwrap_or_else(|| {
+        json!({
+            "state": "unavailable", "detail": readback_observation.detail,
+        })
+    });
     let (origin, detail, diagnosis) = match answer {
         Some(answer) => answer,
-        None => (None, observation.detail.clone().unwrap_or_default(), Value::Null),
+        None => (
+            None,
+            observation.detail.clone().unwrap_or_default(),
+            Value::Null,
+        ),
     };
-    EdgeSelection { endpoint, origin, detail, diagnosis, observation, readback, readback_observation }
+    EdgeSelection {
+        endpoint,
+        origin,
+        detail,
+        diagnosis,
+        observation,
+        readback,
+        readback_observation,
+    }
 }
 
 async fn read_selection(endpoint: &str) -> Result<(Option<String>, String, Value), DeployError> {
     let client = crate::cli::storage::fleet_https_client()
         .map_err(|error| DeployError(format!("could not build HTTPS client: {error}")))?;
-    let response = client.get(endpoint).send().await
+    let response = client
+        .get(endpoint)
+        .send()
+        .await
         .map_err(|error| DeployError(format!("public edge request failed: {error:?}")))?;
     let status = response.status().as_u16();
-    let body = response.text().await
+    let body = response
+        .text()
+        .await
         .map_err(|error| DeployError(format!("public edge response body failed: {error:?}")))?;
-    let payload: Value = serde_json::from_str(&body).map_err(|error| DeployError(format!(
-        "public edge answered HTTP {status} with invalid JSON: {error}; {}", quoted_body(&body)
-    )))?;
+    let payload: Value = serde_json::from_str(&body).map_err(|error| {
+        DeployError(format!(
+            "public edge answered HTTP {status} with invalid JSON: {error}; {}",
+            quoted_body(&body)
+        ))
+    })?;
     if !(200..300).contains(&status) {
-        return Err(DeployError(format!("public edge answered HTTP {status}: {}", quoted_body(&body))));
+        return Err(DeployError(format!(
+            "public edge answered HTTP {status}: {}",
+            quoted_body(&body)
+        )));
     }
     let origin = payload["origin"].as_str().map(str::to_string);
     let detail = match &origin {
         Some(origin) => format!("the public edge reports it fetches release objects from {origin}"),
         None => format!("the public edge answered HTTP {status} and named no selected origin"),
     };
-    let diagnosis = payload.get("originDiagnosis").cloned().unwrap_or(Value::Null);
+    let diagnosis = payload
+        .get("originDiagnosis")
+        .cloned()
+        .unwrap_or(Value::Null);
     Ok((origin, detail, diagnosis))
 }
 

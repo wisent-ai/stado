@@ -20,11 +20,6 @@ use crate::targets::ComputeTarget;
 
 /// Join the four sources into the verdict.
 ///
-/// Split out from the reads, and public, so the truth table is exercisable
-/// without a host, a registry or a store — which is the only way a gate that
-/// decides whether a platform has any builder at all can be held to its
-/// truth table rather than to whatever a live fleet happened to be doing.
-///
 /// `agent_store` is the host's own effective `wc_storage_backend`, or `None`
 /// when the host would not answer with one.
 pub fn assemble(
@@ -146,13 +141,15 @@ pub fn assemble(
     // held, and it has a different remedy from every other condition here:
     // find the holder (`space report`'s `cleanup_lock.holders` names the pid) and
     // deal with THAT process. See [`DISK_CLEANUP_LOCK_HELD`].
-    let disk_cleanup_lock_held = state_observed && cleanup_prevented
+    let disk_cleanup_lock_held = state_observed
+        && cleanup_prevented
         && match (stall_after_seconds, cleanup_success_age_seconds) {
             (None, _) => false,
             (Some(_), None) => true,
             (Some(limit), Some(age)) => age > limit,
         };
-    let disk_cleanup_stalled = state_observed && !cleanup_prevented
+    let disk_cleanup_stalled = state_observed
+        && !cleanup_prevented
         && match (stall_after_seconds, cleanup_success_age_seconds) {
             (None, _) => false,
             // Declared, armed, and no completed pass on record at all. Reported

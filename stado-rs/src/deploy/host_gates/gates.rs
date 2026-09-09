@@ -1,7 +1,7 @@
 //! The shape one host's claiming verdict is carried in.
 
-use std::collections::BTreeMap;
 use super::read::DiagnosticRead;
+use std::collections::BTreeMap;
 
 /// Everything one host answered about whether it can claim.
 #[derive(Debug, Clone, Default, PartialEq)]

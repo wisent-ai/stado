@@ -37,9 +37,14 @@ impl DiagnosticRead {
 
     pub fn skipped(operation: &'static str, source: String, reason: &str) -> Self {
         Self {
-            operation, source, state: ReadState::Skipped, started_at: None,
-            finished_at: Utc::now().to_rfc3339(), elapsed_ms: 0,
-            budget_ms: READ_BUDGET.as_millis(), detail: Some(reason.to_string()),
+            operation,
+            source,
+            state: ReadState::Skipped,
+            started_at: None,
+            finished_at: Utc::now().to_rfc3339(),
+            elapsed_ms: 0,
+            budget_ms: READ_BUDGET.as_millis(),
+            detail: Some(reason.to_string()),
         }
     }
 }
@@ -59,9 +64,17 @@ pub(crate) async fn observe<T, E: std::fmt::Display>(
             READ_BUDGET.as_secs()
         ))),
     };
-    (value, DiagnosticRead {
-        operation, source, state, started_at: Some(started_at),
-        finished_at: Utc::now().to_rfc3339(), elapsed_ms: started.elapsed().as_millis(),
-        budget_ms: READ_BUDGET.as_millis(), detail,
-    })
+    (
+        value,
+        DiagnosticRead {
+            operation,
+            source,
+            state,
+            started_at: Some(started_at),
+            finished_at: Utc::now().to_rfc3339(),
+            elapsed_ms: started.elapsed().as_millis(),
+            budget_ms: READ_BUDGET.as_millis(),
+            detail,
+        },
+    )
 }

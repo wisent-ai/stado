@@ -13,24 +13,43 @@ mod edge;
 use serde_json::{json, Value};
 
 use super::report::declaration_row;
-use crate::public_origin::{self, funnel, PublicOrigin, Resolution, ResolutionState};
 use crate::deploy::host_gates::{observe, ReadState};
 use crate::deploy::DeployError;
+use crate::public_origin::{self, funnel, PublicOrigin, Resolution, ResolutionState};
 use crate::targets::Registry;
 
 pub(crate) use edge::{edge_selection, undeclared_row, EdgeSelection};
 
 pub(crate) const VERDICT_SERVING: &str = "serving";
 
-pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection, registry: &Registry) -> Value {
+pub(crate) async fn examine(
+    origin: &PublicOrigin,
+    selection: &EdgeSelection,
+    registry: &Registry,
+) -> Value {
     let ((resolution, mut dns_read), (publication, publication_read)) = tokio::join!(
-        observe("public_dns", format!("{}: {}", public_origin::resolve::PUBLIC_RESOLVER, origin.hostname),
-            async { Ok::<_, DeployError>(public_origin::resolve(&origin.hostname).await) }),
-        observe("publication", format!("{}: {} publication table", origin.target, origin.publication),
-            publication_of(origin, registry)),
+        observe(
+            "public_dns",
+            format!(
+                "{}: {}",
+                public_origin::resolve::PUBLIC_RESOLVER,
+                origin.hostname
+            ),
+            async { Ok::<_, DeployError>(public_origin::resolve(&origin.hostname).await) }
+        ),
+        observe(
+            "publication",
+            format!(
+                "{}: {} publication table",
+                origin.target, origin.publication
+            ),
+            publication_of(origin, registry)
+        ),
     );
     let resolution = resolution.unwrap_or_else(|| Resolution {
-        state: ResolutionState::Unavailable, hostname: origin.hostname.clone(), answers: Vec::new(),
+        state: ResolutionState::Unavailable,
+        hostname: origin.hostname.clone(),
+        answers: Vec::new(),
         detail: dns_read.detail.clone().unwrap_or_default(),
     });
     if resolution.state == ResolutionState::Unavailable && dns_read.complete() {
@@ -41,19 +60,34 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection, re
         Some(publication) => PublicationReading::Read(publication),
         None => PublicationReading::Unknown(publication_read.detail.clone().unwrap_or_default()),
     };
-    let complete = dns_read.complete() && publication_read.complete()
-        && selection.observation.complete() && selection.readback_observation.complete();
+    let complete = dns_read.complete()
+        && publication_read.complete()
+        && selection.observation.complete()
+        && selection.readback_observation.complete();
     let edge = edge::edge_state(origin, selection);
     let word = if complete {
-        verdict_for(resolution.state, &publication, edge, selection.readback_answered())
+        verdict_for(
+            resolution.state,
+            &publication,
+            edge,
+            selection.readback_answered(),
+        )
     } else {
         "diagnostic-incomplete"
     };
     let problem = if complete {
         origin_error(&resolution, &publication, edge, selection)
     } else {
-        [&dns_read, &publication_read, &selection.observation, &selection.readback_observation].into_iter()
-            .filter_map(|read| read.detail.as_deref()).collect::<Vec<_>>().join("; ")
+        [
+            &dns_read,
+            &publication_read,
+            &selection.observation,
+            &selection.readback_observation,
+        ]
+        .into_iter()
+        .filter_map(|read| read.detail.as_deref())
+        .collect::<Vec<_>>()
+        .join("; ")
     };
     let mut row = declaration_row(origin);
     let object = row.as_object_mut().expect("a JSON object was just built");
@@ -61,7 +95,14 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection, re
     object.insert("complete".into(), json!(complete));
     object.insert("observations".into(), json!([dns_read, publication_read]));
     object.insert("verdict".into(), json!(word));
-    object.insert("origin_error".into(), if word == VERDICT_SERVING { Value::Null } else { json!(problem) });
+    object.insert(
+        "origin_error".into(),
+        if word == VERDICT_SERVING {
+            Value::Null
+        } else {
+            json!(problem)
+        },
+    );
     object.insert("resolution".into(), resolution.to_json());
     object.insert("publication_state".into(), publication.to_json());
     object.insert("edge_selection".into(), selection.report(edge));
@@ -69,10 +110,15 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection, re
 }
 
 /// Read the declared target's own publication table.
-async fn publication_of(origin: &PublicOrigin, registry: &Registry) -> Result<funnel::Publication, DeployError> {
+async fn publication_of(
+    origin: &PublicOrigin,
+    registry: &Registry,
+) -> Result<funnel::Publication, DeployError> {
     let runner = crate::deploy::production_runner();
     let target = crate::deploy::host_channel::resolve_target(registry, &origin.target)?;
-    funnel::read(origin, target, &runner).await.map_err(|error| DeployError(error.to_string()))
+    funnel::read(origin, target, &runner)
+        .await
+        .map_err(|error| DeployError(error.to_string()))
 }
 
 pub(crate) enum PublicationReading {

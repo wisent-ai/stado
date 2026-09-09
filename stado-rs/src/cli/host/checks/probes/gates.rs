@@ -27,14 +27,33 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         return claiming_outcome(&gates);
     }
     println!("host:     {}", gates.host);
-    println!("diagnostic: {}", if gates.complete { "complete" } else { "incomplete" });
+    println!(
+        "diagnostic: {}",
+        if gates.complete {
+            "complete"
+        } else {
+            "incomplete"
+        }
+    );
     for read in &gates.observations {
-        println!("read:     {} {:?}; {} ms; source {}", read.operation, read.state, read.elapsed_ms, read.source);
+        println!(
+            "read:     {} {:?}; {} ms; source {}",
+            read.operation, read.state, read.elapsed_ms, read.source
+        );
         if let Some(detail) = &read.detail {
             println!("detail:   {detail}");
         }
     }
-    println!("claiming: {}", if !gates.complete { "unknown" } else if gates.claiming { "yes" } else { "no" });
+    println!(
+        "claiming: {}",
+        if !gates.complete {
+            "unknown"
+        } else if gates.claiming {
+            "yes"
+        } else {
+            "no"
+        }
+    );
     if gates.claiming {
         println!("blockers: none");
     } else {
@@ -49,7 +68,10 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         gigabytes(gates.target_free_gb.map(|gb| gb as f64)),
         gates.policy_mode.as_deref().unwrap_or("none declared"),
     );
-    println!("pressure evidence: {}", gates.pressure_source.unwrap_or("not observed"));
+    println!(
+        "pressure evidence: {}",
+        gates.pressure_source.unwrap_or("not observed")
+    );
     // Both stores on one line, ahead of the capacity line the first one
     // explains: an agent bound to a device-local store publishes capacity into
     // a store nothing here reads, and an operator who cannot see the two
@@ -193,11 +215,28 @@ fn store_clause(blockers: &[String]) -> &'static str {
 /// repeating that something is wrong.
 fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
     if !gates.complete {
-        let details = gates.observations.iter().filter(|read| !read.complete())
-            .map(|read| format!("{}: {}", read.operation, read.detail.as_deref().unwrap_or("no result")))
-            .collect::<Vec<_>>().join("; ");
-        let failure = CmdError::click(format!("{} diagnostic is incomplete: {details}", gates.host));
-        if gates.observations.iter().any(|read| read.state == crate::deploy::host_gates::ReadState::TimedOut) {
+        let details = gates
+            .observations
+            .iter()
+            .filter(|read| !read.complete())
+            .map(|read| {
+                format!(
+                    "{}: {}",
+                    read.operation,
+                    read.detail.as_deref().unwrap_or("no result")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let failure = CmdError::click(format!(
+            "{} diagnostic is incomplete: {details}",
+            gates.host
+        ));
+        if gates
+            .observations
+            .iter()
+            .any(|read| read.state == crate::deploy::host_gates::ReadState::TimedOut)
+        {
             return Err(failure.stating(crate::failure::FailureCode::Timeout));
         }
         return Err(failure);
