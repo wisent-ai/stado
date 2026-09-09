@@ -158,7 +158,7 @@ fi
 ///
 /// Sets `$domain` (what every verb addresses and every probe reads),
 /// `$domain_status` ([`DOMAIN_STATUS_SYSTEM`], [`DOMAIN_STATUS_GRAPHICAL`],
-/// [`DOMAIN_STATUS_FALLBACK`] or [`DOMAIN_STATUS_UNAVAILABLE`]),
+/// [`DOMAIN_STATUS_BACKGROUND`] or [`DOMAIN_STATUS_UNAVAILABLE`]),
 /// `$domain_reason` (the operator's sentence for that choice) and `$launch`
 /// (the launchctl this domain needs). Returns non-zero only when launchd has
 /// no per-login domain at all, which is the one case a caller may answer
@@ -188,7 +188,7 @@ pub const DOMAIN_RESOLVER: &str = "stado_domain_of() {
   fi
   if /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
     domain=\"$user_domain\"
-    domain_status='fallback'
+    domain_status='background'
     domain_reason=\"/dev/console belongs to $console, not $account: no graphical session, so $gui does not exist and a LaunchAgent has only the background domain $user_domain\"
     return 0
   fi

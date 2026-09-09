@@ -100,7 +100,7 @@ pub(crate) const NO_DOMAIN_SYSTEM: &str = "    domain=\"system\"
 /// Both halves are load-bearing. A unit can be loaded with nothing running
 /// under it (launchd accepted the job and the program died on start), and a
 /// program can be running with no unit loaded — that second one is what the
-/// last-resort fallbacks in these scripts used to produce, and reporting it
+/// bare `nohup` launches in these scripts used to produce, and reporting it
 /// as a successful restart is how an operator comes to believe a service is
 /// under management when the next logout will end it.
 pub(crate) const RUNNING_DESCRIBE: &str = "the unit is loaded and has a pid";
