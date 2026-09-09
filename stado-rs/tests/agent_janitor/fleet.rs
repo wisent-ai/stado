@@ -91,7 +91,10 @@ impl Journey {
                 .capacity()
                 .and_then(|document| document["published_at"].as_str().map(str::to_string))
             {
-                if seen.last().is_none_or(|last| last.published_at != published_at) {
+                if seen
+                    .last()
+                    .is_none_or(|last| last.published_at != published_at)
+                {
                     seen.push(Publication {
                         published_at,
                         seen: Instant::now(),
@@ -103,7 +106,10 @@ impl Journey {
             }
             if let Some(agent) = self.agent.as_mut() {
                 if let Ok(Some(status)) = agent.try_wait() {
-                    panic!("the agent exited {status} before {described}\n{}", self.log());
+                    panic!(
+                        "the agent exited {status} before {described}\n{}",
+                        self.log()
+                    );
                 }
             }
             assert!(

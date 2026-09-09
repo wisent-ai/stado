@@ -37,8 +37,8 @@ fn a_long_cleanup_pass_does_not_delay_the_capacity_publication() {
     journey.plant_tree(DIRECTORIES);
     journey.start_agent();
 
-    let publications =
-        journey.watch_publications("the agent's own janitor to finish a pass", |state| {
+    let publications = journey
+        .watch_publications("the agent's own janitor to finish a pass", |state| {
             state.agent_pass().is_some()
         });
 
@@ -78,11 +78,17 @@ fn a_long_cleanup_pass_does_not_delay_the_capacity_publication() {
         window.start,
         window.end
     );
+    // The tick publishes on its own cadence, so the completed pass reaches
+    // the broadcast on the tick after the janitor persisted it.
+    journey.wait_for("the broadcast to carry that pass", |state| {
+        state
+            .capacity()
+            .is_some_and(|document| document["diag"]["disk_cleanup"]["writer"] == "agent-tick")
+    });
+    let capacity = journey.capacity().expect("a published capacity document");
     assert_eq!(
-        journey.capacity().expect("a published capacity document")["diag"]["disk_cleanup"]
-            ["writer"],
-        "agent-tick",
-        "the broadcast must carry the pass the agent's own janitor ran"
+        capacity["diag"]["disk_cleanup"]["duration_ms"], pass["duration_ms"],
+        "the broadcast must carry the pass the agent's own janitor ran: {capacity:#}"
     );
 }
 
@@ -142,7 +148,11 @@ fn the_running_job_count_reaches_the_pass_the_agent_publishes() {
 /// The window one pass occupied, from the stamp it recorded and the duration
 /// it measured.
 fn pass_window(pass: &serde_json::Value, spent: Duration) -> std::ops::Range<DateTime<Utc>> {
-    let start = stamp(pass["started_at"].as_str().expect("the pass stamped itself"));
+    let start = stamp(
+        pass["started_at"]
+            .as_str()
+            .expect("the pass stamped itself"),
+    );
     start..start + spent
 }
 

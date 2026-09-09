@@ -29,7 +29,11 @@ fn a_policy_field_this_build_does_not_implement_is_journalled_as_a_refusal() {
         "refused pass: {report:#}"
     );
     assert_eq!(report["outcome"], "invalid_or_unavailable_policy");
-    assert_eq!(report["cleaners"], json!(null), "a refused pass has no scan");
+    assert_eq!(
+        report["cleaners"],
+        json!(null),
+        "a refused pass has no scan"
+    );
     assert!(
         candidate.join("payload.bin").is_file(),
         "a refused policy must authorize no deletion"

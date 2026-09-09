@@ -194,7 +194,10 @@ impl Journey {
             }
             if let Some(agent) = self.agent.as_mut() {
                 if let Ok(Some(status)) = agent.try_wait() {
-                    panic!("the agent exited {status} before {described}\n{}", self.log());
+                    panic!(
+                        "the agent exited {status} before {described}\n{}",
+                        self.log()
+                    );
                 }
             }
             std::thread::sleep(Duration::from_millis(200));
@@ -212,7 +215,10 @@ impl Journey {
 
     /// Whether the store holds a record for `job` under `prefix`.
     pub fn recorded(&self, prefix: &str, job: &str) -> bool {
-        self.storage.join(prefix).join(format!("{job}.json")).is_file()
+        self.storage
+            .join(prefix)
+            .join(format!("{job}.json"))
+            .is_file()
     }
 
     /// The tree the agent owns for one job.
@@ -250,7 +256,9 @@ fn hostname() -> String {
     let output = Command::new("/bin/hostname")
         .output()
         .expect("/bin/hostname ran");
-    String::from_utf8_lossy(&output.stdout).trim().to_lowercase()
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase()
 }
 
 fn release_platform() -> &'static str {

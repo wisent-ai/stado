@@ -205,7 +205,9 @@ fn hostname() -> String {
     let output = Command::new("/bin/hostname")
         .output()
         .expect("/bin/hostname ran");
-    String::from_utf8_lossy(&output.stdout).trim().to_lowercase()
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase()
 }
 
 fn release_platform() -> &'static str {

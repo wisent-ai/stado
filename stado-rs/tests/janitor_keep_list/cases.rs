@@ -22,10 +22,7 @@ fn a_terminal_jobs_tree_is_reclaimed_and_a_running_jobs_tree_is_kept() {
     let finished = journey.home().join("first.done");
     let started = journey.home().join("second.started");
     let release = journey.home().join("second.release");
-    let quick = journey.submit(
-        "keep-list-quick",
-        &format!(": > '{}'", finished.display()),
-    );
+    let quick = journey.submit("keep-list-quick", &format!(": > '{}'", finished.display()));
     let blocked = journey.submit(
         "keep-list-blocked",
         &format!(
@@ -87,8 +84,7 @@ fn a_job_whose_document_cannot_be_read_keeps_its_workdir() {
     let report = journey.reclaim();
 
     assert_eq!(
-        report["cleaners"]["queue_workdirs"]["skipped"]["job_queued_or_running"],
-        1,
+        report["cleaners"]["queue_workdirs"]["skipped"]["job_queued_or_running"], 1,
         "reclaim report: {report:#}"
     );
     assert!(

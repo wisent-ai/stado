@@ -103,7 +103,10 @@ impl Journey {
             }
             if let Some(agent) = self.agent.as_mut() {
                 if let Ok(Some(status)) = agent.try_wait() {
-                    panic!("the agent exited {status} before {described}\n{}", self.log());
+                    panic!(
+                        "the agent exited {status} before {described}\n{}",
+                        self.log()
+                    );
                 }
             }
             std::thread::sleep(Duration::from_millis(200));
