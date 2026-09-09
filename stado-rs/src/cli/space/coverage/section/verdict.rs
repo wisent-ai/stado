@@ -1,7 +1,7 @@
 //! Pressure and scan coverage are separate from deletion eligibility.
 
-use serde_json::Value;
 use super::super::render::gib;
+use serde_json::Value;
 
 pub(super) fn verdict(deficit: Option<i64>, observed: bool, outside: i64) -> &'static str {
     match deficit {
@@ -33,10 +33,17 @@ pub(super) fn janitor_detail(state: &Value, need: Option<i64>) -> String {
     let Some(outcome) = state.get("outcome").and_then(Value::as_str) else {
         return "no completed janitor pass was recorded".to_string();
     };
-    let at = state.get("last_pass_at").and_then(Value::as_str).unwrap_or("unknown time");
-    let change = state.get("freed_bytes").and_then(Value::as_i64)
+    let at = state
+        .get("last_pass_at")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown time");
+    let change = state
+        .get("freed_bytes")
+        .and_then(Value::as_i64)
         .map(|bytes| format!("; measured free-space change {}", gib(bytes)))
         .unwrap_or_default();
-    let distance = need.map(|bytes| format!("; currently {} below the target", gib(bytes))).unwrap_or_default();
+    let distance = need
+        .map(|bytes| format!("; currently {} below the target", gib(bytes)))
+        .unwrap_or_default();
     format!("pass at {at} ended {outcome}{change}{distance}; retained files and exhausted limits are reported per cleaner, not inferred from directory sizes")
 }

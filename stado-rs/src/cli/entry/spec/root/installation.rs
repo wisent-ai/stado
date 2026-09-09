@@ -93,10 +93,10 @@ pub(crate) enum InstallationCommands {
     #[command(name = "install-disk-cleanup")]
     InstallDiskCleanup,
 
-    /// Report, and with --apply remove, the scratch working directories under
-    /// `~/.stado/work` that no owner declares.
+    /// Preview every directory directly under ~/.stado/work, including job
+    /// and run areas. --apply removes them all, even when active.
     Workdirs {
-        /// Remove them. Without this the command only reports.
+        /// Delete all listed directories; preserve only root-level files and links.
         #[arg(long)]
         apply: bool,
         /// Emit the machine-readable report.

@@ -43,11 +43,13 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "schedule",
     "secrets",
     "service",
+    "space",
     "status",
     "storage",
     "submit",
     "vast",
     "web",
+    "workdirs",
 ];
 
 pub(super) fn is_retained_log_request(args: &[String]) -> bool {
@@ -68,6 +70,12 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     let family = args.first().map(String::as_str).unwrap_or("");
     let operation = args.get(1).map(String::as_str).unwrap_or("");
     let detail = args.get(2).map(String::as_str).unwrap_or("");
+    if family == "workdirs" {
+        return !args.iter().any(|arg| arg == "--apply");
+    }
+    if family == "space" {
+        return operation == "report" || (operation == "cleaners" && detail == "list");
+    }
     if family == "azure" && operation == "unusual-activity" {
         return detail == "diagnose";
     }
@@ -110,7 +118,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             )
             | (
                 "host",
-                "health" | "inventory" | "uptime" | "ping" | "disk" | "vaults"
+                "health" | "inventory" | "uptime" | "ping" | "vaults"
             )
             | ("identity", "list" | "verify")
             | (

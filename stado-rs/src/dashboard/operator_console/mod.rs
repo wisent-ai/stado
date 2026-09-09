@@ -25,6 +25,8 @@ const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 // its JSON receipt intact for Desktop while retaining a bounded capture.
 const MAX_RETAINED_LOG_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TIMEOUT_SECONDS: u64 = 300;
+// Inventory and explicit scratch removal can traverse whole filesystems.
+const MAX_SPACE_COMMAND_SECONDS: u64 = 1200;
 const MUTATION_CONFIRMATION: &str = "RUN_MUTATION";
 const INPUT_PLACEHOLDER: &str = "$INPUT";
 static INPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -102,9 +104,17 @@ fn validate(request: &RunRequest) -> Result<(), ConsoleError> {
             request.args[0]
         )));
     }
-    if request.timeout_seconds == 0 || request.timeout_seconds > MAX_TIMEOUT_SECONDS {
+    let limit = if matches!(
+        request.args.first().map(String::as_str),
+        Some("space" | "workdirs")
+    ) {
+        MAX_SPACE_COMMAND_SECONDS
+    } else {
+        MAX_TIMEOUT_SECONDS
+    };
+    if request.timeout_seconds == 0 || request.timeout_seconds > limit {
         return Err(ConsoleError::bad_request(format!(
-            "timeout_seconds must be between 1 and {MAX_TIMEOUT_SECONDS}"
+            "timeout_seconds must be between 1 and {limit}"
         )));
     }
     if request.input.as_ref().map_or(0, String::len) > MAX_INPUT_BYTES {

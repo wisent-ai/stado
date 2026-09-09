@@ -23,7 +23,12 @@ pub(crate) async fn examine(origin: &PublicOrigin, selection: &EdgeSelection) ->
     let resolution = public_origin::resolve(&origin.hostname).await;
     let publication = publication_of(origin).await;
     let edge = edge::edge_state(origin, selection);
-    let word = verdict_for(resolution.state, &publication, edge, selection.readback_answered());
+    let word = verdict_for(
+        resolution.state,
+        &publication,
+        edge,
+        selection.readback_answered(),
+    );
     let mut row = declaration_row(origin);
     let object = row.as_object_mut().expect("a JSON object was just built");
     object.insert("schema".into(), json!("stado.public-origin-report.v1"));

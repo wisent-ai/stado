@@ -137,6 +137,13 @@ pub(crate) async fn run_with_lock(
     report.builds_cursor = same_reclaim_policy
         .then(|| build_caches::BuildCachesCursor::from_state(&previous))
         .flatten();
+    report.backup_cursor = same_reclaim_policy
+        .then(|| {
+            crate::providers::local::disk_cleanup::backup_twins::cursor::BackupCursor::from_state(
+                &previous,
+            )
+        })
+        .flatten();
     let before = match free_bytes(home) {
         Ok(free) => free,
         Err(exc) => {

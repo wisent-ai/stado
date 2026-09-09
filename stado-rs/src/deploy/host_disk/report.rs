@@ -198,10 +198,19 @@ const INVENTORY_BUDGET_ENV: &str = "STADO_INVENTORY_BUDGET_SECONDS";
 fn inventory_budget() -> Result<std::time::Duration, DeployError> {
     match std::env::var(INVENTORY_BUDGET_ENV) {
         Err(std::env::VarError::NotPresent) => Ok(INVENTORY_BUDGET),
-        Ok(value) => value.parse::<u64>().ok().filter(|seconds| *seconds > 0)
+        Ok(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|seconds| *seconds > 0)
             .map(std::time::Duration::from_secs)
-            .ok_or_else(|| DeployError(format!("{INVENTORY_BUDGET_ENV} must be a positive whole number of seconds"))),
-        Err(error) => Err(DeployError(format!("cannot read {INVENTORY_BUDGET_ENV}: {error}"))),
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "{INVENTORY_BUDGET_ENV} must be a positive whole number of seconds"
+                ))
+            }),
+        Err(error) => Err(DeployError(format!(
+            "cannot read {INVENTORY_BUDGET_ENV}: {error}"
+        ))),
     }
 }
 
@@ -229,9 +238,14 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
         host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await;
     let (output, attribution) = match full {
         Ok(output) if output.code == 0 => (output, None),
-        Ok(output) => (gates, Some(format!(
-            "inventory command exited {}: {}", output.code, output.stderr.trim()
-        ))),
+        Ok(output) => (
+            gates,
+            Some(format!(
+                "inventory command exited {}: {}",
+                output.code,
+                output.stderr.trim()
+            )),
+        ),
         Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
     };
     let reading = parse_output(&output.stdout, interval);

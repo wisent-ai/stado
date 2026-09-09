@@ -211,6 +211,13 @@ pub(crate) fn write_state(
             .unwrap_or(Value::Null),
     };
     state.insert("build_caches_cursor".to_string(), checkpoint);
+    let backup_checkpoint = match control_update {
+        ControlUpdateAuthority::Owner if scanned => report.get("backup_twins_cursor"),
+        _ => previous.get("backup_twins_cursor"),
+    }
+    .cloned()
+    .unwrap_or(Value::Null);
+    state.insert("backup_twins_cursor".to_string(), backup_checkpoint);
     let payload = canonical_json(&Value::Object(state));
     // Tempfile uniqueness like Python's f".{name}.{getpid()}.{monotonic_ns()}".
     let nanos = SystemTime::now()

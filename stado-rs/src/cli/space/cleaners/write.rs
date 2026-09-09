@@ -54,8 +54,11 @@ pub(super) async fn write_cleaner(
         })?;
     match declaration {
         Some(Value::Object(fields)) => {
-            let value = cleaners.entry(cleaner.to_string()).or_insert_with(|| json!({}));
-            let object = value.as_object_mut()
+            let value = cleaners
+                .entry(cleaner.to_string())
+                .or_insert_with(|| json!({}));
+            let object = value
+                .as_object_mut()
                 .ok_or_else(|| CmdError::click("declared cleaner must be an object"))?;
             object.extend(fields);
             if !object.contains_key("min_age_seconds") {

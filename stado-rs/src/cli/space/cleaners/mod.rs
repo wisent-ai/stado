@@ -71,17 +71,27 @@ async fn declared_for(target: &str) -> Result<Declared, CmdError> {
         .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
     let runner = crate::deploy::production_runner();
     let observed = crate::deploy::host_inventory::inventory_target(
-        entry, registry.service_directory.as_ref(), &runner,
-    ).await;
+        entry,
+        registry.service_directory.as_ref(),
+        &runner,
+    )
+    .await;
     let (installed, installed_error) = match observed {
         Ok(report) => {
-            let version = report["managed_binaries"].as_array()
+            let version = report["managed_binaries"]
+                .as_array()
                 .and_then(|rows| rows.iter().find(|row| row["name"] == "stado"))
                 .and_then(|row| row["version"].as_str())
-                .and_then(|version| crate::deploy::host_inventory::reported_version("stado", version))
+                .and_then(|version| {
+                    crate::deploy::host_inventory::reported_version("stado", version)
+                })
                 .map(str::to_string);
-            let error = version.is_none().then(|| report["error"].as_str()
-                .unwrap_or("the host inventory reported no readable installed Stado version").to_string());
+            let error = version.is_none().then(|| {
+                report["error"]
+                    .as_str()
+                    .unwrap_or("the host inventory reported no readable installed Stado version")
+                    .to_string()
+            });
             (version.unwrap_or_default(), error)
         }
         Err(error) => (String::new(), Some(error.to_string())),
@@ -132,7 +142,10 @@ fn detail(
     installed: &str,
 ) -> String {
     if declared {
-        return format!("declared scan scope: {}; policy mode determines whether it can delete", entry.sweeps);
+        return format!(
+            "declared scan scope: {}; policy mode determines whether it can delete",
+            entry.sweeps
+        );
     }
     if installed.is_empty() {
         return "installed Stado version could not be observed; support is unknown".to_string();
@@ -212,7 +225,10 @@ async fn declare(args: DeclareArgs) -> Result<(), CmdError> {
     })?;
     let declared = declared_for(&args.target).await?;
     if let Some(error) = declared.installed_error {
-        return Err(CmdError::click(format!("cannot verify cleaner support on {}: {error}", args.target)));
+        return Err(CmdError::click(format!(
+            "cannot verify cleaner support on {}: {error}",
+            args.target
+        )));
     }
     if !catalogue::version_at_least(&declared.installed, entry.since) {
         return Err(CmdError::click(format!(

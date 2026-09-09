@@ -250,8 +250,14 @@ pub fn remote_script_for(scope: DiskScope) -> String {
         script.push_str(INVENTORY_SECTION);
     }
     script
-        .replace("__CLONE_CONTAINER__", disk_cleanup::chromium_clones::CLONE_CONTAINER)
-        .replace("__CLONE_ROOT__", disk_cleanup::chromium_clones::CLONE_ROOT_NAME)
+        .replace(
+            "__CLONE_CONTAINER__",
+            disk_cleanup::chromium_clones::CLONE_CONTAINER,
+        )
+        .replace(
+            "__CLONE_ROOT__",
+            disk_cleanup::chromium_clones::CLONE_ROOT_NAME,
+        )
         .replace(
             STATE_PATH_MARK,
             &shlex_quote(&disk_cleanup::state_relative_path()),

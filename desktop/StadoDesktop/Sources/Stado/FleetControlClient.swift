@@ -1,6 +1,8 @@
 import Foundation
 
 actor FleetControlClient {
+    /// The native API grants inventory and scratch commands this longer bound.
+    nonisolated static let spaceCommandSeconds = 1200
     private let session: URLSession
     private let maximumResponseBytes = 2 * 1_024 * 1_024
 
@@ -16,7 +18,7 @@ actor FleetControlClient {
             // legitimately run for minutes and print nothing until they finish.
             // Short reads keep their 30 s idle limit above; run() raises its own
             // request interval per call instead.
-            configuration.timeoutIntervalForResource = 360
+            configuration.timeoutIntervalForResource = TimeInterval(Self.spaceCommandSeconds + 60)
             self.session = URLSession(configuration: configuration)
             return
         }
@@ -114,9 +116,9 @@ actor FleetControlClient {
         authorizationToken: String?,
         timeoutSeconds: Int = 120
     ) async throws -> OperatorCommandResult {
-        // The bridge caps a command at 300 s; asking for more would be lied
-        // about silently, so it is capped here too.
-        let budget = min(max(timeoutSeconds, 1), 300)
+        let isSpace = arguments.first == "space" || arguments.first == "workdirs"
+        let maximum = isSpace ? Self.spaceCommandSeconds : 300
+        let budget = min(max(timeoutSeconds, 1), maximum)
         var body: [String: Any] = ["args": arguments, "timeout_seconds": budget]
         if confirmsMutation {
             body["confirmation"] = "RUN_MUTATION"

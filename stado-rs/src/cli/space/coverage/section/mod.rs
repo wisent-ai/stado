@@ -18,8 +18,11 @@ pub fn section(
     declared_cleaners: &[DeclaredCleaner],
 ) -> Value {
     let available = free_space["available_bytes"].as_i64();
-    let distance = |key: &str| available.zip(free_space[key].as_i64())
-        .map(|(free, mark)| mark.saturating_sub(free).max(0));
+    let distance = |key: &str| {
+        available
+            .zip(free_space[key].as_i64())
+            .map(|(free, mark)| mark.saturating_sub(free).max(0))
+    };
     let need = distance("target_watermark_bytes");
     let deficit = distance("low_watermark_bytes");
     let occupants = paths::occupants(report);
@@ -29,13 +32,21 @@ pub fn section(
     boundaries.extend(scopes.iter().map(|scope| scope.root.clone()));
     let partition = paths::partition(&occupants, &boundaries);
     let in_stage = |path: &str| covered.iter().any(|root| paths::within(path, &root.root));
-    let stage_bytes = partition.iter().filter(|row| in_stage(&row.path))
+    let stage_bytes = partition
+        .iter()
+        .filter(|row| in_stage(&row.path))
         .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
-    let outside: Vec<_> = partition.iter().filter(|row| !in_stage(&row.path)).collect();
-    let outside_bytes = outside.iter().fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
-    let cleaner_bytes = outside.iter().filter(|row| {
-        mechanisms::reach(&row.path, &scopes).is_some_and(|scope| scope.declared)
-    }).fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
+    let outside: Vec<_> = partition
+        .iter()
+        .filter(|row| !in_stage(&row.path))
+        .collect();
+    let outside_bytes = outside
+        .iter()
+        .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
+    let cleaner_bytes = outside
+        .iter()
+        .filter(|row| mechanisms::reach(&row.path, &scopes).is_some_and(|scope| scope.declared))
+        .fold(0_i64, |sum, row| sum.saturating_add(row.bytes));
     let unswept_bytes = outside_bytes.saturating_sub(cleaner_bytes);
     let word = verdict::verdict(deficit, !occupants.is_empty(), unswept_bytes);
     let unarmed = mechanisms::unarmed(&occupants, &scopes);

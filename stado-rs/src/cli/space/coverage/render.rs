@@ -61,6 +61,39 @@ pub fn print_coverage(coverage: &Value, free_space: &Value) {
                 .and_then(Value::as_str)
                 .unwrap_or("no janitor detail"),
         );
+        if let Some(pass) = janitor.get("report").filter(|pass| pass.is_object()) {
+            if let Some(caps) = pass.get("caps").and_then(Value::as_object) {
+                let reached: Vec<_> = caps
+                    .iter()
+                    .filter(|(_, value)| value.as_bool() == Some(true))
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                println!(
+                    "limits reached: {}",
+                    if reached.is_empty() {
+                        "none".to_string()
+                    } else {
+                        reached.join(", ")
+                    }
+                );
+            }
+            if let Some(cleaners) = pass.get("cleaners").and_then(Value::as_object) {
+                for (name, result) in cleaners {
+                    println!(
+                        "cleaner {name}: scanned {}, eligible {}, deleted {}; retained {}",
+                        result["scanned_items"],
+                        result["eligible_items"],
+                        result["deleted_items"],
+                        result["skipped"]
+                    );
+                }
+            }
+            if let Some(errors) = pass.get("errors").and_then(Value::as_array) {
+                for error in errors {
+                    println!("cleanup error: {error}");
+                }
+            }
+        }
     }
     let empty = Vec::new();
     // The first word of each row is the mechanism, not a verdict about the
@@ -89,5 +122,8 @@ pub fn print_coverage(coverage: &Value, free_space: &Value) {
             gib(row.get("bytes").and_then(Value::as_i64).unwrap_or_default()),
             row.get("path").and_then(Value::as_str).unwrap_or("unknown"),
         );
+        if row["exclusive_of_measured_children"].as_bool() == Some(true) {
+            println!("  size excludes the measured child directories listed separately");
+        }
     }
 }

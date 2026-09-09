@@ -24,26 +24,38 @@ pub(super) fn scopes(
     declared: &[DeclaredCleaner],
     report: &Value,
 ) -> Vec<Scope> {
-    catalogue::CLEANERS.iter().filter_map(|cleaner| {
-        let policy = declared.iter().find(|row| row.name == cleaner.name);
-        let root = if let Some(root) = policy.and_then(|row| row.root.as_deref()) {
-            paths::absolute(root, home)
-        } else if cleaner.name == "chromium_clones" {
-            if !platform.starts_with("darwin-") { return None; }
-            report.get("chromium_clone_root")?.as_str()?.to_string()
-        } else if cleaner.name == "build_caches" {
-            report["build_caches"]["declaration"]["root"].as_str()?.to_string()
-        } else {
-            paths::absolute(&format!("~/{}", cleaner.default_root), home)
-        };
-        Some(Scope { cleaner, root, declared: policy.is_some() })
-    }).collect()
+    catalogue::CLEANERS
+        .iter()
+        .filter_map(|cleaner| {
+            let policy = declared.iter().find(|row| row.name == cleaner.name);
+            let root = if let Some(root) = policy.and_then(|row| row.root.as_deref()) {
+                paths::absolute(root, home)
+            } else if cleaner.name == "chromium_clones" {
+                if !platform.starts_with("darwin-") {
+                    return None;
+                }
+                report.get("chromium_clone_root")?.as_str()?.to_string()
+            } else if cleaner.name == "build_caches" {
+                report["build_caches"]["declaration"]["root"]
+                    .as_str()?
+                    .to_string()
+            } else {
+                paths::absolute(&format!("~/{}", cleaner.default_root), home)
+            };
+            Some(Scope {
+                cleaner,
+                root,
+                declared: policy.is_some(),
+            })
+        })
+        .collect()
 }
 
 /// Only containment qualifies. A cleaner nested inside a parent does not own
 /// that parent's siblings; the inventory partition reports them separately.
 pub(super) fn reach<'a>(path: &str, scopes: &'a [Scope]) -> Option<&'a Scope> {
-    scopes.iter()
+    scopes
+        .iter()
         .filter(|scope| paths::within(path, &scope.root))
         .max_by_key(|scope| (scope.declared, scope.root.len()))
 }
@@ -63,11 +75,14 @@ impl Unarmed<'_> {
 }
 
 pub(super) fn unarmed<'a>(occupants: &[Occupant], scopes: &'a [Scope]) -> Vec<Unarmed<'a>> {
-    let mut rows: Vec<_> = scopes.iter().filter(|scope| !scope.declared)
+    let mut rows: Vec<_> = scopes
+        .iter()
+        .filter(|scope| !scope.declared)
         .filter_map(|scope| {
             let bytes = paths::measured(&scope.root, occupants)?;
             (bytes > 0).then_some(Unarmed { scope, bytes })
-        }).collect();
+        })
+        .collect();
     rows.sort_by_key(|row| std::cmp::Reverse(row.bytes));
     rows
 }

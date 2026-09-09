@@ -1,90 +1,73 @@
-//! `stado workdirs`: what the scratch root holds, and its removal.
-//!
-//! Reporting is the default and removal needs `--apply`, the same shape the
-//! rest of the fleet's destructive verbs use, so a plan can be read before a
-//! disk changes.
+//! `stado workdirs`: preview or explicitly remove every scratch directory.
 
 use crate::cli::CmdError;
 use crate::providers::local::scratch_workdirs;
 
-/// Bytes per gibibyte, for the operator-facing line only. The report itself
-/// carries exact byte counts.
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-/// `workdirs` command body.
 pub fn run(apply: bool, json: bool) -> Result<(), CmdError> {
     let report = scratch_workdirs::sweep(apply);
     if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
         println!(
-            "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|error| CmdError::click(error.to_string()))?
+            "scratch root {}: {} directory(ies), {:.1} GiB apparent size",
+            report.root.display(),
+            report.directories.len(),
+            report.apparent_bytes as f64 / GIB
         );
-        return Ok(());
-    }
-    if !report.root_present {
-        println!(
-            "{} does not exist, so this host holds no scratch working directories",
-            report.root.display()
-        );
-        return Ok(());
-    }
-    println!(
-        "scratch root {}: {} undeclared working directory(ies), {:.1} GiB",
-        report.root.display(),
-        report.undeclared.len(),
-        report.bytes_undeclared as f64 / GIB
-    );
-    for area in &report.declared {
-        println!(
-            "  left alone {} · {:.1} GiB · {}",
-            area.name,
-            area.bytes as f64 / GIB,
-            area.owner
-        );
-    }
-    if report.stray_files > 0 {
-        println!(
-            "  left alone {} loose file(s) at the root · {:.1} GiB · not working directories",
-            report.stray_files,
-            report.bytes_stray_files as f64 / GIB
-        );
-    }
-    if !apply {
-        for entry in &report.undeclared {
+        if !report.root_present && report.failed.is_empty() {
+            println!("scratch root does not exist");
+        }
+        for entry in if apply {
+            &report.removed
+        } else {
+            &report.directories
+        } {
             println!(
-                "  would remove {} · {:.1} GiB",
+                "  {} {} · {:.1} GiB apparent size",
+                if apply { "removed" } else { "would remove" },
                 entry.path.display(),
                 entry.bytes as f64 / GIB
             );
         }
-        println!("pass --apply to remove them");
-        return Ok(());
-    }
-    for removal in &report.removed {
         println!(
-            "  removed {} · {:.1} GiB",
-            removal.path.display(),
-            removal.bytes as f64 / GIB
+            "  preserved {} loose file(s) or link(s) · {:.1} GiB",
+            report.stray_files,
+            report.bytes_stray_files as f64 / GIB
         );
+        for failure in &report.failed {
+            eprintln!(
+                "  failed {}: {}: {}",
+                failure.path.display(),
+                failure.operation,
+                failure.error
+            );
+        }
+        if apply {
+            println!(
+                "removed {} directory(ies); {} remain; {:.1} GiB apparent size removed",
+                report.removed.len(),
+                report.remaining_directories.len(),
+                report.apparent_bytes_removed as f64 / GIB
+            );
+            if let (Some(before), Some(after)) = (report.free_bytes_before, report.free_bytes_after)
+            {
+                println!("filesystem free: {:.1} GiB before, {:.1} GiB after (not inferred from file sizes)",
+                    before as f64 / GIB, after as f64 / GIB);
+            }
+            for path in &report.remaining_directories {
+                println!("  remaining {}", path.display());
+            }
+        } else {
+            println!("pass --apply to remove all directories, including jobs, runs and run-signals; active contents are not preserved");
+        }
     }
-    for removal in &report.failed {
-        println!(
-            "  failed {} · {}",
-            removal.path.display(),
-            removal.error.as_deref().unwrap_or("unknown error")
-        );
-    }
-    println!(
-        "removed {} of {} directory(ies), {:.1} GiB reclaimed",
-        report.removed.len(),
-        report.undeclared.len(),
-        report.bytes_removed as f64 / GIB
-    );
-    if !report.failed.is_empty() {
+    if !report.complete() {
         return Err(CmdError::click(format!(
-            "{} working directory(ies) could not be removed",
-            report.failed.len()
+            "working directory cleanup incomplete: {} failure(s), {} directory(ies) remain",
+            report.failed.len(),
+            report.remaining_directories.len()
         )));
     }
     Ok(())

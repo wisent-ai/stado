@@ -30,7 +30,11 @@ pub(super) fn occupants(report: &Value) -> Vec<Occupant> {
         .filter_map(|row| {
             let path = row.get("path").and_then(Value::as_str)?.to_string();
             let bytes = row.get("bytes").and_then(Value::as_i64)?;
-            Some(Occupant { path, bytes, exclusive: false })
+            Some(Occupant {
+                path,
+                bytes,
+                exclusive: false,
+            })
         })
         .collect();
     // The inventory walks several specs and two of them can reach one path:
@@ -100,7 +104,10 @@ fn segment_matches(pattern: &str, segment: &str) -> bool {
 
 /// Sum non-overlapping measurements within one scope.
 pub(super) fn measured(root: &str, occupants: &[Occupant]) -> Option<i64> {
-    let mut rows: Vec<&Occupant> = occupants.iter().filter(|row| within(&row.path, root)).collect();
+    let mut rows: Vec<&Occupant> = occupants
+        .iter()
+        .filter(|row| within(&row.path, root))
+        .collect();
     rows.sort_by(|left, right| left.path.cmp(&right.path));
     let mut total: Option<i64> = None;
     let mut previous: Option<&str> = None;
@@ -152,7 +159,10 @@ pub(super) fn covered(
 fn contains_scope(path: &str, scope: &str) -> bool {
     let mut pattern = scope.trim_end_matches('/').split('/');
     for segment in path.trim_end_matches('/').split('/') {
-        if !pattern.next().is_some_and(|expected| segment_matches(expected, segment)) {
+        if !pattern
+            .next()
+            .is_some_and(|expected| segment_matches(expected, segment))
+        {
             return false;
         }
     }
@@ -167,7 +177,10 @@ pub(super) fn partition(occupants: &[Occupant], scopes: &[String]) -> Vec<Occupa
     let mut top = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        while stack.last().is_some_and(|parent| !within(&row.path, &rows[*parent].path)) {
+        while stack
+            .last()
+            .is_some_and(|parent| !within(&row.path, &rows[*parent].path))
+        {
             stack.pop();
         }
         if let Some(parent) = stack.last() {
@@ -193,17 +206,26 @@ fn partition_node(
     output: &mut Vec<Occupant>,
 ) {
     let row = rows[index];
-    let split = !children[index].is_empty()
-        && scopes.iter().any(|scope| contains_scope(&row.path, scope));
+    let split =
+        !children[index].is_empty() && scopes.iter().any(|scope| contains_scope(&row.path, scope));
     if !split {
-        output.push(Occupant { path: row.path.clone(), bytes: row.bytes, exclusive: false });
+        output.push(Occupant {
+            path: row.path.clone(),
+            bytes: row.bytes,
+            exclusive: false,
+        });
         return;
     }
-    let child_bytes = children[index].iter()
+    let child_bytes = children[index]
+        .iter()
         .fold(0_i64, |sum, child| sum.saturating_add(rows[*child].bytes));
     let remainder = row.bytes.saturating_sub(child_bytes).max(0);
     if remainder > 0 {
-        output.push(Occupant { path: row.path.clone(), bytes: remainder, exclusive: true });
+        output.push(Occupant {
+            path: row.path.clone(),
+            bytes: remainder,
+            exclusive: true,
+        });
     }
     for child in &children[index] {
         partition_node(*child, rows, children, scopes, output);
