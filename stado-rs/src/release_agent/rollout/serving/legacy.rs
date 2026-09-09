@@ -34,39 +34,64 @@ pub(crate) fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     }
 }
 
-/// Hand the stable bind back to the declared legacy unit.
-///
-/// `enable` first: the unit was disabled the moment the release path took the
-/// bind over, and `launchctl bootstrap` refuses a disabled service with exit 5
-/// (`Bootstrap failed: 5: Input/output error`). Until 2026-09-06 that exit was
-/// accepted as success here, so a rollback with no previous release recorded
-/// "legacy restored" while nothing was bootstrapped: on charless-mac-mini the
-/// skarbiec rollback killed its proxy, took exit 5 as the unit being back, and
-/// the stable bind stayed empty for thirteen hours while the object API answered
-/// `503 object authorization unavailable` to every host. A refusal is a refusal;
-/// the caller decides what to do about the bind it still does not have.
+/// Load the declared legacy unit if it is absent. Callers verify the stable
+/// endpoint afterwards; a launchctl exit code cannot establish port ownership.
 pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let Some(plist) = target.legacy_launchd_plist.as_deref() else {
         return Ok(());
     };
-    if let Some(label) = target.legacy_launchd_label.as_deref() {
-        let _ = Command::new("/usr/bin/sudo")
-            .args(["-n", "/bin/launchctl", "enable", &format!("system/{label}")])
-            .status();
+    let label = target
+        .legacy_launchd_label
+        .as_deref()
+        .ok_or_else(|| format!("legacy launchd plist {plist} has no declared service label"))?;
+    let service = format!("system/{label}");
+    let loaded = legacy_loaded(&service)?;
+    let enabled = Command::new("/usr/bin/sudo")
+        .args(["-n", "/bin/launchctl", "enable", &service])
+        .output()
+        .map_err(|error| format!("cannot enable legacy launchd service {service}: {error}"))?;
+    if !enabled.status.success() {
+        return Err(format!(
+            "legacy launchd service {service} enable exited with {}: {}",
+            enabled.status,
+            String::from_utf8_lossy(&enabled.stderr).trim()
+        ));
     }
-    let status = Command::new("/usr/bin/sudo")
+    if loaded {
+        return Ok(());
+    }
+    let bootstrapped = Command::new("/usr/bin/sudo")
         .args(["-n", "/bin/launchctl", "bootstrap", "system", plist])
-        .status()
+        .output()
         .map_err(|error| format!("cannot restore legacy launchd service {plist}: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else if status.code() == Some(5) {
-        Err(format!(
-            "legacy launchd service bootstrap of {plist} was refused (exit 5: the service is disabled or its plist is unloadable); the stable bind has no owner"
-        ))
-    } else {
-        Err(format!(
-            "legacy launchd service bootstrap exited with {status}"
-        ))
+    // A concurrent owner can load the same label between inspection and
+    // bootstrap. Re-read the native state instead of guessing what exit 5 means.
+    if legacy_loaded(&service)? {
+        return Ok(());
     }
+    Err(format!(
+        "legacy launchd service {service} is not loaded after bootstrap of {plist} \
+         ({}): {}",
+        bootstrapped.status,
+        String::from_utf8_lossy(&bootstrapped.stderr).trim()
+    ))
+}
+
+fn legacy_loaded(service: &str) -> Result<bool, String> {
+    let observed = Command::new("/usr/bin/sudo")
+        .args(["-n", "/bin/launchctl", "print", service])
+        .output()
+        .map_err(|error| format!("cannot inspect legacy launchd service {service}: {error}"))?;
+    if observed.status.success() {
+        return Ok(true);
+    }
+    // launchctl's observed missing-service status, also used by stop_legacy.
+    if observed.status.code() == Some(113) {
+        return Ok(false);
+    }
+    Err(format!(
+        "cannot inspect legacy launchd service {service} ({}): {}",
+        observed.status,
+        String::from_utf8_lossy(&observed.stderr).trim()
+    ))
 }
