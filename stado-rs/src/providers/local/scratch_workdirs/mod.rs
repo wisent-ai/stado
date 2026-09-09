@@ -4,7 +4,7 @@
 
 mod filesystem;
 
-use crate::providers::local::disk_cleanup::{free_bytes, ifmt, safefs, IFDIR};
+use crate::providers::local::disk_cleanup::{free_bytes, safefs};
 use serde::Serialize;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -121,7 +121,7 @@ pub fn sweep(apply: bool) -> ScratchReport {
                 continue;
             }
         };
-        if ifmt(info.st_mode as u32) != IFDIR {
+        if info.st_mode & nix::libc::S_IFMT != nix::libc::S_IFDIR {
             report.stray_files += 1;
             report.bytes_stray_files += info.st_size.max(0);
             continue;
@@ -161,7 +161,7 @@ pub fn sweep(apply: bool) -> ScratchReport {
         Ok(entries) => {
             for name in entries {
                 match safefs::fstatat_nofollow(fd.as_raw_fd(), &name) {
-                    Ok(info) if ifmt(info.st_mode as u32) == IFDIR => {
+                    Ok(info) if info.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR => {
                         report.remaining_directories.push(root.join(name))
                     }
                     Ok(_) => (),
