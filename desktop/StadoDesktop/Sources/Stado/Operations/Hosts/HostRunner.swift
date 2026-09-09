@@ -25,6 +25,8 @@ struct HostRunnerReport: Decodable, Sendable {
     let exitCode: Int
     let stdout: String
     let stderr: String
+    let registration: RunnerRegistrationReport?
+    let modelReview: RunnerModelReviewReport?
 
     enum CodingKeys: String, CodingKey {
         case target
@@ -39,5 +41,26 @@ struct HostRunnerReport: Decodable, Sendable {
         case exitCode = "exit_code"
         case stdout
         case stderr
+        case registration
+        case modelReview = "model_review"
+    }
+}
+
+struct RunnerRegistrationReport: Decodable, Sendable {
+    let scope: String
+    let runner: String
+    let present: Bool?
+    let status: String?
+    let reconfigured: Bool
+}
+
+struct RunnerModelReviewReport: Decodable, Sendable {
+    let secret: String
+    let state: String
+    let reconcileWith: String?
+
+    enum CodingKeys: String, CodingKey {
+        case secret, state
+        case reconcileWith = "reconcile_with"
     }
 }

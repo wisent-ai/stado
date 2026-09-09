@@ -1,6 +1,6 @@
 //! Scratch traversal uses the janitor's non-following directory descriptors.
 
-use crate::providers::local::disk_cleanup::{ifmt, safefs, IFDIR};
+use crate::providers::local::disk_cleanup::safefs;
 use nix::sys::stat::FileStat;
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -95,7 +95,7 @@ fn measure(fd: RawFd, depth: usize) -> io::Result<i64> {
     let mut bytes = 0i64;
     for name in names(fd)? {
         let info = safefs::fstatat_nofollow(fd, &name)?;
-        let size = if ifmt(info.st_mode as u32) == IFDIR {
+        let size = if info.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR {
             let child = checked_child(fd, &name, &info)?;
             measure(child.as_raw_fd(), depth + 1)?
         } else {
@@ -112,7 +112,7 @@ fn remove_contents(fd: RawFd, depth: usize) -> io::Result<()> {
     check_depth(depth)?;
     for name in names(fd)? {
         let info = safefs::fstatat_nofollow(fd, &name)?;
-        if ifmt(info.st_mode as u32) == IFDIR {
+        if info.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR {
             let child = checked_child(fd, &name, &info)?;
             remove_contents(child.as_raw_fd(), depth + 1)?;
             if !same(&info, &safefs::fstatat_nofollow(fd, &name)?) {

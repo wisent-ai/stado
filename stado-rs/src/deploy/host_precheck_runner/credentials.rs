@@ -1,10 +1,9 @@
-//! Credential reads: the fleet's own admin vault, and the Probierz agent
-//! identity resolved through Brama's Skarbiec routes.
+//! The Probierz signing identity resolved through Brama's Skarbiec routes.
 
 use serde_json::Value;
 
 use super::brama::brama_skarbiec_context;
-use super::installer::{PROBIERZ_AGENT_ID, PROBIERZ_AGENT_RESOURCE};
+use super::installer::PROBIERZ_AGENT_RESOURCE;
 use super::report::command_failure;
 use crate::deploy::{host_channel, DeployError};
 use crate::targets::ComputeTarget;
@@ -13,24 +12,6 @@ pub(crate) struct ProbierzAgentCredential {
     pub(crate) item: String,
     pub(crate) field: String,
     pub(crate) secret: String,
-}
-
-pub(crate) async fn admin_credential(item: &str, field: &str) -> Result<String, DeployError> {
-    let credentials = crate::credential_store::admin_credentials()
-        .map_err(|error| DeployError(error.to_string()))?;
-    let client = crate::skarbiec::Client::direct(
-        &credentials.url,
-        &credentials.consumer,
-        &credentials.token_file,
-        crate::skarbiec::GrantMode::RereadPerRequest,
-    )
-    .map_err(|error| DeployError(error.to_string()))?;
-    client
-        .read_string(item, field)
-        .await
-        .map_err(|error| DeployError(error.to_string()))?
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| DeployError(format!("credential {item}.{field} is required")))
 }
 
 /// The Probierz agent identity the runner signs Kronika requests with, resolved
@@ -53,10 +34,12 @@ pub(crate) async fn kronika_agent_credential(
     let routes = context.routes;
     let gnupg = context.gnupg;
     let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-    // One read. `route resolve` derives what each vault item declares about
-    // itself at read time, so the separate reconciliation pass the removed
-    // `routes` verb group needed no longer exists and nothing has to be
-    // written before the identity can be found.
+    // One read of the contract Skarbiec publishes: `routes list` answers what
+    // each vault item declares about itself at read time, so nothing has to be
+    // written before the identity can be found. This used to call
+    // `skarbiec route resolve <agent>`, a verb Skarbiec has never had, and the
+    // install failed with `unknown command: route` — Skarbiec's answer to a
+    // question this caller invented.
     let resolved = host_channel::run_program(
         target,
         &[
@@ -66,9 +49,8 @@ pub(crate) async fn kronika_agent_credential(
             &gnupg,
             program_path,
             &skarbiec,
-            "route",
-            "resolve",
-            PROBIERZ_AGENT_ID,
+            "routes",
+            "list",
         ],
         &runner,
     )
@@ -93,7 +75,7 @@ pub(crate) async fn kronika_agent_credential(
         .ok_or_else(|| {
             DeployError(format!(
                 "Skarbiec maps no credential for {PROBIERZ_AGENT_RESOURCE}; declare one with \
-                 `skarbiec route declare --resource {PROBIERZ_AGENT_RESOURCE} --item <item> \
+                 `skarbiec routes add --resource {PROBIERZ_AGENT_RESOURCE} --item <item> \
                  --field <field> --reason <text>` beside that host's Brama"
             ))
         })?;

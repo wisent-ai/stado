@@ -49,6 +49,21 @@ impl RunnerScope {
         }
     }
 
+    /// Where GitHub lists the runners this scope registered. The two lists are
+    /// disjoint: an organization runner never appears under a repository and a
+    /// repository runner never appears under the organization, so asking the
+    /// wrong one answers "no such runner" about a runner that exists.
+    pub(crate) fn runners_endpoint(&self) -> String {
+        match self {
+            Self::Organization => format!(
+                "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runners?per_page=100"
+            ),
+            Self::Repository(repository) => format!(
+                "https://api.github.com/repos/{GITHUB_ORGANIZATION}/{repository}/actions/runners?per_page=100"
+            ),
+        }
+    }
+
     /// What `status` prints and what the host records.
     pub fn label(&self) -> String {
         match self {

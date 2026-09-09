@@ -23,9 +23,9 @@ pub(super) async fn probe_channel(
     resolved: &ComputeTarget,
     runner: &crate::deploy::Runner,
 ) -> ChannelProbe {
-    // Probe every declared route so a working primary does not hide a broken
-    // fallback. The real command below still chooses in declaration order and
-    // runs once.
+    // Probe every declared route so a working preferred path does not hide a
+    // broken alternate. The real command below still chooses in declaration
+    // order and runs once.
     let (connection_probes, connection_probe_error) =
         match crate::deploy::host_channel::probe_ssh_connections(resolved, runner).await {
             Ok(probes) => (probes, None),

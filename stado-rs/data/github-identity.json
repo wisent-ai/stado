@@ -1,6 +1,7 @@
 {
   "schema": "stado.github-identity.v1",
   "credential_route": "github:org-runner-admin",
-  "required_permission": "admin:org",
-  "reality_check": "/orgs/{organization}/actions/runner-groups"
+  "required_permission": "repo",
+  "reality_check": "/repos/{organization}/{repository}/actions/runners",
+  "reality_check_repository": "stado"
 }

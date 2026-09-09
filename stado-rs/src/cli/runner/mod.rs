@@ -24,7 +24,7 @@ pub enum RunnerCommands {
         /// Profile name from stado-rs/data/runner-profiles.json.
         #[arg(long)]
         profile: String,
-        /// Register against this repository and reconcile its profile secrets.
+        /// Register against this repository instead of the organization.
         #[arg(long)]
         repository: Option<String>,
         /// Emit the lifecycle report as JSON.
@@ -73,6 +73,19 @@ pub enum RunnerCommands {
     /// Resolve the declared GitHub credential route and confront it with GitHub.
     Credential {
         /// Emit the resolution and GitHub's answer as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mint the repository's Brama model-review bearer and install it as that
+    /// repository's secret. Registering a runner does not do this: a Brama that
+    /// refuses the route would otherwise stop a repository from getting a
+    /// runner at all, for a secret its checks may never read.
+    ModelReview {
+        target: String,
+        /// Repository inside wisent-ai whose CI presents the bearer.
+        #[arg(long)]
+        repository: String,
+        /// Emit the reconciliation report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -230,6 +243,31 @@ pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
             Ok(())
         }
         RunnerCommands::Credential { json } => crate::github_identity::report(json).await,
+        RunnerCommands::ModelReview {
+            target,
+            repository,
+            json,
+        } => {
+            let report = crate::deploy::host_precheck_runner::reconcile_model_review_secret(
+                &target,
+                &repository,
+            )
+            .await
+            .map_err(|error| click(error, json))?;
+            if json {
+                print_json(&report);
+            } else {
+                println!(
+                    "{} carries {} for {}, minted as {} on the {} route",
+                    text(report.get("repository")),
+                    text(report.get("secret")),
+                    text(report.get("model")),
+                    text(report.get("client_id")),
+                    text(report.get("primary_route")),
+                );
+            }
+            Ok(())
+        }
         RunnerCommands::Diagnostics {
             target,
             profile,

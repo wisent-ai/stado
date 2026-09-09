@@ -15,12 +15,13 @@ pub struct RemoteReport {
     /// host that has no per-login domain at all.
     pub domain: String,
     /// [`DOMAIN_STATUS_SYSTEM`], [`DOMAIN_STATUS_GRAPHICAL`],
-    /// [`DOMAIN_STATUS_FALLBACK`] or [`DOMAIN_STATUS_UNAVAILABLE`] — how the
+    /// [`DOMAIN_STATUS_BACKGROUND`] or [`DOMAIN_STATUS_UNAVAILABLE`] — how the
     /// resolver arrived at [`Self::domain`].
     pub domain_status: String,
     /// Why that domain, in the operator's words. Load-bearing for the
-    /// fallback: it is the reason a user agent cannot be loaded, and until it
-    /// was reported the fallback was a bare `user/501` note nobody read.
+    /// background domain: it is the reason a user agent cannot be loaded, and
+    /// until it was reported the background domain was a bare `user/501` note
+    /// nobody read.
     pub domain_reason: String,
     /// The unit id the remote program actually addressed. On Linux this is
     /// the `.service` spelling, which differs from the launchd label.
@@ -59,7 +60,7 @@ pub const DOMAIN_STATUS_GRAPHICAL: &str = "graphical";
 /// domain there is is the background `user/<uid>`. A user agent that needs
 /// the login session cannot be loaded in it, which is why this word travels
 /// with [`RemoteReport::domain_reason`] wherever it appears.
-pub const DOMAIN_STATUS_FALLBACK: &str = "fallback";
+pub const DOMAIN_STATUS_BACKGROUND: &str = "background";
 /// launchd has no per-login domain for this login at all.
 pub const DOMAIN_STATUS_UNAVAILABLE: &str = "unavailable";
 
@@ -148,7 +149,7 @@ impl RemoteReport {
              service",
             self.domain, self.detail
         );
-        if self.domain_status == DOMAIN_STATUS_FALLBACK {
+        if self.domain_status == DOMAIN_STATUS_BACKGROUND {
             detail.push_str(&format!(". {}", self.domain_reason));
         }
         self.detail = detail;
