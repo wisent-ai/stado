@@ -65,7 +65,7 @@
         ]
       },
       "stage": {
-        "stado-rs/target/release/stado": "stado"
+        ".wisent-output/stado-rs/target/release/stado": "stado"
       }
     },
     "linux-amd64": {
@@ -125,7 +125,7 @@
         ]
       },
       "stage": {
-        "stado-rs/target/release/stado": "stado"
+        ".wisent-output/stado-rs/target/release/stado": "stado"
       }
     }
   },
