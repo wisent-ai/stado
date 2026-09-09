@@ -28,9 +28,9 @@ fn a_document_naming_no_hosts_never_replaces_a_copy_that_names_some() {
     );
     // What an empty fleet does to the operator asking a question, and why the
     // copy is worth keeping: the authority answered, so the answer came from
-    // the document naming nobody.
+    // the document naming nobody, and the refusal names the object it read.
     assert!(
-        !output.status.success() && complaint.contains("is not in local:registry.json"),
+        !output.status.success() && complaint.contains("is not in stado://probierz/registry.json"),
         "the served document names no host, so this machine cannot be resolved: {complaint}"
     );
     assert_eq!(
@@ -93,7 +93,11 @@ fn the_preserved_copy_is_what_answers_when_the_authority_goes_away() {
         notice.contains("reading the last-known-good registry copy from")
             && notice.contains(&fixture.cache_document().display().to_string())
             && notice.contains(&format!("generation {generation}"))
-            && notice.contains("because the authority did not answer: no registry document at"),
+            && notice.contains(
+                "because the authority did not answer: registry store unreachable \
+                 (stado://probierz/registry.json)"
+            )
+            && notice.contains("HTTP 503"),
         "the degraded read says what it is reading, how old it is and why: {notice}"
     );
 }

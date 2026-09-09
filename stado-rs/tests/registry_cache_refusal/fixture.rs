@@ -1,9 +1,15 @@
-//! The isolated storage root, the product invocation and the cache readers
-//! shared by the registry-cache refusal cases.
+//! The isolated store, the product invocation and the cache readers shared by
+//! the registry-cache refusal cases.
 //!
 //! Split out of `main.rs` so each file stays inside the three hundred line
 //! limit this repository enforces on itself.
+//!
+//! The store is the loopback object gateway in [`crate::gateway`], not a
+//! directory on this disk: since `c637b026` a local filesystem store neither
+//! records nor reads the last-known-good copy, so a local store cannot
+//! observe the behaviour these cases are about.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -107,8 +113,13 @@ pub fn names_no_hosts() -> String {
     "{\"schema_version\": 2, \"coordinators\": [], \"targets\": []}\n".to_string()
 }
 
+/// The namespace the store answers under. Lowercase letters, digits and `-`
+/// only: the client refuses anything else before a request leaves.
+pub const NAMESPACE: &str = "cache-observation";
+
 pub struct Fixture {
     root: tempfile::TempDir,
+    gateway: crate::gateway::Gateway,
 }
 
 impl Fixture {
@@ -120,12 +131,19 @@ impl Fixture {
         fixture
     }
 
-    /// The same root with no registry object at all: the authority answers
-    /// "absent", which is one of the states these cases put it in.
+    /// The same root with the store answering `404` for the registry: nobody
+    /// has published one, which is one of the states these cases put it in.
     pub fn empty() -> Self {
         let root = tempfile::tempdir().expect("an isolated storage root");
         std::fs::create_dir_all(root.path().join("home")).expect("a temporary HOME");
-        Self { root }
+        let token = root.path().join("storage-token");
+        std::fs::write(&token, "cache-observation-token").expect("write the store's bearer");
+        std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600))
+            .expect("the bearer is owner-only, which the client requires");
+        Self {
+            root,
+            gateway: crate::gateway::Gateway::start(),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -136,18 +154,16 @@ impl Fixture {
         self.root.path().join("home")
     }
 
-    /// Put `document` in the canonical registry object, byte for byte. This is
-    /// the authority for every command below.
-    pub fn publish(&self, document: &str) {
-        std::fs::write(self.path().join("registry.json"), document)
-            .expect("seed the isolated registry");
+    /// Serve `document` as the canonical registry, byte for byte. This is the
+    /// authority for every command below, and it answers over TCP.
+    pub fn publish(&self, document: &str) -> String {
+        self.gateway.serve(document)
     }
 
-    /// Take the canonical registry object away, so the authority cannot answer
-    /// and the reader has to serve this host's recorded copy instead.
+    /// Leave the authority up but unable to answer, so the reader has to serve
+    /// this host's recorded copy instead.
     pub fn withdraw(&self) {
-        std::fs::remove_file(self.path().join("registry.json"))
-            .expect("remove the isolated registry");
+        self.gateway.set(crate::gateway::Answer::Unavailable);
     }
 
     pub fn stado(&self, args: &[&str]) -> Output {
@@ -170,8 +186,14 @@ impl Fixture {
         let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
         command
             .args(args)
-            .env("WC_STORAGE_BACKEND", "local")
-            .env("WC_LOCAL_STORAGE_PATH", self.path())
+            .env("WC_STORAGE_BACKEND", "stado")
+            .env("WC_STADO_STORAGE_URL", self.gateway.origin())
+            .env(
+                "WC_STADO_STORAGE_TOKEN_FILE",
+                self.path().join("storage-token"),
+            )
+            .env("WC_STADO_STORAGE_NAMESPACE", NAMESPACE)
+            .env_remove("WC_LOCAL_STORAGE_PATH")
             .env("STADO_CONFIG", self.path().join("no-such-config.json"))
             .env_remove("COMPUTE_API_KEY")
             .env_remove("COMPUTE_API_URL")

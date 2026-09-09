@@ -34,6 +34,7 @@
 
 mod copy;
 mod fixture;
+mod gateway;
 mod location;
 
 use crate::fixture::{
