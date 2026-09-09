@@ -21,7 +21,10 @@
 //! vault is copied first and the grant is measured before and after. Running it
 //! twice changes nothing.
 
-use std::path::{Path, PathBuf};
+mod document;
+mod outcome;
+
+use std::path::Path;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -29,32 +32,12 @@ use sha2::{Digest, Sha256};
 use super::owner;
 use crate::skarbiec::SkarbiecError;
 
+use document::{deployment, encode, grant_of, now_seconds, read_vault};
+pub use outcome::GrantOutcome;
+
 /// The only action this grants. Widening a consumer's writes is a deliberate
 /// act with a different blast radius and does not belong on a mint path.
 const ACTION: &str = "read";
-
-/// What one call settled, for callers that report it.
-#[derive(Clone, Debug)]
-pub struct GrantOutcome {
-    /// Capabilities the consumer held before the mint.
-    pub held_before: usize,
-    /// Capabilities the consumer holds now.
-    pub held_after: usize,
-    /// Capabilities this call added; empty means the grant already covered the
-    /// request and nothing was written.
-    pub added: Vec<String>,
-    /// Seconds left on the preserved TTL.
-    pub expires_in: i64,
-    /// Vault copy taken before the mint, absent when nothing was written.
-    pub backup: Option<PathBuf>,
-}
-
-impl GrantOutcome {
-    /// Whether this call changed the vault.
-    pub fn wrote(&self) -> bool {
-        !self.added.is_empty()
-    }
-}
 
 /// Make one item's fields readable by the consumer Stado's own reads
 /// authenticate as, and report what that changed.
@@ -89,53 +72,6 @@ pub fn settle_field_reads(
     let consumer = crate::config::skarbiec_consumer();
     let token_file = crate::config::skarbiec_token_file();
     grant_field_reads(consumer, Path::new(token_file), item, fields).map(Some)
-}
-
-fn deployment(message: String) -> SkarbiecError {
-    SkarbiecError::Deployment(message)
-}
-
-/// `action:item#field`, the spelling `token-mint --capabilities` takes and the
-/// vault records.
-fn encode(capability: &Value) -> String {
-    let action = capability
-        .get("action")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let item = capability
-        .get("item")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    match capability.get("field").and_then(Value::as_str) {
-        Some(field) => format!("{action}:{item}#{field}"),
-        None => format!("{action}:{item}"),
-    }
-}
-
-fn now_seconds() -> i64 {
-    chrono::Utc::now().timestamp()
-}
-
-fn read_vault(vault: &Path) -> Result<Value, SkarbiecError> {
-    let body = std::fs::read_to_string(vault)
-        .map_err(|error| deployment(format!("cannot read vault {}: {error}", vault.display())))?;
-    serde_json::from_str(&body).map_err(|error| {
-        deployment(format!(
-            "vault {} is not valid JSON: {error}",
-            vault.display()
-        ))
-    })
-}
-
-fn grant_of<'a>(document: &'a Value, consumer: &str) -> Result<&'a Value, SkarbiecError> {
-    document
-        .get("tokens")
-        .and_then(|tokens| tokens.get(consumer))
-        .ok_or_else(|| {
-            deployment(format!(
-                "no grant for consumer {consumer} in the owner vault; mint it deliberately first"
-            ))
-        })
 }
 
 /// Grant `consumer` a read on each of `fields` of `item`, keeping its bearer,
