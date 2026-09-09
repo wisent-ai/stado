@@ -28,9 +28,28 @@ mod published_paths;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Markdown this repository does keep: its front page and its release history.
-/// Both are repository furniture — neither is operator documentation.
+/// Markdown this repository does keep: its front page and its release
+/// history. Both are repository furniture — neither is operator
+/// documentation.
+///
+/// The release history is `CHANGELOG.md` plus the range files under
+/// `changelog/`. It is split because the length gate refuses every write to a
+/// file past 300 lines, so a single growing changelog eventually stops
+/// receiving entries: this one reached 414 lines and two product fixes on
+/// 2026-09-08 could not be recorded until it was split.
 const KEPT_MARKDOWN: &[&str] = &["README.md", "CHANGELOG.md"];
+
+/// The directory the released changelog sections live in.
+const CHANGELOG_ARCHIVE: &str = "changelog/";
+
+/// The line count past which this repository refuses to edit a file, and
+/// therefore the count past which a changelog file stops being writable.
+const EDITABLE_LINES: usize = 300;
+
+/// Whether a Markdown path is release history rather than a second corpus.
+fn is_release_history(path: &str) -> bool {
+    KEPT_MARKDOWN.contains(&path) || path.starts_with(CHANGELOG_ARCHIVE)
+}
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -99,7 +118,7 @@ fn operator_documentation_is_not_carried_as_repository_markdown() {
     let stray: Vec<&String> = carried
         .iter()
         .filter(|path| path.ends_with(".md"))
-        .filter(|path| !KEPT_MARKDOWN.contains(&path.as_str()))
+        .filter(|path| !is_release_history(path))
         .collect();
 
     assert!(
@@ -114,6 +133,63 @@ fn operator_documentation_is_not_carried_as_repository_markdown() {
         "this repository must not carry a docs/ directory; its pages are served from \
          the website's own corpus"
     );
+}
+
+/// The release history is only safe to split while the index reaches every
+/// part of it and every part is still writable. An archive nothing links to
+/// is the unread second copy this area exists to prevent, and an archive past
+/// the length gate is a file the next release cannot append to — which is the
+/// defect the split repaired in the first place.
+#[test]
+fn the_release_history_is_reachable_and_still_writable() {
+    let root = repository_root();
+    let index_path = root.join("CHANGELOG.md");
+    let index = std::fs::read_to_string(&index_path).expect("CHANGELOG.md is readable");
+
+    let archives: Vec<String> = source_files()
+        .into_iter()
+        .filter(|path| path.starts_with(CHANGELOG_ARCHIVE) && path.ends_with(".md"))
+        .collect();
+    assert!(
+        !archives.is_empty(),
+        "the released sections live under {CHANGELOG_ARCHIVE}; this revision carries none"
+    );
+
+    for archive in &archives {
+        assert!(
+            index.contains(archive.as_str()),
+            "CHANGELOG.md links no reader to {archive}, so nothing published reaches it"
+        );
+    }
+
+    for line in index.lines() {
+        let Some(open) = line.find("](") else {
+            continue;
+        };
+        let target = &line[open + 2..];
+        let Some(close) = target.find(')') else {
+            continue;
+        };
+        let target = &target[..close];
+        if !target.starts_with(CHANGELOG_ARCHIVE) {
+            continue;
+        }
+        assert!(
+            root.join(target).is_file(),
+            "CHANGELOG.md links {target}, which this revision does not carry"
+        );
+    }
+
+    for path in std::iter::once("CHANGELOG.md".to_string()).chain(archives) {
+        let text = std::fs::read_to_string(root.join(&path)).expect("a readable changelog file");
+        let lines = text.lines().count();
+        assert!(
+            lines <= EDITABLE_LINES,
+            "{path} is {lines} lines: past {EDITABLE_LINES} this repository refuses \
+             to edit it, so the next release could not append to it. Start a new \
+             range file under {CHANGELOG_ARCHIVE}"
+        );
+    }
 }
 
 #[test]
