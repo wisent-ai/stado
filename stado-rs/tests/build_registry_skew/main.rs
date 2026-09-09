@@ -1,260 +1,216 @@
 //! A host whose installed build refuses the registry the control plane
-//! publishes.
+//! publishes, read off the surface an operator reaches for.
 //!
-//! The last gap of the defect class `registry doctor` grew two other checks
-//! for. On `lukasz-macbook` the disk janitor recorded `policy:ValueError`
-//! 8,348 times across roughly 12,700 passes in two windows —
-//! 2026-08-20T20:18:05Z to 2026-08-27T18:03:59Z, with zero successful policy
-//! resolutions anywhere inside it, and 2026-08-31T06:30:49Z to
-//! 2026-09-02T17:50:40Z. The registry was valid throughout; the running build
-//! was too old to accept it. Both windows opened with no restart and no binary
-//! replacement, and both closed on an unrelated restart onto a newer build.
+//! On `lukasz-macbook` the disk janitor recorded `policy:ValueError` 8,348
+//! times across roughly 12,700 passes in two windows, 2026-08-20 to 08-27 and
+//! 08-31 to 09-02. The registry was valid throughout; the running build was
+//! too old to accept it. Both windows opened with no restart and no binary
+//! replacement, and both closed on an unrelated restart onto a newer build —
+//! which is why `stale-unit-image` fires nothing here: the installed file and
+//! the running image agreed, and the registry was what moved. The janitor
+//! learned to journal the refusal, and `resolver status` learned to publish it
+//! as a blocker, and this area defends the two verdicts a reader gets from
+//! `stado registry doctor`: a build that refuses the document, and a build
+//! nobody could ask.
 //!
-//! What is defended here: the condition fires from inside the refusing process
-//! — which is the whole case, and is only possible because `read_registry`
-//! does not gate on `validate_registry`; the row names the host, the build and
-//! the validator's own words rather than saying "incompatible"; it reuses the
-//! `rejected-by-this-build` slug `resolver status` already publishes instead of
-//! inventing a second vocabulary; a build that accepts is silent; every host
-//! this process cannot ask gets exactly one row saying so, because unreadable
-//! rendered as clean is the defect this whole line of work exists to remove;
-//! and judging a document records and writes nothing, so a reporting surface
-//! may call it.
+//! Every case drives the built binary (`CARGO_BIN_EXE_stado`) with
+//! WC_STORAGE_BACKEND=local, WC_LOCAL_STORAGE_PATH inside a tempdir, HOME
+//! inside that tempdir, and STADO_CONFIG pointing at a path that does not
+//! exist, so the operator's own registry, cache and configuration can never
+//! reach a run. The machine is declared by its own kernel host name, so the
+//! product's current-host resolution is what decides which target these
+//! verdicts are about. Every asserted sentence was copied from a hand run
+//! against this seeded state.
 //!
-//! The subject is which document a build accepts, so the two host names here
-//! are declaration rows and nothing contacts them. The refusal fixture was
-//! repaired on 2026-09-08: it declared an unknown cleaner name, which the
-//! product now skips deliberately, so six of these cases were failing on
-//! `main` while asserting a refusal this build no longer makes. It now
-//! declares a field inside a known cleaner, which the schema still refuses.
+//! Rewritten on 2026-09-08: the previous version called
+//! `targets::builds_refusing_registry` in-process and never ran the product,
+//! so nothing it asserted was evidence about a command anybody types.
 
 mod fixture;
 
-use serde_json::Value;
-use stado::targets::{
-    build_refusal, builds_refusing_registry, last_good_refusal, running_build, BuildRegistrySkew,
-    BuildVerdict, LastGoodRefusal, REGISTRY_LAST_GOOD_FILE, REGISTRY_LAST_GOOD_META_FILE,
-};
-
 use fixture::{
-    accepted, declares_a_field_no_build_implements, newer_cleaner_declaration, Home, LOCAL,
-    REFUSES, REMOTE, UNIMPLEMENTED_FIELD, UNREAD,
+    accepted_cleaners, cleaner_a_newer_build_knows, cleaner_with_an_unimplemented_key, detail,
+    findings, stderr, stdout, Harness, LOCAL, REFUSES, REMOTE, UNIMPLEMENTED_KEY, UNREAD,
 };
 
-/// The refusal, or a panic naming what came back instead.
-fn refusal(skew: &BuildRegistrySkew) -> &LastGoodRefusal {
-    match &skew.verdict {
-        BuildVerdict::Refused(refusal) => refusal,
-        BuildVerdict::Unmeasured { reason } => {
-            panic!(
-                "expected a refusal for {}, got unmeasured: {reason}",
-                skew.host
-            )
-        }
-    }
-}
-
-/// The whole case: the process holding the refusing build is the one that
-/// reports it.
-///
-/// It is detectable there only because `read_registry` never gates on
-/// `validate_registry` — `fetch_registry_remote_uncached` loads the published
-/// document through `load_registry_from_str`, which skips what it cannot
-/// model, and only the last-known-good cache is held to the contract. So the
-/// refusing build reads the document, answers every other question in
-/// `registry doctor`, and can be asked directly what it thinks of it.
+/// The refusal is about the machine that refused, it names the installed
+/// version, it carries the validator's own words, and it says what clears it.
 #[test]
 fn a_build_that_refuses_the_document_reports_it_about_itself() {
-    let skews =
-        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
-    assert_eq!(skews.len(), 1, "one row for the one host that was asked");
-    let skew = &skews[0];
-    assert_eq!(skew.kind(), REFUSES);
-    assert_eq!(skew.host, LOCAL);
-    assert_eq!(
-        skew.build.as_deref(),
-        Some(running_build()),
-        "the row names the build that answered, not an unread version"
-    );
-    assert!(matches!(
-        refusal(skew),
-        LastGoodRefusal::RejectedByThisBuild { .. }
-    ));
-}
+    let harness = Harness::new();
+    harness.declare_registry(cleaner_with_an_unimplemented_key());
 
-/// A row saying "incompatible" is the same defect in a new place. The sentence
-/// has to carry the host, the build and the validator's own words.
-#[test]
-fn the_row_names_the_host_the_build_and_the_rejection() {
-    let document = declares_a_field_no_build_implements();
-    let skews = builds_refusing_registry(LOCAL, &document, Some(LOCAL));
-    let skew = &skews[0];
-    let sentence = skew.sentence();
-    assert!(sentence.contains(LOCAL), "names the host: {sentence}");
-    assert!(
-        sentence.contains(running_build()),
-        "names the build version: {sentence}"
+    let out = harness.stado(&["registry", "doctor", "--json"]);
+    let rows = findings(&out, REFUSES);
+
+    assert_eq!(rows.len(), 1, "one row for the one host that was asked");
+    assert_eq!(
+        rows[0].get("subject").and_then(serde_json::Value::as_str),
+        Some(LOCAL),
+        "the row names the host that answered, not an unread machine"
     );
-    let produced = stado::targets::validate_registry(&document)
-        .expect_err("the fixture is refused")
-        .to_string();
+
+    let sentence = detail(&rows[0]);
     assert!(
-        sentence.contains(&produced),
-        "carries the validator's own sentence {produced:?}: {sentence}"
+        sentence.contains(&format!("({})", harness.installed_version())),
+        "the sentence names the installed build: {sentence}"
     );
     assert!(
-        sentence.contains(UNIMPLEMENTED_FIELD),
+        sentence.contains(UNIMPLEMENTED_KEY),
         "and therefore names what was refused: {sentence}"
     );
-}
-
-/// One fault, one word. `resolver status` publishes `rejected-by-this-build`
-/// for the resolver's own process; this row must not invent a second name for
-/// the same refusal.
-#[test]
-fn the_row_reuses_the_published_refusal_slug() {
-    let skews =
-        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
-    let slug = refusal(&skews[0]).kind();
-    assert_eq!(slug, "rejected-by-this-build");
     assert!(
-        skews[0].sentence().contains(slug),
-        "and prints it, the way the resolver's blocker does"
+        sentence.contains("republishing the registry does not"),
+        "and says what does not clear it: {sentence}"
+    );
+    assert!(
+        !out.status.success(),
+        "a divergence exits non-zero: {sentence}"
     );
 }
 
-/// A build that accepts the document has nothing to report. Without this the
-/// check is a permanent row, which is noise and not a check.
+/// The other surface refuses the same document with the same clause, and
+/// writes nothing while doing it.
 #[test]
-fn a_build_that_accepts_the_document_is_silent() {
-    assert!(build_refusal(&accepted()).is_none());
-    assert!(builds_refusing_registry(LOCAL, &accepted(), Some(LOCAL)).is_empty());
-}
+fn registry_validate_refuses_the_same_document_and_leaves_it_alone() {
+    let harness = Harness::new();
+    harness.declare_registry(cleaner_with_an_unimplemented_key());
+    let before = std::fs::read(harness.registry_path()).expect("read the seeded document");
 
-/// An unknown cleaner name is skipped on purpose, so it must not be reported
-/// as a refusal: refusing a whole policy for one unfamiliar name is what
-/// switched every cleaner off on 2026-09-04.
-#[test]
-fn an_unknown_cleaner_name_is_not_a_refusal() {
+    let out = harness.validate();
+
+    assert!(!out.status.success(), "an unreadable document is refused");
+    let refusal = stderr(&out);
     assert!(
-        build_refusal(&newer_cleaner_declaration()).is_none(),
-        "a name this build does not know is a name a newer build does"
+        refusal.contains(&format!(
+            "registry.targets[0].disk_cleanup.cleaners.build_caches: unknown keys ['{UNIMPLEMENTED_KEY}']"
+        )),
+        "the refusal names the key and where it sits: {refusal}"
     );
-}
-
-/// A document that is not a registry at all is still a refusal, not a pass:
-/// the tolerant read path treats `targets` it cannot model as an empty fleet,
-/// and this check must not inherit that tolerance.
-#[test]
-fn a_document_no_build_would_accept_is_refused_too() {
-    let mut document = accepted();
-    document["targets"] = Value::String("not-a-list".to_string());
-    let skews = builds_refusing_registry(LOCAL, &document, Some(LOCAL));
-    assert_eq!(skews.len(), 1);
-    assert_eq!(skews[0].kind(), REFUSES);
-}
-
-/// Whether a remote host's build accepts the registry is not knowable from
-/// here, and is reported as unmeasured rather than omitted — one row per host,
-/// exactly as `unread-unit-image` does for a pid this kernel does not hold.
-#[test]
-fn a_host_this_process_cannot_ask_is_reported_unmeasured() {
-    for document in [accepted(), declares_a_field_no_build_implements()] {
-        let skews = builds_refusing_registry(REMOTE, &document, Some(LOCAL));
-        assert_eq!(skews.len(), 1, "one row, always, for a host not asked");
-        let skew = &skews[0];
-        assert_eq!(skew.kind(), UNREAD);
-        assert_eq!(skew.host, REMOTE);
-        assert!(
-            skew.build.is_none(),
-            "the version there is not knowable from here either"
-        );
-        let sentence = skew.sentence();
-        assert!(sentence.contains(REMOTE), "names the host: {sentence}");
-        assert!(
-            sentence.contains("NOT reported as acceptance"),
-            "and refuses to be read as clean: {sentence}"
-        );
-        assert!(
-            sentence.contains(running_build()) && sentence.contains(LOCAL),
-            "and says which build asked from where: {sentence}"
-        );
-    }
-}
-
-/// The local verdict must not leak onto a remote host. A refusing local build
-/// reporting every declared machine as refusing would be a worse lie than the
-/// silence it replaces.
-#[test]
-fn a_local_refusal_is_not_attributed_to_another_host() {
-    let document = declares_a_field_no_build_implements();
-    let remote = builds_refusing_registry(REMOTE, &document, Some(LOCAL));
-    assert_eq!(remote[0].kind(), UNREAD);
-    assert!(matches!(remote[0].verdict, BuildVerdict::Unmeasured { .. }));
-}
-
-/// A machine no registry target names can ask no build for anybody: it gets
-/// the unmeasured row with that phrase, the same way `observe_unit_images`
-/// words it.
-#[test]
-fn a_host_with_no_local_target_at_all_is_unmeasured() {
-    let skews = builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), None);
-    assert_eq!(skews.len(), 1);
-    assert_eq!(skews[0].kind(), UNREAD);
-    assert!(
-        skews[0]
-            .sentence()
-            .contains("a host no registry target names"),
-        "{}",
-        skews[0].sentence()
-    );
-}
-
-/// The two kinds are distinguishable, which is the point of having two: an
-/// operator filtering for one must never catch the other.
-#[test]
-fn the_two_kinds_are_distinct() {
-    assert_ne!(REFUSES, UNREAD);
-    let refused =
-        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
-    let unmeasured = builds_refusing_registry(REMOTE, &accepted(), Some(LOCAL));
-    assert_ne!(refused[0].kind(), unmeasured[0].kind());
-}
-
-/// Judging a document is not caching one. This runs on a reporting surface, so
-/// it must leave no cache file behind and must not overwrite the recorded
-/// refusal `resolver status` and the tolerant read's notice both read.
-#[test]
-fn judging_a_document_writes_nothing_and_records_nothing() {
-    let home = Home::new();
-    let before = last_good_refusal();
-    assert!(build_refusal(&declares_a_field_no_build_implements()).is_some());
-    assert!(build_refusal(&accepted()).is_none());
     assert_eq!(
-        last_good_refusal(),
+        std::fs::read(harness.registry_path()).expect("read the document back"),
         before,
-        "the process-local record belongs to store_last_good, not to a report"
+        "a refusal writes nothing"
     );
-    for name in [REGISTRY_LAST_GOOD_FILE, REGISTRY_LAST_GOOD_META_FILE] {
-        assert!(
-            !home.cache().join(name).exists(),
-            "{name} must not appear: nothing here writes a cache"
-        );
-    }
 }
 
-/// And the refusal is readable with no cache history at all, which is what
-/// separates this check from reading `last_good_refusal()`. That record exists
-/// only if this process happened to take the uncached authority path; a check
-/// that fires only when the cache was refreshed cannot fire in the case it
-/// exists for.
+/// A document this build accepts produces no verdict about this machine at
+/// all, on either surface.
 #[test]
-fn the_refusal_does_not_depend_on_the_cache_having_been_refreshed() {
-    let skews =
-        builds_refusing_registry(LOCAL, &declares_a_field_no_build_implements(), Some(LOCAL));
-    assert_eq!(skews[0].kind(), REFUSES);
-    assert!(matches!(
-        refusal(&skews[0]),
-        LastGoodRefusal::RejectedByThisBuild { .. }
-    ));
+fn a_document_this_build_accepts_produces_no_refusal() {
+    let harness = Harness::new();
+    harness.declare_registry(accepted_cleaners());
+
+    let validated = harness.validate();
+    assert!(
+        validated.status.success(),
+        "the accepted document validates: {}",
+        stderr(&validated)
+    );
+    assert!(
+        stdout(&validated).contains(&format!(
+            "valid registry: {}",
+            harness.registry_path().display()
+        )),
+        "and says which document it read: {}",
+        stdout(&validated)
+    );
+
+    let doctor = harness.stado(&["registry", "doctor", "--json"]);
+    let about_this_machine: Vec<serde_json::Value> = findings(&doctor, REFUSES)
+        .into_iter()
+        .filter(|row| row.get("subject").and_then(serde_json::Value::as_str) == Some(LOCAL))
+        .collect();
+    assert!(
+        about_this_machine.is_empty(),
+        "no refusal about the host that accepted it: {about_this_machine:?}"
+    );
+}
+
+/// A machine this process cannot ask is unmeasured, and unmeasured is not
+/// acceptance and not refusal. The sentence has to say who was running and
+/// where, or a reader cannot tell which of the two silences they are holding.
+#[test]
+fn a_machine_this_process_cannot_ask_is_unmeasured_not_refused() {
+    let harness = Harness::new();
+    harness.declare_registry(accepted_cleaners());
+
+    let out = harness.stado(&["registry", "doctor", "--json"]);
+
+    let unread = findings(&out, UNREAD);
+    assert_eq!(unread.len(), 1, "one row for the one machine nobody asked");
+    assert_eq!(
+        unread[0].get("subject").and_then(serde_json::Value::as_str),
+        Some(REMOTE)
+    );
+    let sentence = detail(&unread[0]);
+    assert!(
+        sentence.contains("is NOT reported as acceptance"),
+        "silence is not acceptance: {sentence}"
+    );
+    assert!(
+        sentence.contains(&harness.installed_version()) && sentence.contains(LOCAL),
+        "the sentence names the build that ran and where it ran: {sentence}"
+    );
+
+    let refused_remote: Vec<serde_json::Value> = findings(&out, REFUSES)
+        .into_iter()
+        .filter(|row| row.get("subject").and_then(serde_json::Value::as_str) == Some(REMOTE))
+        .collect();
+    assert!(
+        refused_remote.is_empty(),
+        "an unasked machine is never reported as refusing: {refused_remote:?}"
+    );
+}
+
+/// Both kinds arrive in one run, on two different subjects: the machine that
+/// answered refuses, the machine nobody could ask is unmeasured.
+#[test]
+fn the_two_kinds_are_distinct_in_one_report() {
+    let harness = Harness::new();
+    harness.declare_registry(cleaner_with_an_unimplemented_key());
+
+    let out = harness.stado(&["registry", "doctor", "--json"]);
+
+    let refused = findings(&out, REFUSES);
+    let unread = findings(&out, UNREAD);
+    assert_eq!(refused.len(), 1);
+    assert_eq!(unread.len(), 1);
+    assert_eq!(
+        refused[0]
+            .get("subject")
+            .and_then(serde_json::Value::as_str),
+        Some(LOCAL)
+    );
+    assert_eq!(
+        unread[0].get("subject").and_then(serde_json::Value::as_str),
+        Some(REMOTE)
+    );
+}
+
+/// A cleaner *name* this build does not know is skipped, not refused. This is
+/// the case the area used to assert backwards: refusing an unfamiliar name
+/// switched every cleaner off on a host whose document had simply moved ahead
+/// of its binary, so the product changed and the check has to follow.
+#[test]
+fn a_cleaner_name_this_build_does_not_know_is_not_a_refusal() {
+    let harness = Harness::new();
+    harness.declare_registry(cleaner_a_newer_build_knows());
+
+    let validated = harness.validate();
+    assert!(
+        validated.status.success(),
+        "an unfamiliar cleaner name is a document this build can still read: {}",
+        stderr(&validated)
+    );
+
+    let doctor = harness.stado(&["registry", "doctor", "--json"]);
+    let about_this_machine: Vec<serde_json::Value> = findings(&doctor, REFUSES)
+        .into_iter()
+        .filter(|row| row.get("subject").and_then(serde_json::Value::as_str) == Some(LOCAL))
+        .collect();
+    assert!(
+        about_this_machine.is_empty(),
+        "and therefore no refusal about this machine: {about_this_machine:?}"
+    );
 }
