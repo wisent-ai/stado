@@ -58,6 +58,62 @@ pub fn document(lease: &ScratchLease, parent: &ComputeTarget, ssh: &str) -> Valu
     })
 }
 
+/// The fleet's release trust, trimmed for one lease's document, and the
+/// sentence `create` reports either way.
+///
+/// A signed release is verified against `release_control.trusted_keys` in the
+/// registry the DELIVERING side reads, and for a leased run that is this
+/// one-target document. Carrying the fleet's public keys is what lets a
+/// disposable target be delivered a real pipeline-signed version; without them
+/// `host-state --apply` refuses every such version with `registry declares no
+/// release trust keys`, which is how this capability shipped and why only
+/// legacy-manifest versions could reach a lease.
+///
+/// `products` is emptied on the way through. Desired state is the fleet's, not
+/// the lease's: nothing reconciles a throwaway account, and a copied policy
+/// would name logical services this document does not declare. Trust travels;
+/// desired state does not.
+pub fn trust(document: &Value) -> (Option<Value>, String) {
+    // `none: ` prefixes every answer that is not a key list, so one field can
+    // carry both without a reader having to guess which it got. The CLI prints
+    // it verbatim and the Desktop keys its tone off the prefix.
+    let mut control = match crate::release_control::control(document) {
+        Ok(Some(control)) => control,
+        Ok(None) => {
+            return (
+                None,
+                "none: the fleet declares no release trust".to_string(),
+            )
+        }
+        Err(error) => {
+            return (
+                None,
+                format!("none: the fleet's release trust does not parse: {error}"),
+            )
+        }
+    };
+    if control.trusted_keys.is_empty() {
+        return (
+            None,
+            "none: the fleet declares no release trust keys".to_string(),
+        );
+    }
+    control.products.clear();
+    let ids = control
+        .trusted_keys
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    match serde_json::to_value(&control) {
+        Ok(value) => (Some(value), ids),
+        Err(error) => (
+            None,
+            format!("none: the fleet's release trust is not serializable: {error}"),
+        ),
+    }
+}
+
 /// Write the document into a fresh store root and return its path.
 ///
 /// An existing root is refused rather than overwritten: two runs sharing one
@@ -68,6 +124,7 @@ pub fn write(
     lease: &ScratchLease,
     parent: &ComputeTarget,
     ssh: &str,
+    trust: Option<Value>,
 ) -> Result<PathBuf, DeployError> {
     if root.exists() {
         return Err(DeployError(format!(
@@ -75,10 +132,22 @@ pub fn write(
             root.display()
         )));
     }
-    let document = document(lease, parent, ssh);
+    let mut document = document(lease, parent, ssh);
+    if let Some(trust) = trust {
+        document[crate::release_control::RELEASE_CONTROL_KEY] = trust;
+    }
     crate::targets::validate_registry(&document).map_err(|exc| {
         DeployError(format!(
             "the scratch registry this build renders is not a valid registry document: {exc}"
+        ))
+    })?;
+    // The release contract as well as the registry contract, because the trust
+    // block above is the half a delivery reads: a document that satisfies one
+    // and not the other fails inside `host-state --apply`, three commands away
+    // from the call that wrote it.
+    crate::release_control::validate_registry_contract(&document).map_err(|exc| {
+        DeployError(format!(
+            "the scratch registry this build renders does not satisfy the release contract: {exc}"
         ))
     })?;
     std::fs::create_dir_all(root)

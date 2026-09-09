@@ -125,7 +125,19 @@ pub async fn create(
         }
     };
 
-    let registry_path = registry_out::write(&root, &record, &target, &ssh)?;
+    // The fleet's release trust, read once from the canonical document, so a
+    // signed release can be delivered to this lease. A store that will not
+    // answer does not fail the lease - it costs the lease signed deliveries,
+    // and the report says so in the same breath rather than leaving an
+    // operator to meet `registry declares no release trust keys` later.
+    let (trust, release_trust) = match crate::cli::registry::fetch_document().await {
+        Ok(document) => registry_out::trust(&document),
+        Err(error) => (
+            None,
+            format!("the fleet's release trust is unreadable: {error}"),
+        ),
+    };
+    let registry_path = registry_out::write(&root, &record, &target, &ssh, trust)?;
 
     let mut report = host_channel::base_report(&target);
     report.insert("name".into(), Value::from(record.name.clone()));
@@ -148,6 +160,7 @@ pub async fn create(
         "registry_path".into(),
         Value::from(registry_path.display().to_string()),
     );
+    report.insert("release_trust".into(), Value::from(release_trust));
     report.insert("account".into(), Value::from("created"));
     report.insert("verified_login".into(), Value::from(entered.login));
     report.insert("home_path".into(), Value::from(entered.home_path));

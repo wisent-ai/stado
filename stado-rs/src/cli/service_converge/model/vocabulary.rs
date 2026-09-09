@@ -15,6 +15,26 @@ pub const HOST_BEHIND: &str = "host-behind";
 pub const HOST_AHEAD: &str = "host-ahead";
 /// Nothing usable came back, so drift is neither confirmed nor ruled out.
 pub const UNKNOWN: &str = "unknown";
+/// The reporter looked and there is no artefact at all: the host declares
+/// this binary and does not carry it.
+///
+/// Held apart from [`UNKNOWN`] because the two are opposite questions.
+/// `unknown` is a measurement that failed and a host that may be perfectly
+/// healthy, which is why `--apply` leaves it alone. This is a measurement
+/// that succeeded and returned the absence: there is no file, no version to
+/// downgrade, and no process running the declared binary to interrupt, so the
+/// delivery the declaration asks for is exactly what closes it.
+///
+/// Folding the two together meant a host with no copy of a managed binary
+/// could never be given one by the product: `--apply` skipped it as
+/// unmeasured for as long as it stayed empty. On 2026-09-08 a leased scratch
+/// account on `charless-mac-mini` proved it - `verdict unknown`, `root none`,
+/// and no delivery on any number of `--apply` passes - so the first install
+/// had to be carried out by hand through the repository's installer script,
+/// which is not a product capability. Report mode exits non-zero on this
+/// verdict for the same reason it does on `host-behind`: the declaration is
+/// false about the host.
+pub const HOST_MISSING: &str = "host-missing";
 /// The host carries no managed-version declaration. With nothing desired there
 /// is nothing to compare, so this is never drift.
 pub const UNDECLARED: &str = "undeclared";

@@ -19,6 +19,7 @@
 //! Every sentence asserted below was copied from a live run on 2026-09-08.
 
 mod fixture;
+mod leased;
 
 use std::path::Path;
 use std::process::Command;

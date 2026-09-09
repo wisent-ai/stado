@@ -3,389 +3,90 @@
 //! On 2026-08-19 `com.wisent.always-on.stado-object-api` — which is
 //! `stado dashboard --bind 127.0.0.1 --port 8765` — answered
 //! `503 {"error":"object authorization unavailable"}` to the whole fleet
-//! because one slow vault read at startup shut the `object` boundary and
+//! because one bad vault read at startup shut the `object` boundary and
 //! nothing ever revalidated it. Clearing it needed a privileged LaunchDaemon
 //! restart, which is exactly what the product's own recovery path cannot do.
 //!
-//! This test drives the product's own dashboard entry point
-//! (`stado::dashboard::serve`, what `stado dashboard` calls) on loopback,
-//! against a tempdir local storage backend and a stand-in Skarbiec broker
-//! whose item listing is refused exactly once. It defends: the exact 503 body,
-//! recovery without any restart once the cooldown elapses, the verifier's own
-//! sentence in `last_error`, and the cooldown itself — repeated requests
-//! inside it must not turn into a vault sweep per request.
-//!
-//! Isolation is environmental, as everywhere else in this suite:
-//! WC_STORAGE_BACKEND=local + WC_LOCAL_STORAGE_PATH=<TempDir>, a set-but-
-//! missing STADO_CONFIG, every Skarbiec URL pointed at loopback (the object
-//! verifier at the stand-in broker, every other verifier at a dead port), and
-//! owner-only grant files inside the temp dir. Nothing here can reach the
-//! operator's real vault, registry or fleet.
+//! Every case here runs that command as its own process against a real
+//! Skarbiec broker, and asserts what the listener served and what it
+//! published about itself: the exact 503 body, the verifier's own sentence in
+//! `last_error`, the cooldown, recovery without a restart — proved by the
+//! process id the listener publishes staying the same across it — and the
+//! release boundary reopening through a route that never gates on it.
 
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+mod fixture;
+mod frozen;
+mod policy;
+mod vault;
 
 use serde_json::Value;
 
-/// The body every object route answers while its boundary is shut. Copied from
-/// the wire, not from the source: the fleet's clients and the incident
-/// vocabulary both match on this exact string.
-const OBJECT_UNAVAILABLE: &str = r#"{"error":"object authorization unavailable"}"#;
+use fixture::{past_cooldown, Env, OBJECT_UNAVAILABLE};
+use policy::{ABSENT_KEY, NAMESPACE, UNDECLARED_RELEASE_KEY};
+use vault::{bearer, object_item, Vault};
 
-/// The refusal the stand-in broker answers the first item listing with. It
-/// travels all the way into `last_error`, which is the point: an operator
-/// reading the boundary state must see the verifier's own words.
-const BROKER_REFUSAL: &str = r#"{"error":"skarbiec vault broker reset the connection"}"#;
+/// How the verifier's own words reach `last_error` when the refusal is about
+/// this host's deployment rather than about the vault being unreachable.
+/// Copied from a live run of the listener, prefix and spacing included.
+const DEPLOYMENT: &str = "Skarbiec deployment configuration: ";
 
-/// What `SkarbiecError::Response` makes of [`BROKER_REFUSAL`], and therefore
-/// what `/api/state.json` must publish as the `object` boundary's reason.
-const OBJECT_LAST_ERROR: &str =
-    r#"Skarbiec returned HTTP 503: {"error":"skarbiec vault broker reset the connection"}"#;
-
-/// The namespace and key this test reads. `probierz` is one of the active
-/// object namespaces, so the gateway's own configuration accepts it.
-const NAMESPACE: &str = "probierz";
-const KEY: &str = "data/probe.json";
-
-/// Seconds a shut boundary waits before it may be revalidated again. Long
-/// enough that the storm probe below is decided by the cooldown and not by
-/// scheduling luck, short enough to keep this test a few seconds.
-const COOLDOWN_SECONDS: u64 = 3;
-
-/// The Skarbiec item holding one namespace's bearer, as
-/// `config::parse_object_api_namespaces` requires it to be named.
-fn verifier_item(namespace: &str) -> String {
-    if namespace == "wisent-backend" {
-        "wisent-backend-object-client".to_string()
-    } else {
-        format!("{namespace}-object-api")
-    }
+/// One object read, addressed the way an operator's client addresses it.
+fn object_target(namespace: &str, key: &str) -> String {
+    format!("/api/object?uri=stado://{namespace}/{key}")
 }
 
-/// The bearer the stand-in broker holds for one namespace.
-fn namespace_token(namespace: &str) -> String {
-    format!("{}-token", verifier_item(namespace))
-}
-
-/// The `WC_OBJECT_API_NAMESPACES` document: every active namespace, each with
-/// its own item and one `data/` subtree. A missing active namespace is a
-/// configuration problem the verifier reports instead of reaching the vault.
-fn namespaces_document() -> String {
-    let entries = stado::config::ACTIVE_OBJECT_NAMESPACES
-        .iter()
-        .map(|namespace| {
-            format!(
-                r#""{namespace}": {{"item": "{}", "prefixes": ["data/"]}}"#,
-                verifier_item(namespace)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{{{entries}}}")
-}
-
-/// An owner-only grant file. `skarbiec::read_grant` refuses anything a group
-/// or other user can read, so the mode is part of the fixture.
-fn write_grant(path: &Path, token: &str) {
-    std::fs::write(path, token).expect("grant file is writable");
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .expect("grant file takes owner-only mode");
-}
-
-/// One HTTP answer, reduced to what a contract is written against.
-struct Answer {
-    status: u16,
-    body: String,
-}
-
-/// Read one HTTP message off `stream`: the head, then `Content-Length` bytes.
-fn read_message(stream: &mut TcpStream) -> Option<(String, String)> {
-    let mut raw = Vec::new();
-    let mut byte = [0_u8; 1];
-    while !raw.ends_with(b"\r\n\r\n") {
-        match stream.read(&mut byte) {
-            Ok(0) => return None,
-            Ok(_) => raw.push(byte[0]),
-            Err(_) => return None,
-        }
-    }
-    let head = String::from_utf8_lossy(&raw).into_owned();
-    let length = head
-        .lines()
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
-        .unwrap_or(0);
-    let mut body = vec![0_u8; length];
-    if length > 0 && stream.read_exact(&mut body).is_err() {
-        return None;
-    }
-    Some((head, String::from_utf8_lossy(&body).into_owned()))
-}
-
-fn write_response(stream: &mut TcpStream, status: u16, reason: &str, body: &str) {
-    let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
-}
-
-/// A stand-in Skarbiec broker.
-///
-/// `POST /v1/items/list` is refused exactly once and answers the full item set
-/// afterwards — a transient reset, which is what shut the real boundary.
-/// `POST /v1/items/read` always answers the item's bearer, so the difference
-/// between the closed and the recovered listener is only the boundary verdict.
-struct FakeVault {
-    addr: SocketAddr,
-    /// How many item listings the broker has been asked for. Only boundary
-    /// validation lists items, so this counts vault sweeps.
-    listings: Arc<AtomicUsize>,
-}
-
-impl FakeVault {
-    fn spawn() -> Self {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("stand-in broker binds loopback");
-        let addr = listener
-            .local_addr()
-            .expect("stand-in broker has an address");
-        let listings = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&listings);
-        std::thread::Builder::new()
-            .name("stand-in-skarbiec".to_string())
-            .spawn(move || {
-                for stream in listener.incoming() {
-                    let Ok(mut stream) = stream else { continue };
-                    let counter = Arc::clone(&counter);
-                    std::thread::spawn(move || {
-                        let Some((head, body)) = read_message(&mut stream) else {
-                            return;
-                        };
-                        let target = head.split_whitespace().nth(1).unwrap_or("").to_string();
-                        match target.as_str() {
-                            "/v1/items/list" => {
-                                if counter.fetch_add(1, Ordering::SeqCst) == 0 {
-                                    write_response(
-                                        &mut stream,
-                                        503,
-                                        "Service Unavailable",
-                                        BROKER_REFUSAL,
-                                    );
-                                    return;
-                                }
-                                let items = stado::config::ACTIVE_OBJECT_NAMESPACES
-                                    .iter()
-                                    .map(|namespace| {
-                                        format!(
-                                            r#"{{"id": "{}", "deleted": false}}"#,
-                                            verifier_item(namespace)
-                                        )
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                write_response(&mut stream, 200, "OK", &format!("[{items}]"));
-                            }
-                            "/v1/items/read" => {
-                                let request: Value =
-                                    serde_json::from_str(&body).unwrap_or(Value::Null);
-                                let id = request
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string();
-                                write_response(
-                                    &mut stream,
-                                    200,
-                                    "OK",
-                                    &format!(r#"{{"value": "{id}-token"}}"#),
-                                );
-                            }
-                            _ => write_response(&mut stream, 404, "Not Found", "{}"),
-                        }
-                    });
-                }
-            })
-            .expect("stand-in broker thread starts");
-        Self { addr, listings }
-    }
-
-    fn url(&self) -> String {
-        format!("http://{}", self.addr)
-    }
-
-    fn listings(&self) -> usize {
-        self.listings.load(Ordering::SeqCst)
-    }
-}
-
-/// One GET against the dashboard, with the loopback `Host` its guard requires.
-fn get(addr: SocketAddr, target: &str, bearer: Option<&str>) -> Answer {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut stream = loop {
-        match TcpStream::connect(addr) {
-            Ok(stream) => break stream,
-            Err(error) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "dashboard never accepted a loopback connection: {error}"
-                );
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        }
-    };
-    stream
-        .set_read_timeout(Some(Duration::from_secs(60)))
-        .expect("read timeout is settable");
-    let mut request = format!("GET {target} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n");
-    if let Some(bearer) = bearer {
-        request.push_str(&format!("Authorization: Bearer {bearer}\r\n"));
-    }
-    request.push_str("\r\n");
-    stream
-        .write_all(request.as_bytes())
-        .expect("dashboard accepts the request");
-    let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .expect("dashboard answers and closes");
-    let raw = String::from_utf8_lossy(&raw).into_owned();
-    let (head, body) = raw
-        .split_once("\r\n\r\n")
-        .expect("the answer has a head and a body");
-    let status = head
-        .split_whitespace()
-        .nth(1)
-        .and_then(|status| status.parse::<u16>().ok())
-        .expect("the status line carries a code");
-    Answer {
-        status,
-        body: body.to_string(),
-    }
-}
-
-/// The `object` boundary as `/api/state.json` publishes it.
-fn object_boundary_state(addr: SocketAddr) -> Value {
-    let answer = get(addr, "/api/state.json", None);
-    assert_eq!(answer.status, 200, "state document: {}", answer.body);
-    let document: Value =
-        serde_json::from_str(&answer.body).expect("the state document is JSON: {answer.body}");
-    document["boundaries"]["object"].clone()
-}
-
-/// A shut object boundary revalidates itself, once per cooldown, and the fleet
-/// gets its object plane back without a privileged unit restart.
+/// A shut object boundary reopens by itself once its grant is repaired, and
+/// the fleet gets its object plane back inside the running process.
 #[test]
-fn a_shut_object_boundary_recovers_without_a_restart() {
-    let storage = tempfile::TempDir::new().expect("temp storage root");
-    let vault = FakeVault::spawn();
-    let coordinator_grant = storage.path().join("coordinator-grant");
-    let object_grant = storage.path().join("object-verifier-grant");
-    write_grant(&coordinator_grant, "coordinator-grant-value");
-    write_grant(&object_grant, "object-verifier-grant-value");
-
-    std::env::set_var("WC_STORAGE_BACKEND", "local");
-    std::env::set_var("WC_LOCAL_STORAGE_PATH", storage.path());
-    // A set-but-missing STADO_CONFIG disables config-file discovery.
-    std::env::set_var("STADO_CONFIG", storage.path().join("no-such-config.json"));
-    std::env::remove_var("COMPUTE_API_KEY");
-    std::env::remove_var("COMPUTE_API_URL");
-    std::env::remove_var("WC_PROFILES_DIR");
-    // Every boundary but `object` is pointed at a dead loopback port: they must
-    // fail, they must fail instantly, and they must never reach a real vault.
-    for variable in [
-        "WC_SKARBIEC_URL",
-        "WC_RELEASE_SKARBIEC_URL",
-        "WC_MACHINE_SKARBIEC_URL",
-        "WC_SERVICE_SKARBIEC_URL",
-        "WC_RATE_LIMIT_SKARBIEC_URL",
-        "WC_INTEGRATION_SKARBIEC_URL",
-        "WC_INTEGRATION_PROVIDER_SKARBIEC_URL",
-    ] {
-        std::env::set_var(variable, "http://127.0.0.1:1");
-    }
-    std::env::set_var("WC_SKARBIEC_TOKEN_FILE", &coordinator_grant);
-    std::env::set_var("WC_OBJECT_SKARBIEC_URL", vault.url());
-    std::env::set_var("WC_OBJECT_SKARBIEC_TOKEN_FILE", &object_grant);
-    std::env::set_var("WC_OBJECT_API_NAMESPACES", namespaces_document());
-    // One attempt, so the single refusal below is the startup verdict rather
-    // than the first of three retries.
-    std::env::set_var("WC_DASHBOARD_BOUNDARY_ATTEMPTS", "1");
-    std::env::set_var(
-        "WC_DASHBOARD_BOUNDARY_RECHECK_SECONDS",
-        COOLDOWN_SECONDS.to_string(),
+fn a_shut_object_boundary_reopens_without_a_restart() {
+    let env = Env::new();
+    let items = policy::object_items();
+    let vault = Vault::start(&env.home(), &items);
+    // The grant the fleet had: one namespace's item was never added to it, so
+    // the verifier's item set does not match the policy and the boundary is
+    // shut the moment the process boots.
+    let (withheld, granted) = items.split_last().expect("the policy names items");
+    vault.grant(
+        stado::config::OBJECT_API_VERIFIER_CONSUMER,
+        granted,
+        &env.grant("object"),
     );
-    std::env::set_var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS", "20");
+    let listener = env.start(&vault.url(), &vault.url());
+    let target = object_target(NAMESPACE, ABSENT_KEY);
+    let namespace_bearer = bearer(&object_item(NAMESPACE));
 
-    // The dashboard binds a fixed port, so the port is chosen here and
-    // released; the listener below claims it immediately.
-    let addr = {
-        let probe = TcpListener::bind(("127.0.0.1", 0)).expect("a free loopback port exists");
-        probe.local_addr().expect("the probe has an address")
-    };
-    // The listener runs on its own OS thread, for the reason the production
-    // refresh loop does: `serve`'s future takes `Option<&str>` and spawning it
-    // trips the `&str` lifetime-generalization issue (Send "not general
-    // enough"). `block_on` never asks the future to be Send.
-    let port = i64::from(addr.port());
-    std::thread::Builder::new()
-        .name("boundary-dashboard".to_string())
-        .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("dashboard runtime");
-            // Exactly what `stado dashboard --bind 127.0.0.1 --port <port>` runs.
-            let outcome = runtime.block_on(stado::dashboard::serve(
-                Some("127.0.0.1"),
-                Some(port),
-                false,
-            ));
-            if let Err(error) = outcome {
-                eprintln!("[test] dashboard exited: {error}");
-            }
-        })
-        .expect("dashboard thread starts");
-
-    let uri = format!("stado://{NAMESPACE}/{KEY}");
-    let target = format!("/api/object?uri={uri}");
-    let bearer = namespace_token(NAMESPACE);
-
-    // The listener accepts only after startup validation has recorded every
-    // verdict, so the first answer is decided by the refused sweep above.
-    let refused = get(addr, &target, Some(&bearer));
+    // The boot sweep is itself a revalidation attempt, and it anchors the
+    // cooldown, so the window is let pass before the first read: what this
+    // case is about is a request revalidating a shut boundary, not the boot
+    // verdict answering for it.
+    past_cooldown();
+    let refused = listener.get(&target, Some(&namespace_bearer));
     assert_eq!(refused.status, 503, "body: {}", refused.body);
     assert_eq!(refused.body, OBJECT_UNAVAILABLE);
-    assert_eq!(
-        vault.listings(),
-        1,
-        "startup validation swept the vault exactly once"
-    );
 
     // The reason is the verifier's own sentence, published where an operator
-    // already has the `view` permission.
-    let closed = object_boundary_state(addr);
-    assert_eq!(closed["ready"], Value::Bool(false));
+    // already has the read permission.
+    let closed = listener.boundary("object");
+    assert_eq!(closed["ready"], Value::Bool(false), "{closed}");
     assert_eq!(
         closed["last_error"],
-        Value::String(OBJECT_LAST_ERROR.into())
+        Value::String(format!(
+            "{DEPLOYMENT}object verifier grant item set mismatch \
+             (missing=[{withheld}], unexpected=[])"
+        )),
+        "the operator must read what refused and about which item"
     );
     assert!(
         closed["checked_at"].is_string(),
         "a closed verdict is timestamped: {closed}"
     );
+    let pid = listener.pid();
 
     // Liveness answers before authorization, so it stays flat booleans: no
     // vault item, grant or endpoint leaks to an unauthenticated prober.
-    let health = get(addr, "/healthz", None);
+    let health = listener.get("/healthz", None);
     assert_eq!(health.status, 200, "body: {}", health.body);
-    let health: Value = serde_json::from_str(&health.body).expect("liveness answers JSON");
+    let health = health.json();
     assert_eq!(health["ok"], Value::Bool(true));
     assert_eq!(health["degraded"], Value::Bool(true));
     assert_eq!(
@@ -398,23 +99,35 @@ fn a_shut_object_boundary_recovers_without_a_restart() {
         "no boundary reason on the unauthenticated liveness route: {health}"
     );
 
-    // A storm inside the cooldown is answered from the recorded verdict: same
-    // refusal, and not one additional vault sweep.
+    // The grant is repaired in place — the file every verifier re-reads per
+    // attempt — and nothing is restarted, reloaded or signalled. The
+    // revalidation the read above claimed is the cooldown's anchor, so the
+    // burst below is inside the window by construction.
+    let anchor = listener.boundary("object")["checked_at"].clone();
+    vault.grant(
+        stado::config::OBJECT_API_VERIFIER_CONSUMER,
+        &items,
+        &env.grant("object"),
+    );
+
+    // A burst inside the cooldown is answered from the recorded verdict, so a
+    // fleet hammering a shut boundary cannot turn into one vault sweep per
+    // request: the repaired grant is not read yet.
     for _ in 0..5 {
-        let repeated = get(addr, &target, Some(&bearer));
+        let repeated = listener.get(&target, Some(&namespace_bearer));
         assert_eq!(repeated.status, 503, "body: {}", repeated.body);
         assert_eq!(repeated.body, OBJECT_UNAVAILABLE);
     }
     assert_eq!(
-        vault.listings(),
-        1,
-        "the cooldown held: repeated requests revalidated nothing"
+        listener.boundary("object")["checked_at"],
+        anchor,
+        "the cooldown held: the burst revalidated nothing"
     );
 
-    // Past the cooldown the next request revalidates inline. Nothing restarted
-    // the unit, nothing reloaded the daemon, no operator was paged.
-    std::thread::sleep(Duration::from_secs(COOLDOWN_SECONDS) + Duration::from_millis(400));
-    let recovered = get(addr, &target, Some(&bearer));
+    // Past the cooldown the next request revalidates inline and passes the
+    // boundary, authorizes against the namespace bearer, and reads the store.
+    past_cooldown();
+    let recovered = listener.get(&target, Some(&namespace_bearer));
     assert_eq!(
         recovered.status, 404,
         "the request passed the boundary and read the store: {}",
@@ -422,61 +135,119 @@ fn a_shut_object_boundary_recovers_without_a_restart() {
     );
     assert_eq!(
         recovered.body,
-        format!(r#"{{"state":"absent","uri":"{uri}"}}"#)
-    );
-    assert_eq!(
-        vault.listings(),
-        2,
-        "recovery cost exactly one more vault sweep"
+        format!(r#"{{"state":"absent","uri":"stado://{NAMESPACE}/{ABSENT_KEY}"}}"#)
     );
 
-    let open = object_boundary_state(addr);
-    assert_eq!(open["ready"], Value::Bool(true));
+    let open = listener.boundary("object");
+    assert_eq!(open["ready"], Value::Bool(true), "{open}");
     assert_eq!(open["last_error"], Value::Null);
     assert_ne!(
-        open["checked_at"], closed["checked_at"],
+        open["checked_at"], anchor,
         "the recovered verdict carries its own timestamp"
+    );
+    assert_eq!(
+        listener.pid(),
+        pid,
+        "recovery happened inside the process that was already serving"
     );
 }
 
 /// No boundary may be its own precondition for reopening.
 ///
-/// A boundary revalidates only when a request asks about it, so a boundary no
-/// request asks about is frozen at its boot verdict for the life of the
-/// process. `Boundary::Release` was in that state twice: first required by no
-/// route at all, then "fixed" by requiring it on the release-coordinate object
-/// routes — which are exactly the routes excluded from the boundary check
-/// because the key is a release key. Measured on a live resolver on
-/// 2026-09-03: a successful release stat and a rejected release object read,
-/// `release` still `false` after both.
+/// `Boundary::Release` was in that state twice: first required by no route at
+/// all, then "fixed" by requiring it on the release-coordinate object routes —
+/// which are exactly the routes excluded from the boundary check because the
+/// key is a release key. So it was closed once and closed for the life of the
+/// process, and no request, credential or amount of asking could reopen it.
 ///
-/// This is provable from the routing table, so it is proved here rather than
-/// discovered on a host at the moment a release needs the boundary.
+/// The repair separates asking from enforcing, and this case drives both
+/// halves against the running listener: a release-coordinate read is refused
+/// for its key and not for the shut boundary, and that same read is what gives
+/// the boundary its way back.
 #[test]
-fn every_boundary_has_a_route_that_can_reopen_it() {
-    let unreachable = stado::dashboard::boundaries_without_a_reopening_route();
-    assert!(
-        unreachable.is_empty(),
-        "these boundaries can never reopen, because no request revalidates them: {unreachable:?}"
+fn a_release_coordinate_reopens_a_boundary_it_is_not_gated_by() {
+    let env = Env::new();
+    let object = policy::object_items();
+    let publishers = policy::publisher_items();
+    let mut items = object.clone();
+    items.extend(publishers.iter().cloned());
+    let vault = Vault::start(&env.home(), &items);
+    // The object boundary is whole, because a release-coordinate request
+    // spends its one revalidation on the first closed boundary in its plan and
+    // `object` comes first.
+    vault.grant(
+        stado::config::OBJECT_API_VERIFIER_CONSUMER,
+        &object,
+        &env.grant("object"),
     );
-}
+    let (withheld, granted) = publishers
+        .split_last()
+        .expect("the policy names release publishers");
+    vault.grant(
+        stado::config::RELEASE_API_VERIFIER_CONSUMER,
+        granted,
+        &env.grant("release"),
+    );
+    let listener = env.start(&vault.url(), &vault.url());
 
-/// The release split is deliberate: revalidated, not enforced.
-///
-/// Enforcing it in the same change would have answered `503` to every
-/// release-coordinate read on a process whose `release` boundary is already
-/// shut — which is the state of the resolver every host reaches objects
-/// through. Asking is not enforcing, and this pins that this is a decision
-/// rather than an oversight of the same shape as the one it repairs.
-#[test]
-fn a_release_coordinate_asks_about_its_boundary_without_being_gated_by_it() {
-    let (enforced, revalidated) = stado::dashboard::release_coordinate_boundary_split();
-    assert!(
-        revalidated.contains(&"release"),
-        "a release coordinate must revalidate the release boundary: {revalidated:?}"
+    let closed = listener.boundary("release");
+    assert_eq!(
+        closed["ready"],
+        Value::Bool(false),
+        "the release boundary starts shut in this case: {closed}"
     );
-    assert!(
-        !enforced.contains(&"release"),
-        "enforcement is a separate decision and is not on: {enforced:?}"
+    assert_eq!(
+        closed["last_error"],
+        Value::String(format!(
+            "{DEPLOYMENT}release verifier grant item set mismatch \
+             (missing=[{withheld}], unexpected=[])"
+        ))
     );
+    assert_eq!(
+        listener.boundary("object")["ready"],
+        Value::Bool(true),
+        "the object boundary must be open for this case to be about release"
+    );
+
+    // Asking is not enforcing: the request is refused for its key, by the
+    // release authorization it reached, and not by the shut boundary. The
+    // boot sweep anchored the cooldown, so the window is let pass first.
+    past_cooldown();
+    let target = object_target("releases", UNDECLARED_RELEASE_KEY);
+    let refused = listener.get(&target, None);
+    assert_eq!(
+        refused.status, 401,
+        "a shut release boundary must not gate this route: {}",
+        refused.body
+    );
+    assert_eq!(
+        refused.json()["reason"],
+        Value::String("no_publisher_for_key".into()),
+        "body: {}",
+        refused.body
+    );
+    let asked = listener.boundary("release");
+    assert_ne!(
+        asked["checked_at"], closed["checked_at"],
+        "the request the boundary does not gate is the request that revalidates it"
+    );
+
+    // And it is a way back, not only a fresh timestamp: with the grant
+    // repaired, the same ungated route reopens the boundary.
+    vault.grant(
+        stado::config::RELEASE_API_VERIFIER_CONSUMER,
+        &publishers,
+        &env.grant("release"),
+    );
+    past_cooldown();
+    let reopening = listener.get(&target, None);
+    assert_eq!(reopening.status, 401, "body: {}", reopening.body);
+    let open = listener.boundary("release");
+    assert_eq!(
+        open["ready"],
+        Value::Bool(true),
+        "the release boundary reopened through a route that never gated on it: {open}\n{}",
+        listener.logged()
+    );
+    assert_eq!(open["last_error"], Value::Null);
 }

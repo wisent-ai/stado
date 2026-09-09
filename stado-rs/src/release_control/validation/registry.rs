@@ -24,8 +24,18 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
     if control.generation == 0 {
         return Err("registry.release_control.generation must be positive".to_string());
     }
-    if control.products.is_empty() {
-        return Err("registry.release_control.products must not be empty".to_string());
+    // Trust and desired state are separate declarations, and a fleet may hold
+    // the first without the second: a leased scratch target is delivered
+    // releases on request and reconciles nothing, and a fleet before its first
+    // product is in the same position. What must never pass is a block no
+    // consumer reads, which is the pair being empty -- `products` alone was
+    // the wrong test for that, and it is why `stado scratch` could not be
+    // delivered a signed release at all: the emitted registry could carry no
+    // trust keys without also inventing products and services the lease does
+    // not have, so `host-state --apply` refused every pipeline-signed version
+    // with `registry declares no release trust keys`.
+    if control.products.is_empty() && control.trusted_keys.is_empty() {
+        return Err("registry.release_control must declare trusted_keys or products".to_string());
     }
     for (key_id, public_key) in &control.trusted_keys {
         if !identifier(key_id)
