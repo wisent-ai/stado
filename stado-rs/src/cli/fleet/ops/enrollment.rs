@@ -1,123 +1,13 @@
-//! Fleet write operations: `create` and `assign`.
-//!
-//! Every write is a pure document-to-document transform followed by a
-//! compare-and-swap against the generation the transform's own input was read
-//! at — `create`, `delete` and `assign` through `commit_document`, which
-//! re-reads and re-applies the transform when another writer got there first.
-//! `enroll` cannot: it installs a key and probes the machine between its read
-//! and its write, so re-applying its transform would republish a decision
-//! taken against a host that has since been described differently. It takes
-//! one conditional attempt and lets the conflict reach the operator.
+//! `stado fleet enroll`: the target-entry transforms, the identity probe run
+//! through Stado's deploy channel, the preflight and the command that ties
+//! them into one conditional write with a rollback.
 
-use crate::cli::registry::{commit_document, fetch_versioned_document, push_document_if};
+use crate::cli::registry::{fetch_versioned_document, push_document_if};
 use serde_json::{json, Value};
 
 use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
 
-/// Append a fleet entry to the document. Duplicate names are refused up
-/// front; the result is re-parsed through the same [`parse_fleets`] the
-/// readers use, so an invalid name fails here, not in production. Pure.
-pub fn create_fleet(document: &Value, name: &str, notes: &str) -> Result<Value, String> {
-    let fleets = parse_fleets(document)?;
-    if find_fleet(&fleets, name).is_some() {
-        return Err(format!("fleet '{name}' already exists"));
-    }
-    let mut next = document.clone();
-    let root = next
-        .as_object_mut()
-        .ok_or_else(|| "registry must be an object".to_string())?;
-    let section = root
-        .entry("fleets".to_string())
-        .or_insert_with(|| json!([]));
-    let entries = section
-        .as_array_mut()
-        .ok_or_else(|| "registry.fleets: must be an array".to_string())?;
-    entries.push(json!({ "name": name, "notes": notes }));
-    parse_fleets(&next)?;
-    Ok(next)
-}
-
-/// Point one target's `fleet` field at a declared fleet. Moving a target
-/// between fleets is just another assignment; pointing at an undeclared
-/// fleet or an unknown target is refused. Pure.
-pub fn assign_target(
-    document: &Value,
-    target_name: &str,
-    fleet_name: &str,
-) -> Result<Value, String> {
-    let fleets = parse_fleets(document)?;
-    find_fleet(&fleets, fleet_name)
-        .ok_or_else(|| format!("fleet '{fleet_name}' is not declared; create it first"))?;
-    let mut next = document.clone();
-    let targets = next
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
-    let mut found = false;
-    for target in targets.iter_mut() {
-        if target.get("name").and_then(Value::as_str) == Some(target_name) {
-            target["fleet"] = Value::String(fleet_name.to_string());
-            found = true;
-        }
-    }
-    if !found {
-        return Err(format!("target '{target_name}' not found in registry"));
-    }
-    parse_fleets(&next)?;
-    Ok(next)
-}
-
-/// `stado fleet create NAME` — declare a fleet in the canonical registry.
-pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
-    // Pure: the fleet entry is a function of the document it is appended to,
-    // so a lost race is answered by appending it to the newer document.
-    let generation = commit_document(|document| {
-        create_fleet(document, name, notes).map_err(crate::cli::CmdError::click)
-    })
-    .await
-    .map_err(|exc| exc.to_string())?;
-    println!("fleet '{name}' created (generation {generation})");
-    Ok(true)
-}
-
-/// Remove a fleet entry from the document. A fleet that still has members
-/// is refused with their names: dropping the declaration underneath them
-/// would produce the dangling `fleet` reference every reader rejects, so
-/// the write that would strand them never happens. Pure.
-pub fn delete_fleet(document: &Value, name: &str) -> Result<Value, String> {
-    let fleets = parse_fleets(document)?;
-    let fleet =
-        find_fleet(&fleets, name).ok_or_else(|| format!("fleet '{name}' is not declared"))?;
-    if !fleet.members.is_empty() {
-        return Err(format!(
-            "fleet '{name}' still has {} member(s): {}; reassign them first",
-            fleet.members.len(),
-            fleet.members.join(", ")
-        ));
-    }
-    let mut next = document.clone();
-    let section = next
-        .get_mut("fleets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| "registry.fleets: must be an array".to_string())?;
-    section.retain(|entry| entry.get("name").and_then(Value::as_str) != Some(name));
-    parse_fleets(&next)?;
-    Ok(next)
-}
-
-/// `stado fleet delete NAME` — retire a declared fleet.
-pub async fn delete(name: &str) -> Result<bool, String> {
-    // Pure, and the member check has to be re-run against the newer document
-    // anyway: a fleet that gained a member since this command started is one
-    // whose declaration must not be dropped.
-    let generation = commit_document(|document| {
-        delete_fleet(document, name).map_err(crate::cli::CmdError::click)
-    })
-    .await
-    .map_err(|exc| exc.to_string())?;
-    println!("fleet '{name}' deleted (generation {generation})");
-    Ok(true)
-}
+use super::assignment::assign_target;
 
 /// Register a target without an ssh destination (`ssh: null`) — the
 /// self-install path: the machine later runs `stado bootstrap --local
@@ -205,19 +95,6 @@ async fn probe_identity(
     let arch = probe_identity_field(runner, target, destination, "uname -m").await?;
     let platform = crate::cli::fleet::enroll::release_platform(&os, &arch)?;
     Ok((hostname, platform))
-}
-
-/// `stado fleet assign TARGET FLEET` — add a registered machine to a fleet.
-pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
-    // Pure: the assignment is one field on one target, and re-applying it to
-    // a newer document is exactly the intent.
-    let generation = commit_document(|document| {
-        assign_target(document, target, fleet_name).map_err(crate::cli::CmdError::click)
-    })
-    .await
-    .map_err(|exc| exc.to_string())?;
-    println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
-    Ok(true)
 }
 
 /// Enroll preflight, run BEFORE any write: the machine must not already be
