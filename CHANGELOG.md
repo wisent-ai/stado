@@ -17,6 +17,7 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **Desktop packaging:** build the identity helper through the executable product exported by the pinned authentication package. A fresh checkout no longer depends on an absent helper script; the signed bundle keeps the SDK's required helper path.
 - **Recorded release resumption:** `release resume RUN_ID` uses the original stored source and manifest even after the checkout changes. Running jobs keep their IDs and published builds are verified rather than rebuilt. Stado Desktop exposes the same operation from Releases with source identity, command review and complete command output.
 - **Failed delivery retries:** a failed or cancelled queue job now anchors a new idempotent delivery attempt. A stale `submitted` summary is checked against the actual terminal job, so resumption no longer repeatedly returns the same failed job or misses a later delivery's failure.
 - **Host and public-origin diagnostics (0.18 preview):** independent registry, host, storage, capacity, queue, DNS, publication and public-proxy reads retain their own source, elapsed time, error and ten-second budget. A missing host route or configuration-reader binary no longer discards completed measurements; absent measurements no longer become disk-pressure blockers. Configuration failures name the installed executable and preserve command output.

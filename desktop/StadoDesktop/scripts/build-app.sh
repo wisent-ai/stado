@@ -34,7 +34,10 @@ done
 
 # Build the canonical identity helper from the pinned Swift dependency.
 HELPER="$BUNDLE/Contents/Helpers/WisentIdentityKeychainHelper"
-sh "$BUILD_DIR/checkouts/wisent-desktop-auth/scripts/build-keychain-helper.sh" "$HELPER"
+IDENTITY_BUILD_DIR="$BUILD_DIR/identity-helper"
+swift build --package-path "$BUILD_DIR/checkouts/wisent-desktop-auth" \
+    --configuration release --product wisent-identity-keychain-helper --scratch-path "$IDENTITY_BUILD_DIR"
+cp "$IDENTITY_BUILD_DIR/release/wisent-identity-keychain-helper" "$HELPER"
 
 # The icon is derived from the checked-in product artwork on every build.
 ICONSET="$BUILD_DIR/Stado.iconset"
