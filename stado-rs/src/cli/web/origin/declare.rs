@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::cli::registry::commit_document;
 use crate::cli::CmdError;
-use crate::failure::FailureCode;
+use crate::primitives::failure::FailureCode;
 use crate::public_origin::{self, PublicOrigin, POLICY_KEY};
 
 pub(crate) struct DeclareRequest<'a> {

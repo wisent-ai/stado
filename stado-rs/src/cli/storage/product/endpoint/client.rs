@@ -98,7 +98,7 @@ fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
         // once and nothing the next time, while the tailnet address served the
         // same route in 82 ms. SNI and certificate validation still use the
         // name, so this decides the route and never the identity.
-        if let Some(address) = crate::tailnet::address_of(&host) {
+        if let Some(address) = crate::remote::tailnet::address_of(&host) {
             builder = builder.resolve(&host, std::net::SocketAddr::new(address, 0));
         }
     }
@@ -145,7 +145,7 @@ fn configured_origin_hosts() -> Vec<String> {
             continue;
         };
         let Some(host) = url.host_str() else { continue };
-        if crate::tailnet::is_magicdns_name(host) && !hosts.iter().any(|known| known == host) {
+        if crate::remote::tailnet::is_magicdns_name(host) && !hosts.iter().any(|known| known == host) {
             hosts.push(host.to_string());
         }
     }

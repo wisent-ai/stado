@@ -8,16 +8,14 @@ use sha2::{Digest, Sha256};
 
 use super::{read_grant, Client, SkarbiecError};
 
+mod artifacts;
 mod machine;
-mod object;
 mod registry;
-mod release;
 mod service;
 
+pub use artifacts::{validate_object_verifier, validate_release_verifier};
 pub use machine::validate_machine_verifier;
-pub use object::validate_object_verifier;
 pub use registry::validate_registry_verifier;
-pub use release::validate_release_verifier;
 pub use service::validate_service_verifier;
 
 /// Read one `token` field per item through one shared verifier client, with

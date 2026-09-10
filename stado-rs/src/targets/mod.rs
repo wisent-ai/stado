@@ -60,59 +60,25 @@ use serde_json::{Map, Value};
 use crate::models::Job;
 use crate::queue::{BlobBackend, JobStorage, StorageError, VersionedText};
 
-// One module, kept in parts small enough to read. Every part opens with
-// `use super::*;`, so the imports above are the module's single import list
-// and a part sees the items of every other part exactly as it did when this
-// was one file. Each part is re-exported by glob: `pub` items stay public,
-// `pub(crate)` items stay crate-visible, and the module's public surface is
-// unchanged.
+// One module, kept in parts small enough to read, grouped by what each part
+// is about. Every leaf opens with `use crate::targets::*;`, so the imports
+// above are the module's single import list and a part sees the items of
+// every other part exactly as it did when this was one file. Each part is
+// re-exported by glob: `pub` items stay public, `pub(crate)` items stay
+// crate-visible, and the module's public surface is unchanged.
 
-mod build_skew;
 mod builds;
-mod capabilities;
-mod coordinator;
-mod directory;
-mod fetch;
-mod last_good;
-mod last_good_store;
-mod namespace;
-mod parse;
-mod placement;
-mod policies;
-mod registry_lookup;
-mod service;
-mod service_lookup;
-mod store;
+mod cache;
+mod fleet;
+mod lookup;
+mod registry;
 mod target;
-mod validation_basics;
-mod validation_disk;
-mod validation_identity;
-mod validation_onboarding;
-mod validation_registry;
-mod validation_write;
+mod validate;
 
-pub use build_skew::*;
 pub use builds::*;
-pub use capabilities::*;
-pub use coordinator::*;
-pub use directory::*;
-pub use fetch::*;
-pub use last_good::*;
-pub use last_good_store::*;
-pub use namespace::*;
-pub use parse::*;
-pub use placement::*;
-pub use policies::*;
-// `registry_lookup` is one `impl Registry` block: nothing to re-export.
-pub use service::*;
-pub use service_lookup::*;
-pub use store::*;
+pub use cache::*;
+pub use fleet::*;
+pub use lookup::*;
+pub use registry::*;
 pub use target::*;
-pub use validation_basics::*;
-// These three parts hold only crate-internal helpers, so their globs carry
-// exactly that far.
-pub(crate) use validation_disk::*;
-pub(crate) use validation_identity::*;
-pub(crate) use validation_onboarding::*;
-pub use validation_registry::*;
-pub use validation_write::*;
+pub use validate::*;

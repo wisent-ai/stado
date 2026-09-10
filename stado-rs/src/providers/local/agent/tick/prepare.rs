@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::constants;
-use crate::providers::local::agent_heartbeat::CapacityHeartbeat;
-use crate::providers::local::agent_janitor::{JanitorReports, JanitorTask};
+use crate::primitives::constants;
+use crate::providers::local::agent::heartbeat::CapacityHeartbeat;
+use crate::providers::local::agent::janitor::{JanitorReports, JanitorTask};
 use crate::providers::local::disk_cleanup;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{advance_slot, ActiveSlot, SlotOutcome};
@@ -61,12 +61,12 @@ pub(super) fn bound_store(log_fn: &mut dyn FnMut(&str)) -> (&'static str, bool) 
 pub(super) fn spawn_janitor() -> (JanitorReports, JanitorTask) {
     let janitor_reports = JanitorReports::new();
     let janitor = janitor_reports.spawn_janitor(
-        std::time::Duration::from_secs(crate::constants::POLL_INTERVAL_S),
+        std::time::Duration::from_secs(crate::primitives::constants::POLL_INTERVAL_S),
         |active_jobs| async move {
             // Off the critical path, beside the disk pass, for the same reason:
             // an expired lease is host garbage, and the host is the only thing
             // that always knows it holds one.
-            crate::providers::local::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
+            crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
             disk_cleanup::run_cleanup_once(
                 active_jobs,
                 false,
@@ -200,7 +200,7 @@ pub(super) async fn advance_slots(
         }
     }
     // The janitor's bounded cleanup pass runs on its own task
-    // ([`crate::providers::local::agent_janitor`]); this tick only reads
+    // ([`crate::providers::local::agent::janitor`]); this tick only reads
     // passes that have already finished. Awaiting the pass here is what made a
     // release builder invisible: a 13.6-minute `healthy_noop` pass held the
     // capacity publication far past the 180s staleness cutoff, so

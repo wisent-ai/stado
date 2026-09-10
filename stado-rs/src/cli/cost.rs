@@ -56,16 +56,16 @@ pub(crate) async fn dispatch(sub: &CostCommands) -> Result<(), CmdError> {
             }
         }
         CostCommands::Allocation { json } => {
-            super::autonomy_cmd::show_report("allocation", *json).await?;
+            crate::cli::work::autonomy::show_report("allocation", *json).await?;
         }
         CostCommands::Forecast { json } => {
-            super::autonomy_cmd::show_report("forecast", *json).await?;
+            crate::cli::work::autonomy::show_report("forecast", *json).await?;
         }
         CostCommands::Anomalies { json } => {
-            super::autonomy_cmd::show_report("anomalies", *json).await?;
+            crate::cli::work::autonomy::show_report("anomalies", *json).await?;
         }
         CostCommands::Savings { json } => {
-            super::autonomy_cmd::show_report("savings", *json).await?;
+            crate::cli::work::autonomy::show_report("savings", *json).await?;
         }
     }
     Ok(())

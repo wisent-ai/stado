@@ -83,7 +83,7 @@ pub(in crate::doctor) const IDENTITY_REMEDY: &str =
      azure.vm_identity_id), and grant that identity read/write on the queue container";
 
 /// Without a user-assigned identity on the VM, the on-VM half of the
-/// [`crate::azure_token`] chain resolves nothing: an agent VM carries no
+/// [`crate::remote::azure_token`] chain resolves nothing: an agent VM carries no
 /// service-principal env vars and no `az` CLI, so IMDS is the only source
 /// left and IMDS answers only for a VM that has an identity attached. The
 /// agent can then neither read the queue nor self-delete, so it bills

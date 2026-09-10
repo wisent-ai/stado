@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::constants;
+use crate::primitives::constants;
 
 /// Pure parser for /proc/meminfo: value of `key` (e.g. "MemAvailable:")
 /// in GB. None when the key is absent or unparsable.

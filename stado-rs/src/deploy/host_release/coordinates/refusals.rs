@@ -9,7 +9,7 @@ use crate::targets::ComputeTarget;
 ///
 /// Build metadata (`+...`) is rejected rather than tolerated, because a `+`
 /// is not a legal release coordinate segment
-/// ([`crate::release::canonical_coordinate`]) — a version this accepts and
+/// ([`crate::binary::release::canonical_coordinate`]) — a version this accepts and
 /// the store cannot address would be a refusal deferred to the host.
 pub fn is_exact_semver(version: &str) -> bool {
     let (core, prerelease) = match version.split_once('-') {
@@ -46,7 +46,7 @@ pub fn is_exact_semver(version: &str) -> bool {
             }
         }
     }
-    crate::release::canonical_coordinate(version)
+    crate::binary::release::canonical_coordinate(version)
 }
 
 /// True for a lowercase hex SHA-256.

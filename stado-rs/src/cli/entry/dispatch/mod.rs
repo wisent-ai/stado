@@ -9,7 +9,7 @@
 use clap::{CommandFactory, FromArgMatches};
 
 use super::spec::{Cli, Commands};
-use crate::cli::onboarding;
+use crate::cli::setup::onboarding;
 use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 mod failure;
@@ -31,7 +31,7 @@ use failure::{failure_point, failure_service};
 /// Exit codes:
 /// 0 on success, [`CLICK_ERROR_CODE`] on a runtime error, 2 on
 /// usage errors (clap parse failures exit 2 on their own) and for
-/// not-yet-implemented commands, and [`crate::failure::retry_exit_code`]
+/// not-yet-implemented commands, and [`crate::primitives::failure::retry_exit_code`]
 /// when the failure is one a retry can clear. See `stado.wisent.com/docs/cli`.
 pub async fn main_entry() -> i32 {
     // Parse in two steps rather than through `Cli::parse()` — which is
@@ -61,7 +61,7 @@ pub async fn main_entry() -> i32 {
             // refusal's own allowlist and reported `timeout, retryable`.
             let code = err
                 .failure
-                .unwrap_or_else(|| crate::failure::classify_message(message));
+                .unwrap_or_else(|| crate::primitives::failure::classify_message(message));
             if err.json {
                 // The same sorted-keys rendering every `--json` command on
                 // this CLI already prints, so a caller parses one shape.
@@ -84,9 +84,9 @@ pub async fn main_entry() -> i32 {
                 if let Some(help) = err.help.as_deref() {
                     eprintln!("{help}");
                 }
-                eprintln!("{}", crate::failure::operator_line(code));
+                eprintln!("{}", crate::primitives::failure::operator_line(code));
             }
-            crate::failure::log_failure(&point, service, code, message);
+            crate::primitives::failure::log_failure(&point, service, code, message);
             // Usage errors keep their own code: no amount of retrying fixes
             // an argument, whatever the message happens to read like.
             if err.code == CLICK_ERROR_CODE {

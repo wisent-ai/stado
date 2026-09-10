@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { runRecordedRustJourney } from '../probierz-rust-journey.mjs';
 
 await runRecordedRustJourney({

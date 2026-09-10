@@ -32,7 +32,7 @@ fn release_resolve(release_api: &str) -> String {
     let Some(host) = url.host_str() else {
         return String::new();
     };
-    let Some(address) = crate::tailnet::address_of(host) else {
+    let Some(address) = crate::remote::tailnet::address_of(host) else {
         return String::new();
     };
     let port = url.port_or_known_default().unwrap_or(443);

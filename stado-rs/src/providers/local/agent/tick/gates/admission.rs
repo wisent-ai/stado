@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::providers::local::agent::capacity::snapshot::{measured_capacity, publish_branch};
 use crate::providers::local::agent::{maybe_yield_for_priority, Step, POLL_INTERVAL_S};
 use crate::providers::local::self_terminate;
@@ -90,11 +90,11 @@ pub(crate) async fn publish_and_admit(
     // does not have to parse the sentence to get at it.
     agent_diag.insert(
         "agent_version".into(),
-        Value::from(crate::build_identity::BUILD_IDENTITY),
+        Value::from(crate::binary::build_identity::BUILD_IDENTITY),
     );
     agent_diag.insert(
         "agent_source_revision".into(),
-        Value::from(crate::build_identity::SOURCE_REVISION),
+        Value::from(crate::binary::build_identity::SOURCE_REVISION),
     );
     // Whether a claim could take the workload lock right now. The claim path
     // asks the same question and answers `cleanup_in_progress` without a

@@ -11,7 +11,7 @@ pub async fn user_delete(username: &str, target: &str, keep_home: bool) -> Resul
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
     let result =
-        crate::deploy::host_user_delete::delete_user(username, &resolved, keep_home, &runner).await;
+        crate::deploy::host_access::user_delete::delete_user(username, &resolved, keep_home, &runner).await;
     match result.error {
         Some(detail) => Err(CmdError::click(detail)),
         None => {

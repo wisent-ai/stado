@@ -29,7 +29,7 @@ pub struct StorageAbortUploadArgs {
 pub(in crate::cli::storage) async fn abort_upload(
     args: &StorageAbortUploadArgs,
 ) -> Result<(), CmdError> {
-    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let object = crate::remote::object_store::ObjectRef::parse(&args.uri)?;
     let prefix = format!("{}.__stado_upload/", object.key());
     // Which reader answered, reported beside the count. An empty answer and
     // "there are no parts" are not the same fact: the object API's list route
@@ -46,7 +46,7 @@ pub(in crate::cli::storage) async fn abort_upload(
             remote.list(object.namespace(), &prefix).await?
         } else {
             let storage_prefix =
-                crate::object_store::ObjectRef::namespace_prefix(object.namespace(), &prefix)?;
+                crate::remote::object_store::ObjectRef::namespace_prefix(object.namespace(), &prefix)?;
             let store = JobStorage::new().await?;
             let mut values = Vec::new();
             for blob in store
@@ -54,7 +54,7 @@ pub(in crate::cli::storage) async fn abort_upload(
                 .list_blobs_with_meta(&storage_prefix)
                 .await?
             {
-                let part = crate::object_store::ObjectRef::from_storage_path(&blob.name)?;
+                let part = crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?;
                 values.push(json!({
                     "uri": part.to_string(),
                     "key": part.key(),
@@ -73,7 +73,7 @@ pub(in crate::cli::storage) async fn abort_upload(
         };
         bytes += part.get("size").and_then(Value::as_u64).unwrap_or_default();
         if !args.dry_run {
-            let part_object = crate::object_store::ObjectRef::parse(uri)?;
+            let part_object = crate::remote::object_store::ObjectRef::parse(uri)?;
             if let Some(remote) = RemoteObjectApi::configured_for_object(&part_object)? {
                 remote.delete(uri).await?;
             } else {

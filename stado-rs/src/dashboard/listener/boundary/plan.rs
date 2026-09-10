@@ -67,7 +67,7 @@ impl BoundaryPlan {
 /// object's namespace and key for the object routes, and `None` elsewhere.
 pub(crate) fn boundary_plan(path: &str, object: Option<(&str, &str)>) -> BoundaryPlan {
     if let Some((namespace, key)) = object {
-        if crate::object_store::release_policy_key(namespace, key).is_some() {
+        if crate::remote::object_store::release_policy_key(namespace, key).is_some() {
             // Revalidation only, deliberately. `authorize_release` reads the
             // release verifier's material, so this boundary IS this request's
             // precondition in principle — but turning enforcement on is a
@@ -114,5 +114,5 @@ pub(crate) fn boundary_plan(path: &str, object: Option<(&str, &str)>) -> Boundar
 /// [`BoundaryPlan::asked_only`] in [`boundary_plan`] now, which keeps the gate
 /// off for a release coordinate and revalidates the boundary anyway.
 pub(crate) fn requires_object_boundary(namespace: &str, key: &str) -> bool {
-    crate::object_store::release_policy_key(namespace, key).is_none()
+    crate::remote::object_store::release_policy_key(namespace, key).is_none()
 }

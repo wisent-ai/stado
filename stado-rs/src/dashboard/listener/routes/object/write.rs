@@ -66,7 +66,7 @@ impl Dashboard {
             ));
         }
         let authorized = if let Some(policy_key) =
-            crate::object_store::release_policy_key(object.namespace(), object.key())
+            crate::remote::object_store::release_policy_key(object.namespace(), object.key())
         {
             // A release object is only ever created, never replaced; the
             // client resolves its credential from the same routing function.
@@ -108,7 +108,7 @@ impl Dashboard {
     pub(crate) async fn put_object(
         &self,
         request: &Request,
-        object: &crate::object_store::ObjectRef,
+        object: &crate::remote::object_store::ObjectRef,
         query: &str,
     ) -> Result<Response, DashboardError> {
         let values = parse_qs(query);

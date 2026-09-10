@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::procutil::{run_capture, Capture};
+use crate::primitives::procutil::{run_capture, Capture};
 
 use super::protocol::{
     error_response, ToolError, CODE_INTERNAL_ERROR, CODE_METHOD_NOT_FOUND, JSONRPC_VERSION,

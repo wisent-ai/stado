@@ -84,7 +84,7 @@ impl StadoObjectExistsVerifier {
 #[async_trait]
 impl Verifier for StadoObjectExistsVerifier {
     async fn check(&self, expected_uri: &str) -> Result<String, CoverageError> {
-        let object = crate::object_store::ObjectRef::parse(expected_uri)
+        let object = crate::remote::object_store::ObjectRef::parse(expected_uri)
             .map_err(|error| CoverageError::Other(error.to_string()))?;
         let txt = self.store.download_text(&object.storage_path()).await?;
         Ok(if txt.is_some() {

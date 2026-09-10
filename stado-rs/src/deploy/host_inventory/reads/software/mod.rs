@@ -67,7 +67,7 @@ pub fn reported_version<'a>(binary: &str, version: &'a str) -> Option<&'a str> {
             .and_then(|banner| banner.split_once(" (rev "))
             .and_then(|(version, revision)| {
                 let core = revision.strip_suffix("-dirty").unwrap_or(revision);
-                (revision == crate::build_identity::UNKNOWN_REVISION
+                (revision == crate::binary::build_identity::UNKNOWN_REVISION
                     || ([12, 40].contains(&core.len())
                         && core
                             .bytes()

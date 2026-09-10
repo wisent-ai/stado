@@ -55,10 +55,10 @@ pub(crate) async fn install_from_archive(
         argv.extend(options.into_iter().skip(usize::from(true)));
         argv.push(path.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
-        let key = crate::deploy::ssh_key::materialize(target.channel_key())
+        let key = crate::deploy::host_access::ssh_key::materialize(target.channel_key())
             .await
             .map_err(click)?;
-        let argv = crate::deploy::ssh_key::add_identity(argv, &key).map_err(click)?;
+        let argv = crate::deploy::host_access::ssh_key::add_identity(argv, &key).map_err(click)?;
         let copy = runner(crate::deploy::CommandSpec::new(argv))
             .await
             .map_err(CmdError::click)?;

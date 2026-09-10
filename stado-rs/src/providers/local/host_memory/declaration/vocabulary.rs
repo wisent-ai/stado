@@ -1,6 +1,6 @@
 //! The fleet's declared memory-repair vocabulary, compiled into the binary.
 //!
-//! The disk twin is `stado-rs/data/space.json`, read by
+//! The disk twin is `stado-rs/data/fleet/space.json`, read by
 //! [`crate::deploy::host_reclaim::declared_stages`], and this document sits
 //! beside it in the same directory and is read the same way: one compiled
 //! declaration, parsed once, refused loudly rather than half-read.

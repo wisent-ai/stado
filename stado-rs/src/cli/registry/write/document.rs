@@ -79,7 +79,7 @@ pub(in crate::cli::registry) async fn validate_for_write(
         Err(_) => None,
     };
     crate::targets::validate_registry_for_write(document, current.as_ref()).map_err(|exc| {
-        CmdError::click(exc.to_string()).stating(crate::failure::FailureCode::Refused)
+        CmdError::click(exc.to_string()).stating(crate::primitives::failure::FailureCode::Refused)
     })
 }
 

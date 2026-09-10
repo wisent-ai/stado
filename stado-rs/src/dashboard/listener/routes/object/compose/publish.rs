@@ -8,7 +8,7 @@ use std::io::Write;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::object_store::ObjectRef;
+use crate::remote::object_store::ObjectRef;
 
 use crate::dashboard::listener::auth::release_upload_target_key;
 use crate::dashboard::listener::{http_status, storage_error_response, Dashboard, Response};

@@ -32,7 +32,9 @@ mod declaration;
 mod fixture;
 mod published;
 mod readiness;
+mod readiness_probe;
 mod resolution;
+mod resolution_refusals;
 
 use std::fs;
 use std::path::PathBuf;

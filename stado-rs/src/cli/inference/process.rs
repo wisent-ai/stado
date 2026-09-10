@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference_process, production_runner};
+use crate::deploy::{host_channel, inference::process, production_runner};
 
 fn click(error: impl ToString) -> CmdError {
     CmdError::click(error.to_string())
@@ -13,7 +13,7 @@ fn succeeded(report: &Value, expected: &str) -> bool {
 
 pub async fn blockers(host: &str, json_output: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
-    let report = inference_process::blockers(&target, &production_runner())
+    let report = process::blockers(&target, &production_runner())
         .await
         .map_err(click)?;
     if !succeeded(&report, "inventoried") {
@@ -66,7 +66,7 @@ pub async fn release(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
-    let report = inference_process::release(&target, identity, force, &production_runner())
+    let report = process::release(&target, identity, force, &production_runner())
         .await
         .map_err(click)?;
     if !succeeded(&report, "released") {

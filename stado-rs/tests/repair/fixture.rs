@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 /// The service whose repair steps carry executable implementations.
 pub const SERVICE: &str = "stado";
 pub const TARGET: &str = "repair-observation-host";
-pub const DECLARATION: &str = "stado-rs/data/service-catalog.json";
+pub const DECLARATION: &str = "stado-rs/data/catalog/service-catalog.json";
 
 /// The release platform this machine really is, in the product's own spelling.
 pub fn platform() -> &'static str {

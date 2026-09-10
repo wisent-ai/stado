@@ -27,7 +27,7 @@ use crate::cli::registry::doctor::declarations::{unread_configuration, unread_de
 use crate::cli::registry::doctor::findings::Finding;
 use crate::cli::registry::echo_json;
 use crate::cli::registry::write::document::fetch_versioned_document;
-use crate::cli::{table, CmdError};
+use crate::cli::{reporting::table, CmdError};
 use crate::queue::{capacity, JobStorage};
 use crate::targets;
 

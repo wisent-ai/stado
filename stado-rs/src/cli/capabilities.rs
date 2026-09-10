@@ -53,7 +53,7 @@ pub fn run(filter: Option<&str>, as_json: bool) -> Result<(), CmdError> {
             })
         })
         .collect::<Vec<_>>();
-    super::table::print(
+    crate::cli::reporting::table::print(
         &[
             "CAPABILITY",
             "PROVIDER",

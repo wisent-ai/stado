@@ -26,7 +26,7 @@ pub const LOGIN_ACTION: &str = "apple_login";
 /// asks for: a host that does not carry it must say so rather than enqueue.
 pub const CAPTURE_ACTION: &str = "generic_capture";
 
-/// The plan schema `stado-rs/data/workloads.json` declares for this workload.
+/// The plan schema `stado-rs/data/work/workloads.json` declares for this workload.
 pub const PLAN_SCHEMA: &str = "wisent.weles-browser-task-plan.v1";
 
 /// The recording label every plan carries, so a case can prove no run was

@@ -15,7 +15,7 @@ use crate::providers::local::agent::capacity::snapshot::{
 use crate::providers::local::agent::{
     gpu_driver_available, vram_safety_buffer_gb, Step, POLL_INTERVAL_S,
 };
-use crate::providers::local::disk_gate;
+use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
 use crate::queue::capacity::CapacitySnapshot;
@@ -43,7 +43,7 @@ pub(crate) async fn measure(
     last_cap: &mut Option<CapacitySnapshot>,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Step<MeasuredOffer>> {
-    let (refuse_disk, disk_diag) = disk_gate::gate_and_maybe_evict(log_fn);
+    let (refuse_disk, disk_diag) = gate::gate_and_maybe_evict(log_fn);
     agent_diag.extend(diag_map(&disk_diag));
     if refuse_disk {
         let snapshot = measured_capacity(

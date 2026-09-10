@@ -129,7 +129,7 @@ impl Dashboard {
                 &json!({"error": "unauthorized"}),
             ));
         };
-        let storage_prefix = crate::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)?;
+        let storage_prefix = crate::remote::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)?;
         let objects = self
             .store
             .backend()
@@ -137,7 +137,7 @@ impl Dashboard {
             .await?;
         let mut response = Vec::with_capacity(objects.len());
         for blob in objects {
-            let object = crate::object_store::ObjectRef::from_storage_path(&blob.name)?;
+            let object = crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?;
             response.push(json!({
                 "uri": object.to_string(),
                 "namespace": object.namespace(),

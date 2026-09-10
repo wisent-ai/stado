@@ -1,0 +1,17 @@
+# Audit exclusions for `tama find-violations`: generated output, and files
+# whose shape is a product contract rather than a choice this project makes.
+#
+# Written by the wisent-visuals banner bot from .github/banner.toml.
+assets/readme-banner.svg
+# Resolved by cargo from stado-rs/Cargo.toml and committed because this crate
+# ships a binary. A person never edits it, and `cargo build` rewrites it whole.
+stado-rs/Cargo.lock
+# The repository root. Cargo reads rust-toolchain.toml from here, the install
+# and uninstall scripts are fetched by these exact names, the landing tooling
+# reads landing.brief.json, landing.config.json and landing.plan.json, and the
+# pack's release tooling reads .wisent-release.json and
+# platform-entitlements.json by that exact path from other repositories.
+.
+# The crate root. Cargo requires Cargo.toml, Cargo.lock and build.rs here by
+# name, and the release Dockerfile is addressed as stado-rs/Dockerfile.
+stado-rs

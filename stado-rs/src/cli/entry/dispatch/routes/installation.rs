@@ -1,6 +1,10 @@
 //! Where the installation, account and local-upkeep verbs land.
 
 use crate::cli::entry::spec::root::installation::InstallationCommands;
+use crate::cli::hosts::disk_cleanup;
+use crate::cli::work::autonomy;
+use crate::cli::integrations::mail;
+use crate::cli::setup::onboarding;
 use crate::cli::*;
 
 pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdError> {
@@ -23,7 +27,7 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
         InstallationCommands::Overview { json } => overview::run(json).await,
         InstallationCommands::BlastRadius(args) => blast_radius::run(&args).await,
         InstallationCommands::Resources(command) => resources::dispatch(command).await,
-        InstallationCommands::Optimize(command) => autonomy_cmd::dispatch_optimize(command).await,
+        InstallationCommands::Optimize(command) => autonomy::dispatch_optimize(command).await,
         InstallationCommands::Billing(sub) => billing::dispatch(&sub).await,
         InstallationCommands::Azure(sub) => azure::dispatch(sub).await,
         InstallationCommands::Cloudflare(sub) => cloudflare::dispatch(sub).await,

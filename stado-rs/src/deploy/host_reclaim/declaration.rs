@@ -13,8 +13,8 @@ use serde::Deserialize;
 use crate::deploy::DeployError;
 
 /// The one document declaring every selectable reclamation stage.
-pub const DECLARATION_PATH: &str = "stado-rs/data/space.json";
-const DECLARATION: &str = include_str!("../../../data/space.json");
+pub const DECLARATION_PATH: &str = "stado-rs/data/fleet/space.json";
+const DECLARATION: &str = include_str!("../../../data/fleet/space.json");
 const DECLARATION_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

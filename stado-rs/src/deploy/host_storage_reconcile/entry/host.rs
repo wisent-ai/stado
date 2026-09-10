@@ -36,7 +36,7 @@ pub async fn reconcile_host(
     };
     if runner_gate.as_ref().is_some_and(|gate| {
         gate.get("source_sha").and_then(Value::as_str)
-            != Some(crate::build_identity::SOURCE_REVISION)
+            != Some(crate::binary::build_identity::SOURCE_REVISION)
     }) {
         return Err(DeployError(
             "current GitHub job source differs from the transaction tool source".to_string(),
@@ -79,7 +79,7 @@ pub async fn reconcile_host(
         "--phase".to_string(),
         phase.to_string(),
         "--source-revision".to_string(),
-        crate::build_identity::SOURCE_REVISION.to_string(),
+        crate::binary::build_identity::SOURCE_REVISION.to_string(),
         "--tool-sha256".to_string(),
         tool_sha256.clone(),
         "--runner-gate".to_string(),

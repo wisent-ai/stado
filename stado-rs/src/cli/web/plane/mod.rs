@@ -4,7 +4,7 @@
 //! than one sitting can read. The split is mechanical: the command surface,
 //! the two configuration-plane helpers, the declaration writer and the
 //! inventory each moved whole. `super` re-exports them, so every sibling that
-//! reads `super::product`, `super::mutate_web` or `super::WebCommands` still
+//! reads `crate::cli::setup::product`, `super::mutate_web` or `super::WebCommands` still
 //! resolves the same items.
 
 mod commands;

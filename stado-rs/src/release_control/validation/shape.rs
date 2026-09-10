@@ -2,7 +2,7 @@
 
 use std::path::{Component, Path};
 
-use crate::release::canonical_coordinate;
+use crate::binary::release::canonical_coordinate;
 
 /// A canonical coordinate: ASCII alphanumerics plus `.`, `_` and `-`, no
 /// surrounding whitespace, non-empty.

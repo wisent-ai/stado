@@ -1,7 +1,7 @@
 //! The one registry-authorized channel every host capability rides.
 //!
 //! Host and space operations share the option set and report shape factored
-//! from [`crate::deploy::host_reboot`], so target identity, local-vs-SSH
+//! from [`crate::deploy::host_state::reboot`], so target identity, local-vs-SSH
 //! selection, timeout behavior, and failure sentences cannot drift into
 //! capability-specific variants:
 //!
@@ -14,7 +14,7 @@
 //!   registry data — registry values reach ssh only as the destination
 //!   argument;
 //! - the ssh option set is not re-typed here. [`ssh_options`] takes
-//!   [`crate::deploy::host_reboot::ssh_reboot_argv`] and drops its trailing
+//!   [`crate::deploy::host_state::reboot::ssh_reboot_argv`] and drops its trailing
 //!   remote program, so `BatchMode=yes`, `ConnectTimeout` and
 //!   `StrictHostKeyChecking=accept-new` are literally the same words the
 //!   shipped reboot path uses and cannot fall out of step with it;
@@ -25,7 +25,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use super::{host_reboot, host_recovery, py_str_repr, shlex_quote, ssh_key, DeployError, Runner};
+use super::{host_state::reboot, host_recovery, py_str_repr, shlex_quote, host_access::ssh_key, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
 /// The `status` value every command in this family reports when the remote
@@ -120,7 +120,7 @@ pub fn target_is_this_host(target: &ComputeTarget) -> bool {
 }
 
 /// Registry-authorized host resolution, with the refusals
-/// [`crate::deploy::host_reboot`] makes, word for word: not in the
+/// [`crate::deploy::host_state::reboot`] makes, word for word: not in the
 /// registry, not a local host, no registry-managed ssh destination.
 ///
 /// One deliberate exception to the last refusal: a target that IS this
@@ -181,11 +181,11 @@ pub async fn canonical_target(target_name: &str) -> Result<ComputeTarget, Deploy
 }
 
 /// The ssh invocation up to and including the destination, taken from
-/// [`crate::deploy::host_reboot::ssh_reboot_argv`] with its one trailing
+/// [`crate::deploy::host_state::reboot::ssh_reboot_argv`] with its one trailing
 /// element — the reboot program — removed. Derived rather than re-typed so
 /// the option set is provably identical to the shipped one.
 pub fn ssh_options(ssh_target: &str) -> Vec<String> {
-    let mut argv = host_reboot::ssh_reboot_argv(ssh_target);
+    let mut argv = reboot::ssh_reboot_argv(ssh_target);
     argv.pop();
     if tracing::enabled!(
         target: "stado::deploy::host_channel",

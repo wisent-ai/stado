@@ -41,7 +41,7 @@ impl Dashboard {
             );
         }
         let authorized = if let Some(policy_key) =
-            crate::object_store::release_policy_key(object.namespace(), object.key())
+            crate::remote::object_store::release_policy_key(object.namespace(), object.key())
         {
             // A release object is only ever created, never replaced; the
             // client resolves its credential from the same routing function.
@@ -103,7 +103,7 @@ impl Dashboard {
             Err(response) => return response,
         };
         let authorized = if let Some(policy_key) =
-            crate::object_store::release_policy_key(object.namespace(), object.key())
+            crate::remote::object_store::release_policy_key(object.namespace(), object.key())
         {
             if release_object_namespace(object.namespace()) {
                 let Some(target_key) = release_upload_target_key(object.key()) else {

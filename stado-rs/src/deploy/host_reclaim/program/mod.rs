@@ -47,7 +47,7 @@ const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
 /// The fixed remote program.
 ///
 /// stderr is deliberately NOT redirected, for the reason
-/// [`crate::deploy::host_cleanup`] gives: it travels back into the channel's
+/// [`crate::deploy::host_state::cleanup`] gives: it travels back into the channel's
 /// own stderr, which is where [`crate::deploy::host_channel::finish_report`]
 /// reads the last line from, and it is the one sentence explaining why a stage
 /// failed.
@@ -64,7 +64,7 @@ static REMOTE_SCRIPT_TEMPLATE: LazyLock<String> = LazyLock::new(|| {
 ///
 /// Read from [`products::declared`] rather than spelled here: the paths are
 /// facts about each product's delivery history, they live in
-/// `data/products.json`, and a reclamation that carried its own copy would go
+/// `data/catalog/products.json`, and a reclamation that carried its own copy would go
 /// stale the next time a delivery path moves. A catalog that will not parse
 /// yields no roots, so the stage sweeps the services root alone rather than
 /// guessing.

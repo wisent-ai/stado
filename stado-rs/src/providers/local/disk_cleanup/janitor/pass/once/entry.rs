@@ -85,7 +85,7 @@ pub async fn run_cleanup_to_target_once(
 ///
 /// `stado disk-cleanup --dry-run` runs this locally; the `registry_cleanup`
 /// stage of `stado space reclaim TARGET --dry-run`
-/// ([`crate::deploy::host_cleanup`]) runs it on the target whose filesystem is
+/// ([`crate::deploy::host_state::cleanup`]) runs it on the target whose filesystem is
 /// being previewed.
 pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the

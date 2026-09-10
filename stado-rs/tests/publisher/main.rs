@@ -261,7 +261,7 @@ fn a_github_route_nothing_declares_is_refused_by_name() {
     let text = credential_report(home.path(), &fixture);
     for needle in [
         "github:org-runner-admin",
-        "stado-rs/data/github-identity.json",
+        "stado-rs/data/fleet/github-identity.json",
         "skarbiec route declare",
     ] {
         assert!(text.contains(needle), "refusal omits {needle:?}: {text}");

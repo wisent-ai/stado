@@ -165,7 +165,7 @@ pub(crate) async fn read_request(
         None => usize::default(),
     };
     let max_body_bytes = if object_put {
-        crate::object_store::max_object_bytes()
+        crate::remote::object_store::max_object_bytes()
     } else if method == "POST" && path == "/api/operator/run" {
         operator_console::MAX_REQUEST_BYTES
     } else if registry_import {

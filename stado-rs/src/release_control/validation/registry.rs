@@ -8,7 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json::Value;
 
-use crate::release::canonical_coordinate;
+use crate::binary::release::canonical_coordinate;
 use crate::release_control::documents::policy::valid_legacy_launchd_unit;
 use crate::release_control::{control, StrategyKind, DEFAULT_REPLACE_READINESS_PATH};
 

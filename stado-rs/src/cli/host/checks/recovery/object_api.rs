@@ -104,7 +104,7 @@ pub(crate) async fn apply_release_store_repair(
     let script = format!(
         "export STADO_RELEASE_STORE_PRODUCT={}\n{}",
         crate::deploy::shlex_quote(product),
-        include_str!("../../../../../../deploy/repair_release_store.sh")
+        include_str!("../../../../../../deploy/release/repair_release_store.sh")
     );
     let repaired = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,

@@ -1,6 +1,6 @@
 //! Selected-store SSH channel materialization.
 
-use crate::deploy::ssh_key::{self, KeyFile};
+use crate::deploy::host_access::ssh_key::{self, KeyFile};
 
 /// Build one SSH invocation using only the target key in the credential store.
 pub async fn channel_argv(

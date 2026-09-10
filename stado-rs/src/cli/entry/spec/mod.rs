@@ -22,7 +22,7 @@ pub mod spend;
     // version has named several different trees of this crate. `--version`
     // is where an operator asks which build a host is running, so it answers
     // with the revision too.
-    version = crate::build_identity::BUILD_IDENTITY,
+    version = crate::binary::build_identity::BUILD_IDENTITY,
     about = "Stado — policy-controlled queue and compute control plane."
 )]
 pub struct Cli {

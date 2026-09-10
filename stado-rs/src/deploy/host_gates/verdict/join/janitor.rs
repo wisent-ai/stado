@@ -14,9 +14,9 @@ pub(super) struct JanitorHealth {
     /// A workload holds the run lock and every pass is being turned away.
     pub(super) lock_held: bool,
     /// Nothing has completed a pass for the whole stall window.
-    pub(super) prevented_age_seconds: Option<i64>,
-    /// How long ago the last pass was turned away, when one was.
     pub(super) stalled: bool,
+    /// How long ago the last pass was turned away, when one was.
+    pub(super) prevented_age_seconds: Option<i64>,
 }
 
 impl JanitorHealth {

@@ -33,7 +33,7 @@ pub(super) async fn drain_store(
 ) -> Result<(), CmdError> {
     let started = Instant::now();
     let timeout = Duration::from_secs(timeout_seconds);
-    let poll = Duration::from_secs(crate::constants::POLL_INTERVAL_S);
+    let poll = Duration::from_secs(crate::primitives::constants::POLL_INTERVAL_S);
     loop {
         let running = control::job_count(store, control::RUNNING_PREFIX).await?;
         if running == 0 {

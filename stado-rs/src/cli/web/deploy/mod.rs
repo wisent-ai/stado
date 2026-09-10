@@ -28,7 +28,7 @@
 //! this machine, and hardcodes `darwin-arm` as the platform directory. The
 //! program the unit runs is composed with `$HOME` and `$STADO_PLATFORM` and
 //! expanded by [`crate::deploy::service_catalog::resolve_word`], which is the
-//! same expansion `data/service-catalog.json` already uses for brama, so the
+//! same expansion `data/catalog/service-catalog.json` already uses for brama, so the
 //! layout a web release lands in is the layout the fleet already has.
 //!
 //! One file per stage, the way the command already reads: `run.rs` drives the

@@ -227,7 +227,7 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
                 }
             })
             .collect::<String>();
-        let object = crate::object_store::ObjectRef::parse(&input.uri)
+        let object = crate::remote::object_store::ObjectRef::parse(&input.uri)
             .map_err(|error| format!("release input {name:?} URI is invalid: {error}"))?;
         let immutable_source = object.namespace() == "sources"
             && object.key().split('/').any(|part| part == input.sha256);

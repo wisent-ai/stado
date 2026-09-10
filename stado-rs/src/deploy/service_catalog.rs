@@ -7,7 +7,7 @@
 //! of a list the product offers. This catalog is generated from the canonical
 //! `wisent-products/catalog/products.yml` by
 //! `wisent-products/scripts/product_catalog.py`, then compiled into
-//! this binary as [`data/service-catalog.json`]. Product identity never starts
+//! this binary as [`data/catalog/service-catalog.json`]. Product identity never starts
 //! in Stado.
 //!
 //! Resolution order for what a unit runs stays: operator flags, then the
@@ -63,7 +63,7 @@ struct CatalogDocument {
     services: Vec<CatalogService>,
 }
 
-const DOCUMENT: &str = include_str!("../../data/service-catalog.json");
+const DOCUMENT: &str = include_str!("../../data/catalog/service-catalog.json");
 
 /// Every shipped entry, in the document's order.
 pub fn all() -> Result<Vec<CatalogService>, String> {

@@ -24,8 +24,8 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use stado::constants::{CAPACITY_HEARTBEAT_INTERVAL_S, CAPACITY_STALE_SECONDS};
-use stado::providers::local::agent_janitor::{JanitorReports, JanitorTask};
+use stado::primitives::constants::{CAPACITY_HEARTBEAT_INTERVAL_S, CAPACITY_STALE_SECONDS};
+use stado::providers::local::agent::janitor::{JanitorReports, JanitorTask};
 use stado::providers::local::disk_cleanup::{run_cleanup_once, CleanupWriter};
 
 /// The test's scaled heartbeat; every other duration is a multiple of it.

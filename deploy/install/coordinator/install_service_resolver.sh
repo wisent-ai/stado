@@ -1,0 +1,104 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# In a checkout the unit templates sit with the other units, one per init
+# system; on an installed host every file this script needs has been copied
+# flat into ~/.stado/files.
+launchd_dir=$script_dir/../../units/launchd
+systemd_dir=$script_dir/../../units/systemd
+if [ ! -f "$launchd_dir/com.wisent.stado-resolver.plist.tmpl" ]; then
+  launchd_dir=$HOME/.stado/files
+  systemd_dir=$HOME/.stado/files
+fi
+stado_bin=${STADO_BIN:-$HOME/.stado/bin/stado}
+resolver_user=${STADO_RESOLVER_USER:-$(id -un)}
+if [ ! -x "$stado_bin" ]; then
+  printf '%s\n' "Stado binary not found at $stado_bin" >&2
+  exit 1
+fi
+managed_stado="$HOME/.stado/bin/stado"
+if [ "$stado_bin" != "$managed_stado" ]; then
+  mkdir -p "$HOME/.stado/bin"
+  cp "$stado_bin" "$managed_stado.new"
+  chmod u=rwx,go= "$managed_stado.new"
+  mv "$managed_stado.new" "$managed_stado"
+  stado_bin=$managed_stado
+fi
+bootstrap_user_agent() {
+  domain=$1
+  plist=$2
+  attempt=0
+  while ! launchctl bootstrap "$domain" "$plist"; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 10 ]; then
+      printf '%s\n' "Resolver bootstrap did not become available after ${attempt}s" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+target=${1:-}
+if [ -z "$target" ]; then
+  target=$($stado_bin registry self --name-only)
+fi
+case "$target" in
+  ''|*[!a-z0-9._-]*|-*|*-) printf '%s\n' "Invalid registry target: $target" >&2; exit 1 ;;
+esac
+
+mkdir -p "$HOME/.stado/logs"
+case $(uname -s) in
+  Darwin)
+    if [ "${STADO_RESOLVER_SYSTEM:-0}" = 1 ]; then
+      rendered=$(mktemp "$HOME/.stado/stado-resolver.XXXXXX.plist")
+      trap 'rm -f "$rendered"' EXIT HUP INT TERM
+      sed \
+        -e "s|{STADO_BIN}|$stado_bin|g" \
+        -e "s|{TARGET}|$target|g" \
+        -e "s|{HOME}|$HOME|g" \
+        -e "s|{USER}|$resolver_user|g" \
+        "$launchd_dir/com.wisent.stado-resolver.system.plist.tmpl" > "$rendered"
+      destination=/Library/LaunchDaemons/com.wisent.stado-resolver.plist
+      # A system daemon does not inherit the login session's secrets. Remove
+      # the superseded user agent first, otherwise both jobs race for the same
+      # loopback adapters during bootstrap.
+      launchctl bootout "gui/$(id -u)/com.wisent.stado-resolver" >/dev/null 2>&1 || true
+      rm -f "$HOME/Library/LaunchAgents/com.wisent.stado-resolver.plist"
+      sudo launchctl bootout system/com.wisent.stado-resolver >/dev/null 2>&1 || true
+      sudo install -o root -g wheel -m 0644 "$rendered" "$destination"
+      sudo launchctl bootstrap system "$destination"
+      sudo launchctl enable system/com.wisent.stado-resolver
+    else
+      destination=$HOME/Library/LaunchAgents/com.wisent.stado-resolver.plist
+      mkdir -p "$(dirname "$destination")"
+      sed \
+        -e "s|{STADO_BIN}|$stado_bin|g" \
+        -e "s|{TARGET}|$target|g" \
+        -e "s|{HOME}|$HOME|g" \
+        "$launchd_dir/com.wisent.stado-resolver.plist.tmpl" > "$destination"
+      launchctl bootout "gui/$(id -u)/com.wisent.stado-resolver" >/dev/null 2>&1 || true
+      bootstrap_user_agent "gui/$(id -u)" "$destination"
+      launchctl enable "gui/$(id -u)/com.wisent.stado-resolver"
+      # Clean cutover: the resolver supersedes the host-pinned SSH forward.
+      launchctl bootout "gui/$(id -u)/com.wisent.always-on-forward" >/dev/null 2>&1 || true
+    fi
+    ;;
+  Linux)
+    destination=$HOME/.config/systemd/user/stado-service-resolver.service
+    mkdir -p "$(dirname "$destination")"
+    sed \
+      -e "s|{STADO_BIN}|$stado_bin|g" \
+      -e "s|{TARGET}|$target|g" \
+      -e "s|{HOME}|$HOME|g" \
+      "$systemd_dir/stado-service-resolver.service.tmpl" > "$destination"
+    systemctl --user daemon-reload
+    systemctl --user enable --now stado-service-resolver.service
+    ;;
+  *)
+    printf '%s\n' "Unsupported resolver host OS" >&2
+    exit 1
+    ;;
+esac
+
+printf '%s\n' "Installed Stado resolver for $target"

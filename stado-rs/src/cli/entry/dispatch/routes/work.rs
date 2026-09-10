@@ -1,6 +1,9 @@
 //! Where the queue-work verbs and the local worker land.
 
 use crate::cli::entry::spec::root::work::WorkCommands;
+use crate::cli::hosts::{agent, machine};
+use crate::cli::reporting::{results, status};
+use crate::cli::work::cancel;
 use crate::cli::*;
 
 pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {

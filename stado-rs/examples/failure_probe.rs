@@ -5,7 +5,7 @@
 //! Numbers are read from text rather than written as bare literals, the same
 //! provenance rule the crate's own exit codes follow.
 
-use stado::failure::{self, FailureCode};
+use stado::primitives::failure::{self, FailureCode};
 
 /// The exit code a command already chose, as the probe hands it to
 /// `exit_code`: click's runtime code plus one, i.e. the usage code `2`.

@@ -84,7 +84,7 @@ pub async fn import(path: String, json_output: bool) -> Result<(), CmdError> {
         render_import_receipt(&receipt);
     }
     if receipt.accepted() {
-        crate::cli::onboarding::record_registry_import_accepted(&receipt);
+        crate::cli::setup::onboarding::record_registry_import_accepted(&receipt);
         return Ok(());
     }
     let detail = receipt

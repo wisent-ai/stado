@@ -33,8 +33,8 @@ use serde_json::{json, Value};
 pub use check::report;
 
 /// The declaration, and the path every refusal here names.
-pub const DECLARATION_PATH: &str = "stado-rs/data/github-identity.json";
-const DECLARATION: &str = include_str!("../../data/github-identity.json");
+pub const DECLARATION_PATH: &str = "stado-rs/data/fleet/github-identity.json";
+const DECLARATION: &str = include_str!("../../data/fleet/github-identity.json");
 const SCHEMA: &str = "stado.github-identity.v1";
 /// Skarbiec's declared route capability answers the current vault coordinates,
 /// rather than a separately maintained per-caller route listing.

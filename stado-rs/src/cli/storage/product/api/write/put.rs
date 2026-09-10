@@ -13,7 +13,7 @@ impl RemoteObjectApi {
         metadata: &BTreeMap<String, String>,
         bearer: Option<&str>,
     ) -> Result<RemotePutResponse, CmdError> {
-        let object = crate::object_store::ObjectRef::parse(uri)?;
+        let object = crate::remote::object_store::ObjectRef::parse(uri)?;
         let upload_id = hex::encode(Sha256::digest(&bytes));
         let mut chunks = Vec::with_capacity(bytes.len().div_ceil(OBJECT_API_CHUNK_BYTES));
         let mut offset = 0usize;
@@ -24,7 +24,7 @@ impl RemoteObjectApi {
             let chunk = bytes.slice(offset..end);
             let index = chunks.len();
             let sha256 = hex::encode(Sha256::digest(&chunk));
-            let chunk_object = crate::object_store::ObjectRef::new(
+            let chunk_object = crate::remote::object_store::ObjectRef::new(
                 object.namespace(),
                 &format!("{}.__stado_upload/{upload_id}/{index:08}", object.key()),
             )?;
@@ -180,10 +180,10 @@ impl RemoteObjectApi {
         // reading it cost a day: the same sentence covers a missing bearer, a
         // wrong bearer, and a create-only rewrite, which need opposite fixes.
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            let presented = match crate::object_store::ObjectRef::parse(uri)
+            let presented = match crate::remote::object_store::ObjectRef::parse(uri)
                 .ok()
                 .and_then(|object| {
-                    crate::object_store::release_policy_key(object.namespace(), object.key())
+                    crate::remote::object_store::release_policy_key(object.namespace(), object.key())
                 })
                 .and_then(|key| {
                     crate::config::release_client_publisher_for_key(&key)

@@ -105,7 +105,7 @@ impl AccountedBy {
         match self {
             Self::Manifest => "manifest",
             Self::Receipt => "release-receipt",
-            Self::Nothing => crate::provenance::UNPROVENANCED,
+            Self::Nothing => crate::binary::provenance::UNPROVENANCED,
         }
     }
 }
@@ -132,7 +132,7 @@ pub(in crate::cli::host) struct DeliveryReceipt {
 /// One artifact a host carries, joined to whatever accounts for it.
 struct CarriedArtifact {
     artifact: String,
-    record: Option<crate::provenance::Provenance>,
+    record: Option<crate::binary::provenance::Provenance>,
     /// The delivery receipt whose recorded artefact digest equals the
     /// installed bytes, when one exists. Digest-matched on purpose: a receipt
     /// for another version says nothing about the file in place, and reading
@@ -168,7 +168,7 @@ impl CarriedArtifact {
         match (&self.record, &self.receipt) {
             (Some(record), _) => record.commit.clone(),
             (None, Some(receipt)) => receipt.source_commit.clone(),
-            (None, None) => crate::provenance::UNPROVENANCED.to_string(),
+            (None, None) => crate::binary::provenance::UNPROVENANCED.to_string(),
         }
     }
 

@@ -56,8 +56,8 @@ struct DeliveryReceipt {
 
 fn delivery_job_command(product: &str) -> &'static str {
     if product == "stado" {
-        crate::constants::RELEASE_DELIVERY_JOB_COMMAND
+        crate::primitives::constants::RELEASE_DELIVERY_JOB_COMMAND
     } else {
-        crate::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
+        crate::primitives::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
     }
 }

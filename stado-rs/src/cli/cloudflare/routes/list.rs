@@ -9,7 +9,7 @@ use crate::cli::cloudflare::api::{belongs_to_zone, tunnel_access, validate_dns_n
 use crate::cli::cloudflare::records::{
     active_zone_id, tunnel_configuration, tunnel_connections, tunnel_dns_records,
 };
-use crate::cli::{table, CmdError};
+use crate::cli::{reporting::table, CmdError};
 
 pub(in crate::cli::cloudflare) async fn list_routes(
     api_credential_name: &str,

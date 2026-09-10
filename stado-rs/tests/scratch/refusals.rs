@@ -24,7 +24,7 @@ fn an_undeclared_profile_is_refused_with_the_declared_ones() {
         .join(", ");
     assert!(
         stderr(&output).contains(&format!(
-            "scratch profile 'macos-vm' is not declared in stado-rs/data/scratch-profiles.json; \
+            "scratch profile 'macos-vm' is not declared in stado-rs/data/work/scratch-profiles.json; \
              declared profiles: {declared}"
         )),
         "the refusal names the declaration and the declared profiles: {}",

@@ -161,7 +161,7 @@ impl Dashboard {
                 "get"
             };
             let authorized = if let Some(policy_key) =
-                crate::object_store::release_policy_key(&namespace, &key_or_prefix)
+                crate::remote::object_store::release_policy_key(&namespace, &key_or_prefix)
             {
                 // A catalog object is addressed exactly, never listed as a prefix.
                 let listing = list && namespace != "system";

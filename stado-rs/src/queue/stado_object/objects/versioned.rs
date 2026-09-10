@@ -42,7 +42,7 @@ impl StadoObjectBackend {
         let bytes = Self::whole_body(
             response,
             path,
-            Some(crate::constants::STORE_DOCUMENT_MAX_BYTES),
+            Some(crate::primitives::constants::STORE_DOCUMENT_MAX_BYTES),
         )
         .await?;
         let content = String::from_utf8(bytes)

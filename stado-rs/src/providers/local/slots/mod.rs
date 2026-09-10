@@ -33,7 +33,7 @@ use nix::unistd::Pid;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::models::{
     activation_extraction_must_share_gpu, deprecated_activation_command_reason, isoformat_utc,
     job_state, Job,
@@ -41,7 +41,7 @@ use crate::models::{
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 
-use super::gpu_probe;
+use crate::providers::local::probe::gpu;
 use super::helpers;
 use super::{build_job_command, verify_command, Slot};
 

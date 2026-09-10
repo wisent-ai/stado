@@ -8,7 +8,7 @@ use crate::cli::registry::beacons::beacon::Beacon;
 use crate::cli::registry::beacons::load::{beacon_for, load_beacons};
 use crate::cli::registry::echo_json;
 use crate::cli::registry::write::document::fetch_versioned_document;
-use crate::cli::{table, CmdError};
+use crate::cli::{reporting::table, CmdError};
 use crate::queue::JobStorage;
 use crate::targets;
 

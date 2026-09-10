@@ -12,7 +12,7 @@ pub(in crate::cli::registry) mod load;
 use crate::queue::capacity;
 
 /// The state a live launchd/systemd unit reports
-/// (`deploy/host_health_beacon_macos.sh`, `deploy/host_health_beacon.sh`).
+/// (`deploy/beacon/host_health_beacon_macos.sh`, `deploy/beacon/host_health_beacon.sh`).
 pub(in crate::cli::registry) const ACTIVE_STATE: &str = "active";
 /// A successful timer-triggered oneshot with an active native trigger.
 ///
@@ -24,8 +24,8 @@ const SCHEDULED_STATE: &str = "scheduled";
 /// jitter: the beacon republishes on the same cadence as the capacity
 /// broadcast (`constants::CAPACITY_HEARTBEAT_INTERVAL_S` seconds — the
 /// LaunchAgent `StartInterval` rendered by
-/// `deploy/install_macos_coordinator.sh`, and the systemd unit in
-/// `deploy/host-health-beacon.service`), so
+/// `deploy/install/install_macos_coordinator.sh`, and the systemd unit in
+/// `deploy/units/host-health-beacon.service`), so
 /// [`capacity::CAPACITY_STALE_SECONDS`] is the same missed-publications
 /// window `queue::capacity` already applies to the other liveness signal.
 /// One window, both signals.

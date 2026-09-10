@@ -10,12 +10,12 @@ use crate::cli::host::checks::probes::{cell, print_json, report_outcome};
 /// logged-in users (`stado.wisent.com/docs/missing-commands` item two).
 pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_uptime::uptime_host(target, &runner)
+    let report = crate::deploy::host_state::uptime::uptime_host(target, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     if json {
         print_json(&report);
-        return report_outcome(&report, crate::deploy::host_uptime::OK_STATUS);
+        return report_outcome(&report, crate::deploy::host_state::uptime::OK_STATUS);
     }
     let load = report.get("load_average");
     let field = |key: &str| cell(load.and_then(|value| value.get(key)));
@@ -45,9 +45,9 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
                 ]
             })
             .collect();
-        crate::cli::table::print(&["USER", "LINE", "SINCE"], &rows);
+        crate::cli::reporting::table::print(&["USER", "LINE", "SINCE"], &rows);
     }
-    report_outcome(&report, crate::deploy::host_uptime::OK_STATUS)
+    report_outcome(&report, crate::deploy::host_state::uptime::OK_STATUS)
 }
 
 /// `stado host ping TARGET [--json]` — ssh reachability and beacon age in
@@ -60,10 +60,10 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
 pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let store = beacon_store().await?;
-    let report = crate::deploy::host_ping::ping_host(target, &store, &runner)
+    let report = crate::deploy::host_state::ping::ping_host(target, &store, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let verdict = crate::deploy::host_ping::Verdict::Ok.as_str();
+    let verdict = crate::deploy::host_state::ping::Verdict::Ok.as_str();
     if json {
         print_json(&report);
         return report_outcome(&report, verdict);
@@ -90,7 +90,7 @@ pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
             },
         ],
     ];
-    crate::cli::table::print(&["SIGNAL", "STATE", "DETAIL"], &rows);
+    crate::cli::reporting::table::print(&["SIGNAL", "STATE", "DETAIL"], &rows);
     println!(
         "\nverdict: {} (the worse of the two signals)",
         cell(report.get("status"))

@@ -198,7 +198,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
                 "input_objects.{name}.stado_uri is required"
             )));
         };
-        crate::object_store::ObjectRef::parse(uri).map_err(|error| {
+        crate::remote::object_store::ObjectRef::parse(uri).map_err(|error| {
             invalid(format!(
                 "input_objects.{name}.stado_uri is invalid: {error}"
             ))

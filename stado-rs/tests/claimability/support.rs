@@ -1,0 +1,157 @@
+//! The isolated fleet each claimability story runs against: the registry
+//! document, the queued job, the capacity publications and the health
+//! beacons, all copied from the live incident and all inside a temp dir.
+
+use std::path::Path;
+use std::process::{Command, Output};
+
+use serde_json::Value;
+
+
+/// The real job's id, command and submitter, so a sentence about `2c4a47aa`
+/// in a test is a sentence about the job the operator stared at.
+pub(crate) const JOB_ID: &str = "2c4a47aa";
+/// 121 hours and 38 minutes, the wait the live store held. Kept as an offset
+/// from the test's own clock so the sentence is the same on any day.
+pub(crate) const WAITED_SECONDS: i64 = 121 * 3600 + 38 * 60;
+/// The mini's declared queue agent, verbatim from the registry.
+pub(crate) const AGENT_LABEL: &str = "com.wisent.compute.service.stado-agent-mini";
+pub(crate) const AGENT_PLIST: &str =
+    "/Users/charles/Library/LaunchAgents/com.wisent.compute.service.stado-agent-mini.plist";
+
+/// Three `kind=local` hosts in the shape the live registry declares them: a
+/// pinned Mac mini that declares its queue agent as a user LaunchAgent, a
+/// pinned Linux box that declares no agent at all, and an unpinned laptop.
+pub(crate) const REGISTRY: &str = r#"{
+    "schema_version": 2,
+    "targets": [
+        {
+            "name": "mini",
+            "kind": "local",
+            "ssh": "charles@10.0.0.253",
+            "release_platform": "darwin-arm64",
+            "hostnames": ["mini.local"],
+            "pinned_only": true,
+            "services": [
+                {
+                    "kind": "launchd",
+                    "name": "com.wisent.compute.service.stado-agent-mini",
+                    "label": "com.wisent.compute.service.stado-agent-mini",
+                    "path": "/Users/charles/Library/LaunchAgents/com.wisent.compute.service.stado-agent-mini.plist",
+                    "unit": "",
+                    "managed_since": "2026-08-19T00:46:51.797832+00:00"
+                }
+            ]
+        },
+        {
+            "name": "rtx",
+            "kind": "local",
+            "ssh": "root@10.0.0.108",
+            "release_platform": "linux-amd64",
+            "hostnames": ["rtx-box"],
+            "gpu_type": "nvidia-rtx-pro-6000",
+            "pinned_only": true
+        },
+        {
+            "name": "laptop",
+            "kind": "local",
+            "ssh": "op@10.0.0.234",
+            "release_platform": "darwin-arm64",
+            "hostnames": ["laptop.local"]
+        }
+    ],
+    "coordinators": []
+}"#;
+
+pub(crate) fn stado(storage: &Path, args: &[&str]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_stado"));
+    cmd.args(args)
+        .env("WC_STORAGE_BACKEND", "local")
+        .env("WC_LOCAL_STORAGE_PATH", storage)
+        // A set-but-missing STADO_CONFIG disables config-file discovery.
+        .env("STADO_CONFIG", storage.join("no-such-config.json"))
+        .env_remove("COMPUTE_API_KEY")
+        .env_remove("COMPUTE_API_URL")
+        .env_remove("WC_PROFILES_DIR");
+    cmd.output().expect("stado binary runs")
+}
+
+pub(crate) fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A temp store carrying [`REGISTRY`] and nothing else.
+pub(crate) fn fleet() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("registry.json"), REGISTRY).unwrap();
+    dir
+}
+
+pub(crate) fn write(storage: &Path, name: &str, body: &Value) {
+    let path = storage.join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_string(body).unwrap()).unwrap();
+}
+
+/// `seconds` before the moment this test runs, RFC-3339.
+pub(crate) fn ago(seconds: i64) -> String {
+    (chrono::Utc::now() - chrono::Duration::seconds(seconds)).to_rfc3339()
+}
+
+/// The live queued job: `provider: local`, cpu, and pinned to `pinned_host`.
+pub(crate) fn queue_job(storage: &Path, job_id: &str, waited_seconds: i64, pinned_host: &str) {
+    write(
+        storage,
+        &format!("queue/{job_id}.json"),
+        &serde_json::json!({
+            "job_id": job_id,
+            "command": "bash inputs/run.sh",
+            "provider": "local",
+            "state": "queued",
+            "created_at": ago(waited_seconds),
+            "pinned_host": pinned_host,
+            "assigned_to": pinned_host,
+            "submitted_by": "lukaszbartoszcze",
+            "submitted_from": "laptop.local",
+        }),
+    );
+}
+
+/// One capacity broadcast in the shape `queue::capacity::publish_capacity`
+/// writes it.
+pub(crate) fn publish(storage: &Path, consumer_id: &str, age_seconds: i64, diag: Value) {
+    write(
+        storage,
+        &format!("capacity/{consumer_id}.json"),
+        &serde_json::json!({
+            "consumer_id": consumer_id,
+            "kind": consumer_id.split_once('-').map(|(kind, _)| kind).unwrap_or("local"),
+            "free_slots": {"cpu": 1},
+            "free_vram_gb": 1,
+            "total_vram_gb": 1,
+            "published_at": ago(age_seconds),
+            "diag": diag,
+        }),
+    );
+}
+
+/// A health beacon reporting exactly `units`.
+pub(crate) fn beacon(storage: &Path, slug: &str, units: Value) {
+    write(
+        storage,
+        &format!("host_health/{slug}.json"),
+        &serde_json::json!({
+            "host": slug,
+            "reported_at": ago(30),
+            "units": units,
+        }),
+    );
+}
+
+/// The `claimability` section of `stado overview --json`.
+pub(crate) fn claimability(storage: &Path) -> Value {
+    let out = stado(storage, &["overview", "--json"]);
+    assert!(out.status.success(), "overview --json exits 0");
+    let document: Value = serde_json::from_str(&stdout(&out)).expect("overview --json is JSON");
+    document["claimability"].clone()
+}

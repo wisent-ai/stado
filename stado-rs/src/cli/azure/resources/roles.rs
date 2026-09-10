@@ -70,7 +70,7 @@ pub(super) async fn control_principal_id(args: &RepairRbacArgs) -> Result<String
         return Ok(id.to_string());
     }
     let http = reqwest::Client::new();
-    let token = crate::azure_token::identity_bearer_token(&http, ARM_SCOPE, ARM_RESOURCE)
+    let token = crate::remote::azure_token::identity_bearer_token(&http, ARM_SCOPE, ARM_RESOURCE)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
     jwt_claims(&token)

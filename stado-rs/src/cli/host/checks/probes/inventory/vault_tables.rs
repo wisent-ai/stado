@@ -12,7 +12,7 @@ pub(super) fn print_vaults(
     if vaults.is_empty() {
         println!("\nvaults: none — $HOME/.stado holds no *.vault.json");
     } else {
-        crate::cli::table::print(
+        crate::cli::reporting::table::print(
             &["VAULT", "STATE", "BYTES", "MODE", "OWNER ONLY"],
             &vaults
                 .iter()
@@ -33,7 +33,7 @@ pub(super) fn print_vaults(
     // and editing the wrong one is the mistake this separation prevents.
     let sidecars = section("vault_sidecars");
     if !sidecars.is_empty() {
-        crate::cli::table::print(
+        crate::cli::reporting::table::print(
             &["VAULT SIDECAR", "STATE", "BYTES", "MODE", "OWNER ONLY"],
             &sidecars
                 .iter()

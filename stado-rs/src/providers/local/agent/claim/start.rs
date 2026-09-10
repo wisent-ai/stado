@@ -137,7 +137,7 @@ pub(crate) async fn start_candidate(
         Ok(slot) => slot,
         Err(StartSlotError::Claim(exc)) => {
             // One job's claim is that job's problem. Returning here
-            // ends the tick, and `cli::agent` restarts the whole loop:
+            // ends the tick, and `cli::hosts::agent` restarts the whole loop:
             // on charless-mac-mini a single queued job whose durable
             // transition record could not be verified killed the loop
             // every few seconds for hours, so the nine other queued

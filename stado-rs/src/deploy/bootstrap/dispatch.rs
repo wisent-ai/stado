@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use crate::deploy::local_install::{self, TokenFetcher};
-use crate::deploy::{runner_fn, ssh_key, DeployError, Runner};
+use crate::deploy::{runner_fn, host_access::ssh_key, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
 use super::provision::provision_target;

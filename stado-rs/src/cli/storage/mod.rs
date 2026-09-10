@@ -45,13 +45,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::object_store::OBJECT_API_CHUNK_BYTES;
+use crate::remote::object_store::OBJECT_API_CHUNK_BYTES;
 use crate::queue::copy::{
     self, CopyOptions, CopyPlan, CopyReport, Endpoint, Outcome, CANONICAL_PREFIXES,
 };
 use crate::queue::{BlobBackend, BlobInfo, JobStorage, StorageError};
 
-use super::table::print as print_table;
+use crate::cli::reporting::table::print as print_table;
 use super::CmdError;
 
 mod command;

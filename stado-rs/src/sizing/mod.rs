@@ -44,7 +44,7 @@ use std::time::Instant;
 
 use tokio::sync::Mutex;
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::queue::{JobStorage, StorageError};
 
 mod escalate;

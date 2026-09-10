@@ -230,7 +230,7 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
             // findings, and only the second one is about this host's evidence.
             None => println!("dominant cause    none classified"),
         }
-        crate::cli::table::print(
+        crate::cli::reporting::table::print(
             &["CAUSE", "COUNT", "REMEDY"],
             &summary["causes"]
                 .as_array()
@@ -245,7 +245,7 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
                 })
                 .collect::<Vec<Vec<String>>>(),
         );
-        crate::cli::table::print(
+        crate::cli::reporting::table::print(
             &["DIGEST", "DESIRED", "QUARANTINED AT", "CAUSE", "REASON"],
             &quarantined
                 .iter()

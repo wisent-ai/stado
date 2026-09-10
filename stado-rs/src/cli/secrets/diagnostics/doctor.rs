@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use crate::cli::{table, CmdError};
+use crate::cli::{reporting::table, CmdError};
 
 use crate::cli::secrets::store::resolve::skarbiec_binary;
 

@@ -30,6 +30,8 @@
 //! scan that poll ends in.
 
 pub mod capacity;
+pub mod heartbeat;
+pub mod janitor;
 pub mod claim;
 pub mod probes;
 pub mod tick;
@@ -42,7 +44,7 @@ pub use tick::run_agent;
 
 pub(crate) use probes::placement::reconcile_placement_policy;
 
-use crate::constants;
+use crate::primitives::constants;
 
 /// Main agent poll interval (latency vs. storage-API load trade-off).
 pub const POLL_INTERVAL_S: u64 = constants::POLL_INTERVAL_S;

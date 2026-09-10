@@ -83,10 +83,10 @@ async fn store_object_with_metadata_outcome(
     if_absent: bool,
     extra_metadata: &BTreeMap<String, String>,
 ) -> Result<StoreObjectOutcome, CmdError> {
-    let object = crate::object_store::ObjectRef::parse(uri)?;
+    let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
     let create_only = if_absent || object.namespace() == "releases";
-    let mut metadata = crate::object_store::metadata(&object, content_type);
+    let mut metadata = crate::remote::object_store::metadata(&object, content_type);
     for (name, value) in extra_metadata {
         if !name.starts_with("stado-")
             || metadata.contains_key(name)

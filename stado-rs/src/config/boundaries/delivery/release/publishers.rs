@@ -77,7 +77,7 @@ fn parse_declared_release_publishers(
     for (product, raw_entry) in entries {
         let mut entry_valid = true;
         if product.trim() != product
-            || crate::object_store::ObjectRef::new(product, "sentinel").is_err()
+            || crate::remote::object_store::ObjectRef::new(product, "sentinel").is_err()
         {
             problems.push(format!(
                 "release_api.publishers key {product:?} is not a canonical product name"

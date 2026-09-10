@@ -63,7 +63,7 @@ pub async fn dispatch(args: DoctorArgs) -> Result<(), CmdError> {
     // report is already on stdout; this only adds the verdict.
     //
     // The failing check's own DETAIL travels into the message, not just its
-    // remedy. `crate::failure::classify_message` reads that message centrally
+    // remedy. `crate::primitives::failure::classify_message` reads that message centrally
     // in `main_entry`, and a message built only from the summary and the fix
     // hint carries no observed error at all — which is why a doctor run whose
     // real content was an upstream status reported
@@ -99,7 +99,7 @@ fn print_human(report: &Report, fix_hints: bool) {
             ]
         })
         .collect();
-    super::table::print(&["CHECK", "STATUS", "DETAIL"], &rows);
+    crate::cli::reporting::table::print(&["CHECK", "STATUS", "DETAIL"], &rows);
 
     // Remedies are the actionable half, so they get their own block rather
     // than a fourth column that would wrap the table past any terminal.

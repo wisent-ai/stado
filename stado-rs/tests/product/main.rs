@@ -1,7 +1,7 @@
 //! `stado product` against the real `wisent-products` executable.
 //!
 //! Nothing is stubbed. `stado product` owns no catalogue and no installer of
-//! its own — `cli::product` resolves `wisent-products` and hands it the verb —
+//! its own — `cli::setup::product` resolves `wisent-products` and hands it the verb —
 //! so the only evidence worth having is a comparison against what that
 //! executable produces on its own. Every assertion below therefore runs the
 //! real binary directly and then through Stado, and compares.

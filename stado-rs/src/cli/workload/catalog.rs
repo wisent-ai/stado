@@ -1,6 +1,6 @@
 //! The workload declaration this build compiles in, and the reads over it.
 //!
-//! `stado-rs/data/workloads.json` is the declaration; nothing else in the
+//! `stado-rs/data/work/workloads.json` is the declaration; nothing else in the
 //! crate parses it.
 
 use std::collections::BTreeSet;
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::CmdError;
 
-pub const DECLARATION_PATH: &str = "stado-rs/data/workloads.json";
-const DECLARATION: &str = include_str!("../../../data/workloads.json");
+pub const DECLARATION_PATH: &str = "stado-rs/data/work/workloads.json";
+const DECLARATION: &str = include_str!("../../../data/work/workloads.json");
 const SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -94,7 +94,7 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
     if json_output {
         println!("{}", serde_json::to_string_pretty(catalog)?);
     } else {
-        crate::cli::table::print(
+        crate::cli::reporting::table::print(
             &[
                 "KIND",
                 "PRODUCT",

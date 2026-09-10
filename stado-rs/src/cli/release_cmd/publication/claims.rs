@@ -34,7 +34,7 @@ impl CoordinateClaim {
 /// which sends a release operator to inspect a credential for a decision the
 /// release channel made on its own declared terms.
 fn refused(message: String) -> CmdError {
-    CmdError::click(message).stating(crate::failure::FailureCode::Refused)
+    CmdError::click(message).stating(crate::primitives::failure::FailureCode::Refused)
 }
 
 /// Bind one immutable version and its platform coordinate to exactly one source

@@ -35,7 +35,7 @@ pub(super) async fn probe_channel(
         connection_probe_error.is_some() || connection_probes.iter().any(|probe| !probe.reachable);
     let ssh = crate::deploy::host_channel::run_program_with_connection(
         resolved,
-        crate::deploy::host_ping::REMOTE_PROGRAM,
+        crate::deploy::host_state::ping::REMOTE_PROGRAM,
         runner,
     )
     .await;
@@ -90,7 +90,7 @@ pub(super) async fn probe_channel(
 pub(super) async fn probe_beacon(
     store: &crate::queue::JobStorage,
     resolved: &ComputeTarget,
-) -> Result<(crate::deploy::host_ping::BeaconSignal, Option<Value>), CmdError> {
+) -> Result<(crate::deploy::host_state::ping::BeaconSignal, Option<Value>), CmdError> {
     // The beacon half, aged by the one rule `host ping` ages every beacon in
     // this fleet with, and the `link` block the host published inside it.
     let now = chrono::Utc::now();
@@ -101,12 +101,12 @@ pub(super) async fn probe_beacon(
                     .map(serde_json::to_value)
                     .transpose()?;
                 (
-                    crate::deploy::host_ping::grade_beacon(&report, now),
+                    crate::deploy::host_state::ping::grade_beacon(&report, now),
                     published,
                 )
             }
             Err(exc) => (
-                crate::deploy::host_ping::BeaconSignal::unreadable(exc.to_string()),
+                crate::deploy::host_state::ping::BeaconSignal::unreadable(exc.to_string()),
                 None,
             ),
         };
@@ -119,7 +119,7 @@ pub(super) async fn probe_beacon(
 pub(super) async fn collect_silences(
     store: &crate::queue::JobStorage,
     resolved: &ComputeTarget,
-    signal: &crate::deploy::host_ping::BeaconSignal,
+    signal: &crate::deploy::host_state::ping::BeaconSignal,
     blockers: &mut Vec<String>,
 ) -> (
     Vec<crate::monitor::host_silence::SilenceRecord>,
@@ -139,7 +139,7 @@ pub(super) async fn collect_silences(
     let newest_beacon_at = signal
         .reported_at
         .as_deref()
-        .and_then(crate::deploy::host_ping::parse_timestamp);
+        .and_then(crate::deploy::host_state::ping::parse_timestamp);
     if let Err(exc) = crate::monitor::host_silence::observe_beacon_age(
         store,
         &resolved.name,

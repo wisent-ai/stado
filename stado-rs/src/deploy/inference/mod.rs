@@ -1,11 +1,11 @@
 //! Narrow remote lifecycle for one digest-pinned vLLM container.
 
-mod install;
-mod observe;
-mod retire;
-mod support;
+mod lifecycle;
+pub mod process;
+pub mod routes;
+pub(super) mod support;
 
-pub use install::{install, update_reservation};
-pub use observe::{inventory, logs, probe, status, verify_completion};
-pub use retire::retire;
+pub use lifecycle::{
+    install, inventory, logs, probe, retire, status, update_reservation, verify_completion,
+};
 pub use support::startup_timeout;

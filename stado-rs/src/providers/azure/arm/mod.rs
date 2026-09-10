@@ -11,7 +11,7 @@ pub(crate) use verbs::vm_path;
 /// ARM REST base.
 pub const ARM_API_BASE: &str = "https://management.azure.com";
 /// Compute RP API version for VM resource paths. Crate-visible so the
-/// agent's self-delete ([`crate::providers::local::azure_self`]) targets
+/// agent's self-delete ([`crate::providers::local::cloud::azure_self`]) targets
 /// the same VM contract this provider creates against.
 pub(crate) const COMPUTE_API_VERSION: &str = "2023-09-01";
 pub(super) const NETWORK_API_VERSION: &str = "2023-09-01";
@@ -41,10 +41,10 @@ pub enum AzureError {
 
 /// Fresh bearer token for ARM, from the shared chain's per-scope cache.
 async fn bearer_token(http: &reqwest::Client) -> Result<String, AzureError> {
-    crate::azure_token::bearer_token(http, ARM_SCOPE, ARM_RESOURCE)
+    crate::remote::azure_token::bearer_token(http, ARM_SCOPE, ARM_RESOURCE)
         .await
         .map_err(|err| match err {
-            crate::azure_token::TokenError::Auth(msg) => AzureError::Auth(msg),
-            crate::azure_token::TokenError::Http(err) => AzureError::Http(err),
+            crate::remote::azure_token::TokenError::Auth(msg) => AzureError::Auth(msg),
+            crate::remote::azure_token::TokenError::Http(err) => AzureError::Http(err),
         })
 }

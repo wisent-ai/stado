@@ -79,14 +79,14 @@ pub(crate) async fn published_release_coordinates(
             None => {
                 let store = JobStorage::new().await?;
                 let namespaced =
-                    crate::object_store::ObjectRef::namespace_prefix("releases", &prefix)?;
+                    crate::remote::object_store::ObjectRef::namespace_prefix("releases", &prefix)?;
                 store
                     .backend()
                     .list_blobs_with_meta(&namespaced)
                     .await?
                     .into_iter()
                     .filter_map(|blob| {
-                        crate::object_store::ObjectRef::from_storage_path(&blob.name)
+                        crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)
                             .ok()
                             .map(|object| (object.key().to_string(), blob.updated))
                     })
@@ -197,7 +197,7 @@ pub(crate) async fn published_release_coordinates(
         }
         // `version_newer(a, b)` is "b is newer than a", so this asks whether
         // `left` is the newer version and puts it first.
-        if crate::release::version_newer(&right.version, &left.version) {
+        if crate::binary::release::version_newer(&right.version, &left.version) {
             std::cmp::Ordering::Less
         } else {
             std::cmp::Ordering::Greater

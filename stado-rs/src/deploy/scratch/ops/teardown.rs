@@ -7,7 +7,7 @@ use super::probe_state;
 use crate::deploy::scratch::lease::{self, ScratchLease};
 use crate::deploy::scratch::registry_out;
 use crate::deploy::scratch::remote::{self, HostLease};
-use crate::deploy::{host_channel, host_user_delete, DeployError, Runner};
+use crate::deploy::{host_channel, host_access::user_delete, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// The row a just-created lease would have had, for the rollback path.
@@ -35,8 +35,8 @@ pub async fn destroy_row(
         .lease
         .as_ref()
         .map_or_else(|| row.name.clone(), |held| held.username.clone());
-    host_user_delete::validate_deletable(&username)?;
-    let deleted = host_user_delete::delete_user(&username, target, false, runner).await;
+    user_delete::validate_deletable(&username)?;
+    let deleted = user_delete::delete_user(&username, target, false, runner).await;
     let record_path = lease::record_path(home, &row.name);
     let command = remote::forget_command(&record_path);
     let forgotten =

@@ -11,7 +11,7 @@ use super::{
     remote_timeout, select_connection_with_key, ssh_program_argv, target_is_this_host,
     UsedConnection,
 };
-use crate::deploy::{ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
+use crate::deploy::{host_access::ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 mod remote;

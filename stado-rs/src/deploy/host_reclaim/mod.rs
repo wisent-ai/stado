@@ -2,7 +2,7 @@
 //! disk space back in measured, auditable stages.
 //!
 //! The selectable vocabulary and its ordering come from
-//! `stado-rs/data/space.json`, compiled into the binary. The remote program
+//! `stado-rs/data/fleet/space.json`, compiled into the binary. The remote program
 //! contains each stage's guarded implementation, while one `stage_enabled`
 //! predicate selects declaration rows without a command-side match arm. A new
 //! target product is therefore a declaration change, not another CLI verb.

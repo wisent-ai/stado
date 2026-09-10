@@ -32,7 +32,7 @@ mod verify;
 // `deploy::host_release::catalog::objects` names `SHA256SUMS_NAME`,
 // `RELEASE_BINARIES` and `parse_sha256sums`; `cli::config_cmd`,
 // `cli::release_cmd::local::install` and `providers::local::helpers` name
-// `platform_triple_short`; `coordinator` and `providers::local::version_check`
+// `platform_triple_short`; `coordinator` and `providers::local::probe::version_check`
 // name `self_update`, `UpdateOutcome` and `reexec`;
 // `deploy::local_install::artifact` names `HttpReleaseFetcher`,
 // `ReleaseFetcher` and `sha256_hex`. `SelfUpdateError` is the error of every

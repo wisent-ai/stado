@@ -121,7 +121,7 @@ pub(super) fn validate_submission(
         return Err(SubmitError::Validation(reason.into()));
     }
     if !options.output_uri.trim().is_empty() {
-        crate::object_store::ObjectRef::parse(&options.output_uri).map_err(|error| {
+        crate::remote::object_store::ObjectRef::parse(&options.output_uri).map_err(|error| {
             SubmitError::Validation(format!(
                 "output_uri must be a provider-neutral stado:// object URI: {error}"
             ))

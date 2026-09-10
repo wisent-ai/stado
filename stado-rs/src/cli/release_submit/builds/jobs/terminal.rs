@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use crate::cli::cancel;
+use crate::cli::work::cancel;
 use crate::cli::CmdError;
 use crate::models::Job;
 use crate::queue::storage::JobStorage;
