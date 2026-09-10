@@ -1,4 +1,4 @@
-//! Reading the product's version coordinate off disk, and holding a recorded
+//! Reading the product version from a selected source, and holding a recorded
 //! catalog entry to the manifest it claims to carry.
 
 use std::path::Path;
@@ -13,10 +13,12 @@ use crate::release_pipeline::SCHEMA_VERSION;
 use super::manifest::validate_product_manifest;
 use super::predicates::{identifier, sha256};
 
-pub fn declared_version(root: &Path, source: &VersionSource) -> Result<String, String> {
-    let path = root.join(source.path());
-    let bytes = std::fs::read(&path)
-        .map_err(|error| format!("cannot read version source {}: {error}", path.display()))?;
+pub fn declared_version(
+    source: &VersionSource,
+    read: impl FnOnce(&str) -> Result<Vec<u8>, String>,
+) -> Result<String, String> {
+    let path = Path::new(source.path());
+    let bytes = read(source.path())?;
     let value = match source {
         VersionSource::Json { pointer, .. } => {
             let document: Value = serde_json::from_slice(&bytes).map_err(|error| {

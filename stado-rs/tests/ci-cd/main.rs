@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 mod skarbiec_support;
 use skarbiec_support::{SkarbiecFixture, SkarbiecItem};
 
+mod commit;
 mod fixture;
 mod resume;
 mod retry;
@@ -72,7 +73,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
     let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
@@ -180,7 +181,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     seed_stale_capacity(&storage, consumer);
 
     let submit_out = File::create(home.path().join("submit.out")).unwrap();

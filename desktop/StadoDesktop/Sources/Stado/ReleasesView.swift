@@ -79,6 +79,15 @@ struct ReleasesView: View {
             VStack(spacing:
                 0
             ) {
+                ScrollView {
+                    NativeCapabilityActions(host: scope, fleet: fleetStore,
+                        operations: NativeReleaseSourceOperations.all)
+                        .disabled(!fleetStore.isConfigured)
+                        .padding(WisentDesign.Space.x4)
+                }
+                .frame(maxHeight: tableHeight)
+                Divider()
+
                 if let problem = store.inventoryProblem {
                     WisentErrorBanner(
                         title: store.rows.isEmpty

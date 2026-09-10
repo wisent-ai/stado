@@ -1,38 +1,36 @@
 use super::*;
-pub(crate) fn wait_for_capacity(storage: &Path, home: &Path, agent: &mut Child) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let capacity = storage.join("capacity");
-        if fs::read_dir(&capacity)
-            .ok()
-            .and_then(|mut entries| entries.next())
-            .is_some()
-        {
-            return;
-        }
-        if let Some(status) = agent.try_wait().unwrap() {
-            panic!(
-                "agent exited before publishing capacity: {status}\nstdout:\n{}\nstderr:\n{}",
-                fs::read_to_string(home.join("agent.out")).unwrap_or_default(),
-                fs::read_to_string(home.join("agent.err")).unwrap_or_default()
-            );
-        }
-        assert!(Instant::now() < deadline, "agent published no capacity");
-        thread::sleep(Duration::from_millis(100));
+pub(crate) struct Running(pub(crate) Child);
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
 pub(crate) fn wait_for_claimable_capacity(storage: &Path, home: &Path, agent: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(300);
+    let since = chrono::Utc::now();
     loop {
         if let Ok(entries) = fs::read_dir(storage.join("capacity")) {
             for entry in entries.flatten() {
+                // Only the published object is readiness, not its atomic-write candidate.
+                if entry.file_name().to_string_lossy().starts_with('.')
+                    || entry.path().extension().and_then(|value| value.to_str()) != Some("json")
+                {
+                    continue;
+                }
                 let Ok(bytes) = fs::read(entry.path()) else {
                     continue;
                 };
                 if serde_json::from_slice::<Value>(&bytes)
                     .ok()
-                    .is_some_and(|capacity| capacity["accepting_jobs"] == true)
+                    .is_some_and(|capacity| {
+                        capacity["accepting_jobs"] == true
+                            && capacity["published_at"]
+                                .as_str()
+                                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                                .is_some_and(|published| published >= since)
+                    })
                 {
                     return;
                 }
@@ -159,9 +157,7 @@ pub(crate) fn wait_for_queued_release_build(
                 let Ok(job) = serde_json::from_slice::<Value>(&bytes) else {
                     continue;
                 };
-                if job["command"].as_str().is_some_and(|command| {
-                    command.ends_with("release worker --request release-request.json")
-                }) {
+                if job["state"] == "queued" && job["job_id"].is_string() {
                     return job;
                 }
             }

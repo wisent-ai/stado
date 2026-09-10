@@ -1,13 +1,5 @@
 use super::*;
 
-struct Running(Child);
-impl Drop for Running {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 #[test]
 #[ignore = "runs the real Skarbiec-backed release journey"]
 fn failed_delivery_resumes_original_source_after_checkout_changes() {

@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **Committed release sources:** `release submit --commit SHA` reads the manifest, version and source archive from one full local Git commit without changing the branch, index, staged edits or untracked files. Without `--commit`, submission still requires a clean checkout. Desktop's Releases operations expose the same source, commit, version and channel fields.
+- **Release journey selection:** native verification now selects the qualified cancelled-build test name and runs both resumption and committed-source journeys. It uses the fixture's actual Skarbiec selection rather than downloading an unused 0.1.3 binary.
 - **Desktop packaging:** build the identity helper through the executable product exported by the pinned authentication package. A fresh checkout no longer depends on an absent helper script; the signed bundle keeps the SDK's required helper path.
 - **Recorded release resumption:** `release resume RUN_ID` uses the original stored source and manifest even after the checkout changes. Running jobs keep their IDs and published builds are verified rather than rebuilt. Stado Desktop exposes the same operation from Releases with source identity, command review and complete command output.
 - **Failed delivery retries:** a failed or cancelled queue job now anchors a new idempotent delivery attempt. A stale `submitted` summary is checked against the actual terminal job, so resumption no longer repeatedly returns the same failed job or misses a later delivery's failure.

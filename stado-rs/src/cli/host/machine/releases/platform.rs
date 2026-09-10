@@ -38,30 +38,12 @@ export CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
 /usr/bin/git -C "$work/source" remote add origin {repo}
 /usr/bin/git -C "$work/source" fetch -q --depth 1 origin {revision}
 /usr/bin/git -C "$work/source" checkout -q --detach FETCH_HEAD
-case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in
-  Darwin:arm64)
-    platform=darwin-arm64
-    digest=70c925dfe22be3f3c1879f94901977c583fa03b6f367583b4c93815e4ec8bde4
-    ;;
-  Linux:x86_64)
-    platform=linux-amd64
-    digest=4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68
-    ;;
-  *) printf 'unsupported native verification platform\n' >&2; exit 1 ;;
-esac
-/usr/bin/curl -fsSLo "$work/skarbiec.tar.gz" "https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-$platform.tar.gz"
-if [ "$platform" = darwin-arm64 ]; then
-  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/shasum -a 256 -c -
-else
-  printf '%s  %s\n' "$digest" "$work/skarbiec.tar.gz" | /usr/bin/sha256sum -c -
-fi
-/bin/mkdir "$work/skarbiec"
-/usr/bin/tar -xzf "$work/skarbiec.tar.gz" -C "$work/skarbiec"
-export SKARBIEC_TEST_BIN="$work/skarbiec/skarbiec"
 cd "$work/source/stado-rs"
 cargo test --locked --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --exact --nocapture --test-threads=1
-cargo test --locked --test ci-cd a_cancelled_release_build_is_retried_under_a_new_job -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd retry::a_cancelled_release_build_is_retried_under_a_new_job -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd resume::failed_delivery_resumes_original_source_after_checkout_changes -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --test ci-cd commit::committed_submission_preserves_active_work_and_installs_the_selected_source -- --ignored --exact --nocapture --test-threads=1
 "#
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(

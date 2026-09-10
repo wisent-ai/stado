@@ -50,6 +50,8 @@ const verifyDarwin = async () => {
   assert.match(evidence.output, /verified recipe=probierz-native-build; job=.+; platform=darwin-arm64; artifact=build-output.txt/);
   assert.match(evidence.output, /verified release platform=darwin-arm64; installed=ci-release-probe 1.0.0/);
   assert.match(evidence.output, /verified cancelled release retry platform=darwin-arm64; first_job=job-[a-f0-9]+; retry_job=job-[a-f0-9]+; installed=ci-release-probe 1\.0\.0/);
+  assert.match(evidence.output, /real resume evidence:/);
+  assert.match(evidence.output, /committed source release evidence:/);
   assert.equal(evidence.output.includes('test result: FAILED'), false, evidence.output);
   return 'verified host=charless-mac-mini; platform=darwin-arm64';
 };
@@ -63,16 +65,12 @@ const linuxCommand = [
   'export TMPDIR="$PWD/.wisent-output/tmp"',
   'mkdir -p "$TMPDIR"',
   'export TMP="$TMPDIR" TEMP="$TMPDIR"',
-  'curl -fsSLo "$TMPDIR/skarbiec.tar.gz" https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-linux-amd64.tar.gz',
-  'printf "4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68  %s\\n" "$TMPDIR/skarbiec.tar.gz" | sha256sum -c -',
-  'mkdir "$TMPDIR/skarbiec-bin"',
-  'tar -xzf "$TMPDIR/skarbiec.tar.gz" -C "$TMPDIR/skarbiec-bin"',
-  'export SKARBIEC_TEST_BIN="$TMPDIR/skarbiec-bin/skarbiec"',
-  'test -x "$SKARBIEC_TEST_BIN"',
   'cd stado-rs',
   'cargo test --locked --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --exact --nocapture --test-threads=1',
   'cargo test --locked --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --exact --nocapture --test-threads=1',
-  'cargo test --locked --test ci-cd a_cancelled_release_build_is_retried_under_a_new_job -- --ignored --exact --nocapture --test-threads=1',
+  'cargo test --locked --test ci-cd retry::a_cancelled_release_build_is_retried_under_a_new_job -- --ignored --exact --nocapture --test-threads=1',
+  'cargo test --locked --test ci-cd resume::failed_delivery_resumes_original_source_after_checkout_changes -- --ignored --exact --nocapture --test-threads=1',
+  'cargo test --locked --test ci-cd commit::committed_submission_preserves_active_work_and_installs_the_selected_source -- --ignored --exact --nocapture --test-threads=1',
 ].join(' && ');
 const verifyLinux = async () => {
   const runId = `probierz-platform-${createHash('sha256').update(`${probierzRunId}:linux-amd64`).digest('hex').slice(0, 24)}`;
@@ -107,6 +105,8 @@ const verifyLinux = async () => {
     assert.match(evidence.log, /verified recipe=probierz-native-build; job=.+; platform=linux-amd64; artifact=build-output.txt/);
     assert.match(evidence.log, /verified release platform=linux-amd64; installed=ci-release-probe 1\.0\.0/);
     assert.match(evidence.log, /verified cancelled release retry platform=linux-amd64; first_job=job-[a-f0-9]+; retry_job=job-[a-f0-9]+; installed=ci-release-probe 1\.0\.0/);
+    assert.match(evidence.log, /real resume evidence:/);
+    assert.match(evidence.log, /committed source release evidence:/);
     return `verified host=${linuxWorker}; platform=linux-amd64; job=${jobId}`;
   } catch (error) {
     const output = `${error.stdout || watched?.stdout || submitted?.stdout || ''}\n${error.stderr || watched?.stderr || submitted?.stderr || ''}`.trim();
