@@ -81,6 +81,8 @@ pub fn assemble(
     let published_pressure = diag_flag(payload, DISK_PRESSURE_UNRESOLVED);
     let disk_pressure_unresolved = match published_pressure {
         Some(published) if publication_current => published,
+        // Scheduler conservatism is not a measured disk-pressure diagnosis.
+        _ if free_bytes.is_none() || low_watermark_gb.is_none() => false,
         _ => disk_cleanup::disk_pressure_unresolved(
             low_watermark_gb.map(|gb| gb * disk_cleanup::GIB),
             free_bytes.and_then(|bytes| i64::try_from(bytes).ok()),
