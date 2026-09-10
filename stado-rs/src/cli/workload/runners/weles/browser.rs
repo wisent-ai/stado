@@ -213,12 +213,22 @@ pub(crate) async fn run_weles_browser_task(
         if !outcome.result.is_null() {
             println!("result:    {}", serde_json::to_string(&outcome.result)?);
         }
+        if !outcome.stdout_tail.is_empty() {
+            println!("{}", outcome.stdout_tail.trim_end());
+        }
     }
     if outcome.ok {
         Ok(())
     } else {
+        let detail = if !outcome.stderr_tail.trim().is_empty() {
+            outcome.stderr_tail.trim()
+        } else if !outcome.stdout_tail.trim().is_empty() {
+            outcome.stdout_tail.trim()
+        } else {
+            "Weles returned no process output"
+        };
         Err(CmdError::click(format!(
-            "{}: {action} run {} did not succeed; inspect its workload status",
+            "{}: {action} run {} did not succeed: {detail}",
             resolved.name, outcome.run_id
         )))
     }

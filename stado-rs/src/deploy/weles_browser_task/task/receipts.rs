@@ -9,6 +9,8 @@ pub struct TaskOutcome {
     pub ok: bool,
     pub exit_code: Option<i64>,
     pub result: Value,
+    pub stdout_tail: String,
+    pub stderr_tail: String,
     pub profile: Option<Value>,
 }
 
@@ -21,6 +23,8 @@ impl TaskOutcome {
         object.insert("ok".to_string(), json!(self.ok));
         object.insert("exit_code".to_string(), json!(self.exit_code));
         object.insert("result".to_string(), self.result.clone());
+        object.insert("stdout_tail".to_string(), json!(self.stdout_tail));
+        object.insert("stderr_tail".to_string(), json!(self.stderr_tail));
         if let Some(profile) = &self.profile {
             object.insert("profile".to_string(), profile.clone());
         }

@@ -12,6 +12,7 @@
 //! See [`harness`] for the isolation contract. No provider, no cloud, no
 //! simulated executor: a leg that would need one is not written here.
 
+mod attach;
 mod harness;
 
 use std::fs;

@@ -56,6 +56,16 @@ pub async fn submit(
         ok: payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
         exit_code: payload.get("exitCode").and_then(Value::as_i64),
         result: payload.get("result").cloned().unwrap_or(Value::Null),
+        stdout_tail: payload
+            .get("stdout_tail")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        stderr_tail: payload
+            .get("stderr_tail")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         run_id,
         profile,
     })
