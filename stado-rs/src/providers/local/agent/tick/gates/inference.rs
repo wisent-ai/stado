@@ -14,10 +14,10 @@ use crate::providers::local::agent::capacity::snapshot::{
     diag_map, measured_capacity, publish_branch,
 };
 use crate::providers::local::agent::{Step, POLL_INTERVAL_S};
-use crate::providers::local::disk_gate;
+use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
-use crate::providers::local::version_check::{self, DriftOutcome};
+use crate::providers::local::probe::version_check::{self, DriftOutcome};
 use crate::queue::capacity::CapacitySnapshot;
 use crate::queue::JobStorage;
 use crate::sizing::Sizing;
@@ -41,7 +41,7 @@ pub(crate) async fn before_admission(
 ) -> anyhow::Result<Step<(i64, Vec<helpers::GpuCard>)>> {
     // Cleanup already ran before the immutable release check. This gate is
     // admission/diagnostics-only and has no destructive side effects.
-    let (_pre_refuse, pre_diag) = disk_gate::gate_and_maybe_evict(log_fn);
+    let (_pre_refuse, pre_diag) = gate::gate_and_maybe_evict(log_fn);
     agent_diag.extend(diag_map(&pre_diag));
     log_fn("loop: pre-drain release drift check");
     match version_check::maybe_drain_or_upgrade(!slots.is_empty(), log_fn, kind).await {

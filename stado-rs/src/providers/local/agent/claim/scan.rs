@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::constants;
 use crate::models::{activation_extraction_must_share_gpu, isoformat_utc, Job};
-use crate::providers::local::disk_gate;
+use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
 use crate::queue::capacity::CapacitySnapshot;
@@ -111,7 +111,7 @@ pub(crate) async fn claim_scan(
     );
     let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
     let raw_root = Path::new(&tmpdir).join("wisent_raw_pending");
-    let raw_free = disk_gate::free_gb(&raw_root);
+    let raw_free = gate::free_gb(&raw_root);
     let mut raw_reserved = raw_reserve
         * slots
             .iter()

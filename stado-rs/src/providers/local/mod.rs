@@ -10,22 +10,15 @@
 //! executor.
 
 pub mod agent;
-pub mod agent_heartbeat;
-pub mod agent_janitor;
-pub mod azure_self;
+pub mod cloud;
+pub mod disk;
 pub mod disk_cleanup;
-pub mod disk_gate;
 pub mod disk_staging;
-pub mod fleet_flush;
-pub mod gcp_self;
-pub mod gpu_probe;
 pub mod helpers;
-pub mod hf_rate;
 pub mod host_memory;
-pub mod scratch_sweep;
+pub mod probe;
 pub mod scratch_workdirs;
 pub mod slots;
-pub mod version_check;
 
 pub use crate::scheduler::dispatch::r#box::output::{build_job_command, verify_command};
 

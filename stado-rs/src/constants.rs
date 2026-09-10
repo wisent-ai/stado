@@ -76,7 +76,7 @@ pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 = if POLL_INTERVAL_S > CAPACITY_STA
 ///
 /// `disk_cleanup::run_cleanup_once` resolves the canonical registry and the
 /// live job ids before it takes the janitor lock. It no longer runs inside the
-/// agent tick (see [`crate::providers::local::agent_janitor`]), but unbounded
+/// agent tick (see [`crate::providers::local::agent::janitor`]), but unbounded
 /// it still wedges the pass that owns disk reclamation while holding the
 /// cross-process janitor lock, and disk pressure is what closes claiming.
 ///
@@ -117,7 +117,7 @@ pub const AGENT_TICK_STORE_BUDGET_S: u64 = CAPACITY_STALE_SECONDS / 2;
 /// the sizing reads that judge one candidate.
 ///
 /// Larger than [`AGENT_TICK_STORE_BUDGET_S`] on purpose, and only safe because
-/// [`crate::providers::local::agent_heartbeat`] keeps publishing while this
+/// [`crate::providers::local::agent::heartbeat`] keeps publishing while this
 /// half runs. Before that existed the two shared one budget and claiming lost:
 /// the listing lapsed on every tick against a saturated store while the cheap
 /// reads never came close to theirs, so the host was fresh and took no work.

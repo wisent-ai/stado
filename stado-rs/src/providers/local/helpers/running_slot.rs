@@ -11,7 +11,8 @@ use crate::config::{self, estimate_gpu_memory};
 use crate::models::activation_extraction_must_share_gpu;
 use crate::providers::local::helpers::host::ram::sum_rss_gb;
 use crate::providers::local::helpers::MODEL_RE;
-use crate::providers::local::{gpu_probe, Slot};
+use crate::providers::local::probe::gpu;
+use crate::providers::local::Slot;
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 
@@ -57,7 +58,7 @@ pub async fn slot_vram(
 /// unreadable (Python's broad `except Exception` / `max(0, ...)`).
 pub async fn slot_live_vram_gb(slot: &Slot) -> i64 {
     let Some(pid) = slot.pid else { return 0 };
-    gpu_probe::smi_job_used_gb(pid).await.max(0)
+    gpu::smi_job_used_gb(pid).await.max(0)
 }
 
 /// `kill(pid, 0)` liveness check, standing in for Python's
@@ -92,6 +93,6 @@ pub async fn slot_waiting_for_vram(
 /// fits — no hardcoded estimate. Python `_slot_rss`.
 pub async fn slot_rss(slot: &Slot) -> f64 {
     let Some(pid) = slot.pid else { return 0.0 };
-    let pids = gpu_probe::proc_tree_pids(pid).await;
+    let pids = gpu::proc_tree_pids(pid).await;
     sum_rss_gb(Path::new("/proc"), &pids)
 }

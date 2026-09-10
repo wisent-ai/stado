@@ -41,7 +41,7 @@ use crate::models::{
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 
-use super::gpu_probe;
+use crate::providers::local::probe::gpu;
 use super::helpers;
 use super::{build_job_command, verify_command, Slot};
 

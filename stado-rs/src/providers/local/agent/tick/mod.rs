@@ -82,10 +82,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     }
     let (janitor_reports, _janitor) = prepare::spawn_janitor();
     // The broadcast keeps its declared cadence while the tick works. See
-    // [`crate::providers::local::agent_heartbeat`] for why this is not a
+    // [`crate::providers::local::agent::heartbeat`] for why this is not a
     // liveness formality: it republishes only what the tick last measured, and
     // only while the tick is still starting iterations.
-    let heartbeat = crate::providers::local::agent_heartbeat::CapacityHeartbeat::new();
+    let heartbeat = crate::providers::local::agent::heartbeat::CapacityHeartbeat::new();
     let _heartbeat = heartbeat.spawn(
         store.clone(),
         consumer_id.clone(),

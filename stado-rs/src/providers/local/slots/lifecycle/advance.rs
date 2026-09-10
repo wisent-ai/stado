@@ -55,7 +55,7 @@ pub async fn advance_slot(
     let Some(exit_status) = slot.reap(log_fn)? else {
         // Still running: refresh the peak-VRAM attribution and, on the
         // heartbeat interval, the status blob + streamed log.
-        let used = gpu_probe::smi_job_used_gb(pid).await;
+        let used = gpu::smi_job_used_gb(pid).await;
         if used > slot.slot.peak_vram_gb {
             slot.slot.peak_vram_gb = used;
         }

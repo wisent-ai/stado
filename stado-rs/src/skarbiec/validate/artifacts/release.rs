@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use sha2::{Digest, Sha256};
 
-use super::super::{Client, SkarbiecError};
+use crate::skarbiec::{Client, SkarbiecError};
 
 pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
     let publishers = crate::config::release_api_publishers().map_err(|problems| {

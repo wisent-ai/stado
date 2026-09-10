@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use sha2::{Digest, Sha256};
 
-use super::super::{Client, SkarbiecError};
+use crate::skarbiec::{Client, SkarbiecError};
 
 pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {

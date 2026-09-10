@@ -80,7 +80,7 @@ pub async fn maybe_drain_or_upgrade(
             "cloud agent {kind} release drift={drift:?}; self-terminate \
              so dispatcher creates a fresh machine with the configured release"
         ));
-        super::self_terminate(kind, log_fn).await;
+        crate::providers::local::self_terminate(kind, log_fn).await;
         return DriftOutcome::SelfTerminated;
     }
     // Binary self-update downloads the exact configured release, verifies it,
