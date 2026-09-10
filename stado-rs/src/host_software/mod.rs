@@ -47,12 +47,22 @@
 //! to write `|| true` after the command — at which point the drift this exists
 //! to catch stops being noticed again, exactly as
 //! `service_converge::report_gate` argues. Every such program is still reported,
-//! still counted and still visible in `stado host software`; it just does not
-//! decide the gate. Accountability is resolved against the live registry on
+//! still counted and still visible in `stado release host-state`; it just does
+//! not decide the gate. Accountability is resolved against the live registry on
 //! every read rather than frozen into the record, for the reason
 //! [`crate::provenance`] does not store reachability: a declaration added an
 //! hour after a report must bring that program into scope, and a stored verdict
 //! would still be answering the older question.
+//!
+//! The report has exactly one writer, and it is the live read an operator
+//! already reaches for. `stado host software` wrote it until the host verbs
+//! collapsed into the release capability on 2026-09-06; that change deleted
+//! the verb and kept everything the verb fed, so for four days `release
+//! status` judged reports nothing could refresh and sent operators to a
+//! command that no longer parsed. [`refresh`] is the writer now, and
+//! `stado release host-state` calls it on every report and every apply: one
+//! command reads the host, and both the drift verdict and this report come
+//! out of that one visit.
 //!
 //! The components are the seams this file already carried: [`row`] holds the
 //! one program on one host, [`report`] holds the newest report and the store it
@@ -69,7 +79,61 @@ mod verdict;
 pub use inspect::{gather, parse};
 pub use report::{load, load_in, record, record_refusal, reported_hosts, Report};
 pub use row::HostSoftware;
-pub use verdict::{judge, Finding, ProductBinary};
+pub use verdict::{judge, Finding, ProductBinary, REFRESH_COMMAND};
+
+use serde_json::Value;
+
+use crate::deploy::{DeployError, Runner};
+use crate::targets::ComputeTarget;
+
+/// Take a fresh look at TARGET and put it on file, replacing the last one.
+///
+/// `programs` are the paths the caller binds beyond what the host lists
+/// itself: the release-control products rolled out to it, and the artefact
+/// roots the drift reporter just resolved. What comes back is the report as
+/// the store now holds it — read back rather than returned from the gather —
+/// so a caller prints exactly what `release status` will judge next.
+///
+/// A read the channel refuses is recorded as a refusal and returned as one,
+/// never raised past this function: the previous report must stop reading as
+/// current the moment the host cannot be read, and an error here would leave
+/// it on file looking fresh. Only a store that cannot be written is an error,
+/// because then nothing about the look survived.
+pub async fn refresh(
+    target: &ComputeTarget,
+    programs: &[String],
+    runner: &Runner,
+) -> Result<Report, DeployError> {
+    match gather(target, programs, runner).await {
+        Ok((rows, scripts)) => record(&target.name, &rows, scripts),
+        Err(error) => record_refusal(&target.name, &error.0),
+    }
+    .map_err(|error| {
+        DeployError(format!(
+            "{}: the software report could not be written: {error}",
+            target.name
+        ))
+    })?;
+    Ok(load(&target.name))
+}
+
+/// The release-control products rolled out to HOST, as the concrete files a
+/// software report about that host has to name.
+///
+/// A registry without release control, or one whose control block does not
+/// parse, rolls nothing out, and that is an empty list rather than an error:
+/// the report is still owed for everything else the host runs.
+pub fn products_rolled_out_to(document: &Value, host: &str) -> Vec<ProductBinary> {
+    let Ok(Some(control)) = crate::release_control::control(document) else {
+        return Vec::new();
+    };
+    control
+        .products
+        .values()
+        .filter(|policy| policy.targets.contains_key(host))
+        .map(ProductBinary::of)
+        .collect()
+}
 
 /// The bytes came out of a release Stado published and verified.
 pub const RELEASE: &str = "release";

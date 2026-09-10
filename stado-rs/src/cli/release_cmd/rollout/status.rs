@@ -4,36 +4,10 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::release_control::{self, ProductReleasePolicy};
+use crate::host_software::ProductBinary;
+use crate::release_control;
 
 use super::ReleaseStatusArgs;
-
-/// The binary one release policy installs on a host, as the concrete file the
-/// host's software report names.
-///
-/// The rollout's own artefact lives under the product install root, so it is in
-/// no `managed_versions` entry and in no `$HOME/.stado/bin` listing. A status
-/// command that did not resolve this path could compare the desired version
-/// against nothing at all — which is what `observed=unreported` was.
-fn product_binary(policy: &ProductReleasePolicy) -> crate::host_software::ProductBinary {
-    let path = format!(
-        "{}/{}",
-        policy.install_root.trim_end_matches('/'),
-        policy.binary.trim_start_matches('/')
-    );
-    crate::host_software::ProductBinary {
-        name: path
-            .rsplit('/')
-            .next()
-            .unwrap_or(policy.binary.as_str())
-            .to_string(),
-        path,
-        desired: policy
-            .desired
-            .as_ref()
-            .map(|desired| desired.version.clone()),
-    }
-}
 
 /// `stado release status [--product NAME] [--json]` — desired against observed,
 /// and now against what the host actually runs.
@@ -88,7 +62,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                 .map(|entry| entry.managed_versions.clone())
                 .unwrap_or_default();
             let finding =
-                crate::host_software::judge(&software, &declared, Some(&product_binary(policy)));
+                crate::host_software::judge(&software, &declared, Some(&ProductBinary::of(policy)));
             if finding.failed {
                 failures = failures.saturating_add(1);
             }

@@ -19,6 +19,7 @@
 
 mod fixture;
 mod leased;
+mod software;
 
 use fixture::{
     installed_binary, installed_version, report, reported_binary, stderr, Fixture, BINARY,
