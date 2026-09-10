@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 // ---------------------------------------------------------------------------
 // registry.json — service directory and placement profiles

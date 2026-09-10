@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 pub(crate) fn validate_disk_cleanup(
     value: &Value,

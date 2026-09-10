@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 /// Whether this read is answering from a local filesystem store.
 ///

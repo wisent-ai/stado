@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 /// Validate a candidate document against the one it would replace, scoping an
 /// `inference` failure to writes that actually touch `inference`.

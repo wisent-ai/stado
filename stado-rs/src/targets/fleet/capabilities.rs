@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 // ---------------------------------------------------------------------------
 // capabilities.py — provider-neutral workload admission

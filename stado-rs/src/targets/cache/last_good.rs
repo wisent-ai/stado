@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 // ---------------------------------------------------------------------------
 // last-known-good cache — what a reader answers with when the store is down

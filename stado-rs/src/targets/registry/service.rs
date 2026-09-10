@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 /// One directory entry: where a service currently runs, and who may call it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

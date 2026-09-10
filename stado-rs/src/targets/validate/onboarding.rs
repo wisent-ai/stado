@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 pub(crate) fn validate_service_onboarding(
     target: &Map<String, Value>,

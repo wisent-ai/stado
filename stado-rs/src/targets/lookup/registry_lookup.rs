@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 impl Registry {
     /// Return the named target, or None if not in the registry.

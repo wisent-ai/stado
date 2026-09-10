@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 /// The stable code a machine caller branches on when the service directory it
 /// is holding is older than the one the authority published.

@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 // ---------------------------------------------------------------------------
 // validation.py — hostname normalization

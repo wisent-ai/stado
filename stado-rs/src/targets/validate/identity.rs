@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 fn validate_ssh_fallbacks(
     target: &Map<String, Value>,

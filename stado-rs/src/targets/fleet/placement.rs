@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 /// A state file a placement profile must carry with the services it moves.
 /// `required` state that is absent aborts the move: half-migrated state is

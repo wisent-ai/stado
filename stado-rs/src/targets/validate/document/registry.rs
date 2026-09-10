@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 /// Validate a registry-v2 document without modifying it. Python returns the
 /// input dict; here the borrowed input simply remains valid on `Ok(())`.

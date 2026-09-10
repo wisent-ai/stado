@@ -1,4 +1,4 @@
-use super::*;
+use crate::targets::*;
 
 // ---------------------------------------------------------------------------
 // build versus registry — a build that refuses the document being published
