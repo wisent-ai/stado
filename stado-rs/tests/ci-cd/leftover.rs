@@ -1,5 +1,5 @@
 //! A delivery job run again in a work tree its previous attempt already
-//! extracted into replaces that tree and still delivers.
+//! extracted into leaves that tree alone and delivers from one of its own.
 
 use super::*;
 
@@ -52,7 +52,7 @@ fn plant_leftover_source_tree(submit: &mut Child, home: &Path, storage: &Path) -
 
 #[test]
 #[ignore = "runs the real Skarbiec-backed release journey"]
-fn a_delivery_rerun_in_its_own_work_tree_replaces_the_previous_source_tree() {
+fn a_delivery_rerun_in_its_own_work_tree_delivers_from_a_fresh_source_tree() {
     let platform = release_platform();
     let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
     fs::create_dir_all(&run_root).unwrap();
@@ -146,20 +146,31 @@ fn a_delivery_rerun_in_its_own_work_tree_replaces_the_previous_source_tree() {
         .path()
         .join(".stado/work/jobs")
         .join(format!("wc-{job_id}"));
-    assert!(
-        work.join("delivery-source/Cargo.toml").is_file(),
-        "the delivery did not extract its source over the leftover tree"
+    // The attempt extracted the verified source into a tree of its own and
+    // never opened the leftover one.
+    let own_trees: Vec<PathBuf> = fs::read_dir(&work)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("delivery-source-"))
+        })
+        .collect();
+    assert_eq!(
+        own_trees.len(),
+        1,
+        "the attempt did not extract into exactly one tree of its own: {own_trees:?}"
     );
     assert!(
-        !work.join("delivery-source/stale").exists(),
-        "the previous attempt's file survived inside the replaced tree"
+        own_trees[0].join("Cargo.toml").is_file(),
+        "the attempt's own tree carries no source: {:?}",
+        own_trees[0]
     );
-    let log =
-        fs::read_to_string(storage.join(format!("status/{job_id}/output/command_output.log")))
-            .unwrap_or_default();
     assert!(
-        log.contains("replacing the source tree a previous attempt left"),
-        "the worker did not say it replaced the leftover tree:\n{log}"
+        work.join("delivery-source/stale").is_file(),
+        "the leftover tree was touched"
     );
     println!(
         "verified leftover delivery tree platform={platform}; evidence retained at {}",
