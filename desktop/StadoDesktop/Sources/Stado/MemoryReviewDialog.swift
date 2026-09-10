@@ -24,7 +24,7 @@ struct MemoryReviewDialog: View {
             title: "Write memory_reclaim on \(request.target)?",
             lines: request.patch.reviewLines + [
                 "The write is a compare-and-swap on the canonical registry. If the fleet's registry moved since generation \(generation ?? "unknown") was read, the dashboard refuses the write and nothing changes.",
-                "Arming or disarming an individual repair is not part of this write. The repairs stay exactly as the registry declares them.",
+                "The complete policy is validated before any write. Only the repairs and subjects in the resulting declaration may be used by the host.",
             ],
             reasonCode: request.patch.authorizesRepairs
                 ? "enforce authorizes declared repairs on this host"

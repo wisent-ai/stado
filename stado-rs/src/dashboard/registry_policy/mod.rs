@@ -47,19 +47,18 @@ const POLICY_FIELDS: [&str; 8] = [
 
 /// Memory-policy fields an operator client may read and write.
 ///
-/// The same rule as [`POLICY_FIELDS`], and the same omission: `repairs` is
-/// absent from both sides. A repair names units and processes on a host, and
-/// arming one — `graphical_session` above all — is a registry declaration an
-/// operator writes deliberately through `stado space watermark`, not a
-/// control a screen offers beside a slider.
-pub(super) const MEMORY_POLICY_FIELDS: [&str; 7] = [
+/// Memory repair declarations are editable on the same terms as CLI writes.
+/// The complete candidate still passes the canonical registry validator.
+pub(super) const MEMORY_POLICY_FIELDS: [&str; 9] = [
     "check_interval_seconds",
     "high_swap_used_pct",
     "low_free_mb",
+    "target_free_mb",
     "max_pass_seconds",
     "max_repairs_per_pass",
     "mode",
     "refuse_placement",
+    "repairs",
 ];
 
 /// Authenticate one registry-API client bearer for `action`.

@@ -5,10 +5,14 @@ import Foundation
 ///
 /// Seeded from the state the screen read, so an unedited draft produces no
 /// patch at all and the review action stays disabled.
-struct MemoryPolicyDraft: Equatable, Sendable {
+struct MemoryPolicyDraft: Sendable {
     var mode: MemoryReclaimMode?
     var numbers: [MemoryReclaimNumericField: String]
     var refusePlacement: Bool
+    var repairsText: String {
+        didSet { repairsDocument = Self.parseRepairs(repairsText) }
+    }
+    private(set) var repairsDocument: StorageReconciliationJSON?
 
     init(state: MemoryPolicyState) {
         mode = state.mode
@@ -18,10 +22,29 @@ struct MemoryPolicyDraft: Equatable, Sendable {
             }
         )
         refusePlacement = state.refusePlacement
+        let document = state.repairsDocument
+        repairsText = document.prettyJSON
+        repairsDocument = document
     }
 
     func text(for field: MemoryReclaimNumericField) -> String {
         numbers[field] ?? ""
+    }
+
+    private static func parseRepairs(_ text: String) -> StorageReconciliationJSON? {
+        guard let value = try? JSONDecoder().decode(StorageReconciliationJSON.self, from: Data(text.utf8)),
+              value.objectValue != nil else { return nil }
+        return value
+    }
+
+    var validationError: String? {
+        if repairsDocument == nil { return "Repairs must be a JSON object." }
+        for field in MemoryReclaimNumericField.allCases {
+            if !text(for: field).trimmingCharacters(in: .whitespaces).isEmpty, value(for: field) == nil {
+                return "\(field.title) must be a positive whole number within its supported range."
+            }
+        }
+        return nil
     }
 
     /// The typed value, when it is a positive whole number. A percentage is
@@ -40,11 +63,9 @@ struct MemoryPolicyDraft: Equatable, Sendable {
 /// changed, in one canonical order, so the review dialog shows the bytes that
 /// will be posted rather than a paraphrase of them.
 ///
-/// Arming or disarming an individual repair is deliberately absent. A repair
-/// authorizes irreversible work on a named unit or a person's session
-/// process, and this console has no place to show what that subject is doing
-/// at the moment it is signalled; the registry declares them.
-struct MemoryReclaimPatch: Equatable, Sendable {
+/// Repair declarations are included in the reviewed patch and validated by the
+/// same backend as CLI changes; this screen does not invent another policy.
+struct MemoryReclaimPatch: Sendable {
     /// The upper bound of a swap-utilisation watermark.
     static let wholePercent = 100
     /// The registry key this patch is written under.
@@ -53,10 +74,15 @@ struct MemoryReclaimPatch: Equatable, Sendable {
     var mode: MemoryReclaimMode?
     var numbers: [MemoryReclaimNumericField: Int]
     var refusePlacement: Bool?
+    var repairs: StorageReconciliationJSON?
+    let authorizesRepairs: Bool
 
     /// The patch a draft represents against the state it was seeded from, or
     /// `nil` when the operator has changed nothing.
     init?(draft: MemoryPolicyDraft, current: MemoryPolicyState) {
+        guard draft.validationError == nil else { return nil }
+        guard let repairDocument = draft.repairsDocument else { return nil }
+        let repairs = repairDocument.prettyJSON == current.repairsDocument.prettyJSON ? nil : repairDocument
         var mode: MemoryReclaimMode?
         if let drafted = draft.mode, drafted != current.mode {
             mode = drafted
@@ -69,10 +95,12 @@ struct MemoryReclaimPatch: Equatable, Sendable {
         let refusal: Bool? = draft.refusePlacement == current.refusePlacement
             ? nil
             : draft.refusePlacement
-        guard mode != nil || !numbers.isEmpty || refusal != nil else { return nil }
+        guard mode != nil || !numbers.isEmpty || refusal != nil || repairs != nil else { return nil }
         self.mode = mode
         self.numbers = numbers
         refusePlacement = refusal
+        self.repairs = repairs
+        authorizesRepairs = draft.mode == .enforce
     }
 
     /// Mode first, then the watermarks in the order a pass applies them, then
@@ -90,6 +118,7 @@ struct MemoryReclaimPatch: Equatable, Sendable {
         if let refusePlacement {
             entries.append((MemoryPatchKey.refusePlacement, refusePlacement ? "true" : "false"))
         }
+        if let repairs { entries.append(("repairs", repairs.prettyJSON)) }
         return entries
     }
 
@@ -105,6 +134,7 @@ struct MemoryReclaimPatch: Equatable, Sendable {
         if let refusePlacement {
             fields[MemoryPatchKey.refusePlacement] = refusePlacement
         }
+        if let repairs { fields["repairs"] = repairs.foundationValue }
         return fields
     }
 
@@ -137,11 +167,12 @@ struct MemoryReclaimPatch: Equatable, Sendable {
                     : "refuse_placement → false: the host keeps accepting jobs while it is over its watermark, and the pass only reports and repairs."
             )
         }
+        if let repairs {
+            lines.append("Replace the declared memory repairs with: \(repairs.prettyJSON)")
+        }
         return lines
     }
 
-    /// Whether this patch can start irreversible work on the host.
-    var authorizesRepairs: Bool { mode == .enforce }
 }
 
 /// The two patch keys that are not a numeric field's own name.

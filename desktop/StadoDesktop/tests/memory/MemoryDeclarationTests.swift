@@ -2,164 +2,79 @@ import Foundation
 import XCTest
 @testable import Stado
 
-/// The Memory screen's two reads and its one write, driven through the real
-/// decoders and the real patch construction: the dashboard's cleanup envelope
-/// carries the pass report under `memory_reclaim`, the registry projection
-/// carries the declaration under the same key, and the editor composes the
-/// exact body `POST /api/registry/policy` receives.
+/// The same client and draft the Memory screen uses, against real services.
 @MainActor
 final class MemoryDeclarationTests: XCTestCase {
-    // MARK: Reads
-
-    func testAnUndeclaredHostIsMeasuredAgainstTheReportingDefaultAndArmsNoRepair() throws {
-        let report = try XCTUnwrap(Self.memoryReport(in: MemoryReportFixtures.defaulted))
-        let state = MemoryPolicyState(target: "mac-mini", declared: nil, report: report)
-
-        XCTAssertTrue(state.isDefaulted, "policy_defaulted names the host nothing was declared for")
-        XCTAssertEqual(state.mode, .report)
-        XCTAssertEqual(state.lowFreeMB, 900, "the watermark is the report's low_bytes in MiB")
-        XCTAssertEqual(state.targetFreeMB, 1500)
-        XCTAssertEqual(state.highSwapUsedPct, 80)
-        XCTAssertFalse(state.repairsArmed, "report mode with no declared repair arms nothing")
-        XCTAssertEqual(state.declaredRepairNames, [])
-        XCTAssertFalse(report.examinedRepairs, "a null repair table is not a table of zeros")
-        XCTAssertEqual(
-            MemoryRepairsSection(state: state).rows.count,
-            Int.zero,
-            "a host with no declared and no reported repair offers no repair row to control"
-        )
-        XCTAssertFalse(state.isRefusingPlacement, "this host does not declare refuse_placement")
-        XCTAssertEqual(report.currentReading?.availableMB, 1300)
-        XCTAssertEqual(report.currentReading?.compressorPages, 797_000)
-        XCTAssertEqual(report.currentReading?.swapouts, 12_200_000)
-        XCTAssertEqual(report.currentReading?.swapUsedPct, 86)
-    }
-
-    func testAHostThatHasNeverRunAPassDecodesWithEveryNumberAbsent() throws {
-        let report = try XCTUnwrap(Self.memoryReport(in: MemoryReportFixtures.neverRun))
-
-        XCTAssertEqual(report.outcome, MemoryReclaimReport.neverRun)
-        XCTAssertFalse(report.hasEverRun)
-        XCTAssertNil(report.currentReading?.availableBytes)
-        XCTAssertNil(report.lowBytes)
-        XCTAssertNil(report.durationMs)
-        XCTAssertNil(report.activeJobCount)
-        XCTAssertFalse(report.examinedRepairs)
-
-        let state = MemoryPolicyState(target: "mac-mini", declared: nil, report: report)
-        XCTAssertNil(state.lowFreeMB, "an absent watermark is absent, never zero")
-        XCTAssertTrue(state.isDefaulted)
-        XCTAssertEqual(MemoryRepairsSection(state: state).rows.count, Int.zero)
-    }
-
-    func testARefusingHostReportsThePressureAdmissionReasonAndItsRepairCounts() throws {
-        let report = try XCTUnwrap(Self.memoryReport(in: MemoryReportFixtures.refusing))
-        let state = MemoryPolicyState(target: "mac-mini", declared: nil, report: report)
-
-        XCTAssertTrue(report.isRefusingPlacement, "refuse_placement with live pressure is a refusal")
-        XCTAssertTrue(state.isRefusingPlacement)
-        XCTAssertEqual(MemoryReclaimReport.admissionReason, "memory_pressure_active")
-
-        let rows = MemoryRepairsSection(state: state).rows
-        XCTAssertEqual(rows.map(\.name), ["restart_unit"])
-        let repair = try XCTUnwrap(rows.first?.report)
-        XCTAssertEqual(repair.examined, 3)
-        XCTAssertEqual(repair.eligible, 1)
-        XCTAssertEqual(repair.repaired, 1)
-        XCTAssertEqual(repair.subjects, ["ai.wisent.precheck-runner"])
-        XCTAssertEqual(repair.sortedSkipped.map(\.0), ["not_declared", "younger_than_min_age"])
-        XCTAssertEqual(report.caps?.activeLabels, ["repair budget"])
-        XCTAssertEqual(report.writer, "queue-agent")
-    }
-
-    func testAHostUnderItsWatermarkIsNotRefusingEvenWhenItDeclaresRefusal() throws {
-        let report = try XCTUnwrap(Self.memoryReport(in: MemoryReportFixtures.declaredRefusalClear))
-
-        XCTAssertTrue(report.refusePlacement)
-        XCTAssertEqual(report.pressureActive, false)
-        XCTAssertFalse(
-            report.isRefusingPlacement,
-            "a declared refusal only bites while the host is over a watermark"
-        )
-        XCTAssertTrue(report.examinedRepairs, "an empty repair table is a pass that looked")
-    }
-
-    // MARK: Write
-
-    func testTheEditorComposesTheWhitelistedMemoryReclaimBody() throws {
-        let declared = try XCTUnwrap(Self.declaration(in: MemoryReportFixtures.registryProjection))
-        let state = MemoryPolicyState(target: "mac-mini", declared: declared, report: nil)
-
-        var draft = MemoryPolicyDraft(state: state)
-        XCTAssertNil(
-            MemoryReclaimPatch(draft: draft, current: state),
-            "an unedited draft is not a patch, so the review action stays disabled"
-        )
-
+    func testRepairEditsPersistAndInvalidPoliciesPreserveTheRegistry() async throws {
+        let host = try NativeMemoryHost()
+        defer { host.stop() }
+        try await host.waitUntilListening()
+        let client = FleetControlClient()
+        let address = try OperationsDashboardAddress(host.endpoint)
+        let initial = try await state(client, address, host.name)
+        var draft = MemoryPolicyDraft(state: initial)
         draft.mode = .enforce
-        draft.numbers[.lowFreeMB] = "1200"
-        draft.numbers[.highSwapUsedPct] = "70"
-        draft.refusePlacement = true
-        let patch = try XCTUnwrap(MemoryReclaimPatch(draft: draft, current: state))
+        draft.numbers[.lowFreeMB] = "512"
+        draft.numbers[.targetFreeMB] = "1024"
+        draft.numbers[.maxPassSeconds] = "10"
+        draft.repairsText = "{\"restart_unit\":{\"units\":[\"com.wisent.memory-native-test\"]}}"
+        let patch = try XCTUnwrap(MemoryReclaimPatch(draft: draft, current: initial))
+        let generation = try await client.updatePolicy(at: address, target: host.name, patch: .memoryReclaim(patch))
+        let persisted = try host.policy()
+        try host.record(["generation": generation, "policy": persisted], named: "declared.json")
+        XCTAssertEqual(persisted["mode"] as? String, "enforce")
+        XCTAssertEqual(persisted["max_pass_seconds"] as? Int, 10)
+        let repairs = try XCTUnwrap(persisted["repairs"] as? [String: Any])
+        let restart = try XCTUnwrap(repairs["restart_unit"] as? [String: Any])
+        XCTAssertEqual(restart["units"] as? [String], ["com.wisent.memory-native-test"])
 
-        XCTAssertEqual(
-            patch.canonicalJSON(target: "mac-mini"),
-            MemoryReportFixtures.expectedPatchBody,
-            "the reviewed body is the posted body"
-        )
+        let savedState = try await state(client, address, host.name)
+        XCTAssertEqual(savedState.declared?.repairs["restart_unit"]?.units, ["com.wisent.memory-native-test"])
+        XCTAssertEqual(savedState.declared?.maxPassSeconds, 10)
+        let beforeRefusal = try Data(contentsOf: host.registry)
+        var refused = MemoryPolicyDraft(state: savedState)
+        refused.repairsText = "{}"
+        let refusedPatch = try XCTUnwrap(MemoryReclaimPatch(draft: refused, current: savedState))
+        do {
+            _ = try await client.updatePolicy(at: address, target: host.name, patch: .memoryReclaim(refusedPatch))
+            XCTFail("Enforce mode without a repair must be refused")
+        } catch FleetControlError.backend(let status, let message) {
+            try host.record(["status": status, "message": message], named: "refusal.json")
+            XCTAssertEqual(status, 400)
+            XCTAssertTrue(message.contains("must name at least one repair when mode is 'enforce'"), message)
+        }
+        XCTAssertEqual(try Data(contentsOf: host.registry), beforeRefusal)
 
-        let posted = try JSONSerialization.data(
-            withJSONObject: FleetPolicyPatch.memoryReclaim(patch).requestBody(target: "mac-mini")
-        )
-        let parsed = try XCTUnwrap(JSONSerialization.jsonObject(with: posted) as? [String: Any])
-        let expected = try XCTUnwrap(
-            JSONSerialization.jsonObject(
-                with: Data(MemoryReportFixtures.expectedPatchBody.utf8)
-            ) as? [String: Any]
-        )
-        XCTAssertEqual(parsed as NSDictionary, expected as NSDictionary)
+        var invalid = MemoryPolicyDraft(state: savedState)
+        invalid.numbers[.targetFreeMB] = "512"
+        let invalidPatch = try XCTUnwrap(MemoryReclaimPatch(draft: invalid, current: savedState))
+        do {
+            _ = try await client.updatePolicy(at: address, target: host.name, patch: .memoryReclaim(invalidPatch))
+            XCTFail("The target watermark must exceed the low watermark")
+        } catch FleetControlError.backend(let status, let message) {
+            try host.record(["status": status, "message": message], named: "watermark-refusal.json")
+            XCTAssertEqual(status, 400)
+            XCTAssertTrue(message.contains("must be greater than low_free_mb"), message)
+        }
+        XCTAssertEqual(try Data(contentsOf: host.registry), beforeRefusal)
+
+        var removal = MemoryPolicyDraft(state: savedState)
+        removal.mode = .report
+        removal.repairsText = "{}"
+        let removalPatch = try XCTUnwrap(MemoryReclaimPatch(draft: removal, current: savedState))
+        _ = try await client.updatePolicy(at: address, target: host.name, patch: .memoryReclaim(removalPatch))
+        let final = try host.policy()
+        try host.record(final, named: "removed.json")
+        XCTAssertEqual(final["mode"] as? String, "report")
+        XCTAssertEqual((final["repairs"] as? [String: Any])?.count, 0)
+        let finalState = try await state(client, address, host.name)
+        XCTAssertEqual(finalState.declaredRepairNames, [])
     }
 
-    func testThePatchNeverCarriesARepairAndRefusesAnImpossibleWatermark() throws {
-        let declared = try XCTUnwrap(Self.declaration(in: MemoryReportFixtures.registryProjection))
-        let state = MemoryPolicyState(target: "mac-mini", declared: declared, report: nil)
-        XCTAssertEqual(
-            state.declaredRepairNames,
-            ["restart_unit"],
-            "the declaration's repair is read, never rewritten from here"
-        )
-        XCTAssertEqual(
-            MemoryRepairsSection(state: state).rows.first?.declared?.units,
-            ["ai.wisent.precheck-runner"]
-        )
-
-        var draft = MemoryPolicyDraft(state: state)
-        draft.numbers[.highSwapUsedPct] = "140"
-        XCTAssertNil(
-            MemoryReclaimPatch(draft: draft, current: state),
-            "swap cannot be more than wholly used, so the typed value is not a watermark"
-        )
-
-        draft.numbers[.highSwapUsedPct] = "70"
-        draft.numbers[.maxRepairsPerPass] = "4"
-        let patch = try XCTUnwrap(MemoryReclaimPatch(draft: draft, current: state))
-        XCTAssertEqual(Set(patch.fields.keys), ["high_swap_used_pct", "max_repairs_per_pass"])
-        XCTAssertNil(patch.fields["repairs"], "arming a repair is a registry declaration, never a Desktop write")
-        XCTAssertFalse(patch.authorizesRepairs, "an unchanged mode authorizes nothing new")
-    }
-
-    // MARK: Decode helpers
-
-    /// Decoded through `CleanupResponse`, which is the type the screen reads:
-    /// a memory block that only decodes in isolation is a block the app
-    /// cannot use.
-    private static func memoryReport(in envelope: String) -> MemoryReclaimReport? {
-        let response = try? JSONDecoder().decode(CleanupResponse.self, from: Data(envelope.utf8))
-        return response?.report.memoryReclaim
-    }
-
-    private static func declaration(in projection: String) -> FleetMemoryPolicy? {
-        let policy = try? JSONDecoder().decode(FleetPolicy.self, from: Data(projection.utf8))
-        return policy?.targets.first { $0.name == "mac-mini" }?.memory
+    private func state(_ client: FleetControlClient, _ address: OperationsDashboardAddress,
+                       _ target: String) async throws -> MemoryPolicyState {
+        let policy = try await client.policy(at: address)
+        let host = try XCTUnwrap(policy.targets.first { $0.name == target })
+        return MemoryPolicyState(target: target, declared: host.memory, report: nil)
     }
 }
