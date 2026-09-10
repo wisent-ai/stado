@@ -114,7 +114,7 @@ extension HostVaultBearerSheet {
                     kind: .primary
                 ) {
                     Task {
-                        await store.submit(request)
+                        await store.submit(request, fleet: fleet, expectedSource: sourceGeneration)
                         reviewing = false
                     }
                 },

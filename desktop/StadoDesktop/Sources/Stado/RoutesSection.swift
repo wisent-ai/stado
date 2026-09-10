@@ -46,38 +46,41 @@ final class RoutesStore: ObservableObject {
     @Published private(set) var report: RouteDirectoryReport?
     @Published private(set) var isLoading = false
     @Published private(set) var problem: String?
+    @Published private(set) var receipt: OperatorCommandResult?
+    private var generation = 0
 
-    private let cli: StadoCLI
-
-    init(cli: StadoCLI = StadoCLI()) {
-        self.cli = cli
-    }
-
-    func load() async {
-        guard !isLoading else { return }
-        isLoading = true
+    func load(fleet: FleetControlStore) async {
+        generation += 1
+        let current = generation
+        let source = fleet.requestGeneration
+        report = nil
+        receipt = nil
         problem = nil
-        do {
-            report = try await cli.json(
-                RouteDirectoryReport.self,
-                arguments: ["route", "list", "--json"]
-            )
-        } catch {
-            report = nil
-            if let localized = error as? LocalizedError,
-               let description = localized.errorDescription {
-                problem = description
-            } else {
-                problem = error.localizedDescription
-            }
+        guard let address = fleet.address else {
+            problem = "No Stado API is configured."
+            isLoading = false
+            return
         }
-        isLoading = false
+        isLoading = true
+        defer { if current == generation { isLoading = false } }
+        do {
+            let result = try await fleet.client.run(arguments: ["route", "list", "--json"],
+                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken)
+            guard current == generation, source == fleet.requestGeneration else { return }
+            receipt = result
+            guard result.ok else { problem = result.message; return }
+            report = try JSONDecoder().decode(RouteDirectoryReport.self, from: Data(result.standardOutput.utf8))
+        } catch {
+            guard current == generation, source == fleet.requestGeneration else { return }
+            problem = error.localizedDescription
+        }
     }
 }
 
 struct RoutesSection: View {
     @ObservedObject var store: RoutesStore
     let selectedHost: String
+    @ObservedObject var fleet: FleetControlStore
 
     var body: some View {
         WisentSectionBox(
@@ -127,9 +130,16 @@ struct RoutesSection: View {
                     .font(WisentTypeScale.body())
                     .foregroundStyle(WisentDesign.secondary)
             }
+            NativeCapabilityActions(host: selectedHost, fleet: fleet, operations: NativeRouteOperations.all)
+            if let receipt = store.receipt {
+                DisclosureGroup("Complete directory read receipt") {
+                    Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    Text(receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                }
+            }
         }
-        .task {
-            await store.load()
+        .task(id: "\(selectedHost)|\(fleet.requestGeneration)") {
+            await store.load(fleet: fleet)
         }
     }
 

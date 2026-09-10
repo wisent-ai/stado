@@ -27,8 +27,9 @@ struct HostReclaimTarget: Identifiable {
 /// The selected registry host whose live vault will mint or register a bearer.
 struct HostVaultBearerTarget: Identifiable {
     let host: String
+    let sourceGeneration: Int
 
-    var id: String { host }
+    var id: String { "\(host)|\(sourceGeneration)" }
 }
 
 /// The registry host whose ordered control routes are being edited.
@@ -156,10 +157,6 @@ struct HostsView: View {
             guard let host = selection else { return }
             await forwardStore.load(host: host)
         }
-        .task(id: selection) {
-            guard let host = selection else { return }
-            await vaultStore.load(host: host)
-        }
         .onChange(of: selection) { _, _ in
             tailscaleLogSource = nil
         }
@@ -181,7 +178,9 @@ struct HostsView: View {
         .sheet(item: $vaultBearerTarget) { target in
             HostVaultBearerSheet(
                 host: target.host,
-                store: vaultBearerStore
+                store: vaultBearerStore,
+                fleet: fleetStore,
+                sourceGeneration: target.sourceGeneration
             )
         }
         .sheet(item: $reclaimTarget) { target in

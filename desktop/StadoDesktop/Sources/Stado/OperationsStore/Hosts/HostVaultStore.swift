@@ -1,6 +1,5 @@
 import Combine
 import Foundation
-import WisentDesignSystem
 
 /// Which vault a selected host's credential operations resolve to, read
 /// through `stado credentials vaults --host <target>`.
@@ -17,37 +16,48 @@ final class HostVaultStore: ObservableObject {
     @Published private(set) var problem: String?
     @Published private(set) var isLoading = false
 
-    private let cli: StadoCLI
-
-    init(cli: StadoCLI = StadoCLI()) {
-        self.cli = cli
-    }
+    @Published private(set) var receipt: OperatorCommandResult?
+    private var generation = 0
 
     nonisolated static func arguments(host: String) -> [String] {
         ["credentials", "vaults", "--host", host, "--json"]
     }
 
-    func load(host name: String) async {
+    func load(host name: String, fleet: FleetControlStore) async {
+        generation += 1
+        let current = generation
+        let source = fleet.requestGeneration
         host = name
-        isLoading = true
+        vaults = []
+        authority = nil
+        receipt = nil
         problem = nil
+        guard let address = fleet.address else {
+            isLoading = false
+            problem = "No Stado API is configured."
+            return
+        }
+        isLoading = true
+        defer { if current == generation { isLoading = false } }
         do {
-            let report = try await cli.json(
-                VaultReport.self,
-                arguments: Self.arguments(host: name),
-                timeoutSeconds:
-                    300
-            )
-            let entry = report.hosts.first { $0.target == name } ?? report.hosts.first
-            vaults = entry?.vaults ?? []
-            authority = entry?.authority
-            problem = entry?.error
+            let result = try await fleet.client.run(arguments: Self.arguments(host: name),
+                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken,
+                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+            guard current == generation, source == fleet.requestGeneration else { return }
+            receipt = result
+            guard result.ok else { problem = result.message; return }
+            let report = try JSONDecoder().decode(VaultReport.self, from: Data(result.standardOutput.utf8))
+            guard let entry = report.hosts.first(where: { $0.target == name }) else {
+                problem = "The vault report did not identify \(name)."
+                return
+            }
+            vaults = entry.vaults ?? []
+            authority = entry.authority
+            problem = entry.error
         } catch {
-            vaults = []
-            authority = nil
+            guard current == generation, source == fleet.requestGeneration else { return }
             problem = Self.message(for: error)
         }
-        isLoading = false
     }
 
     private nonisolated static func message(for error: Error) -> String {
