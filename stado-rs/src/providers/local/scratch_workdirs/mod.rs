@@ -1,6 +1,8 @@
 //! Explicit removal of every directory immediately below the local scratch root.
-//! Loose files and links at that root stay; links inside a removed tree are
-//! unlinked, never followed. This is an operator command, not a periodic sweeper.
+//! Loose files and links at that root stay unless `include_files` is set, which
+//! is what an operator asks for when the root itself must be empty; links are
+//! unlinked, never followed. This is an operator command, not a periodic
+//! sweeper.
 
 mod filesystem;
 
@@ -44,6 +46,13 @@ pub struct ScratchReport {
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,
     pub stray_files: usize,
+    /// Loose files and links removed by an `include_files` pass. A pass
+    /// without it leaves them and reports the census below instead.
+    pub removed_files: Vec<ScratchEntry>,
+    pub apparent_bytes_files_removed: i64,
+    /// Entries still at the root after an `include_files` pass, so an
+    /// incomplete sweep cannot report success.
+    pub remaining_files: Vec<PathBuf>,
     pub bytes_stray_files: i64,
 }
 
@@ -57,11 +66,13 @@ impl ScratchReport {
     }
 
     pub fn complete(&self) -> bool {
-        self.failed.is_empty() && (!self.applied || self.remaining_directories.is_empty())
+        self.failed.is_empty()
+            && (!self.applied
+                || (self.remaining_directories.is_empty() && self.remaining_files.is_empty()))
     }
 }
 
-pub fn sweep(apply: bool) -> ScratchReport {
+pub fn sweep(apply: bool, include_files: bool) -> ScratchReport {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut report = ScratchReport {
         schema_version: REPORT_VERSION,
@@ -81,6 +92,9 @@ pub fn sweep(apply: bool) -> ScratchReport {
         free_bytes_after: None,
         stray_files: usize::default(),
         bytes_stray_files: i64::default(),
+        removed_files: Vec::new(),
+        apparent_bytes_files_removed: i64::default(),
+        remaining_files: Vec::new(),
     };
     let Some(home) = home else {
         report.fail(Path::new("~"), "resolve home", "HOME is not set");
@@ -122,8 +136,34 @@ pub fn sweep(apply: bool) -> ScratchReport {
             }
         };
         if info.st_mode & nix::libc::S_IFMT != nix::libc::S_IFDIR {
+            let bytes = info.st_size.max(0);
             report.stray_files += 1;
-            report.bytes_stray_files += info.st_size.max(0);
+            report.bytes_stray_files += bytes;
+            if !include_files {
+                continue;
+            }
+            report.apparent_bytes += bytes;
+            if !apply {
+                report.directories.push(ScratchEntry {
+                    name: name.to_string_lossy().into_owned(),
+                    path: path.clone(),
+                    bytes,
+                });
+                continue;
+            }
+            // `unlink_at` removes a symlink itself rather than what it names,
+            // which is the whole reason this pass never follows one.
+            match safefs::unlink_at(fd.as_raw_fd(), &name) {
+                Ok(()) => {
+                    report.apparent_bytes_files_removed += bytes;
+                    report.removed_files.push(ScratchEntry {
+                        name: name.to_string_lossy().into_owned(),
+                        path,
+                        bytes,
+                    });
+                }
+                Err(error) => report.fail(&path, "remove loose entry", error),
+            }
             continue;
         }
         let tree = match filesystem::Tree::open(fd.as_raw_fd(), name, info) {
@@ -164,6 +204,7 @@ pub fn sweep(apply: bool) -> ScratchReport {
                     Ok(info) if info.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR => {
                         report.remaining_directories.push(root.join(name))
                     }
+                    Ok(_) if include_files => report.remaining_files.push(root.join(name)),
                     Ok(_) => (),
                     Err(error) => report.fail(&root.join(name), "verify final entry", error),
                 }

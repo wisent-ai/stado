@@ -96,9 +96,15 @@ pub(crate) enum InstallationCommands {
     /// Preview every directory directly under ~/.stado/work, including job
     /// and run areas. --apply removes them all, even when active.
     Workdirs {
-        /// Delete all listed directories; preserve only root-level files and links.
+        /// Delete all listed directories; root-level files and links stay
+        /// unless --include-files is given.
         #[arg(long)]
         apply: bool,
+        /// Also remove the loose files and links directly at the root, so the
+        /// scratch root itself ends up empty. Links are unlinked, never
+        /// followed.
+        #[arg(long = "include-files")]
+        include_files: bool,
         /// Emit the machine-readable report.
         #[arg(long)]
         json: bool,
