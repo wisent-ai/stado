@@ -39,6 +39,14 @@ struct WorkloadSection: View {
     @ObservedObject var fleet: FleetControlStore
     @State private var statusKind = ""
     @State private var receiptID = ""
+    @State private var attachment: AttachmentReview?
+
+    private struct AttachmentReview: Identifiable {
+        let kind: String
+        let host: String
+        let source: Int
+        var id: String { "\(kind)|\(host)|\(source)" }
+    }
 
     var body: some View {
         WisentSectionBox(
@@ -62,6 +70,12 @@ struct WorkloadSection: View {
                                     .foregroundStyle(WisentDesign.muted)
                             }
                             Spacer(minLength: WisentDesign.Space.x2)
+                            if workload.interactive {
+                                Button("Attach…") {
+                                    attachment = AttachmentReview(kind: workload.kind, host: target,
+                                        source: fleet.requestGeneration)
+                                }
+                            }
                         }
                         Text("Report: \(workload.report.joined(separator: ", "))")
                             .font(WisentTypeScale.caption())
@@ -95,7 +109,12 @@ struct WorkloadSection: View {
                 }
             }
         }
+        .sheet(item: $attachment) { review in
+            WorkloadAttachmentView(kind: review.kind, target: review.host,
+                expectedSource: review.source, fleet: fleet)
+        }
         .task(id: "\(target)|\(fleet.requestGeneration)") {
+            attachment = nil
             statusKind = ""
             receiptID = ""
             await store.load(target: target, fleet: fleet)
