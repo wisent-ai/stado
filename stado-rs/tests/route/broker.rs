@@ -8,14 +8,8 @@
 //!
 //! * [`current`] — a broker that knows the `route` verb group Skarbiec ships
 //!   today, resolved through the shared support policy.
-//!
-//! Until 2026-09-10 a second case installed the older broker this machine
-//! happened to carry at `~/.stado/bin/skarbiec` and proved Stado's
-//! delivery-gap refusal against it. That binary has since been replaced by a
-//! current one, and the case was keyed to a machine state rather than to a
-//! contract: the only honest source of a broker without the verb group is an
-//! older real Skarbiec, and this repository builds no second checkout to make
-//! one. The refusal itself lives in `stado-rs/src/deploy/host_capability`.
+//! * [`stale`] — the verified 0.2.39 release artifact. It still knows
+//!   `routes add` and refuses `route`, regardless of the operator's install.
 
 use std::fs;
 use std::io::Write;
@@ -26,6 +20,7 @@ use std::process::{Command, Stdio};
 use serde_json::json;
 
 use super::fleet::Fleet;
+use super::historical_skarbiec::historical_skarbiec;
 use super::skarbiec::real_skarbiec_binary;
 
 pub const ITEM: &str = "route-real-login";
@@ -33,6 +28,11 @@ pub const FIELD: &str = "username";
 pub const RESOURCE: &str = "origin:https://route.real.invalid/username";
 const OWNER: &str = "Stado route tests <route-real@example.invalid>";
 const REASON: &str = "stado route area real evidence";
+
+/// Whether this path is a file this machine can run.
+fn executable(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
 
 /// True when this binary knows the verb group Skarbiec ships today. An older
 /// broker answers `unknown command: route` and exits non-zero.
@@ -59,11 +59,32 @@ pub fn current() -> PathBuf {
     binary
 }
 
+/// A real pre-group broker: explicitly supplied, or the pinned release this
+/// fleet published before the `route` verb group existed.
+pub fn stale() -> PathBuf {
+    let binary = match std::env::var_os("SKARBIEC_STALE_BIN") {
+        Some(configured) => PathBuf::from(configured),
+        None => historical_skarbiec(),
+    };
+    assert!(
+        executable(&binary),
+        "no older skarbiec at {}: this case proves what Stado answers when a fleet host still runs \
+         a broker without the `route` verb group, so it needs that real binary. Point \
+         SKARBIEC_STALE_BIN at one.",
+        binary.display()
+    );
+    assert!(
+        !knows_route_group(&binary),
+        "the broker at {} already knows the `route` verb group, so it cannot demonstrate the \
+         delivery gap this case is about. Point SKARBIEC_STALE_BIN at a broker that predates it.",
+        binary.display()
+    );
+    binary
+}
 /// One real vault on the isolated host, opened by one real broker.
 pub struct Vault {
-    /// gpg's agent socket lives here, and the system temp root is deep enough
-    /// to overrun the socket path limit — the same reason `tests/support`
-    /// keeps its GnuPG home under `~/.stado/work`.
+    /// Only the GnuPG home needs a short product-owned test root: macOS Unix
+    /// socket paths cannot exceed 104 bytes. TempDir removes it on drop.
     gnupg: tempfile::TempDir,
     binary: PathBuf,
     vault: PathBuf,
@@ -85,7 +106,7 @@ impl Vault {
         fs::copy(binary, &installed).expect("install the real broker on the isolated host");
         fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/work");
+        let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/test-runs");
         fs::create_dir_all(&scratch).unwrap();
         let gnupg = tempfile::Builder::new()
             .prefix("route-real-gpg-")

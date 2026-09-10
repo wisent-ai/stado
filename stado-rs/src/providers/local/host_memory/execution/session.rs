@@ -13,8 +13,8 @@
 
 use std::process::Command;
 
-use super::report::RepairReport;
-use super::schema::MemoryRepairPolicy;
+use crate::providers::local::host_memory::declaration::schema::MemoryRepairPolicy;
+use crate::providers::local::host_memory::report::RepairReport;
 
 /// One matching process of the graphical session.
 #[derive(Debug, Clone, PartialEq, Eq)]

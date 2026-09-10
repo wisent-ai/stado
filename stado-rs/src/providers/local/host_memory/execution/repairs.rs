@@ -15,8 +15,8 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use super::report::RepairReport;
-use super::schema::MemoryRepairPolicy;
+use crate::providers::local::host_memory::declaration::schema::MemoryRepairPolicy;
+use crate::providers::local::host_memory::report::RepairReport;
 
 /// The recovery programs a declaration may name, and their exact bytes.
 ///
@@ -26,15 +26,15 @@ use super::schema::MemoryRepairPolicy;
 pub const RECOVERY_PROGRAMS: [(&str, &str); 3] = [
     (
         "recover-skarbiec-crypto",
-        include_str!("../../../host_payloads/recover-skarbiec-crypto.sh"),
+        include_str!("../../../../host_payloads/recover-skarbiec-crypto.sh"),
     ),
     (
         "recover-skarbiec-audit-lock",
-        include_str!("../../../host_payloads/recover-skarbiec-audit-lock.sh"),
+        include_str!("../../../../host_payloads/recover-skarbiec-audit-lock.sh"),
     ),
     (
         "recover-skarbiec-acquisition-state",
-        include_str!("../../../host_payloads/recover-skarbiec-acquisition-state.sh"),
+        include_str!("../../../../host_payloads/recover-skarbiec-acquisition-state.sh"),
     ),
 ];
 

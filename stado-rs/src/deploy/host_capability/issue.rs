@@ -39,7 +39,8 @@ pub async fn issue(
     runner: &Runner,
 ) -> Result<String, DeployError> {
     let mut arguments = vec![
-        "capability-issue",
+        "grant",
+        "capability",
         "--agent",
         issuance.agent,
         "--purpose",

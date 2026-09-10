@@ -25,8 +25,8 @@ use serde::Deserialize;
 use super::schema::REPAIR_NAMES;
 
 /// The one document declaring every memory repair a registry may name.
-pub const DECLARATION_PATH: &str = "stado-rs/data/memory.json";
-const DECLARATION: &str = include_str!("../../../../data/memory.json");
+pub const DECLARATION_PATH: &str = "stado-rs/data/memory/repairs.json";
+const DECLARATION: &str = include_str!("../../../../../data/memory/repairs.json");
 const DECLARATION_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -34,12 +34,8 @@ pub(crate) async fn kronika_agent_credential(
     let routes = context.routes;
     let gnupg = context.gnupg;
     let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-    // One read of the contract Skarbiec publishes: `routes list` answers what
-    // each vault item declares about itself at read time, so nothing has to be
-    // written before the identity can be found. This used to call
-    // `skarbiec route resolve <agent>`, a verb Skarbiec has never had, and the
-    // install failed with `unknown command: route` — Skarbiec's answer to a
-    // question this caller invented.
+    // Read the capability routes from Skarbiec's declared route capability.
+    // The vault resolves self-declared identities at read time.
     let resolved = host_channel::run_program(
         target,
         &[
@@ -49,8 +45,8 @@ pub(crate) async fn kronika_agent_credential(
             &gnupg,
             program_path,
             &skarbiec,
-            "routes",
-            "list",
+            "route",
+            "resolve",
         ],
         &runner,
     )
@@ -75,7 +71,7 @@ pub(crate) async fn kronika_agent_credential(
         .ok_or_else(|| {
             DeployError(format!(
                 "Skarbiec maps no credential for {PROBIERZ_AGENT_RESOURCE}; declare one with \
-                 `skarbiec routes add --resource {PROBIERZ_AGENT_RESOURCE} --item <item> \
+                 `skarbiec route declare --resource {PROBIERZ_AGENT_RESOURCE} --item <item> \
                  --field <field> --reason <text>` beside that host's Brama"
             ))
         })?;

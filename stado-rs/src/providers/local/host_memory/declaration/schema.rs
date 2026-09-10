@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::constants;
+use crate::providers::local::host_memory::constants;
 
 /// Restart a declared OS unit whose process cannot allocate.
 pub const REPAIR_RESTART_UNIT: &str = "restart_unit";
@@ -69,8 +69,16 @@ pub struct MemoryRepairPolicy {
     /// would terminate and how much they hold; it never signals one until an
     /// operator writes this flag. Killing somebody's Safari is not a
     /// consequence of declaring an interest in memory.
-    #[serde(default)]
+    ///
+    /// Written only where it is true, so a `restart_unit` or `reap_recovery`
+    /// declaration does not carry an authorization for work it cannot do.
+    #[serde(default, skip_serializing_if = "is_false")]
     pub allow_graphical_session: bool,
+}
+
+/// A `false` flag is an absent flag in a declaration.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Memory-reclaim policy for a local target.

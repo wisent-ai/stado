@@ -94,6 +94,7 @@ pub(crate) fn boundary_plan(path: &str, object: Option<(&str, &str)>) -> Boundar
         | "/api/registry.json"
         | "/api/registry/policy"
         | "/api/cleanup.json"
+        | "/api/memory-policies.json"
         | "/api/cleanup/run" => BoundaryPlan::gated(&[Boundary::Registry]),
         path if path.starts_with("/api/integration/") => {
             BoundaryPlan::gated(&[Boundary::Integration])

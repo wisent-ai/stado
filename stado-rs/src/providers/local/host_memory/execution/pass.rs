@@ -16,14 +16,14 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use super::constants;
-use super::reading::{self, MemoryReading};
-use super::report::{self, MemoryCaps, MemoryReport, RepairReport};
-use super::schema::{
+use super::{policy, repairs, session};
+use crate::providers::local::host_memory::declaration::schema::{
     MemoryReclaimPolicy, REPAIR_GRAPHICAL_SESSION, REPAIR_NAMES, REPAIR_REAP_RECOVERY,
     REPAIR_RESTART_UNIT,
 };
-use super::{policy, repairs, session, state};
+use crate::providers::local::host_memory::reading::{self, MemoryReading};
+use crate::providers::local::host_memory::report::{self, MemoryCaps, MemoryReport, RepairReport};
+use crate::providers::local::host_memory::{constants, state};
 
 /// Which process made a pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

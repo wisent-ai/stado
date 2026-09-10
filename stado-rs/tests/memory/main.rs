@@ -12,6 +12,8 @@
 
 mod constants;
 mod harness;
+mod policies;
+mod policy_refusals;
 
 use constants::{
     ALWAYS_OVER_LOW_MB, ALWAYS_OVER_TARGET_MB, INCOHERENT_TARGET_MB, NEVER_OVER_LOW_MB,

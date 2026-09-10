@@ -53,7 +53,7 @@ pub(super) async fn register_acquisition_scopes(
     let home = host_channel::remote_home(resolved, runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let bin = format!("{home}/.stado/bin/skarbiec");
+    let bin = crate::cli::host::release_managed_skarbiec(resolved, runner, &home).await?;
     let private_key = format!("{home}/.stado/weles-credential-workload-private.pem");
     let catalog = format!("{home}/.stado/files/{catalog_name}");
 

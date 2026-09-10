@@ -73,3 +73,40 @@ fn a_declared_route_resolves_through_the_real_broker_to_the_coordinate_it_names(
     assert_eq!(table[RESOURCE]["item"], ITEM);
     assert_eq!(table[RESOURCE]["field"], FIELD);
 }
+
+/// A broker that predates the `route` verb group is a delivery gap, and Stado
+/// has to say so. Before the caller was fixed it reported the host's raw
+/// `unknown command: routes`, which reads as a routing failure and sends an
+/// operator to the route table instead of to the binary.
+#[test]
+fn a_broker_without_the_route_verb_group_is_refused_as_a_delivery_gap() {
+    let fleet = fleet_with_service();
+    let stale = broker::stale();
+    let vault = Vault::install(&fleet, &stale);
+
+    let output = fleet.stado_with(
+        &["route", "capability", SERVICE, "--json"],
+        &[("GNUPGHOME", vault.gnupg_home())],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+    let text = said(&output);
+    for needle in [
+        "does not know the `route` verb group",
+        "`route resolve`, `route declare` and `route verify` replaced `routes list`, `routes add` and `routes verify`",
+        "cargo build --release --locked",
+        "This is a delivery gap, not a routing failure.",
+    ] {
+        assert!(text.contains(needle), "refusal omits {needle:?}:\n{text}");
+    }
+    assert!(
+        text.contains(vault.vault_file().to_str().unwrap()),
+        "the refusal does not name the vault it was asked about:\n{text}"
+    );
+
+    // The stale broker declared the route with its own verb, so the table on
+    // disk is real and complete. Only the read verb is missing, which is what
+    // makes this a delivery gap rather than an unmapped resource.
+    let table: Value = serde_json::from_str(&std::fs::read_to_string(&vault.table).unwrap())
+        .expect("the persisted capability route table is JSON");
+    assert_eq!(table[RESOURCE]["item"], ITEM);
+}

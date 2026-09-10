@@ -176,7 +176,7 @@ pub fn grant_field_reads(
         .collect::<Vec<_>>()
         .join(",");
     let output = std::process::Command::new(&binary)
-        .arg("token-mint")
+        .args(["grant", "issue"])
         .arg(consumer)
         .arg("--capabilities")
         .arg(&union)
