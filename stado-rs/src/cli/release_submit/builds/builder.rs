@@ -3,12 +3,27 @@
 use std::collections::BTreeMap;
 
 use crate::cli::release_submit::builds::claimability::{claimability, Claimability};
+use crate::cli::release_submit::builds::scratch::{published_free_bytes, scratch_verdict};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
+use crate::release_pipeline::ScratchReceipt;
 
+/// Pin one job to a live host of `platform`.
+///
+/// `scratch` is what the last build of the product being placed wrote to
+/// disk, when a measuring builder has recorded it: a host that publishes less
+/// free disk than that above its own low watermark is refused with
+/// [`crate::deploy::host_gates::RELEASE_SCRATCH_SHORT`]. Delivery jobs pass
+/// `None`; they write an archive, not a build tree.
+///
+/// Among the hosts that may take the job, the one publishing the most free
+/// disk goes first. Name order used to decide, and it sent every darwin build
+/// to charless-mac-mini for as long as that host stayed one byte above its
+/// low watermark.
 pub(crate) async fn builder(
     platform: &str,
     pinned: Option<&str>,
+    scratch: Option<&ScratchReceipt>,
 ) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -51,7 +66,16 @@ pub(crate) async fn builder(
                 return None;
             }
             let (consumer, publication) = live_consumers.get(&target.name)?;
-            let verdict = claimability(publication);
+            let mut verdict = claimability(publication);
+            if let Some(short) = scratch.and_then(|need| scratch_verdict(publication, need)) {
+                verdict = match verdict {
+                    Claimability::Refusing { mut blockers } => {
+                        blockers.push(short);
+                        Claimability::Refusing { blockers }
+                    }
+                    _ => Claimability::Unfit { reason: short },
+                };
+            }
             considered.push((target.name.clone(), verdict.clone()));
             // Busy workers can receive queued builds; their normal claim gate
             // still waits for resources. Disk, policy, missing measurements,
@@ -71,18 +95,20 @@ pub(crate) async fn builder(
                 verdict if verdict.eligible() => false,
                 _ => return None,
             };
-            Some((waiting_for_resources, target, consumer.clone()))
+            let free = published_free_bytes(publication).unwrap_or_default();
+            Some((waiting_for_resources, free, target, consumer.clone()))
         })
         .collect();
     candidates.sort_by(|left, right| {
         left.0
             .cmp(&right.0)
-            .then_with(|| left.1.name.cmp(&right.1.name))
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| left.2.name.cmp(&right.2.name))
     });
     candidates
         .into_iter()
         .next()
-        .map(|(_, target, consumer)| (target, consumer))
+        .map(|(_, _, target, consumer)| (target, consumer))
         .ok_or_else(|| {
             // Name the store this looked in. Builders are selected from capacity
             // publications, not from the registry's platform declaration, so a host

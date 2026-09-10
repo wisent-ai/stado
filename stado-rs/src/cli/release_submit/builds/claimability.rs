@@ -9,15 +9,25 @@ use serde_json::Value;
 /// kept eligible during rolling upgrades because silence is not a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Claimability {
-    Claimable { available_cpu_cores: i64 },
-    Refusing { blockers: Vec<String> },
+    Claimable {
+        available_cpu_cores: i64,
+    },
+    Refusing {
+        blockers: Vec<String>,
+    },
+    /// Accepting work, and short of the disk the last build of this product
+    /// and platform wrote. The host is not refusing anything; the coordinator
+    /// is, because it read the evidence the host cannot have.
+    Unfit {
+        reason: String,
+    },
     Unstated,
 }
 
 impl Claimability {
     /// Whether [`builder`] may pin a job here.
     pub fn eligible(&self) -> bool {
-        !matches!(self, Self::Refusing { .. })
+        !matches!(self, Self::Refusing { .. } | Self::Unfit { .. })
     }
 
     pub fn describe(&self) -> String {
@@ -30,6 +40,9 @@ impl Claimability {
             }
             Self::Refusing { blockers } => {
                 format!("not accepting jobs; reasons: {}", blockers.join(", "))
+            }
+            Self::Unfit { reason } => {
+                format!("accepting jobs but cannot hold this build: {reason}")
             }
             Self::Unstated => "published no admission decision".to_string(),
         }

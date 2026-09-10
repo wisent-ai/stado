@@ -129,6 +129,7 @@ pub(super) async fn plan_redelivery(
         builder(
             &manifest.platforms[&delivery.platform].runner_platform,
             None,
+            None,
         )
         .await?
         .1

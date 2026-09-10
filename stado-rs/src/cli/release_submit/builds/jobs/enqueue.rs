@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use crate::cli::release_submit::builds::builder::builder;
 use crate::cli::release_submit::builds::jobs::command::release_worker_command;
 use crate::cli::release_submit::builds::jobs::{input, persist_worker_request, secret_refs};
+use crate::cli::release_submit::builds::scratch::last_scratch;
 use crate::cli::release_submit::run::source::{queue_immutable, run_path, run_uri};
 use crate::cli::storage;
 use crate::cli::CmdError;
@@ -78,27 +79,29 @@ pub(crate) async fn enqueue(
         }
     }
     let recipe = &m.platforms[platform];
-    let (builder_name, consumer) =
-        if let (Some(request), Some(submission)) = (&saved_request, &saved_submission) {
-            let consumer = submission
-                .get("request")
-                .and_then(|request| request.get("options"))
-                .and_then(|options| options.get("pinned_host"))
-                .and_then(Value::as_str)
-                .filter(|consumer| !consumer.is_empty())
-                .ok_or_else(|| {
-                    CmdError::click(format!(
-                        "saved release submission {submission_run_id} has no pinned consumer"
-                    ))
-                })?;
-            (request.builder.clone(), consumer.to_owned())
-        } else {
-            let pinned = saved_request
-                .as_ref()
-                .map(|request| request.builder.as_str());
-            let (host, consumer) = builder(&recipe.runner_platform, pinned).await?;
-            (host.name, consumer)
-        };
+    let scratch = last_scratch(store, &m.product, &recipe.runner_platform).await?;
+    let (builder_name, consumer) = if let (Some(request), Some(submission)) =
+        (&saved_request, &saved_submission)
+    {
+        let consumer = submission
+            .get("request")
+            .and_then(|request| request.get("options"))
+            .and_then(|options| options.get("pinned_host"))
+            .and_then(Value::as_str)
+            .filter(|consumer| !consumer.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "saved release submission {submission_run_id} has no pinned consumer"
+                ))
+            })?;
+        (request.builder.clone(), consumer.to_owned())
+    } else {
+        let pinned = saved_request
+            .as_ref()
+            .map(|request| request.builder.as_str());
+        let (host, consumer) = builder(&recipe.runner_platform, pinned, scratch.as_ref()).await?;
+        (host.name, consumer)
+    };
     let mut resolved = Map::new();
     resolved.insert(
         "source".into(),
@@ -178,9 +181,13 @@ pub(crate) async fn enqueue(
     } else {
         // Another coordinator published the request first. Keep that placement
         // and apply the normal claim gate before creating its queue plan.
-        builder(&recipe.runner_platform, Some(&request.builder))
-            .await?
-            .1
+        builder(
+            &recipe.runner_platform,
+            Some(&request.builder),
+            scratch.as_ref(),
+        )
+        .await?
+        .1
     };
     let sha = release_control::sha256_bytes(&bytes);
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));

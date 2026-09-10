@@ -191,3 +191,13 @@ pub(in crate::deploy::host_gates) const STALL_INTERVALS: i64 = 4;
 /// commonest cause of that silence in this fleet is a declaration naming a
 /// unit no launchd or systemd on that host is running.
 pub const AGENT_DECLARED_NOT_LOADED: &str = "agent_declared_not_loaded";
+
+/// This host publishes less free disk than the last build of the product and
+/// platform being placed wrote as scratch, above the host's own low watermark.
+///
+/// Not the agent's word: a host does not know what a build it has not run
+/// will write. The coordinator reads the previous build's measured scratch
+/// from the run store and judges the publication against it, because the
+/// 0.20.3 darwin build was pinned to charless-mac-mini with fourteen GiB free
+/// and died of a full disk after twenty-five minutes of compiling.
+pub const RELEASE_SCRATCH_SHORT: &str = "release_scratch_short";

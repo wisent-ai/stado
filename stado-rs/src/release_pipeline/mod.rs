@@ -24,6 +24,7 @@ pub use records::receipt::{ArtifactReceipt, BuildReceipt, ReceiptInput, StepRece
 pub use records::run::{
     DeliveryRun, DeliveryRunState, PlatformRun, PlatformRunState, ReleaseRun, ReleaseRunState,
 };
+pub use records::scratch::{tree_bytes, ScratchReceipt, SCRATCH_LEAF};
 pub use records::worker::{WorkerInput, WorkerRequest};
 pub use validate::manifest::{
     parse_product_manifest, validate_product_manifest, validate_release_manifest,

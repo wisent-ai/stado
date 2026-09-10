@@ -8,8 +8,12 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::cli::release_submit::builds::worker::package::{package, write_receipt};
-use crate::cli::release_submit::builds::worker::steps::{ensure_rust_components, execute};
+use crate::cli::release_submit::builds::worker::package::{
+    disk_sentence, measure_scratch, package, write_receipt, write_scratch,
+};
+use crate::cli::release_submit::builds::worker::steps::{
+    ensure_rust_components, execute, require_free_space,
+};
 use crate::cli::release_submit::ReleaseWorkerArgs;
 use crate::cli::CmdError;
 use crate::release_control;
@@ -137,6 +141,9 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // toolchain itself already arrives.
     ensure_rust_components(&manifest.platforms[&request.platform], &source)?;
     let recipe = &manifest.platforms[&request.platform];
+    // Before the first crate, not after the last one: a build with no room
+    // fails having spent every minute it was going to spend.
+    require_free_space(recipe, &source)?;
     let job_id = std::env::var("WC_JOB_ID").unwrap_or_default();
     let mut quality = Vec::new();
     for gate in &recipe.quality {
@@ -218,7 +225,19 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             quality.push(signing);
         }
     }
+    // Measured before anything is removed and before anything more is
+    // written: what this build put on disk and what the volume had left. The
+    // record goes beside the receipt, and the next placement of this product
+    // and platform reads it.
+    let scratch = measure_scratch(temp.path(), &request, &job_id, build.status.clone())?;
     if build.status != StepStatus::Passed {
+        let disk = disk_sentence(&scratch);
+        println!("[release-worker] build: {disk}");
+        // Give the record room: a build that filled the volume has left none
+        // for the account of its own failure until its tree is gone.
+        temp.close()
+            .map_err(|error| CmdError::click(format!("cannot remove the build tree: {error}")))?;
+        write_scratch(&scratch)?;
         let receipt = BuildReceipt {
             schema_version: 1,
             run_id: request.run_id,
@@ -237,11 +256,14 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             status: StepStatus::Failed,
             artifact: None,
             completed_at: Utc::now().to_rfc3339(),
-            failure: Some("build command failed".into()),
+            failure: Some(format!("build command failed; {disk}")),
         };
         write_receipt(&receipt)?;
-        return Err(CmdError::click("release build command failed"));
+        return Err(CmdError::click(format!(
+            "release build command failed; {disk}"
+        )));
     }
+    write_scratch(&scratch)?;
     // The stage map is relative to `WISENT_OUTPUT_DIR`, which is what every
     // recipe's build script writes into -- brama and skarbiec both install to
     // `$WISENT_OUTPUT_DIR/stage/...`. Packaging resolved it against the source

@@ -184,6 +184,18 @@ else
     fi
   fi
 fi
+# The builder's measured scratch, left beside the receipt by a worker that
+# measures. A worker that predates the record writes none, and that is not
+# a failure; a record that was written and cannot be stored is one, for the
+# same reason the receipt is.
+if owned_regular_file "$work/output/scratch.json"; then
+  if ! upload_output_object canonical "$canonical_output_uri" scratch.json application/json; then
+    evidence_upload_failed=1
+  fi
+  if ! upload_output_object attempt "$attempt_output_uri" scratch.json application/json; then
+    evidence_upload_failed=1
+  fi
+fi
 if [ "$evidence_upload_failed" -ne 0 ]; then
   printf '%s\n' "[release-worker-bootstrap] output upload/read-back failed; worker_exit_code=$rc" >&2
   if [ "$rc" -eq 0 ]; then

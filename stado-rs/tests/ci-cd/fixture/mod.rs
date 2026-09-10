@@ -1,5 +1,6 @@
 use super::*;
 mod profile;
+mod signing;
 
 mod wait;
 pub(super) use wait::*;
@@ -286,4 +287,7 @@ pub(crate) fn registry(
     )
     .unwrap();
     profile::configure(home, storage);
+    if platform.starts_with("darwin-") {
+        signing::seed_native_signing_input(home, storage);
+    }
 }

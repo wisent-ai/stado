@@ -95,7 +95,7 @@ pub(crate) async fn run_deliveries(
             // installs locally; only target-less deliveries fall back to any
             // live builder of the platform.
             let consumer = if d.target.is_empty() {
-                builder(&m.platforms[&d.platform].runner_platform, None)
+                builder(&m.platforms[&d.platform].runner_platform, None, None)
                     .await?
                     .1
             } else {

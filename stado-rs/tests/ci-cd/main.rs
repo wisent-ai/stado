@@ -24,6 +24,7 @@ mod commit;
 mod fixture;
 mod resume;
 mod retry;
+mod scratch;
 use fixture::*;
 
 #[test]
@@ -135,6 +136,21 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         "=anchor apple generic",
         installed.to_str().unwrap(),
     ]));
+    // The builder measured its own scratch and the bootstrap stored it
+    // beside the receipt; the next placement of this product reads it.
+    let job_id = release["platforms"][platform]["job_id"].as_str().unwrap();
+    let scratch: Value = serde_json::from_slice(
+        &fs::read(storage.join(format!("status/{job_id}/output/scratch.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(scratch["product"], "ci-release-probe");
+    assert_eq!(scratch["platform"], platform);
+    assert_eq!(scratch["builder"], "ci-runner");
+    assert_eq!(scratch["build"], "passed");
+    assert!(
+        scratch["bytes"].as_u64().unwrap() > 0 && scratch["free_bytes"].as_u64().unwrap() > 0,
+        "the build measured nothing: {scratch}"
+    );
     println!("verified release platform={platform}; installed=ci-release-probe 1.0.0");
     println!("release evidence retained at {}", home.keep().display());
 }

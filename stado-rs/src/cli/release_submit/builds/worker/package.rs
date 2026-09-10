@@ -1,5 +1,5 @@
-//! The artifact the builder leaves behind: the staged tree it packages, and
-//! the receipt that stands for it.
+//! The artifact the builder leaves behind: the staged tree it packages, the
+//! receipt that stands for it, and the measure of the scratch it wrote.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use flate2::{Compression, GzBuilder};
 
 use crate::cli::CmdError;
-use crate::release_pipeline::BuildReceipt;
+use crate::release_pipeline::{
+    tree_bytes, BuildReceipt, ScratchReceipt, StepStatus, WorkerRequest, SCRATCH_LEAF,
+};
 
 fn collect(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<(), CmdError> {
     let path = root.join(relative);
@@ -84,4 +86,65 @@ pub(super) fn write_receipt(receipt: &BuildReceipt) -> Result<(), CmdError> {
     std::fs::create_dir_all("output")?;
     std::fs::write("output/receipt.json", serde_json::to_vec(receipt)?)?;
     Ok(())
+}
+
+/// Measure the scratch tree at `root` and the free bytes on its volume, now,
+/// before the tree is removed. Nothing is written: a build that filled the
+/// volume has left no room for the record until its tree is gone.
+pub(super) fn measure_scratch(
+    root: &Path,
+    request: &WorkerRequest,
+    job_id: &str,
+    build: StepStatus,
+) -> Result<ScratchReceipt, CmdError> {
+    let bytes = tree_bytes(root).map_err(|error| {
+        CmdError::click(format!(
+            "cannot measure the build tree {}: {error}",
+            root.display()
+        ))
+    })?;
+    let stat = nix::sys::statvfs::statvfs(root).map_err(|error| {
+        CmdError::click(format!(
+            "cannot read the free space of the volume holding {}: {error}",
+            root.display()
+        ))
+    })?;
+    Ok(ScratchReceipt {
+        schema_version: 1,
+        run_id: request.run_id.clone(),
+        job_id: job_id.to_owned(),
+        product: request.product.clone(),
+        platform: request.platform.clone(),
+        builder: request.builder.clone(),
+        bytes,
+        free_bytes: stat.blocks_available() as u64 * stat.fragment_size() as u64,
+        build,
+        measured_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+pub(super) fn write_scratch(scratch: &ScratchReceipt) -> Result<(), CmdError> {
+    std::fs::create_dir_all("output")?;
+    std::fs::write(
+        Path::new("output").join(SCRATCH_LEAF),
+        serde_json::to_vec(scratch)?,
+    )?;
+    Ok(())
+}
+
+/// The sentence a failed build's receipt and exit carry about the disk it
+/// was writing: the two numbers that were one line inside a 30 KB log when
+/// the 0.20.3 darwin build died on charless-mac-mini.
+pub(super) fn disk_sentence(scratch: &ScratchReceipt) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let state = if scratch.exhausted_disk() {
+        "ran out of disk"
+    } else {
+        "had room"
+    };
+    format!(
+        "the build tree held {:.1} GiB and its volume had {:.1} GiB free ({state})",
+        scratch.bytes as f64 / GIB,
+        scratch.free_bytes as f64 / GIB
+    )
 }
