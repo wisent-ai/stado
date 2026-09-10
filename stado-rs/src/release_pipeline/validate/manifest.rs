@@ -100,6 +100,19 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
                 "{platform:?}: invalid output platform or runner_platform"
             ));
         }
+        // Forward compatibility does not mean silence: the contract keeps a
+        // key it does not know so an older worker can still build, and the
+        // binary the operator submits with names it here. A typo is refused
+        // before a job is queued; a field from a newer Stado is refused with
+        // the same sentence, which is the true answer for this binary.
+        if !recipe.extra.is_empty() {
+            let mut unknown: Vec<&str> = recipe.extra.keys().map(String::as_str).collect();
+            unknown.sort_unstable();
+            return Err(format!(
+                "{platform}: unknown recipe keys for this Stado: {}",
+                unknown.join(", ")
+            ));
+        }
         let mut gates = BTreeSet::new();
         for gate in &recipe.quality {
             if !identifier(&gate.name) || !gates.insert(gate.name.as_str()) || !argv(&gate.argv) {

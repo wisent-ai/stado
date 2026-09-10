@@ -295,3 +295,94 @@ fn a_build_with_no_room_is_refused_before_its_first_gate() {
     );
     println!("verified the no-room refusal platform={platform}");
 }
+
+/// A recipe key this Stado does not know is kept, then refused by name.
+///
+/// Both halves matter, and they were learnt the hard way on 2026-09-10:
+/// declaring `min_free_gb` in the same commit as its reader failed stado
+/// 0.20.4 on both platforms with serde's "unknown field", because a release is
+/// built by the binary a host already has and that binary denied the key
+/// before compiling a single crate. Unknown keys are therefore tolerated by
+/// the contract — and named by the submitting binary, so a typo never reaches
+/// the queue.
+#[test]
+#[ignore = "runs the real Skarbiec-backed release journey"]
+fn an_unknown_recipe_key_is_refused_by_name_before_a_job_is_queued() {
+    let platform = release_platform();
+    let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
+    fs::create_dir_all(&run_root).unwrap();
+    let home = tempfile::Builder::new()
+        .prefix("release-unknown-key-")
+        .tempdir_in(run_root)
+        .unwrap();
+    let storage = home.path().join("store");
+    fs::create_dir_all(&storage).unwrap();
+    let operator_home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    std::os::unix::fs::symlink(operator_home.join(".cargo"), home.path().join(".cargo")).unwrap();
+    std::os::unix::fs::symlink(operator_home.join(".rustup"), home.path().join(".rustup")).unwrap();
+    let source = fixture_source(home.path(), platform, "");
+
+    let manifest_path = source.join(".wisent-release.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["platforms"][platform]["min_fee_gb"] = json!(20);
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    run(Command::new("git")
+        .current_dir(&source)
+        .args(["commit", "-qam", "misspell a recipe key"]));
+
+    let private = home.path().join("release-private");
+    let public = home.path().join("release-public");
+    run(Command::new(env!("CARGO_BIN_EXE_stado")).args([
+        "release",
+        "keygen",
+        "--private-key",
+        private.to_str().unwrap(),
+        "--public-key",
+        public.to_str().unwrap(),
+        "--key-id",
+        "ci-release-key",
+    ]));
+    let public_key = fs::read_to_string(&public).unwrap();
+    let vault = SkarbiecFixture::start_release(home.path(), &private);
+    registry(home.path(), &storage, &public_key, platform, None);
+
+    let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
+    release_env(&mut submit, home.path(), &storage, &vault);
+    let refused = submit
+        .args([
+            "release",
+            "submit",
+            "--source",
+            source.to_str().unwrap(),
+            "--version",
+            "1.0.0",
+            "--channel",
+            "candidate",
+        ])
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success(),
+        "the manifest was accepted: {said}"
+    );
+    assert!(
+        said.contains("unknown recipe keys for this Stado: min_fee_gb"),
+        "the refusal did not name the key: {said}"
+    );
+    // Nothing was queued: the refusal happened while reading the source.
+    assert!(
+        !storage.join("queue").exists(),
+        "a job was queued for a manifest that was refused:\n{}",
+        store_snapshot(&storage)
+    );
+    println!("verified the unknown-key refusal platform={platform}");
+}

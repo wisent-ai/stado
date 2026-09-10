@@ -7,8 +7,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::release_pipeline::validate::predicates::{default_extract, default_required};
 
+/// One platform's recipe.
+///
+/// Unknown keys are kept rather than refused, and the reason is a production
+/// failure: the workers that build a release run the binary a host already
+/// has, so a manifest field added in the same commit as its reader is read
+/// by the OLD contract first. Declaring `min_free_gb` on 2026-09-10 failed
+/// stado 0.20.4 on both platforms with serde's "unknown field" before a
+/// single crate compiled, because the deployed worker denied it. A field a
+/// worker does not understand must be ignorable; `stado release submit`
+/// refuses typos itself, in the binary the operator is running.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PlatformRecipe {
     pub runner_platform: String,
     pub quality: Vec<QualityGate>,
@@ -40,17 +49,21 @@ pub struct PlatformRecipe {
     /// instead of from a refusal before the first crate.
     #[serde(default)]
     pub min_free_gb: u64,
+    /// Keys this contract does not know, kept so a worker running an older
+    /// contract can still build a release whose manifest carries a newer
+    /// field. `validate_release_manifest` refuses them, in the binary the
+    /// operator submits with.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct QualityGate {
     pub name: String,
     pub argv: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BuildCommand {
     pub argv: Vec<String>,
 }
@@ -66,7 +79,6 @@ pub struct ReleaseInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RuntimeContract {
     pub binary: String,
     pub launcher: String,
@@ -78,7 +90,6 @@ pub struct RuntimeContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PromotionPolicy {
     pub channels: Vec<PipelineChannel>,
     pub reconcile: bool,
@@ -92,7 +103,6 @@ pub enum PipelineChannel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Delivery {
     pub name: String,
     pub platform: String,
