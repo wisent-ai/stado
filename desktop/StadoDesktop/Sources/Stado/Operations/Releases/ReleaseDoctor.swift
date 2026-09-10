@@ -126,23 +126,45 @@ struct ReleaseCandidate: Decodable, Sendable {
 }
 
 /// The host's claiming gates as `release doctor` reports them. A rollout on a
-/// host that stopped claiming for disk is blocked by the disk, and this is the
-/// section that says so where the rollout is being read.
+/// host that stopped claiming is blocked by whichever watermark stopped it,
+/// and this is the section that says so where the rollout is being read. The
+/// memory half is here because on 2026-09-10 a builder refusing every job for
+/// memory pressure showed nothing but its disk on this screen.
 struct ReleaseGates: Decodable, Sendable {
     let diskPressureUnresolved: Bool
     let freeGB: Double?
     let lowWatermarkGB: Double?
+    let memoryPressureActive: Bool
+    let memoryAvailableGB: Double?
+    let memoryLowWatermarkGB: Double?
+    let memorySwapUsedPct: Int?
 
-    init(diskPressureUnresolved: Bool = false, freeGB: Double? = nil, lowWatermarkGB: Double? = nil) {
+    init(
+        diskPressureUnresolved: Bool = false,
+        freeGB: Double? = nil,
+        lowWatermarkGB: Double? = nil,
+        memoryPressureActive: Bool = false,
+        memoryAvailableGB: Double? = nil,
+        memoryLowWatermarkGB: Double? = nil,
+        memorySwapUsedPct: Int? = nil
+    ) {
         self.diskPressureUnresolved = diskPressureUnresolved
         self.freeGB = freeGB
         self.lowWatermarkGB = lowWatermarkGB
+        self.memoryPressureActive = memoryPressureActive
+        self.memoryAvailableGB = memoryAvailableGB
+        self.memoryLowWatermarkGB = memoryLowWatermarkGB
+        self.memorySwapUsedPct = memorySwapUsedPct
     }
 
     enum CodingKeys: String, CodingKey {
         case diskPressureUnresolved = "disk_pressure_unresolved"
         case freeGB = "free_gb"
         case lowWatermarkGB = "low_watermark_gb"
+        case memoryPressureActive = "memory_pressure_active"
+        case memoryAvailableGB = "memory_available_gb"
+        case memoryLowWatermarkGB = "memory_low_watermark_gb"
+        case memorySwapUsedPct = "memory_swap_used_pct"
     }
 
     init(from decoder: Decoder) throws {
@@ -150,5 +172,9 @@ struct ReleaseGates: Decodable, Sendable {
         diskPressureUnresolved = try values.decodeIfPresent(Bool.self, forKey: .diskPressureUnresolved) ?? false
         freeGB = try values.decodeIfPresent(Double.self, forKey: .freeGB)
         lowWatermarkGB = try values.decodeIfPresent(Double.self, forKey: .lowWatermarkGB)
+        memoryPressureActive = try values.decodeIfPresent(Bool.self, forKey: .memoryPressureActive) ?? false
+        memoryAvailableGB = try values.decodeIfPresent(Double.self, forKey: .memoryAvailableGB)
+        memoryLowWatermarkGB = try values.decodeIfPresent(Double.self, forKey: .memoryLowWatermarkGB)
+        memorySwapUsedPct = try values.decodeIfPresent(Int.self, forKey: .memorySwapUsedPct)
     }
 }

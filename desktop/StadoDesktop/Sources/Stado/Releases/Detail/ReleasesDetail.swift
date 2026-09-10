@@ -109,6 +109,11 @@ extension ReleasesView {
                         label: "Low watermark",
                         value: ConsoleFormat.gigabytes(report.gates.lowWatermarkGB)
                     )
+                    WisentField(
+                        label: "Memory",
+                        value: memorySummary(report.gates),
+                        tone: report.gates.memoryPressureActive ? .danger : .neutral
+                    )
                 }
                 Text(StadoCLI.commandLine(ReleaseEvidenceStore.doctorArguments(pair: row.pair)))
                     .font(WisentTypeScale.identifierSmall())
@@ -121,6 +126,26 @@ extension ReleasesView {
                 )
             }
         }
+    }
+
+    /// The memory half of the claiming gates, in the CLI's own words: the
+    /// reading, the watermark it was measured against, and whether this host
+    /// is withholding itself from the rollout's build.
+    private func memorySummary(_ gates: ReleaseGates) -> String {
+        var clauses: [String] = []
+        if let available = gates.memoryAvailableGB {
+            clauses.append(
+                gates.memoryLowWatermarkGB.map { "\(StadoFormat.decimal(available)) GB against a \(StadoFormat.decimal($0)) GB watermark" }
+                    ?? "\(StadoFormat.decimal(available)) GB available"
+            )
+        }
+        if let swap = gates.memorySwapUsedPct {
+            clauses.append("swap \(swap)%")
+        }
+        if gates.memoryPressureActive {
+            clauses.append("refusing placement")
+        }
+        return clauses.isEmpty ? "Not observed" : clauses.joined(separator: " · ")
     }
 
     /// What the host itself says it runs, and every disagreement the CLI found.
