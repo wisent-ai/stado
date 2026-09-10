@@ -5,8 +5,8 @@ use crate::providers::local::scratch_workdirs;
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-pub fn run(apply: bool, json: bool) -> Result<(), CmdError> {
-    let report = scratch_workdirs::sweep(apply);
+pub fn run(apply: bool, include_files: bool, json: bool) -> Result<(), CmdError> {
+    let report = scratch_workdirs::sweep(apply, include_files);
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -31,11 +31,27 @@ pub fn run(apply: bool, json: bool) -> Result<(), CmdError> {
                 entry.bytes as f64 / GIB
             );
         }
-        println!(
-            "  preserved {} loose file(s) or link(s) · {:.1} GiB",
-            report.stray_files,
-            report.bytes_stray_files as f64 / GIB
-        );
+        for entry in &report.removed_files {
+            println!(
+                "  removed {} · {:.1} GiB apparent size · loose file",
+                entry.path.display(),
+                entry.bytes as f64 / GIB
+            );
+        }
+        if include_files {
+            println!(
+                "  {} {} loose file(s) or link(s) · {:.1} GiB",
+                if apply { "removed" } else { "would remove" },
+                report.stray_files,
+                report.bytes_stray_files as f64 / GIB
+            );
+        } else {
+            println!(
+                "  preserved {} loose file(s) or link(s) · {:.1} GiB",
+                report.stray_files,
+                report.bytes_stray_files as f64 / GIB
+            );
+        }
         for failure in &report.failed {
             eprintln!(
                 "  failed {}: {}: {}",
@@ -60,7 +76,7 @@ pub fn run(apply: bool, json: bool) -> Result<(), CmdError> {
                 println!("  remaining {}", path.display());
             }
         } else {
-            println!("pass --apply to remove all directories, including jobs, runs and run-signals; active contents are not preserved");
+            println!("pass --apply to remove all directories, including jobs, runs and run-signals; active contents are not preserved. Add --include-files to empty the root of loose files and links as well");
         }
     }
     if !report.complete() {

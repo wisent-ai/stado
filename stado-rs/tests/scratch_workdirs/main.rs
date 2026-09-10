@@ -1,77 +1,84 @@
-//! Drive cleanup through the real CLI, retaining receipts outside the swept home.
+//! Cases driving the real CLI over the scratch root; the fixture is beside
+//! them in `fixture`.
 
+mod fixture;
+
+use fixture::{document, Fixture};
 use serde_json::Value;
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
 
-struct Fixture {
-    evidence: PathBuf,
-    home: PathBuf,
-}
+#[test]
+fn include_files_empties_the_root_without_following_a_link_out_of_it() {
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    fs::create_dir_all(work.join("alpha")).unwrap();
+    fs::write(work.join("alpha/contents"), "directory data").unwrap();
+    fs::write(work.join("corpus.jsonl"), "loose data").unwrap();
+    let outside = fixture.home.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), "outside data").unwrap();
+    symlink(&outside, work.join("escape")).unwrap();
 
-impl Fixture {
-    fn new() -> Self {
-        let evidence_root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.wisent-output/scratch-workdirs");
-        fs::create_dir_all(&evidence_root).unwrap();
-        let evidence = tempfile::Builder::new()
-            .prefix("run-")
-            .tempdir_in(evidence_root)
-            .unwrap()
-            .keep();
-        let home = evidence.join("home");
-        fs::create_dir_all(home.join(".stado/work")).unwrap();
-        let revision = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .unwrap();
-        fs::write(evidence.join("revision.txt"), revision.stdout).unwrap();
-        Self { evidence, home }
-    }
+    // A pass without the flag still leaves every loose entry alone, which is
+    // what the operator command promised before this flag existed.
+    let preserved = fixture.run("preserve", &["workdirs", "--apply", "--json"]);
+    assert!(
+        preserved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preserved.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(work.join("corpus.jsonl")).unwrap(),
+        "loose data"
+    );
 
-    fn work(&self) -> PathBuf {
-        self.home.join(".stado/work")
-    }
+    let previewed = fixture.run(
+        "preview-files",
+        &["workdirs", "--include-files", "--json"],
+    );
+    assert!(previewed.status.success());
+    let listed = document(&previewed);
+    assert_eq!(
+        listed["directories"]
+            .as_array()
+            .expect("directories is an array")
+            .len(),
+        2,
+        "the loose file and the link are both candidates: {listed}"
+    );
+    assert!(work.join("corpus.jsonl").exists(), "a preview removes nothing");
 
-    fn run(&self, step: &str, args: &[&str]) -> Output {
-        let output = Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(args)
-            .env_clear()
-            .env("HOME", &self.home)
-            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .env("STADO_CONFIG", self.home.join("absent-config.json"))
-            .output()
-            .unwrap();
-        fs::write(self.evidence.join(format!("{step}.stdout")), &output.stdout).unwrap();
-        fs::write(self.evidence.join(format!("{step}.stderr")), &output.stderr).unwrap();
-        fs::write(
-            self.evidence.join(format!("{step}.json")),
-            serde_json::to_vec_pretty(
-                &serde_json::json!({"arguments": args, "exitCode": output.status.code()}),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        output
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.home);
-    }
-}
-
-fn document(output: &Output) -> Value {
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "invalid report: {error}; stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
+    let applied = fixture.run(
+        "apply-files",
+        &["workdirs", "--apply", "--include-files", "--json"],
+    );
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let report = document(&applied);
+    let removed: Vec<&str> = report["removedFiles"]
+        .as_array()
+        .expect("removedFiles is an array")
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap_or_default())
+        .collect();
+    assert!(removed.contains(&"corpus.jsonl"), "{report}");
+    assert!(removed.contains(&"escape"), "{report}");
+    assert!(!work.join("corpus.jsonl").exists(), "the loose file is gone");
+    assert!(
+        fs::symlink_metadata(work.join("escape")).is_err(),
+        "the link itself is gone"
+    );
+    // Unlinked, never followed: what the link named is untouched.
+    assert_eq!(
+        fs::read_to_string(outside.join("keep")).unwrap(),
+        "outside data"
+    );
+    assert_eq!(report["remainingFiles"], Value::Array(vec![]));
 }
 
 #[test]
