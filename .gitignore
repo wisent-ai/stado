@@ -10,6 +10,14 @@ wisent_compute/targets/registry.json
 .alert-watcher-*
 stado-rs/target/
 stado-rs/target-*/
+# One machine's local assistant and editor state, which is not this product's
+# source and does not belong in a public repository. `.claude/`s scheduled
+# task lock was committed in May 2026 carrying a session id, a pid and the
+# wall-clock start of a process on one laptop; nothing in the fleet reads it
+# and every checkout would have fought over it.
+.claude/
+.vscode/
+.idea/
 # A filesystem-backed queue store root, written by a local run rather than by
 # a build: `queue/storage.rs` creates `system/storage-layout.json` beside a
 # `.metadata` file and a `.locks/` directory under whatever root the run is
