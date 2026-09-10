@@ -173,7 +173,31 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             return Err(CmdError::click("release quality gate failed"));
         }
     }
-    let build = execute("build", &recipe.build.argv, &source, &environment)?;
+    let mut build = execute("build", &recipe.build.argv, &source, &environment)?;
+    if build.status == StepStatus::Passed && request.platform.starts_with("darwin-") {
+        let signing = execute(
+            "macos-code-signing",
+            &[
+                "wisent-products".into(),
+                "signing".into(),
+                "stage".into(),
+                "--manifest".into(),
+                source.join(".wisent-release.json").display().to_string(),
+                "--output".into(),
+                output.display().to_string(),
+                "--platform".into(),
+                request.platform.clone(),
+                "--json".into(),
+            ],
+            &source,
+            &environment,
+        )?;
+        if signing.status != StepStatus::Passed {
+            build = signing;
+        } else {
+            quality.push(signing);
+        }
+    }
     if build.status != StepStatus::Passed {
         let receipt = BuildReceipt {
             schema_version: 1,

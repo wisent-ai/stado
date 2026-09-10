@@ -32,6 +32,18 @@ struct MemoryEditorSection: View {
                         numericRow(field)
                     }
                     refusalRow
+                    Text("Repairs and their subjects")
+                        .font(WisentTypeScale.panelTitle())
+                    TextField("Memory repair declarations as JSON", text: $draft.repairsText, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .font(WisentTypeScale.identifierSmall())
+                        .accessibilityIdentifier("memory.repairs.editor")
+                    Text("Edit restart_unit, reap_recovery or graphical_session with their units, recovery or processes. An empty object removes the repairs; the registry validates the complete policy before writing.")
+                        .font(WisentTypeScale.caption())
+                    if let problem = draft.validationError {
+                        Text(problem)
+                            .foregroundStyle(WisentTone.danger.color)
+                    }
                     if let pending {
                         Text(pending.canonicalJSON(target: state.target))
                             .font(WisentTypeScale.identifierSmall())

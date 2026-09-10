@@ -17,6 +17,9 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **Stable macOS code identity (0.20):** Darwin release workers sign native staged code through Wisent Products before publishing the immutable archive. Apple challenge helpers and managed GitHub apphosts now require an Apple identity instead of accepting an ad-hoc build hash. Darwin builders need Wisent Products 0.2.1 and access to a provisioned Apple signing identity when their inputs are not already signed.
+- **Signature diagnostics and migration:** `product signatures PRODUCT --surface cli|service [--apply] --json` reports actual identifiers, Apple teams, authorities and requirements, and reconciles recorded native files without resetting TCC or restarting services. Settings exposes the same operation through the selected Stado API. The first migration from ad-hoc signing can require new consent; subsequent builds retain the product identity.
+
 - **Desktop packaging:** build the identity helper through the executable product exported by the pinned authentication package. A fresh checkout no longer depends on an absent helper script; the signed bundle keeps the SDK's required helper path.
 - **Recorded release resumption:** `release resume RUN_ID` uses the original stored source and manifest even after the checkout changes. Running jobs keep their IDs and published builds are verified rather than rebuilt. Stado Desktop exposes the same operation from Releases with source identity, command review and complete command output.
 - **Failed delivery retries:** a failed or cancelled queue job now anchors a new idempotent delivery attempt. A stale `submitted` summary is checked against the actual terminal job, so resumption no longer repeatedly returns the same failed job or misses a later delivery's failure.

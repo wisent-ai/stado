@@ -28,6 +28,17 @@ struct FleetMemoryRepairPolicy: Decodable, Sendable {
     var declaredSubjects: [String] {
         units + processes + (recovery.map { [$0] } ?? [])
     }
+
+    var jsonValue: StorageReconciliationJSON {
+        var fields: [String: StorageReconciliationJSON] = [
+            "units": .array(units.map(StorageReconciliationJSON.string)),
+            "processes": .array(processes.map(StorageReconciliationJSON.string)),
+            "allow_graphical_session": .boolean(allowGraphicalSession),
+        ]
+        if let recovery { fields["recovery"] = .string(recovery) }
+        if let minAgeSeconds { fields["min_age_seconds"] = .integer(Int64(minAgeSeconds)) }
+        return .object(fields)
+    }
 }
 
 struct FleetMemoryPolicy: Decodable, Sendable {
@@ -71,6 +82,8 @@ struct FleetMemoryPolicy: Decodable, Sendable {
         case .targetFreeMB: targetFreeMB
         case .highSwapUsedPct: highSwapUsedPct
         case .maxRepairsPerPass: maxRepairsPerPass
+        case .checkIntervalSeconds: checkIntervalSeconds
+        case .maxPassSeconds: maxPassSeconds
         }
     }
 }
@@ -109,6 +122,8 @@ enum MemoryReclaimNumericField: String, CaseIterable, Identifiable, Sendable {
     case targetFreeMB = "target_free_mb"
     case highSwapUsedPct = "high_swap_used_pct"
     case maxRepairsPerPass = "max_repairs_per_pass"
+    case checkIntervalSeconds = "check_interval_seconds"
+    case maxPassSeconds = "max_pass_seconds"
 
     var id: String { rawValue }
 
@@ -118,6 +133,8 @@ enum MemoryReclaimNumericField: String, CaseIterable, Identifiable, Sendable {
         case .targetFreeMB: "Stop at (MiB available)"
         case .highSwapUsedPct: "Swap pressure at (percent used)"
         case .maxRepairsPerPass: "Repairs per pass"
+        case .checkIntervalSeconds: "Time between passes (seconds)"
+        case .maxPassSeconds: "Maximum pass duration (seconds)"
         }
     }
 
@@ -131,6 +148,10 @@ enum MemoryReclaimNumericField: String, CaseIterable, Identifiable, Sendable {
             "Swap utilisation at or above this percentage is pressure on its own, whatever the free-memory reading says."
         case .maxRepairsPerPass:
             "The most repairs one pass may perform before it stops and reports."
+        case .checkIntervalSeconds:
+            "Each writer waits this long between memory passes."
+        case .maxPassSeconds:
+            "A pass stops at this time budget and records what it completed."
         }
     }
 }
@@ -149,6 +170,10 @@ struct MemoryPolicyState: Sendable {
     let target: String
     let declared: FleetMemoryPolicy?
     let report: MemoryReclaimReport?
+
+    var repairsDocument: StorageReconciliationJSON {
+        .object((declared?.repairs ?? [:]).mapValues(\.jsonValue))
+    }
 
     /// This host declares no `memory_reclaim`, so it is measured against the
     /// reporting default: visible, and untouched.
@@ -213,6 +238,8 @@ struct MemoryPolicyState: Sendable {
         case .targetFreeMB: targetFreeMB
         case .highSwapUsedPct: highSwapUsedPct
         case .maxRepairsPerPass: maxRepairsPerPass
+        case .checkIntervalSeconds: checkIntervalSeconds
+        case .maxPassSeconds: declared?.maxPassSeconds
         }
     }
 

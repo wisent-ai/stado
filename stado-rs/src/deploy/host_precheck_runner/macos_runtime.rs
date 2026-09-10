@@ -1,10 +1,10 @@
-//! The macOS runner runtime: verifying and restoring GitHub's own signed
-//! apphosts, and reading a publisher runner's state.
+//! The macOS runner runtime: verifying upstream apphosts, maintaining stable
+//! local signing identities, and reading a publisher runner's state.
 
 pub(crate) const MACOS_RUNTIME_FUNCTIONS: &str = r#"
 runner_signatures_valid() {
-  root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Listener" >/dev/null 2>&1 &&
-  root /usr/bin/codesign --verify --strict "$runner_root/bin/Runner.Worker" >/dev/null 2>&1
+  root /usr/bin/codesign --verify --strict -R '=anchor apple generic' "$runner_root/bin/Runner.Listener" >/dev/null 2>&1 &&
+  root /usr/bin/codesign --verify --strict -R '=anchor apple generic' "$runner_root/bin/Runner.Worker" >/dev/null 2>&1
 }
 resolve_runner_release() {
   version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
@@ -29,6 +29,8 @@ restore_runner_apphosts() {
   for executable in Runner.Listener Runner.Worker; do
     /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
   done
+  "${WISENT_PRODUCTS_BIN:-$HOME/.local/bin/wisent-products}" signing sign --product stado \
+    "$signed_runtime/bin/Runner.Listener" "$signed_runtime/bin/Runner.Worker"
   for executable in Runner.Worker Runner.Listener; do
     owner=$(stat -f '%u:%g' "$runner_root/bin/$executable")
     replacement=$(root mktemp "$runner_root/bin/.$executable.stado.XXXXXX")
@@ -57,7 +59,7 @@ resolve_runner_release
 fetch_runner_archive
 restore_runner_apphosts
 runner_signatures_valid
-printf 'restored upstream runner %s apphosts; archive sha256=%s; no service restarted\n' "$version" "$expected"
+printf 'restored runner %s with stable Apple identities; upstream archive sha256=%s; no service restarted\n' "$version" "$expected"
 "#;
 
 pub(crate) const MACOS_PUBLISHER_STATUS: &str = r#"set -euo pipefail

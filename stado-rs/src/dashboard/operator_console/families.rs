@@ -33,6 +33,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "optimize",
     "overview",
     "placement",
+    "product",
     "profiles",
     "quota",
     "queue",
@@ -112,6 +113,10 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     }
     if family == "workdirs" {
         return !args.iter().any(|arg| arg == "--apply");
+    }
+    if family == "product" {
+        return matches!(operation, "catalog" | "status")
+            || (operation == "signatures" && !args.iter().any(|arg| arg == "--apply"));
     }
     if family == "space" {
         return operation == "report"

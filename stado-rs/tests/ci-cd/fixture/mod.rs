@@ -69,7 +69,7 @@ pub(crate) fn release_env(
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
         .env("WC_STADO_STORAGE_NAMESPACE", "ci-release")
-        .env("STADO_CONFIG", home.join(".config/stado/config.json"))
+        .env("STADO_CONFIG", home.join(".stado/config.json"))
         .env("WC_SKARBIEC_URL", vault.url())
         .env(
             "WC_RELEASE_SIGNING_SKARBIEC_CONSUMER",
@@ -83,6 +83,11 @@ pub(crate) fn release_env(
     command
         .env("CARGO_HOME", operator_home.join(".cargo"))
         .env("RUSTUP_HOME", operator_home.join(".rustup"));
+    for name in ["WISENT_CODESIGN_KEYCHAIN", "WISENT_CODESIGN_IDENTITY"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
 }
 
 pub(crate) fn fixture_source(home: &Path, platform: &str, delivery_target: &str) -> PathBuf {
@@ -279,20 +284,22 @@ pub(crate) fn registry(
         serde_json::to_string_pretty(&document).unwrap(),
     )
     .unwrap();
-    // Workloads intentionally do not inherit agent-only storage variables.
-    // Their ordinary profile must address the same isolated persisted state.
-    let profile = home.join(".config/stado/config.json");
-    fs::create_dir_all(profile.parent().unwrap()).unwrap();
-    fs::write(
-        profile,
-        serde_json::to_vec(&json!({
-            "storage": {
-                "backend": "local",
-                "local": {"path": storage},
-                "stado": {"namespace": "ci-release"}
-            }
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    // Native delivery workers intentionally do not inherit control-plane env
+    // overrides. Give this isolated host its real persisted deployment profile.
+    run(Command::new(env!("CARGO_BIN_EXE_stado"))
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", std::env::var("PATH").unwrap())
+        .args(["config", "init"]));
+    for (key, value) in [
+        ("storage.local.path", storage.to_str().unwrap()),
+        ("storage.stado.namespace", "ci-release"),
+    ] {
+        run(Command::new(env!("CARGO_BIN_EXE_stado"))
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("STADO_CONFIG", home.join(".stado/config.json"))
+            .args(["config", "set", key, value]));
+    }
 }
