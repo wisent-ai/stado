@@ -10,7 +10,7 @@ use std::path::Path;
 
 use crate::queue::submit::default_store;
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 pub async fn run(job_id: &str, output_dir: &str) -> Result<(), CmdError> {
     std::fs::create_dir_all(output_dir)?;

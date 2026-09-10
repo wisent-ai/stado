@@ -3,6 +3,7 @@
 
 use clap::Subcommand;
 
+use crate::cli::work::autonomy;
 use crate::cli::*;
 
 /// The first block of `stado` verbs. Flattened into
@@ -52,7 +53,7 @@ pub(crate) enum InstallationCommands {
     Resources(resources::ResourcesCommands),
     /// Inspect and control autonomous placement and resource reconciliation.
     #[command(subcommand)]
-    Optimize(autonomy_cmd::OptimizeCommands),
+    Optimize(autonomy::OptimizeCommands),
 
     /// Inspect or refresh cross-cloud costs, grants, burn, and credit balances.
     #[command(subcommand)]

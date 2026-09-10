@@ -51,7 +51,7 @@ use crate::queue::copy::{
 };
 use crate::queue::{BlobBackend, BlobInfo, JobStorage, StorageError};
 
-use super::table::print as print_table;
+use crate::cli::reporting::table::print as print_table;
 use super::CmdError;
 
 mod command;

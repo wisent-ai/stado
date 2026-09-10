@@ -51,7 +51,7 @@ pub(super) async fn reclaim(
                 &target,
                 &reclamation,
                 reason,
-                &crate::cli::autonomy_cmd::actor(),
+                &crate::cli::work::autonomy::actor(),
                 &runner,
             )
             .await

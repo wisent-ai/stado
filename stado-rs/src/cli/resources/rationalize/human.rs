@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::cli::table;
+use crate::cli::reporting::table;
 
 use super::RationalizationReport;
 

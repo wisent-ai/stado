@@ -269,7 +269,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         println!("{target}: carries no stado-managed programs");
         return Ok(());
     }
-    crate::cli::table::print(
+    crate::cli::reporting::table::print(
         &[
             "ARTIFACT",
             "ACCOUNTED",

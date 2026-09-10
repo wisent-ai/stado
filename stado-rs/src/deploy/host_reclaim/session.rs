@@ -46,7 +46,7 @@ printf 'STADO_RECLAIM_AUDITED\t%s\n' "$log"
 /// intention.
 ///
 /// `actor` arrives from the caller rather than being read here, so that this
-/// binary has ONE spelling of "who did this" — `cli/autonomy_cmd::actor`, the
+/// binary has ONE spelling of "who did this" — `cli/autonomy::actor`, the
 /// same one `service ensure` stamps its own record with.
 pub async fn record_audit(
     target: &ComputeTarget,

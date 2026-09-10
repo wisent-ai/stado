@@ -4,7 +4,7 @@ use crate::cli::host::checks::probes::cell;
 
 /// The managed-binary and Cargo-path tables of [`super::inventory`].
 pub(super) fn print_binaries(report: &Value, section: &dyn Fn(&str) -> Vec<Value>) {
-    crate::cli::table::print(
+    crate::cli::reporting::table::print(
         &[
             "BINARY",
             "STATE",
@@ -53,7 +53,7 @@ pub(super) fn print_binaries(report: &Value, section: &dyn Fn(&str) -> Vec<Value
             })
         })
         .collect::<Vec<Vec<String>>>();
-    crate::cli::table::print(
+    crate::cli::reporting::table::print(
         &[
             "CARGO PATH",
             "TYPE",
@@ -73,7 +73,7 @@ pub(super) fn print_binaries(report: &Value, section: &dyn Fn(&str) -> Vec<Value
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    crate::cli::table::print(
+    crate::cli::reporting::table::print(
         &[
             "CARGO BIN ENTRY",
             "NAME STATE",

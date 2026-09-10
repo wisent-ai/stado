@@ -2,7 +2,7 @@
 //! `stado/cli.py`: runs the scheduling tick locally instead of the GCP
 //! Cloud Function (see `crate::coordinator`).
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 /// Python raises `SystemExit(run_coordinator(...))`: 0 is success, a
 /// message is a fatal exit 1.

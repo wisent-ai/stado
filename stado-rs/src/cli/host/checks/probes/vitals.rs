@@ -45,7 +45,7 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
                 ]
             })
             .collect();
-        crate::cli::table::print(&["USER", "LINE", "SINCE"], &rows);
+        crate::cli::reporting::table::print(&["USER", "LINE", "SINCE"], &rows);
     }
     report_outcome(&report, crate::deploy::host_state::uptime::OK_STATUS)
 }
@@ -90,7 +90,7 @@ pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
             },
         ],
     ];
-    crate::cli::table::print(&["SIGNAL", "STATE", "DETAIL"], &rows);
+    crate::cli::reporting::table::print(&["SIGNAL", "STATE", "DETAIL"], &rows);
     println!(
         "\nverdict: {} (the worse of the two signals)",
         cell(report.get("status"))

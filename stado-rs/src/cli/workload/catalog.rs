@@ -94,7 +94,7 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
     if json_output {
         println!("{}", serde_json::to_string_pretty(catalog)?);
     } else {
-        crate::cli::table::print(
+        crate::cli::reporting::table::print(
             &[
                 "KIND",
                 "PRODUCT",

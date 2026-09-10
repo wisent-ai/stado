@@ -6,7 +6,7 @@ use crate::deploy::fleet_claim;
 use crate::models::Job;
 use crate::queue::submit::default_store;
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 /// Canonical lifecycle states in display and direct-lookup order.
 const STATES: &[&str] = &[

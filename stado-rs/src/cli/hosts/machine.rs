@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::machine::{canonical_json, MachineError, MachineFacade, SCHEMA_VERSION};
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 /// Python `_emit`: one canonical-JSON line on stdout.
 fn emit(payload: Value) {

@@ -9,7 +9,7 @@
 use clap::{CommandFactory, FromArgMatches};
 
 use super::spec::{Cli, Commands};
-use crate::cli::onboarding;
+use crate::cli::setup::onboarding;
 use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 mod failure;

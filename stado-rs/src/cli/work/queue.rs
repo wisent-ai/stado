@@ -21,7 +21,7 @@ use crate::primitives::constants;
 use crate::queue::control::{self, QueueControl};
 use crate::queue::JobStorage;
 
-use super::{table, CmdError};
+use crate::cli::{reporting::table, CmdError};
 
 /// Reason stamped by `drain`, which takes no `--reason` of its own — the
 /// command IS the reason, and an empty one would make every scheduler and

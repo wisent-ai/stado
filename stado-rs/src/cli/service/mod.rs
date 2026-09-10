@@ -40,7 +40,8 @@ use crate::observations;
 use crate::queue::JobStorage;
 use crate::targets;
 
-use super::{registry, table, CmdError};
+use super::{registry, CmdError};
+use crate::cli::reporting::table;
 
 pub mod commands;
 

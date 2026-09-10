@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::CmdError;
+use crate::cli::CmdError;
 use crate::providers::local::disk_cleanup;
 use crate::providers::local::host_memory;
 

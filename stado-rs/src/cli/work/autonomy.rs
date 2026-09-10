@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::queue::JobStorage;
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 #[derive(Subcommand, Debug)]
 pub enum OptimizeCommands {

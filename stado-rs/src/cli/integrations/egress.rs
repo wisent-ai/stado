@@ -14,7 +14,7 @@ use nix::ifaddrs::getifaddrs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpListener, TcpSocket, TcpStream};
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 

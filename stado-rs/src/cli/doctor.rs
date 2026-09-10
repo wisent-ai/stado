@@ -99,7 +99,7 @@ fn print_human(report: &Report, fix_hints: bool) {
             ]
         })
         .collect();
-    super::table::print(&["CHECK", "STATUS", "DETAIL"], &rows);
+    crate::cli::reporting::table::print(&["CHECK", "STATUS", "DETAIL"], &rows);
 
     // Remedies are the actionable half, so they get their own block rather
     // than a fourth column that would wrap the table past any terminal.

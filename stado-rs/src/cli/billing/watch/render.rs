@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::mail::MailProbe;
 use crate::cli::billing::format::text;
-use crate::cli::table;
+use crate::cli::reporting::table;
 use crate::monitor::billing::{self, HealthEvaluation};
 
 pub(super) fn print_watch(document: &Value, evaluation: &HealthEvaluation, mail: &MailProbe) {

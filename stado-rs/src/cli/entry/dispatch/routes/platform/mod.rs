@@ -5,6 +5,10 @@
 //! `registries`, `identities` and `hosts`.
 
 use crate::cli::entry::spec::root::platform::PlatformCommands;
+use crate::cli::integrations::{egress, vast};
+use crate::cli::reporting::alerts;
+use crate::cli::setup::{bootstrap, product, profiles};
+use crate::cli::work::{queue, schedule};
 use crate::cli::*;
 
 mod hosts;
@@ -13,7 +17,7 @@ mod registries;
 
 pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> {
     match command {
-        PlatformCommands::Profiles { name } => profiles_cmd::run(name.as_deref()),
+        PlatformCommands::Profiles { name } => profiles::run(name.as_deref()),
         PlatformCommands::Config { sub, key, value } => {
             config_cmd::run(&sub, key.as_deref(), value.as_deref())
         }

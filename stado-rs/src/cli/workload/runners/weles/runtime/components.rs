@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use crate::cli::table;
+use crate::cli::reporting::table;
 use crate::cli::workload::plan::print_json;
 use crate::cli::CmdError;
 use crate::deploy::host_channel;

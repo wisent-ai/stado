@@ -4,7 +4,7 @@
 use serde_json::json;
 
 use crate::cli::release_evidence;
-use crate::cli::table;
+use crate::cli::reporting::table;
 use crate::cli::CmdError;
 use crate::release_agent;
 use crate::release_control::{ProductReleasePolicy, ReleaseTargetPolicy};

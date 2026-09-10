@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::profiles;
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 pub fn run(name: Option<&str>) -> Result<(), CmdError> {
     if let Some(name) = name {

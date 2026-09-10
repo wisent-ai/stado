@@ -14,7 +14,7 @@ use clap::Subcommand;
 use crate::config;
 use crate::monitor::alerts::{send_alert_with, AlertChannels};
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 #[derive(Subcommand)]
 pub enum AlertsCommands {

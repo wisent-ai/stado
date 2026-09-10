@@ -12,7 +12,7 @@ use crate::schedules::{
     self, compute_next_due, cron_is_valid, generate_schedule_id, read_schedule, Schedule,
 };
 
-use super::{CmdError, ScheduleCreateArgs};
+use crate::cli::{CmdError, ScheduleCreateArgs};
 
 /// `$USER` or `$LOGNAME` (Python `os.environ.get("USER", "") or ...`).
 fn created_by() -> String {
@@ -38,7 +38,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .collect();
-    let secret_env = super::submit::parse_secret_env(&args.secret_env)?;
+    let secret_env = crate::cli::submit::parse_secret_env(&args.secret_env)?;
     let now = Utc::now();
     let next_due = compute_next_due(&args.cron, now, &args.tz).map_err(|exc| {
         CmdError::click(format!("could not compute next run ({}): {exc}", args.tz))
@@ -55,7 +55,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.gpu_type = args.gpu_type.clone();
     sched.vram_gb = args.vram_gb;
     sched.machine_type = args.machine_type.clone();
-    sched.pinned_host = super::submit::resolve_pinned_host(&args.pinned_host).await?;
+    sched.pinned_host = crate::cli::submit::resolve_pinned_host(&args.pinned_host).await?;
     sched.repo = args.repo.clone();
     sched.repo_ref = args.repo_ref.clone();
     sched.repo_workdir = args.repo_workdir.clone();

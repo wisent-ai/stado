@@ -1,4 +1,4 @@
-use super::{CmdError, MailCommands};
+use crate::cli::{CmdError, MailCommands};
 use crate::mail::{self, GmailClient, MailAnalysis};
 
 pub(crate) async fn dispatch(command: &MailCommands) -> Result<(), CmdError> {

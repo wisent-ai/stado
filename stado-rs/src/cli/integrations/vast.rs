@@ -12,12 +12,12 @@
 
 use serde_json::{json, Value};
 
-use super::{CmdError, VastCommands};
+use crate::cli::{CmdError, VastCommands};
 use crate::providers::vast::{self, AutoListParams, ListMachineParams, VastClient, VastError};
 use crate::queue::JobStorage;
 
 /// Dispatch one `vast` subcommand.
-pub(super) async fn dispatch(command: &VastCommands) -> Result<(), CmdError> {
+pub(crate) async fn dispatch(command: &VastCommands) -> Result<(), CmdError> {
     match command {
         VastCommands::List {
             price_gpu,

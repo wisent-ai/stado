@@ -3,6 +3,10 @@
 
 use clap::Subcommand;
 
+use crate::cli::integrations::egress;
+use crate::cli::reporting::alerts;
+use crate::cli::setup::product;
+use crate::cli::work::queue;
 use crate::cli::*;
 
 /// The fourth block of `stado` verbs. Flattened into

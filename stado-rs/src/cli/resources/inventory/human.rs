@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use super::model::ResourcesReport;
-use crate::cli::table;
+use crate::cli::reporting::table;
 
 pub(super) fn print_human(report: &ResourcesReport) {
     table::print(

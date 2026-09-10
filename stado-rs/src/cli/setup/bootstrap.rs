@@ -2,7 +2,7 @@
 //! across reboots. Thin CLI shell over [`crate::deploy::bootstrap`]
 //! (Python `bootstrap` command in `stado/cli.py`).
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 /// `bootstrap [--target NAME] [--dry-run] [--local]` command body.
 pub async fn run(target: Option<String>, dry_run: bool, local: bool) -> Result<(), CmdError> {

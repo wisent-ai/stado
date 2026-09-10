@@ -17,7 +17,7 @@ pub(super) fn print_network(report: &Value, section: &dyn Fn(&str) -> Vec<Value>
         // the marker points, DECLARATION is whether the registry sends
         // consumers to the same place. A marker can pass one and fail the
         // other, and collapsing them would hide exactly that case.
-        crate::cli::table::print(
+        crate::cli::reporting::table::print(
             &[
                 "MARKER",
                 "STATE",
@@ -45,7 +45,7 @@ pub(super) fn print_network(report: &Value, section: &dyn Fn(&str) -> Vec<Value>
     }
 
     let listeners = section("listeners");
-    crate::cli::table::print(
+    crate::cli::reporting::table::print(
         &["PORT", "PID", "ADDRESS"],
         &listeners
             .iter()
@@ -79,7 +79,7 @@ pub(super) fn print_network(report: &Value, section: &dyn Fn(&str) -> Vec<Value>
         );
     }
 
-    crate::cli::table::print(
+    crate::cli::reporting::table::print(
         &["SUBCOMMAND", "INSTALLED BINARY"],
         &section("subcommands")
             .iter()

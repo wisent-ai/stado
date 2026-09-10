@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use tokio::process::Command;
 
-use super::CmdError;
+use crate::cli::CmdError;
 #[derive(Debug, Subcommand)]
 pub enum ProductCommands {
     /// Every canonical Wisent product and its installable surfaces.

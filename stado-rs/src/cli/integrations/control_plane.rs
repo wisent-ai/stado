@@ -3,7 +3,7 @@
 //! Python `cli.py::local_control_plane` → `deploy.local_control_plane.run`
 //! and `cli.py::cloud_control_plane` → `deploy.cloud_control_plane.run`.
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 pub async fn local(bind: String, port: i64, interval: i64) -> Result<(), CmdError> {
     crate::remote::control_plane::run_local(&bind, port, interval)

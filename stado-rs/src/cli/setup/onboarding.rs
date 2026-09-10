@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use super::CmdError;
+use crate::cli::CmdError;
 
 const PRODUCT_ID: &str = "stado-cli";
 const JOURNEY_ID: &str = "first-use";
 const FIRST_SUCCESS_FACT: &str = "registry_configuration_accepted";
-const DEFINITION: &str = include_str!("../onboarding_first_use.json");
+const DEFINITION: &str = include_str!("../../onboarding_first_use.json");
 const COMPLETED_MESSAGE: &str = "First-run journey already complete: an existing registry configuration was accepted by the canonical store. Use `stado onboarding --reset` to show it again, or `stado registry import PATH` to adopt another non-conflicting registry.";
 
 fn definition() -> Result<Value, CmdError> {
@@ -199,7 +199,7 @@ pub async fn run(
     write_state(&path, &state)?;
 
     if let Some(source) = import_registry {
-        return super::registry::import(source, json_output).await;
+        return crate::cli::registry::import(source, json_output).await;
     }
 
     for (index, screen) in screens.iter().enumerate() {
