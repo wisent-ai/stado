@@ -11,10 +11,10 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::schema::{self, MemoryReclaimPolicy};
 use crate::providers::local::disk_cleanup::{
     canonical_json, resolve_canonical_policy, JanitorError,
 };
+use crate::providers::local::host_memory::declaration::schema::{self, MemoryReclaimPolicy};
 use crate::targets::{ComputeTarget, RegistryStore};
 
 /// The declaration in force on this host, and where it came from.

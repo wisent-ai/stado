@@ -45,16 +45,17 @@
 //! the recorded admission reason.
 
 pub mod constants;
-pub mod pass;
-pub mod policy;
+pub mod declaration;
+pub mod execution;
 pub mod reading;
-pub mod repairs;
 pub mod report;
-pub mod schema;
-pub mod session;
 pub mod state;
-pub mod validate;
-pub mod vocabulary;
+
+// The two halves are re-exported under their own names so that a caller
+// naming `host_memory::schema` or `host_memory::pass` still resolves: which
+// half a file lives in is this module's business, not its callers'.
+pub use declaration::{policies, schema, validate, vocabulary};
+pub use execution::{pass, policy, repairs, session};
 
 pub use pass::{run_memory_pass_once, MemoryWriter};
 pub use reading::{read_host_memory, MemoryReading};

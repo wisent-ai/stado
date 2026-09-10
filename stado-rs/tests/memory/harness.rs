@@ -11,6 +11,22 @@ use crate::constants::{
 
 pub const TARGET: &str = "memory-fixture";
 
+/// Two more registry hosts, declaring the platform and role a declared
+/// policy is written for. They exist because applying a declared policy is
+/// registry work: the fit is read from `release_platform` and `role`, not
+/// from the machine running the test, so both sides of that refusal can be
+/// proved on either platform. Nothing is ever executed against them.
+pub const MACOS_TARGET: &str = "memory-fixture-macos";
+pub const LINUX_TARGET: &str = "memory-fixture-linux";
+
+/// The role the machine fixture declares. `interactive` on purpose: the only
+/// declared policy this suite ever applies to the host it runs on is
+/// `observe-only`, and a fixture that matched an enforcing policy would let a
+/// future test arm a repair against the operator's own processes.
+pub const FIXTURE_ROLE: &str = "interactive";
+pub const MACOS_ROLE: &str = "always-on";
+pub const LINUX_ROLE: &str = "burst";
+
 /// A launchd label and systemd unit name nothing on a developer machine
 /// loads, so `restart_unit` reaches its declared subject and records that the
 /// host reports no such unit instead of restarting something real.
@@ -60,17 +76,36 @@ fn release_platform() -> &'static str {
     }
 }
 
-/// A registry carrying one local target that declares nothing about memory.
+/// A registry carrying the machine's own local target, which declares
+/// nothing about memory, plus the two platform fixtures a declared policy is
+/// written for.
 pub fn setup() -> tempfile::TempDir {
     let storage = tempfile::tempdir().unwrap();
     let document = serde_json::json!({
         "schema_version": REGISTRY_SCHEMA_VERSION,
-        "targets": [{
-            "name": TARGET,
-            "kind": "local",
-            "release_platform": release_platform(),
-            "hostnames": [system_hostname()],
-        }],
+        "targets": [
+            {
+                "name": TARGET,
+                "kind": "local",
+                "release_platform": release_platform(),
+                "role": FIXTURE_ROLE,
+                "hostnames": [system_hostname()],
+            },
+            {
+                "name": MACOS_TARGET,
+                "kind": "local",
+                "release_platform": "darwin-arm64",
+                "role": MACOS_ROLE,
+                "hostnames": [format!("{MACOS_TARGET}.invalid")],
+            },
+            {
+                "name": LINUX_TARGET,
+                "kind": "local",
+                "release_platform": "linux-amd64",
+                "role": LINUX_ROLE,
+                "hostnames": [format!("{LINUX_TARGET}.invalid")],
+            },
+        ],
         "coordinators": [],
     });
     fs::write(
@@ -84,6 +119,52 @@ pub fn setup() -> tempfile::TempDir {
 pub fn registry_bytes(storage: &Path) -> String {
     fs::read_to_string(storage.join("registry.json")).unwrap()
 }
+
+/// The declared policy catalog, as the binary under test carries it. Read
+/// back from the product rather than restated here: a test that repeated the
+/// catalog's watermarks would pass while the shipped declaration said
+/// something else.
+pub fn catalog(storage: &Path) -> Vec<serde_json::Value> {
+    let output = stado(storage, &["space", "policies", "--json"]);
+    assert!(
+        output.status.success(),
+        "space policies failed: {}",
+        stderr(&output)
+    );
+    let document: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    document["policies"].as_array().cloned().unwrap()
+}
+
+/// One declared policy by name.
+pub fn policy_named<'a>(catalog: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
+    catalog
+        .iter()
+        .find(|policy| policy["name"] == name)
+        .unwrap_or_else(|| panic!("the catalog declares no policy {name}"))
+}
+
+/// What the isolated registry now says one target's memory declaration is.
+/// `Value::Null` when it declares none, which is what a refused write must
+/// leave behind.
+pub fn stored_policy(storage: &Path, target: &str) -> serde_json::Value {
+    let persisted: serde_json::Value = serde_json::from_str(&registry_bytes(storage)).unwrap();
+    persisted["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == target)
+        .unwrap_or_else(|| panic!("the fixture registry has no target {target}"))["memory_reclaim"]
+        .clone()
+}
+
+/// The one policy the suite applies to the machine it runs on: report mode,
+/// no repairs, so a pass that follows touches nothing.
+pub const INERT_POLICY: &str = "observe-only";
+/// A declared policy written for an always-on Mac, which ends session
+/// processes and therefore needs its own authorization.
+pub const MACOS_POLICY: &str = "macos-always-on-host";
+/// A declared policy written for a Linux queue host.
+pub const LINUX_POLICY: &str = "linux-queue-host";
 
 /// The memory report the janitor pass writes, read out of `disk-cleanup`'s
 /// own stdout: the disk report is printed first and the memory report second,

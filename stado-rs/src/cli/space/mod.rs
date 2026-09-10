@@ -6,6 +6,7 @@ use super::{host, CmdError};
 mod cleaners;
 mod coverage;
 mod ops;
+mod policies;
 mod read;
 pub mod watermark;
 
@@ -26,6 +27,17 @@ pub enum SpaceCommands {
     /// rewrites `targets[].memory_reclaim` through the canonical registry's
     /// compare-and-swap, validating the whole document first.
     Watermark(watermark::WatermarkArgs),
+    /// List the memory policies the fleet declares, and which of them fit a host.
+    ///
+    /// The catalog is `stado-rs/data/memory/policies.json`, compiled into
+    /// this binary. With TARGET it also says which policy that host carries
+    /// and whether its declaration is one this fleet reviewed.
+    Policies {
+        /// Report against one registry host rather than the whole catalog.
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read which janitor cleaners TARGET declares, and declare or withdraw one.
     Cleaners {
         #[command(subcommand)]
@@ -129,6 +141,9 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
     match command {
         SpaceCommands::Report { target, json } => report(&target, json).await,
         SpaceCommands::Watermark(args) => watermark::dispatch(args).await,
+        SpaceCommands::Policies { target, json } => {
+            policies::dispatch(target.as_deref(), json).await
+        }
         SpaceCommands::Cleaners { command } => cleaners::dispatch(command).await,
         SpaceCommands::Reclaim {
             target,
