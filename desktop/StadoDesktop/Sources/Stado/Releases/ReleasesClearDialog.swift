@@ -133,6 +133,8 @@ extension ReleasesView {
             Text("Resume \(run.product) \(run.version)?")
                 .font(WisentTypography.heading(17))
             Text("Uses the stored source and manifest. Running jobs and published builds are kept; failed jobs receive a new attempt.")
+            Text("Stado API: \(fleetStore.address?.displayString ?? "not configured")")
+                .textSelection(.enabled)
             Text("Source: \(run.sourceCommit.isEmpty ? "not recorded" : run.sourceCommit)")
                 .font(WisentTypeScale.identifierSmall())
                 .textSelection(.enabled)
@@ -146,7 +148,7 @@ extension ReleasesView {
                 })
                 WisentActionButton(action: WisentAction("Resume", kind: .primary) {
                     resumption = nil
-                    Task { await store.resume(run) }
+                    Task { await store.resume(run, fleet: fleetStore) }
                 })
             }
         }

@@ -21,6 +21,8 @@ private enum HostVaultBearerMode: String, CaseIterable, Identifiable {
 struct HostVaultBearerSheet: View {
     let host: String
     @ObservedObject var store: HostVaultBearerStore
+    @ObservedObject var fleet: FleetControlStore
+    let sourceGeneration: Int
 
     @Environment(\.dismiss) private var dismiss
     @State private var mode: HostVaultBearerMode = .mint
@@ -104,6 +106,10 @@ struct HostVaultBearerSheet: View {
         }
         .onAppear { store.clear() }
         .onDisappear { store.clear() }
+        .onChange(of: fleet.requestGeneration) { _, _ in
+            store.clear()
+            dismiss()
+        }
         .onChange(of: request) { _, _ in
             if !reviewing { store.clear() }
         }
@@ -241,6 +247,12 @@ struct HostVaultBearerSheet: View {
                     receiptSection(receipt)
                 }
                 WisentMutationBar(outcome: store.mutation) { store.clear() }
+                if let result = store.operationReceipt {
+                    DisclosureGroup("Complete operation receipt") {
+                        Text(result.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                        Text(result.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    }
+                }
 
                 HStack(spacing: WisentDesign.Space.x2) {
                     Spacer(minLength: 0)

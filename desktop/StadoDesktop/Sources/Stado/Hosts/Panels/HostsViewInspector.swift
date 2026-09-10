@@ -18,17 +18,20 @@ extension HostsView {
                 linkSection(for: host)
                 CredentialsHostSection(
                     host: host.targetName ?? host.displayName,
-                    store: vaultStore
+                    store: vaultStore,
+                    fleet: fleetStore
                 ) {
                     vaultBearerTarget = HostVaultBearerTarget(
-                        host: host.targetName ?? host.displayName
+                        host: host.targetName ?? host.displayName,
+                        sourceGeneration: fleetStore.requestGeneration
                     )
                 }
-                RoutesSection(store: routesStore, selectedHost: host.targetName ?? host.displayName)
+                RoutesSection(store: routesStore, selectedHost: host.targetName ?? host.displayName, fleet: fleetStore)
                 tailscaleLogSection(for: host)
                 HostReleaseSection(
                     store: store.hostReleaseStore,
-                    host: host.targetName ?? host.displayName
+                    host: host.targetName ?? host.displayName,
+                    fleet: fleetStore
                 )
 
 
@@ -37,9 +40,10 @@ extension HostsView {
                 RunnerSection(host: host, fleetStore: fleetStore)
                 WorkloadSection(
                     target: host.targetName ?? host.displayName,
-                    store: workloadStore
+                    store: workloadStore,
+                    fleet: fleetStore
                 )
-                RepairSection(store: repairStore, host: host.targetName ?? host.displayName)
+                RepairSection(store: repairStore, host: host.targetName ?? host.displayName, fleet: fleetStore)
                 ScratchSection(host: host.targetName ?? host.displayName)
                 if host.status != .live {
                     WisentAlertPanel(

@@ -200,6 +200,7 @@ struct SpaceSection: View {
             } else {
                 WisentField(label: "Space report", value: "Reading…")
             }
+            NativeCapabilityActions(host: host, fleet: fleetStore, operations: NativeSpaceOperations.all)
             if let receipt = store.receipt {
                 DisclosureGroup("Complete space report receipt") {
                     Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)

@@ -25,7 +25,7 @@ pub(super) async fn recycle_launchd(
         .map_err(|error| format!("{context}: cannot identify this host: {error}"))?
         .ok_or_else(|| format!("{context}: no registry target names this machine ({hostname})"))?;
     let runner = crate::deploy::production_runner();
-    let units = crate::deploy::service::loaded_units(target, &runner)
+    let units = crate::deploy::service::loaded_image_units(target, &runner)
         .await
         .map_err(|error| {
             format!("{context}: cannot enumerate domain-bound launchd units: {error}")
@@ -54,7 +54,8 @@ pub(super) async fn recycle_launchd(
             continue;
         }
         let running = running_images.get(&pid);
-        let declared_program = unit.program.split_whitespace().next();
+        let declared_command = unit.declared_program();
+        let declared_program = declared_command.split_whitespace().next();
         let directly_declared = paths
             .iter()
             .any(|path| declared_program == Some(path.as_str()));
@@ -105,7 +106,7 @@ pub(super) async fn recycle_launchd(
                 unit.label, unit.loaded_domains[0], unit.label, unit.path
             )
         })?;
-        let after = crate::deploy::service::loaded_units(target, &runner)
+        let after = crate::deploy::service::loaded_image_units(target, &runner)
             .await
             .map_err(|error| format!("{context}: cannot re-read {service}: {error}"))?;
         let current_pid = after

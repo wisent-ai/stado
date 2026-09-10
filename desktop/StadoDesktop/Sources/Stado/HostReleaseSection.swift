@@ -33,37 +33,41 @@ struct HostReleaseState: Decodable, Sendable {
 final class HostReleaseStore: ObservableObject {
     @Published private(set) var report: HostReleaseState?
     @Published private(set) var refusal: String?
+    @Published private(set) var receipt: OperatorCommandResult?
     @Published private(set) var isRefreshing = false
-
-    private let cli: StadoCLI
     private var generation = 0
-
-    init(cli: StadoCLI = StadoCLI()) {
-        self.cli = cli
-    }
 
     nonisolated static func arguments(host: String) -> [String] {
         ["release", "host-state", "--host", host, "--json"]
     }
 
-    func refresh(host: String) async {
+    func refresh(host: String, fleet: FleetControlStore) async {
         generation += 1
         let current = generation
-        isRefreshing = true
-        defer {
-            if current == generation { isRefreshing = false }
+        let source = fleet.requestGeneration
+        report = nil
+        receipt = nil
+        refusal = nil
+        guard let address = fleet.address else {
+            refusal = "No Stado API is configured."
+            isRefreshing = false
+            return
         }
+        isRefreshing = true
+        defer { if current == generation { isRefreshing = false } }
         do {
-            let answer = try await cli.jsonResult(
-                HostReleaseState.self,
-                arguments: Self.arguments(host: host)
-            )
-            guard current == generation else { return }
-            report = answer.value
-            refusal = answer.refusal
+            let result = try await fleet.client.run(arguments: Self.arguments(host: host),
+                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken)
+            guard current == generation, source == fleet.requestGeneration else { return }
+            receipt = result
+            refusal = result.ok ? nil : result.message
+            do {
+                report = try JSONDecoder().decode(HostReleaseState.self, from: Data(result.standardOutput.utf8))
+            } catch {
+                if refusal == nil { refusal = error.localizedDescription }
+            }
         } catch {
-            guard current == generation else { return }
-            report = nil
+            guard current == generation, source == fleet.requestGeneration else { return }
             refusal = error.localizedDescription
         }
     }
@@ -72,6 +76,7 @@ final class HostReleaseStore: ObservableObject {
 struct HostReleaseSection: View {
     @ObservedObject var store: HostReleaseStore
     let host: String
+    @ObservedObject var fleet: FleetControlStore
 
     var body: some View {
         WisentSectionBox(
@@ -122,12 +127,19 @@ struct HostReleaseSection: View {
                     symbol: "arrow.clockwise",
                     isEnabled: !store.isRefreshing
                 ) {
-                    Task { await store.refresh(host: host) }
+                    Task { await store.refresh(host: host, fleet: fleet) }
                 }
             )
+            NativeCapabilityActions(host: host, fleet: fleet, operations: NativeHostReleaseOperations.all)
+            if let receipt = store.receipt {
+                DisclosureGroup("Complete release state receipt") {
+                    Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    Text(receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                }
+            }
         }
-        .task(id: host) {
-            await store.refresh(host: host)
+        .task(id: "\(host)|\(fleet.requestGeneration)") {
+            await store.refresh(host: host, fleet: fleet)
         }
     }
 }

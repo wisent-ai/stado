@@ -87,13 +87,12 @@ fn failed_delivery_resumes_original_source_after_checkout_changes() {
         "an occupied installation destination passed"
     );
     assert!(installed.is_dir(), "the existing destination was replaced");
-    let mut inventory = Command::new(env!("CARGO_BIN_EXE_stado"));
-    release_env(&mut inventory, home.path(), &storage, &vault);
-    let before: Value = serde_json::from_slice(
-        &run(inventory.args(["release", "status", "ci-release-probe", "--json"])).stdout,
-    )
-    .unwrap();
-    let before = &before["runs"][0];
+    let run_path = fs::read_dir(storage.join("runs/release-pipeline"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join("run.json"))
+        .find(|path| path.is_file())
+        .expect("submission persisted its release run");
+    let before: Value = serde_json::from_slice(&fs::read(&run_path).unwrap()).unwrap();
     assert_eq!(before["state"], "failed");
     assert_eq!(before["platforms"][platform]["state"], "published");
     assert_eq!(
@@ -161,6 +160,10 @@ fn failed_delivery_resumes_original_source_after_checkout_changes() {
     );
     let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut command, home.path(), &storage, &vault);
+    command.env(
+        "WC_RELEASE_SIGNING_SKARBIEC_TOKEN_FILE",
+        home.path().join("absent-signing-grant"),
+    );
     let repeated: Value = serde_json::from_slice(
         &run(command
             .current_dir(&source)

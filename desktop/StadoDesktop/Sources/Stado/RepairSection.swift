@@ -1,126 +1,21 @@
-import Foundation
 import SwiftUI
 import WisentDesignSystem
 
-private struct RepairCatalog: Decodable, Sendable {
-    let declaration: String
-    let services: [RepairService]
-}
 
-@MainActor
-final class RepairStore: ObservableObject {
-    @Published private(set) var services: [RepairService] = []
-    @Published private(set) var declaration = "stado-rs/data/service-catalog.json"
-    @Published private(set) var reports: [String: RepairReport] = [:]
-    @Published private(set) var loadingCatalog = false
-    @Published private(set) var running: String?
-    @Published private(set) var problem: String?
-    @Published private(set) var mutation: WisentMutationOutcome = .idle
-
-    private let cli: StadoCLI
-
-    init(cli: StadoCLI = StadoCLI()) {
-        self.cli = cli
-    }
-
-    nonisolated static func listArguments() -> [String] {
-        ["repair", "list", "--json"]
-    }
-
-    nonisolated static func runArguments(
-        service: String,
-        host: String,
-        step: String? = nil,
-        apply: Bool
-    ) -> [String] {
-        var arguments = ["repair", service]
-        if let step {
-            arguments.append(contentsOf: ["--step", step])
-        }
-        arguments.append(contentsOf: ["--target", host])
-        if apply {
-            arguments.append("--apply")
-        }
-        arguments.append("--json")
-        return arguments
-    }
-
-    func load() async {
-        guard services.isEmpty, !loadingCatalog else { return }
-        loadingCatalog = true
-        defer { loadingCatalog = false }
-        do {
-            let catalog = try await cli.json(
-                RepairCatalog.self,
-                arguments: Self.listArguments()
-            )
-            declaration = catalog.declaration
-            services = catalog.services.filter { !$0.repair.isEmpty }
-            problem = nil
-        } catch {
-            problem = Self.message(error)
-        }
-    }
-
-    func report(service: String, host: String) -> RepairReport? {
-        reports[Self.key(service: service, host: host)]
-    }
-
-    func isRunning(service: String, host: String) -> Bool {
-        running == Self.key(service: service, host: host)
-    }
-
-    func run(service: String, host: String, step: String? = nil, apply: Bool) async {
-        guard running == nil else { return }
-        let key = Self.key(service: service, host: host)
-        running = key
-        mutation = .working(
-            apply ? "Applying \(service)'s declared repair on \(host)" : "Reading \(service)'s repair plan on \(host)"
-        )
-        defer { running = nil }
-        do {
-            let report = try await cli.json(
-                RepairReport.self,
-                arguments: Self.runArguments(
-                    service: service,
-                    host: host,
-                    step: step,
-                    apply: apply
-                ),
-                timeoutSeconds: apply ? nil : RepairConstants.dryRunTimeoutSeconds
-            )
-            reports[key] = report
-            problem = nil
-            mutation = .succeeded(
-                apply
-                    ? "Applied \(report.steps.count) declared repair step(s) on \(host)."
-                    : "Read \(report.steps.count) declared repair step(s) on \(host) without applying them."
-            )
-        } catch {
-            let message = Self.message(error)
-            problem = message
-            mutation = .failed(message)
-        }
-    }
-
-    func clearMutation() {
-        mutation = .idle
-    }
-
-    private nonisolated static func key(service: String, host: String) -> String {
-        "\(host)|\(service)"
-    }
-
-    private nonisolated static func message(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-    }
+private struct RepairReview: Identifiable {
+    let service: RepairService
+    let host: String
+    let step: String?
+    let source: Int
+    var id: String { "\(host)|\(service.name)|\(step ?? "all")|\(source)" }
 }
 
 struct RepairSection: View {
     @ObservedObject var store: RepairStore
     let host: String
+    @ObservedObject var fleet: FleetControlStore
 
-    @State private var pendingApply: RepairService?
+    @State private var pendingApply: RepairReview?
 
     var body: some View {
         WisentSectionBox(
@@ -147,16 +42,18 @@ struct RepairSection: View {
                 store.clearMutation()
             }
         }
-        .task {
-            await store.load()
+        .task(id: "\(host)|\(fleet.requestGeneration)") {
+            await store.load(fleet: fleet)
         }
-        .alert(item: $pendingApply) { service in
+        .onChange(of: "\(host)|\(fleet.requestGeneration)") { _, _ in pendingApply = nil }
+        .alert(item: $pendingApply) { review in
             Alert(
-                title: Text("Apply \(service.name) repair on \(host)?"),
-                message: Text("Stado will run \(service.repair.count) mutating step(s) in declaration order and read each declared proof afterwards."),
+                title: Text("Apply \(review.service.name) repair on \(review.host)?"),
+                message: Text("Stado will apply \(review.step.map { "step \($0)" } ?? "the declared steps in order") and read each declared proof afterwards."),
                 primaryButton: .destructive(Text("Apply")) {
                     Task {
-                        await store.run(service: service.name, host: host, apply: true)
+                        await store.run(service: review.service.name, host: review.host, step: review.step,
+                            apply: true, fleet: fleet, expectedSource: review.source)
                     }
                 },
                 secondaryButton: .cancel()
@@ -181,6 +78,14 @@ struct RepairSection: View {
                     value: "\(step.summary)\nProof: \(step.proof)",
                     tone: step.mutating ? .warning : .neutral
                 )
+                HStack {
+                    Button("Preview step") {
+                        Task { await store.run(service: service.name, host: host, step: step.name, apply: false, fleet: fleet) }
+                    }
+                    Button("Apply step…") {
+                        pendingApply = RepairReview(service: service, host: host, step: step.name, source: fleet.requestGeneration)
+                    }
+                }.disabled(store.running != nil)
             }
             HStack(spacing: WisentDesign.Space.x2) {
                 WisentActionButton(
@@ -188,10 +93,10 @@ struct RepairSection: View {
                         "Dry run",
                         symbol: "doc.text.magnifyingglass",
                         kind: .secondary,
-                        isEnabled: !store.isRunning(service: service.name, host: host)
+                        isEnabled: store.running == nil
                     ) {
                         Task {
-                            await store.run(service: service.name, host: host, apply: false)
+                            await store.run(service: service.name, host: host, apply: false, fleet: fleet)
                         }
                     }
                 )
@@ -200,9 +105,9 @@ struct RepairSection: View {
                         "Apply declared steps…",
                         symbol: "wrench.and.screwdriver",
                         kind: .primary,
-                        isEnabled: !store.isRunning(service: service.name, host: host)
+                        isEnabled: store.running == nil
                     ) {
-                        pendingApply = service
+                        pendingApply = RepairReview(service: service, host: host, step: nil, source: fleet.requestGeneration)
                     }
                 )
             }
@@ -217,6 +122,12 @@ struct RepairSection: View {
                         value: "\(step.observation.text)\nProof read: \(step.proof)",
                         tone: step.status == "applied" ? .success : .neutral
                     )
+                }
+            }
+            if let receipt = store.receipt(service: service.name, host: host) {
+                DisclosureGroup("Complete repair receipt") {
+                    Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    Text(receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
                 }
             }
         }

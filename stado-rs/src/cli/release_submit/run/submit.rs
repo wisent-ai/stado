@@ -211,10 +211,7 @@ pub(super) async fn continue_run(
     }
     run.state = ReleaseRunState::Waiting;
     save(&mut run).await?;
-    let (key, private) = match signing(&run.product).await {
-        Ok(signing) => signing,
-        Err(error) => return Err(persist_failure(&mut run, error).await),
-    };
+    let mut signing_material = None;
     run.state = ReleaseRunState::Publishing;
     save(&mut run).await?;
     let mut artifacts = BTreeMap::new();
@@ -222,7 +219,18 @@ pub(super) async fn continue_run(
         let result = if run.platforms[p].state == PlatformRunState::Published {
             release_cmd::verified_artifact_for_submit(&run.product, &run.version, p).await
         } else {
-            publish(&mut run, &m, p, &store, &key, &private).await
+            // Verification and delivery of already signed bytes need no private
+            // signing grant on the machine resuming the release.
+            if signing_material.is_none() {
+                signing_material = Some(match signing(&run.product).await {
+                    Ok(material) => material,
+                    Err(error) => return Err(persist_failure(&mut run, error).await),
+                });
+            }
+            let (key, private) = signing_material
+                .as_ref()
+                .expect("unpublished platform needs signing");
+            publish(&mut run, &m, p, &store, key, private).await
         };
         let a = match result {
             Ok(artifact) => artifact,

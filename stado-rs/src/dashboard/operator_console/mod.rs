@@ -49,6 +49,8 @@ struct RunRequest {
     #[serde(default)]
     input: Option<String>,
     #[serde(default)]
+    stdin: Option<String>,
+    #[serde(default)]
     confirmation: String,
     #[serde(default = "default_timeout")]
     timeout_seconds: u64,
@@ -120,6 +122,11 @@ fn validate(request: &RunRequest) -> Result<(), ConsoleError> {
     if request.input.as_ref().map_or(0, String::len) > MAX_INPUT_BYTES {
         return Err(ConsoleError::bad_request(format!(
             "input exceeds the {MAX_INPUT_BYTES}-byte limit"
+        )));
+    }
+    if request.stdin.as_ref().map_or(0, String::len) > MAX_INPUT_BYTES {
+        return Err(ConsoleError::bad_request(format!(
+            "stdin exceeds the {MAX_INPUT_BYTES}-byte limit"
         )));
     }
     if request.args.iter().any(|arg| arg == INPUT_PLACEHOLDER) && request.input.is_none() {

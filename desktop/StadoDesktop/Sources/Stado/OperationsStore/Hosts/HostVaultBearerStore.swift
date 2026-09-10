@@ -26,11 +26,8 @@ final class HostVaultBearerStore: ObservableObject {
     @Published private(set) var rawBearer: String?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
 
-    private let cli: StadoCLI
-
-    init(cli: StadoCLI = StadoCLI()) {
-        self.cli = cli
-    }
+    @Published private(set) var operationReceipt: OperatorCommandResult?
+    private var generation = 0
 
     nonisolated static func arguments(_ request: HostVaultBearerRequest) -> [String] {
         var arguments = [
@@ -54,50 +51,50 @@ final class HostVaultBearerStore: ObservableObject {
         return arguments
     }
 
-    func submit(_ request: HostVaultBearerRequest) async {
+    func submit(_ request: HostVaultBearerRequest, fleet: FleetControlStore, expectedSource: Int) async {
         guard !mutation.isWorking else { return }
-        receipt = nil
-        rawBearer = nil
-        mutation = .working(
-            request.tokenItem == nil
-                ? "Minting a bounded bearer on \(request.host)"
-                : "Registering the stored bearer on \(request.host)"
-        )
-        if request.showGeneratedBearer {
-            do {
-                rawBearer = try await cli.text(arguments: Self.arguments(request))
-                mutation = .succeeded(
-                    "\(request.host) minted a bounded bearer for \(request.consumer). This is the only displayed copy; the vault stores its hash."
-                )
-            } catch {
-                mutation = .failed(Self.message(for: error))
-            }
+        guard expectedSource == fleet.requestGeneration, let address = fleet.address else {
+            mutation = .failed("The selected Stado endpoint changed. Review the bearer operation again.")
             return
         }
+        let current = generation
+        receipt = nil
+        rawBearer = nil
+        operationReceipt = nil
+        mutation = .working(request.tokenItem == nil
+            ? "Minting a bounded bearer on \(request.host)"
+            : "Registering the stored bearer on \(request.host)")
         do {
-            let answer = try await cli.json(
-                HostVaultBearerReceipt.self,
-                arguments: Self.arguments(request)
-            )
-            receipt = answer
-            guard Self.matches(answer, request: request) else {
-                mutation = .failed(
-                    answer.detail
-                        ?? "Stado returned \(answer.status) for \(answer.target); the requested grant was not reported as applied."
-                )
+            let result = try await fleet.client.run(arguments: Self.arguments(request),
+                confirmsMutation: true, at: address, authorizationToken: fleet.authorizationToken,
+                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+            guard current == generation, expectedSource == fleet.requestGeneration else { return }
+            operationReceipt = result
+            guard result.ok else { mutation = .failed(result.message); return }
+            if request.showGeneratedBearer {
+                rawBearer = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                mutation = .succeeded("\(request.host) minted a bounded bearer for \(request.consumer). This is the displayed copy; the vault stores its hash.")
                 return
             }
-            mutation = .succeeded(
-                answer.status == "token_registered"
-                    ? "\(answer.target) registered the existing \(answer.tokenSource?.item ?? request.tokenItem ?? "")#\(answer.tokenSource?.field ?? request.tokenField) bearer for \(answer.skarbiec.consumer)."
-                    : "\(answer.target) minted a bounded bearer for \(answer.skarbiec.consumer). The bearer was not printed."
-            )
+            let answer = try JSONDecoder().decode(HostVaultBearerReceipt.self, from: Data(result.standardOutput.utf8))
+            receipt = answer
+            guard Self.matches(answer, request: request) else {
+                mutation = .failed(answer.detail
+                    ?? "Stado returned \(answer.status) for \(answer.target); the requested grant was not reported as applied.")
+                return
+            }
+            mutation = .succeeded(answer.status == "token_registered"
+                ? "\(answer.target) registered the existing \(answer.tokenSource?.item ?? request.tokenItem ?? "")#\(answer.tokenSource?.field ?? request.tokenField) bearer for \(answer.skarbiec.consumer)."
+                : "\(answer.target) minted a bounded bearer for \(answer.skarbiec.consumer). The bearer was not printed.")
         } catch {
+            guard current == generation, expectedSource == fleet.requestGeneration else { return }
             mutation = .failed(Self.message(for: error))
         }
     }
 
     func clear() {
+        generation += 1
+        operationReceipt = nil
         rawBearer = nil
         receipt = nil
         mutation = .idle

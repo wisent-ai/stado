@@ -18,6 +18,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "cloudflare",
     "config",
     "cost",
+    "credentials",
     "disk-cleanup",
     "doctor",
     "fleet",
@@ -40,9 +41,12 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "registry",
     "release",
     "resources",
+    "repair",
     "results",
     "runner",
+    "route",
     "schedule",
+    "scratch",
     "secrets",
     "service",
     "space",
@@ -52,6 +56,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "vast",
     "web",
     "workdirs",
+    "workload",
 ];
 
 pub(super) fn is_retained_log_request(args: &[String]) -> bool {
@@ -72,6 +77,40 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     let family = args.first().map(String::as_str).unwrap_or("");
     let operation = args.get(1).map(String::as_str).unwrap_or("");
     let detail = args.get(2).map(String::as_str).unwrap_or("");
+    if family == "workload" {
+        return matches!(operation, "list" | "status");
+    }
+    if family == "repair" {
+        return !args.iter().any(|arg| arg == "--apply");
+    }
+    if family == "route" {
+        return matches!(operation, "list" | "capability");
+    }
+    if family == "scratch" {
+        return matches!(operation, "profiles" | "hosts" | "list")
+            || (operation == "reap" && !args.iter().any(|arg| arg == "--apply"));
+    }
+    if family == "credentials" {
+        return operation == "vaults"
+            || operation == "seed-freshness"
+            || (operation == "item"
+                && (detail == "show"
+                    || (detail == "retag" && !args.iter().any(|arg| arg == "--tags"))))
+            || (operation == "grant" && detail == "show")
+            || (operation == "vault"
+                && (detail.is_empty()
+                    || (detail == "sync" && args.iter().any(|arg| arg == "--check"))))
+            || (operation == "backup"
+                && detail == "audit"
+                && !args.iter().any(|arg| arg == "--apply"));
+    }
+    if family == "release" {
+        return matches!(
+            operation,
+            "status" | "provenance" | "logs" | "doctor" | "active-binary"
+        ) || (operation == "host-state" && !args.iter().any(|arg| arg == "--apply"))
+            || (operation == "catalog" && detail == "audit");
+    }
     if family == "workdirs" {
         return !args.iter().any(|arg| arg == "--apply");
     }
@@ -80,13 +119,16 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             || (operation == "signatures" && !args.iter().any(|arg| arg == "--apply"));
     }
     if family == "space" {
-        return operation == "report" || (operation == "cleaners" && detail == "list");
+        return operation == "report"
+            || (operation == "cleaners" && detail == "list")
+            || (matches!(operation, "reclaim" | "relocate")
+                && !args.iter().any(|arg| arg == "--apply"))
+            || (operation == "file"
+                && detail == "retire"
+                && args.iter().any(|arg| arg == "--dry-run"));
     }
     if family == "azure" && operation == "unusual-activity" {
         return detail == "diagnose";
-    }
-    if family == "host" && operation == "gui-automation" {
-        return detail == "status";
     }
     if family == "host" && operation == "exec" {
         return is_retained_log_request(args);
@@ -140,7 +182,6 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 "registry",
                 "validate" | "pull" | "self" | "doctor" | "beacon-age"
             )
-            | ("release", "catalog" | "status")
             | ("resources", "show" | "verify" | "operations")
             | (
                 "runner",

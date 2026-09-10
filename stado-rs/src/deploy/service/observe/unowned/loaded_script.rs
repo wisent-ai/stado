@@ -20,6 +20,7 @@ if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   exit 0
 fi
 uid=$(/usr/bin/id -u)
+details=full
 listing=$(/bin/launchctl list)
 
 # Every job launchd actually HOLDS, in every domain this login can print.
@@ -185,9 +186,11 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
     # forever. The beacon relay on lukasz-macbook carried HOME and PATH while
     # its program required STADO_HOST_HEALTH_API_URL, and it failed every five
     # minutes for three weeks.
+    if [ "$details" != images ]; then
     env_keys=$(/usr/bin/plutil -extract EnvironmentVariables json -o - "$plist" 2>/dev/null \
       | /usr/bin/tr -d '{}"' | /usr/bin/tr ',' '\n' \
       | /usr/bin/awk -F':' 'NF > 1 { print $1 }' | /usr/bin/tr '\n' ' ')
+    fi
   fi
   # Which uppercase variables the program's own script reads, and which it sets
   # or defaults for itself. The subtraction happens in the reader, against the
@@ -200,6 +203,7 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
   # one has to OPEN the file, so it unescapes here or it opens nothing -- and
   # opening nothing is how this check measured zero subjects on its first run
   # while looking, from the outside, exactly like a host with no problem.
+  if [ "$details" != images ]; then
   unescaped=$(printf '%s' "$program" | /usr/bin/tr -d '\\')
   script=$(printf '%s' "$unescaped" | /usr/bin/awk '{ print $1 }')
   case "$script" in
@@ -226,6 +230,7 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
       fi
       ;;
   esac
+  fi
   running=''
   started=''
   written=''
@@ -233,14 +238,17 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
     ''|*[!0-9]*) ;;
     *)
       running=$(/bin/ps -p "$pid" -o command= 2>/dev/null | /usr/bin/tr '\t\r\n' ' ')
+      if [ "$details" != images ]; then
       lstart=$(/bin/ps -p "$pid" -o lstart= 2>/dev/null)
       started=$(/bin/date -j -f '%a %b %d %T %Y' "$lstart" +%s 2>/dev/null)
       binary=$(/bin/ps -p "$pid" -o comm= 2>/dev/null)
       if [ -f "$binary" ]; then written=$(/usr/bin/stat -f %m "$binary" 2>/dev/null); fi
+      fi
       ;;
   esac
   printf 'STADO_LOADED\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$status" "$label" "${plist:--}" "${program:--}" "${domains:--}" "${running:--}" "${started:--}" "${written:--}" "${source:--}" "${loaded_domains:--}" "${runs:--}" "${exited:--}" "${env_keys:--}" "${needs:--}" "${assigns:--}"
 done
+[ "$details" != images ] || exit 0
 # Every place a shell on this host could find a `stado`, and which one the
 # release channel delivered.
 #

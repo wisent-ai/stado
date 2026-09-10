@@ -6,12 +6,13 @@ import WisentDesignSystem
 struct CredentialsHostSection: View {
     let host: String
     @ObservedObject var store: HostVaultStore
+    @ObservedObject var fleet: FleetControlStore
     let openBearer: () -> Void
 
     var body: some View {
         WisentSectionBox(
             title: "Credentials",
-            detail: "The vault authority declared by this host. Values and item names are never listed."
+            detail: "The selected host's declared vault, credential operations and complete native API receipts."
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 if store.host != host || store.isLoading {
@@ -54,6 +55,16 @@ struct CredentialsHostSection: View {
                     )
                 }
             }
+            NativeCapabilityActions(host: host, fleet: fleet, operations: NativeCredentialOperations.all)
+            if let receipt = store.receipt {
+                DisclosureGroup("Complete vault inventory receipt") {
+                    Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    Text(receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                }
+            }
+        }
+        .task(id: "\(host)|\(fleet.requestGeneration)") {
+            await store.load(host: host, fleet: fleet)
         }
     }
 }
