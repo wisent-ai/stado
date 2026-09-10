@@ -1,34 +1,21 @@
-//! The current Skarbiec broker this area resolves declared routes through.
-//!
-//! No stand-in on PATH and no canned answer, and no environment variable an
-//! operator has to remember: the binary is either the one named in
-//! `SKARBIEC_BIN`, or the one built here from the sibling Skarbiec checkout at
-//! `origin/main`. The source is taken with `git archive` into an ignored cache
-//! keyed by commit, so the operator's own working tree — which routinely
-//! carries uncommitted work, and at the time of writing does not compile — is
-//! read and never touched, and a second run reuses the build.
-//!
-//! Same shape as `tests/credentials_host/broker.rs`, because both areas need
-//! the same real dependency and two ways of getting it would drift.
+//! Real current and historical brokers, without copying another checkout.
+//! Current builds use the one canonical Skarbiec checkout. The historical
+//! dependency is downloaded from its immutable release and digest-checked.
 
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 
-const CACHE: &str = "../.wisent-output/route-skarbiec";
-const OWNER_ONLY_EXECUTABLE: u32 = 0o700;
-// This released source predates the route group; the current host's install
-// cannot serve as the fixture because upgrading it would break this test.
-const HISTORICAL_REVISION: &str = "33daa68378c4fb81b12f3a108ccd4906204cc440";
+use sha2::{Digest, Sha256};
 
-/// One build per test binary. Dereferencing the lock blocks the other test
-/// threads while the first one exports and compiles, so parallel cases cannot
-/// race each other through the same export directory.
+const HISTORICAL_VERSION: &str = "0.2.39";
+const HISTORICAL_REVISION: &str = "33daa68378c4fb81b12f3a108ccd4906204cc440";
+const HASH_BUFFER_BYTES: usize = 8192;
 static BROKER: LazyLock<PathBuf> = LazyLock::new(resolve);
-static HISTORICAL_BROKER: LazyLock<PathBuf> =
-    LazyLock::new(|| cached_build(&skarbiec_repo(), HISTORICAL_REVISION));
+static HISTORICAL_BROKER: LazyLock<PathBuf> = LazyLock::new(download_historical);
 
 pub fn real_skarbiec() -> PathBuf {
     BROKER.clone()
@@ -43,39 +30,98 @@ fn resolve() -> PathBuf {
         let binary = PathBuf::from(named);
         assert!(
             executable(&binary),
-            "blocked: SKARBIEC_BIN does not name an executable file: {}",
+            "SKARBIEC_BIN is not executable: {}",
             binary.display()
         );
         return binary;
     }
     let repo = skarbiec_repo();
-    let commit = git(&repo, &["rev-parse", "origin/main"]);
-    cached_build(&repo, &commit)
-}
-
-fn cached_build(repo: &Path, commit: &str) -> PathBuf {
-    let cache = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(CACHE)
-        .join(commit);
-    let binary = cache.join("skarbiec");
-    if executable(&binary) {
-        return binary;
-    }
-    build(repo, commit, &cache);
+    run(
+        Command::new("cargo")
+            .args(["build", "--locked", "--release", "--bin", "skarbiec"])
+            .current_dir(&repo)
+            .env("CARGO_TARGET_DIR", repo.join("target"))
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env_remove("RUSTFLAGS"),
+        "build the canonical Skarbiec checkout",
+    );
+    let binary = repo.join("target/release/skarbiec");
     assert!(
         executable(&binary),
-        "blocked: the Skarbiec build produced no executable at {}",
+        "build produced no broker: {}",
         binary.display()
     );
     binary
 }
 
-/// The Skarbiec checkout beside this one.
-///
-/// Resolved from the common git directory rather than from
-/// `CARGO_MANIFEST_DIR`, because this area is expected to run from a linked
-/// worktree as well as from the primary checkout, and only the common
-/// directory names the place both of them were cloned into.
+fn download_historical() -> PathBuf {
+    let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("linux", "x86_64") => "linux-amd64",
+        other => panic!("no historical release platform for {other:?}; provide SKARBIEC_STALE_BIN"),
+    };
+    let cache = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/test-dependencies/skarbiec")
+        .join(format!("{HISTORICAL_VERSION}-{platform}"));
+    fs::create_dir_all(&cache).expect("create the test dependency cache");
+    let prefix = format!("stado://releases/skarbiec/{HISTORICAL_VERSION}/{platform}");
+    let manifest = cache.join("release.json");
+    download(&format!("{prefix}/release.json"), &manifest);
+    let identity: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap())
+        .expect("historical release manifest is JSON");
+    assert_eq!(identity["source_revision"], HISTORICAL_REVISION);
+    assert_eq!(identity["binary"], "bin/skarbiec");
+    let expected = identity["artifact_sha256"]
+        .as_str()
+        .expect("archive digest");
+    let archive = cache.join("release.tar.gz");
+    if digest(&archive).as_deref() != Some(expected) {
+        download(&format!("{prefix}/release.tar.gz"), &archive);
+    }
+    assert_eq!(
+        digest(&archive).as_deref(),
+        Some(expected),
+        "historical archive digest mismatch"
+    );
+    run(
+        Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&cache)
+            .arg("bin/skarbiec"),
+        "extract the verified historical broker",
+    );
+    let binary = cache.join("bin/skarbiec");
+    assert!(
+        executable(&binary),
+        "archive did not contain an executable broker"
+    );
+    binary
+}
+
+fn download(uri: &str, destination: &Path) {
+    run(
+        Command::new(env!("CARGO_BIN_EXE_stado"))
+            .args(["storage", "get", uri]).arg(destination),
+        "read the real historical release; provide SKARBIEC_STALE_BIN if this platform was not published",
+    );
+}
+
+fn digest(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0; HASH_BUFFER_BYTES];
+    loop {
+        let size = file.read(&mut buffer).ok()?;
+        if size == 0 {
+            break;
+        }
+        hash.update(&buffer[..size]);
+    }
+    Some(format!("{:x}", hash.finalize()))
+}
+
 fn skarbiec_repo() -> PathBuf {
     if let Some(named) = std::env::var_os("SKARBIEC_REPO") {
         return PathBuf::from(named);
@@ -92,68 +138,20 @@ fn skarbiec_repo() -> PathBuf {
         .unwrap_or_default();
     assert!(
         repo.join(".git").exists(),
-        "blocked: no Skarbiec checkout at {}; name one in SKARBIEC_REPO or a built binary in \
-         SKARBIEC_BIN. This area resolves declared routes through the real broker and does not \
-         pretend to without one.",
+        "no canonical Skarbiec checkout at {}; set SKARBIEC_REPO or SKARBIEC_BIN",
         repo.display()
     );
     repo
 }
 
-fn build(repo: &Path, commit: &str, cache: &Path) {
-    let source = cache.join("source");
-    let archive = cache.join("source.tar");
-    fs::create_dir_all(&source).expect("create the Skarbiec export directory");
-    run(
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["archive", "--format=tar", "-o"])
-            .arg(&archive)
-            .arg(commit),
-        "export the selected immutable Skarbiec revision",
-    );
-    run(
-        Command::new("tar")
-            .arg("-xf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(&source),
-        "unpack the Skarbiec export",
-    );
-    run(
-        Command::new("cargo")
-            .args(["build", "--locked", "--release", "--bin", "skarbiec"])
-            .current_dir(&source)
-            .env("CARGO_TARGET_DIR", cache.join("target"))
-            .env_remove("CARGO")
-            .env_remove("CARGO_MAKEFLAGS")
-            .env_remove("CARGO_MANIFEST_DIR")
-            .env_remove("CARGO_ENCODED_RUSTFLAGS")
-            .env_remove("RUSTFLAGS")
-            .env_remove("RUSTC")
-            .env_remove("RUSTC_WRAPPER")
-            .env_remove("RUSTDOC"),
-        "build the real Skarbiec broker",
-    );
-    let built = cache.join("target/release/skarbiec");
-    fs::copy(&built, cache.join("skarbiec")).expect("keep the built broker beside its export");
-    fs::set_permissions(
-        cache.join("skarbiec"),
-        fs::Permissions::from_mode(OWNER_ONLY_EXECUTABLE),
-    )
-    .expect("make the built broker owner-only executable");
-}
-
 fn git(directory: &Path, arguments: &[&str]) -> String {
-    let output = run(
+    String::from_utf8(run(
         Command::new("git").arg("-C").arg(directory).args(arguments),
-        "read the git checkout",
-    );
-    String::from_utf8(output)
-        .expect("git answers in UTF-8")
-        .trim()
-        .to_string()
+        "read the canonical checkout",
+    ))
+    .expect("git answers in UTF-8")
+    .trim()
+    .to_owned()
 }
 
 fn run(command: &mut Command, purpose: &str) -> Vec<u8> {
@@ -164,7 +162,7 @@ fn run(command: &mut Command, purpose: &str) -> Vec<u8> {
         output.status.success(),
         "blocked: could not {purpose}\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stderr)
     );
     output.stdout
 }

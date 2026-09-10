@@ -18,6 +18,7 @@ final class NativeMemoryHost {
     private var previousEnvironment: [String: String] = [:]
     private var changedEnvironment: [String] = []
     private var sequence = 0
+    private var stopped = false
 
     init() throws {
         let caller = ProcessInfo.processInfo.environment
@@ -27,13 +28,14 @@ final class NativeMemoryHost {
         stado = URL(fileURLWithPath: caller["STADO_BIN"] ?? repo.appendingPathComponent("stado-rs/target/debug/stado").path)
         skarbiec = URL(fileURLWithPath: try XCTUnwrap(caller["SKARBIEC_BIN"], "Set SKARBIEC_BIN to the real consolidated broker"))
         let revision = try XCTUnwrap(caller["STADO_SOURCE_REVISION"], "Set STADO_SOURCE_REVISION to the compiled revision")
-        // GnuPG uses Unix sockets, whose path length is bounded on macOS.
-        root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".stado/work/mm-\(UUID().uuidString.prefix(8))")
+        let runID = String(UUID().uuidString.prefix(8))
+        root = package.appendingPathComponent(".build/test-results/memory-\(runID)")
         let storage = root.appendingPathComponent("storage")
         registry = storage.appendingPathComponent("registry.json")
         endpoint = "http://127.0.0.1:\(try Self.availablePort())"
-        let gnupg = root.appendingPathComponent("gnupg")
+        // Only the keyring needs the short root: macOS limits Unix socket paths to 104 bytes.
+        let gnupg = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".stado/test-runs/mm-\(runID)")
         environment = ["HOME": root.path, "GNUPGHOME": gnupg.path,
             "TMPDIR": root.appendingPathComponent("temporary").path,
             "PATH": caller["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -107,6 +109,8 @@ final class NativeMemoryHost {
     }
 
     func stop() {
+        guard !stopped else { return }
+        stopped = true
         for child in children.reversed() where child.isRunning { child.terminate(); child.waitUntilExit() }
         children.removeAll()
         for handle in handles { try? handle.close() }
@@ -123,6 +127,7 @@ final class NativeMemoryHost {
         cleanup.standardOutput = FileHandle.nullDevice
         cleanup.standardError = FileHandle.nullDevice
         if (try? cleanup.run()) != nil { cleanup.waitUntilExit() }
+        if let keyring = environment["GNUPGHOME"] { try? FileManager.default.removeItem(atPath: keyring) }
     }
 
     private func identity(_ binary: URL) throws -> [String: String] {

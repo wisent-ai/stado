@@ -8,9 +8,8 @@
 //!
 //! * [`current`] — a broker that knows the `route` verb group Skarbiec ships
 //!   today, resolved through the shared support policy.
-//! * [`stale`] — the genuine 0.2.39 source, built once in the same cache as
-//!   the current broker. It still knows `routes add` and refuses `route`,
-//!   regardless of which release the operator has since installed.
+//! * [`stale`] — the verified 0.2.39 release artifact. It still knows
+//!   `routes add` and refuses `route`, regardless of the operator's install.
 
 use std::fs;
 use std::io::Write;
@@ -85,9 +84,8 @@ pub fn stale() -> PathBuf {
 
 /// One real vault on the isolated host, opened by one real broker.
 pub struct Vault {
-    /// gpg's agent socket lives here, and the system temp root is deep enough
-    /// to overrun the socket path limit — the same reason `tests/support`
-    /// keeps its GnuPG home under `~/.stado/work`.
+    /// Only the GnuPG home needs a short product-owned test root: macOS Unix
+    /// socket paths cannot exceed 104 bytes. TempDir removes it on drop.
     gnupg: tempfile::TempDir,
     binary: PathBuf,
     vault: PathBuf,
@@ -109,7 +107,7 @@ impl Vault {
         fs::copy(binary, &installed).expect("install the real broker on the isolated host");
         fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/work");
+        let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/test-runs");
         fs::create_dir_all(&scratch).unwrap();
         let gnupg = tempfile::Builder::new()
             .prefix("route-real-gpg-")
