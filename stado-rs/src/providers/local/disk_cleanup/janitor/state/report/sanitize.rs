@@ -36,7 +36,7 @@ const PUBLIC_OUTCOMES: [&str; 13] = [
 
 /// Public beacon reason codes. Private operator reports retain the complete
 /// recorded pass, including reasons absent from this legacy projection.
-const PUBLIC_SKIP_REASONS: [&str; 17] = [
+const PUBLIC_SKIP_REASONS: [&str; 18] = [
     "active_jobs",
     "blob_link_count_uncertain",
     "byte_cap",
@@ -44,6 +44,7 @@ const PUBLIC_SKIP_REASONS: [&str; 17] = [
     "incomplete_repository",
     "lock_root_absent",
     "not_run_directory",
+    "privacy_protected",
     "reserved_or_hidden",
     "root_absent",
     "root_changed",

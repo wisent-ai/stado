@@ -51,6 +51,9 @@ pub(super) struct Walk<'a> {
     /// regenerable.
     pub(super) root_dev: dev_t,
     pub(super) reserved: Vec<PathBuf>,
+    /// Roots the walk must not even look inside, because looking is what
+    /// costs: a macOS privacy prompt, or a cloud download.
+    pub(super) privacy: Vec<PathBuf>,
     /// Bytes this pass expects to have freed, against `max_bytes_per_pass`.
     pub(super) deleted_bytes: i64,
     /// Directories discovered but not yet fully examined, in breadth-first

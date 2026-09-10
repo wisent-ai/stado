@@ -114,6 +114,19 @@ impl Host {
     /// budgets, which is how the budget cases declare a bound a pass will
     /// actually reach.
     pub fn declare(&self, max_bytes_per_pass: u64, max_items_per_pass: u32) {
+        self.declare_rooted(&self.cache_root, max_bytes_per_pass, max_items_per_pass);
+    }
+
+    /// The same declaration with the cleaner rooted somewhere else in this
+    /// fixture. A case rooted at the isolated home is how the walk's own
+    /// refusals — the ones that depend on where a directory sits under the
+    /// account, not on the cleaner root — are reachable at all.
+    pub fn declare_rooted(
+        &self,
+        cleaner_root: &Path,
+        max_bytes_per_pass: u64,
+        max_items_per_pass: u32,
+    ) {
         let document = format!(
             r#"{{
   "schema_version": {SCHEMA_VERSION},
@@ -147,7 +160,7 @@ impl Host {
 "#,
             platform = release_platform(),
             hostname = self.hostname,
-            root = self.cache_root.to_string_lossy(),
+            root = cleaner_root.to_string_lossy(),
         );
         fs::write(self.storage.join("registry.json"), document).expect("write fixture registry");
     }

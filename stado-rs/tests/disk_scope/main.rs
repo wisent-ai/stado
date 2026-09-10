@@ -222,3 +222,50 @@ fn an_untagged_or_young_directory_is_measured_and_kept() {
         (SMALL_MIB as u64) << 20
     );
 }
+
+/// A tagged, aged cache inside a macOS privacy location is refused before the
+/// pass opens it, while the identical tree elsewhere under the same root is
+/// removed in the same pass.
+///
+/// The refusal is what stops an unattended agent from asking the person at
+/// the keyboard for their photo library: on 2026-09-09 `tccd` recorded
+/// `kTCCServicePhotos` requests attributed to `~/.stado/bin/stado` while the
+/// always-on agent's pass was walking `$HOME`, which is this cleaner's
+/// default root. The two trees here differ only in where they sit, so a walk
+/// that went back to opening `~/Pictures` fails this case rather than
+/// producing a dialog on somebody's screen.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_privacy_gated_location_is_refused_before_it_is_opened() {
+    let host = Host::new();
+    let home = host.home.clone();
+    host.declare_rooted(&home, fixture::WHOLE_GIB, fixture::MANY_ITEMS);
+    let library = host.under_home("Pictures/Photos Library.photoslibrary");
+    let protected = host.seed_tree(&library, "derived-data", SMALL_MIB, true, true);
+    let removable = host.seed_tree(&host.cache_root, "aged-tagged", CACHE_MIB, true, true);
+
+    let report = host.cleanup_pass(&["disk-cleanup", "--once"]);
+    let cleaner = build_caches(&report);
+    assert_eq!(
+        cleaner["skipped"]["privacy_protected"].as_i64(),
+        Some(1),
+        "the pass did not report refusing the privacy-gated location: {cleaner}"
+    );
+    assert!(
+        payload_kept(&protected),
+        "a cache inside the photo library was removed, so the pass opened it"
+    );
+    assert!(
+        !removable.exists(),
+        "the identical tree outside the privacy location survived, so this \
+         case proves nothing about where the refusal came from: {cleaner}"
+    );
+    assert_eq!(
+        fs::read_to_string(protected.join(CACHE_TAG_NAME))
+            .expect("the protected tree still carries its tag")
+            .lines()
+            .count(),
+        1,
+        "the fixture's protected tree lost the tag that made it a candidate"
+    );
+}
