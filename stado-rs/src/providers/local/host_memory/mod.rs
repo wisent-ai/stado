@@ -58,6 +58,6 @@ pub mod vocabulary;
 
 pub use pass::{run_memory_pass_once, MemoryWriter};
 pub use reading::{read_host_memory, MemoryReading};
-pub use report::{placement_refusal, MEMORY_PRESSURE_ACTIVE};
+pub use report::{placement_decision, PlacementDecision, MEMORY_PRESSURE_ACTIVE};
 pub use schema::{MemoryReclaimPolicy, MemoryRepairPolicy};
 pub use validate::{validate, MemoryPolicyProblem};

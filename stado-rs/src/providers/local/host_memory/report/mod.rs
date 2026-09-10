@@ -14,6 +14,9 @@ use serde_json::{json, Map, Value};
 use super::reading::MemoryReading;
 use super::state;
 
+mod placement;
+pub use placement::{placement_decision, PlacementDecision};
+
 /// No pass has ever completed on this host.
 pub const NEVER_RUN: &str = "never_run";
 /// The canonical registry could not be read, or what it declares is not a

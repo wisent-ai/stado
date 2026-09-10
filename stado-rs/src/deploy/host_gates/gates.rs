@@ -63,6 +63,11 @@ pub struct HostGates {
     pub total_ram_gb: Option<f64>,
     pub free_vram_gb: Option<i64>,
     pub total_vram_gb: Option<i64>,
+    /// What this host published about its own memory: the declaration's
+    /// refusal, the reading behind it and both watermarks. The disk half of
+    /// this struct has always been complete; a host refusing every job for
+    /// memory pressure reported two RAM totals and a flag nothing read.
+    pub memory: super::verdict::MemoryGate,
     /// The storage backend this host's own installed binary resolves from the
     /// config its services consume, or `None` when the host would not answer
     /// with one ([`AGENT_STORE_UNREADABLE`]). Reported beside

@@ -68,6 +68,16 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         gigabytes(gates.target_free_gb.map(|gb| gb as f64)),
         gates.policy_mode.as_deref().unwrap_or("none declared"),
     );
+    // Beside the disk line and never inside it: the two watermarks refuse
+    // work for different reasons and are repaired by different commands, and
+    // a host refusing every job for memory pressure printed no line at all.
+    println!(
+        "memory:   {}",
+        gates
+            .memory
+            .line()
+            .unwrap_or_else(|| "not observed".to_string())
+    );
     println!(
         "pressure evidence: {}",
         gates.pressure_source.unwrap_or("not observed")
