@@ -74,6 +74,35 @@ impl MemoryReading {
         }
     }
 
+    /// Whether this reading withholds the host from job selection, against
+    /// the two watermarks it is measured with.
+    ///
+    /// Memory scarcity decides; swap decides only where availability could
+    /// not be read at all. Used swap is history rather than pressure - Linux
+    /// never pages anonymous memory back in on its own - so a host that
+    /// swapped during one spike reads over its swap watermark for as long as
+    /// it stays up. On 2026-09-10 `ubuntu-server-rtx-pro-6000` held 67.2 GB
+    /// available of 132.1 GB against an 8 GiB watermark with 85% of an 8.59 GB
+    /// swap file in use, refused every job, and `skarbiec` could not build
+    /// `linux-amd64` in three consecutive releases. Withholding a host with
+    /// 64 GiB of headroom frees no memory; it removes the fleet's one Linux
+    /// builder. `over_watermark` still reports either crossing as pressure,
+    /// and the declared repairs still run.
+    ///
+    /// One predicate, both writers: the pass records its answer in the report
+    /// and the publisher answers the capacity document with it, so the report
+    /// and the publication can never disagree about whether work is refused.
+    pub fn withholds_placement(&self, low_bytes: i64, high_swap_used_pct: i64) -> Option<bool> {
+        match (
+            self.available_bytes.map(|available| available < low_bytes),
+            self.swap_used_pct().map(|pct| pct >= high_swap_used_pct),
+        ) {
+            (Some(memory), _) => Some(memory),
+            (None, Some(swap)) => Some(swap),
+            (None, None) => None,
+        }
+    }
+
     /// Whether the host has reached the declared target watermark.
     pub fn at_target(&self, policy: &MemoryReclaimPolicy) -> Option<bool> {
         self.available_bytes

@@ -75,6 +75,9 @@ struct HostGatesMemory: Decodable, Sendable {
     let availableGB: Double?
     let totalGB: Double?
     let lowWatermarkGB: Double?
+    /// Swap over its watermark while memory still has headroom: reported,
+    /// never a reason this host takes no work.
+    let swapPressureOnly: Bool?
     let swapUsedPct: Int?
     let swapHighWatermarkPct: Int?
     let policyMode: String?
@@ -87,6 +90,7 @@ struct HostGatesMemory: Decodable, Sendable {
         case totalGB = "total_gb"
         case lowWatermarkGB = "low_watermark_gb"
         case swapUsedPct = "swap_used_pct"
+        case swapPressureOnly = "swap_pressure_only"
         case swapHighWatermarkPct = "swap_high_watermark_pct"
         case policyMode = "policy_mode"
         case passOutcome = "pass_outcome"
@@ -109,6 +113,8 @@ struct HostGatesMemory: Decodable, Sendable {
         }
         if isRefusingPlacement {
             clauses.append("refusing placement (memory_pressure_active)")
+        } else if swapPressureOnly == true {
+            clauses.append("taking work; swap over its watermark with memory headroom (memory_swap_over_watermark)")
         } else if refusePlacement == false {
             clauses.append("reporting only; this host does not refuse placement")
         } else if !clauses.isEmpty {

@@ -75,6 +75,13 @@ impl PlacementDecision {
                 "memory_swap_high_watermark_pct".into(),
                 Value::from(watermark.high_swap_used_pct),
             );
+            // Swap over its watermark while memory still has its headroom.
+            // Reported and never enforced: this host takes work, and the
+            // finding still has to reach an operator.
+            diag.insert(
+                "memory_swap_pressure_only".into(),
+                Value::Bool(swap_pressure_only(watermark, &self.reading)),
+            );
         }
         let report = last_report_in(&crate::config_file::expand_tilde("~"));
         if !report.is_null() {
@@ -88,6 +95,19 @@ impl PlacementDecision {
 fn gigabytes(bytes: Option<i64>) -> Option<f64> {
     let gib = (constants::MIB * 1024) as f64;
     bytes.map(|bytes| (bytes as f64 / gib * 10.0).round() / 10.0)
+}
+
+/// Swap over its watermark on a host that still has its memory headroom: a
+/// finding to report, and never a reason this host takes no work. The
+/// placement rule itself lives in [`MemoryReading::withholds_placement`].
+fn swap_pressure_only(watermark: PublishedWatermark, reading: &MemoryReading) -> bool {
+    let headroom = reading
+        .available_bytes
+        .is_some_and(|available| available >= watermark.low_bytes);
+    let over_swap = reading
+        .swap_used_pct()
+        .is_some_and(|pct| pct >= watermark.high_swap_used_pct);
+    headroom && over_swap
 }
 
 /// This host's placement decision, made once per publication.

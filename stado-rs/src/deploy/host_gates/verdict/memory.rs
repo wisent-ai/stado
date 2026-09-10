@@ -22,6 +22,12 @@ use crate::deploy::host_gates::gates::HostGates;
 pub const MEMORY_PRESSURE_ACTIVE: &str =
     crate::providers::local::host_memory::MEMORY_PRESSURE_ACTIVE;
 
+/// Swap over its watermark on a host that still has its memory headroom. A
+/// note and never a blocker: refusing work frees no memory, and on 2026-09-10
+/// exactly this condition withheld the fleet's only Linux builder for three
+/// consecutive `skarbiec` releases.
+pub const MEMORY_SWAP_OVER_WATERMARK: &str = "memory_swap_over_watermark";
+
 /// What this host published about its own memory, as the verdict carries it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MemoryGate {
@@ -39,6 +45,9 @@ pub struct MemoryGate {
     pub low_watermark_gb: Option<f64>,
     pub swap_used_pct: Option<i64>,
     pub swap_high_watermark_pct: Option<i64>,
+    /// Swap is over its watermark while memory still has its headroom, so
+    /// this host keeps taking work and the finding is still reported.
+    pub swap_pressure_only: bool,
     /// The declared mode of the pass that maintains this host's memory.
     pub policy_mode: Option<String>,
     /// Seconds since the memory pass last completed, or `None` when it has
@@ -58,6 +67,7 @@ impl MemoryGate {
             "low_watermark_gb": self.low_watermark_gb,
             "swap_used_pct": self.swap_used_pct,
             "swap_high_watermark_pct": self.swap_high_watermark_pct,
+            "swap_pressure_only": self.swap_pressure_only,
             "policy_mode": self.policy_mode,
             "pass_success_age_seconds": self.pass_success_age_seconds,
             "pass_outcome": self.pass_outcome,
@@ -83,6 +93,8 @@ impl MemoryGate {
         }
         clauses.push(if self.pressure_active {
             format!("refusing placement ({MEMORY_PRESSURE_ACTIVE})")
+        } else if self.swap_pressure_only {
+            format!("taking work; swap over its watermark with memory headroom ({MEMORY_SWAP_OVER_WATERMARK})")
         } else if self.refuse_placement == Some(false) {
             "reporting only; this host does not refuse placement".to_string()
         } else {
@@ -118,6 +130,7 @@ pub fn apply(
         low_watermark_gb: number(diag, "memory_low_watermark_gb"),
         swap_used_pct: integer(diag, "memory_swap_used_pct"),
         swap_high_watermark_pct: integer(diag, "memory_swap_high_watermark_pct"),
+        swap_pressure_only: diag_flag(payload, "memory_swap_pressure_only") == Some(true),
         policy_mode: text(report, "mode"),
         pass_success_age_seconds: text(report, "last_success_at")
             .as_deref()
@@ -128,6 +141,8 @@ pub fn apply(
     if gates.memory.pressure_active {
         gates.blockers.push(MEMORY_PRESSURE_ACTIVE.to_string());
         gates.claiming = false;
+    } else if gates.memory.swap_pressure_only {
+        gates.notes.push(MEMORY_SWAP_OVER_WATERMARK.to_string());
     }
 }
 
