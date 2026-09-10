@@ -6,10 +6,10 @@ use std::path::Path;
 
 use super::recycle::defers_to_release_handshake;
 
-/// `launchctl list` prints `PID\tStatus\tLabel` after one header row. A job
-/// that is loaded but not running prints `-` for the PID and holds no image,
-/// so it is skipped: it will pick up the new binary the next time launchd
-/// starts it.
+/// A job that is loaded but not running holds no image, so it is skipped: it
+/// will pick up the new binary the next time launchd starts it. The inventory
+/// reports such a job with an empty pid, whether `launchctl list` wrote `-`
+/// for it or a domain table wrote `0`; only a live pid reaches the image read.
 pub(super) async fn recycle_launchd(
     context: &str,
     paths: &[String],

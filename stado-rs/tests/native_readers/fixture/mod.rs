@@ -1,5 +1,6 @@
 use super::*;
 
+mod idle;
 mod operations;
 
 impl Fixture {
@@ -50,8 +51,10 @@ impl Fixture {
             std::process::id(),
             unique
         );
+        let idle_label = format!("{label}.idle");
         let domain = available_login_domain();
         let plist = agents.join(format!("{label}.plist"));
+        let idle_plist = agents.join(format!("{idle_label}.plist"));
         let port = unused_loopback_port();
 
         let fixture = Self {
@@ -60,8 +63,10 @@ impl Fixture {
             storage,
             config,
             label,
+            idle_label,
             domain,
             plist,
+            idle_plist,
             root_binary,
             private_binary,
             archive,
@@ -158,5 +163,37 @@ impl Fixture {
                 .to_string_lossy()),
         );
         fs::write(&self.plist, body).expect("native-reader LaunchAgent plist");
+    }
+
+    /// A unit launchd will hold and never start on its own: no `RunAtLoad`,
+    /// no `KeepAlive`, and a program that is the delivered root binary.
+    pub(crate) fn write_idle_plist(&self) {
+        let body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+      <key>Label</key><string>{label}</string>
+      <key>ProgramArguments</key>
+      <array>
+        <string>{program}</string>
+        <string>--version</string>
+      </array>
+      <key>EnvironmentVariables</key>
+      <dict>
+        <key>HOME</key><string>{home}</string>
+        <key>PATH</key><string>{path}</string>
+      </dict>
+      <key>RunAtLoad</key><false/>
+      <key>ProcessType</key><string>Background</string>
+    </dict>
+    </plist>
+    "#,
+            label = xml(&self.idle_label),
+            program = xml(&self.root_binary.to_string_lossy()),
+            home = xml(&self.home.to_string_lossy()),
+            path = PATH,
+        );
+        fs::write(&self.idle_plist, body).expect("idle LaunchAgent plist");
     }
 }

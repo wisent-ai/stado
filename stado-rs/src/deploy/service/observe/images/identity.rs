@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 /// The three directories this fleet installs launchd units into, in the
-/// order [`LOADED_LABELS_SCRIPT`] walks them.
+/// order [`crate::deploy::service::LOADED_UNITS_SCRIPT`] walks them.
 ///
 /// Same list and same order deliberately: a unit one enumeration can see and
 /// the other cannot is how a label ends up in nobody's set, which is the

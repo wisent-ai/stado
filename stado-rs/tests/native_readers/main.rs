@@ -38,8 +38,13 @@ struct Fixture {
     storage: PathBuf,
     config: PathBuf,
     label: String,
+    /// A second LaunchAgent, loaded beside the reader and never started: it
+    /// declares the delivered binary, so launchd holds it with no pid — the
+    /// state of charless-mac-mini's idle stado-resolver unit on 2026-09-10.
+    idle_label: String,
     domain: String,
     plist: PathBuf,
+    idle_plist: PathBuf,
     root_binary: PathBuf,
     private_binary: PathBuf,
     archive: PathBuf,

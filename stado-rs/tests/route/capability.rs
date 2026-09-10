@@ -73,4 +73,3 @@ fn a_declared_route_resolves_through_the_real_broker_to_the_coordinate_it_names(
     assert_eq!(table[RESOURCE]["item"], ITEM);
     assert_eq!(table[RESOURCE]["field"], FIELD);
 }
-

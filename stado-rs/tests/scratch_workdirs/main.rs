@@ -34,10 +34,7 @@ fn include_files_empties_the_root_without_following_a_link_out_of_it() {
         "loose data"
     );
 
-    let previewed = fixture.run(
-        "preview-files",
-        &["workdirs", "--include-files", "--json"],
-    );
+    let previewed = fixture.run("preview-files", &["workdirs", "--include-files", "--json"]);
     assert!(previewed.status.success());
     let listed = document(&previewed);
     assert_eq!(
@@ -48,7 +45,10 @@ fn include_files_empties_the_root_without_following_a_link_out_of_it() {
         2,
         "the loose file and the link are both candidates: {listed}"
     );
-    assert!(work.join("corpus.jsonl").exists(), "a preview removes nothing");
+    assert!(
+        work.join("corpus.jsonl").exists(),
+        "a preview removes nothing"
+    );
 
     let applied = fixture.run(
         "apply-files",
@@ -68,7 +68,10 @@ fn include_files_empties_the_root_without_following_a_link_out_of_it() {
         .collect();
     assert!(removed.contains(&"corpus.jsonl"), "{report}");
     assert!(removed.contains(&"escape"), "{report}");
-    assert!(!work.join("corpus.jsonl").exists(), "the loose file is gone");
+    assert!(
+        !work.join("corpus.jsonl").exists(),
+        "the loose file is gone"
+    );
     assert!(
         fs::symlink_metadata(work.join("escape")).is_err(),
         "the link itself is gone"

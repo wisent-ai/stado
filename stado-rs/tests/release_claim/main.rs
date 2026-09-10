@@ -49,7 +49,10 @@ impl Area {
             commands: std::cell::Cell::new(0),
         };
         let identity = area.stado(&["--version"]);
-        assert!(identity.status.success(), "the product binary did not report its identity");
+        assert!(
+            identity.status.success(),
+            "the product binary did not report its identity"
+        );
         eprintln!("release claim evidence: {}", area.root.display());
         area
     }
@@ -178,7 +181,10 @@ fn a_second_source_revision_is_refused_and_the_recorded_claim_is_untouched() {
     assert_eq!(failure["error_code"], "refused");
     assert_eq!(failure["retryable"], false);
     assert_eq!(failure["failure_point"], "cli.release.claim-coordinate");
-    assert_eq!(failure["summary"], "an explicit policy refused this command");
+    assert_eq!(
+        failure["summary"],
+        "an explicit policy refused this command"
+    );
     assert_eq!(
         failure["message"],
         format!(

@@ -7,7 +7,7 @@ use crate::deploy::service::*;
 ///
 /// It NAMES a finding and never decides what gets looked at. It used to do
 /// both, in three places at once — the `launchctl list` filter in
-/// [`LOADED_LABELS_SCRIPT`], that script's `com.wisent.*.plist` glob, and a
+/// [`LOADED_UNITS_SCRIPT`], that script's `com.wisent.*.plist` glob, and a
 /// `starts_with` in [`loaded_units`] — and a process outside the prefix could
 /// therefore not be reported as undeclared, because it was never enumerated.
 /// On 2026-09-01 charless-mac-mini had `com.stado.agent.charless-mac-mini`

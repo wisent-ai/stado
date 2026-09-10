@@ -50,7 +50,7 @@ impl PathBinary {
     }
 }
 
-/// [`LOADED_LABELS_SCRIPT`] once, for both of the things it answers: the
+/// The full inventory script once, for both of the things it answers: the
 /// loaded units, and which `stado` the host's own PATH resolves.
 ///
 /// One read, because both facts come out of one script and a sweep that asked
@@ -59,7 +59,7 @@ pub async fn loaded_units_with_posture(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<(Vec<UndeclaredUnit>, Option<PathBinary>), DeployError> {
-    read_loaded_units(target, runner, LOADED_LABELS_SCRIPT).await
+    read_loaded_units(target, runner, &loaded_labels_script(LoadedDetails::Full)).await
 }
 
 /// Read every loaded label, domain, declaration and running command needed for
@@ -68,7 +68,7 @@ pub async fn loaded_image_units(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<Vec<UndeclaredUnit>, DeployError> {
-    let script = LOADED_LABELS_SCRIPT.replacen("details=full", "details=images", 1);
+    let script = loaded_labels_script(LoadedDetails::Images);
     Ok(read_loaded_units(target, runner, &script).await?.0)
 }
 

@@ -1,26 +1,53 @@
-/// Read-only: `launchctl list`, `launchctl print` for the three domains,
-/// `launchctl dumpstate` once, and the unit files those name. It starts
-/// nothing, stops nothing, signals nothing and needs no sudo.
-///
-/// Three reads, then one join, then one pass per label. The shape matters
-/// because this script is what the fleet sweep spends its budget on. The
-/// version before this one asked launchd again for every label -- five `awk`
-/// passes over two in-memory tables and up to three `launchctl print
-/// <domain>/<label>` calls each -- so a mac carrying 1,034 labels spawned
-/// something near fifteen thousand processes to answer questions that one
-/// pass answers for every label at once. It took longer than
-/// [`crate::deploy::host_recovery::TIMEOUT_SECONDS`], the channel killed it,
-/// and `stado doctor` reported `lukasz-macbook: not measured` -- the host
-/// running the sweep was the one host the sweep could never finish. Measured
-/// on that host: 28 seconds for 1,159 labels, against a 120-second cap it
-/// used to exceed.
-pub(crate) const LOADED_LABELS_SCRIPT: &str = r##"set -u
+//! Read-only: `launchctl list`, `launchctl print` for the three domains,
+//! `launchctl dumpstate` once, and the unit files those name. It starts
+//! nothing, stops nothing, signals nothing and needs no sudo.
+//!
+//! Three reads, then one join, then one pass per label. The shape matters
+//! because this script is what the fleet sweep spends its budget on. The
+//! version before this one asked launchd again for every label -- five `awk`
+//! passes over two in-memory tables and up to three `launchctl print
+//! <domain>/<label>` calls each -- so a mac carrying 1,034 labels spawned
+//! something near fifteen thousand processes to answer questions that one
+//! pass answers for every label at once. It took longer than
+//! [`crate::deploy::host_recovery::TIMEOUT_SECONDS`], the channel killed it,
+//! and `stado doctor` reported `lukasz-macbook: not measured` -- the host
+//! running the sweep was the one host the sweep could never finish. Measured
+//! on that host: 28 seconds for 1,159 labels, against a 120-second cap it
+//! used to exceed.
+
+mod posture;
+
+pub(crate) use posture::PATH_POSTURE_SCRIPT;
+
+/// How much one read of the host has to answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoadedDetails {
+    /// Everything: environment keys, script reads, process ages, and the
+    /// `stado` copies a shell on the host could find.
+    Full,
+    /// Only what image reconciliation needs: labels, domains, declared
+    /// executables and running commands.
+    Images,
+}
+
+/// The script for one read at the requested level of detail.
+pub(crate) fn loaded_labels_script(details: LoadedDetails) -> String {
+    let (word, posture) = match details {
+        LoadedDetails::Full => ("full", PATH_POSTURE_SCRIPT),
+        LoadedDetails::Images => ("images", ""),
+    };
+    format!("details={word}\n{LOADED_UNITS_SCRIPT}{posture}")
+}
+
+/// Every loaded label with its pid, status, domains, unit file, declared
+/// program and running command, one `STADO_LOADED` row each. Expects
+/// `details` to be `full` or `images` before it runs.
+pub(crate) const LOADED_UNITS_SCRIPT: &str = r##"set -u
 if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   printf 'STADO_LOADED_UNSUPPORTED\t%s\n' "$(/usr/bin/uname -s)"
   exit 0
 fi
 uid=$(/usr/bin/id -u)
-details=full
 listing=$(/bin/launchctl list)
 
 # Every job launchd actually HOLDS, in every domain this login can print.
@@ -109,7 +136,10 @@ joined=$(
     $1 == "H" {
       label[$2] = 1
       domains[$2] = domains[$2] $3 " "
-      if (hpid[$2] == "") hpid[$2] = $4
+      # A domain table writes pid 0 for a job it holds but is not running, so
+      # the first domain that IS running the job answers; a zero from an idle
+      # domain must not hide a live pid held in a later one.
+      if (hpid[$2] == "" || hpid[$2] == "0") hpid[$2] = $4
       if (hstatus[$2] == "") hstatus[$2] = $5
       next
     }
@@ -125,8 +155,13 @@ joined=$(
       for (l in label) {
         pid = lpid[l]; status = lstatus[l]
         # The domain table wins over the single-domain listing: it is the only
-        # one of the two that can speak for the system domain.
-        if (hpid[l] ~ /^[0-9]+$/) pid = hpid[l]
+        # one of the two that can speak for the system domain. Its 0 is not a
+        # pid: `launchctl print` writes 0 where `launchctl list` writes `-`,
+        # for a job launchd holds and is not running. Read as a pid, that zero
+        # sent the 0.20.1 delivery on charless-mac-mini looking for the kernel
+        # image of pid 0 behind an idle stado-resolver unit, and the required
+        # delivery failed on a job that was running nothing at all.
+        if (hpid[l] ~ /^[1-9][0-9]*$/) pid = hpid[l]
         if (status == "" && hstatus[l] ~ /^-?[0-9]+$/) status = hstatus[l]
         # A domain the job is loaded in answers first; any domain that knows
         # the label answers second. Both beat asking launchd again.
@@ -140,9 +175,17 @@ joined=$(
           for (i = 1; i <= n; i++) { if (any[i] != "") { chosen = any[i]; break } }
         }
         key = l SUBSEP chosen
-        printf "J\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", l, pid, status, domains[l],
-          (key in spath ? spath[key] : ""), (key in sruns ? sruns[key] : ""),
-          (key in sexit ? sexit[key] : ""), files[l]
+        # `-` for every column that has no value. The reader below splits on
+        # tab through `read`, and tab is IFS whitespace: two tabs around an
+        # empty column collapse into one delimiter and every later column
+        # shifts left. A system-domain job with no pid then read its exit
+        # status as its pid and the word `system` as its status.
+        printf "J\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", l, (pid == "" ? "-" : pid),
+          (status == "" ? "-" : status), (domains[l] == "" ? "-" : domains[l]),
+          (key in spath && spath[key] != "" ? spath[key] : "-"),
+          (key in sruns && sruns[key] != "" ? sruns[key] : "-"),
+          (key in sexit && sexit[key] != "" ? sexit[key] : "-"),
+          (files[l] == "" ? "-" : files[l])
       }
     }'
 )
@@ -152,7 +195,7 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
   [ -n "$label" ] || continue
   case "$pid" in ''|*[!0-9]*) pid='' ;; esac
   case "$runs" in ''|*[!0-9]*) runs='' ;; esac
-  case "$exited" in ''|*[!0-9-]*) exited='' ;; esac
+  case "$exited" in ''|-|*[!0-9-]*) exited='' ;; esac
   plist=''
   source=''
   domains=''
@@ -247,45 +290,5 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
       ;;
   esac
   printf 'STADO_LOADED\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$status" "$label" "${plist:--}" "${program:--}" "${domains:--}" "${running:--}" "${started:--}" "${written:--}" "${source:--}" "${loaded_domains:--}" "${runs:--}" "${exited:--}" "${env_keys:--}" "${needs:--}" "${assigns:--}"
-done
-[ "$details" != images ] || exit 0
-# Every place a shell on this host could find a `stado`, and which one the
-# release channel delivered.
-#
-# `~/.cargo/bin/stado` at 0.7.34 shadowed a delivered 0.13.40 for a week, and
-# 0.7.34 has no `--undeclared`, no `bootout` and no `reap`: every answer it
-# gave was "this host is clean", not because the host was, but because that
-# binary could not look.
-#
-# `command -v` alone is not the question. This program runs on the channel's
-# non-interactive shell, whose PATH is not the login shell's -- on
-# charless-mac-mini it resolved NOTHING, and the reader called that agreement
-# with the delivered binary. So the concrete locations are probed by name, a
-# stale copy in any of them is a finding, and a location that could not be read
-# is reported as unread rather than as clean.
-delivered="$HOME/.stado/bin/stado"
-delivered_version=''
-delivered_real=''
-if [ -x "$delivered" ]; then
-  delivered_version=$("$delivered" --version 2>/dev/null | /usr/bin/awk '{ print $2; exit }')
-  delivered_real=$(/usr/bin/readlink -f "$delivered" 2>/dev/null || printf '%s' "$delivered")
-fi
-printf 'STADO_PATH_DELIVERED\t%s\t%s\t%s\n' "$delivered" "${delivered_version:--}" "${delivered_real:--}"
-# The delivered path is itself a candidate. Without it a host that carries
-# exactly one correct binary measured ZERO locations and the reader had nothing
-# to compare -- honest, but useless, and indistinguishable from a host nobody
-# looked at.
-#
-# `-L` as well as `-e`: a DANGLING symlink on a PATH directory is not nothing,
-# it is a `stado` that a shell finds and cannot execute.
-for candidate in "$delivered" "$(command -v stado 2>/dev/null || true)" "$HOME/.cargo/bin/stado" "$HOME/.local/bin/stado" /usr/local/bin/stado /opt/homebrew/bin/stado; do
-  [ -n "$candidate" ] || continue
-  if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then continue; fi
-  version=''
-  real=$(/usr/bin/readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")
-  if [ -x "$candidate" ]; then
-    version=$("$candidate" --version 2>/dev/null | /usr/bin/awk '{ print $2; exit }')
-  fi
-  printf 'STADO_PATH_CANDIDATE\t%s\t%s\t%s\n' "$candidate" "${version:--}" "${real:--}"
 done
 "##;
