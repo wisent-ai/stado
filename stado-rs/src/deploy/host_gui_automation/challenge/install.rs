@@ -126,12 +126,23 @@ async fn sign_helper(
     previous: &str,
     runner: &Runner,
 ) -> Result<(), DeployError> {
+    // Apple's intermediate is not on every Mac, and its absence makes the
+    // certificate unusable without saying so, so the issuer travels with it.
+    let issuers = String::from_utf8(
+        pinned_artifact(
+            &format!("apple-issuers-{APPLE_ISSUER_CHAIN_SHA256}.pem"),
+            APPLE_ISSUER_CHAIN_SHA256,
+        )
+        .await?,
+    )
+    .map_err(|error| DeployError(format!("Apple issuer chain is not text: {error}")))?;
+    let certificate = signing_credential("certificate").await?;
     let request = serde_json::json!({
         "program": signer,
         "identifier": APPLE_CHALLENGE_HELPER_BUNDLE_ID,
         "target": staged,
         "previous": previous,
-        "certificate": signing_credential("certificate").await?,
+        "certificate": format!("{}\n{issuers}", certificate.trim_end()),
         "private_key": signing_credential("private_key").await?,
     });
     let output = host_channel::run_program_with_stdin(
@@ -208,27 +219,13 @@ async fn bootstrap_signer(
 ) -> Result<String, DeployError> {
     use base64::Engine;
 
-    // Private build input from wisent-products 319a6fb, never a public release.
-    const SOURCE_SHA256: &str = "277271b7a548d0d09a0889d063c997baeef6de90787255249800705aac2ad484";
+    // Private build input from wisent-products 7aa6f1f, never a public release.
+    const SOURCE_SHA256: &str = "6a2781e2a70a1fa7160ac5562332f29954e2c81f799ff50a69f12eef94c9bd24";
     let program = format!("{home}/.stado/cache/native-signing/{SOURCE_SHA256}/bin/wisent-products");
     if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&program)), runner).await? {
         return Ok(program);
     }
-    let namespace = crate::config::wc_stado_storage_namespace();
-    if namespace.is_empty() {
-        return Err(DeployError(
-            "native signing runtime is absent and storage.stado.namespace is not configured".into(),
-        ));
-    }
-    let uri = format!("stado://{namespace}/artifacts/native-signing/{SOURCE_SHA256}.tar.gz");
-    let source = crate::cli::storage::fetch_object(&uri)
-        .await
-        .map_err(|error| DeployError(format!("cannot read native signing input {uri}: {error}")))?;
-    if crate::release_control::sha256_bytes(&source) != SOURCE_SHA256 {
-        return Err(DeployError(format!(
-            "native signing input digest mismatch: {uri}"
-        )));
-    }
+    let source = pinned_artifact(&format!("{SOURCE_SHA256}.tar.gz"), SOURCE_SHA256).await?;
     let input = serde_json::json!({
         "archive": base64::engine::general_purpose::STANDARD.encode(source),
         "sha256": SOURCE_SHA256,
@@ -261,4 +258,26 @@ async fn bootstrap_signer(
         ));
     }
     Ok(program)
+}
+
+/// One immutable native-signing input, addressed by its own digest in the
+/// fleet's object namespace and verified before anything uses it.
+async fn pinned_artifact(leaf: &str, sha256: &str) -> Result<Vec<u8>, DeployError> {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    if namespace.is_empty() {
+        return Err(DeployError(
+            "storage.stado.namespace is not configured, so no native signing input can be read"
+                .into(),
+        ));
+    }
+    let uri = format!("stado://{namespace}/artifacts/native-signing/{leaf}");
+    let bytes = crate::cli::storage::fetch_object(&uri)
+        .await
+        .map_err(|error| DeployError(format!("cannot read native signing input {uri}: {error}")))?;
+    if crate::release_control::sha256_bytes(&bytes) != sha256 {
+        return Err(DeployError(format!(
+            "native signing input digest mismatch: {uri}"
+        )));
+    }
+    Ok(bytes)
 }

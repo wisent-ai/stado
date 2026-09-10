@@ -23,7 +23,8 @@ def sign(request):
     if result.returncode:
         raise RuntimeError("{} exited {}: {}".format(
             " ".join(argv), result.returncode, (result.stderr or result.stdout).strip()))
-    return json.loads(result.stdout)
+    # One target in, one report out: the CLI answers with a list either way.
+    return json.loads(result.stdout)[0]
 
 
 try:
