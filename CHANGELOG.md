@@ -17,6 +17,7 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **Desktop packaging:** build the identity helper through the executable product exported by the pinned authentication package. A fresh checkout no longer depends on an absent helper script; the signed bundle keeps the SDK's required helper path.
 - **Recorded release resumption:** `release resume RUN_ID` uses the original stored source and manifest even after the checkout changes. Running jobs keep their IDs and published builds are verified rather than rebuilt. Stado Desktop exposes the same operation from Releases with source identity, command review and complete command output.
 - **Failed delivery retries:** a failed or cancelled queue job now anchors a new idempotent delivery attempt. A stale `submitted` summary is checked against the actual terminal job, so resumption no longer repeatedly returns the same failed job or misses a later delivery's failure.
 - **Native release resumption:** Desktop resumes through its selected Stado API and retains that endpoint's command receipt. Already published platforms no longer require a private signing grant merely to verify their bytes or finish deliveries.
