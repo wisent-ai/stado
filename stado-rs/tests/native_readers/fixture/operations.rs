@@ -107,7 +107,13 @@ impl Fixture {
     }
 
     pub(crate) fn pid(&self) -> Option<u32> {
-        let service = format!("{}/{}", self.domain, self.label);
+        self.launchd_pid(&self.label)
+    }
+
+    /// The pid launchd itself holds for `label` in the fixture domain, or
+    /// `None` when the domain does not hold the label or holds it idle.
+    pub(crate) fn launchd_pid(&self, label: &str) -> Option<u32> {
+        let service = format!("{}/{label}", self.domain);
         let output = Command::new("/bin/launchctl")
             .args(["print", &service])
             .output()
@@ -264,6 +270,10 @@ impl Fixture {
             Err(error) => failures.push(format!(
                 "Stado guarded space file remove did not run: {error}"
             )),
+        }
+
+        if let Err(error) = self.cleanup_idle() {
+            failures.push(error);
         }
 
         if failures.is_empty() {

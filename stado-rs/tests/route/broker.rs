@@ -29,10 +29,6 @@ pub const RESOURCE: &str = "origin:https://route.real.invalid/username";
 const OWNER: &str = "Stado route tests <route-real@example.invalid>";
 const REASON: &str = "stado route area real evidence";
 
-fn executable(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-
 /// True when this binary knows the verb group Skarbiec ships today. An older
 /// broker answers `unknown command: route` and exits non-zero.
 fn knows_route_group(binary: &Path) -> bool {
@@ -79,7 +75,6 @@ pub fn stale() -> PathBuf {
     );
     binary
 }
-
 /// One real vault on the isolated host, opened by one real broker.
 pub struct Vault {
     /// Only the GnuPG home needs a short product-owned test root: macOS Unix

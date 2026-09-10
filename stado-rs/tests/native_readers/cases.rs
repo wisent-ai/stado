@@ -168,3 +168,64 @@ fn service_update_reloads_a_cached_global_stado_definition_once() {
         .cleanup()
         .unwrap_or_else(|error| panic!("private-reader cleanup was not proven: {error}"));
 }
+
+/// charless-mac-mini, 2026-09-10: the 0.20.1 delivery failed with "the kernel
+/// image for com.wisent.compute.service.com.wisent.always-on.stado-resolver
+/// pid 0 is unreadable". launchd held that unit idle; its domain table wrote
+/// pid 0 for it, and the reconcile read the zero as a live process. An idle
+/// unit declaring the delivered binary must be reported without a pid and
+/// left alone, while the live reader beside it still converges.
+#[test]
+#[ignore = "Probierz runs the real launchd reader lifecycle on a dedicated macOS host"]
+fn convergence_leaves_an_idle_unit_declaring_the_delivered_binary_alone() {
+    let mut fixture = Fixture::new();
+    let root_identity = file_identity(&fixture.root_binary);
+    fixture.bootstrap();
+    fixture.wait_until_listening(Duration::from_secs(60));
+    let private_pid = fixture.wait_for_pid(None, Duration::from_secs(30));
+    fixture.bootstrap_idle();
+
+    let idle = fixture.inventory_row(&fixture.idle_label);
+    assert_eq!(
+        idle["pid"], "",
+        "an idle unit was reported with a pid: {idle}"
+    );
+    assert_eq!(
+        idle["running_program"], "",
+        "an idle unit was reported running: {idle}"
+    );
+    // The inventory carries the declaration as `plutil` renders it, with
+    // every path separator escaped.
+    let declared = idle["program"]
+        .as_str()
+        .unwrap_or_default()
+        .replace('\\', "");
+    assert_eq!(
+        declared.split_whitespace().next(),
+        fixture.root_binary.to_str(),
+        "the idle unit does not declare the delivered binary: {idle}"
+    );
+
+    fixture.write_plist(&fixture.root_binary);
+    let converged = fixture.converge();
+    assert!(
+        converged.status.success(),
+        "an idle unit declaring the delivered binary blocked convergence: {}",
+        said(&converged)
+    );
+    let root_pid = fixture.wait_for_pid(Some(private_pid), Duration::from_secs(60));
+    fixture.wait_until_listening(Duration::from_secs(60));
+    assert_maps(&fixture, root_pid, &fixture.root_binary, &root_identity);
+    assert!(
+        fixture.idle_is_loaded(),
+        "convergence booted the idle unit out"
+    );
+    assert_eq!(
+        fixture.launchd_pid(&fixture.idle_label),
+        None,
+        "convergence started the idle unit"
+    );
+    fixture
+        .cleanup()
+        .unwrap_or_else(|error| panic!("idle-unit cleanup was not proven: {error}"));
+}

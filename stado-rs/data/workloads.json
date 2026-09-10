@@ -23,7 +23,7 @@
       "interactive": false,
       "registry_allowance": "$plan.action",
       "plan_schema": "wisent.weles-browser-task-plan.v1",
-      "report": ["target", "action", "run_id", "outcome", "profile", "result"]
+      "report": ["target", "action", "run_id", "outcome", "profile", "result", "stdout_tail", "stderr_tail"]
     },
     {
       "kind": "weles-diagnostics",
