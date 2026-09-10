@@ -260,7 +260,7 @@ fn a_leased_target_with_no_eligible_stage_is_refused_by_its_own_sentence() {
     );
     let sentence = format!(
         "{} declares no eligible space reclamation stage; \
-         add it to stado-rs/data/space.json reclaim_stages",
+         add it to stado-rs/data/fleet/space.json reclaim_stages",
         lease.name
     );
     let printed: Value = serde_json::from_slice(&refused.stdout)

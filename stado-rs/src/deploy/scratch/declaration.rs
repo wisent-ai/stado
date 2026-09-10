@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::deploy::DeployError;
 
 /// The one document declaring every scratch profile.
-pub const DECLARATION_PATH: &str = "stado-rs/data/scratch-profiles.json";
-const DECLARATION: &str = include_str!("../../../data/scratch-profiles.json");
+pub const DECLARATION_PATH: &str = "stado-rs/data/work/scratch-profiles.json";
+const DECLARATION: &str = include_str!("../../../data/work/scratch-profiles.json");
 
 /// The document contract this build understands. A document from the future is
 /// refused rather than partially honoured.

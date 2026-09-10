@@ -13,8 +13,8 @@ use crate::deploy::{host_channel, DeployError};
 use crate::targets::ComputeTarget;
 
 /// The compiled declaration that makes runner kinds data rather than commands.
-pub const DECLARATION_PATH: &str = "stado-rs/data/runner-profiles.json";
-const DECLARATION: &str = include_str!("../../../data/runner-profiles.json");
+pub const DECLARATION_PATH: &str = "stado-rs/data/work/runner-profiles.json";
+const DECLARATION: &str = include_str!("../../../data/work/runner-profiles.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

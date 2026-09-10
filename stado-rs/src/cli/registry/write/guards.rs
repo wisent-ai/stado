@@ -168,7 +168,7 @@ pub(super) fn refuse_unsafe_replace(
     // targets. On 2026-09-01 a worker ran
     // `stado registry push --force < /tmp/registry_updated.json`: the command
     // takes a PATH, so stdin was never read, `source_path(None)` resolved to
-    // the repository's bundled `data/registry.json` - 65 bytes,
+    // the repository's bundled `data/fleet/registry.json` - 65 bytes,
     // `{"schema_version":2,"coordinators":[],"targets":[]}` - and `--force`
     // waved it past the deleted-key guard that had refused the first attempt.
     // The live document lost all three targets, all eighteen of the mini's

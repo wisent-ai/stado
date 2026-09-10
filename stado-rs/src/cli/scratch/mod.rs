@@ -1,7 +1,7 @@
 //! `stado scratch`: lease a disposable target on a registered host.
 //!
 //! Profiles, lifetimes and mechanisms live in
-//! `stado-rs/data/scratch-profiles.json`; this module is the command surface
+//! `stado-rs/data/work/scratch-profiles.json`; this module is the command surface
 //! over [`crate::deploy::scratch`]. Adding a kind of disposable target is a
 //! declaration change, not another CLI verb.
 
@@ -37,7 +37,7 @@ pub enum ScratchCommands {
         /// Registry target the lease is taken on.
         #[arg(long)]
         host: String,
-        /// Profile name from stado-rs/data/scratch-profiles.json.
+        /// Profile name from stado-rs/data/work/scratch-profiles.json.
         #[arg(long)]
         profile: String,
         /// Lease name, which is also the account name. Generated when omitted.

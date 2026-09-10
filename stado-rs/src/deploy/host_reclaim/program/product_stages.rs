@@ -160,7 +160,7 @@ if [ -d "$services" ]; then
   done
 fi
 # Where an EARLIER delivery mechanism staged one directory per version, taken
-# from what `data/products.json` declares per product, so a delivery path that
+# from what `data/catalog/products.json` declares per product, so a delivery path that
 # changes again is a declaration change and not a change here. Each root IS one
 # product's version directory, one level shallower than the services layout.
 for superseded in @SUPERSEDED_ROOTS@; do

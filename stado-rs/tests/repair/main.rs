@@ -11,7 +11,7 @@
 //! zeroed report fails.
 //!
 //! The mutating half is deliberately not exercised. Every declared remedy in
-//! `data/service-catalog.json` restores a production service — the Stado host
+//! `data/catalog/service-catalog.json` restores a production service — the Stado host
 //! program, the object API, a release store, a stable bind — and applying one
 //! from a test would cycle a live service on the operator's machine. That is
 //! an absent leg stated out loud, not a stub standing in for it.

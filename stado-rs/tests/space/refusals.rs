@@ -83,7 +83,7 @@ fn an_undeclared_stage_and_a_missing_reason_stop_before_the_host() {
             "--dry-run",
         ]),
         USAGE_EXIT,
-        "stage 'mystery' is not declared; add it to stado-rs/data/space.json reclaim_stages",
+        "stage 'mystery' is not declared; add it to stado-rs/data/fleet/space.json reclaim_stages",
     );
     refused(
         &host.run(&[

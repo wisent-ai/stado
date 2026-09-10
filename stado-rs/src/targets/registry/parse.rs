@@ -242,5 +242,5 @@ pub fn load_registry_file(path: &Path) -> Result<Registry, RegistryError> {
 /// compile-time path only as an operator-facing location helper avoids making
 /// installed binaries depend on the build machine's `/app/data` directory.
 pub fn load_bundled_registry() -> Result<Registry, RegistryError> {
-    load_registry_from_str(include_str!("../../../data/registry.json"))
+    load_registry_from_str(include_str!("../../../data/fleet/registry.json"))
 }

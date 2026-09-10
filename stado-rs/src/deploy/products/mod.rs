@@ -77,11 +77,11 @@ pub use validation::validate;
 
 /// The one file that says what this fleet can deliver, named in refusals so
 /// an operator adding a product knows the single place to write it.
-pub const DECLARATION_PATH: &str = "stado-rs/data/products.json";
+pub const DECLARATION_PATH: &str = "stado-rs/data/catalog/products.json";
 
 /// The declaration itself, read at compile time. Reading it back through
 /// [`crate::data_dir`] at runtime only ever worked on the build machine.
-const DECLARATION: &str = include_str!("../../../data/products.json");
+const DECLARATION: &str = include_str!("../../../data/catalog/products.json");
 
 /// The declaration schema this build understands. A document from the future
 /// is refused rather than partially honoured.

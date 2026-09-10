@@ -13,7 +13,7 @@
 //! three absences asserted.
 //!
 //! Nothing is applied, and the declaration says why. Every repair step in
-//! `data/service-catalog.json` is `mutating`, and every one of them restores
+//! `data/catalog/service-catalog.json` is `mutating`, and every one of them restores
 //! a service the operator owns: the Stado host program, the core object API,
 //! the release store and its verifier grants, the control plane's delivered
 //! binaries, Skarbiec's audit journal, keybox and acquisition state. Not one

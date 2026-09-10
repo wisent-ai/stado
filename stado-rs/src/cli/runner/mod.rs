@@ -21,7 +21,7 @@ pub enum RunnerCommands {
     /// Install or reconcile one declared profile on a registry host.
     Install {
         target: String,
-        /// Profile name from stado-rs/data/runner-profiles.json.
+        /// Profile name from stado-rs/data/work/runner-profiles.json.
         #[arg(long)]
         profile: String,
         /// Register against this repository instead of the organization.
@@ -44,7 +44,7 @@ pub enum RunnerCommands {
     /// Restart one declared runner in place and wait for a fresh listener event.
     Restart {
         target: String,
-        /// Profile name from stado-rs/data/runner-profiles.json.
+        /// Profile name from stado-rs/data/work/runner-profiles.json.
         #[arg(long)]
         profile: String,
         /// Emit the lifecycle report for native clients.
@@ -54,7 +54,7 @@ pub enum RunnerCommands {
     /// Deregister and remove one declared runner from a registry host.
     Remove {
         target: String,
-        /// Profile name from stado-rs/data/runner-profiles.json.
+        /// Profile name from stado-rs/data/work/runner-profiles.json.
         #[arg(long)]
         profile: String,
         /// Repository scope used when this runner was registered.
@@ -93,7 +93,7 @@ pub enum RunnerCommands {
     /// its own diagnostic log, whole.
     Diagnostics {
         target: String,
-        /// Profile name from stado-rs/data/runner-profiles.json.
+        /// Profile name from stado-rs/data/work/runner-profiles.json.
         #[arg(long)]
         profile: String,
         /// Emit the unit verdict and the log tail as JSON.

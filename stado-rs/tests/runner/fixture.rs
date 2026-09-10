@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 use serde_json::{json, Value};
 
 pub const TARGET: &str = "runner-observation-host";
-pub const PROFILE_DECLARATION: &str = "stado-rs/data/runner-profiles.json";
+pub const PROFILE_DECLARATION: &str = "stado-rs/data/work/runner-profiles.json";
 
 pub fn platform() -> &'static str {
     if std::env::consts::OS == "macos" {

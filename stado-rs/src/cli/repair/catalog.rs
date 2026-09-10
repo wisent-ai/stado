@@ -8,7 +8,7 @@ use crate::deploy::service_catalog::{CatalogRepair, CatalogService};
 
 use super::steps::{implementation_visible, RepairStep, REPAIR_STEPS};
 
-pub(super) const DECLARATION: &str = "stado-rs/data/service-catalog.json";
+pub(super) const DECLARATION: &str = "stado-rs/data/catalog/service-catalog.json";
 
 pub(super) fn catalog() -> Result<Vec<CatalogService>, CmdError> {
     let services = crate::deploy::service_catalog::all().map_err(CmdError::click)?;

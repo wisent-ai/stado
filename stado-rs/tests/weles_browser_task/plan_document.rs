@@ -1,7 +1,7 @@
 //! The plan document: refused whole, before any of it is enqueued.
 //!
 //! A workload plan is one JSON object declaring the schema
-//! `stado-rs/data/workloads.json` names for the kind. Every refusal here
+//! `stado-rs/data/work/workloads.json` names for the kind. Every refusal here
 //! arrives before a host is contacted, and the exit code is clap's usage code
 //! rather than the click code a placed run fails with — the operator is being
 //! told to fix the document, not the fleet.
@@ -44,7 +44,7 @@ fn the_command_will_not_run_without_the_plan_it_declares() {
         refusal(&out),
         format!(
             "weles-browser-task requires --plan FILE with schema {PLAN_SCHEMA}; add the plan \
-             declared by stado-rs/data/workloads.json"
+             declared by stado-rs/data/work/workloads.json"
         )
     );
 }
