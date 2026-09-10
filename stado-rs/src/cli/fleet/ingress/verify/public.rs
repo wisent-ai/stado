@@ -16,7 +16,7 @@ pub async fn verify_public(base: &str) -> Result<(usize, usize), String> {
     let expected = crate::dashboard::join_script_source().len();
     if expected == 0 {
         return Err(
-            "this build embeds no deploy/join.sh, so there is nothing to verify the tunnel \
+            "this build embeds no deploy/join fragments, so there is nothing to verify the tunnel \
              against and the published address could not serve an invite anyway"
                 .to_string(),
         );

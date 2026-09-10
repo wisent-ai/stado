@@ -12,7 +12,7 @@ use super::super::JOIN_SCRIPT;
 pub(in crate::dashboard) fn join_script() -> Response {
     if JOIN_SCRIPT.is_empty() {
         return unavailable(
-            "join script unavailable: this build has no deploy/join.sh in its source tree",
+            "join script unavailable: this build has no deploy/join fragments in its source tree",
         );
     }
     Response::new_with_headers(
