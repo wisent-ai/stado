@@ -8,12 +8,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 
 pub(crate) struct SkarbiecFixture {
+    /// Owns the removal of everything below, and — because the name is
+    /// drawn at random rather than from a clock reading two stories can
+    /// share — guarantees each story its own vault, GnuPG home and storage.
+    _run: tempfile::TempDir,
     pub(crate) root: PathBuf,
     pub(crate) gnupg: PathBuf,
     pub(crate) vault: PathBuf,
@@ -26,19 +30,17 @@ pub(crate) struct SkarbiecFixture {
 
 impl SkarbiecFixture {
     pub(crate) fn new() -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock follows the Unix epoch")
-            .as_nanos();
         // GnuPG creates Unix sockets below GNUPGHOME. Keep this deliberately
         // short so macOS's AF_UNIX path limit cannot break key generation.
-        let root = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
-            .join(".stado/test-runs")
-            .join(format!(
-                "stsb{:x}{:08x}",
-                std::process::id(),
-                unique & 0xffff_ffff
-            ));
+        let runs = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
+            .join(".stado/test-runs");
+        fs::create_dir_all(&runs).expect("create the isolated test-run root");
+        let run = tempfile::Builder::new()
+            .prefix("sts")
+            .rand_bytes(8)
+            .tempdir_in(&runs)
+            .expect("reserve an isolated run directory");
+        let root = run.path().to_path_buf();
         let gnupg = root.join("g");
         let storage = root.join("storage");
         fs::create_dir_all(&gnupg).expect("create isolated GnuPG home");
@@ -64,6 +66,7 @@ impl SkarbiecFixture {
         let fixture = Self {
             vault: root.join("vault.json"),
             token: root.join("stado-token"),
+            _run: run,
             root,
             gnupg,
             storage,
@@ -235,7 +238,7 @@ impl Drop for SkarbiecFixture {
                 "gpg-agent",
             ])
             .output();
-        let _ = fs::remove_dir_all(&self.root);
+        // `_run` removes the tree itself once this fixture is dropped.
     }
 }
 
