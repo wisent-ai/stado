@@ -94,7 +94,16 @@ impl Fixture {
     }
 
     pub fn stado(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_stado"))
+        self.command(args)
+            .output()
+            .expect("the built stado binary runs")
+    }
+
+    /// The product invocation every case shares: the isolated storage root,
+    /// no configuration file, and none of the operator's own API settings.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        command
             .args(args)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.path())
@@ -102,9 +111,8 @@ impl Fixture {
             .env_remove("COMPUTE_API_KEY")
             .env_remove("COMPUTE_API_URL")
             .env_remove("STADO_API_URL")
-            .env_remove("WC_PROFILES_DIR")
-            .output()
-            .expect("the built stado binary runs")
+            .env_remove("WC_PROFILES_DIR");
+        command
     }
 
     pub fn declare(&self, version: &str) -> Output {
@@ -138,6 +146,18 @@ impl Fixture {
         let mut args = vec!["release", "host-state", "--host", TARGET, "--json"];
         args.extend_from_slice(extra);
         self.stado(&args)
+    }
+
+    /// `host_state` with `$HOME` pointed at a directory the caller owns, so
+    /// the product reads that home's `.stado/bin` and writes that home's
+    /// `.stado/observations.json` instead of the operator's.
+    pub fn host_state_in_home(&self, home: &Path, extra: &[&str]) -> Output {
+        let mut args = vec!["release", "host-state", "--host", TARGET, "--json"];
+        args.extend_from_slice(extra);
+        self.command(&args)
+            .env("HOME", home)
+            .output()
+            .expect("the built stado binary runs")
     }
 
     /// The registry document as it stands on disk, which is where a declaration

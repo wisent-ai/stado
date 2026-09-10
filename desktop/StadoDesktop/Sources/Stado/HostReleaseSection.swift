@@ -22,11 +22,29 @@ struct HostReleaseBinary: Decodable, Identifiable, Sendable {
     }
 }
 
+/// The software report the visit left on file for `stado release status`, as
+/// the command reports it: the state of the look, its age, the counts, and
+/// the refusal when the host could not be read.
+struct HostSoftwareReport: Decodable, Sendable {
+    let state: String
+    let observed: String
+    let detail: String
+    let reported: Int
+    let release: Int
+    let unmanaged: Int
+    let scripts: Int
+
+    var summary: String {
+        "\(reported) program(s), \(release) release, \(unmanaged) unmanaged, \(scripts) script(s)"
+    }
+}
+
 struct HostReleaseState: Decodable, Sendable {
     let target: String
     let state: String
     let applied: Bool
     let binaries: [HostReleaseBinary]
+    let software: HostSoftwareReport?
 }
 
 @MainActor
@@ -118,6 +136,20 @@ struct HostReleaseSection: View {
                         if !row.detail.isEmpty && row.detail != "-" {
                             WisentField(label: "Detail", value: row.detail)
                         }
+                    }
+                }
+                if let software = report.software {
+                    if software.state == "observed" {
+                        WisentField(
+                            label: "Software report",
+                            value: "recorded \(software.observed): \(software.summary)"
+                        )
+                    } else {
+                        WisentAlertPanel(
+                            tone: .warning,
+                            title: "The software report was not refreshed (\(software.state))",
+                            detail: software.detail
+                        )
                     }
                 }
             }

@@ -5,8 +5,14 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use crate::observations::{Freshness, OBSERVED};
+use crate::release_control::ProductReleasePolicy;
 
 use super::{HostSoftware, Report, UNKNOWN};
+
+/// The one invocation that refreshes a host's software report, spelled once so
+/// the sentence that names it and the test that runs it cannot drift apart.
+/// `{host}` is the registry target.
+pub const REFRESH_COMMAND: &str = "stado release host-state --host {host}";
 
 // ---------------------------------------------------------------------------
 // Judging
@@ -23,6 +29,36 @@ pub struct ProductBinary {
     /// `None` when the registry declares no desired release, which is a
     /// different finding from a disagreement.
     pub desired: Option<String>,
+}
+
+impl ProductBinary {
+    /// The binary one release policy installs on a host, as the concrete file
+    /// the host's software report names.
+    ///
+    /// The rollout's own artefact lives under the product install root, so it
+    /// is in no `managed_versions` entry and in no `$HOME/.stado/bin` listing.
+    /// A reader that did not resolve this path could compare the desired
+    /// version against nothing at all — which is what `observed=unreported`
+    /// was — and a writer that did not inspect it could never confirm it.
+    pub fn of(policy: &ProductReleasePolicy) -> Self {
+        let path = format!(
+            "{}/{}",
+            policy.install_root.trim_end_matches('/'),
+            policy.binary.trim_start_matches('/')
+        );
+        Self {
+            name: path
+                .rsplit('/')
+                .next()
+                .unwrap_or(policy.binary.as_str())
+                .to_string(),
+            path,
+            desired: policy
+                .desired
+                .as_ref()
+                .map(|desired| desired.version.clone()),
+        }
+    }
 }
 
 /// What one target's software report says about the declarations it is supposed
@@ -128,18 +164,26 @@ pub fn judge(
     let mut finding = Finding::default();
     let host = report.host.as_str();
 
+    // The command each sentence names is the one live read this binary still
+    // has: `stado host software` refreshed this report until the host verbs
+    // collapsed into the release capability on 2026-09-06, and for four days
+    // afterwards `release status` kept sending operators to a verb that
+    // answered `Usage: stado host <COMMAND>`. Nothing wrote a report in those
+    // four days either, which is why every host read `stale`.
     match &report.freshness {
         Freshness::Never => {
             finding.fail(format!(
                 "{host} has never reported what software it runs, so every version claimed for it \
-                 is a declaration nothing on the host confirms: run `stado host software {host}`"
+                 is a declaration nothing on the host confirms: run `{}`",
+                REFRESH_COMMAND.replace("{host}", host)
             ));
             return finding;
         }
         Freshness::Stale(_) => finding.fail(format!(
             "{host} last reported its software {}, past the window an observation speaks for, so \
-             nothing here describes the present: run `stado host software {host}`",
-            report.age()
+             nothing here describes the present: run `{}`",
+            report.age(),
+            REFRESH_COMMAND.replace("{host}", host)
         )),
         Freshness::Fresh(_) => {}
     }

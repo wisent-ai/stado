@@ -11,15 +11,39 @@ use crate::cli::service_converge::model::receipts::{
 use crate::cli::service_converge::model::vocabulary::{Row, PROCESS_DIFFERS, UNDECLARED, UNKNOWN};
 use crate::cli::service_converge::model::ServiceConvergeResult;
 use crate::cli::CmdError;
+use crate::host_software::Report;
+use crate::observations::OBSERVED;
 
 // ---------------------------------------------------------------------------
 // Reporting
 // ---------------------------------------------------------------------------
 
+/// The software report as `stado release status` will read it, or why there
+/// is none: the same object [`Report::json`] gives the status command, with
+/// `state` `unverified` and the refusal in `detail` when the host would not be
+/// read, and `state` `unrecorded` with the sentence in `detail` when this
+/// process could not even write the refusal down.
+fn software_json(software: Result<&Report, &String>) -> Value {
+    match software {
+        Ok(report) => report.json(),
+        Err(detail) => json!({
+            "state": "unrecorded",
+            "observed": "never",
+            "detail": detail,
+            "reported": 0,
+            "release": 0,
+            "unmanaged": 0,
+            "scripts": 0,
+            "programs": [],
+        }),
+    }
+}
+
 pub(in crate::cli::service_converge) fn report_json(
     target: &str,
     applied: Option<&AppliedPass>,
     rows: &[Row],
+    software: Result<&Report, &String>,
 ) -> Value {
     let empty = AppliedPass::default();
     let pass = applied.unwrap_or(&empty);
@@ -35,7 +59,33 @@ pub(in crate::cli::service_converge) fn report_json(
             .collect::<Vec<Value>>(),
         "refused": pass.refused.iter().map(Refused::to_json).collect::<Vec<Value>>(),
         "binaries": rows.iter().map(Row::to_json).collect::<Vec<Value>>(),
+        "software": software_json(software),
     })
+}
+
+/// One line on what this visit put on file for `release status`, after the
+/// rows and before the diagnostics.
+///
+/// Printed in every text mode, the undeclared one included, because it is the
+/// only place an operator learns the refresh they were sent here for
+/// happened. A refusal goes to stderr in the host's own words, and a report
+/// that could not be written says so the same way: silently keeping the old
+/// report on file is the failure the whole report exists to end.
+fn emit_software(target: &str, software: Result<&Report, &String>) {
+    match software {
+        Ok(report) if report.state() == OBSERVED => println!(
+            "software={} recorded={}: {}",
+            report.state(),
+            report.age(),
+            report.summary()
+        ),
+        Ok(report) => eprintln!(
+            "{target}: cannot read what software it runs, recorded as {}: {}",
+            report.state(),
+            report.refusal()
+        ),
+        Err(detail) => eprintln!("{target}: the software report was not refreshed: {detail}"),
+    }
 }
 
 /// The report on stdout, and whatever `--apply` could not do on stderr.
@@ -56,6 +106,7 @@ pub(in crate::cli::service_converge) fn emit(
              add them to targets[].managed_versions",
             result.target
         );
+        emit_software(&result.target, result.software.as_ref());
         return Ok(());
     }
     for row in rows {
@@ -74,6 +125,7 @@ pub(in crate::cli::service_converge) fn emit(
             row.detail
         );
     }
+    emit_software(&result.target, result.software.as_ref());
     // The path is what an operator acts on and is far too long for a column, so
     // it is named here — and only for the rows where it contradicts the
     // declaration, which are the rows that would otherwise read as fine.

@@ -3,6 +3,10 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+mod janitor;
+
+use janitor::JanitorHealth;
+
 use super::payload::{accelerator_availability, diag_flag};
 use crate::capabilities::{storage_reach, StorageReach};
 use crate::deploy::host_disk;
@@ -112,55 +116,13 @@ pub fn assemble(
     let stall_after_seconds = policy
         .filter(|policy| policy.mode != "off")
         .map(|policy| policy.check_interval_seconds * STALL_INTERVALS);
-    // How long the janitor has been PREVENTED rather than silent. A workload
-    // holds the run lock in shared mode for its whole duration, by design, and
-    // every pass that starts meanwhile answers `lock_busy` — the modelled
-    // answer, not a fault.
-    let cleanup_prevented_age_seconds = reading
-        .state
-        .last_prevented_at
-        .as_deref()
-        .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
-        .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds());
-    // A pass prevented within the same window the stall is measured over is a
-    // janitor that is still running and still being turned away, so the age of
-    // its last success says nothing about its health. Only silence does.
-    //
-    // This is the whole of the 2026-09-03 false blocker: charless-mac-mini ran
-    // one job for 42 minutes, the in-process janitor polled every ten seconds
-    // throughout, and because a prevented pass recorded nothing the success age
-    // reached 2311s against a 1200s limit and `claiming` went off — on a host
-    // with 17.3 GiB free against a 15 GiB watermark and
-    // `disk_pressure_unresolved: false`. The host was refusing new work because
-    // it was doing work.
-    let cleanup_prevented = match (stall_after_seconds, cleanup_prevented_age_seconds) {
-        (Some(limit), Some(age)) => age <= limit,
-        _ => false,
-    };
-    // Being turned away is healthy for as long as somebody is taking turns.
-    // Being turned away while nothing has got through for the whole window the
-    // stall is measured over is not being turned away — it is a lock that is
-    // held, and it has a different remedy from every other condition here:
-    // find the holder (`space report`'s `cleanup_lock.holders` names the pid) and
-    // deal with THAT process. See [`DISK_CLEANUP_LOCK_HELD`].
-    let disk_cleanup_lock_held = state_observed
-        && cleanup_prevented
-        && match (stall_after_seconds, cleanup_success_age_seconds) {
-            (None, _) => false,
-            (Some(_), None) => true,
-            (Some(limit), Some(age)) => age > limit,
-        };
-    let disk_cleanup_stalled = state_observed
-        && !cleanup_prevented
-        && match (stall_after_seconds, cleanup_success_age_seconds) {
-            (None, _) => false,
-            // Declared, armed, and no completed pass on record at all. Reported
-            // rather than excused: a janitor that has never finished a pass is
-            // the fifteen-day case exactly, and the state file being absent or
-            // fresh says nothing about whether the thing ever worked.
-            (Some(_), None) => true,
-            (Some(limit), Some(age)) => age > limit,
-        };
+    let janitor = JanitorHealth::read(
+        reading,
+        now,
+        state_observed,
+        stall_after_seconds,
+        cleanup_success_age_seconds,
+    );
 
     let mut blockers: Vec<String> = Vec::new();
     // First in the vector, ahead of the staleness it causes: an agent bound to
@@ -198,10 +160,10 @@ pub fn assemble(
     // a janitor that was healthy. The condition stays visible either way —
     // `disk_cleanup_stalled` is carried as a field and embedded in the release
     // verdict, so nothing that could see this before has stopped seeing it.
-    if disk_cleanup_stalled && disk_pressure_unresolved {
+    if janitor.stalled && disk_pressure_unresolved {
         blockers.push(DISK_CLEANUP_STALLED.to_string());
     }
-    if disk_cleanup_lock_held && disk_pressure_unresolved {
+    if janitor.lock_held && disk_pressure_unresolved {
         blockers.push(DISK_CLEANUP_LOCK_HELD.to_string());
     }
     if diag_flag(payload, "disk_cleanup_policy_known") == Some(false) || low_watermark_gb.is_none()
@@ -231,13 +193,13 @@ pub fn assemble(
     // blocker (see the pressure gate above) and not silence either: an
     // operator has to be told that the mechanism which maintains this host's
     // free space is not running, before the day it matters.
-    if disk_cleanup_stalled && !disk_pressure_unresolved {
+    if janitor.stalled && !disk_pressure_unresolved {
         notes.push(DISK_CLEANUP_STALLED.to_string());
     }
     // The same finding for a lock that is held rather than a janitor that is
     // silent, and a note for the same reason: a host with headroom that cannot
     // clean is a host to go fix, not a host to close.
-    if disk_cleanup_lock_held && !disk_pressure_unresolved {
+    if janitor.lock_held && !disk_pressure_unresolved {
         notes.push(DISK_CLEANUP_LOCK_HELD.to_string());
     }
     if agent_store.is_none() {
@@ -251,10 +213,10 @@ pub fn assemble(
         blockers,
         disk_pressure_unresolved,
         free_bytes,
-        disk_cleanup_stalled,
-        disk_cleanup_lock_held,
+        disk_cleanup_stalled: janitor.stalled,
+        disk_cleanup_lock_held: janitor.lock_held,
         cleanup_success_age_seconds,
-        cleanup_prevented_age_seconds,
+        cleanup_prevented_age_seconds: janitor.prevented_age_seconds,
         free_gb,
         low_watermark_gb,
         target_free_gb: policy.map(|policy| policy.target_free_gb),

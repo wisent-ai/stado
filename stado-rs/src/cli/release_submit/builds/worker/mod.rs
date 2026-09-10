@@ -1,15 +1,16 @@
 //! `stado release worker` — the builder-side half of one platform build job.
 
+mod environment;
 mod package;
 pub(in crate::cli::release_submit) mod steps;
+
+use environment::build_environment;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use chrono::Utc;
-
 use crate::cli::release_submit::builds::worker::package::{
-    disk_sentence, measure_scratch, package, write_receipt, write_scratch,
+    disk_sentence, measure_scratch, package, receipt, write_receipt, write_scratch,
 };
 use crate::cli::release_submit::builds::worker::steps::{
     ensure_rust_components, execute, require_free_space,
@@ -18,8 +19,7 @@ use crate::cli::release_submit::ReleaseWorkerArgs;
 use crate::cli::CmdError;
 use crate::release_control;
 use crate::release_pipeline::{
-    self, ArtifactReceipt, BuildReceipt, ProductManifest, ReceiptInput, StepReceipt, StepStatus,
-    WorkerRequest,
+    self, ArtifactReceipt, ProductManifest, ReceiptInput, StepReceipt, StepStatus, WorkerRequest,
 };
 
 pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
@@ -89,46 +89,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     }
     let output = source.join(".wisent-output");
     std::fs::create_dir_all(&output)?;
-    // `WISENT_SOURCE_COMMIT` and `WISENT_SOURCE_SHA256` are the snapshot's own
-    // identity, and a build that needs them has nowhere else to get them: the
-    // worker unpacks a `git archive`, so there is no repository to ask. Both
-    // names are set from the immutable request so a build script cannot inherit
-    // an unrelated parent `STADO_SOURCE_REVISION`; Stado's build script requires
-    // them to agree exactly. The source commit was already validated before the
-    // archive existed.
-    let mut environment = BTreeMap::from([
-        ("WISENT_SOURCE_DIR".into(), source.display().to_string()),
-        ("WISENT_OUTPUT_DIR".into(), output.display().to_string()),
-        (
-            "WISENT_INPUTS_DIR".into(),
-            inputs_root.display().to_string(),
-        ),
-        ("WISENT_PRODUCT".into(), request.product.clone()),
-        ("WISENT_VERSION".into(), request.version.clone()),
-        ("WISENT_PLATFORM".into(), request.platform.clone()),
-        ("WISENT_SOURCE_COMMIT".into(), request.source_commit.clone()),
-        (
-            "STADO_SOURCE_REVISION".into(),
-            request.source_commit.clone(),
-        ),
-        ("WISENT_SOURCE_SHA256".into(), request.source_sha256.clone()),
-    ]);
-    for (name, input) in &request.inputs {
-        let key = name
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() {
-                    b.to_ascii_uppercase() as char
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        environment.insert(
-            format!("WISENT_INPUT_{key}_DIR"),
-            inputs_root.join(&input.mount).display().to_string(),
-        );
-    }
+    let environment = build_environment(&request, &source, &output, &inputs_root);
 
     // Give the pinned toolchain the components its own gates are about to
     // demand. rustup installs a pinned toolchain on first use WITHOUT optional
@@ -151,31 +112,21 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         let passed = step.status == StepStatus::Passed;
         quality.push(step);
         if !passed {
-            let receipt = BuildReceipt {
-                schema_version: 1,
-                run_id: request.run_id.clone(),
-                job_id,
-                product: request.product,
-                version: request.version,
-                platform: request.platform,
-                builder: request.builder,
-                source_commit: request.source_commit,
-                source_sha256: request.source_sha256,
-                manifest_sha256: request.manifest_sha256,
-                inputs: receipt_inputs,
-                secret_env: request.secret_env,
+            let receipt = receipt(
+                &request,
+                &job_id,
+                receipt_inputs,
                 quality,
-                build: StepReceipt {
+                StepReceipt {
                     name: "build".into(),
                     argv: recipe.build.argv.clone(),
                     status: StepStatus::Failed,
                     exit_code: None,
                 },
-                status: StepStatus::Failed,
-                artifact: None,
-                completed_at: Utc::now().to_rfc3339(),
-                failure: Some(format!("quality gate {} failed", gate.name)),
-            };
+                StepStatus::Failed,
+                None,
+                Some(format!("quality gate {} failed", gate.name)),
+            );
             write_receipt(&receipt)?;
             return Err(CmdError::click("release quality gate failed"));
         }
@@ -238,26 +189,16 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         temp.close()
             .map_err(|error| CmdError::click(format!("cannot remove the build tree: {error}")))?;
         write_scratch(&scratch)?;
-        let receipt = BuildReceipt {
-            schema_version: 1,
-            run_id: request.run_id,
-            job_id,
-            product: request.product,
-            version: request.version,
-            platform: request.platform,
-            builder: request.builder,
-            source_commit: request.source_commit,
-            source_sha256: request.source_sha256,
-            manifest_sha256: request.manifest_sha256,
-            inputs: receipt_inputs,
-            secret_env: request.secret_env,
+        let receipt = receipt(
+            &request,
+            &job_id,
+            receipt_inputs,
             quality,
             build,
-            status: StepStatus::Failed,
-            artifact: None,
-            completed_at: Utc::now().to_rfc3339(),
-            failure: Some(format!("build command failed; {disk}")),
-        };
+            StepStatus::Failed,
+            None,
+            Some(format!("build command failed; {disk}")),
+        );
         write_receipt(&receipt)?;
         return Err(CmdError::click(format!(
             "release build command failed; {disk}"
@@ -273,29 +214,19 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     let bytes = package(&output, &recipe.stage)?;
     std::fs::create_dir_all("output")?;
     std::fs::write("output/release.tar.gz", &bytes)?;
-    let receipt = BuildReceipt {
-        schema_version: 1,
-        run_id: request.run_id,
-        job_id,
-        product: request.product,
-        version: request.version,
-        platform: request.platform,
-        builder: request.builder,
-        source_commit: request.source_commit,
-        source_sha256: request.source_sha256,
-        manifest_sha256: request.manifest_sha256,
-        inputs: receipt_inputs,
-        secret_env: request.secret_env,
+    let receipt = receipt(
+        &request,
+        &job_id,
+        receipt_inputs,
         quality,
         build,
-        status: StepStatus::Passed,
-        artifact: Some(ArtifactReceipt {
+        StepStatus::Passed,
+        Some(ArtifactReceipt {
             sha256: release_control::sha256_bytes(&bytes),
             bytes: bytes.len() as u64,
             path: "release.tar.gz".into(),
         }),
-        completed_at: Utc::now().to_rfc3339(),
-        failure: None,
-    };
+        None,
+    );
     write_receipt(&receipt)
 }

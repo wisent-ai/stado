@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
-use crate::native::{hostname, said, SYSTEM_PATH};
+use crate::native::{hostname, product_binary, said, SYSTEM_PATH};
 
 /// The registry target name this area declares for the current machine.
 pub const TARGET: &str = "disk-scope-current-host";
@@ -96,7 +96,7 @@ impl Host {
         // path its services use, not a replacement command or a PATH lookup.
         let bin = home.join(".stado/bin");
         fs::create_dir_all(&bin).expect("create isolated product installation");
-        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_stado"), bin.join("stado"))
+        std::os::unix::fs::symlink(product_binary(), bin.join("stado"))
             .expect("install the real product binary in the isolated host");
         let host = Self {
             _dir: dir,
@@ -165,9 +165,9 @@ impl Host {
         fs::write(self.storage.join("registry.json"), document).expect("write fixture registry");
     }
 
-    /// Run the built binary with nothing of the operator's environment left.
+    /// Run the product binary with nothing of the operator's environment left.
     pub fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_stado"))
+        Command::new(product_binary())
             .args(args)
             .env_clear()
             .env("HOME", &self.home)

@@ -38,6 +38,20 @@ pub const PRODUCT_RELEASE_DELIVERY_JOB_COMMAND: &str =
 /// Release qualification and delivery unblock declared fleet versions, so
 /// routine batch work must not leave them at the zero-priority FIFO tail.
 pub const RELEASE_JOB_PRIORITY: i64 = 90_000_000;
+/// How long a platform the manifest marks `required: false` may sit in the
+/// queue unclaimed before the release records it as unbuilt and finishes on
+/// the platforms that are required.
+///
+/// It exists because a release with an optional platform nothing can claim
+/// never ended. Skarbiec 0.3.5 published darwin-arm64 in twenty minutes and
+/// then waited: its `linux-amd64` recipe reads the Skarbiec item
+/// `browser-extension-key#private_key`, and the only Linux builder in this
+/// fleet declines every job carrying workload secrets — "workload secrets
+/// require a dedicated agent Skarbiec grant; leaving it queued for a host
+/// that can resolve it", once a second, for hours. An optional platform is
+/// exactly the case where waiting forever is the wrong answer: the operator
+/// declared it skippable.
+pub const OPTIONAL_PLATFORM_CLAIM_GRACE_S: u64 = 900;
 
 // ---------------------------------------------------------------------------
 // Timers / telemetry

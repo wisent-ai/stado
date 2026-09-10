@@ -1,4 +1,10 @@
 //! The per-program readings of one reporting pass over one host.
+//!
+//! [`classify`] decides what each population path is before anything is read
+//! from it; the readings of a program — digest, provenance, version — are
+//! here.
+
+mod classify;
 
 use std::time::Duration;
 
@@ -10,6 +16,8 @@ use crate::host_software::{HostSoftware, RELEASE, UNKNOWN, UNMANAGED};
 
 use super::queries::VersionQuery;
 use super::{ProgramInspection, ReleaseMatch, Reporter};
+
+pub(super) use classify::Classification;
 
 /// A supported version command is a tiny read, not a recovery operation.
 const VERSION_QUERY_DEADLINE: Duration = Duration::from_secs(5);
@@ -207,42 +215,23 @@ impl Reporter<'_> {
         &self,
         path: &str,
     ) -> Result<ProgramInspection, DeployError> {
-        if path.is_empty() {
-            return Ok(ProgramInspection::Ignored);
+        let decided = self.classify(path).await?;
+        self.inspect_classified(path, decided).await
+    }
+
+    /// The readings of one path already classified: digest, provenance and
+    /// version for a program; a count for a script; nothing for the rest.
+    pub(super) async fn inspect_classified(
+        &self,
+        path: &str,
+        decided: Classification,
+    ) -> Result<ProgramInspection, DeployError> {
+        match decided {
+            Classification::Ignored => return Ok(ProgramInspection::Ignored),
+            Classification::Script => return Ok(ProgramInspection::Script),
+            Classification::Program => {}
         }
         let base = path.rsplit('/').next().unwrap_or(path);
-        // A `.previous` is the rollback copy of a program already reported
-        // under its own name, and a dotfile is this directory's own staging
-        // litter.
-        if base.starts_with('.') || base.ends_with(".previous") {
-            return Ok(ProgramInspection::Ignored);
-        }
-
-        // The regular-file check and two-byte read share one single-line
-        // command so 1394 helper scripts cost 1394 overlapped SSH round trips,
-        // not twice that many serialized ones. The leading `f` preserves the
-        // distinction between a non-file and a file whose `head` itself failed.
-        let quoted = shlex_quote(path);
-        let head = host_channel::run_command(
-            self.target,
-            &format!("test -f {quoted} && printf f && /usr/bin/head -c 2 {quoted}"),
-            self.runner,
-        )
-        .await?;
-        let Some(head) = head.stdout.strip_prefix('f') else {
-            return Ok(ProgramInspection::Ignored);
-        };
-        // Tested before the executable bit and not after: retired helpers on
-        // control-host are no longer executable, but their shebangs are still
-        // the population the report is contracted to count.
-        if head == "#!" {
-            return Ok(ProgramInspection::Script);
-        }
-        // What is left has to be executable to be a program.
-        // `$HOME/.stado/bin` also holds `SHA256SUMS` and release manifests.
-        if !host_channel::remote_test(self.target, &format!("-x {quoted}"), self.runner).await? {
-            return Ok(ProgramInspection::Ignored);
-        }
         let digest = match &self.hasher {
             Some(hasher) => hasher.digest(self.target, path, self.runner).await?,
             None => String::new(),

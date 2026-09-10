@@ -21,11 +21,28 @@ pub(crate) async fn read_terminal_job(
 }
 
 pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
+    terminal_within(store, id, None).await
+}
+
+/// Wait for one release job, optionally giving up on a job nothing claims.
+///
+/// `grace` is `None` for a platform the manifest requires: a required build
+/// that waits is a release that has not happened yet, and a deadline there
+/// would spend the coordinate on a queue that was merely busy. It carries a
+/// duration for an optional platform, where a job no host will claim must
+/// end the wait rather than the release: the queue state and the pinned host
+/// travel in the refusal, so the run records why that platform has no bytes.
+pub(crate) async fn terminal_within(
+    store: &JobStorage,
+    id: &str,
+    grace: Option<Duration>,
+) -> Result<Job, CmdError> {
+    let started = std::time::Instant::now();
     loop {
         if let Some(job) = read_terminal_job(store, id).await? {
             return Ok(job);
         }
-        if store.read_job("queue", id).await?.is_some() {
+        if let Some(queued) = store.read_job("queue", id).await? {
             let queue_control = crate::queue::control::read(store)
                 .await
                 .map_err(|error| CmdError::click(error.to_string()))?;
@@ -38,6 +55,21 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
                 return Err(CmdError::click(format!(
                     "cancelled queued release job {id} because the queue is paused ({})",
                     queue_control.pause_summary()
+                )));
+            }
+            if grace.is_some_and(|grace| started.elapsed() >= grace) {
+                let host = if queued.pinned_host.is_empty() {
+                    "no pinned host".to_string()
+                } else {
+                    queued.pinned_host.clone()
+                };
+                cancel::cancel_in_store(store, id).await?;
+                return Err(CmdError::click(format!(
+                    "no host claimed optional release job {id} within {}s; it was {} on {host}. \
+                     The host's own decline is in its agent log: read it with `stado service \
+                     logs <unit> --host <host>`",
+                    started.elapsed().as_secs(),
+                    queued.state
                 )));
             }
         }
