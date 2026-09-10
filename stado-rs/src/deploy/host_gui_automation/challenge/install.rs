@@ -64,12 +64,14 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
     run(
         target,
         &[
-            "/usr/bin/codesign",
-            "--force",
-            "--sign",
-            "-",
+            "/usr/bin/env",
+            "wisent-products",
+            "signing",
+            "sign",
             "--identifier",
             APPLE_CHALLENGE_HELPER_BUNDLE_ID,
+            "--previous",
+            path,
             &staged,
         ],
         "sign Apple challenge helper",

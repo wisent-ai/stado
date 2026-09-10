@@ -72,7 +72,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
     let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
@@ -101,12 +101,16 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     };
     let _ = agent.kill();
     let _ = agent.wait();
-    assert!(
-        result.status.success(),
-        "release submit failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
+    if !result.status.success() {
+        let retained = home.keep();
+        panic!(
+            "release submit failed; evidence retained at {}\nstdout:\n{}\nstderr:\n{}\nstore:\n{}",
+            retained.display(),
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr),
+            store_snapshot(&storage),
+        );
+    }
     let release: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(release["state"], "completed");
     assert_eq!(release["platforms"][platform]["state"], "published");
@@ -122,7 +126,16 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         String::from_utf8(output.stdout).unwrap().trim(),
         "ci-release-probe 1.0.0"
     );
+    #[cfg(target_os = "macos")]
+    run(Command::new("/usr/bin/codesign").args([
+        "--verify",
+        "--strict",
+        "-R",
+        "=anchor apple generic",
+        installed.to_str().unwrap(),
+    ]));
     println!("verified release platform={platform}; installed=ci-release-probe 1.0.0");
+    println!("release evidence retained at {}", home.keep().display());
 }
 
 #[test]
@@ -180,7 +193,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
         .stderr(Stdio::from(agent_err))
         .spawn()
         .unwrap();
-    wait_for_capacity(&storage, home.path(), &mut agent);
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     seed_stale_capacity(&storage, consumer);
 
     let submit_out = File::create(home.path().join("submit.out")).unwrap();

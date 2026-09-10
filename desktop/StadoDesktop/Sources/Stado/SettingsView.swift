@@ -66,6 +66,7 @@ struct SettingsView: View {
             }
 
             WorkdirsSection(fleetStore: fleetStore)
+            SigningSection(fleetStore: fleetStore)
 
             Section("First-run walkthrough") {
                 VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {

@@ -96,7 +96,14 @@ pub(in crate::deploy::host_gui_automation) async fn helper_identity(
     }
     run(
         target,
-        &["/usr/bin/codesign", "--verify", "--strict", path],
+        &[
+            "/usr/bin/codesign",
+            "--verify",
+            "--strict",
+            "-R",
+            "=anchor apple generic",
+            path,
+        ],
         "Apple challenge helper signature verification",
         runner,
     )

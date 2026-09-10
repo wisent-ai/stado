@@ -28,6 +28,8 @@ pub enum ProductCommands {
     Remove(ProductMutation),
     /// Re-install every catalogued product on one surface that is behind `origin/main`.
     Sync(ProductSweep),
+    /// Inspect stable macOS signing identities, or reconcile installed native code.
+    Signatures(ProductSignatures),
 }
 
 #[derive(Debug, clap::Args)]
@@ -38,6 +40,17 @@ pub struct ProductMutation {
     /// Required only for a service surface.
     #[arg(long)]
     host: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ProductSignatures {
+    product: String,
+    #[arg(long, value_parser = ["cli", "service"], default_value = "cli")]
+    surface: String,
+    #[arg(long)]
+    apply: bool,
     #[arg(long)]
     json: bool,
 }
@@ -151,5 +164,17 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
         ProductCommands::Rollback(value) => invoke(mutation_args("rollback", value)).await,
         ProductCommands::Remove(value) => invoke(mutation_args("remove", value)).await,
         ProductCommands::Sync(value) => invoke(sweep_args(value)).await,
+        ProductCommands::Signatures(value) => {
+            let mut args = if value.apply {
+                vec!["signing".into(), "reconcile".into(), value.product]
+            } else {
+                vec!["signing".into(), "report".into(), value.product]
+            };
+            args.extend(["--surface".into(), value.surface]);
+            if value.json {
+                args.push("--json".into());
+            }
+            invoke(args).await
+        }
     }
 }
