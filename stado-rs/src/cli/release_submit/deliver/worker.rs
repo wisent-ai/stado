@@ -77,6 +77,31 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
         return Err(CmdError::click("delivery input identity mismatch"));
     }
     let source_root = std::env::current_dir()?.join("delivery-source");
+    // A previous attempt of this job in the same work tree left its
+    // extraction behind: on 2026-09-10 the fleet-macbook delivery of 0.20.5
+    // installed the release, and installing it recycled the object API the
+    // agent heartbeats through, so the lease lapsed and the queue ran the job
+    // again in the same directory, where the second attempt died on the first
+    // attempt's tree. The tree is this job's scratch and the archive it came
+    // from is immutable and digest-checked above, so it is replaced, never
+    // trusted. A link or a file at that name is removed as what it is.
+    if let Ok(previous) = source_root.symlink_metadata() {
+        println!(
+            "[release-worker] delivery: replacing the source tree a previous attempt left at {}",
+            source_root.display()
+        );
+        let removed = if previous.is_dir() {
+            std::fs::remove_dir_all(&source_root)
+        } else {
+            std::fs::remove_file(&source_root)
+        };
+        removed.map_err(|error| {
+            CmdError::click(format!(
+                "cannot remove the previous attempt's source tree {}: {error}",
+                source_root.display()
+            ))
+        })?;
+    }
     release_control::safe_extract_archive(&source_archive, &source_root)
         .map_err(CmdError::click)?;
     let output = std::env::current_dir()?.join("output");
