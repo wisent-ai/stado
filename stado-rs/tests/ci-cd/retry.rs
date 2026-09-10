@@ -40,37 +40,40 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
     let mut initial_agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut initial_agent_command, home.path(), &storage, &vault);
-    let mut initial_agent = initial_agent_command
-        .args(["agent", "--target", "ci-runner"])
-        .stdout(Stdio::from(agent_out))
-        .stderr(Stdio::from(agent_err))
-        .spawn()
-        .unwrap();
-    wait_for_claimable_capacity(&storage, home.path(), &mut initial_agent);
-    initial_agent.kill().unwrap();
-    initial_agent.wait().unwrap();
+    let mut initial_agent = Running(
+        initial_agent_command
+            .args(["agent", "--target", "ci-runner"])
+            .stdout(Stdio::from(agent_out))
+            .stderr(Stdio::from(agent_err))
+            .spawn()
+            .unwrap(),
+    );
+    wait_for_claimable_capacity(&storage, home.path(), &mut initial_agent.0);
+    drop(initial_agent);
 
     let submit_out = File::create(home.path().join("submit-first.out")).unwrap();
     let submit_err = File::create(home.path().join("submit-first.err")).unwrap();
     let mut first_submit_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut first_submit_command, home.path(), &storage, &vault);
-    let mut first_submit = first_submit_command
-        .args([
-            "release",
-            "submit",
-            "--source",
-            source.to_str().unwrap(),
-            "--version",
-            "1.0.0",
-            "--channel",
-            "candidate",
-            "--json",
-        ])
-        .stdout(Stdio::from(submit_out))
-        .stderr(Stdio::from(submit_err))
-        .spawn()
-        .unwrap();
-    let first_job = wait_for_queued_release_build(&mut first_submit, home.path(), &storage);
+    let mut first_submit = Running(
+        first_submit_command
+            .args([
+                "release",
+                "submit",
+                "--source",
+                source.to_str().unwrap(),
+                "--version",
+                "1.0.0",
+                "--channel",
+                "candidate",
+                "--json",
+            ])
+            .stdout(Stdio::from(submit_out))
+            .stderr(Stdio::from(submit_err))
+            .spawn()
+            .unwrap(),
+    );
+    let first_job = wait_for_queued_release_build(&mut first_submit.0, home.path(), &storage);
     let first_job_id = first_job["job_id"].as_str().unwrap().to_string();
     let mut cancel = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut cancel, home.path(), &storage, &vault);
@@ -78,7 +81,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let first_status = loop {
-        if let Some(status) = first_submit.try_wait().unwrap() {
+        if let Some(status) = first_submit.0.try_wait().unwrap() {
             break status;
         }
         assert!(
@@ -100,42 +103,45 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
     let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut agent_command, home.path(), &storage, &vault);
-    let mut agent = agent_command
-        .args(["agent", "--target", "ci-runner"])
-        .stdout(Stdio::from(agent_out))
-        .stderr(Stdio::from(agent_err))
-        .spawn()
-        .unwrap();
-    wait_for_claimable_capacity(&storage, home.path(), &mut agent);
+    let mut agent = Running(
+        agent_command
+            .args(["agent", "--target", "ci-runner"])
+            .stdout(Stdio::from(agent_out))
+            .stderr(Stdio::from(agent_err))
+            .spawn()
+            .unwrap(),
+    );
+    wait_for_claimable_capacity(&storage, home.path(), &mut agent.0);
 
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
     let mut retry_submit_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut retry_submit_command, home.path(), &storage, &vault);
-    let mut retry_submit = retry_submit_command
-        .args([
-            "release",
-            "submit",
-            "--source",
-            source.to_str().unwrap(),
-            "--version",
-            "1.0.0",
-            "--channel",
-            "candidate",
-            "--json",
-        ])
-        .stdout(Stdio::from(submit_out))
-        .stderr(Stdio::from(submit_err))
-        .spawn()
-        .unwrap();
-    let status = wait_for_submit(&mut retry_submit, &mut agent, home.path(), &storage);
+    let mut retry_submit = Running(
+        retry_submit_command
+            .args([
+                "release",
+                "submit",
+                "--source",
+                source.to_str().unwrap(),
+                "--version",
+                "1.0.0",
+                "--channel",
+                "candidate",
+                "--json",
+            ])
+            .stdout(Stdio::from(submit_out))
+            .stderr(Stdio::from(submit_err))
+            .spawn()
+            .unwrap(),
+    );
+    let status = wait_for_submit(&mut retry_submit.0, &mut agent.0, home.path(), &storage);
     let result = Output {
         status,
         stdout: fs::read(home.path().join("submit.out")).unwrap(),
         stderr: fs::read(home.path().join("submit.err")).unwrap(),
     };
-    let _ = agent.kill();
-    let _ = agent.wait();
+    drop(agent);
     assert!(
         result.status.success(),
         "retried release submit failed:\nstdout:\n{}\nstderr:\n{}\nagent stdout:\n{}\nagent stderr:\n{}\nstore:{}",

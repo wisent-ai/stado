@@ -13,7 +13,8 @@ use crate::cli::release_submit::publish::artifact::publish;
 use crate::cli::release_submit::publish::promotion::reconcile;
 use crate::cli::release_submit::publish::signing::{require_rollback_compatibility, signing};
 use crate::cli::release_submit::run::source::{
-    identity, immutable, queue_immutable, run_path, run_uri, snapshot,
+    committed_file, identity, immutable, queue_immutable, resolve_commit, run_path, run_uri,
+    snapshot,
 };
 use crate::cli::release_submit::run::state::{load, persist_failure, save};
 use crate::cli::release_submit::ReleaseSubmitArgs;
@@ -31,13 +32,16 @@ const OBJECT_API_REASON: &str =
 
 pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     let root = args.source.canonicalize()?;
-    let manifest_bytes = std::fs::read(root.join(PRODUCT_MANIFEST))?;
+    let commit = resolve_commit(&root, args.commit.as_deref())?;
+    let manifest_bytes = committed_file(&root, &commit, PRODUCT_MANIFEST)?;
     let pm = release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)?;
     let ProductManifest::Release(m) = pm.clone() else {
         return Err(CmdError::click("product declares releases:false"));
     };
-    let declared =
-        release_pipeline::declared_version(&root, &m.version_source).map_err(CmdError::click)?;
+    let declared = release_pipeline::declared_version(&m.version_source, |path| {
+        committed_file(&root, &commit, path).map_err(|error| error.to_string())
+    })
+    .map_err(CmdError::click)?;
     if declared != args.version {
         return Err(CmdError::click(
             "--version disagrees with declared version source",
@@ -71,7 +75,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             ))
         })?;
     }
-    let (commit, archive) = snapshot(&root)?;
+    let archive = snapshot(&root, &commit)?;
     // Reserve every platform coordinate before this submission can become the
     // newest durable run. Delivery workers fence themselves against that
     // newest run. When the claim lived only in `publish`, a second source tree

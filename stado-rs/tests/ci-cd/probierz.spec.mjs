@@ -37,6 +37,14 @@ await runReleaseTest(
   /verified release platform=(darwin-arm64|linux-amd64); installed=ci-release-probe 1\.0\.0/,
 );
 await runReleaseTest(
-  'a_cancelled_release_build_is_retried_under_a_new_job',
+  'retry::a_cancelled_release_build_is_retried_under_a_new_job',
   /verified cancelled release retry platform=(darwin-arm64|linux-amd64); first_job=job-[a-f0-9]+; retry_job=job-[a-f0-9]+; installed=ci-release-probe 1\.0\.0/,
+);
+await runReleaseTest(
+  'resume::failed_delivery_resumes_original_source_after_checkout_changes',
+  /real resume evidence:/,
+);
+await runReleaseTest(
+  'commit::committed_submission_preserves_active_work_and_installs_the_selected_source',
+  /committed source release evidence:/,
 );

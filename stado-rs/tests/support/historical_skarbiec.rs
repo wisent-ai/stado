@@ -1,6 +1,15 @@
-//! Real current and historical brokers, without copying another checkout.
-//! Current builds use the one canonical Skarbiec checkout. The historical
-//! dependency is downloaded from its immutable release and digest-checked.
+// Shared by the test targets that need a broker predating a verb group.
+#![allow(dead_code)]
+
+//! The one older broker a delivery-gap case can be proved against.
+//!
+//! Which Skarbiec the fleet runs is decided by `support/skarbiec.rs` and
+//! nothing here: this file answers a different question, and only the
+//! question a current binary cannot answer — what Stado says when a host
+//! still runs a broker that predates a command group. That binary is not on
+//! a developer machine or a fresh CI runner, so it is read from its own
+//! immutable release by version, source revision and archive digest. Pinned
+//! in code, verified before use, and never a build of another checkout.
 
 use std::fs;
 use std::io::Read;
@@ -11,47 +20,16 @@ use std::sync::LazyLock;
 
 use sha2::{Digest, Sha256};
 
+/// The release this fixture is pinned to: the last Skarbiec published before
+/// the `route` verb group existed.
 const HISTORICAL_VERSION: &str = "0.2.39";
 const HISTORICAL_REVISION: &str = "33daa68378c4fb81b12f3a108ccd4906204cc440";
 const HASH_BUFFER_BYTES: usize = 8192;
-static BROKER: LazyLock<PathBuf> = LazyLock::new(resolve);
 static HISTORICAL_BROKER: LazyLock<PathBuf> = LazyLock::new(download_historical);
 
-pub fn real_skarbiec() -> PathBuf {
-    BROKER.clone()
-}
-
+/// The verified historical broker, downloaded once per test binary.
 pub fn historical_skarbiec() -> PathBuf {
     HISTORICAL_BROKER.clone()
-}
-
-fn resolve() -> PathBuf {
-    if let Some(named) = std::env::var_os("SKARBIEC_BIN") {
-        let binary = PathBuf::from(named);
-        assert!(
-            executable(&binary),
-            "SKARBIEC_BIN is not executable: {}",
-            binary.display()
-        );
-        return binary;
-    }
-    let repo = skarbiec_repo();
-    run(
-        Command::new("cargo")
-            .args(["build", "--locked", "--release", "--bin", "skarbiec"])
-            .current_dir(&repo)
-            .env("CARGO_TARGET_DIR", repo.join("target"))
-            .env_remove("CARGO_ENCODED_RUSTFLAGS")
-            .env_remove("RUSTFLAGS"),
-        "build the canonical Skarbiec checkout",
-    );
-    let binary = repo.join("target/release/skarbiec");
-    assert!(
-        executable(&binary),
-        "build produced no broker: {}",
-        binary.display()
-    );
-    binary
 }
 
 fn download_historical() -> PathBuf {
@@ -103,7 +81,8 @@ fn download_historical() -> PathBuf {
 fn download(uri: &str, destination: &Path) {
     run(
         Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(["storage", "get", uri]).arg(destination),
+            .args(["storage", "get", uri])
+            .arg(destination),
         "read the real historical release; provide SKARBIEC_STALE_BIN if this platform was not published",
     );
 }
@@ -120,38 +99,6 @@ fn digest(path: &Path) -> Option<String> {
         hash.update(&buffer[..size]);
     }
     Some(format!("{:x}", hash.finalize()))
-}
-
-fn skarbiec_repo() -> PathBuf {
-    if let Some(named) = std::env::var_os("SKARBIEC_REPO") {
-        return PathBuf::from(named);
-    }
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let common = PathBuf::from(git(
-        manifest,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    ));
-    let repo = common
-        .parent()
-        .and_then(Path::parent)
-        .map(|siblings| siblings.join("skarbiec"))
-        .unwrap_or_default();
-    assert!(
-        repo.join(".git").exists(),
-        "no canonical Skarbiec checkout at {}; set SKARBIEC_REPO or SKARBIEC_BIN",
-        repo.display()
-    );
-    repo
-}
-
-fn git(directory: &Path, arguments: &[&str]) -> String {
-    String::from_utf8(run(
-        Command::new("git").arg("-C").arg(directory).args(arguments),
-        "read the canonical checkout",
-    ))
-    .expect("git answers in UTF-8")
-    .trim()
-    .to_owned()
 }
 
 fn run(command: &mut Command, purpose: &str) -> Vec<u8> {

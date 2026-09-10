@@ -28,3 +28,14 @@ enum NativeHostReleaseOperations {
         .init(id: "provenance", title: "Read installed artifact provenance", path: ["release", "provenance"], mutates: false),
     ]
 }
+
+enum NativeReleaseSourceOperations {
+    static let all: [NativeCapabilityOperation] = [
+        .init(id: "submit-source", title: "Submit a release source", path: ["release", "submit"], hostPlacement: .none, fields: [
+            .init(id: "source", label: "Git repository path on the selected Stado API host", option: "--source", required: true),
+            .init(id: "commit", label: "Full Git commit (blank requires a clean HEAD)", option: "--commit"),
+            .init(id: "version", label: "Version declared by that source", option: "--version", required: true),
+            .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
+        ]),
+    ]
+}

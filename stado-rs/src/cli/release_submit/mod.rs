@@ -36,6 +36,9 @@ pub(crate) use crate::cli::release_submit::run::reports::recent_runs;
 pub struct ReleaseSubmitArgs {
     #[arg(long)]
     source: PathBuf,
+    /// Read this full Git commit without changing or requiring a clean checkout.
+    #[arg(long)]
+    commit: Option<String>,
     #[arg(long)]
     version: String,
     #[arg(long, value_enum, default_value_t = SubmitChannel::Candidate)]

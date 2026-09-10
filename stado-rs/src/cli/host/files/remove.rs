@@ -63,51 +63,16 @@ pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFile
     let script = format!(
         r#"set -u
 path={quoted}
-report() {{ printf 'STADO_REMOVE_FILE\t%s\t%s\n' "$1" "$2"; }}
-# A service file is removable exactly where Stado installs service files.
-# Keeping this list beside the delete is deliberate: a missing Linux path left
-# retired user units on disk, ready for an older coordinator or a manual
-# `systemctl enable` to resurrect. Root-owned machine units keep the same
-# `com.wisent.*` namespace restriction as LaunchDaemons.
-privileged=no
 case "$path" in
-  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*|"$HOME/.config/systemd/user/"*) ;;
-  /Library/LaunchDaemons/com.wisent.*.plist|/etc/systemd/system/com.wisent.*.service) privileged=yes ;;
-  *) report refused "outside the managed areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
+  /Library/LaunchDaemons/com.wisent.*.plist|/etc/systemd/system/com.wisent.*.service)
+    set -- /usr/bin/sudo -n python3 - "$path" "$HOME" ;;
+  *) set -- python3 - "$path" "$HOME" ;;
 esac
-if [ -L "$path" ]; then
-  report refused "a symlink points outside the managed area; remove it by hand: rm -- $path"
-elif [ -d "$path" ]; then
-  report refused "a directory is not removed by a single-file command"
-elif [ ! -e "$path" ]; then
-  report absent ""
-elif [ ! -f "$path" ]; then
-  report refused "not a regular file"
-elif [ "$privileged" = yes ]; then
-  # Owned by root by construction, so the `-O` test the home areas use would
-  # refuse every one of them. The grant is the same `sudo -n` the install used;
-  # a host without it is told which command was refused rather than left with a
-  # unit nobody can remove.
-  if /usr/bin/sudo -n /bin/rm -f -- "$path"; then
-    if [ -e "$path" ]; then
-      report failed "sudo rm succeeded and the path is still there"
-    else
-      report removed ""
-    fi
-  else
-    report refused "sudo -n rm -- $path was refused; this host has no passwordless grant"
-  fi
-elif [ ! -O "$path" ]; then
-  report refused "not owned by this account; remove it on the host with: sudo rm -- $path"
-else
-  rm -f -- "$path"
-  if [ -e "$path" ]; then
-    report failed "rm succeeded and the path is still there"
-  else
-    report removed ""
-  fi
-fi
-"#
+"$@" <<'STADO_REMOVE_FILE_PROGRAM'
+{program}
+STADO_REMOVE_FILE_PROGRAM
+"#,
+        program = include_str!("../../../host_payloads/remove_file/operation.py"),
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
@@ -120,15 +85,8 @@ fi
     let (state, detail) = output
         .stdout
         .lines()
-        .find_map(|line| {
-            crate::deploy::host_channel::marker_fields(line)
-                .as_slice()
-                .split_first()
-                .and_then(|(marker, rest)| {
-                    (*marker == "STADO_REMOVE_FILE")
-                        .then(|| (rest[0].to_string(), rest.get(1).map(|s| s.to_string())))
-                })
-        })
+        .find_map(|line| line.strip_prefix("STADO_REMOVE_FILE\t"))
+        .and_then(|line| serde_json::from_str::<(String, Option<String>)>(line).ok())
         .ok_or_else(|| {
             CmdError::click(format!(
                 "{}: the host answered without a removal report: {}",

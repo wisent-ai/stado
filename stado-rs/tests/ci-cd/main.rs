@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 mod skarbiec_support;
 use skarbiec_support::{SkarbiecFixture, SkarbiecItem};
 
+mod commit;
 mod fixture;
 mod resume;
 mod retry;

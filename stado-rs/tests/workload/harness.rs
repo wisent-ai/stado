@@ -7,8 +7,9 @@
 //! system really executes it: no provider is contacted, no executor is
 //! simulated, and no host but this one is ever addressed.
 
+use std::cell::Cell;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -55,21 +56,25 @@ pub fn said(bytes: &[u8]) -> String {
 }
 
 pub struct Area {
-    pub root: tempfile::TempDir,
+    pub root: PathBuf,
     pub storage: PathBuf,
     pub home: PathBuf,
     pub hostname: String,
     config: PathBuf,
+    next_command: Cell<usize>,
 }
 
 impl Area {
     pub fn new() -> Self {
+        let evidence = Path::new(env!("CARGO_MANIFEST_DIR")).join(".wisent-output/workload");
+        fs::create_dir_all(&evidence).expect("create retained workload evidence directory");
         let root = tempfile::Builder::new()
-            .prefix("stado-workload-")
-            .tempdir()
-            .expect("create the isolated workload journey");
-        let storage = root.path().join("storage");
-        let home = root.path().join("home");
+            .prefix("run-")
+            .tempdir_in(evidence)
+            .expect("create the isolated workload journey")
+            .keep();
+        let storage = root.join("storage");
+        let home = root.join("home");
         for directory in [&storage, &home] {
             fs::create_dir_all(directory).expect("create isolated journey directory");
         }
@@ -79,14 +84,22 @@ impl Area {
             serde_json::to_vec_pretty(&registry(&hostname)).unwrap(),
         )
         .expect("write the isolated registry");
-        let config = root.path().join("config-that-does-not-exist.json");
-        Self {
+        let config = root.join("config-that-does-not-exist.json");
+        let area = Self {
             root,
             storage,
             home,
             hostname,
             config,
-        }
+            next_command: Cell::new(0),
+        };
+        let identity = area.stado(&["--version"]);
+        assert!(
+            identity.status.success(),
+            "could not read the tested Stado identity"
+        );
+        eprintln!("workload evidence: {}", area.root.display());
+        area
     }
 
     pub fn command(&self, args: &[&str]) -> Command {
@@ -105,7 +118,28 @@ impl Area {
     }
 
     pub fn stado(&self, args: &[&str]) -> Output {
-        self.command(args).output().expect("the stado binary runs")
+        let index = self.next_command.get();
+        self.next_command.set(index + 1);
+        let directory = self.root.join("commands").join(index.to_string());
+        fs::create_dir_all(&directory).expect("create command evidence directory");
+        fs::write(
+            directory.join("request.json"),
+            serde_json::to_vec_pretty(&json!({
+                "binary": env!("CARGO_BIN_EXE_stado"),
+                "args": args,
+            }))
+            .unwrap(),
+        )
+        .expect("record the real command");
+        let output = self.command(args).output().expect("the stado binary runs");
+        fs::write(directory.join("stdout"), &output.stdout).expect("record stdout");
+        fs::write(directory.join("stderr"), &output.stderr).expect("record stderr");
+        fs::write(
+            directory.join("result.json"),
+            serde_json::to_vec(&json!({"exit_code": output.status.code()})).unwrap(),
+        )
+        .expect("record the exit status");
+        output
     }
 
     /// Submit one command routed to this host and return its job id.
@@ -140,7 +174,7 @@ impl Area {
     /// Run the product's own local agent until it drains the queue and shuts
     /// itself down, and return everything it logged.
     pub fn drain(&self) -> String {
-        let log_path = self.root.path().join("agent.log");
+        let log_path = self.root.join("agent.log");
         let log = fs::File::create(&log_path).expect("create the agent log");
         let mut child = self
             .command(&["agent", "--auto", "--idle-shutdown"])
@@ -164,6 +198,16 @@ impl Area {
             std::thread::sleep(Duration::from_millis(200));
         };
         let log = fs::read_to_string(&log_path).expect("read the agent log");
+        fs::write(
+            self.root.join("agent-result.json"),
+            serde_json::to_vec_pretty(&json!({
+                "binary": env!("CARGO_BIN_EXE_stado"),
+                "args": ["agent", "--auto", "--idle-shutdown"],
+                "exit_code": status.code(),
+            }))
+            .unwrap(),
+        )
+        .expect("record the agent exit status");
         assert!(status.success(), "the local agent exited badly:\n{log}");
         log
     }
@@ -184,7 +228,7 @@ impl Area {
     }
 
     pub fn scratch(&self, name: &str) -> PathBuf {
-        let path = self.root.path().join(name);
+        let path = self.root.join(name);
         fs::create_dir_all(&path).expect("create a journey scratch directory");
         path
     }

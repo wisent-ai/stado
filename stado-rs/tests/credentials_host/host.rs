@@ -22,7 +22,7 @@ use std::process::{Command, Output, Stdio};
 
 use serde_json::{json, Value};
 
-use crate::broker::real_skarbiec;
+use crate::skarbiec::real_skarbiec_binary;
 
 /// The registry name of the isolated entry standing for this machine.
 pub const TARGET: &str = "credentials-host-isolated";
@@ -109,7 +109,7 @@ impl IsolatedHost {
 
         // The product reaches the host's Stado and Skarbiec at these two fixed
         // paths under the account's home. Both are the real binaries.
-        let broker = real_skarbiec();
+        let broker = real_skarbiec_binary();
         link(
             Path::new(env!("CARGO_BIN_EXE_stado")),
             &home.join(".stado/bin/stado"),

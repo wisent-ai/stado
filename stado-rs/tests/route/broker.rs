@@ -20,7 +20,8 @@ use std::process::{Command, Stdio};
 use serde_json::json;
 
 use super::fleet::Fleet;
-use super::source::{historical_skarbiec, real_skarbiec};
+use super::historical_skarbiec::historical_skarbiec;
+use super::skarbiec::real_skarbiec_binary;
 
 pub const ITEM: &str = "route-real-login";
 pub const FIELD: &str = "username";
@@ -36,25 +37,22 @@ fn executable(path: &Path) -> bool {
 /// broker answers `unknown command: route` and exits non-zero.
 fn knows_route_group(binary: &Path) -> bool {
     Command::new(binary)
-        .arg("route")
+        .args(["route", "--help"])
         .output()
         .unwrap_or_else(|error| panic!("{} could not start: {error}", binary.display()))
         .status
         .success()
 }
 
-/// The broker the fleet is supposed to be running: named in `SKARBIEC_BIN`, or
-/// built from the sibling checkout at `origin/main`. Either way it is real,
-/// and either way it has to know the verb group Stado reads with.
+/// The real broker selected by the shared installed-binary policy.
+/// No source checkout is copied or built by the test.
 pub fn current() -> PathBuf {
-    let binary = real_skarbiec();
+    let binary = real_skarbiec_binary();
     assert!(
         knows_route_group(&binary),
-        "the resolved skarbiec at {} does not know the `route` verb group, so it cannot resolve a \
-         declared route. `route resolve`, `route declare` and `route verify` replaced `routes \
-         list`, `routes add` and `routes verify`, so this binary predates them. Unset SKARBIEC_BIN \
-         to have this area build the sibling checkout at origin/main, or point it at a broker \
-         built from there.",
+        "the resolved Skarbiec at {} does not provide the required route command group. \
+         Select an installed or verified release binary with SKARBIEC_BIN; this test \
+         never creates another source checkout.",
         binary.display()
     );
     binary

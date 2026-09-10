@@ -12,10 +12,14 @@ use crate::cli::storage;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_control;
-use crate::release_pipeline::{PipelineChannel, PRODUCT_MANIFEST};
+use crate::release_pipeline::PipelineChannel;
 
 fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
-    let o = Command::new("git").args(args).current_dir(root).output()?;
+    let o = Command::new("git")
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .current_dir(root)
+        .output()?;
     if !o.status.success() {
         return Err(CmdError::click(format!(
             "git {} failed: {}",
@@ -25,44 +29,52 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
     }
     Ok(o.stdout)
 }
-pub(crate) fn snapshot(root: &Path) -> Result<(String, Vec<u8>), CmdError> {
-    if !git(
-        root,
-        &["status", "--porcelain=v1", "--untracked-files=normal"],
-    )?
-    .is_empty()
-    {
-        return Err(CmdError::click(
-            "release source must be a clean committed Git tree",
-        ));
-    }
-    let commit = String::from_utf8(git(root, &["rev-parse", "HEAD"])?)
-        .map_err(|_| CmdError::click("Git commit is not UTF-8"))?
-        .trim()
-        .to_string();
+pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<String, CmdError> {
+    let commit = match requested {
+        Some(commit) => commit.to_owned(),
+        None => {
+            if !git(
+                root,
+                &["status", "--porcelain=v1", "--untracked-files=normal"],
+            )?
+            .is_empty()
+            {
+                return Err(CmdError::click(
+                    "release source must be a clean committed Git tree",
+                ));
+            }
+            String::from_utf8(git(root, &["rev-parse", "HEAD"])?)
+                .map_err(|_| CmdError::click("Git commit is not UTF-8"))?
+                .trim()
+                .to_string()
+        }
+    };
     if commit.len() != 40
         || !commit
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
-        return Err(CmdError::click("Git HEAD is not a full lowercase commit"));
+        return Err(CmdError::usage(
+            "--commit must be 40 lowercase hexadecimal characters",
+        ));
     }
-    if git(
-        root,
-        &["ls-tree", "--name-only", "HEAD", "--", PRODUCT_MANIFEST],
-    )?
-    .is_empty()
-    {
-        return Err(CmdError::click(format!(
-            "{PRODUCT_MANIFEST} must be committed at HEAD"
-        )));
+    if git(root, &["cat-file", "-t", &commit])? != b"commit\n" {
+        return Err(CmdError::usage("--commit must name a Git commit object"));
     }
-    let tar = git(root, &["archive", "--format=tar", "HEAD"])?;
+    Ok(commit)
+}
+
+pub(crate) fn committed_file(root: &Path, commit: &str, path: &str) -> Result<Vec<u8>, CmdError> {
+    git(root, &["show", &format!("{commit}:{path}")])
+}
+
+pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
+    let tar = git(root, &["archive", "--format=tar", commit])?;
     let mut gz = GzBuilder::new()
         .mtime(0)
         .write(Vec::new(), Compression::best());
     gz.write_all(&tar)?;
-    Ok((commit, gz.finish()?))
+    Ok(gz.finish()?)
 }
 pub(crate) async fn immutable(
     uri: &str,

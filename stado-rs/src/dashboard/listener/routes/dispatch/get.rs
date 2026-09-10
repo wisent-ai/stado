@@ -33,6 +33,9 @@ impl Dashboard {
             }
             return send_json(http_status("403"), &json!({"error": "forbidden"}));
         }
+        if path_no_query == crate::dashboard::operator_console::stream::PATH {
+            return crate::dashboard::operator_console::stream::upgrade(request).await;
+        }
         if path_no_query == "/healthz" || path_no_query == "/livez" {
             // Liveness answers before authorization, so it publishes the flat
             // readiness booleans only: a boundary's reason names vault items,

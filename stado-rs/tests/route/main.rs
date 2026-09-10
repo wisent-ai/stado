@@ -21,8 +21,11 @@
 mod broker;
 mod capability;
 mod fleet;
+#[path = "../support/historical_skarbiec.rs"]
+mod historical_skarbiec;
 mod leased;
-mod source;
+#[path = "../support/skarbiec.rs"]
+mod skarbiec;
 
 use std::os::unix::fs::PermissionsExt;
 

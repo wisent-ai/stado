@@ -7,11 +7,11 @@
 //! evidence that Stado can put a credential where a host will read it.
 //!
 //! Here every case drives the built `stado` binary (`CARGO_BIN_EXE_stado`)
-//! against the real Skarbiec broker built from `origin/main`, over a vault
+//! against a real installed Skarbiec broker, over a vault
 //! this area creates and initialises with real GnuPG keys, on this machine
 //! named in a registry of its own. Assertions read the persisted encrypted
 //! record on disk and the exit status; stdout is corroboration, never the
-//! only witness. See `host.rs` for the isolation, `broker.rs` for the broker.
+//! only witness. See `host.rs` for isolation and `tests/support/skarbiec.rs` for dependency selection.
 //!
 //! What is defended: a credential declared through the product is really in
 //! the host's declared vault and the declaration reads back from persisted
@@ -20,9 +20,10 @@
 //! and in `refusals.rs`, the refusals that matter, each with its exact
 //! sentence and with the vault left untouched.
 
-mod broker;
 mod host;
 mod refusals;
+#[path = "../support/skarbiec.rs"]
+mod skarbiec;
 
 use std::process::Output;
 

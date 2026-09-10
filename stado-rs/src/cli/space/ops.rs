@@ -97,7 +97,9 @@ pub(super) async fn remove_file(
     path: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let outcome = host::remove_file_document(target, path).await?;
+    let outcome = host::remove_file_document(target, path)
+        .await
+        .map_err(|error| error.machine_readable(json_output))?;
     let report = json!({
         "target": outcome.target,
         "path": outcome.path,
@@ -127,7 +129,9 @@ pub(super) async fn retire_file(
     request: host::RetireFileRequest<'_>,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let outcome = host::retire_file_outcome(target, &request).await?;
+    let outcome = host::retire_file_outcome(target, &request)
+        .await
+        .map_err(|error| error.machine_readable(json_output))?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else if outcome.status == "absent" {
