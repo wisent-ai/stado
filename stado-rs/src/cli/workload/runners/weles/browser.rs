@@ -220,12 +220,9 @@ pub(crate) async fn run_weles_browser_task(
     if outcome.ok {
         Ok(())
     } else {
-        let detail = if !outcome.stderr_tail.trim().is_empty() {
-            outcome.stderr_tail.trim()
-        } else if !outcome.stdout_tail.trim().is_empty() {
-            outcome.stdout_tail.trim()
-        } else {
-            "Weles returned no process output"
+        let detail = match (outcome.stdout_tail.trim(), outcome.stderr_tail.trim()) {
+            ("", "") => "Weles returned no process output".to_string(),
+            (stdout, stderr) => format!("stdout:\n{stdout}\nstderr:\n{stderr}"),
         };
         Err(CmdError::click(format!(
             "{}: {action} run {} did not succeed: {detail}",

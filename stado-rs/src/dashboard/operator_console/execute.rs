@@ -73,6 +73,25 @@ async fn read_bounded<R: AsyncRead + Unpin>(
     Ok((output, truncated))
 }
 
+pub(super) fn command(arguments: &[String]) -> Result<Command, ConsoleError> {
+    let executable = std::env::current_exe().map_err(|error| {
+        ConsoleError::unavailable(format!("could not resolve Stado binary: {error}"))
+    })?;
+    let mut command = Command::new(executable);
+    command
+        .args(arguments)
+        .env("NO_COLOR", "1")
+        .env("TERM", "dumb")
+        .env("STADO_DASHBOARD_CHILD", "1")
+        // Server-only storage overrides must not change a CLI child's store.
+        .env_remove("WC_STORAGE_BACKEND")
+        .env_remove("WC_LOCAL_STORAGE_PATH")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    Ok(command)
+}
+
 pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
     let request: RunRequest = serde_json::from_slice(body)
         .map_err(|error| ConsoleError::bad_request(format!("invalid JSON: {error}")))?;
@@ -95,26 +114,12 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
             })
             .collect::<Vec<_>>()
     });
-    let executable = std::env::current_exe().map_err(|error| {
-        ConsoleError::unavailable(format!("could not resolve Stado binary: {error}"))
-    })?;
-    let mut child = Command::new(executable)
-        .args(staged_args.as_deref().unwrap_or(&request.args))
-        .env("NO_COLOR", "1")
-        .env("TERM", "dumb")
-        .env("STADO_DASHBOARD_CHILD", "1")
-        // The server's local-store override is not the ordinary CLI client's
-        // storage configuration. Children must use the configured object API.
-        .env_remove("WC_STORAGE_BACKEND")
-        .env_remove("WC_LOCAL_STORAGE_PATH")
+    let mut child = command(staged_args.as_deref().unwrap_or(&request.args))?
         .stdin(if request.stdin.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
         })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
         .spawn()
         .map_err(|error| {
             ConsoleError::unavailable(format!("could not start Stado command: {error}"))

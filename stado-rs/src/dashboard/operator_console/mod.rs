@@ -8,6 +8,7 @@
 
 mod execute;
 mod families;
+pub(crate) mod stream;
 
 use serde::Deserialize;
 use serde_json::json;
