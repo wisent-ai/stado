@@ -10,6 +10,7 @@
   "platforms": {
     "darwin-arm64": {
       "runner_platform": "darwin-arm64",
+      "min_free_gb": 20,
       "quality": [
         {
           "name": "fmt",
@@ -70,6 +71,7 @@
     },
     "linux-amd64": {
       "runner_platform": "linux-amd64",
+      "min_free_gb": 20,
       "quality": [
         {
           "name": "fmt",

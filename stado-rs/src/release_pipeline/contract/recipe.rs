@@ -29,6 +29,17 @@ pub struct PlatformRecipe {
     pub env: BTreeMap<String, String>,
     #[serde(default = "default_required")]
     pub required: bool,
+    /// Free space this platform's build needs on the work volume, in GiB, or
+    /// zero where the product declares no requirement.
+    ///
+    /// Declared, never inferred. On 2026-09-10 the stado 0.20.3 darwin build
+    /// compiled for twenty minutes on charless-mac-mini and died with
+    /// `No space left on device (os error 28)` while rustc wrote metadata,
+    /// with roughly 11 GiB free against an 8 GiB janitor watermark: the
+    /// operator learnt the requirement from a linker error inside a 30 KB log
+    /// instead of from a refusal before the first crate.
+    #[serde(default)]
+    pub min_free_gb: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
