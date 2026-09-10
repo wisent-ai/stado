@@ -1,4 +1,5 @@
 use super::*;
+mod profile;
 
 mod wait;
 pub(super) use wait::*;
@@ -284,22 +285,5 @@ pub(crate) fn registry(
         serde_json::to_string_pretty(&document).unwrap(),
     )
     .unwrap();
-    // Native delivery workers intentionally do not inherit control-plane env
-    // overrides. Give this isolated host its real persisted deployment profile.
-    run(Command::new(env!("CARGO_BIN_EXE_stado"))
-        .env_clear()
-        .env("HOME", home)
-        .env("PATH", std::env::var("PATH").unwrap())
-        .args(["config", "init"]));
-    for (key, value) in [
-        ("storage.local.path", storage.to_str().unwrap()),
-        ("storage.stado.namespace", "ci-release"),
-    ] {
-        run(Command::new(env!("CARGO_BIN_EXE_stado"))
-            .env_clear()
-            .env("HOME", home)
-            .env("PATH", std::env::var("PATH").unwrap())
-            .env("STADO_CONFIG", home.join(".stado/config.json"))
-            .args(["config", "set", key, value]));
-    }
+    profile::configure(home, storage);
 }
