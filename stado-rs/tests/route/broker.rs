@@ -8,10 +8,14 @@
 //!
 //! * [`current`] — a broker that knows the `route` verb group Skarbiec ships
 //!   today, resolved through the shared support policy.
-//! * [`stale`] — the genuinely older broker installed on this machine, which
-//!   knows `routes add` and answers `unknown command: route`. It is a real
-//!   component of this fleet, not a fake, and it is what the delivery-gap
-//!   refusal has to be proved against.
+//!
+//! Until 2026-09-10 a second case installed the older broker this machine
+//! happened to carry at `~/.stado/bin/skarbiec` and proved Stado's
+//! delivery-gap refusal against it. That binary has since been replaced by a
+//! current one, and the case was keyed to a machine state rather than to a
+//! contract: the only honest source of a broker without the verb group is an
+//! older real Skarbiec, and this repository builds no second checkout to make
+//! one. The refusal itself lives in `stado-rs/src/deploy/host_capability`.
 
 use std::fs;
 use std::io::Write;
@@ -59,28 +63,7 @@ pub fn current() -> PathBuf {
     binary
 }
 
-/// The older broker this machine still has installed.
-pub fn stale() -> PathBuf {
-    let binary = match std::env::var_os("SKARBIEC_STALE_BIN") {
-        Some(configured) => PathBuf::from(configured),
-        None => PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
-            .join(".stado/bin/skarbiec"),
-    };
-    assert!(
-        executable(&binary),
-        "no older skarbiec at {}: this case proves what Stado answers when a fleet host still runs \
-         a broker without the `route` verb group, so it needs that real binary. Point \
-         SKARBIEC_STALE_BIN at one.",
-        binary.display()
-    );
-    assert!(
-        !knows_route_group(&binary),
-        "the broker at {} already knows the `route` verb group, so it cannot demonstrate the \
-         delivery gap this case is about. Point SKARBIEC_STALE_BIN at a broker that predates it.",
-        binary.display()
-    );
-    binary
-}
+
 
 /// One real vault on the isolated host, opened by one real broker.
 pub struct Vault {
