@@ -27,8 +27,10 @@
 //! exit code, the socket that is or is not open. Stdout corroborates. Every
 //! refusal sentence is copied from a live run of this fixture.
 
+mod answers;
 mod declaration;
 mod fixture;
+mod published;
 mod readiness;
 mod resolution;
 
