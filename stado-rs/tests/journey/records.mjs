@@ -8,7 +8,7 @@ import { writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runProcess, succeeded } from './process.mjs';
+import { errorRecord, runProcess, succeeded } from './process.mjs';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 

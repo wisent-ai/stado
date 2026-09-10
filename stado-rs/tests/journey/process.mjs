@@ -8,7 +8,7 @@ const killGraceMs = 2 * 1000;
 const processOutputEncoding = 'utf8';
 const activeChildren = new Set();
 
-function errorRecord(error) {
+export function errorRecord(error) {
   if (!error) return null;
   return {
     name: error.name || null,
