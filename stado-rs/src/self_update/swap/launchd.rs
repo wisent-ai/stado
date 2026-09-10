@@ -54,7 +54,8 @@ pub(super) async fn recycle_launchd(
             continue;
         }
         let running = running_images.get(&pid);
-        let declared_program = unit.program.split_whitespace().next();
+        let declared_command = unit.declared_program();
+        let declared_program = declared_command.split_whitespace().next();
         let directly_declared = paths
             .iter()
             .any(|path| declared_program == Some(path.as_str()));
