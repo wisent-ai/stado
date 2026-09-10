@@ -20,6 +20,8 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
     }
 
     let home = host_channel::remote_home(target, runner).await?;
+    let signer = signing_program(target, &home, runner).await?;
+    items.push(("apple-challenge-signer".to_string(), signer.clone()));
     let cache = format!("{home}/.stado/cache/apple-challenge-helper");
     let source = format!("{cache}/capture.swift");
     let staged = format!("{cache}/stado-apple-challenge-capture.staged");
@@ -64,8 +66,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
     run(
         target,
         &[
-            "/usr/bin/env",
-            "wisent-products",
+            &signer,
             "signing",
             "sign",
             "--identifier",
@@ -125,4 +126,27 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
         identity.version.clone(),
     ));
     Ok(identity)
+}
+
+async fn signing_program(
+    target: &ComputeTarget,
+    home: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let lookup =
+        host_channel::run_program(target, &["/usr/bin/which", "wisent-products"], runner).await?;
+    if lookup.ok() && !lookup.stdout.trim().is_empty() {
+        return Ok(lookup.stdout.trim().to_string());
+    }
+    // pipx exposes the shared signer here even when SSH's PATH omits it.
+    let installed = format!("{home}/.local/bin/wisent-products");
+    if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&installed)), runner).await? {
+        return Ok(installed);
+    }
+    Err(DeployError(format!(
+        "{}: Wisent Products signing executable is unavailable: PATH lookup returned {}; \
+         {installed} is not executable. Install the shared signer on this build host",
+        target.name,
+        lookup.detail().trim()
+    )))
 }
