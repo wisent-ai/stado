@@ -51,7 +51,18 @@ fn the_json_catalog_carries_program_and_args() {
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("catalog --json emits JSON");
     let services = document["services"].as_array().expect("services array");
-    assert_eq!(services.len(), 6);
+    assert!(!services.is_empty(), "the catalogue declares no service");
+    for entry in services {
+        let name = entry["name"].as_str().expect("every entry is named");
+        assert!(
+            entry["program"].as_str().is_some_and(|p| !p.is_empty()),
+            "{name} carries no program: {entry:#}"
+        );
+        assert!(
+            entry["args"].is_array(),
+            "{name} carries no argument list: {entry:#}"
+        );
+    }
     let skarbiec = services
         .iter()
         .find(|entry| entry["name"] == "skarbiec")
@@ -65,7 +76,11 @@ fn the_json_catalog_carries_program_and_args() {
         .iter()
         .find(|entry| entry["name"] == "stado")
         .expect("stado entry");
-    assert_eq!(stado["args"], serde_json::json!(["local-control-plane"]));
+    assert_eq!(
+        stado["args"],
+        serde_json::json!(["dashboard", "--bind", "127.0.0.1", "--port", "8765"]),
+        "the catalogue's stado entry is the object API every consumer resolves"
+    );
 }
 
 #[test]

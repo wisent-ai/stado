@@ -26,23 +26,87 @@
 //! the command printed. The `.invalid` TLD is reserved by RFC 2606 and
 //! never resolves, so no packet leaves the machine.
 
-mod cli;
-mod refusals;
-mod support;
+use std::path::Path;
+use std::process::{Command, Output};
+use std::sync::Arc;
 
-
-use serde_json::json;
+use chrono::{DateTime, Utc};
+use serde_json::{json, Value};
 
 use stado::monitor::host_silence::{
-    recent_silences, READER_CLI, READER_DASHBOARD, READER_RESOLVER,
-
     beacon_is_silent, close_record, merge_observation, observe_beacon_age_at, open_record,
-    silence_object_path, silence_threshold_seconds, DEFAULT_SILENCE_THRESHOLD_SECONDS,
+    recent_refusals_at, recent_silences, record_refusal, refusal_object_path, refusal_summary_at,
+    silence_object_path, silence_threshold_seconds, summarize_refusals, RefusalRecord,
+    DEFAULT_SILENCE_THRESHOLD_SECONDS, READER_CLI, READER_DASHBOARD, READER_RESOLVER,
+    REASON_AUTHORITY_UNREACHABLE, REASON_BEACON_STALE, REASON_DIRECTORY_CACHE_STALE,
     SILENCE_THRESHOLD_ENV,
 };
+use stado::queue::{JobStorage, LocalBackend};
 
-use support::{at, blob_names, on_disk, store, AUTHORITY_SENTENCE, HOST};
+const HOST: &str = "control-host";
 
+/// The resolver's own sentence from the incident, verbatim.
+const AUTHORITY_SENTENCE: &str = "registry authority exited with exit status: 255: ssh: connect to host 10.0.0.253 port 22: Operation timed out";
+
+/// The other reader's own sentence from the incident, verbatim.
+const STALE_SENTENCE: &str = "service directory cache is stale (store generation 7)";
+
+fn store(root: &Path) -> JobStorage {
+    let backend = LocalBackend::new(root.to_str().expect("tempdir path is utf-8"))
+        .expect("local backend roots at the tempdir");
+    JobStorage::with_backend(Arc::new(backend), "local")
+}
+
+fn at(text: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(text)
+        .expect("fixture timestamp is RFC 3339")
+        .with_timezone(&Utc)
+}
+
+/// The document actually on disk at `blob`, parsed.
+fn on_disk(root: &Path, blob: &str) -> Value {
+    let body = std::fs::read_to_string(root.join(blob))
+        .unwrap_or_else(|error| panic!("{blob} is not on disk: {error}"));
+    serde_json::from_str(&body).expect("the record stays JSON")
+}
+
+/// Blob names directly under `dir`, sorted.
+fn blob_names(root: &Path, dir: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Seed one refusal at an exact instant, the way a reader publishes it.
+///
+/// `record_refusal` stamps `Utc::now()` and throttles, which is right for a
+/// live reader and useless for building a window with known ages; the path
+/// and body here are the ones it would have written.
+async fn seed_refusal(store: &JobStorage, record: &RefusalRecord) {
+    store
+        .upload_text(
+            &refusal_object_path(&record.host, record.at),
+            &serde_json::to_string_pretty(record).expect("refusal serializes"),
+        )
+        .await
+        .expect("seeding a refusal writes");
+}
+
+fn refusal(at_text: &str, reader: &str, reason: &str, detail: &str) -> RefusalRecord {
+    RefusalRecord {
+        host: HOST.to_string(),
+        at: at(at_text),
+        reader: reader.to_string(),
+        reason: reason.to_string(),
+        detail: detail.to_string(),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // the transition
@@ -221,49 +285,6 @@ async fn a_host_that_never_published_starts_its_silence_at_the_observation() {
     );
 }
 
-#[test]
-fn the_transition_truth_table_needs_no_store() {
-    let beacon = at("2026-08-19T18:29:00Z");
-
-    assert!(!beacon_is_silent(
-        Some(beacon),
-        at("2026-08-19T18:33:59Z"),
-        300
-    ));
-    assert!(beacon_is_silent(
-        Some(beacon),
-        at("2026-08-19T18:34:01Z"),
-        300
-    ));
-    assert!(
-        beacon_is_silent(None, at("2026-08-19T18:34:01Z"), 300),
-        "a host that never published is not a host that is fine"
-    );
-    assert!(
-        !beacon_is_silent(Some(at("2026-08-19T19:00:00Z")), beacon, 300),
-        "a publisher with a fast clock is not an outage"
-    );
-
-    // A close stamped before the open reports zero, never negative time.
-    let mut skewed = open_record(HOST, beacon, READER_CLI, None);
-    assert!(close_record(&mut skewed, at("2026-08-19T18:28:00Z")));
-    assert_eq!(skewed.duration_seconds, Some(0));
-    assert!(
-        !close_record(&mut skewed, at("2026-08-19T18:40:00Z")),
-        "a closed record does not close twice"
-    );
-
-    let mut record = open_record(HOST, beacon, READER_RESOLVER, None);
-    assert!(merge_observation(&mut record, READER_CLI, Some("first")));
-    assert!(!merge_observation(&mut record, READER_CLI, Some("second")));
-    assert_eq!(
-        record.first_reader_error.as_deref(),
-        Some("first"),
-        "the field records who noticed first, not who ran last"
-    );
-    assert_eq!(record.observed_by, vec!["resolver", "cli"]);
-}
-
 /// Held across every `set_var` and every subprocess spawn in this binary.
 ///
 /// `#[test]` functions share one process and run on parallel threads, and
@@ -271,29 +292,8 @@ fn the_transition_truth_table_needs_no_store() {
 /// data race in libc, not in Rust — it aborts rather than failing an
 /// assertion, at whatever rate the scheduler feels like. These are the only
 /// two tests here that touch the process environment.
-pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[test]
-fn the_threshold_is_read_from_one_place() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-    assert_eq!(
-        silence_threshold_seconds(),
-        DEFAULT_SILENCE_THRESHOLD_SECONDS
-    );
-    std::env::set_var(SILENCE_THRESHOLD_ENV, "45");
-    assert_eq!(silence_threshold_seconds(), 45);
-    // A typo must not switch the detector off.
-    std::env::set_var(SILENCE_THRESHOLD_ENV, "not a number");
-    assert_eq!(
-        silence_threshold_seconds(),
-        DEFAULT_SILENCE_THRESHOLD_SECONDS
-    );
-    std::env::set_var(SILENCE_THRESHOLD_ENV, "0");
-    assert_eq!(
-        silence_threshold_seconds(),
-        DEFAULT_SILENCE_THRESHOLD_SECONDS
-    );
-    std::env::remove_var(SILENCE_THRESHOLD_ENV);
-}
-
-
+mod authority;
+mod threshold;
+mod truth_table;

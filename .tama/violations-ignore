@@ -6,16 +6,6 @@ assets/readme-banner.svg
 # Resolved by cargo from stado-rs/Cargo.toml and committed because this crate
 # ships a binary. A person never edits it, and `cargo build` rewrites it whole.
 stado-rs/Cargo.lock
-# The bootstrap script a joining machine receives as one file. `build.rs`
-# embeds it verbatim and the dashboard hands exactly these bytes to
-# `GET /join.sh`; `stado fleet ingress up` then fetches the route back and
-# compares it byte for byte. A machine that has not joined yet has no way to
-# fetch a second fragment, so this script cannot be split.
-deploy/join.sh
-# Run on a remote host as one program by the host channel, which fixes the
-# program per command and never assembles it from fragments: the far side
-# receives this file on stdin and runs it under `/bin/bash -s`.
-deploy/recover_object_api.sh
 # The repository root. Cargo reads rust-toolchain.toml from here, the install
 # and uninstall scripts are fetched by these exact names, the landing tooling
 # reads landing.brief.json, landing.config.json and landing.plan.json, and the

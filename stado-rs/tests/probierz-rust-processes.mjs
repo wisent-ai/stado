@@ -1,11 +1,19 @@
-// Running one child process for a recorded journey and stopping it the way
-// the journey promises: a budget, a signal to the whole tree, a grace period,
-// and a sentence saying which of those ended it.
-
+// The child processes this journey runs: spawning them, killing their trees
+// on the way out, and turning a finished run into a record.
+//
+// Split out of probierz-rust-journey.mjs, which had grown past the 300-line
+// file limit.
 import { spawn } from 'node:child_process';
 
+export const compilationBudgetMs = 70 * 60 * 1000;
+export const executionBudgetMs = 10 * 60 * 1000;
 const killGraceMs = 2 * 1000;
-const processOutputEncoding = 'utf8';
+export const processOutputEncoding = 'utf8';
+export const testArgs = ['--ignored', '--nocapture', '--test-threads=1'];
+export const profileEnvironment = {
+  CARGO_PROFILE_TEST_DEBUG: '0',
+  CARGO_INCREMENTAL: '0',
+};
 const activeChildren = new Set();
 
 export function errorRecord(error) {
@@ -31,7 +39,7 @@ function signalProcessTree(child, signal) {
   }
 }
 
-function terminateActiveChildren(signal) {
+export function terminateActiveChildren(signal) {
   for (const child of activeChildren) signalProcessTree(child, signal);
 }
 
@@ -118,13 +126,66 @@ export function succeeded(result) {
   return !result.spawnError && !result.timedOut && result.exitCode === 0;
 }
 
-export function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function digestText(text) {
+  return createHash('sha256').update(text).digest('hex');
 }
 
-export function formatFailure(result) {
-  if (!result) return 'not run';
-  if (result.spawnError) return result.spawnError.message;
-  if (result.timedOut) return `timed out after ${result.timeoutMs}ms`;
-  return `exit ${result.exitCode ?? 'unknown'}${result.signal ? ` (${result.signal})` : ''}`;
+async function digestFile(file) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
 }
+
+async function writeProcessRecord(result, artifacts, stem) {
+  const stdoutPath = join(artifacts, `${stem}.stdout.log`);
+  const stderrPath = join(artifacts, `${stem}.stderr.log`);
+  await Promise.all([
+    writeFile(stdoutPath, result.stdout, { mode: 0o600 }),
+    writeFile(stderrPath, result.stderr, { mode: 0o600 }),
+  ]);
+  return {
+    executable: result.executable,
+    args: result.args,
+    cwd: result.cwd,
+    startedAt: result.startedAt,
+    completedAt: result.completedAt,
+    durationMs: result.durationMs,
+    timeoutMs: result.timeoutMs,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    timedOut: result.timedOut,
+    killed: result.killed,
+    spawnError: errorRecord(result.spawnError),
+    stdout: {
+      file: stdoutPath,
+      bytes: Buffer.byteLength(result.stdout),
+      sha256: digestText(result.stdout),
+    },
+    stderr: {
+      file: stderrPath,
+      bytes: Buffer.byteLength(result.stderr),
+      sha256: digestText(result.stderr),
+    },
+  };
+}
+
+async function sourceIdentity(checkpoint) {
+  const options = { cwd: repository, env: process.env, timeoutMs: 30 * 1000 };
+  const [revision, status] = await Promise.all([
+    runProcess('git', ['rev-parse', 'HEAD'], options),
+    runProcess('git', ['status', '--porcelain', '--untracked-files=all'], options),
+  ]);
+  if (!succeeded(revision)) {
+    throw new Error(`cannot read source revision at ${checkpoint}: ${revision.stderr || revision.spawnError?.message || revision.signal || revision.exitCode}`);
+  }
+  if (!succeeded(status)) {
+    throw new Error(`cannot read source status at ${checkpoint}: ${status.stderr || status.spawnError?.message || status.signal || status.exitCode}`);
+  }
+  return {
+    checkpoint,
+    observedAt: new Date().toISOString(),
+    revision: revision.stdout.trim(),
+    clean: status.stdout.trim().length === 0,
+  };
+}
+

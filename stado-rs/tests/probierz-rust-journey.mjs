@@ -1,33 +1,30 @@
-// The recorded Rust journey every Probierz spec runs: build the crate, run
-// the named tests against the built binary, and write the report and the
-// retained artifacts that stand for the run.
-
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+// One recorded Rust journey: compile the suite, snapshot the binaries it
+// runs, run it, and retain what happened.
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  compilationBudgetMs,
+  executionBudgetMs,
+  processOutputEncoding,
+  profileEnvironment,
+  runProcess,
+  succeeded,
+  terminateActiveChildren,
+  testArgs,
+} from './probierz-rust-processes.mjs';
+import {
+  escapeRegExp,
+  formatFailure,
   parseCompilerArtifacts,
   selectStadoArtifact,
   selectTestArtifact,
   snapshotExecutable,
-  uniqueExecutableArtifacts,
-} from './journey/artifacts.mjs';
-import { escapeRegExp, formatFailure, runProcess, succeeded } from './journey/process.mjs';
-import { digestText, sourceIdentity, writeProcessRecord } from './journey/records.mjs';
+} from './probierz-rust-artifacts.mjs';
 
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repository = resolve(crate, '..');
-const processOutputEncoding = 'utf8';
-const compilationBudgetMs = 70 * 60 * 1000;
-const executionBudgetMs = 10 * 60 * 1000;
-const testArgs = ['--ignored', '--nocapture', '--test-threads=1'];
-const profileEnvironment = {
-  CARGO_PROFILE_TEST_DEBUG: '0',
-  CARGO_INCREMENTAL: '0',
-};
-
-
 
 export async function runRecordedRustJourney({
   journey,

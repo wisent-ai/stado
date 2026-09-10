@@ -115,7 +115,9 @@ pub(crate) fn scratch_verdict(publication: &Value, evidence: &ScratchReceipt) ->
     Some(format!(
         "{RELEASE_SCRATCH_SHORT} ({:.1} GiB free; the last {} build of {} wrote {history}, and \
          needs that above the {:.1} GiB low watermark; reclaim with `stado space reclaim \
-         <host> --apply --reason …` or raise the host's target watermark)",
+         <host> --apply --reason …`, declare cleaners for what `stado space report <host>` \
+         lists as uncovered, or lower the floor with `stado space watermark <host> \
+         --disk-low-free-gb N --disk-target-free-gb M` if it overstates the reserve)",
         free as f64 / GIB,
         evidence.platform,
         evidence.product,

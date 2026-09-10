@@ -12,13 +12,12 @@
 
 mod constants;
 mod harness;
-mod placement;
 mod policies;
 mod policy_refusals;
 
 use constants::{
-    ALWAYS_OVER_LOW_MB, ALWAYS_OVER_TARGET_MB, INCOHERENT_TARGET_MB, UNREACHABLE_SWAP_PCT,
-
+    ALWAYS_OVER_LOW_MB, ALWAYS_OVER_TARGET_MB, INCOHERENT_TARGET_MB, NEVER_OVER_LOW_MB,
+    NEVER_OVER_TARGET_MB, UNREACHABLE_SWAP_PCT,
 };
 use harness::{declare, registry_bytes, run_pass, setup, stado, stderr, ABSENT_UNIT, TARGET};
 
@@ -104,87 +103,91 @@ fn an_incoherent_declaration_is_refused_with_its_own_sentence() {
     );
 }
 
-
 #[test]
-fn a_declared_unit_restart_is_attempted_and_recorded() {
+fn a_host_over_its_watermark_is_refused_for_placement() {
     let storage = setup();
     let declared = declare(
         storage.path(),
         &[
             "--memory-mode",
-            "enforce",
-            "--memory-repair",
-            "restart_unit",
-            "--memory-repair-unit",
-            ABSENT_UNIT,
+            "report",
+            "--memory-refuse-placement",
+            "true",
         ],
     );
     assert!(
         declared.status.success(),
-        "declaring the repair failed: {}",
+        "declaring the refusal failed: {}",
         stderr(&declared)
     );
 
     let report = run_pass(storage.path());
-    assert_eq!(report["mode"], serde_json::json!("enforce"));
     assert_eq!(report["pressure_active"], serde_json::json!(true));
-    let repair = &report["repairs"]["restart_unit"];
+    assert_eq!(report["refuse_placement"], serde_json::json!(true));
     assert_eq!(
-        repair["subjects"],
-        serde_json::json!([ABSENT_UNIT]),
-        "the pass did not record the declared subject: {report}"
+        report["placement_refusal"],
+        serde_json::json!("memory_pressure_active"),
+        "the pass did not publish the admission reason: {report}"
     );
-    assert_eq!(
-        repair["examined"],
-        serde_json::json!(1),
-        "the pass did not reach the declared repair: {report}"
-    );
-    assert_eq!(
-        repair["skipped"]["unit_not_loaded"],
-        serde_json::json!(1),
-        "the pass did not record why it did not restart: {report}"
-    );
-    assert_eq!(repair["repaired"], serde_json::json!(0));
-    assert_eq!(report["outcome"], serde_json::json!("no_eligible_items"));
 }
 
+/// Swap over its watermark on a host that still has its memory headroom is a
+/// finding, not a refusal.
+///
+/// On 2026-09-10 `ubuntu-server-rtx-pro-6000` held 67.2 GB available of 132.1
+/// GB against an 8 GiB watermark with 85% of an 8.59 GB swap file in use, so
+/// it refused every job and `skarbiec` could not build `linux-amd64` in three
+/// consecutive releases. Withholding a host with 64 GiB of headroom frees no
+/// memory; it only removes the fleet's one Linux builder.
 #[test]
-fn a_host_that_declares_nothing_reports_and_changes_nothing() {
+fn used_swap_alone_does_not_withhold_a_host_with_memory_headroom() {
     let storage = setup();
-    let before = registry_bytes(storage.path());
-
-    let read = stado(storage.path(), &["space", "watermark", TARGET, "--json"]);
-    assert!(read.status.success(), "read failed: {}", stderr(&read));
-    let document: serde_json::Value = serde_json::from_slice(&read.stdout).unwrap();
-    assert_eq!(document["declared"], serde_json::json!(false));
+    let low = NEVER_OVER_LOW_MB.to_string();
+    let target = NEVER_OVER_TARGET_MB.to_string();
+    let declared = stado(
+        storage.path(),
+        &[
+            "space",
+            "watermark",
+            TARGET,
+            "--memory-mode",
+            "report",
+            "--memory-low-free-mb",
+            &low,
+            "--memory-target-free-mb",
+            &target,
+            // Every host with any swap in use is over this watermark.
+            "--memory-high-swap-used-pct",
+            "1",
+            "--memory-refuse-placement",
+            "true",
+        ],
+    );
+    assert!(
+        declared.status.success(),
+        "declaring the swap watermark failed: {}",
+        stderr(&declared)
+    );
 
     let report = run_pass(storage.path());
-    assert_eq!(
-        report["policy_defaulted"],
-        serde_json::json!(true),
-        "an undeclared host did not say so: {report}"
-    );
-    assert_eq!(report["mode"], serde_json::json!("report"));
-    assert_eq!(report["refuse_placement"], serde_json::json!(false));
-    assert_eq!(report["placement_refusal"], serde_json::Value::Null);
+    let reading = &report["memory_before"];
     assert!(
-        report["memory_before"]["available_bytes"].is_i64(),
-        "the reporting default reported no memory at all: {report}"
+        reading["available_bytes"].is_i64(),
+        "the pass reported no memory reading: {report}"
     );
-    let repaired = report["repairs"]
-        .as_object()
-        .map(|repairs| {
-            repairs
-                .values()
-                .filter_map(|entry| entry["repaired"].as_i64())
-                .sum::<i64>()
-        })
-        .unwrap_or_default();
-    assert_eq!(repaired, 0, "the reporting default repaired something");
     assert_eq!(
-        before,
-        registry_bytes(storage.path()),
-        "a reporting pass rewrote the canonical registry"
+        report["placement_refusal"],
+        serde_json::Value::Null,
+        "a host with its memory headroom was withheld from placement: {report}"
     );
+    let swap_used = reading["swap_used_bytes"].as_i64();
+    if swap_used.is_some_and(|used| used > i64::default()) {
+        assert_eq!(
+            report["pressure_active"],
+            serde_json::json!(true),
+            "swap over its watermark was not reported at all: {report}"
+        );
+    }
 }
 
+mod refusals;

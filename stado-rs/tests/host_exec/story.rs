@@ -1,6 +1,6 @@
-//! The exact words this platform's retained-log read is made of, and the
-//! three widenings that must be refused: a wider time window, an extra
-//! process or unit, and an operation that would modify the log itself.
+//! The exact native reads this journey expects, per platform: the words the
+//! refusals carry, the argv the host runs, and the widenings it must refuse.
+use super::*;
 
 pub(crate) const TARGET: &str = "retained-log-current-host";
 pub(crate) const SYSTEM_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -99,7 +99,8 @@ pub(crate) const MACOS_EXTRA_PROCESS: &[&str] = &[
 ];
 // `log config` is the modifying verb. The deliberately invalid mode keeps the
 // journey harmless even if a future regression accidentally executes it.
-pub(crate) const MACOS_MODIFYING_LOG: &[&str] = &["log", "config", "--mode", "definitely-not-a-log-mode"];
+pub(crate) const MACOS_MODIFYING_LOG: &[&str] =
+    &["log", "config", "--mode", "definitely-not-a-log-mode"];
 
 pub(crate) const LINUX_LOG_WORDS: &[&str] = &[
     "journalctl",
@@ -145,7 +146,8 @@ pub(crate) const LINUX_EXTRA_UNIT: &[&str] = &[
 ];
 // Vacuuming is a modifying journal operation. Its invalid duration ensures the
 // native tool could not vacuum anything even if this refusal ever regressed.
-pub(crate) const LINUX_MODIFYING_LOG: &[&str] = &["journalctl", "--vacuum-time", "definitely-not-a-duration"];
+pub(crate) const LINUX_MODIFYING_LOG: &[&str] =
+    &["journalctl", "--vacuum-time", "definitely-not-a-duration"];
 
 pub(crate) struct NativeStory {
     pub(crate) platform: &'static str,
@@ -183,3 +185,36 @@ pub(crate) fn native_story() -> NativeStory {
     }
 }
 
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) {
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap_or_else(|error| panic!("create retained evidence {}: {error}", path.display()));
+    file.write_all(bytes)
+        .unwrap_or_else(|error| panic!("write retained evidence {}: {error}", path.display()));
+}
+
+pub(crate) fn hostname() -> String {
+    let output = Command::new("hostname")
+        .env_clear()
+        .env("PATH", SYSTEM_PATH)
+        .output()
+        .expect("blocked: the real hostname executable could not start");
+    assert!(
+        output.status.success(),
+        "blocked: the real hostname executable failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let hostname = String::from_utf8(output.stdout)
+        .expect("the kernel hostname is UTF-8")
+        .trim()
+        .to_string();
+    assert!(
+        !hostname.is_empty(),
+        "the real current host has no hostname"
+    );
+    hostname
+}

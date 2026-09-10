@@ -7,11 +7,10 @@
 //! loopback port. The active host is this machine, so the adapter takes its
 //! local-upstream path and no connection to any other host is opened.
 
-
 use serde_json::json;
 
-use crate::fixture::Policy;
-use crate::{report, said, Host, CONSUMER, SERVICE, TARGET};
+use crate::fixture::{http_get, wait_listening, wait_published, Policy, Serving};
+use crate::{report, said, stderr, Host, CONSUMER, SERVICE, TARGET};
 
 /// The generation this area's authority publishes.
 pub(crate) const GENERATION: u64 = 7;
@@ -86,3 +85,120 @@ fn a_declared_service_resolves_to_its_endpoint_and_the_marker_lands_on_disk() {
     );
 }
 
+#[test]
+fn the_running_resolver_answers_the_declared_consumer_and_refuses_every_other_read() {
+    let policy = Policy::patient(GENERATION);
+    let host = Host::new(&policy.document());
+    let mut resolver = Serving::start(&host, &["resolver", "serve", "--target", TARGET]);
+    assert!(
+        wait_listening(policy.api),
+        "the resolver never bound its declared API: {}",
+        resolver.said()
+    );
+    wait_published(&host, "serving");
+    let consumer = [("x-stado-consumer", CONSUMER)];
+
+    let health = http_get(policy.api, "/health", &[]).expect("the resolution API answers");
+    assert!(
+        health.starts_with("HTTP/1.1 200 OK"),
+        "the resolution API is up but unhealthy: {health}"
+    );
+    assert!(
+        health.contains(&format!(
+            "{{\"status\":\"ok\",\"service\":\"stado-resolver\",\"generation\":{GENERATION}}}"
+        )),
+        "got: {health}"
+    );
+
+    let resolved = http_get(
+        policy.api,
+        &format!("/v1/resolve/service/{SERVICE}"),
+        &consumer,
+    )
+    .expect("the resolution API answers an authorized read");
+    assert!(resolved.starts_with("HTTP/1.1 200 OK"), "got: {resolved}");
+    assert!(
+        resolved.contains(&format!(
+            "\"gateway_url\":\"http://127.0.0.1:{}\"",
+            policy.adapter
+        )),
+        "the answer does not name the adapter this consumer must use: {resolved}"
+    );
+    assert!(
+        resolved.contains("\"capabilities\":[\"object-store\"]"),
+        "got: {resolved}"
+    );
+
+    // A read with no consumer identity at all.
+    let anonymous = http_get(policy.api, &format!("/v1/resolve/service/{SERVICE}"), &[])
+        .expect("a refusal is an answer");
+    assert!(
+        anonymous.starts_with("HTTP/1.1 401 Unauthorized"),
+        "got: {anonymous}"
+    );
+    assert!(
+        anonymous.contains("{\"error\":\"consumer_required\"}"),
+        "got: {anonymous}"
+    );
+
+    // A consumer the route does not authorize, and a service nothing declares.
+    let intruder = http_get(
+        policy.api,
+        &format!("/v1/resolve/service/{SERVICE}"),
+        &[("x-stado-consumer", "intruder")],
+    )
+    .expect("a refusal is an answer");
+    assert!(
+        intruder.starts_with("HTTP/1.1 503 Service Unavailable"),
+        "got: {intruder}"
+    );
+    assert!(
+        intruder.contains(&format!(
+            "consumer \\\"intruder\\\" is not authorized for service \\\"{SERVICE}\\\""
+        )),
+        "got: {intruder}"
+    );
+
+    let unknown = http_get(policy.api, "/v1/resolve/service/no-such-service", &consumer)
+        .expect("a refusal is an answer");
+    assert!(
+        unknown.starts_with("HTTP/1.1 503 Service Unavailable"),
+        "got: {unknown}"
+    );
+    assert!(
+        unknown.contains("unknown logical service \\\"no-such-service\\\""),
+        "got: {unknown}"
+    );
+
+    let elsewhere = http_get(policy.api, "/v1/resolve", &consumer).expect("a refusal is an answer");
+    assert!(
+        elsewhere.starts_with("HTTP/1.1 404 Not Found"),
+        "got: {elsewhere}"
+    );
+    assert!(resolver.running(), "the resolver died: {}", resolver.said());
+
+    // The same two refusals through the CLI, which resolves against the
+    // registry rather than against the running process.
+    let answer = host.stado(&[
+        "resolver",
+        "resolve",
+        "no-such-service",
+        "--consumer",
+        CONSUMER,
+    ]);
+    assert_eq!(answer.status.code(), Some(1));
+    assert!(
+        stderr(&answer).contains("Error: unknown logical service \"no-such-service\""),
+        "got: {}",
+        said(&answer)
+    );
+    let answer = host.stado(&["resolver", "resolve", SERVICE, "--consumer", "intruder"]);
+    assert_eq!(answer.status.code(), Some(1));
+    assert!(
+        stderr(&answer).contains(&format!(
+            "Error: consumer \"intruder\" is not authorized for service \"{SERVICE}\""
+        )),
+        "got: {}",
+        said(&answer)
+    );
+}

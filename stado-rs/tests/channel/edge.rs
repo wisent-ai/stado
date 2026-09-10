@@ -44,7 +44,7 @@ fn status(fixture: &Fixture, api_url: &str) -> std::process::Output {
 /// unactionable.
 fn assert_not_public(row: &Value, hostname: &str) {
     assert_eq!(row["name"], json!(ORIGIN));
-    assert_eq!(row["verdict"], json!("origin-not-public"));
+    assert_eq!(row["verdict"], json!("origin-not-public"), "{row:#}");
     assert_eq!(row["resolution"]["state"], json!("dns_unresolved"));
     assert_eq!(row["resolution"]["hostname"], json!(hostname));
     assert_eq!(

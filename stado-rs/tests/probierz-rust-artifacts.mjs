@@ -1,11 +1,10 @@
-// Which binaries a build actually produced, which of them the journey runs,
-// and the copy it keeps beside the report so the run can be re-read against
-// the exact executable that produced it.
-
-import { constants } from 'node:fs';
-import { chmod, copyFile, stat } from 'node:fs/promises';
-
-import { digestFile } from './records.mjs';
+// The compiler artifacts this journey selects and snapshots.
+//
+// Split out of probierz-rust-journey.mjs for the 300-line file limit.
+import { createHash } from 'node:crypto';
+import { constants, createReadStream } from 'node:fs';
+import { chmod, copyFile, mkdir, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 export function parseCompilerArtifacts(stdout) {
   const artifacts = [];
@@ -22,7 +21,7 @@ export function parseCompilerArtifacts(stdout) {
   return artifacts;
 }
 
-export function uniqueExecutableArtifacts(artifacts) {
+function uniqueExecutableArtifacts(artifacts) {
   return [...new Map(artifacts.map((artifact) => [artifact.executable, artifact])).values()];
 }
 
@@ -77,3 +76,15 @@ export async function snapshotExecutable(artifact, destination, role) {
     },
   };
 }
+
+export function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function formatFailure(result) {
+  if (!result) return 'not run';
+  if (result.spawnError) return result.spawnError.message;
+  if (result.timedOut) return `timed out after ${result.timeoutMs}ms`;
+  return `exit ${result.exitCode ?? 'unknown'}${result.signal ? ` (${result.signal})` : ''}`;
+}
+

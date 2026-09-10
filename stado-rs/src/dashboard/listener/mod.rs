@@ -52,7 +52,7 @@ pub(crate) const ENROLLMENT_ROUTES: [(&str, &str); 3] = [
 /// Published for `stado fleet ingress`, which verifies a newly opened tunnel
 /// by fetching that route from the internet and comparing the bytes with what
 /// the listener behind the tunnel would have served. Empty in a build whose
-/// source tree had no `deploy/join.sh`, exactly as the route is.
+/// source tree had no `deploy/join/` fragments, exactly as the route is.
 pub fn join_script_source() -> &'static str {
     fleet_join::join_script_source()
 }

@@ -1,50 +1,6 @@
-//! The isolated journey: a registry naming this machine, a home and config
-//! nothing else shares, the built CLI invoked against them, and the dashboard
-//! boundary the same story crosses.
-
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-
-use serde_json::json;
-
-use crate::story::{native_story, NativeStory, SYSTEM_PATH, TARGET};
-
-pub(crate) fn write_private(path: &Path, bytes: &[u8]) {
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)
-        .unwrap_or_else(|error| panic!("create retained evidence {}: {error}", path.display()));
-    file.write_all(bytes)
-        .unwrap_or_else(|error| panic!("write retained evidence {}: {error}", path.display()));
-}
-
-pub(crate) fn hostname() -> String {
-    let output = Command::new("hostname")
-        .env_clear()
-        .env("PATH", SYSTEM_PATH)
-        .output()
-        .expect("blocked: the real hostname executable could not start");
-    assert!(
-        output.status.success(),
-        "blocked: the real hostname executable failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    let hostname = String::from_utf8(output.stdout)
-        .expect("the kernel hostname is UTF-8")
-        .trim()
-        .to_string();
-    assert!(
-        !hostname.is_empty(),
-        "the real current host has no hostname"
-    );
-    hostname
-}
+//! The isolated journey: one registry naming this machine, the CLI runs it
+//! drives, and the assertions their output must satisfy.
+use super::*;
 
 pub(crate) struct Journey {
     pub(crate) root: PathBuf,
@@ -198,7 +154,6 @@ impl Journey {
             .unwrap(),
         );
     }
-
 
     pub(crate) fn assert_unchanged(&self) {
         assert_eq!(

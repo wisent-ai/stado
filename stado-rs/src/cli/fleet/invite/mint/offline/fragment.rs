@@ -10,7 +10,7 @@
 /// `set -eu` and calls `exit` on a missing tool must not be able to close that
 /// shell.
 ///
-/// The address rules are `deploy/join.sh`'s, in its order — tailnet DNS name,
+/// The address rules are the join program's, in its order — tailnet DNS name,
 /// then a multicast `.local` name only where something answers for it, then the
 /// IPv4 address of the default interface, then the bare hostname. Two commands
 /// choosing an address by different rules would report two different machines.

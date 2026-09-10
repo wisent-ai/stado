@@ -6,6 +6,19 @@ use crate::targets::ComputeTarget;
 use crate::cli::host::machine::config::remote::{remote_config_output, RemoteConfigAction};
 use crate::cli::host::machine::config::write_host_config;
 
+/// The recovery program this command sends, assembled from its four
+/// fragments in exactly this order: the prologue and its readers, the
+/// Skarbiec bootstrap reconciliation, the route inspection, and the recovery
+/// itself. The text a host receives is byte-for-byte the program the
+/// fragments spell out; they are separate files because a single 819-line
+/// one could not be edited under this repository's 300-line limit.
+const RECOVERY_PROGRAM: &str = concat!(
+    include_str!("../../../../../../deploy/recover_object_api/prologue.sh"),
+    include_str!("../../../../../../deploy/recover_object_api/skarbiec.sh"),
+    include_str!("../../../../../../deploy/recover_object_api/routes.sh"),
+    include_str!("../../../../../../deploy/recover_object_api/recovery.sh"),
+);
+
 /// Restore the core object API without depending on the API being available.
 ///
 /// Storage authority changes belong to the resident storage-root transaction.
@@ -40,9 +53,7 @@ with os.fdopen(descriptor, "a") as lock:
     )
     sys.exit(result.returncode)
 PY"#,
-        STANDARD.encode(include_str!(
-            "../../../../../../deploy/recover_object_api.sh"
-        )),
+        STANDARD.encode(RECOVERY_PROGRAM),
     );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
         resolved,

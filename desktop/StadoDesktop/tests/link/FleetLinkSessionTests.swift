@@ -1,13 +1,65 @@
 import Foundation
 import WisentDesignSystem
 import XCTest
+
 @testable import Stado
 
-/// Who is logged in on a host, as the console reads it out of the command's
-/// own `session` block: a headless box, a graphical one, a host that never
-/// reported, and a word this console does not recognise.
+/// What a verdict keeps and what a login session reports. Split out of
+/// `FleetLinkStoreTests.swift` for the 300-line file limit.
 @MainActor
 final class FleetLinkSessionTests: XCTestCase {
+    /// A healthy verdict can still carry sentences, and they must not be
+    /// dropped. Copied from the live `stado host link operator-host --json`
+    /// answer on 2026-08-19, which exits 0 and still names one blocker: an old
+    /// beacon format that predates the link block is not the host's ill health,
+    /// so the command reports it without failing the verdict over it.
+    ///
+    /// It is also the only sentence explaining why the path, sleep, wake and
+    /// interface-change fields below it read "Not reported", which is exactly
+    /// why the inspector keeps it — neutral, beside the one healthy line.
+    func testAHealthyVerdictKeepsTheBlockersItCameWith() throws {
+        let link: HostLink = try XCTUnwrap(
+            HostLinkStore.decode(
+                from: """
+                {"host": "operator-host", "beacon_age_seconds": 286, "ssh_reachable": true,
+                 "path_kind": "unknown", "endpoint": null, "last_sleep_at": null,
+                 "last_wake_at": null, "interface_changes": [], "silences": [],
+                 "reader_refusals": {"window_seconds": 3600, "count": 0, "reasons": {}},
+                 "verdict": "healthy",
+                 "blockers": ["this host's beacon carries no link block, so its path, its sleep and wake times and its interface changes are unknown here"]}
+                """
+            )
+        )
+        XCTAssertEqual(link.verdict, .healthy)
+        XCTAssertFalse(link.verdict.needsAttention, "a healthy link earns one line, not a panel")
+        XCTAssertEqual(link.verdict.tone, .neutral, "a sentence on a healthy verdict is never red")
+        XCTAssertEqual(
+            link.blockers,
+            [
+                "this host's beacon carries no link block, so its path, its sleep and wake times and its interface changes are unknown here",
+            ],
+            "carried verbatim; dropping it loses the only explanation of the Not reported fields"
+        )
+        XCTAssertFalse(link.linkReported)
+        XCTAssertNil(link.openSilence)
+    }
+
+    /// A host that has never published a beacon at all. `beacon_age_seconds`
+    /// null must not read as "reported 0 s ago".
+    func testANullBeaconAgeStaysNull() throws {
+        let link: HostLink = try XCTUnwrap(
+            HostLinkStore.decode(
+                from: """
+                {"host": "control-host", "beacon_age_seconds": null, "ssh_reachable": false,
+                 "verdict": "silent", "blockers": ["no beacon has ever been published for this host"]}
+                """
+            )
+        )
+        XCTAssertNil(link.beaconAgeSeconds)
+        XCTAssertFalse(link.sshReachable)
+        XCTAssertEqual(link.verdict, .silent)
+    }
+
     /// The question an operator asked out loud — "where do I see whether
     /// anyone is logged in on that host" — answered from the command's own
     /// `session` block.
@@ -18,7 +70,7 @@ final class FleetLinkSessionTests: XCTestCase {
     /// carried unedited: it is the evidence for the headline, and an operator
     /// who doubts the headline has nowhere else to read it.
     func testAHeadlessHostSaysNobodyIsLoggedInWithoutInventingASeverity() throws {
-        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: LinkDocuments.headlessDocument))
+        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: FleetLinkStoreTests.headlessDocument))
 
         let session = try XCTUnwrap(link.session)
         XCTAssertEqual(session.kind, .headless)
@@ -42,7 +94,7 @@ final class FleetLinkSessionTests: XCTestCase {
     /// has — verbatim, one entry per affected unit. Three units on the mini,
     /// three sentences, each carrying its own install command.
     func testTheHeadlessDeclarationBlockersArriveVerbatimAndInOrder() throws {
-        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: LinkDocuments.headlessDocument))
+        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: FleetLinkStoreTests.headlessDocument))
 
         XCTAssertEqual(link.verdict, .degraded)
         XCTAssertTrue(link.verdict.needsAttention, "a degraded link earns the panel these render in")
@@ -114,7 +166,7 @@ final class FleetLinkSessionTests: XCTestCase {
     /// logged in" would be asserting the fact this reading was added to
     /// establish, on every host that never reported it.
     func testAnAbsentSessionObjectIsNotReportedRatherThanHeadless() throws {
-        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: LinkDocuments.linkAbsentDocument))
+        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: FleetLinkStoreTests.linkAbsentDocument))
 
         XCTAssertNil(link.session, "the command carried no session block")
         XCTAssertEqual(link.sessionLine, "Not reported")
@@ -129,4 +181,9 @@ final class FleetLinkSessionTests: XCTestCase {
         XCTAssertEqual(HostLinkSessionKind("headless"), .headless)
         XCTAssertEqual(HostLinkSessionKind(""), .unrecognised(""))
     }
+
+    /// Severity is the layout, and absence by choice is never red. A healthy
+    /// link earns one neutral line; the two verdicts the command exits 1 for
+    /// earn a danger panel; a word this console does not know earns a warning
+    /// rather than being folded into healthy.
 }

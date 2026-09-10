@@ -16,7 +16,7 @@ import XCTest
 @MainActor
 final class FleetLinkStoreTests: XCTestCase {
     func testDecodesTheWholeLinkDocument() throws {
-        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: LinkDocuments.fullDocument))
+        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: Self.fullDocument))
 
         XCTAssertEqual(link.host, "control-host")
         XCTAssertEqual(link.beaconAgeSeconds, 41)
@@ -78,7 +78,7 @@ final class FleetLinkStoreTests: XCTestCase {
     /// an unknown path, and the console must not read it as one — the
     /// difference is whether an operator chases the network or the collector.
     func testALinkBlockThatWasNeverCollectedIsNotReportedRatherThanAPath() throws {
-        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: LinkDocuments.linkAbsentDocument))
+        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: Self.linkAbsentDocument))
 
         XCTAssertEqual(link.host, "gpu-host")
         XCTAssertEqual(link.pathKind, .unknown, "the command's own word survives decode")
@@ -126,62 +126,6 @@ final class FleetLinkStoreTests: XCTestCase {
         XCTAssertTrue(link.blockers.isEmpty)
     }
 
-    /// A healthy verdict can still carry sentences, and they must not be
-    /// dropped. Copied from the live `stado host link operator-host --json`
-    /// answer on 2026-08-19, which exits 0 and still names one blocker: an old
-    /// beacon format that predates the link block is not the host's ill health,
-    /// so the command reports it without failing the verdict over it.
-    ///
-    /// It is also the only sentence explaining why the path, sleep, wake and
-    /// interface-change fields below it read "Not reported", which is exactly
-    /// why the inspector keeps it — neutral, beside the one healthy line.
-    func testAHealthyVerdictKeepsTheBlockersItCameWith() throws {
-        let link: HostLink = try XCTUnwrap(
-            HostLinkStore.decode(
-                from: """
-                {"host": "operator-host", "beacon_age_seconds": 286, "ssh_reachable": true,
-                 "path_kind": "unknown", "endpoint": null, "last_sleep_at": null,
-                 "last_wake_at": null, "interface_changes": [], "silences": [],
-                 "reader_refusals": {"window_seconds": 3600, "count": 0, "reasons": {}},
-                 "verdict": "healthy",
-                 "blockers": ["this host's beacon carries no link block, so its path, its sleep and wake times and its interface changes are unknown here"]}
-                """
-            )
-        )
-        XCTAssertEqual(link.verdict, .healthy)
-        XCTAssertFalse(link.verdict.needsAttention, "a healthy link earns one line, not a panel")
-        XCTAssertEqual(link.verdict.tone, .neutral, "a sentence on a healthy verdict is never red")
-        XCTAssertEqual(
-            link.blockers,
-            [
-                "this host's beacon carries no link block, so its path, its sleep and wake times and its interface changes are unknown here",
-            ],
-            "carried verbatim; dropping it loses the only explanation of the Not reported fields"
-        )
-        XCTAssertFalse(link.linkReported)
-        XCTAssertNil(link.openSilence)
-    }
-
-    /// A host that has never published a beacon at all. `beacon_age_seconds`
-    /// null must not read as "reported 0 s ago".
-    func testANullBeaconAgeStaysNull() throws {
-        let link: HostLink = try XCTUnwrap(
-            HostLinkStore.decode(
-                from: """
-                {"host": "control-host", "beacon_age_seconds": null, "ssh_reachable": false,
-                 "verdict": "silent", "blockers": ["no beacon has ever been published for this host"]}
-                """
-            )
-        )
-        XCTAssertNil(link.beaconAgeSeconds)
-        XCTAssertFalse(link.sshReachable)
-        XCTAssertEqual(link.verdict, .silent)
-    }
-
-    /// Severity is the layout, and absence by choice is never red. A healthy
-    /// link earns one neutral line; the two verdicts the command exits 1 for
-    /// earn a danger panel; a word this console does not know earns a warning
-    /// rather than being folded into healthy.
     func testVerdictToneAndAttention() {
         XCTAssertEqual(HostLinkVerdict("healthy"), .healthy)
         XCTAssertEqual(HostLinkVerdict.healthy.tone, .neutral)
@@ -213,5 +157,4 @@ final class FleetLinkStoreTests: XCTestCase {
         XCTAssertEqual(HostLinkPathKind("mesh-exit"), .unrecognised("mesh-exit"))
         XCTAssertEqual(HostLinkPathKind("mesh-exit").word, "mesh-exit")
     }
-
 }

@@ -108,10 +108,12 @@ pub(super) fn declared_policy_for(
     Ok(document)
 }
 
-/// Print one host's declaration together with the verdict on it.
+/// Print one host's declarations: the memory one together with the verdict
+/// on it, and the disk one as the registry carries it.
 pub(super) fn print_read(
     target: &str,
     declared: Option<Value>,
+    disk: Option<Value>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     let verdict = automatic_verdict(declared.as_ref());
@@ -121,6 +123,7 @@ pub(super) fn print_read(
             "declared": declared.is_some(),
             "automatic": verdict,
             "memory_reclaim": declared,
+            "disk_cleanup": disk,
         }));
     }
     println!(
@@ -139,7 +142,18 @@ pub(super) fn print_read(
         );
     }
     if let Some(policy) = declared {
+        println!("memory_reclaim:");
         println!("{}", serde_json::to_string_pretty(&policy)?);
+    }
+    match disk {
+        Some(policy) => {
+            println!("disk_cleanup:");
+            println!("{}", serde_json::to_string_pretty(&policy)?);
+        }
+        None => println!(
+            "disk_cleanup: none declared; the host is measured against the reporting default \
+             until `--disk-low-free-gb` and `--disk-target-free-gb` are written"
+        ),
     }
     Ok(())
 }

@@ -1,11 +1,11 @@
 import Foundation
 import WisentDesignSystem
 import XCTest
+
 @testable import Stado
 
-/// What the console makes of a host that went quiet: how long an open
-/// silence has lasted, the posture decision it raises, the order several of
-/// them are shown in, and the command the panel quotes for all of it.
+/// What an open silence measures, decides and orders. Split out of
+/// `FleetLinkStoreTests.swift` for the 300-line file limit.
 @MainActor
 final class FleetLinkSilenceTests: XCTestCase {
     /// An open silence has no recorded duration until it closes, so its length
@@ -43,7 +43,7 @@ final class FleetLinkSilenceTests: XCTestCase {
     /// command it reproduces from under the section.
     func testAnOpenSilenceBecomesAPostureDecisionRoutedAtThatHost() throws {
         let snapshot: DashboardSnapshot = try XCTUnwrap(
-            LinkDocuments.decode(from: #"{"ready": true, "workers": []}"#)
+            FleetLinkStoreTests.decode(from: #"{"ready": true, "workers": []}"#)
         )
         let started = Date().addingTimeInterval(-366)
         let link: HostLink = try XCTUnwrap(
@@ -89,9 +89,9 @@ final class FleetLinkSilenceTests: XCTestCase {
     /// anything.
     func testAClosedSilenceRaisesNoDecision() throws {
         let snapshot: DashboardSnapshot = try XCTUnwrap(
-            LinkDocuments.decode(from: #"{"ready": true, "workers": []}"#)
+            FleetLinkStoreTests.decode(from: #"{"ready": true, "workers": []}"#)
         )
-        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: LinkDocuments.fullDocument))
+        let link: HostLink = try XCTUnwrap(HostLinkStore.decode(from: FleetLinkStoreTests.fullDocument))
         let posture = FleetPosture(snapshot: snapshot, report: nil, links: [link])
 
         XCTAssertTrue(posture.openSilences.isEmpty)
@@ -103,10 +103,10 @@ final class FleetLinkSilenceTests: XCTestCase {
     /// down longer is the one the operator reads first.
     func testOpenSilencesAreOrderedLongestQuietFirst() throws {
         let snapshot: DashboardSnapshot = try XCTUnwrap(
-            LinkDocuments.decode(from: #"{"ready": true, "workers": []}"#)
+            FleetLinkStoreTests.decode(from: #"{"ready": true, "workers": []}"#)
         )
-        let brief = try XCTUnwrap(LinkDocuments.openSilenceLink(host: "gpu-host", quietFor: 320))
-        let long = try XCTUnwrap(LinkDocuments.openSilenceLink(host: "control-host", quietFor: 900))
+        let brief = try XCTUnwrap(FleetLinkStoreTests.openSilenceLink(host: "gpu-host", quietFor: 320))
+        let long = try XCTUnwrap(FleetLinkStoreTests.openSilenceLink(host: "control-host", quietFor: 900))
         let posture = FleetPosture(snapshot: snapshot, report: nil, links: [brief, long])
 
         XCTAssertEqual(

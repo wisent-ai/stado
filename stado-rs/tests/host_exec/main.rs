@@ -16,15 +16,25 @@
 //! Funnel. A missing logging executable or a failed native read fails this
 //! journey instead of being skipped or replaced.
 
-mod checks;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
+
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::time::timeout;
+
+use serde_json::{json, Value};
+
 mod dashboard;
 mod journey;
 mod story;
 
-use serde_json::json;
-
-use checks::{assert_native_read, assert_refused};
-use journey::{write_private, Journey};
+use dashboard::*;
+use journey::*;
+use story::*;
 
 #[tokio::test]
 #[ignore = "requires and records the current host's real retained logging service"]

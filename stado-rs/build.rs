@@ -151,9 +151,28 @@ fn compile_python(source: &Path, out_dir: &Path) {
 fn main() {
     let out_dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
     let out_dir = Path::new(&out_dir);
-    let source = Path::new("..").join("deploy").join("join.sh");
-    println!("cargo:rerun-if-changed={}", source.display());
-    let script = std::fs::read_to_string(&source).unwrap_or_default();
+    // The join program a joining machine runs lives as ordinal-prefixed
+    // fragments, for the same reason the reconciliation program below does: a
+    // single 496-line file could not be edited under this repository's
+    // 300-line limit. Sorted order is assembly order and the directory
+    // listing is the only list, so adding a fragment needs no edit here. The
+    // bytes written are exactly the concatenation, which is what
+    // `GET /join.sh` serves and what `fleet ingress up` compares against.
+    let join_fragments = Path::new("..").join("deploy").join("join");
+    println!("cargo:rerun-if-changed={}", join_fragments.display());
+    let mut join_files = std::fs::read_dir(&join_fragments)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.expect("read a join program fragment").path())
+                .filter(|path| path.extension().is_some_and(|kind| kind == "sh"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    join_files.sort();
+    let script = join_files
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("read a join program fragment"))
+        .collect::<String>();
     std::fs::write(out_dir.join("join.sh"), script).expect("write the embedded join script");
     // The embedded reconciliation program lives as contiguous fragments that
     // `deploy::host_storage_reconcile` assembles with

@@ -7,11 +7,12 @@
 //! from a remote destination — the authority read is the local store read,
 //! which each report states as `authority.source == "local"`.
 
+use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use crate::fixture::{wait_listening, wait_published, Policy, Serving};
-use crate::{report, said, Host, TARGET};
+use crate::fixture::{wait_listening, wait_published, Policy, Serving, BUDGET};
+use crate::{report, said, stdout, Host, CONSUMER, SERVICE, TARGET};
 
 /// The generation the fixture's authority starts at, and the one it advances
 /// to while a resolver keeps the first — both are declared data, and the
@@ -122,3 +123,123 @@ fn a_serving_resolver_is_ready_until_the_authority_moves_past_the_generation_it_
     );
 }
 
+#[test]
+fn a_resolver_that_has_never_run_is_reported_down_with_the_file_and_the_ports_named() {
+    let policy = Policy::patient(HELD_GENERATION);
+    let host = Host::new(&policy.document());
+
+    let answer = status(&host);
+    assert_eq!(
+        answer.status.code(),
+        Some(1),
+        "a resolver that is not running must exit 1: {}",
+        said(&answer)
+    );
+    let down = report(&answer);
+    assert_eq!(down["verdict"], "down");
+    assert_eq!(down["state"], "unpublished");
+    assert_eq!(down["generation"], Value::Null);
+    assert_eq!(
+        down["stale"], true,
+        "holding no generation is not freshness: {down}"
+    );
+    assert_eq!(down["api"]["listening"], false);
+    assert_eq!(down["adapters"][0]["listening"], false);
+    assert_eq!(
+        down["blockers"],
+        json!([
+            format!(
+                "no resolver has published state at {}: nothing has served here since that file \
+                 was last removed",
+                host.state_path().display()
+            ),
+            format!(
+                "nothing is listening on the resolution API at 127.0.0.1:{}",
+                policy.api
+            ),
+            format!(
+                "nothing is listening on the {SERVICE} adapter for consumer {CONSUMER} at \
+                 127.0.0.1:{}",
+                policy.adapter
+            ),
+        ])
+    );
+    assert!(
+        !host.state_path().exists(),
+        "status is a read: it must not create the file it reports missing"
+    );
+
+    // The same facts one per line, for an operator reading a terminal.
+    let answer = host.stado(&["resolver", "status", "--target", TARGET]);
+    assert_eq!(answer.status.code(), Some(1));
+    let text = stdout(&answer);
+    assert!(
+        text.starts_with(&format!(
+            "resolver {TARGET} state=unpublished verdict=down generation=- stale=yes\n"
+        )),
+        "got: {text}"
+    );
+    assert!(
+        text.contains(&format!("api 127.0.0.1:{} not-listening\n", policy.api)),
+        "got: {text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "authority {TARGET} source=local reachable generation={HELD_GENERATION}\n"
+        )),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn a_resolver_killed_while_serving_goes_stale_by_the_window_its_target_declares() {
+    let policy = Policy::eager(HELD_GENERATION);
+    let host = Host::new(&policy.document());
+    let (mut resolver, _) = serving(&host, &policy);
+
+    // Killed outright, so nothing publishes a last word: the state file keeps
+    // saying `serving` while the ports it named are gone. That is the shape
+    // the launchd restart loop left behind, and the readiness answer has to
+    // age the snapshot itself rather than take the state's own word.
+    resolver.end();
+
+    let deadline = Instant::now() + BUDGET;
+    let mut aged = report(&status(&host));
+    while Instant::now() < deadline
+        && aged["generation_age_seconds"].as_i64().unwrap_or_default()
+            <= policy.max_stale_seconds as i64
+    {
+        aged = report(&status(&host));
+    }
+
+    let age = aged["generation_age_seconds"].as_i64().unwrap_or_default();
+    assert_eq!(aged["state"], "serving", "{aged}");
+    assert_eq!(aged["generation"], HELD_GENERATION);
+    assert_eq!(aged["max_stale_seconds"], policy.max_stale_seconds);
+    assert_eq!(aged["stale"], true);
+    assert_eq!(aged["api"]["listening"], false);
+    assert_eq!(aged["adapters"][0]["listening"], false);
+    assert_eq!(
+        aged["blockers"],
+        json!([
+            format!(
+                "nothing is listening on the resolution API at 127.0.0.1:{}",
+                policy.api
+            ),
+            format!(
+                "nothing is listening on the {SERVICE} adapter for consumer {CONSUMER} at \
+                 127.0.0.1:{}",
+                policy.adapter
+            ),
+            format!(
+                "the snapshot the resolver holds is {age}s old, past the {}s max-stale window \
+                 this target declares",
+                policy.max_stale_seconds
+            ),
+        ])
+    );
+    assert_eq!(
+        aged["verdict"], "degraded",
+        "a resolver that published a snapshot is not `down`: {aged}"
+    );
+}
