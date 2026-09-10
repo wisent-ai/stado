@@ -26,5 +26,4 @@ use support::{
     SEEDED_REGISTRY, SEEDED_REGISTRY_GROWN, UNREACHABLE_AUTHORITY,
 };
 
-
 mod cases;
