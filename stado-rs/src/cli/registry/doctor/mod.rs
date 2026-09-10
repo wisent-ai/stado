@@ -235,7 +235,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     // by its own wording, so an operator was told the command failed and we
     // could not attribute it to anything but their request or credentials
     // [unknown] — four false claims about a check that worked. The same
-    // silent exit `release status`, `host software`, `resolver status` and
+    // silent exit `release status`, `release host-state`, `resolver status` and
     // `web route` verdicts use carries the one thing a gate owes its caller:
     // a non-zero code, and the count beside the two things compared.
     eprintln!(

@@ -75,7 +75,8 @@
 //! check, one staging tree, one `rename(2)`, one restart — there is one path
 //! that both reports drift and delivers the declaration.
 
-use crate::deploy::{host_channel, production_runner, DeployError};
+use crate::deploy::{host_channel, production_runner, DeployError, Runner};
+use crate::targets::ComputeTarget;
 
 use super::CmdError;
 
@@ -95,6 +96,7 @@ use crate::cli::service_converge::model::receipts::FAILED;
 use crate::cli::service_converge::model::vocabulary::ATTEST_MATCH;
 use crate::cli::service_converge::observing::declaration::declaring;
 use crate::cli::service_converge::observing::read_installed;
+use crate::cli::service_converge::observing::software::refresh_software;
 use crate::cli::service_converge::verdicts::attach_processes;
 use crate::cli::service_converge::verdicts::reporting::emit;
 use crate::cli::service_converge::verdicts::reporting::gates::{
@@ -123,36 +125,64 @@ pub async fn converge_result(
         .await
         .map_err(click)?;
     let declared = declaring(&resolved, binary)?;
-    if declared.is_empty() {
-        return Ok(ServiceConvergeResult::new(resolved.name, None, Vec::new()));
+    if !declared.is_empty() {
+        crate::deploy::products::managed_platform(resolved.release_platform.trim()).map_err(
+            |error| {
+                CmdError::click(format!(
+                    "{} declares release_platform {:?}, which cannot carry a managed release: \
+                     {}; set targets[].release_platform to a published platform",
+                    resolved.name, resolved.release_platform, error
+                ))
+            },
+        )?;
     }
-    crate::deploy::products::managed_platform(resolved.release_platform.trim()).map_err(
-        |error| {
-            CmdError::click(format!(
-                "{} declares release_platform {:?}, which cannot carry a managed release: {}; \
-             set targets[].release_platform to a published platform",
-                resolved.name, resolved.release_platform, error
-            ))
-        },
-    )?;
     let runner = production_runner();
+    // One session for the whole visit. Outside a session every remote command
+    // fetches the target's private key from Skarbiec and, on a multi-route
+    // host, probes a route before it runs; the software report alone is a
+    // few hundred commands, and paying that per command is how one refresh of
+    // charless-mac-mini came to take thirteen minutes.
+    host_channel::with_session(&resolved, &runner, async {
+        Ok(visit(resolved.clone(), &declared, apply, &runner).await)
+    })
+    .await
+    .map_err(click)
+}
 
-    let reported = read_installed(&resolved, &runner).await;
-    let mut rows = verdict_rows(&declared, &reported);
-    attach_processes(&resolved, &mut rows, &runner).await;
-    if !apply {
-        return Ok(ServiceConvergeResult::new(resolved.name, None, rows));
+/// The host visit itself: the drift read, the delivery when asked for, and
+/// the software report, all over one authenticated session.
+async fn visit(
+    resolved: ComputeTarget,
+    declared: &[(String, String)],
+    apply: bool,
+    runner: &Runner,
+) -> ServiceConvergeResult {
+    if declared.is_empty() {
+        // Undeclared is not unvisited. A rollout target with an empty
+        // `managed_versions` still carries the products release control
+        // installs under their own roots, and `release status` judges those
+        // against this report; the host is visited for the report alone.
+        let software = refresh_software(&resolved, None, runner).await;
+        return ServiceConvergeResult::new(resolved.name, None, Vec::new(), software);
     }
 
-    let mut pass = apply_releases(&resolved.name, &rows, &runner).await;
+    let reported = read_installed(&resolved, runner).await;
+    let mut rows = verdict_rows(declared, &reported);
+    attach_processes(&resolved, &mut rows, runner).await;
+    if !apply {
+        let software = refresh_software(&resolved, reported.as_ref().ok(), runner).await;
+        return ServiceConvergeResult::new(resolved.name, None, rows, software);
+    }
+
+    let mut pass = apply_releases(&resolved.name, &rows, runner).await;
     // Re-read rather than trust delivery's own word. A delivery that reports
     // `released` has testified about its own work, which is the
     // one witness that cannot establish the fact being claimed; the version the
     // host reports afterwards comes back through the same reporter that
     // produced the drift finding, so a successful delivery and a confirmed
     // convergence are not the same claim.
-    let reported = read_installed(&resolved, &runner).await;
-    let mut rows = verdict_rows(&declared, &reported);
+    let reported = read_installed(&resolved, runner).await;
+    let mut rows = verdict_rows(declared, &reported);
     let stado_root_in_sync = rows.iter().any(|row| {
         row.binary == "stado"
             && row.verdict == IN_SYNC
@@ -167,14 +197,17 @@ pub async fn converge_result(
         .iter()
         .any(|release| release.binary == "stado" && release.status == FAILED);
     if stado_root_in_sync && !root_delivery_failed {
-        converge_native_readers(&resolved, &declared, &runner, &mut pass).await;
+        converge_native_readers(&resolved, declared, runner, &mut pass).await;
     }
     // Asked again after the delivery for the same reason the versions are: a
     // release ends in a restart, and whether the restarted process is executing
     // the artefact that was just installed is exactly the claim `--apply` is
     // being asked to prove.
-    attach_processes(&resolved, &mut rows, &runner).await;
-    Ok(ServiceConvergeResult::new(resolved.name, Some(pass), rows))
+    attach_processes(&resolved, &mut rows, runner).await;
+    // The report is written from the second read too, so what `release
+    // status` judges next is the host after the delivery, not before it.
+    let software = refresh_software(&resolved, reported.as_ref().ok(), runner).await;
+    ServiceConvergeResult::new(resolved.name, Some(pass), rows, software)
 }
 
 /// `stado service converge TARGET [BINARY] [--apply]`.

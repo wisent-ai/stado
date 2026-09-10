@@ -4,6 +4,7 @@
 mod artefact;
 pub(in crate::cli::service_converge) mod declaration;
 mod probe;
+pub(in crate::cli::service_converge) mod software;
 mod units;
 
 use std::collections::BTreeMap;

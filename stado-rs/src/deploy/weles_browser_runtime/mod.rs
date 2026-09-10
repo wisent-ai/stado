@@ -15,8 +15,8 @@
 //! task on the host fails. Turning recording off would trade the product's
 //! own evidence for a green run; completing the runtime is the repair.
 //!
-//! Nothing in Stado installed or repaired anything on a host: `host software`
-//! reports what a host runs and stops there. So the alternative to this module
+//! Nothing in Stado installed or repaired anything on a host: the software report
+//! says what a host runs and stops there. So the alternative to this module
 //! was an `npx playwright install` typed into somebody's terminal — an
 //! unrepeatable change nobody can audit and nobody can apply to the next host.
 //!

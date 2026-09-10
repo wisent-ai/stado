@@ -22,6 +22,7 @@ use crate::targets::ComputeTarget;
 use super::HostSoftware;
 use hasher::Hasher;
 use queries::{version_queries, VersionQuery};
+use reporter::Classification;
 
 pub use parse::parse;
 
@@ -113,37 +114,44 @@ pub async fn gather(
     // Preserve source order while admitting each concrete path once. In
     // particular, an installed binary that is also named by a service unit is
     // one observation, while same-named files at different paths remain two.
-    let mut paths = Vec::new();
+    //
+    // The bin directory is classified in one command and everything else per
+    // path: the directory is where the population is large — 1408 retired
+    // helper scripts on charless-mac-mini — and the unit programs and bound
+    // product paths are a handful that live anywhere.
+    let mut paths: Vec<(String, Option<Classification>)> = Vec::new();
     let mut seen = BTreeSet::new();
     if host_channel::remote_test(target, &format!("-d {}", shlex_quote(&bin)), runner).await? {
-        let listed = host_channel::run_program(target, &["/bin/ls", &bin], runner).await?;
-        if listed.ok() {
-            for name in listed.stdout.lines().filter(|name| !name.is_empty()) {
-                let path = format!("{bin}/{name}");
-                if seen.insert(path.clone()) {
-                    paths.push(path);
-                }
+        for (path, decided) in reporter.classify_directory(&bin).await? {
+            if seen.insert(path.clone()) {
+                paths.push((path, Some(decided)));
             }
         }
     }
     for (kind, path) in declared_units(target) {
         if let Some(program) = reporter.unit_program(&kind, &path).await? {
             if seen.insert(program.clone()) {
-                paths.push(program);
+                paths.push((program, None));
             }
         }
     }
     for program in programs {
         if !program.is_empty() && seen.insert(program.clone()) {
-            paths.push(program.clone());
+            paths.push((program.clone(), None));
         }
     }
 
     let mut inspections: Vec<(usize, Result<ProgramInspection, DeployError>)> =
         stream::iter(paths.into_iter().enumerate())
-            .map(|(index, path)| {
+            .map(|(index, (path, decided))| {
                 let reporter = &reporter;
-                async move { (index, reporter.inspect_program(&path).await) }
+                async move {
+                    let inspection = match decided {
+                        Some(decided) => reporter.inspect_classified(&path, decided).await,
+                        None => reporter.inspect_program(&path).await,
+                    };
+                    (index, inspection)
+                }
             })
             .buffer_unordered(INSPECTION_CONCURRENCY)
             .collect()

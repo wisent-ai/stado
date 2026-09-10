@@ -11,7 +11,7 @@
 //! `appium driver list --installed`, `which adb` and `adb devices -l` on
 //! 2026-09-03 precisely so a crawl coordinator could ask a placement host
 //! whether it can run before submitting a job. Nothing could act on the
-//! answer: `host software` reports what a host runs and stops there, and the
+//! answer: the software report says what a host runs and stops there, and the
 //! only remaining route was an `npm install -g appium` typed into somebody's
 //! terminal — the unrepeatable, unauditable change
 //! [`super::weles_browser_runtime`] was written to replace for Playwright.

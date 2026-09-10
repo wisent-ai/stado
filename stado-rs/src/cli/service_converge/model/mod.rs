@@ -6,6 +6,8 @@ pub(in crate::cli::service_converge) mod vocabulary;
 
 use serde_json::Value;
 
+use crate::host_software::Report;
+
 use crate::cli::service_converge::model::receipts::AppliedPass;
 use crate::cli::service_converge::model::vocabulary::Row;
 use crate::cli::service_converge::verdicts::reporting::gates::{apply_exit_code, report_exit_code};
@@ -23,10 +25,20 @@ pub struct ServiceConvergeResult {
     pub(super) target: String,
     pub(super) applied: Option<AppliedPass>,
     pub(super) rows: Vec<Row>,
+    /// The host's software report as this visit left it on file — what
+    /// `stado release status` judges next — or the sentence saying why it
+    /// could not be refreshed. Never a gate: see
+    /// [`observing::software`](crate::cli::service_converge::observing::software).
+    pub(super) software: Result<Report, String>,
 }
 
 impl ServiceConvergeResult {
-    pub(super) fn new(target: String, applied: Option<AppliedPass>, rows: Vec<Row>) -> Self {
+    pub(super) fn new(
+        target: String,
+        applied: Option<AppliedPass>,
+        rows: Vec<Row>,
+        software: Result<Report, String>,
+    ) -> Self {
         let exit_code = match applied.as_ref() {
             Some(pass) => apply_exit_code(&rows, pass),
             None => report_exit_code(&rows),
@@ -36,11 +48,17 @@ impl ServiceConvergeResult {
             target,
             applied,
             rows,
+            software,
         }
     }
 
     /// The complete report shared by the CLI JSON and HTTP interfaces.
     pub fn report_json(&self) -> Value {
-        report_json(&self.target, self.applied.as_ref(), &self.rows)
+        report_json(
+            &self.target,
+            self.applied.as_ref(),
+            &self.rows,
+            self.software.as_ref(),
+        )
     }
 }
