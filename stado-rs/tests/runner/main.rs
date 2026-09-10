@@ -19,6 +19,7 @@
 
 mod fixture;
 mod identity;
+mod memory;
 
 use std::path::Path;
 
