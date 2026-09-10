@@ -96,7 +96,11 @@ impl Journey {
         self.command().args(args).output().unwrap()
     }
 
-    pub(crate) fn invoke_ok(&self, args: &[&str]) -> Value {
+    /// Every report the command printed, in order. One canonical JSON
+    /// document per line: a preview prints the janitor's plan alone, and an
+    /// enforcing pass prints the janitor's report and then the memory pass
+    /// the same unit runs after it.
+    pub(crate) fn invoke_reports(&self, args: &[&str]) -> Vec<Value> {
         let output = self.invoke(args);
         assert!(
             output.status.success(),
@@ -105,7 +109,26 @@ impl Journey {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-        serde_json::from_slice(&output.stdout).expect("cleanup prints one JSON report")
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str(line).expect("each cleanup report line is one JSON document")
+            })
+            .collect()
+    }
+
+    /// The single report a command prints when it runs one pass.
+    pub(crate) fn invoke_ok(&self, args: &[&str]) -> Value {
+        let mut reports = self.invoke_reports(args);
+        assert_eq!(
+            reports.len(),
+            1,
+            "stado {} printed {} reports",
+            args.join(" "),
+            reports.len()
+        );
+        reports.remove(0)
     }
 
     pub(crate) fn tagged_cache(&self, name: &str) -> PathBuf {
@@ -154,4 +177,22 @@ impl Journey {
             })
             .collect()
     }
+}
+
+/// The janitor's own report out of one enforcing pass. The command prints
+/// two: the disk janitor's, then the memory pass the same unit runs after
+/// it. A pass that printed only one has stopped running the second
+/// declaration, which is the defect this reader refuses to hide.
+pub(crate) fn janitor_report(reports: &[Value]) -> Value {
+    assert_eq!(
+        reports.len(),
+        2,
+        "an enforcing pass prints the janitor report and the memory pass: {reports:#?}"
+    );
+    assert!(
+        reports[1].get("memory_before").is_some(),
+        "the second report is the memory pass: {:#}",
+        reports[1]
+    );
+    reports[0].clone()
 }

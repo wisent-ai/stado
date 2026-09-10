@@ -11,7 +11,7 @@ use std::fs::{self, OpenOptions};
 use fs2::FileExt;
 use serde_json::{json, Value};
 
-use support::Journey;
+use support::{janitor_report, Journey};
 
 #[test]
 #[ignore = "Probierz records the real disk-cleanup preview journey"]
@@ -42,7 +42,8 @@ fn enforce_deletes_only_tagged_cache_and_persists_reclaimed_progress() {
     let tagged = journey.tagged_cache("enforce-candidate");
     let untagged = journey.untagged_directory();
 
-    let report = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    let reports = journey.invoke_reports(&["disk-cleanup", "--once"]);
+    let report = janitor_report(&reports);
 
     assert_eq!(report["mode"], "enforce", "cleanup report: {report:#}");
     assert_eq!(report["outcome"], "reclaimed_progress");
@@ -92,7 +93,7 @@ fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released(
     )
     .unwrap();
 
-    let takeover = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    let takeover = janitor_report(&journey.invoke_reports(&["disk-cleanup", "--once"]));
     assert_eq!(takeover["outcome"], "lock_recovery_report_only");
     assert!(tagged.is_dir(), "takeover pass must not delete");
     assert_eq!(journey.retired_locks().len(), 1);
@@ -100,7 +101,7 @@ fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released(
         serde_json::from_slice(&fs::read(journey.state_path()).unwrap()).unwrap();
     assert_eq!(persisted["report"]["outcome"], "lock_recovery_report_only");
 
-    let still_held = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    let still_held = janitor_report(&journey.invoke_reports(&["disk-cleanup", "--once"]));
     assert_eq!(still_held["outcome"], "lock_recovery_report_only");
     assert!(
         tagged.is_dir(),
@@ -109,7 +110,7 @@ fn overdue_lock_stays_report_only_until_the_predecessor_kernel_lock_is_released(
 
     FileExt::unlock(&held).unwrap();
     drop(held);
-    let recovered = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    let recovered = janitor_report(&journey.invoke_reports(&["disk-cleanup", "--once"]));
     assert_eq!(
         recovered["mode"], "enforce",
         "cleanup report: {recovered:#}"
@@ -175,7 +176,8 @@ fn busy_lock_preserves_the_reclaim_hysteresis_and_scan_cursor() {
     )
     .unwrap();
 
-    let report = journey.invoke_ok(&["disk-cleanup", "--once"]);
+    let reports = journey.invoke_reports(&["disk-cleanup", "--once"]);
+    let report = janitor_report(&reports);
     assert_eq!(report["outcome"], "lock_busy");
     assert_eq!(report["policy_digest"], "continuing-policy");
     assert_eq!(report["pressure_active"], true);
