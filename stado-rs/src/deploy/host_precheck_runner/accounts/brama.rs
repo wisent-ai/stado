@@ -1,6 +1,6 @@
 //! The Brama the runner is permitted to dial, and the Skarbiec that Brama owns.
 
-use super::report::command_failure;
+use crate::deploy::host_precheck_runner::verdict::report::command_failure;
 use crate::deploy::{host_channel, production_runner, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -141,8 +141,8 @@ pub(crate) async fn brama_identity_host(
 /// Only a private loopback HTTP origin can be returned, because that is the
 /// only thing the rendered boundary can express: the runner uid is permitted
 /// exactly `127.0.0.1:<port>` and rejected on every network in
-/// [`super::platform::BLOCKED_IPV4_NETWORKS`] and
-/// [`super::platform::BLOCKED_IPV6_NETWORKS`], which includes the tailnet and
+/// [`crate::deploy::host_precheck_runner::platform::BLOCKED_IPV4_NETWORKS`] and
+/// [`crate::deploy::host_precheck_runner::platform::BLOCKED_IPV6_NETWORKS`], which includes the tailnet and
 /// the rest of loopback. The route has to terminate on the runner's own box.
 ///
 /// Where that origin is declared depends on whether the box runs Brama, and

@@ -1,7 +1,7 @@
 //! The platform a runner installs on, the substitutions a declared template
 //! takes, and the host-wide job gate both platforms install.
 
-use super::declaration::RunnerProfile;
+use crate::deploy::host_precheck_runner::declaration::RunnerProfile;
 use crate::deploy::DeployError;
 use crate::targets::ComputeTarget;
 

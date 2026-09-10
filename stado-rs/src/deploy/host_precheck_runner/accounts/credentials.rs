@@ -2,9 +2,9 @@
 
 use serde_json::Value;
 
-use super::brama::brama_skarbiec_context;
-use super::installer::PROBIERZ_AGENT_RESOURCE;
-use super::report::command_failure;
+use crate::deploy::host_precheck_runner::accounts::brama::brama_skarbiec_context;
+use crate::deploy::host_precheck_runner::release::installer::PROBIERZ_AGENT_RESOURCE;
+use crate::deploy::host_precheck_runner::verdict::report::command_failure;
 use crate::deploy::{host_channel, DeployError};
 use crate::targets::ComputeTarget;
 
@@ -18,7 +18,7 @@ pub(crate) struct ProbierzAgentCredential {
 /// through Brama's own Skarbiec broker rather than named here.
 ///
 /// `target` is the host whose Brama installation holds that broker, which is
-/// NOT always the runner's host -- see [`super::brama::brama_identity_host`].
+/// NOT always the runner's host -- see [`crate::deploy::host_precheck_runner::accounts::brama::brama_identity_host`].
 /// The route is `agent:probierz`, and the item and field behind it are whatever
 /// Brama's capability-routes table says today: a credential that is retagged or
 /// renamed is still found, and this function never has to be edited to follow

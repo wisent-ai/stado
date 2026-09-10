@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
-use super::super::{host_channel, DeployError};
+use crate::deploy::{host_channel, DeployError};
 use crate::targets::ComputeTarget;
 
 /// The compiled declaration that makes runner kinds data rather than commands.

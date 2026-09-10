@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use super::scope::RunnerScope;
+use crate::deploy::host_precheck_runner::verdict::scope::RunnerScope;
 use crate::deploy::DeployError;
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";

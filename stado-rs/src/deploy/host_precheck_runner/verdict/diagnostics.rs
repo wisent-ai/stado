@@ -19,8 +19,8 @@
 
 use serde_json::{json, Value};
 
-use super::declaration::{runner_profile, runner_target};
-use super::platform::{profile_template, Platform};
+use crate::deploy::host_precheck_runner::declaration::{runner_profile, runner_target};
+use crate::deploy::host_precheck_runner::platform::{profile_template, Platform};
 use crate::deploy::{host_channel, production_runner, DeployError};
 
 /// Read the unit's own verdict and the newest diagnostic log, whole.

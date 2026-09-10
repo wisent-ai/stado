@@ -12,7 +12,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{json, Value};
 
-use super::github::{
+use crate::deploy::host_precheck_runner::accounts::github::{
     github_credential, repository_name, set_repository_secret, GITHUB_ORGANIZATION,
 };
 use crate::deploy::DeployError;

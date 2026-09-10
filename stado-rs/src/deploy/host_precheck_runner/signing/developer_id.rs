@@ -2,15 +2,15 @@
 
 use serde_json::{json, Value};
 
-use super::apple_signing::{
+use crate::deploy::host_precheck_runner::signing::apple::{
     developer_id_bundle, issue_apple_capability, publish_developer_id_secrets,
     required_remote_file, APPLE_DEVELOPER_ID_ACTION, DEVELOPER_ID_FINISH, DEVELOPER_ID_ITEM,
     DEVELOPER_ID_PREPARE,
 };
-use super::declaration::runner_target;
-use super::github::github_credential;
-use super::platform::{replace, Platform};
-use super::report::command_failure;
+use crate::deploy::host_precheck_runner::declaration::runner_target;
+use crate::deploy::host_precheck_runner::accounts::github::github_credential;
+use crate::deploy::host_precheck_runner::platform::{replace, Platform};
+use crate::deploy::host_precheck_runner::verdict::report::command_failure;
 use crate::deploy::{
     host_capability, host_channel, production_runner, shlex_quote, weles_browser_task,
     weles_capture, DeployError,

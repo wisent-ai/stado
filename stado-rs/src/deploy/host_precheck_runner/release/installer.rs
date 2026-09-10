@@ -1,14 +1,14 @@
 //! The exact installer program a registration renders, per platform.
 
-use super::declaration::{runner_profile, RunnerProfile};
-use super::linux_install::LINUX_INSTALLER;
-use super::macos_install::MACOS_INSTALLER;
-use super::macos_runtime::MACOS_RUNTIME_FUNCTIONS;
-use super::platform::{
+use crate::deploy::host_precheck_runner::declaration::{runner_profile, RunnerProfile};
+use crate::deploy::host_precheck_runner::linux::install::LINUX_INSTALLER;
+use crate::deploy::host_precheck_runner::macos::install::MACOS_INSTALLER;
+use crate::deploy::host_precheck_runner::macos::runtime::MACOS_RUNTIME_FUNCTIONS;
+use crate::deploy::host_precheck_runner::platform::{
     job_gate_program, profile_template, replace, shell_list, Platform, BLOCKED_IPV4_NETWORKS,
     BLOCKED_IPV6_NETWORKS, LINUX_JOBS_DIR, MACOS_JOBS_DIR,
 };
-use super::scope::{scope_for_profile, RunnerScope};
+use crate::deploy::host_precheck_runner::verdict::scope::{scope_for_profile, RunnerScope};
 use crate::deploy::{shlex_quote, DeployError};
 
 pub const PROBIERZ_AGENT_ID: &str = "probierz";

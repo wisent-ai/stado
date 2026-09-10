@@ -5,19 +5,19 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::brama::{brama_identity_host, private_brama_route};
-use super::credentials::kronika_agent_credential;
-use super::declaration::{runner_profile, runner_target, RunnerProfile};
-use super::developer_id::bootstrap_developer_id;
-use super::github::{github_runner, github_runner_is_online, github_runner_token, RunnerRecord};
-use super::installer::{
+use crate::deploy::host_precheck_runner::accounts::brama::{brama_identity_host, private_brama_route};
+use crate::deploy::host_precheck_runner::accounts::credentials::kronika_agent_credential;
+use crate::deploy::host_precheck_runner::declaration::{runner_profile, runner_target, RunnerProfile};
+use crate::deploy::host_precheck_runner::signing::developer_id::bootstrap_developer_id;
+use crate::deploy::host_precheck_runner::accounts::github::{github_runner, github_runner_is_online, github_runner_token, RunnerRecord};
+use crate::deploy::host_precheck_runner::release::installer::{
     installer_program, Decision, InstallerRequest, PROBIERZ_AGENT_ID, PROBIERZ_AGENT_RESOURCE,
 };
-use super::model_review::MODEL_REVIEW_SECRET;
-use super::platform::Platform;
-use super::publisher::bootstrap_publisher_repository;
-use super::report::{command_failure, report};
-use super::scope::{scope_for_profile, RunnerScope};
+use crate::deploy::host_precheck_runner::accounts::model_review::MODEL_REVIEW_SECRET;
+use crate::deploy::host_precheck_runner::platform::Platform;
+use crate::deploy::host_precheck_runner::release::publisher::bootstrap_publisher_repository;
+use crate::deploy::host_precheck_runner::verdict::report::{command_failure, report};
+use crate::deploy::host_precheck_runner::verdict::scope::{scope_for_profile, RunnerScope};
 use crate::deploy::{host_channel, production_runner, shlex_quote, DeployError};
 use crate::targets::ComputeTarget;
 

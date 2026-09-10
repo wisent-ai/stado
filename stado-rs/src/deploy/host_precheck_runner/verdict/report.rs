@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::declaration::RunnerProfile;
+use crate::deploy::host_precheck_runner::declaration::RunnerProfile;
 use crate::deploy::{host_channel, CommandOutput};
 use crate::targets::ComputeTarget;
 

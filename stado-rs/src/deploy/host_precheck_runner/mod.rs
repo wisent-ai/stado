@@ -13,54 +13,30 @@
 //! |---|---|
 //! | [`declaration`] | the compiled profile declaration and the host it resolves |
 //! | [`platform`] | the two platforms, template substitution, the host job gate |
-//! | [`scope`] | organization or repository registration, and who may ask |
-//! | [`github`] | the GitHub credential and every call made with it |
-//! | [`credentials`] | Skarbiec reads, including the routed Probierz identity |
-//! | [`brama`] | the Brama a runner dials and the Skarbiec beside it |
-//! | [`installer`] | the exact installer program one registration renders |
-//! | [`install`] | installing a runner and everything its profile declares |
 //! | [`lifecycle`] | restarting, repairing and removing an installed runner |
-//! | [`status`] | what one runner, one host, or the fleet reports |
-//! | [`diagnostics`] | what a runner that will not start is saying, read whole |
-//! | [`report`] | the shape of an answer and the fields read out of a program |
-//! | [`model_review`] | the model-review bearer a repository's CI presents |
-//! | [`publisher`] | a desktop publisher repository's release secrets |
-//! | [`apple_signing`], [`developer_id`] | the Developer ID bundle |
-//! | `linux_install`, `linux_scripts`, `macos_install`, `macos_runtime`, `macos_scripts` | the programs the host runs |
+//! | [`accounts`] | every identity a runner presents: GitHub, Skarbiec, Brama, model review |
+//! | [`release`] | registering a runner: the rendered installer and what one install declares |
+//! | [`signing`] | the Developer ID bundle a desktop publisher signs with |
+//! | [`verdict`] | what a runner, a host or the fleet reports, and how an answer is read |
+//! | [`macos`], [`linux`] | the programs each platform's host runs |
 
-mod apple_signing;
-mod brama;
-mod credentials;
+mod accounts;
 mod declaration;
-mod developer_id;
-mod diagnostics;
-mod github;
-mod install;
-mod installer;
 mod lifecycle;
-mod linux_install;
-mod linux_scripts;
-mod macos_install;
-mod macos_runtime;
-mod macos_scripts;
-mod model_review;
+mod linux;
+mod macos;
 mod platform;
-mod publisher;
-mod report;
-mod scope;
-mod status;
+mod release;
+mod signing;
+mod verdict;
 
-// `brama`, `credentials` and `report` carry no name a caller outside this
-// module uses; their submodules address each other directly.
+// `accounts::brama`, `accounts::credentials` and `verdict::report` carry no
+// name a caller outside this module uses; their submodules address each
+// other directly.
+pub use self::accounts::*;
 pub use self::declaration::*;
-pub use self::developer_id::*;
-pub use self::diagnostics::*;
-pub use self::github::*;
-pub use self::install::*;
-pub use self::installer::*;
 pub use self::lifecycle::*;
-pub use self::model_review::*;
 pub use self::platform::*;
-pub use self::publisher::*;
-pub use self::scope::*;
-pub use self::status::*;
+pub use self::release::*;
+pub use self::signing::*;
+pub use self::verdict::*;

@@ -1,7 +1,7 @@
 //! Where a runner registers, and which declared profile may ask for that door.
 
-use super::declaration::{RunnerProfile, DECLARATION_PATH};
-use super::github::{repository_name, GITHUB_ORGANIZATION};
+use crate::deploy::host_precheck_runner::declaration::{RunnerProfile, DECLARATION_PATH};
+use crate::deploy::host_precheck_runner::accounts::github::{repository_name, GITHUB_ORGANIZATION};
 use crate::deploy::DeployError;
 
 /// Where a runner registers. GitHub answers a registration token at two

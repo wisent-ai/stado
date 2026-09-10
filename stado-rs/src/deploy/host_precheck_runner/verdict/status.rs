@@ -2,13 +2,13 @@
 
 use serde_json::{json, Value};
 
-use super::brama::private_brama_route;
-use super::declaration::{runner_declaration, runner_profile, runner_target, RunnerProfile};
-use super::linux_scripts::{LINUX_PUBLISHER_STATUS, LINUX_STATUS};
-use super::macos_runtime::MACOS_PUBLISHER_STATUS;
-use super::macos_scripts::MACOS_STATUS;
-use super::platform::{profile_template, Platform};
-use super::report::{command_failure, registered_scope, report, unavailable_status};
+use crate::deploy::host_precheck_runner::accounts::brama::private_brama_route;
+use crate::deploy::host_precheck_runner::declaration::{runner_declaration, runner_profile, runner_target, RunnerProfile};
+use crate::deploy::host_precheck_runner::linux::scripts::{LINUX_PUBLISHER_STATUS, LINUX_STATUS};
+use crate::deploy::host_precheck_runner::macos::runtime::MACOS_PUBLISHER_STATUS;
+use crate::deploy::host_precheck_runner::macos::scripts::MACOS_STATUS;
+use crate::deploy::host_precheck_runner::platform::{profile_template, Platform};
+use crate::deploy::host_precheck_runner::verdict::report::{command_failure, registered_scope, report, unavailable_status};
 use crate::deploy::{host_channel, production_runner, DeployError};
 
 /// The shape of [`fleet_report`], which a reader checks before trusting the

@@ -4,14 +4,14 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::declaration::{runner_profile, runner_target, RunnerProfile};
-use super::github::github_runner_token;
-use super::linux_scripts::{LINUX_REMOVE, LINUX_RESTART};
-use super::macos_runtime::{MACOS_RUNTIME_FUNCTIONS, MACOS_RUNTIME_REPAIR};
-use super::macos_scripts::{MACOS_REMOVE, MACOS_RESTART};
-use super::platform::{profile_template, replace, Platform};
-use super::report::{command_failure, report};
-use super::scope::{scope_for_profile, RunnerScope};
+use crate::deploy::host_precheck_runner::declaration::{runner_profile, runner_target, RunnerProfile};
+use crate::deploy::host_precheck_runner::accounts::github::github_runner_token;
+use crate::deploy::host_precheck_runner::linux::scripts::{LINUX_REMOVE, LINUX_RESTART};
+use crate::deploy::host_precheck_runner::macos::runtime::{MACOS_RUNTIME_FUNCTIONS, MACOS_RUNTIME_REPAIR};
+use crate::deploy::host_precheck_runner::macos::scripts::{MACOS_REMOVE, MACOS_RESTART};
+use crate::deploy::host_precheck_runner::platform::{profile_template, replace, Platform};
+use crate::deploy::host_precheck_runner::verdict::report::{command_failure, report};
+use crate::deploy::host_precheck_runner::verdict::scope::{scope_for_profile, RunnerScope};
 use crate::deploy::{host_channel, production_runner, service, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
