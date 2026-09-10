@@ -59,7 +59,25 @@ pub async fn loaded_units_with_posture(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<(Vec<UndeclaredUnit>, Option<PathBinary>), DeployError> {
-    let output = host_channel::run_script(target, LOADED_LABELS_SCRIPT, runner).await?;
+    read_loaded_units(target, runner, LOADED_LABELS_SCRIPT).await
+}
+
+/// Read every loaded label, domain, declaration and running command needed for
+/// image reconciliation, without unrelated environment/script/PATH diagnostics.
+pub async fn loaded_image_units(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<Vec<UndeclaredUnit>, DeployError> {
+    let script = LOADED_LABELS_SCRIPT.replacen("details=full", "details=images", 1);
+    Ok(read_loaded_units(target, runner, &script).await?.0)
+}
+
+async fn read_loaded_units(
+    target: &ComputeTarget,
+    runner: &Runner,
+    script: &str,
+) -> Result<(Vec<UndeclaredUnit>, Option<PathBinary>), DeployError> {
+    let output = host_channel::run_script(target, script, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,
