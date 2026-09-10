@@ -17,6 +17,7 @@ enum PublicOriginVerdict: Hashable, Sendable {
     case originUnpublished
     case originUnreachable
     case originMismatch
+    case diagnosticIncomplete
     case unrecognised(String)
 
     init(_ raw: String) {
@@ -28,6 +29,7 @@ enum PublicOriginVerdict: Hashable, Sendable {
         case "origin-unpublished": self = .originUnpublished
         case "origin-unreachable": self = .originUnreachable
         case "origin-mismatch": self = .originMismatch
+        case "diagnostic-incomplete": self = .diagnosticIncomplete
         default: self = .unrecognised(raw)
         }
     }
@@ -42,6 +44,7 @@ enum PublicOriginVerdict: Hashable, Sendable {
         case .originUnpublished: "origin-unpublished"
         case .originUnreachable: "origin-unreachable"
         case .originMismatch: "origin-mismatch"
+        case .diagnosticIncomplete: "diagnostic-incomplete"
         case let .unrecognised(raw): raw.isEmpty ? "unreported" : raw
         }
     }
@@ -55,6 +58,7 @@ enum PublicOriginVerdict: Hashable, Sendable {
         case .originUnpublished: "Not published"
         case .originUnreachable: "Unreachable"
         case .originMismatch: "The edge selects another origin"
+        case .diagnosticIncomplete: "Diagnostic reads incomplete"
         case let .unrecognised(raw): raw.isEmpty ? "Not reported" : raw.humanizedIdentifier
         }
     }
@@ -75,9 +79,11 @@ enum PublicOriginVerdict: Hashable, Sendable {
         case .originUnpublished:
             "The host is not publishing every declared path, so the edge would fetch a path this origin does not answer."
         case .originUnreachable:
-            "The hostname resolves publicly and the fetch still failed, so the failure is the connection or the handshake."
+            "The actual public release request failed or supplied no usable response. Its recorded error and the separate diagnostic probe remain distinct."
         case .originMismatch:
             "The edge selects a different origin than the one declared here, so converging this declaration would not change what a release client reads."
+        case .diagnosticIncomplete:
+            "One or more reads failed or did not finish. Completed readings remain visible; unknown state is not evidence that the origin is down."
         case .unrecognised:
             "This Stado returned a verdict this console does not classify. It is shown in the command's own word rather than read as any known state."
         }
@@ -86,7 +92,7 @@ enum PublicOriginVerdict: Hashable, Sendable {
     var tone: WisentTone {
         switch self {
         case .serving: .success
-        case .resolverUnavailable, .unrecognised: .warning
+        case .resolverUnavailable, .diagnosticIncomplete, .unrecognised: .warning
         case .originUndeclared, .originNotPublic, .originUnpublished, .originUnreachable, .originMismatch: .danger
         }
     }

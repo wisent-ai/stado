@@ -1,119 +1,231 @@
-//! The reads: two ssh reads and one object read against a live host, in that
-//! order, and nothing that writes.
-
+//! Independent diagnostic reads retain their own result, source and duration.
 use chrono::Utc;
 use serde_json::Value;
+use std::future::Future;
 
 use super::gates::HostGates;
 use super::verdict::assemble;
+use super::HOST_DIAGNOSTIC_INCOMPLETE;
 use crate::deploy::{host_channel, host_disk, DeployError, Runner};
 use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;
 
+mod observation;
 mod sources;
-
+pub(crate) use observation::{observe, READ_BUDGET};
+pub use observation::{DiagnosticRead, ReadState};
+pub(in crate::deploy) use sources::resolves_to;
 use sources::{publication, waiting_jobs};
 
-pub(in crate::deploy) use sources::resolves_to;
-
-/// Read every gate that decides whether `host` claims.
-///
-/// Two ssh reads and one object read, in that order. An unreachable host is an
-/// error carrying the remote's own last line rather than a report full of
-/// nulls: "this box is not answering" is a different answer from "this box is
-/// answering and refuses to claim", and only the second one is what this
-/// command was written to find.
-///
-/// The second ssh read — which store the host's agent is bound to — is the
-/// only one that is allowed to fail quietly. By the time it runs, the disk and
-/// the capacity reads have both succeeded, so there is a verdict worth
-/// printing; a host that will not answer that one question gets
-/// [`AGENT_STORE_UNREADABLE`] noted and keeps its verdict.
-///
-/// [`AGENT_STORE_UNREADABLE`]: super::AGENT_STORE_UNREADABLE
 pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, DeployError> {
-    let registry = host_channel::canonical_registry().await?;
-    let target = host_channel::resolve_target(&registry, host)?.clone();
+    let backend = crate::config::wc_storage_backend().to_string();
+    let (registry, mut registry_read) = observe(
+        "registry",
+        format!("registry.json through {backend}"),
+        async {
+            crate::targets::fetch_registry_or_last_good()
+                .await
+                .map_err(|error| DeployError(error.to_string()))
+        },
+    )
+    .await;
+    let Some((registry, notice)) = registry else {
+        let mut observations = vec![registry_read];
+        for (operation, source) in [
+            ("disk_usage", format!("{host}: df -Pk /")),
+            ("host_state", format!("{host}: janitor state and snapshots")),
+            (
+                "agent_store",
+                format!("{host}: effective storage configuration"),
+            ),
+            ("storage", backend.clone()),
+            ("capacity", "capacity/".to_string()),
+            ("queue", "queue/".to_string()),
+        ] {
+            observations.push(DiagnosticRead::skipped(
+                operation,
+                source,
+                "registry read did not complete",
+            ));
+        }
+        return Ok(HostGates {
+            host: host.to_string(),
+            fleet_store_backend: backend,
+            observations,
+            blockers: vec![HOST_DIAGNOSTIC_INCOMPLETE.to_string()],
+            ..HostGates::default()
+        });
+    };
+    if let Some(notice) = notice {
+        crate::targets::report_registry_notice(&notice);
+        registry_read.state = ReadState::Cached;
+        registry_read.detail = Some(notice);
+    }
+    let route = host_channel::resolve_target(&registry, host);
+    // A declared host without a usable route still has independently readable
+    // capacity and queue state. Preserve the route refusal on each host read;
+    // never execute that read or acquire credentials after the refusal.
+    let target = match &route {
+        Ok(target) => *target,
+        Err(error) => registry
+            .lookup(host)
+            .filter(|target| target.is_provider(crate::capabilities::ProviderId::Local))
+            .ok_or_else(|| DeployError(error.to_string()))?,
+    };
+    // Free space must survive a slow janitor, snapshot, or configuration read.
+    // These scopes reuse the same producer sections as the normal disk report.
+    let (usage, state, agent, storage) = tokio::join!(
+        observe(
+            "disk_usage",
+            format!("{}: df -Pk /", target.name),
+            host_read(
+                &route,
+                disk_read(target, host_disk::DiskScope::UsageOnly, runner)
+            )
+        ),
+        observe(
+            "host_state",
+            format!("{}: janitor state and snapshots", target.name),
+            host_read(
+                &route,
+                disk_read(target, host_disk::DiskScope::StateOnly, runner)
+            )
+        ),
+        observe(
+            "agent_store",
+            format!("{}: effective storage configuration", target.name),
+            host_read(&route, agent_store_backend(target, runner))
+        ),
+        observe("storage", backend.clone(), async {
+            JobStorage::new()
+                .await
+                .map_err(|error| DeployError(error.to_string()))
+        }),
+    );
+    let state_observed = state.0.is_some();
+    let mut reading = state.0.unwrap_or_default();
+    reading.usage = usage.0.and_then(|reading| reading.usage);
+    let mut observations = vec![registry_read, usage.1, state.1, agent.1, storage.1];
+    let mut publication_value = None;
+    let mut publication_observed = false;
+    let mut waiting = Vec::new();
+    if let Some(store) = storage.0 {
+        let (published, queued) = tokio::join!(
+            observe(
+                "capacity",
+                format!("{backend}:capacity/ for {}", target.name),
+                publication(&registry, target, &store)
+            ),
+            observe(
+                "queue",
+                format!("{backend}:queue/ for {}", target.name),
+                waiting_jobs(&registry, target, &store, Utc::now())
+            ),
+        );
+        publication_observed = published.0.is_some();
+        publication_value = published.0.flatten();
+        let mut publication_read = published.1;
+        if publication_observed && publication_value.is_none() {
+            publication_read.state = ReadState::Absent;
+            publication_read.detail =
+                Some("no capacity publication names this registry target".to_string());
+        }
+        if let Some(jobs) = queued.0 {
+            waiting = jobs;
+        }
+        observations.push(publication_read);
+        observations.push(queued.1);
+    } else {
+        observations.push(DiagnosticRead::skipped(
+            "capacity",
+            format!("{backend}:capacity/"),
+            "storage client did not open",
+        ));
+        observations.push(DiagnosticRead::skipped(
+            "queue",
+            format!("{backend}:queue/"),
+            "storage client did not open",
+        ));
+    }
+    let mut gates = assemble(
+        target,
+        &reading,
+        publication_value.as_ref(),
+        agent.0.as_deref(),
+        Utc::now(),
+        state_observed,
+        publication_observed,
+    );
+    gates.waiting_jobs = waiting;
+    gates.complete = observations.iter().all(DiagnosticRead::complete);
+    gates.observations = observations;
+    if !gates.complete {
+        gates.claiming = false;
+        gates.blockers.push(HOST_DIAGNOSTIC_INCOMPLETE.to_string());
+    }
+    Ok(gates)
+}
 
-    let interval = target
-        .disk_cleanup
+async fn host_read<T>(
+    route: &Result<&ComputeTarget, DeployError>,
+    read: impl Future<Output = Result<T, DeployError>>,
+) -> Result<T, DeployError> {
+    route
         .as_ref()
-        .map(|policy| policy.check_interval_seconds);
-    // Only the sections this command reads. `assemble` below consumes
-    // `usage`, `state` and `snapshots` and nothing else, while the full
-    // script also walks `$HOME` with `du` for an `inventory` only
-    // `space report` prints. Measured on `lukasz-macbook` on 2026-09-02, the
-    // three fields take 0.8s and the full script had not finished in 180s,
-    // so this command died on `remote_timeout` on the machine it was
-    // running on and published no verdict at all — a gate condition nobody
-    // can read is a gate condition that does not exist. The kept fields are
-    // produced by the same section constants under either scope, so the
-    // cheap read cannot answer differently from the expensive one.
-    let output = host_channel::run_script(
-        &target,
-        &host_disk::remote_script_for(host_disk::DiskScope::GateInputs),
+        .map_err(|error| DeployError(error.to_string()))?;
+    read.await
+}
+
+async fn disk_read(
+    target: &ComputeTarget,
+    scope: host_disk::DiskScope,
+    runner: &Runner,
+) -> Result<host_disk::DiskReading, DeployError> {
+    let output = host_channel::run_script_with_timeout(
+        target,
+        &host_disk::remote_script_for(scope),
+        READ_BUDGET,
         runner,
     )
     .await?;
     if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "the host did not report its disk state",
+        return Err(DeployError(format!(
+            "host read exited {}: {} {}",
+            output.code, output.stderr, output.stdout
         )));
     }
+    let interval = target
+        .disk_cleanup
+        .as_ref()
+        .map(|policy| policy.check_interval_seconds);
     let reading = host_disk::parse_output(&output.stdout, interval);
-    let agent_store = agent_store_backend(&target, runner).await;
-
-    let store = JobStorage::new()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
-    let publication = publication(&registry, &target, &store).await?;
-
-    let mut gates = assemble(
-        &target,
-        &reading,
-        publication.as_ref(),
-        agent_store.as_deref(),
-        Utc::now(),
-    );
-    gates.waiting_jobs = waiting_jobs(&registry, &target, &store, Utc::now()).await?;
-    Ok(gates)
+    if scope == host_disk::DiskScope::UsageOnly && reading.usage.is_none() {
+        return Err(DeployError(
+            "the host command completed without a filesystem usage reading".to_string(),
+        ));
+    }
+    Ok(reading)
 }
 
-/// The `wc_storage_backend` this host's own installed binary resolves from the
-/// config its services consume, or `None` when the host would not say.
-///
-/// Read with [`crate::cli::host::remote_config_output`] — the exact script
-/// `stado host config-show` sends — and not a second remote script of this
-/// module's own, for the same reason `host gates` and `space report` share one
-/// `df`: two scripts reading one host's configuration would eventually read
-/// two different configurations, under a different `HOME` or a different
-/// `STADO_CONFIG`, and the whole finding here is which configuration that
-/// host's services actually consume.
-///
-/// The field is `resolved.wc_storage_backend`: `config show` reports the file
-/// it read and the values it resolved separately, and only the resolved half
-/// is what the agent on that host actually binds its `JobStorage` to — a
-/// `WC_STORAGE_BACKEND` exported by the unit beats the file, which is one of
-/// the two ways the Mac mini got where it got.
-///
-/// Failure and a missing field collapse to the same `None` deliberately.
-/// "The read did not happen" and "the read happened and said nothing about the
-/// store" are the same finding for an operator: this command cannot tell them
-/// where that agent publishes, and must say so rather than imply the store is
-/// fine.
-async fn agent_store_backend(target: &ComputeTarget, runner: &Runner) -> Option<String> {
+async fn agent_store_backend(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<String, DeployError> {
     let stdout = crate::cli::host::remote_config_output(
         target,
         crate::cli::host::RemoteConfigAction::Show,
         runner,
     )
     .await
-    .ok()?;
-    serde_json::from_str::<Value>(&stdout)
-        .ok()?
-        .get("resolved")?
-        .get("wc_storage_backend")
+    .map_err(|error| DeployError(error.to_string()))?;
+    let document: Value = serde_json::from_str(&stdout)
+        .map_err(|error| DeployError(format!("host storage configuration is not JSON: {error}")))?;
+    document
+        .get("resolved")
+        .and_then(|value| value.get("wc_storage_backend"))
         .and_then(Value::as_str)
         .map(str::to_string)
+        .ok_or_else(|| {
+            DeployError("host configuration contains no resolved.wc_storage_backend".to_string())
+        })
 }

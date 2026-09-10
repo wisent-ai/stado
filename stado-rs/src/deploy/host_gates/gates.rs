@@ -1,9 +1,10 @@
 //! The shape one host's claiming verdict is carried in.
 
+use super::read::DiagnosticRead;
 use std::collections::BTreeMap;
 
 /// Everything one host answered about whether it can claim.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct HostGates {
     /// The registry target name, not the operator's spelling of it.
     pub host: String,
@@ -39,7 +40,9 @@ pub struct HostGates {
     /// never recorded one. `None` with a declared interval is the fifteen-day
     /// case, and is not the same finding as "it succeeded a long time ago".
     pub cleanup_success_age_seconds: Option<i64>,
-    /// `df -Pk /` available blocks as GiB, one decimal.
+    /// Available bytes from the host's `df -Pk /` reading, never from a pressure flag.
+    pub free_bytes: Option<u64>,
+    /// The same available space as GiB, rounded to one decimal.
     pub free_gb: Option<f64>,
     /// The threshold admission is actually gated on: the janitor's own
     /// validated watermark first, the registry declaration second — the same
@@ -87,6 +90,11 @@ pub struct HostGates {
     /// pinned to it is starving that exact list, and "blocked" without the
     /// starved work named is a verdict nobody can size.
     pub waiting_jobs: Vec<WaitingJob>,
+    /// Incomplete reads are not a claiming or disk-full verdict.
+    pub complete: bool,
+    pub observations: Vec<DiagnosticRead>,
+    pub pressure_source: Option<&'static str>,
+    pub published_diagnostics: Option<serde_json::Value>,
 }
 
 /// One queued job a non-claiming host is starving.

@@ -67,9 +67,16 @@ struct PublicOriginEdgeSelection: Decodable, Sendable {
     let origin: String?
     let endpoint: String?
     let detail: String?
+    let diagnosis: StorageReconciliationJSON?
+    let observation: StorageReconciliationJSON?
+    let readback: StorageReconciliationJSON?
+    let readbackObservation: StorageReconciliationJSON?
 
     enum CodingKeys: String, CodingKey {
         case state, origin, endpoint, detail
+        case diagnosis, observation
+        case readback
+        case readbackObservation = "readback_observation"
     }
 
     init(from decoder: Decoder) throws {
@@ -80,6 +87,10 @@ struct PublicOriginEdgeSelection: Decodable, Sendable {
         origin = try values.decodeIfPresent(String.self, forKey: .origin)
         endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint)
         detail = try values.decodeIfPresent(String.self, forKey: .detail)
+        diagnosis = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .diagnosis)
+        observation = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .observation)
+        readback = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .readback)
+        readbackObservation = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .readbackObservation)
     }
 }
 
@@ -108,20 +119,24 @@ struct PublicOriginReport: Decodable, Identifiable, Sendable {
     let resolution: PublicOriginResolution?
     let publicationState: PublicOriginPublicationReport?
     let edgeSelection: PublicOriginEdgeSelection?
+    let observations: StorageReconciliationJSON?
+    let registryObservation: StorageReconciliationJSON?
 
-    var id: String { name }
+    var id: String { name.isEmpty ? origin : name }
 
     enum CodingKeys: String, CodingKey {
         case schema, name, hostname, origin, target, publication, upstream, paths, verdict, resolution
         case originError = "origin_error"
         case publicationState = "publication_state"
         case edgeSelection = "edge_selection"
+        case observations
+        case registryObservation = "registry_observation"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         schema = try values.decodeIfPresent(String.self, forKey: .schema) ?? ""
-        name = try values.decode(String.self, forKey: .name)
+        name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
         hostname = try values.decodeIfPresent(String.self, forKey: .hostname) ?? ""
         origin = try values.decodeIfPresent(String.self, forKey: .origin) ?? ""
         target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
@@ -141,14 +156,17 @@ struct PublicOriginReport: Decodable, Identifiable, Sendable {
             PublicOriginEdgeSelection.self,
             forKey: .edgeSelection
         )
+        observations = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .observations)
+        registryObservation = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .registryObservation)
     }
 
     /// Whether a convergence of this declaration is the operation on offer.
     /// A verdict that names no declaration has nothing for the converge to
     /// read, and a serving origin has nothing to change.
     var isConvergeable: Bool {
-        switch verdict {
-        case .serving, .originUndeclared: false
+        guard !name.isEmpty else { return false }
+        return switch verdict {
+        case .serving, .originUndeclared, .diagnosticIncomplete: false
         default: true
         }
     }

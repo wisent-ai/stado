@@ -19,7 +19,7 @@ struct PublicOriginRowPanel: View {
 
     var body: some View {
         WisentSectionBox(
-            title: report.name,
+            title: report.name.isEmpty ? "Public edge" : report.name,
             detail: report.origin.isEmpty ? report.hostname : report.origin,
             trailing: report.verdict.word
         ) {
@@ -30,6 +30,12 @@ struct PublicOriginRowPanel: View {
                     sentence(problem, tone: report.verdict.tone)
                 }
                 measurements
+                if let observation = report.registryObservation {
+                    diagnostic("Registry reading", observation)
+                }
+                if let observations = report.observations {
+                    diagnostic("Diagnostic readings", observations)
+                }
                 if let receipt {
                     PublicOriginReceiptPanel(receipt: receipt)
                 }
@@ -132,6 +138,27 @@ struct PublicOriginRowPanel: View {
                     ("Origin the edge selects", selection.origin ?? "Not reported"),
                 ]
             )
+            if let readback = selection.readback {
+                diagnostic("Actual public release request", readback)
+            }
+            if let observation = selection.readbackObservation {
+                diagnostic("Public release request reading", observation)
+            }
+            if let observation = selection.observation {
+                diagnostic("Public edge reading", observation)
+            }
+            if let diagnosis = selection.diagnosis {
+                diagnostic("DNS, TCP, TLS and HTTP evidence", diagnosis)
+            }
+        }
+    }
+
+    private func diagnostic(_ title: String, _ value: StorageReconciliationJSON) -> some View {
+        WisentSectionBox(title: title) {
+            Text(value.prettyJSON)
+                .font(WisentTypeScale.identifierSmall())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

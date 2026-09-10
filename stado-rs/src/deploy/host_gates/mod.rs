@@ -53,7 +53,8 @@ mod verdict;
 mod words;
 
 pub use gates::{HostGates, WaitingJob};
-pub use read::read_host_gates;
+pub(crate) use read::observe;
+pub use read::{read_host_gates, DiagnosticRead, ReadState};
 pub use verdict::{assemble, gates_section, to_report};
 pub use words::{
     AGENT_DECLARED_NOT_LOADED, AGENT_STORE_DEVICE_ONLY, AGENT_STORE_UNKNOWN,
@@ -62,5 +63,7 @@ pub use words::{
     DISK_PRESSURE_UNRESOLVED, LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY,
     QUEUE_PAUSED,
 };
+
+pub const HOST_DIAGNOSTIC_INCOMPLETE: &str = "host_diagnostic_incomplete";
 
 pub(super) use read::resolves_to;

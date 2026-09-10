@@ -3,6 +3,16 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
 
+pub(super) const CONFIG_SCRIPT_PREFIX: &str = "\
+set -euo pipefail\n\
+case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
+export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
+binary=\"$HOME/.stado/bin/stado\"\n\
+if ! test -x \"$binary\"; then\n\
+  printf 'cannot read host configuration: %s is missing or not executable; configuration %s\\n' \"$binary\" \"$STADO_CONFIG\" >&2\n\
+  exit 1\n\
+fi\n";
+
 pub(crate) enum RemoteConfigAction<'a> {
     Show,
     Set { key: &'a str, value: &'a str },
@@ -54,14 +64,7 @@ pub(crate) async fn remote_config_output(
             STANDARD.encode(value.as_bytes())
         ),
     };
-    let script = format!(
-        "set -euo pipefail\n\
-         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
-         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
-         binary=\"$HOME/.stado/bin/stado\"\n\
-         test -x \"$binary\"\n\
-         {action}\n"
-    );
+    let script = format!("{CONFIG_SCRIPT_PREFIX}{action}\n");
     let output = crate::deploy::host_channel::run_script_with_timeout(
         target,
         &script,
@@ -71,12 +74,15 @@ pub(crate) async fn remote_config_output(
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
-        return Err(CmdError::click(
-            crate::deploy::host_channel::last_error_line(
-                &output,
-                "remote Stado configuration command failed",
-            ),
-        ));
+        let detail = output.detail().trim().to_string();
+        return Err(CmdError::click(if detail.is_empty() {
+            format!(
+                "host configuration command on {} exited with code {} and produced no output",
+                target.name, output.code
+            )
+        } else {
+            detail
+        }));
     }
     Ok(output.stdout)
 }

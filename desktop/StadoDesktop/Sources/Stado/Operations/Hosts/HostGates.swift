@@ -11,7 +11,9 @@ import Foundation
 /// numbers below it.
 struct HostGates: Decodable, Identifiable, Sendable {
     let host: String
-    let claiming: Bool
+    let claiming: Bool?
+    let complete: Bool?
+    let observations: [HostDiagnosticRead]
     /// Verbatim, in the agent's words. Never rewritten here: a paraphrase of a
     /// blocker is a second source of truth about why work is not being taken.
     let blockers: [String]
@@ -28,28 +30,50 @@ struct HostGates: Decodable, Identifiable, Sendable {
     /// `pinned_only` refusal alone is policy — red when it is costing work,
     /// which is exactly when `waitingJobs` is non-empty.
     var pinnedByDesign: Bool {
-        !claiming && !blockers.isEmpty && blockers.allSatisfy { $0 == "pinned_only" }
+        complete == true && claiming == false && !blockers.isEmpty && blockers.allSatisfy { $0 == "pinned_only" }
     }
 
     /// Claiming nothing in a way that is not declared policy.
     var refusingUnpinned: Bool {
-        !claiming && !pinnedByDesign
+        complete == true && claiming == false && !pinnedByDesign
     }
 
     enum CodingKeys: String, CodingKey {
         case host, claiming, blockers, disk, capacity
+        case complete, observations
         case waitingJobs = "waiting_jobs"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
-        claiming = try values.decodeIfPresent(Bool.self, forKey: .claiming) ?? false
+        host = try values.decode(String.self, forKey: .host)
+        claiming = try values.decodeIfPresent(Bool.self, forKey: .claiming)
+        complete = try values.decodeIfPresent(Bool.self, forKey: .complete)
+        observations = try values.decodeIfPresent([HostDiagnosticRead].self, forKey: .observations) ?? []
         blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
         disk = try values.decodeIfPresent(HostGatesDisk.self, forKey: .disk)
         capacity = try values.decodeIfPresent(HostGatesCapacity.self, forKey: .capacity)
         waitingJobs =
             try values.decodeIfPresent([HostGatesWaitingJob].self, forKey: .waitingJobs) ?? []
+    }
+}
+
+struct HostDiagnosticRead: Decodable, Sendable, Identifiable {
+    let operation: String
+    let source: String
+    let state: String
+    let elapsedMs: Double
+    let budgetMs: Double
+    let startedAt: String?
+    let finishedAt: String
+    let detail: String?
+    var id: String { operation }
+    var complete: Bool { state == "complete" || state == "absent" }
+
+    enum CodingKeys: String, CodingKey {
+        case operation, source, state, detail
+        case elapsedMs = "elapsed_ms", budgetMs = "budget_ms"
+        case startedAt = "started_at", finishedAt = "finished_at"
     }
 }
 
@@ -77,11 +101,18 @@ struct HostGatesDisk: Decodable, Sendable {
     let lowWatermarkGB: Double?
     let targetFreeGB: Double?
     let policyMode: String?
+    let freeBytes: UInt64?
+    let observedAt: String?
+    let readState: String?
+    let pressureSource: String?
+    let pressureUnresolved: Bool?
+    let belowWatermark: Bool?
 
     /// The comparison the host itself makes when it decides whether to claim.
     /// `nil` when either number is missing, which is different from "there is
     /// enough room".
     var isBelowWatermark: Bool? {
+        if let belowWatermark { return belowWatermark }
         guard let freeGB, let lowWatermarkGB else { return nil }
         return freeGB < lowWatermarkGB
     }
@@ -91,6 +122,9 @@ struct HostGatesDisk: Decodable, Sendable {
         case lowWatermarkGB = "low_watermark_gb"
         case targetFreeGB = "target_free_gb"
         case policyMode = "policy_mode"
+        case freeBytes = "free_bytes", observedAt = "observed_at", readState = "read_state"
+        case pressureSource = "pressure_source", pressureUnresolved = "pressure_unresolved"
+        case belowWatermark = "below_watermark"
     }
 
     init(from decoder: Decoder) throws {
@@ -99,6 +133,12 @@ struct HostGatesDisk: Decodable, Sendable {
         lowWatermarkGB = try values.decodeIfPresent(Double.self, forKey: .lowWatermarkGB)
         targetFreeGB = try values.decodeIfPresent(Double.self, forKey: .targetFreeGB)
         policyMode = try values.decodeIfPresent(String.self, forKey: .policyMode)
+        freeBytes = try values.decodeIfPresent(UInt64.self, forKey: .freeBytes)
+        observedAt = try values.decodeIfPresent(String.self, forKey: .observedAt)
+        readState = try values.decodeIfPresent(String.self, forKey: .readState)
+        pressureSource = try values.decodeIfPresent(String.self, forKey: .pressureSource)
+        pressureUnresolved = try values.decodeIfPresent(Bool.self, forKey: .pressureUnresolved)
+        belowWatermark = try values.decodeIfPresent(Bool.self, forKey: .belowWatermark)
     }
 }
 
@@ -114,6 +154,7 @@ struct HostGatesCapacity: Decodable, Sendable {
     let totalRAMGB: Double?
     let freeVRAMGB: Double?
     let totalVRAMGB: Double?
+    let diagnostics: StorageReconciliationJSON?
 
     enum CodingKeys: String, CodingKey {
         case publishedAt = "published_at"
@@ -127,6 +168,7 @@ struct HostGatesCapacity: Decodable, Sendable {
         case totalRAMGB = "total_ram_gb"
         case freeVRAMGB = "free_vram_gb"
         case totalVRAMGB = "total_vram_gb"
+        case diagnostics
     }
 
     init(from decoder: Decoder) throws {
@@ -143,5 +185,6 @@ struct HostGatesCapacity: Decodable, Sendable {
         totalRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalRAMGB)
         freeVRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeVRAMGB)
         totalVRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalVRAMGB)
+        diagnostics = try values.decodeIfPresent(StorageReconciliationJSON.self, forKey: .diagnostics)
     }
 }

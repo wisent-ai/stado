@@ -106,6 +106,10 @@ pub enum DiskScope {
     /// independent commands, so the kept fields are produced by the same
     /// text, in the same order, as under [`DiskScope::Full`].
     GateInputs,
+    /// A current free-space reading, independent of janitor and snapshot reads.
+    UsageOnly,
+    /// Janitor state and snapshots, without repeating the filesystem measurement.
+    StateOnly,
 }
 
 /// `df` — the `usage` field. Read by both scopes.
@@ -238,9 +242,15 @@ pub fn remote_script() -> String {
 /// independent sources, so dropping one cannot alter another's output.
 pub fn remote_script_for(scope: DiskScope) -> String {
     let mut script = String::from("set -u\n");
-    script.push_str(DISK_USAGE_SECTION);
-    script.push_str(MEMORY_SECTION);
-    script.push_str(MEMORY_STATE_SECTION);
+    if scope == DiskScope::UsageOnly {
+        script.push_str(DISK_USAGE_SECTION);
+        return script;
+    }
+    if scope != DiskScope::StateOnly {
+        script.push_str(DISK_USAGE_SECTION);
+        script.push_str(MEMORY_SECTION);
+        script.push_str(MEMORY_STATE_SECTION);
+    }
     script.push_str(CLEANUP_STATE_SECTION);
     if scope == DiskScope::Full {
         script.push_str(CLEANUP_LOCK_SECTION);

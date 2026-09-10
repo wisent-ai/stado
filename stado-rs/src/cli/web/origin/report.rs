@@ -11,10 +11,19 @@ use serde_json::{json, Value};
 
 use super::verdict::{self, VERDICT_SERVING};
 use crate::cli::CmdError;
+use crate::deploy::host_gates::observe;
 use crate::public_origin::{self, PublicOrigin};
 
 pub(crate) async fn list(json_output: bool) -> Result<(), CmdError> {
-    let document = crate::cli::registry::fetch_document().await?;
+    let (document, observation) = observe(
+        "registry",
+        crate::targets::registry_location(),
+        crate::cli::registry::fetch_document(),
+    )
+    .await;
+    let document = document.ok_or_else(|| {
+        CmdError::click(observation.detail.unwrap_or_default()).machine_readable(json_output)
+    })?;
     let origins = public_origin::declarations(&document);
     if json_output {
         let rows: Vec<Value> = origins.iter().map(declaration_row).collect();
@@ -52,7 +61,31 @@ pub(crate) fn declaration_row(origin: &PublicOrigin) -> Value {
 }
 
 pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), CmdError> {
-    let document = crate::cli::registry::fetch_document().await?;
+    let ((document, registry_read), selection) = tokio::join!(
+        observe(
+            "registry",
+            crate::targets::registry_location(),
+            crate::cli::registry::fetch_document()
+        ),
+        verdict::edge_selection(),
+    );
+    let Some(document) = document else {
+        let row = json!({
+            "schema": "stado.public-origin-report.v1", "name": name,
+            "origin": selection.origin, "complete": false,
+            "verdict": "diagnostic-incomplete", "origin_error": registry_read.detail,
+            "observations": [registry_read],
+            "edge_selection": selection.report("unreadable"),
+        });
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&[row])?);
+        } else {
+            print_row(&row);
+        }
+        return Err(CmdError::silent(1));
+    };
+    let registry = crate::targets::load_registry_from_value(&document)
+        .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
     let declared = public_origin::declarations(&document);
     if let Some(wanted) = name {
         if !declared.iter().any(|origin| origin.name == wanted) {
@@ -62,17 +95,20 @@ pub(crate) async fn status(name: Option<&str>, json_output: bool) -> Result<(), 
             )));
         }
     }
-    let selection = verdict::edge_selection().await;
     let mut rows = Vec::new();
     let mut broken = Vec::new();
-    for origin in &declared {
-        if name.is_some_and(|wanted| wanted != origin.name) {
-            continue;
-        }
-        let row = verdict::examine(origin, &selection).await;
+    let examined = futures::future::join_all(
+        declared
+            .iter()
+            .filter(|origin| name.is_none_or(|wanted| wanted == origin.name))
+            .map(|origin| verdict::examine(origin, &selection, &registry)),
+    )
+    .await;
+    for mut row in examined {
+        row["registry_observation"] = json!(registry_read);
         let word = row["verdict"].as_str().unwrap_or("");
         if word != VERDICT_SERVING {
-            broken.push(format!("{}: {word}", origin.name));
+            broken.push(format!("{}: {word}", row["name"].as_str().unwrap_or("")));
         }
         rows.push(row);
     }
@@ -144,8 +180,26 @@ fn print_row(row: &Value) {
         nested("edge_selection", "state"),
         nested("edge_selection", "detail")
     );
-    if let Some(readback) = row["edge_selection"]["readback"]["detail"].as_str() {
-        println!("  read-back:   {readback}");
+    if let Some(diagnosis) = row["edge_selection"]
+        .get("diagnosis")
+        .filter(|value| !value.is_null())
+    {
+        println!(
+            "  origin diagnosis: {}",
+            serde_json::to_string_pretty(diagnosis).expect("JSON value serializes")
+        );
+    }
+    if let Some(reads) = row["observations"].as_array() {
+        for read in reads {
+            println!(
+                "  read {}: {} ({} ms) {} — {}",
+                read["operation"].as_str().unwrap_or(""),
+                read["state"].as_str().unwrap_or(""),
+                read["elapsed_ms"],
+                read["source"].as_str().unwrap_or(""),
+                read["detail"].as_str().unwrap_or("")
+            );
+        }
     }
     if let Some(problem) = row["origin_error"].as_str() {
         println!("  origin:      {problem}");

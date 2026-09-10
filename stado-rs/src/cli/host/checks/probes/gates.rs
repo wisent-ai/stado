@@ -20,14 +20,40 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let gates = crate::deploy::host_gates::read_host_gates(host, &runner)
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+        .map_err(|exc| CmdError::click(exc.to_string()).machine_readable(json))?;
     let report = Value::Object(crate::deploy::host_gates::to_report(&gates));
     if json {
         print_json(&report);
         return claiming_outcome(&gates);
     }
     println!("host:     {}", gates.host);
-    println!("claiming: {}", if gates.claiming { "yes" } else { "no" });
+    println!(
+        "diagnostic: {}",
+        if gates.complete {
+            "complete"
+        } else {
+            "incomplete"
+        }
+    );
+    for read in &gates.observations {
+        println!(
+            "read:     {} {:?}; {} ms; source {}",
+            read.operation, read.state, read.elapsed_ms, read.source
+        );
+        if let Some(detail) = &read.detail {
+            println!("detail:   {detail}");
+        }
+    }
+    println!(
+        "claiming: {}",
+        if !gates.complete {
+            "unknown"
+        } else if gates.claiming {
+            "yes"
+        } else {
+            "no"
+        }
+    );
     if gates.claiming {
         println!("blockers: none");
     } else {
@@ -41,6 +67,10 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         gigabytes(gates.low_watermark_gb.map(|gb| gb as f64)),
         gigabytes(gates.target_free_gb.map(|gb| gb as f64)),
         gates.policy_mode.as_deref().unwrap_or("none declared"),
+    );
+    println!(
+        "pressure evidence: {}",
+        gates.pressure_source.unwrap_or("not observed")
     );
     // Both stores on one line, ahead of the capacity line the first one
     // explains: an agent bound to a device-local store publishes capacity into
@@ -152,7 +182,7 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
 
 /// GiB with one decimal, or a dash for a number this host did not answer with.
 fn gigabytes(value: Option<f64>) -> String {
-    value.map_or_else(|| "-".to_string(), |gb| format!("{gb} GiB"))
+    value.map_or_else(|| "not observed".to_string(), |gb| format!("{gb} GiB"))
 }
 
 /// What the two backend names mean when they do not agree, read off the
@@ -184,6 +214,33 @@ fn store_clause(blockers: &[String]) -> &'static str {
 /// read succeeded either way, and the message names the blockers rather than
 /// repeating that something is wrong.
 fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
+    if !gates.complete {
+        let details = gates
+            .observations
+            .iter()
+            .filter(|read| !read.complete())
+            .map(|read| {
+                format!(
+                    "{}: {}",
+                    read.operation,
+                    read.detail.as_deref().unwrap_or("no result")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let failure = CmdError::click(format!(
+            "{} diagnostic is incomplete: {details}",
+            gates.host
+        ));
+        if gates
+            .observations
+            .iter()
+            .any(|read| read.state == crate::deploy::host_gates::ReadState::TimedOut)
+        {
+            return Err(failure.stating(crate::failure::FailureCode::Timeout));
+        }
+        return Err(failure);
+    }
     if gates.claiming {
         return Ok(());
     }

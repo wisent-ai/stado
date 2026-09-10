@@ -20,13 +20,15 @@ extension HostsView {
         guard let gates = hostGates(host) else {
             return gateFailure(host) == nil ? "Not read" : "Unreadable"
         }
-        if gates.claiming { return "Yes" }
+        guard gates.complete == true, let claiming = gates.claiming else { return "Unknown" }
+        if claiming { return "Yes" }
         return gates.pinnedByDesign && gates.waitingJobs.isEmpty ? "Pinned" : "No"
     }
 
     func claimingTone(_ host: WorkerNode) -> WisentTone {
         guard let gates = hostGates(host) else { return .warning }
-        if gates.claiming { return .success }
+        guard gates.complete == true, let claiming = gates.claiming else { return .warning }
+        if claiming { return .success }
         // The declared pin is neutral until it starves a job addressed to this
         // host; every other refusal is a failure.
         return gates.pinnedByDesign && gates.waitingJobs.isEmpty ? .neutral : .danger
@@ -42,7 +44,10 @@ extension HostsView {
                 ? "stado host gates has not answered for this host"
                 : "Not a declared registry target"
         }
-        if gates.claiming { return "" }
+        guard gates.complete == true, let claiming = gates.claiming else {
+            return "Diagnostic reads are incomplete; inspect their source and failure."
+        }
+        if claiming { return "" }
         if gates.pinnedByDesign {
             return gates.waitingJobs.isEmpty
                 ? "Pinned by the registry: claims only work addressed to this host"
