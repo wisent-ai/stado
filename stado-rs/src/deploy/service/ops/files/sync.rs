@@ -182,7 +182,7 @@ esac
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export GNUPGHOME="$HOME/.gnupg"
 export SKARBIEC_VAULT_FILE="$vault"
-if ! report=$("$HOME/.stado/bin/skarbiec" token-mint "$consumer" \
+if ! report=$("$HOME/.stado/bin/skarbiec" grant issue "$consumer" \
     --capabilities "$caps" \
     --token-file "$token_path" \
     --replace-capabilities \

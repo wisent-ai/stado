@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Skarbiec token-mint with an existing owner-vault field, on its own host."""
+"""Run Skarbiec grant issue with an existing owner-vault field, on its own host."""
 
 import json
 import os
@@ -24,8 +24,8 @@ def invoke(skarbiec, arguments):
 
 def main():
     skarbiec, item, field, *arguments = sys.argv[1:]
-    if not arguments or arguments[0] != "token-mint":
-        raise SystemExit("an existing vault field can only supply token-mint")
+    if arguments[:2] != ["grant", "issue"]:
+        raise SystemExit("an existing vault field can only supply grant issue")
     source = invoke(skarbiec, ["get", item])
     fields = source.get("fields") if isinstance(source, dict) else None
     token = fields.get(field) if isinstance(fields, dict) else None
@@ -40,7 +40,7 @@ def main():
             output.write(token)
         report = invoke(skarbiec, [*arguments, "--token-file", str(token_path)])
     if not isinstance(report, dict) or report.get("ok") is not True:
-        raise SystemExit("skarbiec token-mint did not report a successful registration")
+        raise SystemExit("skarbiec grant issue did not report a successful registration")
     report.pop("token", None)
     print(json.dumps(report))
 

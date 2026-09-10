@@ -50,7 +50,8 @@ pub async fn grant_item_read(
         gnupg_environment.as_str(),
         vault_environment.as_str(),
         skarbiec.as_str(),
-        "token-ensure-read",
+        "grant",
+        "ensure",
         consumer,
         item,
         "--field",
@@ -183,7 +184,8 @@ pub async fn grant_show(
             }
             Some((item, field)) => {
                 let arguments = [
-                    String::from("token-ensure-read"),
+                    String::from("grant"),
+                    String::from("ensure"),
                     consumer.to_string(),
                     item,
                     String::from("--field"),

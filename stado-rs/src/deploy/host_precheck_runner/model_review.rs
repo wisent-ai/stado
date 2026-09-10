@@ -83,14 +83,14 @@ async fn reconcile_brama_introspection_grant(
          fi\n\
          if [ -f \"$token_file\" ]; then\n\
            /bin/chmod 600 \"$token_file\"\n\
-           {} token-mint {} --capabilities {} --replace-capabilities \
+           {} grant issue {} --capabilities {} --replace-capabilities \
              --token-file \"$token_file\" --ttl-seconds {} >/dev/null\n\
          else\n\
            staged=\"$token_file.stado-new.$$\"\n\
            trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM\n\
            umask 077\n\
            /usr/bin/openssl rand -hex 32 > \"$staged\"\n\
-           {} token-mint {} --capabilities {} --replace-capabilities \
+           {} grant issue {} --capabilities {} --replace-capabilities \
              --token-file \"$staged\" --ttl-seconds {} >/dev/null\n\
            /bin/mv -f \"$staged\" \"$token_file\"\n\
            trap - EXIT HUP INT TERM\n\
@@ -247,7 +247,8 @@ pub async fn reconcile_model_review_secret(
             &context.gnupg,
             program_path,
             &context.skarbiec,
-            "token-mint",
+            "grant",
+            "issue",
             &client_id,
             "--capabilities",
             &capability,
