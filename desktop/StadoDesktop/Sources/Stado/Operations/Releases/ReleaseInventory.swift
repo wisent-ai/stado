@@ -38,6 +38,7 @@ struct ReleaseInventory: Decodable, Sendable {
 /// the screen shows the store's truth, not a paraphrase.
 struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
     let runID: String
+    let sourceCommit: String
     let product: String
     let version: String
     let channel: String
@@ -50,6 +51,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case runID = "run_id"
+        case sourceCommit = "source_commit"
         case product
         case version
         case channel
@@ -62,6 +64,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         runID = try values.decodeIfPresent(String.self, forKey: .runID) ?? ""
+        sourceCommit = try values.decodeIfPresent(String.self, forKey: .sourceCommit) ?? ""
         product = try values.decodeIfPresent(String.self, forKey: .product) ?? ""
         version = try values.decodeIfPresent(String.self, forKey: .version) ?? ""
         channel = try values.decodeIfPresent(String.self, forKey: .channel) ?? ""

@@ -17,6 +17,9 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **Recorded release resumption:** `release resume RUN_ID` uses the original stored source and manifest even after the checkout changes. Running jobs keep their IDs and published builds are verified rather than rebuilt. Stado Desktop exposes the same operation from Releases with source identity, command review and complete command output.
+- **Failed delivery retries:** a failed or cancelled queue job now anchors a new idempotent delivery attempt. A stale `submitted` summary is checked against the actual terminal job, so resumption no longer repeatedly returns the same failed job or misses a later delivery's failure.
+
 - **Runner credential and registration:** runner operations resolve the same Skarbiec route that `runner credential` checks. Repository registration uses the existing repository-admin credential without demanding organization runner-group permissions. Installation reconciles changed scope, group and labels, refuses reconfiguration during a job, and requires GitHub to report the named runner online. Linux Rust toolchain setup can write its `.profile` without opening the whole runner home.
 - **Runner desktop and model review:** Desktop's operator API now accepts the runner family, including read-only credential diagnostics. The host inspector displays GitHub registration results and all declared profiles. Brama model-review setup is an explicit `runner model-review TARGET --repository REPO` operation, separate from runner installation.
 - **Working directories:** `workdirs --apply` removes every direct child directory of `~/.stado/work`, including job and run areas, while preserving root-level files and links. Descriptor-relative traversal refuses linked roots and filesystem crossings. JSON and text both fail on unreadable or remaining directories; file lengths and actual free-space readings are reported separately.

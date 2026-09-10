@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use serde_json::Map;
 
 use crate::cli::release_submit::builds::builder::{builder, target_consumer};
-use crate::cli::release_submit::builds::jobs::terminal::{job_output_tail, terminal};
+use crate::cli::release_submit::builds::jobs::terminal::{
+    job_output_tail, read_terminal_job, terminal,
+};
 use crate::cli::release_submit::builds::jobs::{input, secret_refs};
 use crate::cli::release_submit::deliver::{delivery_job_command, DeliveryRequest};
 use crate::cli::release_submit::run::source::{queue_immutable, run_path, run_uri};
@@ -25,14 +27,20 @@ pub(crate) async fn run_deliveries(
 ) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     for d in &m.deliveries {
-        // A failed delivery is re-enqueued the same way a failed platform is
-        // re-built: the record's existence is not the work's existence. Until
-        // 2026-08-19 a resumed run skipped every recorded delivery whatever
-        // its state, so a run whose required deliveries had all failed
-        // marked itself Completed — done without checking the world.
-        if !run.deliveries.contains_key(&d.name)
-            || run.deliveries[&d.name].state == DeliveryRunState::Failed
-        {
+        // The queue, not a stale release summary, decides whether an attempt
+        // finished. A previous coordinator may have stopped before recording
+        // failures from later deliveries.
+        let prior_failure = match run.deliveries.get(&d.name) {
+            Some(current) if current.state != DeliveryRunState::Passed => {
+                read_terminal_job(&store, &current.job_id)
+                    .await?
+                    .filter(|job| {
+                        matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED)
+                    })
+            }
+            _ => None,
+        };
+        if !run.deliveries.contains_key(&d.name) || prior_failure.is_some() {
             let a = &artifacts[&d.platform];
             let request = DeliveryRequest {
                 schema_version: 1,
@@ -93,10 +101,19 @@ pub(crate) async fn run_deliveries(
             } else {
                 target_consumer(&d.target).await?
             };
+            // Match platform retries: each failed job anchors exactly one
+            // replacement, including a resume interrupted before save(run).
+            let submission_run_id = match &prior_failure {
+                Some(job) => stable_run_id(
+                    "release-delivery",
+                    &format!("{}\0{}\0{}", run.run_id, d.name, job.job_id),
+                ),
+                None => stable_run_id("release-delivery", &format!("{}\0{}", run.run_id, d.name)),
+            };
             let options = SubmitOptions {
                 pinned_host: consumer,
                 priority: crate::constants::RELEASE_JOB_PRIORITY,
-                run_id: stable_run_id("release-delivery", &format!("{}\0{}", run.run_id, d.name)),
+                run_id: submission_run_id,
                 output_uri: run_uri(
                     &run.product,
                     &run.run_id,

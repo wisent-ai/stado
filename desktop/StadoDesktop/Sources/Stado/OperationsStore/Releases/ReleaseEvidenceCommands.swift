@@ -11,6 +11,10 @@ extension ReleaseEvidenceStore {
         ["release", "status", "--json"]
     }
 
+    nonisolated static func resumeArguments(runID: String) -> [String] {
+        ["release", "resume", runID, "--json"]
+    }
+
     nonisolated static func doctorArguments(pair: ReleaseInventoryPair) -> [String] {
         ["release", "doctor", pair.product, "--target", pair.target, "--json"]
     }

@@ -17,6 +17,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Keygen(args) => keygen(&args).await,
         ReleaseCommands::PolicyApply(args) => apply_policy(&args).await,
         ReleaseCommands::Submit(args) => crate::cli::release_submit::submit(&args).await,
+        ReleaseCommands::Resume(args) => crate::cli::release_submit::resume(&args).await,
         ReleaseCommands::Redeliver(args) => crate::cli::release_submit::redeliver(&args).await,
         ReleaseCommands::Catalog(args) => crate::cli::release_catalog::dispatch(args).await,
         ReleaseCommands::Worker(args) => crate::cli::release_submit::worker(&args).await,

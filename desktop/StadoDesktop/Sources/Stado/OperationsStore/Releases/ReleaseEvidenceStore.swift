@@ -45,6 +45,7 @@ final class ReleaseEvidenceStore: ObservableObject {
     /// in flight shows where each platform stands; a failed one carries its
     /// recorded failure, so an operator learns why here, not in a terminal.
     @Published private(set) var pipelineRuns: [ReleasePipelineRunRecord] = []
+    @Published private(set) var resumeDetails = ""
 
     private let cli: StadoCLI
     private var refreshGeneration = 0
@@ -226,13 +227,7 @@ final class ReleaseEvidenceStore: ObservableObject {
         }
     }
 
-    /// The one write this screen performs. It refuses without a reason here,
-    /// in the store, rather than only in the dialog: the audit record is the
-    /// point of the command, and a screen is only one of its callers.
-    ///
-    /// Nothing is started, stopped or restarted afterwards. The release agent
-    /// picks the digest up on its next tick, and the store re-reads the host
-    /// so the rollout's state on screen is the host's answer.
+    /// Clear one quarantine entry, retaining the command's result and rereading the host.
     func clearQuarantine(
         pair: ReleaseInventoryPair,
         digest: String,
@@ -260,6 +255,33 @@ final class ReleaseEvidenceStore: ObservableObject {
         } catch {
             mutation = .failed(Self.message(for: error))
         }
+    }
+
+    func resume(_ run: ReleasePipelineRunRecord) async {
+        guard !mutation.isWorking else { return }
+        mutation = .working("Resuming \(run.product) \(run.version)")
+        resumeDetails = ""
+        do {
+            let result = try await cli.jsonResult(
+                ReleasePipelineRunRecord.self,
+                arguments: Self.resumeArguments(runID: run.runID),
+                timeoutSeconds: nil
+            )
+            resumeDetails = String(decoding: result.stdout, as: UTF8.self)
+                + "\n" + String(decoding: result.stderr, as: UTF8.self)
+            mutation = result.exitCode == 0
+                ? .succeeded("Release \(result.value.version): \(result.value.state)")
+                : .failed(result.refusal ?? "Release resume failed")
+        } catch {
+            if case let StadoCLIError.response(_, stdout, stderr, _) = error {
+                resumeDetails = String(decoding: stdout, as: UTF8.self)
+                    + "\n" + String(decoding: stderr, as: UTF8.self)
+            } else {
+                resumeDetails = Self.message(for: error)
+            }
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh()
     }
 
     func clearMutation() {

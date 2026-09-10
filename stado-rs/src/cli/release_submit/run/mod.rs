@@ -3,6 +3,7 @@
 //! reports read back from it.
 
 pub(in crate::cli::release_submit) mod reports;
+pub(in crate::cli::release_submit) mod resume;
 pub(in crate::cli::release_submit) mod source;
 pub(in crate::cli::release_submit) mod state;
 pub(in crate::cli::release_submit) mod submit;

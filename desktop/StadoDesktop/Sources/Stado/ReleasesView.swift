@@ -24,14 +24,13 @@ struct PendingClearance: Identifiable {
 /// the candidate's own stderr off the host, and the quarantined digests, one
 /// of which is usually the reason the rollout will never finish.
 ///
-/// The single write is `release quarantine clear`, and it asks for a typed
-/// reason and shows the exact command first. Clearing a digest starts nothing:
-/// the release agent picks it up on its next tick.
+/// Quarantine clearance and recorded-run resumption show the exact command
+/// before mutation. Resumption keeps the original source and recorded jobs.
 ///
 /// The screen's own parts live in `Releases/`: the frame, the pane heights and
 /// the pipeline runs in `Releases/ReleasesChrome.swift`, the rows in
 /// `Releases/ReleasesTable.swift`, the evidence pane in `Releases/Detail/`,
-/// the one write in `Releases/ReleasesClearDialog.swift` and the reads in
+/// mutation dialogs in `Releases/ReleasesClearDialog.swift` and the reads in
 /// `Releases/ReleasesLoading.swift`. The stored state stays here, because
 /// `@State` belongs to the view rather than to any one of its sections.
 struct ReleasesView: View {
@@ -44,6 +43,11 @@ struct ReleasesView: View {
     @State var clearance: PendingClearance?
     @State var reason = ""
     @State var selectedRunID: String?
+    @State var resumption: ReleasePipelineRunRecord?
+
+    var selectedRun: ReleasePipelineRunRecord? {
+        store.pipelineRuns.first { $0.runID == selectedRunID }
+    }
 
     static let lineChoices = [40, 100, 250, 500, 1_000]
 
@@ -59,6 +63,13 @@ struct ReleasesView: View {
                     isEnabled: !store.isRefreshing
                 ) {
                     Task { await reload() }
+                },
+                WisentAction(
+                    "Resume selected run",
+                    symbol: "play",
+                    isEnabled: selectedRun != nil && !store.mutation.isWorking
+                ) {
+                    resumption = selectedRun
                 }
             ],
             scrolls: false,
@@ -101,6 +112,19 @@ struct ReleasesView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
 
+                if !store.resumeDetails.isEmpty {
+                    DisclosureGroup("Release resume result") {
+                        ScrollView {
+                            Text(store.resumeDetails)
+                                .font(WisentTypeScale.identifierSmall())
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: tableHeight)
+                    }
+                    .padding(.horizontal, WisentDesign.Space.x4)
+                }
+
                 WisentMutationBar(outcome: store.mutation) { store.clearMutation() }
                     .padding(.horizontal, WisentDesign.Space.x4)
                     .padding(.bottom, store.mutation == .idle ? 0 : WisentDesign.Space.x3)
@@ -116,6 +140,9 @@ struct ReleasesView: View {
         }
         .sheet(item: $clearance) { pending in
             clearDialog(pending)
+        }
+        .sheet(item: $resumption) { run in
+            resumeDialog(run)
         }
     }
 }

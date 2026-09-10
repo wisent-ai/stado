@@ -27,6 +27,7 @@ pub use crate::cli::release_submit::builds::claimability::Claimability;
 pub use crate::cli::release_submit::builds::worker::worker;
 pub use crate::cli::release_submit::deliver::redelivery::entry::redeliver;
 pub use crate::cli::release_submit::deliver::worker::delivery_worker;
+pub use crate::cli::release_submit::run::resume::resume;
 pub use crate::cli::release_submit::run::submit::submit;
 
 pub(crate) use crate::cli::release_submit::run::reports::recent_runs;
@@ -39,6 +40,15 @@ pub struct ReleaseSubmitArgs {
     version: String,
     #[arg(long, value_enum, default_value_t = SubmitChannel::Candidate)]
     channel: SubmitChannel,
+    #[arg(long)]
+    json: bool,
+}
+
+/// Resume recorded source and jobs without reading the current checkout.
+#[derive(Args)]
+pub struct ReleaseResumeArgs {
+    /// Full run ID from release status --json.
+    run_id: String,
     #[arg(long)]
     json: bool,
 }

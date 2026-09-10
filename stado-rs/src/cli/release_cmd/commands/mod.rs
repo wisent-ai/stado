@@ -27,6 +27,8 @@ pub enum ReleaseCommands {
     PolicyApply(ReleasePolicyApplyArgs),
     /// Snapshot, qualify, build, sign, publish, deliver, and promote a product.
     Submit(crate::cli::release_submit::ReleaseSubmitArgs),
+    /// Resume a recorded release without replacing its source or running jobs.
+    Resume(crate::cli::release_submit::ReleaseResumeArgs),
     /// Re-run one delivery from an exact completed release without promotion.
     Redeliver(crate::cli::release_submit::ReleaseRedeliverArgs),
     /// Manage the Stado-owned product and source policy catalog.

@@ -21,8 +21,8 @@ use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_control;
 use crate::release_pipeline::{
-    self, CatalogSourceIdentity, PlatformRunState, ProductManifest, ReleaseRun, ReleaseRunState,
-    PRODUCT_MANIFEST,
+    self, CatalogSourceIdentity, PlatformRunState, ProductManifest, ReleasePipelineManifest,
+    ReleaseRun, ReleaseRunState, PRODUCT_MANIFEST,
 };
 
 const OBJECT_API_CATALOG_SERVICE: &str = "stado";
@@ -110,13 +110,12 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         &manifest_sha,
     );
     let source_input_path = run_path(&m.product, &id, "inputs/source.tar.gz");
-    let source_input_uri = run_uri(&m.product, &id, "inputs/source.tar.gz");
     queue_immutable(&source_input_path, &archive).await?;
     let manifest_path = run_path(&m.product, &id, "manifest.json");
     let manifest_uri = run_uri(&m.product, &id, "manifest.json");
     queue_immutable(&manifest_path, &manifest_bytes).await?;
     let now = Utc::now().to_rfc3339();
-    let mut run = load(&id).await?.unwrap_or(ReleaseRun {
+    let run = load(&id).await?.unwrap_or(ReleaseRun {
         schema_version: 1,
         run_id: id.clone(),
         product: m.product.clone(),
@@ -140,6 +139,21 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     {
         return Err(CmdError::click("durable release run identity mismatch"));
     }
+    continue_run(run, m, args.json).await
+}
+
+pub(super) async fn continue_run(
+    mut run: ReleaseRun,
+    m: ReleasePipelineManifest,
+    json: bool,
+) -> Result<(), CmdError> {
+    let version = run.version.clone();
+    let id = run.run_id.clone();
+    let commit = run.source_commit.clone();
+    let source_sha = run.source_sha256.clone();
+    let source_input_uri = run_uri(&run.product, &id, "inputs/source.tar.gz");
+    let manifest_sha = run.manifest_sha256.clone();
+    let manifest_uri = run.manifest_uri.clone();
     run.failure = None;
     save(&mut run).await?;
     let store = match JobStorage::new().await {
@@ -153,7 +167,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         &store,
         &mut run,
         &m,
-        &args.version,
+        &version,
         &id,
         &commit,
         &source_sha,
@@ -248,7 +262,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         run.state = ReleaseRunState::Completed
     }
     save(&mut run).await?;
-    if args.json {
+    if json {
         println!("{}", serde_json::to_string_pretty(&run)?)
     } else {
         println!(

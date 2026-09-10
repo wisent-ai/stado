@@ -1,13 +1,13 @@
 import SwiftUI
 import WisentDesignSystem
 
-/// The screen's single write: clearing one quarantined digest.
+/// Reviewed release mutations, using the same commands shown in each dialog.
 ///
 /// `clearDialog` is internal rather than private only because the sheet it is
 /// presented from sits on `body` in `ReleasesView.swift`: Swift scopes
 /// `private` to one file.
 extension ReleasesView {
-    // MARK: The one write
+    // MARK: Reviewed mutations
 
     /// The reason is not optional and not defaulted. The command records it
     /// beside the state file, and a cleared digest with no recorded reason is
@@ -126,5 +126,31 @@ extension ReleasesView {
         .padding(WisentDesign.Space.x6)
         .frame(width: WisentAppLayout.dialogWidth, alignment: .leading)
         .background(WisentDesign.surface)
+    }
+
+    func resumeDialog(_ run: ReleasePipelineRunRecord) -> some View {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
+            Text("Resume \(run.product) \(run.version)?")
+                .font(WisentTypography.heading(17))
+            Text("Uses the stored source and manifest. Running jobs and published builds are kept; failed jobs receive a new attempt.")
+            Text("Source: \(run.sourceCommit.isEmpty ? "not recorded" : run.sourceCommit)")
+                .font(WisentTypeScale.identifierSmall())
+                .textSelection(.enabled)
+            Text(StadoCLI.commandLine(ReleaseEvidenceStore.resumeArguments(runID: run.runID)))
+                .font(WisentTypeScale.identifierSmall())
+                .textSelection(.enabled)
+            HStack {
+                Spacer()
+                WisentActionButton(action: WisentAction("Cancel") {
+                    resumption = nil
+                })
+                WisentActionButton(action: WisentAction("Resume", kind: .primary) {
+                    resumption = nil
+                    Task { await store.resume(run) }
+                })
+            }
+        }
+        .padding(WisentDesign.Space.x6)
+        .frame(width: WisentAppLayout.dialogWidth, alignment: .leading)
     }
 }
