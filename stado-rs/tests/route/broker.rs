@@ -29,6 +29,11 @@ pub const RESOURCE: &str = "origin:https://route.real.invalid/username";
 const OWNER: &str = "Stado route tests <route-real@example.invalid>";
 const REASON: &str = "stado route area real evidence";
 
+/// Whether this path is a file this machine can run.
+fn executable(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
 /// True when this binary knows the verb group Skarbiec ships today. An older
 /// broker answers `unknown command: route` and exits non-zero.
 fn knows_route_group(binary: &Path) -> bool {
@@ -54,7 +59,8 @@ pub fn current() -> PathBuf {
     binary
 }
 
-/// A real pre-group broker, explicitly supplied or built from its pinned source.
+/// A real pre-group broker: explicitly supplied, or the pinned release this
+/// fleet published before the `route` verb group existed.
 pub fn stale() -> PathBuf {
     let binary = match std::env::var_os("SKARBIEC_STALE_BIN") {
         Some(configured) => PathBuf::from(configured),
