@@ -182,4 +182,3 @@ fn default_adapter_idle_seconds() -> u64 {
 fn default_adapter_connect_seconds() -> u64 {
     10
 }
-

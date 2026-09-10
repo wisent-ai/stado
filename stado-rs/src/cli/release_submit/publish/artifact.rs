@@ -2,7 +2,7 @@
 //! coordinate.
 
 use crate::cli::release_cmd;
-use crate::cli::release_submit::builds::jobs::terminal::{job_output_tail, terminal};
+use crate::cli::release_submit::builds::jobs::terminal::{job_output_tail, terminal_within};
 use crate::cli::CmdError;
 use crate::models::job_state;
 use crate::queue::storage::JobStorage;
@@ -20,7 +20,12 @@ pub(crate) async fn publish(
     private: &[u8],
 ) -> Result<ReleaseArtifactRef, CmdError> {
     let rec = run.platforms[p].clone();
-    let job = terminal(store, &rec.job_id).await?;
+    // A platform the manifest marks optional gets a bounded wait: see
+    // `constants::OPTIONAL_PLATFORM_CLAIM_GRACE_S` for the release this
+    // taught.
+    let grace = (!m.platforms[p].required)
+        .then(|| std::time::Duration::from_secs(crate::constants::OPTIONAL_PLATFORM_CLAIM_GRACE_S));
+    let job = terminal_within(store, &rec.job_id, grace).await?;
     if !matches!(
         job.state.as_str(),
         job_state::COMPLETED | job_state::UPLOADED

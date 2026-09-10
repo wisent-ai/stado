@@ -8,7 +8,8 @@ use flate2::{Compression, GzBuilder};
 
 use crate::cli::CmdError;
 use crate::release_pipeline::{
-    tree_bytes, BuildReceipt, ScratchReceipt, StepStatus, WorkerRequest, SCRATCH_LEAF,
+    tree_bytes, ArtifactReceipt, BuildReceipt, ReceiptInput, ScratchReceipt, StepReceipt,
+    StepStatus, WorkerRequest, SCRATCH_LEAF,
 };
 
 fn collect(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<(), CmdError> {
@@ -147,4 +148,44 @@ pub(super) fn disk_sentence(scratch: &ScratchReceipt) -> String {
         scratch.bytes as f64 / GIB,
         scratch.free_bytes as f64 / GIB
     )
+}
+
+/// The receipt every outcome of one build job writes.
+///
+/// A build ends in one of three places — a quality gate refused, the build
+/// command refused, or an artifact exists — and each of them recorded the
+/// same seventeen fields inline. Three copies of one record is three chances
+/// for one of them to stop matching the other two, which is exactly the
+/// record an operator reads when a release is in doubt.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn receipt(
+    request: &WorkerRequest,
+    job_id: &str,
+    inputs: BTreeMap<String, ReceiptInput>,
+    quality: Vec<StepReceipt>,
+    build: StepReceipt,
+    status: StepStatus,
+    artifact: Option<ArtifactReceipt>,
+    failure: Option<String>,
+) -> BuildReceipt {
+    BuildReceipt {
+        schema_version: 1,
+        run_id: request.run_id.clone(),
+        job_id: job_id.to_string(),
+        product: request.product.clone(),
+        version: request.version.clone(),
+        platform: request.platform.clone(),
+        builder: request.builder.clone(),
+        source_commit: request.source_commit.clone(),
+        source_sha256: request.source_sha256.clone(),
+        manifest_sha256: request.manifest_sha256.clone(),
+        inputs,
+        secret_env: request.secret_env.clone(),
+        quality,
+        build,
+        status,
+        artifact,
+        completed_at: chrono::Utc::now().to_rfc3339(),
+        failure,
+    }
 }

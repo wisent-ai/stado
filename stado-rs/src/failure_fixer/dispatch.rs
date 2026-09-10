@@ -5,8 +5,7 @@ use serde_json::{json, Map, Value};
 
 use super::{
     scan_new_failures, state_load, state_save, truncate_chars, FailureRecord, FixError,
-    ALREADY_DISPATCHED,
-    CLAUDE_NOT_FOUND, DISPATCHED, DISPATCH_FAILED, DRY_RUN, EXHAUSTED,
+    ALREADY_DISPATCHED, CLAUDE_NOT_FOUND, DISPATCHED, DISPATCH_FAILED, DRY_RUN, EXHAUSTED,
 };
 use crate::config;
 use crate::queue::JobStorage;

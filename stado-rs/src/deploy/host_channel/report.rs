@@ -4,8 +4,8 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::deploy::CommandOutput;
 use super::FAILED_STATUS;
+use crate::deploy::CommandOutput;
 use crate::targets::ComputeTarget;
 
 /// The `target` / `ssh` head every report in this family opens with,

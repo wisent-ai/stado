@@ -7,11 +7,11 @@
 
 use std::time::Duration;
 
-use crate::deploy::{ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use super::{
-    remote_timeout, select_connection_with_key,
-    ssh_program_argv, target_is_this_host, UsedConnection,
+    remote_timeout, select_connection_with_key, ssh_program_argv, target_is_this_host,
+    UsedConnection,
 };
+use crate::deploy::{ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 mod remote;
@@ -21,9 +21,7 @@ pub use remote::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, run_command,
 };
-pub use script::{
-    run_script, run_script_with_timeout, run_script_with_timeout_and_connection,
-};
+pub use script::{run_script, run_script_with_timeout, run_script_with_timeout_and_connection};
 
 /// Run one fixed program on a resolved target.
 ///
@@ -138,4 +136,3 @@ pub async fn run_program_with_stdin_and_connection<'a>(
     .map_err(DeployError)?;
     Ok((output, UsedConnection::Ssh(connection)))
 }
-

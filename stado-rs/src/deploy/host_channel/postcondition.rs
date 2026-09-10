@@ -2,9 +2,9 @@
 //! unobserved each mean, and the verdict a caller reads instead of trusting
 //! that a command which exited zero left the host where it said it would.
 
-use crate::deploy::{shlex_quote, CommandOutput, DeployError, Runner};
-use super::run::run_script;
 use super::marker_fields;
+use super::run::run_script;
+use crate::deploy::{shlex_quote, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 // ---------------------------------------------------------------------------

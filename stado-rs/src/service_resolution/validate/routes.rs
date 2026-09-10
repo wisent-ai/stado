@@ -7,8 +7,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use serde_json::Value;
 
-use super::super::{ResolverConfig, ServiceDirectory, ServiceEndpoint, ServiceRoute};
 use super::super::self_reference::socket_of;
+use super::super::{ResolverConfig, ServiceDirectory, ServiceEndpoint, ServiceRoute};
 use super::{target_declares_service, validate_identifier};
 
 pub(super) fn active_profile_host(

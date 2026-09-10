@@ -8,8 +8,8 @@ use crate::models::py_str_repr;
 use crate::queue::JobStorage;
 
 use super::{
-    dispatch_fix, format_fix_prompt_default, scan_new_failures, state_load, truncate_chars,
-    scan_and_dispatch, FixError,
+    dispatch_fix, format_fix_prompt_default, scan_and_dispatch, scan_new_failures, state_load,
+    truncate_chars, FixError,
 };
 
 // ---------------------------------------------------------------------------

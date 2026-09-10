@@ -10,8 +10,7 @@ use serde_json::Value;
 use super::super::{directory, DIRECTORY_KEY};
 use super::routes::{
     active_profile_host, release_controlled_product, validate_endpoint,
-    validate_release_controlled_route,
-    validate_resolver_config,
+    validate_release_controlled_route, validate_resolver_config,
 };
 use super::{target_declares_service, targets, validate_identifier};
 

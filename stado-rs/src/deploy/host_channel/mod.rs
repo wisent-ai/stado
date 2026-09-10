@@ -25,11 +25,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-
-use super::{
-    host_reboot, host_recovery, py_str_repr, shlex_quote, ssh_key,
-    DeployError, Runner,
-};
+use super::{host_reboot, host_recovery, py_str_repr, shlex_quote, ssh_key, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
 /// The `status` value every command in this family reports when the remote
@@ -244,8 +240,8 @@ mod postcondition;
 mod report;
 mod run;
 
-pub use connection::{probe_ssh_connections, select_ssh_connection};
 pub(in crate::deploy::host_channel) use connection::select_connection_with_key;
+pub use connection::{probe_ssh_connections, select_ssh_connection};
 pub use postcondition::{
     postcondition_verdict, run_checked_script, PostCondition, PostConditionVerdict,
     POSTCONDITION_MARKER, POSTCONDITION_MET, POSTCONDITION_UNMET, POSTCONDITION_UNOBSERVED,

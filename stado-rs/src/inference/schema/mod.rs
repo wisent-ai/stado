@@ -11,8 +11,8 @@ mod names;
 mod shapes;
 mod validate;
 
-pub use shapes::{Deployment, Endpoint, Engine, Model, Registry, Resources};
 pub use names::gateway_selector;
+pub use shapes::{Deployment, Endpoint, Engine, Model, Registry, Resources};
 pub use validate::validate;
 
 pub const SECTION: &str = "inference";
@@ -125,4 +125,3 @@ pub fn retire(document: &Value, name: &str) -> Result<Value, String> {
     validate(&next)?;
     Ok(next)
 }
-

@@ -4,8 +4,8 @@
 
 use serde_json::Value;
 
-use crate::deploy::{shlex_quote, CommandOutput, DeployError, Runner};
 use super::run_program;
+use crate::deploy::{shlex_quote, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 pub async fn run_command(

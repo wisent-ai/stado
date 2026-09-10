@@ -2,12 +2,11 @@
 //! every path a registry declares is probed with the same fixed program, and
 //! the first one that answers is the one every later command rides.
 
-use crate::deploy::{py_str_repr, ssh_key, CommandSpec, DeployError, Runner};
 use super::{
-    last_error_line, target_is_this_host, HOST_SESSION,
-    ssh_program_argv, SshConnection, SshConnectionProbe, CONNECTION_PROBE_PROGRAM,
-    CONNECTION_PROBE_TIMEOUT,
+    last_error_line, ssh_program_argv, target_is_this_host, SshConnection, SshConnectionProbe,
+    CONNECTION_PROBE_PROGRAM, CONNECTION_PROBE_TIMEOUT, HOST_SESSION,
 };
+use crate::deploy::{py_str_repr, ssh_key, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 fn declared_connections(target: &ComputeTarget) -> impl Iterator<Item = SshConnection<'_>> {

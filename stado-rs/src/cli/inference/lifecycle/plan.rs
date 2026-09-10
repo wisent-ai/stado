@@ -4,8 +4,7 @@
 use serde_json::{json, Value};
 
 use super::{
-    click, field, mode_only_change, replace, restore_after_failed_apply, succeeded,
-    wait_ready,
+    click, field, mode_only_change, replace, restore_after_failed_apply, succeeded, wait_ready,
     PlanOptions,
 };
 use crate::cli::CmdError;

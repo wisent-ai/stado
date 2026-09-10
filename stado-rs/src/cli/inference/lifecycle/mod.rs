@@ -129,7 +129,10 @@ mod retire;
 pub use plan::{apply, plan};
 pub use retire::{abort, retire, rollback};
 
-pub(super) fn mode_only_change(current: &schema::Deployment, candidate: &schema::Deployment) -> bool {
+pub(super) fn mode_only_change(
+    current: &schema::Deployment,
+    candidate: &schema::Deployment,
+) -> bool {
     current.resources.gpu_mode != candidate.resources.gpu_mode
         && current.name == candidate.name
         && current.target == candidate.target

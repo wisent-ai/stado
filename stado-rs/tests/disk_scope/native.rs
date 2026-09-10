@@ -9,7 +9,7 @@
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The fixed PATH these readers and the binary under test are given.
@@ -92,6 +92,21 @@ pub fn hostname() -> String {
     let hostname = tool("/bin/hostname", &[]).trim().to_lowercase();
     assert!(!hostname.is_empty(), "this host has no hostname");
     hostname
+}
+
+/// The product binary these cases drive: the one this checkout builds, or the
+/// one `STADO_TEST_BINARY` names.
+///
+/// The override exists because "the fix is on main" and "the machine stopped
+/// doing it" are different claims. Pointing this at `~/.stado/bin/stado` runs
+/// the same journeys against the artifact a release actually delivered, which
+/// is the only way to see a delivered binary's own behaviour without touching
+/// the operator's home: every case still runs inside its own tempdir.
+pub fn product_binary() -> PathBuf {
+    match std::env::var_os("STADO_TEST_BINARY") {
+        Some(installed) if !installed.is_empty() => PathBuf::from(installed),
+        _ => PathBuf::from(env!("CARGO_BIN_EXE_stado")),
+    }
 }
 
 /// Run one of the operating system's own read-only tools, or fail the case. A

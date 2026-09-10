@@ -4,12 +4,11 @@
 
 use std::time::Duration;
 
-use crate::deploy::{ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use super::super::{
-    remote_timeout, select_connection_with_key,
-    ssh_script_argv, target_is_this_host,
+    remote_timeout, select_connection_with_key, ssh_script_argv, target_is_this_host,
     UsedConnection,
 };
+use crate::deploy::{ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// Run one fixed script (fed on stdin) on a resolved target.
