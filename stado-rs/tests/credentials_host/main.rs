@@ -20,10 +20,10 @@
 //! and in `refusals.rs`, the refusals that matter, each with its exact
 //! sentence and with the vault left untouched.
 
-#[path = "../support/skarbiec.rs"]
-mod skarbiec;
 mod host;
 mod refusals;
+#[path = "../support/skarbiec.rs"]
+mod skarbiec;
 
 use std::process::Output;
 

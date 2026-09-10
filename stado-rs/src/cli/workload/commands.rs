@@ -77,8 +77,19 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
             target,
             json,
         } => status(&kind_or_id, target.as_deref(), json).await,
-        WorkloadCommands::Attach { kind, target, workspace, resume } => {
-            attach(&kind, target.as_deref(), workspace.as_deref(), resume.as_deref()).await
+        WorkloadCommands::Attach {
+            kind,
+            target,
+            workspace,
+            resume,
+        } => {
+            attach(
+                &kind,
+                target.as_deref(),
+                workspace.as_deref(),
+                resume.as_deref(),
+            )
+            .await
         }
     }
 }
@@ -214,7 +225,12 @@ async fn status(
     }
 }
 
-async fn attach(kind: &str, requested_target: Option<&str>, workspace: Option<&str>, resume: Option<&str>) -> Result<(), CmdError> {
+async fn attach(
+    kind: &str,
+    requested_target: Option<&str>,
+    workspace: Option<&str>,
+    resume: Option<&str>,
+) -> Result<(), CmdError> {
     let declaration = workload(kind)?;
     if !declaration.interactive {
         return Err(CmdError::usage(format!(
@@ -227,7 +243,9 @@ async fn attach(kind: &str, requested_target: Option<&str>, workspace: Option<&s
                 Some(name) => Some(place(declaration, Some(name), None).await?.name),
                 None => None,
             };
-            let workspace = workspace.map(str::to_string).unwrap_or_else(current_workspace);
+            let workspace = workspace
+                .map(str::to_string)
+                .unwrap_or_else(current_workspace);
             connect_jeden(&workspace, target.as_deref(), resume).await
         }
         _ => Err(CmdError::click(format!(

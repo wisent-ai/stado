@@ -20,7 +20,10 @@ impl Drop for Attachment {
         if let Some(pid) = self.0.id() {
             #[cfg(unix)]
             {
-                use nix::{sys::signal::{killpg, Signal}, unistd::Pid};
+                use nix::{
+                    sys::signal::{killpg, Signal},
+                    unistd::Pid,
+                };
                 let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGTERM);
             }
             let _ = self.0.start_kill();
@@ -32,7 +35,10 @@ async fn output(socket: &mut Socket, channel: u8, bytes: &[u8]) -> Result<(), St
     let mut frame = Vec::with_capacity(bytes.len() + 1);
     frame.push(channel);
     frame.extend_from_slice(bytes);
-    socket.send(Message::binary(frame)).await.map_err(|error| error.to_string())
+    socket
+        .send(Message::binary(frame))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub(super) async fn run(socket: &mut Socket, arguments: &[String]) -> Result<(), String> {
@@ -43,21 +49,48 @@ pub(super) async fn run(socket: &mut Socket, arguments: &[String]) -> Result<(),
         use std::os::unix::process::CommandExt;
         command.as_std_mut().process_group(0);
     }
-    let mut attachment = Attachment(command.spawn().map_err(|error| format!("could not start workload: {error}"))?);
-    let mut stdin = Some(attachment.0.stdin.take().ok_or("workload stdin was not captured")?);
-    let mut stdout = attachment.0.stdout.take().ok_or("workload stdout was not captured")?;
-    let mut stderr = attachment.0.stderr.take().ok_or("workload stderr was not captured")?;
+    let mut attachment = Attachment(
+        command
+            .spawn()
+            .map_err(|error| format!("could not start workload: {error}"))?,
+    );
+    let mut stdin = Some(
+        attachment
+            .0
+            .stdin
+            .take()
+            .ok_or("workload stdin was not captured")?,
+    );
+    let mut stdout = attachment
+        .0
+        .stdout
+        .take()
+        .ok_or("workload stdout was not captured")?;
+    let mut stderr = attachment
+        .0
+        .stderr
+        .take()
+        .ok_or("workload stderr was not captured")?;
     let mut out = [0; CHUNK_BYTES];
     let mut err = [0; CHUNK_BYTES];
     let mut stdout_open = true;
     let mut stderr_open = true;
     let mut status: Option<std::process::ExitStatus> = None;
-    socket.send(Message::text(json!({"type": "attached", "protocol": "stado.workload.v1"}).to_string()))
-        .await.map_err(|error| error.to_string())?;
+    socket
+        .send(Message::text(
+            json!({"type": "attached", "protocol": "stado.workload.v1"}).to_string(),
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
     loop {
         if let Some(status) = status.filter(|_| !stdout_open && !stderr_open) {
-            socket.send(Message::text(json!({"type": "exit", "code": status.code(), "ok": status.success()}).to_string()))
-                .await.map_err(|error| error.to_string())?;
+            socket
+                .send(Message::text(
+                    json!({"type": "exit", "code": status.code(), "ok": status.success()})
+                        .to_string(),
+                ))
+                .await
+                .map_err(|error| error.to_string())?;
             return Ok(());
         }
         tokio::select! {

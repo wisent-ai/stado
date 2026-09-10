@@ -94,7 +94,10 @@ impl Area {
             next_command: Cell::new(0),
         };
         let identity = area.stado(&["--version"]);
-        assert!(identity.status.success(), "could not read the tested Stado identity");
+        assert!(
+            identity.status.success(),
+            "could not read the tested Stado identity"
+        );
         eprintln!("workload evidence: {}", area.root.display());
         area
     }
@@ -124,15 +127,18 @@ impl Area {
             serde_json::to_vec_pretty(&json!({
                 "binary": env!("CARGO_BIN_EXE_stado"),
                 "args": args,
-            })).unwrap(),
-        ).expect("record the real command");
+            }))
+            .unwrap(),
+        )
+        .expect("record the real command");
         let output = self.command(args).output().expect("the stado binary runs");
         fs::write(directory.join("stdout"), &output.stdout).expect("record stdout");
         fs::write(directory.join("stderr"), &output.stderr).expect("record stderr");
         fs::write(
             directory.join("result.json"),
             serde_json::to_vec(&json!({"exit_code": output.status.code()})).unwrap(),
-        ).expect("record the exit status");
+        )
+        .expect("record the exit status");
         output
     }
 
@@ -198,8 +204,10 @@ impl Area {
                 "binary": env!("CARGO_BIN_EXE_stado"),
                 "args": ["agent", "--auto", "--idle-shutdown"],
                 "exit_code": status.code(),
-            })).unwrap(),
-        ).expect("record the agent exit status");
+            }))
+            .unwrap(),
+        )
+        .expect("record the agent exit status");
         assert!(status.success(), "the local agent exited badly:\n{log}");
         log
     }

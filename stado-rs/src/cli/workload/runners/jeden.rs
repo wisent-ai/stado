@@ -113,9 +113,15 @@ printf ready
             }
             Ok(output) => {
                 let detail = output.detail();
-                refusals.push(format!("{}: {}", target.name, if detail.trim().is_empty() {
-                    "the runtime preflight returned no readiness or failure detail"
-                } else { detail.trim() }));
+                refusals.push(format!(
+                    "{}: {}",
+                    target.name,
+                    if detail.trim().is_empty() {
+                        "the runtime preflight returned no readiness or failure detail"
+                    } else {
+                        detail.trim()
+                    }
+                ));
             }
             Err(error) => refusals.push(format!("{}: {error}", target.name)),
         }
@@ -216,8 +222,13 @@ async fn attach_jeden(
     let status = if host_channel::target_is_this_host(&target) {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let path = std::env::join_paths(
-            std::iter::once(expand_home(".stado/bin")?).chain(std::env::split_paths(&inherited))
-        ).map_err(|error| CmdError::click(format!("cannot construct the managed runtime PATH: {error}")))?;
+            std::iter::once(expand_home(".stado/bin")?).chain(std::env::split_paths(&inherited)),
+        )
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot construct the managed runtime PATH: {error}"
+            ))
+        })?;
         tokio::process::Command::new(expand_home(MANAGED_JEDEN)?)
             .arg("rpc")
             .env("PATH", path)
