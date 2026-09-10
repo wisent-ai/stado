@@ -48,6 +48,39 @@ final class CleanerScreenTests: XCTestCase {
         XCTAssertNil(store.listing, "an error on a new host must not show the previous host's data")
         XCTAssertNotNil(store.problem)
     }
+
+    func testManagedFileActionDeletesOnlyItsManagedFileAndRefusesLinkedParents() async throws {
+        let host = try NativeSpaceHost()
+        defer { host.stop() }
+        try await host.waitUntilListening()
+        let fleet = FleetControlStore()
+        fleet.configureEndpoint(host.endpoint)
+        let store = NativeCapabilityStore()
+        let operation = try XCTUnwrap(NativeSpaceOperations.all.first { $0.id == "remove-file" })
+        let managed = host.home.appendingPathComponent(".stado/work/native-file-test")
+        try FileManager.default.createDirectory(at: managed, withIntermediateDirectories: true)
+        let ordinary = managed.appendingPathComponent("ordinary.txt")
+        try Data("ordinary file".utf8).write(to: ordinary)
+        let remove = try operation.request(host: host.name, values: ["path": ordinary.path], content: "")
+        let removed = await store.run(remove, fleet: fleet, expectedSource: fleet.requestGeneration)
+        try host.retain(store.receipt, named: "managed-remove.json")
+        XCTAssertTrue(removed, store.problem ?? "remove did not complete")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ordinary.path))
+
+        let outside = host.home.appendingPathComponent("outside-managed-areas")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let protected = outside.appendingPathComponent("protected.txt")
+        let original = Data("must remain outside the managed area".utf8)
+        try original.write(to: protected)
+        let linked = managed.appendingPathComponent("linked-parent")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: outside)
+        let refusedRequest = try operation.request(host: host.name,
+            values: ["path": linked.appendingPathComponent("protected.txt").path], content: "")
+        let accepted = await store.run(refusedRequest, fleet: fleet, expectedSource: fleet.requestGeneration)
+        try host.retain(store.receipt, named: "linked-parent-refusal.json")
+        XCTAssertFalse(accepted, "the managed file action followed a parent link outside its scope")
+        XCTAssertEqual(try Data(contentsOf: protected), original)
+    }
 }
 
 /// An actual Stado listener and installed binary, with a separate home and
