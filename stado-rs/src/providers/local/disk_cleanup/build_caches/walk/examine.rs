@@ -60,6 +60,12 @@ impl<'a> Walk<'a> {
                 continue;
             }
             let absolute = root.join(&relative);
+            // Before the descriptor is opened: on macOS, opening it is what
+            // raises the consent dialog this cleaner has no business raising.
+            if self.privacy.iter().any(|item| absolute.starts_with(item)) {
+                report.skip_builds("privacy_protected", 1);
+                continue;
+            }
             if self.reserved.iter().any(|item| absolute.starts_with(item)) {
                 report.skip_builds("reserved_or_hidden", 1);
                 continue;
@@ -99,7 +105,11 @@ impl<'a> Walk<'a> {
                 report.skip_builds("unsafe_owner_or_device", 1);
                 continue;
             }
-            let guards_reserved = self.reserved.iter().any(|item| item.starts_with(&absolute));
+            let guards_reserved = self
+                .reserved
+                .iter()
+                .chain(self.privacy.iter())
+                .any(|item| item.starts_with(&absolute));
             let tag = match self.read_tag(child.as_raw_fd()) {
                 Ok(tag) => tag,
                 Err(_) => {

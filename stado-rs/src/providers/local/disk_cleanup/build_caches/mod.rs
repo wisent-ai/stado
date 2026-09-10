@@ -59,7 +59,7 @@ use super::{euid, ifmt, CleanupReport, JanitorError};
 use crate::targets::DiskCleanupPolicy;
 
 use cursor::CursorPath;
-use reserved::reserved_roots;
+use reserved::{privacy_protected_roots, reserved_roots};
 use walk::Walk;
 
 pub(super) use cursor::BuildCachesCursor;
@@ -162,6 +162,7 @@ pub(super) fn scan_build_caches(
             remaining_scan,
             root_dev: root_info.st_dev,
             reserved: reserved_roots(home, policy),
+            privacy: privacy_protected_roots(home),
             deleted_bytes: 0,
             frontier: cursor.frontier,
             next_child: cursor.next_child.map(PathBuf::from),
