@@ -189,3 +189,71 @@ fn a_host_outside_the_registry_has_no_beacon_to_read() {
         stderr(&out)
     );
 }
+
+/// The init system's own always-loaded system-domain unit on this platform.
+/// Read-only, and present on every host this suite runs on.
+fn system_unit() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "com.apple.opendirectoryd"
+    } else {
+        "systemd-journald.service"
+    }
+}
+
+/// `stado host collect-beacon` builds the document this host publishes about
+/// itself, and the two facts it must never merge stay apart: a unit the init
+/// system holds is `active`, a unit nothing holds is `inactive`.
+///
+/// The collector this replaced read each label with
+/// `launchctl print … 2>/dev/null || true` and published `inactive` whenever
+/// the read produced nothing — including when the host refused the read, which
+/// is every system-domain daemon on a Mac without passwordless sudo. The
+/// gateway on charless-mac-mini was published as not loaded for weeks that
+/// way, and `service status`, `registry doctor` and Stado Desktop repeated it.
+#[test]
+fn a_collected_beacon_names_what_the_init_system_holds_and_what_it_does_not() {
+    let fleet = Fleet::new();
+    let absent = format!("com.wisent.beacon-area.absent.{}", std::process::id());
+    fleet.declare_units(&[system_unit(), &absent]);
+
+    let collected = fleet.run(&["host", "collect-beacon"]);
+    assert!(collected.status.success(), "{}", said(&collected));
+    let document: Value = serde_json::from_str(&stdout(&collected)).unwrap_or_else(|error| {
+        panic!("the collection is not JSON: {error}\n{}", said(&collected))
+    });
+
+    let held = &document["units"][system_unit()];
+    assert_eq!(held["state"], "active", "{document}");
+    assert_eq!(held["domain"], "system", "{document}");
+    assert_eq!(
+        document["units"][&absent]["state"], "inactive",
+        "{document}"
+    );
+    assert!(
+        document["units"][&absent]["detail"].is_null(),
+        "an absent unit was given a read failure: {document}"
+    );
+    assert!(
+        document["disk_avail_gb"].as_i64().is_some_and(|gb| gb > 0),
+        "the collection measured no free space: {document}"
+    );
+
+    // The same collection, published through the real route, stored by the
+    // real listener, and read back through the product's own reader.
+    let published = fleet.run(&["host", "collect-beacon", "--publish"]);
+    assert!(published.status.success(), "{}", said(&published));
+    let stored = fleet
+        .stored(&fleet.host)
+        .expect("the listener stored the collected beacon");
+    assert_eq!(stored["units"][system_unit()]["state"], "active");
+    assert_eq!(stored["units"][&absent]["state"], "inactive");
+
+    let read_back = fleet.run(&["host", "health", TARGET, "--json"]);
+    assert!(read_back.status.success(), "{}", said(&read_back));
+    let report: Value = serde_json::from_str(&stdout(&read_back)).expect("the report is JSON");
+    assert_eq!(
+        report["beacon"]["units"][system_unit()]["state"],
+        "active",
+        "{report}"
+    );
+}

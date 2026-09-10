@@ -182,3 +182,95 @@ fn the_declared_environment_reaches_the_unit_and_reads_back_with_credentials_red
     assert_eq!(record["env"][MARKER], MARKER_VALUE);
     assert_eq!(record["env"][SECRET], SECRET_VALUE);
 }
+
+/// The init system's own always-loaded unit, in the domain only the system
+/// manager holds: macOS keeps `opendirectoryd` in `system`, systemd keeps the
+/// journal there. Both are readable without privilege.
+fn system_unit() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "com.apple.opendirectoryd"
+    } else {
+        "systemd-journald.service"
+    }
+}
+
+/// Reading a domain needs no privilege, and asking for one turned a readable
+/// daemon into an unreadable one.
+///
+/// Before this case the program read the system domain through
+/// `sudo -n launchctl print`. On a host whose channel has no passwordless
+/// sudo — every Mac in this fleet — that read came back
+/// "sudo: a password is required", so `stado service label-print` answered
+/// `unavailable` for a daemon launchd was holding, and the beacon collector
+/// built on the same idea published `inactive` for it.
+#[test]
+fn a_system_domain_unit_is_read_without_borrowing_root() {
+    let fleet = Fleet::lifecycle();
+    let label = system_unit();
+    let out = fleet.stado(&[
+        "service",
+        "label-print",
+        label,
+        "--host",
+        &fleet.target,
+        "--json",
+    ]);
+    assert!(
+        out.status.success(),
+        "label-print could not read {label}: {}",
+        said(&out)
+    );
+    let report = json_stdout(&out);
+    assert_eq!(report["read_status"], "loaded", "{}", said(&out));
+    assert_eq!(report["domain"], "system", "{}", said(&out));
+    assert!(
+        report["program"].as_str().is_some_and(|p| !p.is_empty()),
+        "the read produced no program for a loaded daemon: {}",
+        said(&out)
+    );
+    for failure in report["read_failures"].as_array().into_iter().flatten() {
+        assert_ne!(
+            failure["kind"],
+            "permission_refused",
+            "a domain read was refused for want of privilege: {}",
+            said(&out)
+        );
+    }
+}
+
+/// A unit no init system holds is absent, and absence is not a refusal.
+#[test]
+fn a_unit_no_init_system_holds_is_absent_and_says_so() {
+    let fleet = Fleet::lifecycle();
+    let label = format!("com.wisent.service-area.absent.{}", std::process::id());
+    let out = fleet.stado(&[
+        "service",
+        "label-print",
+        &label,
+        "--host",
+        &fleet.target,
+        "--json",
+    ]);
+    assert!(
+        !out.status.success(),
+        "label-print claimed to find {label}: {}",
+        said(&out)
+    );
+    let report = json_stdout(&out);
+    assert_eq!(report["read_status"], "not_loaded", "{}", said(&out));
+    assert_eq!(
+        report["read_failures"].as_array().map(Vec::len),
+        Some(0),
+        "an absent unit was reported with a failed read: {}",
+        said(&out)
+    );
+    let spoken = said(&out);
+    assert!(
+        spoken.contains(&format!("{label} is not loaded")),
+        "the refusal did not say the unit is absent: {spoken}"
+    );
+    assert!(
+        !spoken.contains("cannot tell whether"),
+        "an absent unit was reported as unreadable: {spoken}"
+    );
+}

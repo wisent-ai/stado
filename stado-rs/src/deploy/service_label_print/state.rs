@@ -6,6 +6,19 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+/// Why a domain read produced no answer: the host refused it, or it failed.
+///
+/// The distinction is the whole point of the type. A refused read and an
+/// absent unit look identical in a collector that drops stderr, and the
+/// beacon that did exactly that published `inactive` for a loaded daemon.
+pub const READ_REFUSED: &str = "permission_refused";
+/// A read that reached the init system and failed for any other reason.
+pub const READ_FAILED: &str = "read_failed";
+
+fn read_failed() -> String {
+    READ_FAILED.to_string()
+}
+
 /// A domain whose init-system state could not be read. This is distinct from
 /// an authoritative answer that the named job is absent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,6 +26,18 @@ pub struct LabelReadFailure {
     pub domain: String,
     pub exit_code: i32,
     pub detail: String,
+    /// [`READ_REFUSED`] when the host refused the read for want of privilege,
+    /// [`READ_FAILED`] otherwise. Older reports carried no kind and are read
+    /// as plain failures.
+    #[serde(default = "read_failed")]
+    pub kind: String,
+}
+
+impl LabelReadFailure {
+    /// Was this read refused rather than answered?
+    pub fn refused(&self) -> bool {
+        self.kind == READ_REFUSED
+    }
 }
 
 /// What an init system holds under one exact service identity.
@@ -73,6 +98,10 @@ impl LabelState {
     }
 
     /// Whether the requested init-system domains were read conclusively.
+    ///
+    /// `not_loaded` is only ever said when every requested domain answered:
+    /// a domain that refused the read leaves [`READ_REFUSED`] here instead,
+    /// because "you may not look" is not "there is nothing there".
     pub fn read_status(&self) -> &'static str {
         if self.unsupported.is_some() {
             "unsupported"
@@ -80,9 +109,17 @@ impl LabelState {
             "loaded"
         } else if self.read_failures.is_empty() {
             "not_loaded"
+        } else if self.read_failures.iter().all(LabelReadFailure::refused) {
+            READ_REFUSED
         } else {
             "unavailable"
         }
+    }
+
+    /// Whether any domain refused its read, whatever else was found. A found
+    /// job beside a refused domain is still an incomplete answer.
+    pub fn refused_read(&self) -> bool {
+        self.read_failures.iter().any(LabelReadFailure::refused)
     }
 
     /// Render the bounded domain failures for a CLI or higher-level refusal.
@@ -94,8 +131,13 @@ impl LabelState {
             self.read_failures
                 .iter()
                 .map(|failure| {
+                    let outcome = if failure.refused() {
+                        "refused the read, exit"
+                    } else {
+                        "exited"
+                    };
                     format!(
-                        "{} exited {}: {}",
+                        "{} {outcome} {}: {}",
                         failure.domain, failure.exit_code, failure.detail
                     )
                 })

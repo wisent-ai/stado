@@ -28,20 +28,17 @@ pub(crate) async fn label_print(
         return Ok(());
     }
     if !state.loaded() {
-        if !state.read_failures.is_empty() {
-            let detail = state
-                .read_failures
-                .iter()
-                .map(|failure| {
-                    format!(
-                        "{} exited {}: {}",
-                        failure.domain, failure.exit_code, failure.detail
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
+        if let Some(detail) = state.read_failure_detail() {
+            // A domain that refused the read is not a domain that answered.
+            // The two sentences are different because the operator's next
+            // move is: gain the privilege, or accept that the unit is gone.
+            let opening = if state.refused_read() {
+                "cannot tell whether"
+            } else {
+                "could not determine whether"
+            };
             return Err(CmdError::click(format!(
-                "{}: could not determine whether {label} is loaded: {detail}",
+                "{}: {opening} {label} is loaded: {detail}",
                 state.host
             )));
         }
@@ -85,8 +82,13 @@ pub(crate) async fn label_print(
         vec!["program".to_string(), dash(state.runs().unwrap_or(""))],
     ];
     for failure in &state.read_failures {
+        let outcome = if failure.refused() {
+            "read refused"
+        } else {
+            "read failure"
+        };
         rows.push(vec![
-            format!("{} read failure", failure.domain),
+            format!("{} {outcome}", failure.domain),
             format!("exit {}: {}", failure.exit_code, failure.detail),
         ]);
     }

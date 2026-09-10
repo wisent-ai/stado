@@ -1,3 +1,7 @@
+mod collect;
+
+pub use collect::collect_beacon;
+
 use std::io::Read;
 
 use serde_json::Value;
@@ -43,7 +47,7 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
             "host beacon must contain between one and 65535 bytes",
         ));
     }
-    let mut document: Value = serde_json::from_slice(&bytes)
+    let document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CmdError::click(format!("host beacon is not valid JSON: {error}")))?;
     let host = document
         .as_object()
@@ -67,6 +71,30 @@ pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
         ));
     }
 
+    publish_document(document, print).await
+}
+
+/// The beacon slug for a host name: its leading label, lowercased. One
+/// spelling, used by the collector, the publisher and every reader.
+pub(super) fn beacon_slug(hostname: &str) -> String {
+    hostname
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+/// Publish one validated beacon document, or print it and publish nothing.
+///
+/// Shared by `publish-beacon`, which takes a document a caller collected,
+/// and `collect-beacon`, which builds this host's document itself. The
+/// local-only `link` block is merged here so both routes carry it.
+pub(super) async fn publish_document(mut document: Value, print: bool) -> Result<(), CmdError> {
+    let host = document
+        .get("host")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     if beacon_is_this_host(&host) {
         let runner = crate::deploy::production_runner();
         refresh_local_unit_lifecycle(&mut document, &runner).await;

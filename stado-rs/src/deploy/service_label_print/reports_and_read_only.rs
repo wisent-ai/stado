@@ -56,12 +56,14 @@ mod tests {
 
     #[test]
     fn the_remote_program_asks_only_for_named_scalars() {
-        assert!(LABEL_PRINT_SCRIPT.contains("key == \"pid\""));
+        let program = super::script::label_print_script("'x'", "'p'", "any");
+        assert!(program.contains("key == \"pid\""));
         // The reader is launchctl and the only verb it is given is `print`.
-        // The path is chosen per domain into `$launch`, so the program never
-        // spells the binary and the verb next to each other.
-        assert!(LABEL_PRINT_SCRIPT.contains("/bin/launchctl"));
-        assert!(LABEL_PRINT_SCRIPT.contains("$launch print"));
+        assert!(program.contains("/bin/launchctl print"));
+        // Reading a domain needs no privilege, and this program asks for
+        // none: a read that borrows root cannot happen on a host whose
+        // channel has no root, and it reported absence when it was refused.
+        assert!(!program.contains("sudo"));
         // Read-only: nothing in this program may act on the job.
         for verb in [
             "bootout",
@@ -71,8 +73,28 @@ mod tests {
             "unload",
             "load",
         ] {
-            assert!(!LABEL_PRINT_SCRIPT.contains(verb), "{verb} must not appear");
+            assert!(!program.contains(verb), "{verb} must not appear");
         }
+    }
+
+    #[test]
+    fn a_refused_domain_is_not_an_absent_job() {
+        let refused = "STADO_LABEL_READ_REFUSED\tsystem\t1\tsudo: a password is required\n\
+             STADO_LABEL_DONE\tno\n";
+        let state = parse_label_print("mini", "x", refused);
+        assert!(!state.loaded());
+        assert_eq!(state.read_status(), "permission_refused");
+        assert!(state.refused_read());
+        assert_eq!(
+            state.read_failure_detail().as_deref(),
+            Some("system refused the read, exit 1: sudo: a password is required")
+        );
+
+        let failed = "STADO_LABEL_READ_FAILURE\tsystem\t1\tlaunchctl print failed without detail\n\
+             STADO_LABEL_DONE\tno\n";
+        let state = parse_label_print("mini", "x", failed);
+        assert_eq!(state.read_status(), "unavailable");
+        assert!(!state.refused_read());
     }
 
     #[test]

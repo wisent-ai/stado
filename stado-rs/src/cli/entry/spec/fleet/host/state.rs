@@ -45,6 +45,23 @@ pub(crate) enum HostStateCommands {
     /// nothing at all, which is worse than reporting the operator's own list.
     #[command(name = "beacon-units")]
     BeaconUnits,
+    /// Collect THIS host's health beacon from the registry's declarations and
+    /// the init system's own answers.
+    ///
+    /// One unit per identity the registry declares here, with the state
+    /// launchd or systemd reports for it: `active`, `failed`, `inactive` when
+    /// every domain answered that nothing is there, and `unreadable` with the
+    /// cause when a domain refused the read or the read failed. A refused
+    /// read is never published as `inactive` — the collector that did that
+    /// published a loaded gateway as not loaded.
+    ///
+    /// Prints the document and publishes nothing unless `--publish` is given.
+    #[command(name = "collect-beacon")]
+    CollectBeacon {
+        /// Publish the collected document through the scoped health API.
+        #[arg(long)]
+        publish: bool,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.

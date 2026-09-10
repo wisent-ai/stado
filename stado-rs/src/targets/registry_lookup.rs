@@ -117,27 +117,37 @@ impl Registry {
     /// SSH connection path are identities. Ambiguous registry data is rejected
     /// rather than allowing target order to decide which configuration a
     /// host receives.
+    ///
+    /// The mDNS suffix is not part of an identity. A Mac's kernel answers
+    /// `mini.local` while the registry declares `mini`, and a lookup that
+    /// compared the two spellings found nothing: `stado host beacon-units`
+    /// then printed no units and `host collect-beacon` had nothing to collect,
+    /// on a host whose services were declared all along. The collector script
+    /// carried its own matcher for exactly this reason, and a second matcher
+    /// is how the two answers drift apart.
     pub fn lookup_self(&self, hostname: &str) -> Result<Option<&ComputeTarget>, RegistryError> {
         let identity = normalize_hostname(hostname);
         if identity.is_empty() {
             return Ok(None);
         }
+        let stem = |value: &str| value.trim_end_matches(".local").to_string();
+        let wanted = stem(&identity);
         let mut matches: Vec<&ComputeTarget> = Vec::new();
         for target in &self.targets {
             let mut identities: HashSet<String> = HashSet::new();
-            identities.insert(normalize_hostname(&target.name));
+            identities.insert(stem(&normalize_hostname(&target.name)));
             identities.extend(
                 target
                     .hostnames
                     .iter()
-                    .map(|alias| normalize_hostname(alias)),
+                    .map(|alias| stem(&normalize_hostname(alias))),
             );
             identities.extend(
                 target
                     .ssh_connections()
-                    .map(|(_, destination)| ssh_hostname(destination)),
+                    .map(|(_, destination)| stem(&ssh_hostname(destination))),
             );
-            if identities.contains(&identity) {
+            if identities.contains(&wanted) {
                 matches.push(target);
             }
         }

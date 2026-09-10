@@ -87,7 +87,15 @@ impl Fleet {
             .prefix("stado-service-real-")
             .tempdir()
             .expect("an isolated fleet root");
-        let root = dir.path().to_path_buf();
+        // macOS hands out `/var/folders/...` tempdirs and `/var` is a symlink
+        // to `/private/var`. The product's own safe delete refuses to walk a
+        // parent that is a link, so `service remove` failed here on a path
+        // shape no host ever has. Resolve the root once, and every case runs
+        // against the same real directory the product would be given.
+        let root = dir
+            .path()
+            .canonicalize()
+            .expect("resolve the isolated fleet root");
         let fleet = Self {
             home: root.join("home"),
             storage: root.join("storage"),

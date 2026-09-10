@@ -37,6 +37,11 @@ pub const STATE_MISSING: &str = "missing";
 /// Nothing is known: the host has published no beacon, or the beacon
 /// carries the unit with an empty state.
 pub const STATE_UNKNOWN: &str = "unknown";
+/// The host could not read this unit's state: a domain refused the read, or
+/// the read failed. Never folded into [`STATE_INACTIVE`] — the collector
+/// that did exactly that published a loaded gateway as not loaded, and
+/// `service status`, `registry doctor` and Stado Desktop all repeated it.
+pub const STATE_UNREADABLE: &str = "unreadable";
 
 /// The `kind` slot of the label [`plan_deploy`] mints, so a deployed
 /// service can never collide with the agent / coordinator / disk-cleanup /

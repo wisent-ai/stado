@@ -115,6 +115,22 @@ impl Fleet {
         self.run_with_token(arguments, &self.publisher_token)
     }
 
+    /// Declare these unit identities for this machine in the isolated
+    /// registry, so a collection has something of this host's own to read.
+    pub fn declare_units(&self, labels: &[&str]) {
+        let path = self.storage.join("registry.json");
+        let mut document: Value =
+            serde_json::from_slice(&fs::read(&path).expect("read the isolated registry"))
+                .expect("the isolated registry is JSON");
+        document["targets"][0]["services"] = Value::Array(
+            labels
+                .iter()
+                .map(|label| json!({"name": label, "label": label, "kind": "launchd"}))
+                .collect(),
+        );
+        fs::write(&path, serde_json::to_vec_pretty(&document).unwrap())
+            .expect("declare the units under test");
+    }
     /// The same invocation with a different owner-only bearer file, for the
     /// case where the route refuses what it is given.
     pub fn run_with_token(&self, arguments: &[&str], token_file: &Path) -> Output {

@@ -60,16 +60,27 @@ fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, 
             "declared here; the latest beacon does not report it".to_string(),
         );
     };
-    // The beacon writer emits {"state": ...} per unit; older beacons wrote
-    // a bare string. Both shapes are in flight, so read both.
-    let state = match entry {
-        Value::String(state) => state.clone(),
-        Value::Object(fields) => fields
-            .get("state")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        _ => String::new(),
+    // The beacon writer emits {"state": ..., "detail": ...} per unit; older
+    // beacons wrote a bare string. Both shapes are in flight, so read both.
+    // The detail is why the state is what it is — for an `unreadable` unit
+    // it is the only thing that says whether the host refused the read or
+    // the read itself failed, and dropping it here would leave the operator
+    // with a word and no cause.
+    let (state, detail) = match entry {
+        Value::String(state) => (state.clone(), String::new()),
+        Value::Object(fields) => (
+            fields
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            fields
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        _ => (String::new(), String::new()),
     };
     if state.is_empty() {
         return (
@@ -77,7 +88,7 @@ fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, 
             "beacon reports the unit with no state".to_string(),
         );
     }
-    (state, String::new())
+    (state, detail)
 }
 
 /// A beacon older than the fleet's one silence threshold cannot describe the

@@ -19,6 +19,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             host::publish_beacon(&source, print).await
         }
         HostStateCommands::BeaconUnits => host::beacon_units().await,
+        HostStateCommands::CollectBeacon { publish } => host::collect_beacon(publish).await,
         HostStateCommands::Reboot { target } => host::reboot(&target).await,
         HostStateCommands::User(HostUserCommands::Create {
             username,

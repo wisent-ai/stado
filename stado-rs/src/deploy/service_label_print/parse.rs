@@ -1,7 +1,7 @@
 //! The marker stream a host sends back, turned into a state. A partial
 //! process-identity tuple is dropped rather than reported piecewise.
 
-use super::state::{LabelReadFailure, LabelState};
+use super::state::{LabelReadFailure, LabelState, READ_FAILED, READ_REFUSED};
 use crate::deploy::host_channel;
 
 /// Turn the marker stream into a state. Pure — covered by unit tests.
@@ -13,14 +13,21 @@ pub fn parse_label_print(host: &str, label: &str, stdout: &str) -> LabelState {
     };
     for line in stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
-            ["STADO_LABEL_READ_FAILURE", domain, exit_code, detail] => {
+            [marker @ ("STADO_LABEL_READ_FAILURE" | "STADO_LABEL_READ_REFUSED"), domain, exit_code, detail] =>
+            {
                 let domain = (*domain).trim();
                 let detail = (*detail).trim();
                 if !domain.is_empty() && !detail.is_empty() {
+                    let kind = if *marker == "STADO_LABEL_READ_REFUSED" {
+                        READ_REFUSED
+                    } else {
+                        READ_FAILED
+                    };
                     state.read_failures.push(LabelReadFailure {
                         domain: domain.to_string(),
                         exit_code: exit_code.trim().parse().unwrap_or(-1),
                         detail: detail.to_string(),
+                        kind: kind.to_string(),
                     });
                 }
             }

@@ -145,7 +145,8 @@ struct FleetServiceEntry: Decodable, Identifiable, Sendable {
     let path: String
     let kind: String
     /// The state word the beacon reported: `active`, `inactive`, `failed`,
-    /// `missing`, `unknown` — or whatever other word the host used.
+    /// `missing`, `unreadable`, `unknown` — or whatever other word the host
+    /// used.
     let state: String
     /// The beacon's `reported_at`, verbatim: a confident-looking `active`
     /// from a five-day-old beacon is visibly five days old.
@@ -167,6 +168,11 @@ struct FleetServiceEntry: Decodable, Identifiable, Sendable {
     var domain: ServiceDomain { ServiceDomain(path: path) }
 
     var isFailed: Bool { state == "failed" }
+
+    /// The host could not answer for this unit: a domain refused the read, or
+    /// the read failed. Distinct from `inactive`, which is an answer, and the
+    /// reason is in `detail`.
+    var isUnreadable: Bool { state == "unreadable" }
 
     enum CodingKeys: String, CodingKey {
         case host, name, unit, label, path, kind, state, detail, failure

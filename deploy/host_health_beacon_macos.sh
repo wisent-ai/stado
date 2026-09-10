@@ -16,49 +16,21 @@ PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:/usr/local/bin:/opt/homebrew/bin:/A
 export PATH
 
 STADO_BIN="${STADO_BIN:-$HOME/.stado/bin/stado}"
-# A beacon that runs as a system daemon has no GUI domain of its own: `id -u` is
-# 0 and `gui/0` holds nothing, so every user-domain unit read as inactive even
-# while it was listening. Ask the console session's domain instead when running
-# as root, which is where the fleet's per-user services are loaded.
-GUI_UID=$(/usr/bin/id -u)
-if [ "$GUI_UID" = "0" ]; then
-    CONSOLE_UID=$(/usr/bin/stat -f %u /dev/console 2>/dev/null || printf '')
-    case "$CONSOLE_UID" in
-        ''|0) : ;;
-        *) GUI_UID="$CONSOLE_UID" ;;
-    esac
-fi
-GUI_DOMAIN="gui/$GUI_UID"
-# The labels this host is judged on are the ones the registry declares for it.
-# A fixed pair written here reported "inactive" for units nobody runs and said
-# nothing about the ones that matter.
+# The labels this host is judged on, the domains they may live in, and the
+# state each one is in are the product's answer now, not this script's:
+# `stado host collect-beacon` reads the registry's declarations for this host
+# and asks launchd about each of them. What used to be here was a second
+# reader -- a console-uid guess, a `gui/<uid>` lookup, a `sudo -n` system
+# lookup and a python parse of `registry pull` -- and every one of those
+# turned a read it was not allowed to make into the word `inactive`.
 HOST_SLUG=$(/bin/hostname -s | /usr/bin/tr '[:upper:]' '[:lower:]')
 # jq is not on every managed host, and a beacon that dies for want of it is a
 # host that reads as dead. python3 ships with macOS and is already what the
 # operator helpers use.
-# A host knows itself by its hostname; the registry may know it by a different
-# target name. Match the way fleet readers match: target name, declared
-# hostnames, or either with the local suffix dropped.
-READ_LABELS='import json,sys
-host = sys.argv[1].lower()
-def stem(name):
-    name = (name or "").lower()
-    return name[:-len(".local")] if name.endswith(".local") else name
-doc = json.load(sys.stdin)
-for entry in doc.get("targets", []):
-    known = {stem(entry.get("name"))}
-    known.update(stem(name) for name in entry.get("hostnames", []) or [])
-    if stem(host) in known:
-        for service in entry.get("services", []):
-            print(service.get("label") or service.get("unit") or service.get("name"))
-        break'
 READ_NAMES='import json,sys
 for entry in json.load(sys.stdin).get("targets", []):
     print(entry.get("name"))'
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || printf /usr/bin/python3)}"
-LABELS="${WC_HEALTH_UNITS:-$("$STADO_BIN" registry pull 2>/dev/null \
-    | "$PYTHON_BIN" -c "$READ_LABELS" "$HOST_SLUG" | /usr/bin/tr '\n' ' ')}"
-LABELS="${LABELS:-com.wisent.host-health-beacon}"
 
 # Publishing needs the health API, a Skarbiec to mint the bearer against, and
 # the consumer grant this host holds. All three are already declared -- the API
@@ -83,68 +55,24 @@ declared_skarbiec=$("$STADO_BIN" registry pull 2>/dev/null \
 export STADO_HOST_HEALTH_SKARBIEC_URL="${declared_skarbiec:-${STADO_HOST_HEALTH_SKARBIEC_URL:-}}"
 export STADO_HOST_HEALTH_SKARBIEC_CONSUMER="${STADO_HOST_HEALTH_SKARBIEC_CONSUMER:-stado-host-health-beacon}"
 export STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-$HOME/.stado/host-health-beacon-skarbiec-token}"
-printf 'host_health_beacon: api=%s skarbiec=%s labels=%s\n' \
-    "$STADO_HOST_HEALTH_API_URL" "$STADO_HOST_HEALTH_SKARBIEC_URL" "$LABELS" >/dev/stderr
+printf 'host_health_beacon: api=%s skarbiec=%s collector=%s\n' \
+    "$STADO_HOST_HEALTH_API_URL" "$STADO_HOST_HEALTH_SKARBIEC_URL" \
+    "$STADO_BIN host collect-beacon" >/dev/stderr
 
-reported_at=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)
-disk_line=$(/bin/df -h / 2>/dev/null | /usr/bin/awk '{line=$0} END {if (line != "") print line}' || true)
-# The memory line, and why it is a read of the pass rather than a fourth
-# measurement. `targets[].memory_reclaim` is executed on this host by two
-# writers -- the janitor unit on its timer and the queue agent's janitor task
-# on every tick -- and each of them writes the reading it decided against into
-# the state file below. A beacon that ran its own `vm_stat` here would publish
-# a number nothing was measured against, and the first time the two disagreed
-# the operator would have to work out which one the watermark used. So the
-# beacon carries the product's own answer: the last completed pass, with its
-# reading, its watermarks, its outcome and its repairs.
-memory_state="$HOME/.cache/wisent-compute/memory-reclaim-state.json"
-memory_json=null
-if [ -r "$memory_state" ]; then
-  memory_json=$(/usr/bin/tr -d '\t\r\n' < "$memory_state")
-fi
-
-units_json=""
-for lbl in $LABELS; do
-    # An always-on unit lives in the system domain, and a `gui/$uid` lookup
-    # misses it entirely -- which is how a running fleet reported itself as
-    # inactive. Ask both domains, and let the one that answers decide.
-    #
-    # A root beacon reading another account's GUI domain gets empty output
-    # rather than an error, which read as "inactive" for services that were
-    # loaded: root has to enter that session with `asuser` to see it.
-    info=$(/bin/launchctl print "${GUI_DOMAIN}/${lbl}" 2>/dev/null || true)
-    if [ -z "$info" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
-        info=$(/bin/launchctl asuser "$GUI_UID" /bin/launchctl print \
-            "${GUI_DOMAIN}/${lbl}" 2>/dev/null || true)
-    fi
-    if [ -z "$info" ]; then
-        info=$(/usr/bin/sudo -n /bin/launchctl print "system/${lbl}" 2>/dev/null || true)
-    fi
-    if [ -n "$info" ]; then
-        state="active"
-        # A live process outranks history. launchd keeps the previous run's
-        # "last exit code" while the current one is up, so a worker that
-        # crashed once and was restarted read as failed for the rest of its
-        # life. Read the exit code only when nothing is running now.
-        running=$(echo "$info" | /usr/bin/awk '/state = running/ {print "yes"; exit}')
-        if [ "$running" != "yes" ]; then
-            # "last exit code" is the verdict only when it is a number and not
-            # zero; "(never exited)" is healthy, not a failure.
-            last_exit=$(echo "$info" | /usr/bin/awk -F'=' '/last exit code/ {gsub(/[ \t]/,""); print $2; exit}')
-            if [ -n "$last_exit" ] && [ "$last_exit" != "0" ] && [ "$last_exit" != "(neverexited)" ]; then
-                state="failed"
-            fi
-        fi
-    else
-        state="inactive"
-    fi
-    if [ -n "$units_json" ]; then units_json="$units_json,"; fi
-    units_json="$units_json\"$lbl\":{\"state\":\"$state\"}"
-done
-
-payload="{\"host\":\"$HOST_SLUG\",\"reported_at\":\"$reported_at\",\"disk\":\"$disk_line\",\"memory\":$memory_json,\"units\":{$units_json}}"
-
-"$STADO_BIN" host publish-beacon <(printf '%s' "$payload")
+# One collection, in the product: `stado host collect-beacon --publish` reads
+# the identities the registry declares for this host, asks the init system
+# about each of them through the same reader `stado service label-print` uses,
+# and publishes the document through the API this script has just configured.
+#
+# What used to sit here was a loop that read each label with
+# `launchctl print ... 2>/dev/null || true` and called the empty result
+# `inactive`. A read the host refuses is also empty, so a daemon loaded in the
+# system domain -- every always-on gateway on a Mac -- was published as not
+# loaded, and `stado service status`, `registry doctor` and Stado Desktop all
+# repeated it. The product now publishes `unreadable` with the cause for a
+# refused read, and reads the system domain without asking for privilege it
+# does not need.
+"$STADO_BIN" host collect-beacon --publish
 
 # Relay for hosts that cannot publish for themselves.
 #

@@ -22,7 +22,7 @@ mod reports_and_read_only;
 mod script;
 mod state;
 
-use script::LABEL_PRINT_SCRIPT;
+use script::label_print_script;
 
 pub use parse::parse_label_print;
 pub use state::{LabelReadFailure, LabelState};
@@ -63,10 +63,7 @@ pub async fn inspect_label(
         "process == \"launchd\" AND eventMessage CONTAINS \"{}\"",
         label.replace('\\', "\\\\").replace('"', "\\\"")
     );
-    let script = LABEL_PRINT_SCRIPT
-        .replace("@LABEL@", &shlex_quote(label))
-        .replace("@PREDICATE@", &shlex_quote(&predicate))
-        .replace("@SCOPE@", scope.word());
+    let script = label_print_script(&shlex_quote(label), &shlex_quote(&predicate), scope.word());
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(

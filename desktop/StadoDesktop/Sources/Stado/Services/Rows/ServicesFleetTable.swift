@@ -90,7 +90,10 @@ extension ServicesView {
                                 text: entry.state.isEmpty ? "Not reported" : entry.state,
                                 width:
                                     92,
-                                tone: entry.isFailed ? .danger : .neutral
+                                // An unreadable unit is not a stopped one: the
+                                // host could not answer for it, and the row
+                                // has to say so rather than look calm.
+                                tone: entry.isFailed ? .danger : (entry.isUnreadable ? .warning : .neutral)
                             )
                             ConsoleCell(
                                 text: entry.domain.rawValue,
@@ -108,6 +111,9 @@ extension ServicesView {
                         }
                         if entry.isFailed, let evidence = failureEvidenceLine(entry) {
                             fleetFailureLine(evidence)
+                        }
+                        if entry.isUnreadable, !entry.detail.isEmpty {
+                            fleetFailureLine(entry.detail)
                         }
                         if let finding = entry.misdeclaredDomain {
                             declarationLine(finding)
