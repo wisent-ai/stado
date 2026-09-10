@@ -180,10 +180,14 @@ pub(crate) fn undeclared_row(
         return None;
     }
     let named = !selected.is_empty();
+    let hostname = reqwest::Url::parse(&selected)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_default();
     Some(json!({
         "schema": "stado.public-origin-report.v1",
         "name": Value::Null,
-        "hostname": if named { selected.trim_start_matches("https://") } else { "" },
+        "hostname": hostname,
         "origin": if named { selected.as_str() } else { "" },
         "target": Value::Null,
         "publication": Value::Null,
@@ -206,7 +210,7 @@ pub(crate) fn undeclared_row(
         "resolution": {
             "state": ResolutionState::Unavailable.word(),
             "resolver": public_origin::resolve::PUBLIC_RESOLVER,
-            "hostname": if named { selected.trim_start_matches("https://") } else { "" },
+            "hostname": hostname,
             "answers": [],
             "detail": "not asked: an origin nothing declares is repaired by declaring it, and resolving it would answer a question nobody has asked the fleet",
         },
