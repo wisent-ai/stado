@@ -54,6 +54,12 @@ pub enum WorkloadCommands {
         /// Reattach on one registry target rather than placing afresh.
         #[arg(long)]
         target: Option<String>,
+        /// Workspace name on the selected host; __home__ selects its home.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Select only a host that owns this durable session ledger.
+        #[arg(long)]
+        resume: Option<String>,
     },
 }
 
@@ -71,7 +77,9 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
             target,
             json,
         } => status(&kind_or_id, target.as_deref(), json).await,
-        WorkloadCommands::Attach { kind, target } => attach(&kind, target.as_deref()).await,
+        WorkloadCommands::Attach { kind, target, workspace, resume } => {
+            attach(&kind, target.as_deref(), workspace.as_deref(), resume.as_deref()).await
+        }
     }
 }
 
@@ -206,7 +214,7 @@ async fn status(
     }
 }
 
-async fn attach(kind: &str, requested_target: Option<&str>) -> Result<(), CmdError> {
+async fn attach(kind: &str, requested_target: Option<&str>, workspace: Option<&str>, resume: Option<&str>) -> Result<(), CmdError> {
     let declaration = workload(kind)?;
     if !declaration.interactive {
         return Err(CmdError::usage(format!(
@@ -219,8 +227,8 @@ async fn attach(kind: &str, requested_target: Option<&str>) -> Result<(), CmdErr
                 Some(name) => Some(place(declaration, Some(name), None).await?.name),
                 None => None,
             };
-            let workspace = current_workspace();
-            connect_jeden(&workspace, target.as_deref(), None).await
+            let workspace = workspace.map(str::to_string).unwrap_or_else(current_workspace);
+            connect_jeden(&workspace, target.as_deref(), resume).await
         }
         _ => Err(CmdError::click(format!(
             "{kind} declares no stream attachment; add it to {DECLARATION_PATH}"

@@ -23,8 +23,6 @@ pub(crate) fn current_workspace() -> String {
 const CHECKOUT_ROOT: &str = "Documents/CodingProjects/Wisent";
 const HOME_WORKSPACE: &str = "__home__";
 const MANAGED_JEDEN: &str = ".stado/bin/jeden";
-const MANAGED_JEDEN_LAUNCHER: &str = ".stado/bin/jeden-run-with-stado";
-const MANAGED_SANDBOX_HELPER: &str = ".stado/bin/jeden-sandbox-helper";
 const MANAGED_STADO: &str = ".stado/bin/stado";
 const PLACEMENT_PREFIX: &str = "STADO_JEDEN_PLACEMENT ";
 
@@ -89,24 +87,36 @@ pub(crate) async fn connect_jeden(
     let mut refusals = Vec::new();
     for target in candidates.drain(..) {
         let checkout = checkout_path(workspace);
-        let resume_probe = resume
-            .map(|session| format!("test -d \"$HOME\"/.jeden/sessions/{session}\\n"))
-            .unwrap_or_default();
+        let resume_probe = resume.map(|session| format!(
+            "if [ ! -d \"$HOME\"/.jeden/sessions/{session} ]; then printf 'session ledger is missing: %s\\n' \"$HOME\"/.jeden/sessions/{session} >&2; ready=no; fi\n"
+        )).unwrap_or_default();
         let probe = format!(
-            "set -e\\ntest -d \"$HOME\"/{checkout}\\n{resume_probe}test -x \"$HOME\"/{MANAGED_JEDEN}\\ntest -x \"$HOME\"/{MANAGED_JEDEN_LAUNCHER}\\ntest -x \"$HOME\"/{MANAGED_SANDBOX_HELPER}\\ntest -x \"$HOME\"/{MANAGED_STADO}\\nprintf ready\\n",
+            r#"ready=yes
+if [ ! -d "$HOME"/{checkout} ]; then
+  printf 'workspace directory is missing: %s\n' "$HOME"/{checkout} >&2
+  ready=no
+fi
+{resume_probe}
+for binary in {MANAGED_JEDEN} {MANAGED_STADO}; do
+  if [ ! -x "$HOME/$binary" ]; then
+    printf 'managed runtime is missing or not executable: %s\n' "$HOME/$binary" >&2
+    ready=no
+  fi
+done
+[ "$ready" = yes ] || exit 1
+printf ready
+"#,
         );
         match host_channel::run_script(&target, &probe, &runner).await {
             Ok(output) if output.ok() && output.stdout.trim() == "ready" => {
-                return attach_jeden(target, workspace, &checkout).await;
+                return attach_jeden(target, workspace, &checkout, resume).await;
             }
-            Ok(output) => refusals.push(format!(
-                "{}: {}",
-                target.name,
-                host_channel::last_error_line(
-                    &output,
-                    "workspace, durable session ledger, or managed Jeden runtime is unavailable"
-                )
-            )),
+            Ok(output) => {
+                let detail = output.detail();
+                refusals.push(format!("{}: {}", target.name, if detail.trim().is_empty() {
+                    "the runtime preflight returned no readiness or failure detail"
+                } else { detail.trim() }));
+            }
             Err(error) => refusals.push(format!("{}: {error}", target.name)),
         }
     }
@@ -190,6 +200,7 @@ async fn attach_jeden(
     target: ComputeTarget,
     workspace: &str,
     checkout: &str,
+    resume: Option<&str>,
 ) -> Result<(), CmdError> {
     eprintln!(
         "{PLACEMENT_PREFIX}{}",
@@ -199,13 +210,17 @@ async fn attach_jeden(
             "workspace": workspace,
             "cwd": format!("~/{checkout}"),
             "ledger": "~/.jeden/sessions",
+            "resume": resume,
         }))?
     );
     let status = if host_channel::target_is_this_host(&target) {
-        tokio::process::Command::new(expand_home(MANAGED_JEDEN_LAUNCHER)?)
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::env::join_paths(
+            std::iter::once(expand_home(".stado/bin")?).chain(std::env::split_paths(&inherited))
+        ).map_err(|error| CmdError::click(format!("cannot construct the managed runtime PATH: {error}")))?;
+        tokio::process::Command::new(expand_home(MANAGED_JEDEN)?)
             .arg("rpc")
-            .env("JEDEN_STADO_BIN", expand_home(MANAGED_STADO)?)
-            .env("JEDEN_BIN", expand_home(MANAGED_JEDEN)?)
+            .env("PATH", path)
             .current_dir(expand_home(checkout)?)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -224,7 +239,7 @@ async fn attach_jeden(
         let mut argv = host_channel::ssh_options(connection.destination);
         argv.insert(1, "-T".to_string());
         argv.push(format!(
-            "cd \"$HOME\"/{checkout}; export JEDEN_STADO_BIN=\"$HOME\"/{MANAGED_STADO} JEDEN_BIN=\"$HOME\"/{MANAGED_JEDEN}; exec \"$HOME\"/{MANAGED_JEDEN_LAUNCHER} rpc"
+            "cd \"$HOME\"/{checkout} && PATH=\"$HOME/.stado/bin:$PATH\" exec \"$HOME\"/{MANAGED_JEDEN} rpc"
         ));
         let argv = ssh_key::add_identity(argv, &key)
             .map_err(|error| CmdError::click(error.to_string()))?;
