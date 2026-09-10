@@ -8,10 +8,9 @@
 //!
 //! * [`current`] — a broker that knows the `route` verb group Skarbiec ships
 //!   today, resolved through the shared support policy.
-//! * [`stale`] — the genuinely older broker installed on this machine, which
-//!   knows `routes add` and answers `unknown command: route`. It is a real
-//!   component of this fleet, not a fake, and it is what the delivery-gap
-//!   refusal has to be proved against.
+//! * [`stale`] — the genuine 0.2.39 source, built once in the same cache as
+//!   the current broker. It still knows `routes add` and refuses `route`,
+//!   regardless of which release the operator has since installed.
 
 use std::fs;
 use std::io::Write;
@@ -22,7 +21,7 @@ use std::process::{Command, Stdio};
 use serde_json::json;
 
 use super::fleet::Fleet;
-use super::source::real_skarbiec;
+use super::source::{historical_skarbiec, real_skarbiec};
 
 pub const ITEM: &str = "route-real-login";
 pub const FIELD: &str = "username";
@@ -62,12 +61,11 @@ pub fn current() -> PathBuf {
     binary
 }
 
-/// The older broker this machine still has installed.
+/// A real pre-group broker, explicitly supplied or built from its pinned source.
 pub fn stale() -> PathBuf {
     let binary = match std::env::var_os("SKARBIEC_STALE_BIN") {
         Some(configured) => PathBuf::from(configured),
-        None => PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
-            .join(".stado/bin/skarbiec"),
+        None => historical_skarbiec(),
     };
     assert!(
         executable(&binary),

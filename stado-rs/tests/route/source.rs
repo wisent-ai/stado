@@ -19,14 +19,23 @@ use std::sync::LazyLock;
 
 const CACHE: &str = "../.wisent-output/route-skarbiec";
 const OWNER_ONLY_EXECUTABLE: u32 = 0o700;
+// This released source predates the route group; the current host's install
+// cannot serve as the fixture because upgrading it would break this test.
+const HISTORICAL_REVISION: &str = "33daa68378c4fb81b12f3a108ccd4906204cc440";
 
 /// One build per test binary. Dereferencing the lock blocks the other test
 /// threads while the first one exports and compiles, so parallel cases cannot
 /// race each other through the same export directory.
 static BROKER: LazyLock<PathBuf> = LazyLock::new(resolve);
+static HISTORICAL_BROKER: LazyLock<PathBuf> =
+    LazyLock::new(|| cached_build(&skarbiec_repo(), HISTORICAL_REVISION));
 
 pub fn real_skarbiec() -> PathBuf {
     BROKER.clone()
+}
+
+pub fn historical_skarbiec() -> PathBuf {
+    HISTORICAL_BROKER.clone()
 }
 
 fn resolve() -> PathBuf {
@@ -41,14 +50,18 @@ fn resolve() -> PathBuf {
     }
     let repo = skarbiec_repo();
     let commit = git(&repo, &["rev-parse", "origin/main"]);
+    cached_build(&repo, &commit)
+}
+
+fn cached_build(repo: &Path, commit: &str) -> PathBuf {
     let cache = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(CACHE)
-        .join(&commit);
+        .join(commit);
     let binary = cache.join("skarbiec");
     if executable(&binary) {
         return binary;
     }
-    build(&repo, &commit, &cache);
+    build(repo, commit, &cache);
     assert!(
         executable(&binary),
         "blocked: the Skarbiec build produced no executable at {}",
@@ -98,7 +111,7 @@ fn build(repo: &Path, commit: &str, cache: &Path) {
             .args(["archive", "--format=tar", "-o"])
             .arg(&archive)
             .arg(commit),
-        "export Skarbiec at origin/main",
+        "export the selected immutable Skarbiec revision",
     );
     run(
         Command::new("tar")
@@ -110,7 +123,7 @@ fn build(repo: &Path, commit: &str, cache: &Path) {
     );
     run(
         Command::new("cargo")
-            .args(["build", "--release", "--bin", "skarbiec"])
+            .args(["build", "--locked", "--release", "--bin", "skarbiec"])
             .current_dir(&source)
             .env("CARGO_TARGET_DIR", cache.join("target"))
             .env_remove("CARGO")
