@@ -21,12 +21,13 @@ pub enum SpaceCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Read or set the memory watermarks TARGET is measured against.
+    /// Read or set the disk and memory watermarks TARGET is measured against.
     ///
-    /// With no write flag this prints the declaration in force. With one it
-    /// rewrites `targets[].memory_reclaim` through the canonical registry's
-    /// compare-and-swap, validating the whole document first.
-    Watermark(watermark::WatermarkArgs),
+    /// With no write flag this prints the declarations in force. With
+    /// `--memory-*` flags or `--policy` it rewrites `targets[].memory_reclaim`,
+    /// with `--disk-*` flags `targets[].disk_cleanup`, through the canonical
+    /// registry's compare-and-swap, validating the whole document first.
+    Watermark(Box<watermark::WatermarkArgs>),
     /// List the memory policies the fleet declares, and which of them fit a host.
     ///
     /// The catalog is `stado-rs/data/memory/policies.json`, compiled into
@@ -140,7 +141,7 @@ pub enum SpaceFileCommands {
 pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
     match command {
         SpaceCommands::Report { target, json } => report(&target, json).await,
-        SpaceCommands::Watermark(args) => watermark::dispatch(args).await,
+        SpaceCommands::Watermark(args) => watermark::dispatch(*args).await,
         SpaceCommands::Policies { target, json } => {
             policies::dispatch(target.as_deref(), json).await
         }

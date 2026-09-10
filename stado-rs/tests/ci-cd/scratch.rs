@@ -133,6 +133,7 @@ fn a_builder_short_of_the_last_measured_scratch_is_refused_before_queuing() {
         "GiB free",
         "low watermark",
         "stado space reclaim",
+        "stado space watermark <host> --disk-low-free-gb",
     ] {
         assert!(
             stderr.contains(expected),
