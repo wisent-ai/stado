@@ -192,7 +192,7 @@ pub(super) async fn reconcile_verifier(
                umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
                source_file=\"$staged\"; \
              fi; \
-             {} token-mint {} --capabilities {} --replace-capabilities \
+             {} grant issue {} --capabilities {} --replace-capabilities \
                --token-file \"$source_file\" --ttl-seconds {} > /dev/null; \
              if [ -n \"$staged\" ]; then /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; fi",
             crate::deploy::shlex_quote(&skarbiec),
@@ -207,12 +207,12 @@ pub(super) async fn reconcile_verifier(
         format!(
             "{common}; \
              if [ -f \"$token_file\" ]; then \
-               {} token-ensure-read {} {} --field token --token-file \"$token_file\" > /dev/null; \
+               {} grant ensure {} {} --field token --token-file \"$token_file\" > /dev/null; \
              else \
                staged=\"$token_file.stado-new.$$\"; \
                trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
                umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
-               {} token-mint {} --capabilities {} --replace-capabilities \
+               {} grant issue {} --capabilities {} --replace-capabilities \
                  --token-file \"$staged\" --ttl-seconds {} > /dev/null; \
                /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; \
              fi",

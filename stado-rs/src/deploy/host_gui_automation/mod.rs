@@ -36,6 +36,13 @@ pub const CUA_DRIVER_ARCHIVE_URL: &str = "https://github.com/trycua/cua/releases
 pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "2";
 pub const APPLE_CHALLENGE_HELPER: &str = "/usr/local/libexec/stado-apple-challenge-capture";
 const APPLE_CHALLENGE_HELPER_BUNDLE_ID: &str = "com.wisent.stado.apple-challenge-capture";
+/// The Skarbiec item holding the Apple certificate and key this fleet signs
+/// native code with. A build host keeps no identity of its own.
+const APPLE_SIGNING_CERTIFICATE_ITEM: &str = "desktop-signing-apple-development";
+/// Apple's WWDR G3 intermediate, the issuer of that certificate. A Mac without
+/// it builds no chain and reports the certificate as no identity at all.
+const APPLE_ISSUER_CHAIN_SHA256: &str =
+    "e9473d95d06080920600a0101bf47581906ea21810c67b71ad39616be3c55b4b";
 const APPLE_CHALLENGE_HELPER_SOURCE: &str = concat!(
     include_str!("../../host_payloads/capture_apple_challenge/01-accessibility-capture.swift"),
     include_str!("../../host_payloads/capture_apple_challenge/02-prompt-resolution.swift"),

@@ -81,3 +81,4 @@ pub(crate) use crate::cli::host::files::forwarding::install_secret_value_at_home
 pub(crate) use crate::cli::host::machine::config::remote::remote_config_output;
 pub(crate) use crate::cli::host::machine::config::remote::RemoteConfigAction;
 pub(crate) use crate::cli::host::machine::users::credentials::credential_host;
+pub(crate) use crate::cli::host::machine::users::credentials::release_managed_skarbiec;

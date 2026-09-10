@@ -42,6 +42,9 @@ struct FleetPolicyTarget: Decodable, Identifiable, Sendable {
     /// nothing about its memory and is measured against the reporting
     /// default.
     let memory: FleetMemoryPolicy?
+    /// The backend's verdict on that declaration, and the declared policies
+    /// written for this host.
+    let memoryPolicies: FleetMemoryPolicyFit?
     let welesRecordingsDirectory: String?
 
     var id: String { name }
@@ -51,6 +54,7 @@ struct FleetPolicyTarget: Decodable, Identifiable, Sendable {
         case pinnedOnly = "pinned_only"
         case cleanup = "disk_cleanup"
         case memory = "memory_reclaim"
+        case memoryPolicies = "memory_policies"
         case weles
     }
 
@@ -64,8 +68,62 @@ struct FleetPolicyTarget: Decodable, Identifiable, Sendable {
         pinnedOnly = try values.decodeIfPresent(Bool.self, forKey: .pinnedOnly)
         cleanup = try values.decodeIfPresent(FleetCleanupPolicy.self, forKey: .cleanup)
         memory = try values.decodeIfPresent(FleetMemoryPolicy.self, forKey: .memory)
+        memoryPolicies = try values.decodeIfPresent(
+            FleetMemoryPolicyFit.self,
+            forKey: .memoryPolicies
+        )
         let weles = try? values.nestedContainer(keyedBy: WelesKeys.self, forKey: .weles)
         welesRecordingsDirectory = try weles?.decodeIfPresent(String.self, forKey: .recordingsDirectory)
+    }
+}
+
+/// The `memory_policies` block `GET /api/registry.json` attaches to each
+/// target: whether what the host carries repairs anything, which declared
+/// policy that document is, and which declared policies are written for this
+/// host's platform and role.
+///
+/// The verdict is the backend's, not this app's. A console that recomputed
+/// "is this managed" from the fields would be a second opinion, and the two
+/// would drift the first time either changed.
+struct FleetMemoryAutomatic: Decodable, Sendable {
+    let armed: Bool
+    let reviewedPolicy: String?
+    let mode: String?
+    let repairs: [String]
+    let detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case armed
+        case reviewedPolicy = "reviewed_policy"
+        case mode
+        case repairs
+        case detail
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        armed = try container.decodeIfPresent(Bool.self, forKey: .armed) ?? false
+        reviewedPolicy = try container.decodeIfPresent(String.self, forKey: .reviewedPolicy)
+        mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        repairs = try container.decodeIfPresent([String].self, forKey: .repairs) ?? []
+        detail = try container.decodeIfPresent(String.self, forKey: .detail) ?? ""
+    }
+}
+
+struct FleetMemoryPolicyFit: Decodable, Sendable {
+    let automatic: FleetMemoryAutomatic
+    /// The names of the declared policies written for this host.
+    let fitting: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case automatic
+        case fitting
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        automatic = try container.decode(FleetMemoryAutomatic.self, forKey: .automatic)
+        fitting = try container.decodeIfPresent([String].self, forKey: .fitting) ?? []
     }
 }
 

@@ -67,7 +67,14 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
         .find(|(key, _)| key == "SKARBIEC_VAULT_FILE")
         .map(|(_, value)| value.clone())
         .unwrap_or_default();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let skarbiec = match crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await
+    {
+        Ok(binary) => binary,
+        Err(error) => {
+            remove_remote(&resolved, &[installed.as_str()], &runner).await;
+            return Err(refused(error.to_string()));
+        }
+    };
 
     // The renderer is a Node program, at the interpreter this fleet's macOS
     // hosts install; a host that resolves `node` elsewhere answers for itself

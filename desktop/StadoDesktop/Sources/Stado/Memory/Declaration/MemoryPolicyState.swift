@@ -29,12 +29,23 @@ struct FleetMemoryRepairPolicy: Decodable, Sendable {
         units + processes + (recovery.map { [$0] } ?? [])
     }
 
+    /// The declaration this repair IS, with absent fields absent.
+    ///
+    /// An empty list and a `false` authorization are omitted because that is
+    /// what the registry holds and what the CLI writes: a console that padded
+    /// every repair with `units: []` and `allow_graphical_session: false`
+    /// wrote a document that meant the same thing and did not match the
+    /// policy it came from, so the host stopped reading as carrying a
+    /// reviewed declaration.
     var jsonValue: StorageReconciliationJSON {
-        var fields: [String: StorageReconciliationJSON] = [
-            "units": .array(units.map(StorageReconciliationJSON.string)),
-            "processes": .array(processes.map(StorageReconciliationJSON.string)),
-            "allow_graphical_session": .boolean(allowGraphicalSession),
-        ]
+        var fields: [String: StorageReconciliationJSON] = [:]
+        if !units.isEmpty {
+            fields["units"] = .array(units.map(StorageReconciliationJSON.string))
+        }
+        if !processes.isEmpty {
+            fields["processes"] = .array(processes.map(StorageReconciliationJSON.string))
+        }
+        if allowGraphicalSession { fields["allow_graphical_session"] = .boolean(true) }
         if let recovery { fields["recovery"] = .string(recovery) }
         if let minAgeSeconds { fields["min_age_seconds"] = .integer(Int64(minAgeSeconds)) }
         return .object(fields)

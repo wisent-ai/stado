@@ -50,7 +50,7 @@ pub async fn vault_item_put(
     let vault = credential_host.vault;
     let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");

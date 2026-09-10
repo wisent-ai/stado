@@ -20,6 +20,8 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
     }
 
     let home = host_channel::remote_home(target, runner).await?;
+    let signer = signing_program(target, &home, runner).await?;
+    items.push(("apple-challenge-signer".to_string(), signer.clone()));
     let cache = format!("{home}/.stado/cache/apple-challenge-helper");
     let source = format!("{cache}/capture.swift");
     let staged = format!("{cache}/stado-apple-challenge-capture.staged");
@@ -61,23 +63,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
         runner,
     )
     .await?;
-    run(
-        target,
-        &[
-            "/usr/bin/env",
-            "wisent-products",
-            "signing",
-            "sign",
-            "--identifier",
-            APPLE_CHALLENGE_HELPER_BUNDLE_ID,
-            "--previous",
-            path,
-            &staged,
-        ],
-        "sign Apple challenge helper",
-        runner,
-    )
-    .await?;
+    sign_helper(target, &signer, &staged, path, runner).await?;
     run_sudo(
         target,
         &["/bin/mkdir", "-p", "/usr/local/libexec"],
@@ -125,4 +111,173 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
         identity.version.clone(),
     ));
     Ok(identity)
+}
+
+/// Sign the staged helper with the fleet's stored Apple certificate.
+///
+/// A build host holds no signing identity of its own. The certificate and its
+/// key live in Skarbiec, are read here, and reach the host on stdin; the signer
+/// puts them in a temporary keychain it deletes again, so no host keychain and
+/// no login item is changed and no system dialog is opened.
+async fn sign_helper(
+    target: &ComputeTarget,
+    signer: &str,
+    staged: &str,
+    previous: &str,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    // Apple's intermediate is not on every Mac, and its absence makes the
+    // certificate unusable without saying so, so the issuer travels with it.
+    let issuers = String::from_utf8(
+        pinned_artifact(
+            &format!("apple-issuers-{APPLE_ISSUER_CHAIN_SHA256}.pem"),
+            APPLE_ISSUER_CHAIN_SHA256,
+        )
+        .await?,
+    )
+    .map_err(|error| DeployError(format!("Apple issuer chain is not text: {error}")))?;
+    let certificate = signing_credential("certificate").await?;
+    let request = serde_json::json!({
+        "program": signer,
+        "identifier": APPLE_CHALLENGE_HELPER_BUNDLE_ID,
+        "target": staged,
+        "previous": previous,
+        "certificate": format!("{}\n{issuers}", certificate.trim_end()),
+        "private_key": signing_credential("private_key").await?,
+    });
+    let output = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/python3",
+            "-c",
+            include_str!("../../../host_payloads/native_signing/sign.py"),
+        ],
+        &request.to_string(),
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: sign Apple challenge helper failed: {}",
+            target.name,
+            output.detail().trim()
+        )));
+    }
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
+        DeployError(format!("invalid Apple challenge signing receipt: {error}"))
+    })?;
+    if report["state"].as_str() != Some("stable") {
+        return Err(DeployError(format!(
+            "{}: Apple challenge helper signature is {}",
+            target.name, report["state"]
+        )));
+    }
+    Ok(())
+}
+
+/// One field of the fleet's Apple signing certificate: the broker grant first,
+/// then the owner vault, naming both failures rather than one.
+async fn signing_credential(field: &str) -> Result<String, DeployError> {
+    let broker = crate::credential_store::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).await;
+    if let Ok(Some(value)) = &broker {
+        if !value.is_empty() {
+            return Ok(value.clone());
+        }
+    }
+    let broker = match broker {
+        Ok(_) => format!("{APPLE_SIGNING_CERTIFICATE_ITEM} has no {field}"),
+        Err(error) => error.to_string(),
+    };
+    crate::credential_store::owner::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).map_err(
+        |owner| {
+            DeployError(format!(
+                "cannot read {APPLE_SIGNING_CERTIFICATE_ITEM}#{field} for native signing: \
+                 broker: {broker}; owner vault: {owner}"
+            ))
+        },
+    )
+}
+
+/// Resolve the pinned shared signer this fleet signs native code with,
+/// installing it into its Stado-owned cache when the host has none.
+///
+/// Deliberately not a PATH lookup: the signature a host produces has to come
+/// from one reviewed signer revision, and a machine's own `wisent-products`
+/// may be any older one.
+async fn signing_program(
+    target: &ComputeTarget,
+    home: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    bootstrap_signer(target, home, runner).await
+}
+
+async fn bootstrap_signer(
+    target: &ComputeTarget,
+    home: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    use base64::Engine;
+
+    // Private build input from wisent-products 7aa6f1f, never a public release.
+    const SOURCE_SHA256: &str = "6a2781e2a70a1fa7160ac5562332f29954e2c81f799ff50a69f12eef94c9bd24";
+    let program = format!("{home}/.stado/cache/native-signing/{SOURCE_SHA256}/bin/wisent-products");
+    if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&program)), runner).await? {
+        return Ok(program);
+    }
+    let source = pinned_artifact(&format!("{SOURCE_SHA256}.tar.gz"), SOURCE_SHA256).await?;
+    let input = serde_json::json!({
+        "archive": base64::engine::general_purpose::STANDARD.encode(source),
+        "sha256": SOURCE_SHA256,
+    });
+    let output = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/python3",
+            "-c",
+            include_str!("../../../host_payloads/native_signing/runtime.py"),
+        ],
+        &input.to_string(),
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: native signing runtime preparation failed: {}",
+            target.name,
+            output.detail().trim()
+        )));
+    }
+    let observed: serde_json::Value = serde_json::from_str(&output.stdout)
+        .map_err(|error| DeployError(format!("invalid native signing runtime receipt: {error}")))?;
+    if observed["program"].as_str() != Some(program.as_str())
+        || observed["source_sha256"].as_str() != Some(SOURCE_SHA256)
+    {
+        return Err(DeployError(
+            "native signing runtime returned another source or program".into(),
+        ));
+    }
+    Ok(program)
+}
+
+/// One immutable native-signing input, addressed by its own digest in the
+/// fleet's object namespace and verified before anything uses it.
+async fn pinned_artifact(leaf: &str, sha256: &str) -> Result<Vec<u8>, DeployError> {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    if namespace.is_empty() {
+        return Err(DeployError(
+            "storage.stado.namespace is not configured, so no native signing input can be read"
+                .into(),
+        ));
+    }
+    let uri = format!("stado://{namespace}/artifacts/native-signing/{leaf}");
+    let bytes = crate::cli::storage::fetch_object(&uri)
+        .await
+        .map_err(|error| DeployError(format!("cannot read native signing input {uri}: {error}")))?;
+    if crate::release_control::sha256_bytes(&bytes) != sha256 {
+        return Err(DeployError(format!(
+            "native signing input digest mismatch: {uri}"
+        )));
+    }
+    Ok(bytes)
 }

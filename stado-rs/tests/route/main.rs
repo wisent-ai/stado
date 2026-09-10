@@ -21,6 +21,8 @@
 mod broker;
 mod capability;
 mod fleet;
+#[path = "../support/historical_skarbiec.rs"]
+mod historical_skarbiec;
 mod leased;
 #[path = "../support/skarbiec.rs"]
 mod skarbiec;

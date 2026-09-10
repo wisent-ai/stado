@@ -78,7 +78,7 @@ pub(crate) fn mint_acquisition_token(
     let vault = crate::credential_store::owner::vault()
         .map_err(|error| CmdError::click(format!("mint-acquisition-token: {error}")))?;
     let minted = std::process::Command::new(&launcher)
-        .arg("token-mint")
+        .args(["grant", "issue"])
         .arg(consumer)
         .arg("--capabilities")
         .arg(&capability)
@@ -86,14 +86,14 @@ pub(crate) fn mint_acquisition_token(
         .output()?;
     if !minted.status.success() {
         return Err(CmdError::click(format!(
-            "{} token-mint failed: {}",
+            "{} grant issue failed: {}",
             launcher.display(),
             String::from_utf8_lossy(&minted.stderr).trim()
         )));
     }
     let report: Value = serde_json::from_slice(&minted.stdout).map_err(|_| {
         CmdError::click(format!(
-            "{} token-mint produced no JSON report",
+            "{} grant issue produced no JSON report",
             launcher.display()
         ))
     })?;
@@ -101,7 +101,7 @@ pub(crate) fn mint_acquisition_token(
         .get("token")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| CmdError::click("Skarbiec token-mint report contained no token"))?;
+        .ok_or_else(|| CmdError::click("Skarbiec grant issue report contained no token"))?;
     let owner_read_write = (u8::BITS - u16::BITS / u8::BITS) << (u8::BITS - u16::BITS / u8::BITS);
     let write_result = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
@@ -114,7 +114,7 @@ pub(crate) fn mint_acquisition_token(
     })();
     if let Err(error) = write_result {
         let _ = std::process::Command::new(&launcher)
-            .arg("token-revoke")
+            .args(["grant", "revoke"])
             .arg(consumer)
             .output();
         let _ = std::fs::remove_file(output_path);

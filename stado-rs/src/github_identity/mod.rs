@@ -36,13 +36,9 @@ pub use check::report;
 pub const DECLARATION_PATH: &str = "stado-rs/data/github-identity.json";
 const DECLARATION: &str = include_str!("../../data/github-identity.json");
 const SCHEMA: &str = "stado.github-identity.v1";
-/// Skarbiec's own operator route for its route table. It used to read
-/// `/v1/operator/route/resolve`, an endpoint Skarbiec has never served: the
-/// resolution answered HTTP 404 and the report blamed the vault for a question
-/// this caller invented. `POST /v1/operator/routes/list` is the published one,
-/// and it answers `{consumer, routes:[{resource,item,item_present,field,
-/// field_present}]}` — the shape read below.
-const RESOLVE_ENDPOINT: &str = "/v1/operator/routes/list";
+/// Skarbiec's declared route capability answers the current vault coordinates,
+/// rather than a separately maintained per-caller route listing.
+const RESOLVE_ENDPOINT: &str = "/v1/operator/route/resolve";
 const SELF_DECLARING_PREFIXES: &[&str] = &["provider:", "agent:", "login:"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -154,7 +150,7 @@ fn unanswered(route: &str, detail: &str) -> String {
     format!(
         "Skarbiec answers no credential for the declared GitHub route {route:?}: {detail}. Stado \
          reads its GitHub identity through that route, declared in {DECLARATION_PATH}; declare it \
-         with `skarbiec routes add --resource {route} --item <item> --field <field> --reason \
+         with `skarbiec route declare --resource {route} --item <item> --field <field> --reason \
          <text>`"
     )
 }

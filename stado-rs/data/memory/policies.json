@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "memory_policies": [
+    {
+      "name": "macos-always-on-host",
+      "summary": "An always-on Mac that runs fleet work and keeps a logged-in graphical session. Restarts the pre-check runner when its process is gone, reaps stale GnuPG daemons, and ends the session processes that held the memory on charless-mac-mini on 2026-09-06, largest first and only after ten minutes of life. Refuses new placement while the host is under its low watermark.",
+      "platforms": ["darwin-arm64"],
+      "roles": ["always-on"],
+      "policy": {
+        "mode": "enforce",
+        "check_interval_seconds": 300,
+        "low_free_mb": 2048,
+        "target_free_mb": 4096,
+        "high_swap_used_pct": 80,
+        "max_repairs_per_pass": 4,
+        "max_pass_seconds": 120,
+        "refuse_placement": true,
+        "repairs": {
+          "restart_unit": {
+            "units": ["com.wisent.stado-precheck-runner"]
+          },
+          "reap_recovery": {
+            "recovery": "recover-skarbiec-crypto"
+          },
+          "graphical_session": {
+            "processes": ["WindowManager", "Safari", "Messages"],
+            "min_age_seconds": 600,
+            "allow_graphical_session": true
+          }
+        }
+      }
+    },
+    {
+      "name": "macos-operator-workstation",
+      "summary": "A Mac a person is working on. Reaps this fleet's own stale GnuPG daemons and nothing else: no unit is restarted and no session process is ended, because the memory here belongs to the operator's open work. Keeps accepting jobs while over its watermark, since an interactive host is often the only one that can run them.",
+      "platforms": ["darwin-arm64"],
+      "roles": ["interactive"],
+      "policy": {
+        "mode": "enforce",
+        "check_interval_seconds": 300,
+        "low_free_mb": 4096,
+        "target_free_mb": 8192,
+        "high_swap_used_pct": 85,
+        "max_repairs_per_pass": 1,
+        "max_pass_seconds": 120,
+        "refuse_placement": false,
+        "repairs": {
+          "reap_recovery": {
+            "recovery": "recover-skarbiec-crypto"
+          }
+        }
+      }
+    },
+    {
+      "name": "linux-queue-host",
+      "summary": "A headless Linux queue host. Restarts the pre-check runner service when its process is gone and reaps stale GnuPG daemons; it declares no graphical session because there is none to end. Refuses new placement while under its low watermark so a job is not admitted onto a host that cannot give it memory.",
+      "platforms": ["linux-amd64"],
+      "roles": ["always-on", "burst"],
+      "policy": {
+        "mode": "enforce",
+        "check_interval_seconds": 300,
+        "low_free_mb": 8192,
+        "target_free_mb": 16384,
+        "high_swap_used_pct": 80,
+        "max_repairs_per_pass": 2,
+        "max_pass_seconds": 120,
+        "refuse_placement": true,
+        "repairs": {
+          "restart_unit": {
+            "units": ["wisent-stado-precheck-runner.service"]
+          },
+          "reap_recovery": {
+            "recovery": "recover-skarbiec-crypto"
+          }
+        }
+      }
+    },
+    {
+      "name": "observe-only",
+      "summary": "Read a host's memory against real watermarks and repair nothing. What a host gets before anybody has decided which repairs it permits: the readings, the pressure verdict and the pass record become visible, and no process on it is touched.",
+      "platforms": ["darwin-arm64", "linux-amd64"],
+      "roles": ["always-on", "burst", "interactive"],
+      "policy": {
+        "mode": "report",
+        "check_interval_seconds": 300,
+        "low_free_mb": 2048,
+        "target_free_mb": 4096,
+        "high_swap_used_pct": 80,
+        "max_repairs_per_pass": 1,
+        "refuse_placement": false,
+        "repairs": {}
+      }
+    }
+  ]
+}

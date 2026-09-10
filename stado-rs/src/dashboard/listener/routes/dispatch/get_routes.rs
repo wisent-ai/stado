@@ -106,6 +106,18 @@ impl Dashboard {
             }
             return Ok(registry_policy::get_cleanup());
         }
+        if path == "/api/memory-policies.json" {
+            if !self.boundaries_available(&[Boundary::Registry]).await {
+                return Ok(send_json(
+                    http_status("503"),
+                    &json!({"error": "registry authorization unavailable"}),
+                ));
+            }
+            if let Err(response) = registry_policy::authorized(request, "policy-read").await {
+                return Ok(response);
+            }
+            return Ok(registry_policy::get_memory_policies());
+        }
 
         Ok(empty_response(404, "Not Found"))
     }

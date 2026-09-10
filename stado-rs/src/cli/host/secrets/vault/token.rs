@@ -64,7 +64,8 @@ pub async fn vault_token_mint(
         ));
     }
     let mut arguments = vec![
-        String::from("token-mint"),
+        String::from("grant"),
+        String::from("issue"),
         consumer.to_string(),
         String::from("--capabilities"),
         capabilities.to_string(),
@@ -86,7 +87,7 @@ pub async fn vault_token_mint(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
                 CmdError::click(format!(
-                    "{}: Skarbiec token-mint returned no bearer",
+                    "{}: Skarbiec grant issue returned no bearer",
                     resolved.name
                 ))
             })?;

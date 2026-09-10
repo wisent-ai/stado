@@ -12,8 +12,8 @@
 
 use serde_json::Value;
 
-use super::constants;
 use super::schema::{REPAIR_GRAPHICAL_SESSION, REPAIR_REAP_RECOVERY, REPAIR_RESTART_UNIT};
+use crate::providers::local::host_memory::constants;
 
 /// A refusal: where in the document, and what is wrong there.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,7 +205,9 @@ fn validate_repairs(mode: &str, value: &Value, location: &str) -> Result<(), Mem
                             "must name the declared recovery program to run",
                         )
                     })?;
-                if super::repairs::recovery_program(recovery).is_none() {
+                if crate::providers::local::host_memory::repairs::recovery_program(recovery)
+                    .is_none()
+                {
                     return Err(problem(
                         &format!("{here}.recovery"),
                         &format!("names {recovery:?}, which this build ships no program for"),
