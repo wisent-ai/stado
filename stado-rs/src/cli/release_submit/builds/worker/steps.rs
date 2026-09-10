@@ -79,6 +79,60 @@ pub(crate) fn execute(
         exit_code: status.code(),
     })
 }
+/// Refuse a build the host has no room for, before the first crate.
+///
+/// A release build that runs out of space fails after every minute it was
+/// going to spend: the stado 0.20.3 darwin job compiled 616 crates on
+/// charless-mac-mini and died on `No space left on device (os error 28)`
+/// writing rustc metadata, and the cause was one line inside a 30 KB log. The
+/// requirement is the recipe's own (`min_free_gb`), the observation is the
+/// work volume's, and a recipe that declares nothing is not measured.
+pub(super) fn require_free_space(
+    recipe: &crate::release_pipeline::PlatformRecipe,
+    work: &Path,
+) -> Result<(), CmdError> {
+    if recipe.min_free_gb == u64::default() {
+        return Ok(());
+    }
+    let free = free_gibibytes(work).ok_or_else(|| {
+        CmdError::click(format!(
+            "this build declares {} GiB of free space and the free space of {} could not be read",
+            recipe.min_free_gb,
+            work.display()
+        ))
+    })?;
+    if free < recipe.min_free_gb as f64 {
+        return Err(CmdError::click(format!(
+            "this build needs {} GiB free on {} and the volume has {free:.1} GiB; \
+             reclaim space on this host (`stado space reclaim <host> --apply --reason …`) \
+             or move the work root, then submit again",
+            recipe.min_free_gb,
+            work.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Free space of the volume holding `path`, in GiB, read through the host's
+/// own `df -Pk` rather than a crate that guesses at mount tables.
+fn free_gibibytes(path: &Path) -> Option<f64> {
+    let output = std::process::Command::new("/bin/df")
+        .args(["-Pk", &path.display().to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let blocks: f64 = text
+        .lines()
+        .nth(usize::from(true))?
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()?;
+    Some(blocks / (1024.0 * 1024.0))
+}
 
 /// Install the toolchain components this recipe's gates run, when the recipe
 /// is a Rust one and rustup manages the host's toolchain.
