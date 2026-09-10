@@ -140,13 +140,71 @@ async fn signing_program(
     }
     // pipx exposes the shared signer here even when SSH's PATH omits it.
     let installed = format!("{home}/.local/bin/wisent-products");
-    if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&installed)), runner).await? {
+    if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&installed)), runner).await?
+    {
         return Ok(installed);
     }
-    Err(DeployError(format!(
-        "{}: Wisent Products signing executable is unavailable: PATH lookup returned {}; \
-         {installed} is not executable. Install the shared signer on this build host",
-        target.name,
-        lookup.detail().trim()
-    )))
+    bootstrap_signer(target, home, runner).await
+}
+
+async fn bootstrap_signer(
+    target: &ComputeTarget,
+    home: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    use base64::Engine;
+
+    // Private build input from wisent-products 43f83a7, never a public release.
+    const SOURCE_SHA256: &str = "01c9d50de40f7f6ca5fbbacabd5f4f1faa4f7b8c95d07a0e628832e6ad158259";
+    let program = format!("{home}/.stado/cache/native-signing/{SOURCE_SHA256}/bin/wisent-products");
+    if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&program)), runner).await? {
+        return Ok(program);
+    }
+    let namespace = crate::config::wc_stado_storage_namespace();
+    if namespace.is_empty() {
+        return Err(DeployError(
+            "native signing runtime is absent and storage.stado.namespace is not configured".into(),
+        ));
+    }
+    let uri = format!("stado://{namespace}/artifacts/native-signing/{SOURCE_SHA256}.tar.gz");
+    let source = crate::cli::storage::fetch_object(&uri)
+        .await
+        .map_err(|error| DeployError(format!("cannot read native signing input {uri}: {error}")))?;
+    if crate::release_control::sha256_bytes(&source) != SOURCE_SHA256 {
+        return Err(DeployError(format!(
+            "native signing input digest mismatch: {uri}"
+        )));
+    }
+    let input = serde_json::json!({
+        "archive": base64::engine::general_purpose::STANDARD.encode(source),
+        "sha256": SOURCE_SHA256,
+    });
+    let output = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/python3",
+            "-c",
+            include_str!("../../../host_payloads/native-signing-runtime.py"),
+        ],
+        &input.to_string(),
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: native signing runtime preparation failed: {}",
+            target.name,
+            output.detail().trim()
+        )));
+    }
+    let observed: serde_json::Value = serde_json::from_str(&output.stdout)
+        .map_err(|error| DeployError(format!("invalid native signing runtime receipt: {error}")))?;
+    if observed["program"].as_str() != Some(program.as_str())
+        || observed["source_sha256"].as_str() != Some(SOURCE_SHA256)
+    {
+        return Err(DeployError(
+            "native signing runtime returned another source or program".into(),
+        ));
+    }
+    Ok(program)
 }
