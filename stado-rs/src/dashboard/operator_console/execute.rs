@@ -107,7 +107,7 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         // storage configuration. Children must use the configured object API.
         .env_remove("WC_STORAGE_BACKEND")
         .env_remove("WC_LOCAL_STORAGE_PATH")
-        .stdin(Stdio::null())
+        .stdin(if request.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -123,16 +123,24 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         .stderr
         .take()
         .ok_or_else(|| ConsoleError::unavailable("could not capture command stderr"))?;
+    let stdin = child.stdin.take();
     let stdout_limit = if is_retained_log_request(&request.args) {
         MAX_RETAINED_LOG_OUTPUT_BYTES
     } else {
         MAX_OUTPUT_BYTES
     };
     let execution = async {
-        let (stdout, stderr, status) = tokio::join!(
+        let (stdout, stderr, status, input) = tokio::join!(
             read_bounded(stdout, stdout_limit),
             read_bounded(stderr, MAX_OUTPUT_BYTES),
-            child.wait()
+            child.wait(),
+            async {
+                if let (Some(mut pipe), Some(content)) = (stdin, request.stdin.as_deref()) {
+                    pipe.write_all(content.as_bytes()).await?;
+                    pipe.shutdown().await?;
+                }
+                Ok::<_, std::io::Error>(())
+            }
         );
         let stdout = stdout.map_err(|error| {
             ConsoleError::unavailable(format!("could not read command stdout: {error}"))
@@ -143,9 +151,10 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         let status = status.map_err(|error| {
             ConsoleError::unavailable(format!("could not wait for Stado command: {error}"))
         })?;
-        Ok::<_, ConsoleError>((stdout, stderr, status))
+        let stdin_error = input.err().map(|error| format!("could not write command stdin: {error}"));
+        Ok::<_, ConsoleError>((stdout, stderr, status, stdin_error))
     };
-    let ((stdout, stdout_truncated), (stderr, stderr_truncated), status) =
+    let ((stdout, stdout_truncated), (stderr, stderr_truncated), status, stdin_error) =
         tokio::time::timeout(Duration::from_secs(request.timeout_seconds), execution)
             .await
             .map_err(|_| {
@@ -158,8 +167,8 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
     let stderr = String::from_utf8_lossy(&stderr).into_owned();
     let structured = serde_json::from_str::<Value>(stdout.trim()).ok();
     Ok(
-        json!({ "ok": status.success(), "exit_code": status.code(), "read_only": is_read_only(&request.args),
+        json!({ "ok": status.success() && stdin_error.is_none(), "exit_code": status.code(), "read_only": is_read_only(&request.args),
         "args": request.args, "stdout": stdout, "stderr": stderr, "stdout_truncated": stdout_truncated,
-        "stderr_truncated": stderr_truncated, "structured": structured }),
+        "stderr_truncated": stderr_truncated, "stdin_error": stdin_error, "structured": structured }),
     )
 }

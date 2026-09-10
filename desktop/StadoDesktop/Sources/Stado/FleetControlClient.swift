@@ -114,12 +114,16 @@ actor FleetControlClient {
         confirmsMutation: Bool,
         at address: OperationsDashboardAddress,
         authorizationToken: String?,
-        timeoutSeconds: Int = 120
+        timeoutSeconds: Int = 120,
+        input: String? = nil,
+        standardInput: String? = nil
     ) async throws -> OperatorCommandResult {
         let isSpace = arguments.first == "space" || arguments.first == "workdirs"
         let maximum = isSpace ? Self.spaceCommandSeconds : 300
         let budget = min(max(timeoutSeconds, 1), maximum)
         var body: [String: Any] = ["args": arguments, "timeout_seconds": budget]
+        if let input { body["input"] = input }
+        if let standardInput { body["stdin"] = standardInput }
         if confirmsMutation {
             body["confirmation"] = "RUN_MUTATION"
         }

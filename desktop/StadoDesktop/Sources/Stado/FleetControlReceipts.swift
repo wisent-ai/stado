@@ -79,6 +79,7 @@ struct OperatorCommandResult: Decodable, Sendable {
     let arguments: [String]
     let standardOutput: String
     let standardError: String
+    let standardInputError: String?
     let standardOutputTruncated: Bool
     let standardErrorTruncated: Bool
 
@@ -89,6 +90,7 @@ struct OperatorCommandResult: Decodable, Sendable {
         case arguments = "args"
         case standardOutput = "stdout"
         case standardError = "stderr"
+        case standardInputError = "stdin_error"
         case standardOutputTruncated = "stdout_truncated"
         case standardErrorTruncated = "stderr_truncated"
     }
@@ -101,6 +103,7 @@ struct OperatorCommandResult: Decodable, Sendable {
         arguments = try values.decodeIfPresent([String].self, forKey: .arguments) ?? []
         standardOutput = try values.decodeIfPresent(String.self, forKey: .standardOutput) ?? ""
         standardError = try values.decodeIfPresent(String.self, forKey: .standardError) ?? ""
+        standardInputError = try values.decodeIfPresent(String.self, forKey: .standardInputError)
         standardOutputTruncated = try values.decodeIfPresent(Bool.self, forKey: .standardOutputTruncated) ?? false
         standardErrorTruncated = try values.decodeIfPresent(Bool.self, forKey: .standardErrorTruncated) ?? false
     }
@@ -114,6 +117,7 @@ struct OperatorCommandResult: Decodable, Sendable {
                 ? "\(error) (output truncated by the dashboard limit)"
                 : error
         }
+        if let standardInputError { return standardInputError }
         let output = standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
         if !output.isEmpty {
             return output
