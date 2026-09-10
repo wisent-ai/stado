@@ -8,7 +8,7 @@
 /// Command failure with a click-matching exit code. A `Some` message is
 /// printed as `Error: {msg}` on stderr (click `ClickException`, code 1)
 /// followed by the classified operator line, and the process exits with
-/// [`crate::failure::FailureCode::exit_code`] applied to `code`; a `None`
+/// [`crate::primitives::failure::FailureCode::exit_code`] applied to `code`; a `None`
 /// message exits silently (click `SystemExit`, e.g. config validation
 /// failure after the ERROR lines were already printed).
 #[derive(Debug, Default)]
@@ -18,13 +18,13 @@ pub struct CmdError {
     /// The failure code this error stated about itself where it was built.
     ///
     /// `None` means it arrived as prose and [`main_entry`](crate::cli::main_entry) resorts to
-    /// [`crate::failure::classify_message`], which reads the wording. That
+    /// [`crate::primitives::failure::classify_message`], which reads the wording. That
     /// inference is the last resort and never an equal alternative: a
     /// keyword read of a sentence is a guess, and on 2026-09-03 the guess
     /// reported a hard allowlist refusal as a retryable timeout because the
     /// refusal printed an allowlist containing `--login-timeout-ms`. A
     /// caller that knows what its failure is says so here.
-    pub failure: Option<crate::failure::FailureCode>,
+    pub failure: Option<crate::primitives::failure::FailureCode>,
     /// Operator help that belongs beside the failure but not inside it —
     /// the approved spellings of a refused command, for instance. Printed
     /// after the error line, carried as its own field in `--json`, and
@@ -79,7 +79,7 @@ impl CmdError {
 
     /// Carry the code the failure already knows, so nothing downstream has
     /// to infer it from the wording.
-    pub fn stating(mut self, code: crate::failure::FailureCode) -> Self {
+    pub fn stating(mut self, code: crate::primitives::failure::FailureCode) -> Self {
         self.failure = Some(code);
         self
     }

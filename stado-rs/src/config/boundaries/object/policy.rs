@@ -121,7 +121,7 @@ pub(crate) fn parse_object_api_namespaces(
         let problem_count = problems.len();
         if namespace.trim() != namespace
             || namespace == "releases"
-            || crate::object_store::ObjectRef::new(namespace, "sentinel").is_err()
+            || crate::remote::object_store::ObjectRef::new(namespace, "sentinel").is_err()
         {
             problems.push(format!(
                 "object_api.namespaces key {namespace:?} is not a canonical private product namespace"

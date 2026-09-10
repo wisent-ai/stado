@@ -38,7 +38,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
     }
 
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut records: std::collections::BTreeMap<String, crate::provenance::Provenance> =
+    let mut records: std::collections::BTreeMap<String, crate::binary::provenance::Provenance> =
         std::collections::BTreeMap::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut helpers: usize = 0;
@@ -69,7 +69,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             }
             names.insert(name.to_string());
         } else if let Some(document) = line.strip_prefix("STADO-MANIFEST ") {
-            match serde_json::from_str::<crate::provenance::Provenance>(document.trim()) {
+            match serde_json::from_str::<crate::binary::provenance::Provenance>(document.trim()) {
                 Ok(record) => {
                     names.insert(record.artifact.clone());
                     records.insert(record.artifact.clone(), record);
@@ -92,7 +92,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         }
     }
 
-    let repository = crate::provenance::local_repo();
+    let repository = crate::binary::provenance::local_repo();
     let now = chrono::Utc::now();
     let carried: Vec<CarriedArtifact> = names
         .into_iter()
@@ -124,10 +124,10 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             };
             let reachable = match (&commit, &repository) {
                 (None, _) => Some(false),
-                (Some(commit), _) if !crate::provenance::is_commit_id(commit) => Some(false),
+                (Some(commit), _) if !crate::binary::provenance::is_commit_id(commit) => Some(false),
                 (Some(_), None) => None,
                 (Some(commit), Some(repository)) => {
-                    Some(crate::provenance::reachable_in_repo(commit, repository))
+                    Some(crate::binary::provenance::reachable_in_repo(commit, repository))
                 }
             };
             let stamp = match (&record, &receipt) {

@@ -60,7 +60,7 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
         return Ok(json!(subscription).to_string());
     }
     let http = reqwest::Client::new();
-    let token = crate::azure_token::identity_bearer_token(
+    let token = crate::remote::azure_token::identity_bearer_token(
         &http,
         "https://management.azure.com/.default",
         "https://management.azure.com",

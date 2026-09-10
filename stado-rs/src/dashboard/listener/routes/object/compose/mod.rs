@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use crate::object_store::{ObjectRef, OBJECT_API_CHUNK_BYTES};
+use crate::remote::object_store::{ObjectRef, OBJECT_API_CHUNK_BYTES};
 
 use crate::dashboard::listener::auth::{authorize_object, authorize_release};
 use crate::dashboard::listener::boundary::requires_object_boundary;
@@ -90,7 +90,7 @@ impl Dashboard {
                 )
             }
         };
-        if payload.size == 0 || payload.size > crate::object_store::max_object_bytes() {
+        if payload.size == 0 || payload.size > crate::remote::object_store::max_object_bytes() {
             return object_compose_error(
                 http_status("400"),
                 "composition size is outside the object API limit",
@@ -181,7 +181,7 @@ impl Dashboard {
             return object_compose_error(http_status("503"), "object authorization unavailable");
         }
         let authorized = if let Some(policy_key) =
-            crate::object_store::release_policy_key(object.namespace(), object.key())
+            crate::remote::object_store::release_policy_key(object.namespace(), object.key())
         {
             if object.namespace() == "releases" && !payload.if_absent {
                 Ok(Some("release_write_must_be_create_only"))

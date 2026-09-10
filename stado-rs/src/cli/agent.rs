@@ -184,7 +184,7 @@ pub async fn run(
                     "agent loop failed: {message}{hint}; restarting after bounded delay"
                 ));
                 tokio::time::sleep(std::time::Duration::from_secs(
-                    crate::constants::POLL_INTERVAL_S,
+                    crate::primitives::constants::POLL_INTERVAL_S,
                 ))
                 .await;
             }

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::release::version_newer;
+use crate::binary::release::version_newer;
 use crate::self_update::swap::replace::replace_verified;
 use crate::self_update::{
     platform_triple_short, recycle_replaced_units, sha256_hex, stage_for_attestation,

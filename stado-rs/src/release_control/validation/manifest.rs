@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::release::canonical_coordinate;
+use crate::binary::release::canonical_coordinate;
 use crate::release_control::{QualificationStatus, ReleaseManifest, MAX_RELEASE_BYTES};
 
 use super::shape::{identifier, safe_relative, sha256};

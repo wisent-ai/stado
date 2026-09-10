@@ -26,7 +26,7 @@ pub(in crate::cli::storage) fn backend_key(
     path: &str,
 ) -> Result<String, CmdError> {
     if path.starts_with("stado://") {
-        Ok(backend.blob_path(&crate::object_store::ObjectRef::parse(path)?))
+        Ok(backend.blob_path(&crate::remote::object_store::ObjectRef::parse(path)?))
     } else {
         Ok(path.to_string())
     }

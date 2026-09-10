@@ -17,7 +17,7 @@ use crate::cli::storage::*;
 /// the caller deciding whether a coordinate is spent is told whether to
 /// repair a credential, wait, or chase the transport.
 pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> {
-    let object = crate::object_store::ObjectRef::parse(uri)?;
+    let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
     if object.namespace() == "releases" {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
@@ -46,7 +46,7 @@ pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> 
 /// `fetch no_declared_size` on 2026-09-03, while the same object read from any
 /// other node answered `206 bytes 0-0/75433627`.
 pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
-    let object = crate::object_store::ObjectRef::parse(uri)?;
+    let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
     if object.namespace() == "releases" {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {

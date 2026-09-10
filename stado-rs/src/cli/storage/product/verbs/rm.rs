@@ -19,7 +19,7 @@ pub struct StorageUrlArgs {
 }
 
 pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
-    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let object = crate::remote::object_store::ObjectRef::parse(&args.uri)?;
     if object.namespace() == "releases" {
         // True of a published release object, and false of the parts staged
         // below it - which is why the refusal names the command that removes
@@ -45,7 +45,7 @@ pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdE
 }
 
 pub(in crate::cli::storage) fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
-    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let object = crate::remote::object_store::ObjectRef::parse(&args.uri)?;
     let base_url = configured_api_origin()?
         .ok_or_else(|| CmdError::click("STADO_API_URL is required to render an object URL"))?;
     let route = if object.namespace() == "releases" {

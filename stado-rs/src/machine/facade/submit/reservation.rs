@@ -91,7 +91,7 @@ impl MachineFacade {
                             "stored source byte count is invalid",
                         ));
                     }
-                    let expected_source = crate::object_store::ObjectRef::new(
+                    let expected_source = crate::remote::object_store::ObjectRef::new(
                         "machine-inputs",
                         &format!("{request_id}/{retained_sha}.tar.gz"),
                     )?;
@@ -191,7 +191,7 @@ impl MachineFacade {
                 staged_source = Some(staged);
                 source_sha = sha;
                 source_bytes = bytes;
-                let source_object = crate::object_store::ObjectRef::new(
+                let source_object = crate::remote::object_store::ObjectRef::new(
                     "machine-inputs",
                     &format!("{request_id}/{source_sha}.tar.gz"),
                 )?;

@@ -15,7 +15,7 @@
 
 /// Version ordering lives in [`crate::release`], which owns every rule about
 /// release versions. Re-exported here for compatibility tests.
-pub use crate::release::{version_newer, version_tuple, VersionToken};
+pub use crate::binary::release::{version_newer, version_tuple, VersionToken};
 
 /// Pure: newest release key of a PyPI /pypi/<pkg>/json payload.
 /// None when there are no releases (Python `if not releases: return None`).

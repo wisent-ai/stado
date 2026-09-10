@@ -170,11 +170,11 @@ async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
     let Some(host) = url::Url::parse(api)
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
-        .filter(|host| crate::tailnet::is_magicdns_name(host))
+        .filter(|host| crate::remote::tailnet::is_magicdns_name(host))
     else {
         return;
     };
-    let pinned = crate::tailnet::address_of(&host);
+    let pinned = crate::remote::tailnet::address_of(&host);
     // A resolver with no answer for this suffix is exactly the state being
     // measured, and `getaddrinfo` can sit on one of those for seconds. Bound
     // it well inside the shared probe deadline: no answer in two seconds is

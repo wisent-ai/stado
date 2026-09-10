@@ -5,14 +5,14 @@ use crate::deploy::DeployError;
 
 use super::allowlist::allowlist;
 
-/// A host-exec failure that states its own [`crate::failure::FailureCode`]
+/// A host-exec failure that states its own [`crate::primitives::failure::FailureCode`]
 /// where it is created, instead of leaving one to be guessed from its prose.
 ///
 /// On 2026-09-03 `host exec charless-mac-mini -- ls -la …` was refused by the
 /// allowlist and reported `error_code=timeout`, `retryable=true`. Nothing had
 /// timed out. The refusal was built as a bare [`DeployError`], flattened to a
 /// string by the CLI, and the code was then reconstructed by
-/// [`crate::failure::classify_message`], whose `timeout` needle is the bare
+/// [`crate::primitives::failure::classify_message`], whose `timeout` needle is the bare
 /// substring `"timeout"` — and this refusal prints the whole allowlist, three
 /// entries of which carry `--login-timeout-ms`. **The refusal matched its own
 /// help text**, so every unapproved command on every host told its caller to
@@ -32,7 +32,7 @@ use super::allowlist::allowlist;
 #[error("{message}")]
 pub struct ExecRefusal {
     /// What this failure knows itself to be, when it knows.
-    pub code: Option<crate::failure::FailureCode>,
+    pub code: Option<crate::primitives::failure::FailureCode>,
     /// The operator sentence: what was refused, and why.
     pub message: String,
     /// Operator help that is not part of the failure — the approved
@@ -44,7 +44,7 @@ impl ExecRefusal {
     /// A refusal this module states outright: the words are understood, and
     /// the allowlist does not admit them.
     ///
-    /// [`crate::failure::FailureCode::Refused`] — "an explicit policy refused
+    /// [`crate::primitives::failure::FailureCode::Refused`] — "an explicit policy refused
     /// this command" — is the whole of what happened. Nothing is missing, no
     /// credential was presented, nothing is down, and waiting changes
     /// nothing: only the words or the table can change. It is not retryable,
@@ -57,7 +57,7 @@ impl ExecRefusal {
     /// misclassification was already imposing, only quieter.
     pub(super) fn unapproved(message: String) -> Self {
         Self {
-            code: Some(crate::failure::FailureCode::Refused),
+            code: Some(crate::primitives::failure::FailureCode::Refused),
             message,
             help: Some(format!("approved commands: {}", allowlist())),
         }

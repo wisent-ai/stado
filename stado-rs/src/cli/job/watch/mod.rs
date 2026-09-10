@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::cli::{table, CmdError};
-use crate::constants::POLL_INTERVAL_S;
+use crate::primitives::constants::POLL_INTERVAL_S;
 use crate::machine::{normalize_job, MachineFacade};
 use crate::models::{job_state, Job};
 

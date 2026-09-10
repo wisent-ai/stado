@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use clap::Subcommand;
 use serde_json::Value;
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::queue::control::{self, QueueControl};
 use crate::queue::JobStorage;
 

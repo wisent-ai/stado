@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use super::support::{report, safe_runtime, unit_name};
+use crate::deploy::inference::support::{report, safe_runtime, unit_name};
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::inference::schema::Deployment;
 use crate::targets::ComputeTarget;

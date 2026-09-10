@@ -151,7 +151,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
         loaded.ok_or_else(|| CmdError::click("redelivery transaction disappeared"))?;
     let options = SubmitOptions {
         pinned_host: consumer,
-        priority: crate::constants::RELEASE_JOB_PRIORITY,
+        priority: crate::primitives::constants::RELEASE_JOB_PRIORITY,
         run_id: stable_run_id(
             "release-redelivery",
             &format!("{}\0{}\0{}", run.run_id, request.name, token_sha),

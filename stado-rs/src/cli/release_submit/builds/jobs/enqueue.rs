@@ -202,7 +202,7 @@ pub(crate) async fn enqueue(
     let command = release_worker_command(&output_uri);
     let options = SubmitOptions {
         pinned_host: consumer,
-        priority: crate::constants::RELEASE_JOB_PRIORITY,
+        priority: crate::primitives::constants::RELEASE_JOB_PRIORITY,
         run_id: submission_run_id,
         output_uri,
         input_artifacts: resolved.clone(),

@@ -38,10 +38,10 @@ pub(super) async fn reclaim(
         .machine_readable(json_output));
     }
     for (stage, detail) in &reclamation.skipped {
-        crate::failure::log_failure(
+        crate::primitives::failure::log_failure(
             "cli.space.reclaim",
             "fleet",
-            crate::failure::classify_message(detail),
+            crate::primitives::failure::classify_message(detail),
             &format!("{stage}: {detail}"),
         );
     }

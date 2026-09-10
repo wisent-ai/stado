@@ -12,7 +12,7 @@
 //! Unlike GCE (`gcloud compute instances delete`), the delete goes
 //! straight at the ARM REST API via [`crate::providers::azure`]'s
 //! [`ArmClient`]: the agent image carries no `az` CLI, and the shared
-//! token chain in [`crate::azure_token`] already knows how to get an ARM
+//! token chain in [`crate::remote::azure_token`] already knows how to get an ARM
 //! bearer token from the VM's managed identity.
 //!
 //! PERMISSIONS: the delete only lands if the identity the agent
@@ -37,9 +37,9 @@ pub const IMDS_INSTANCE_URL: &str = "http://169.254.169.254/metadata/instance";
 
 /// Pinned IMDS API version. IMDS versions the whole service, not the
 /// endpoint, so this is the same value the managed-identity token request
-/// in [`crate::azure_token`] pins; the three `compute` fields read below
+/// in [`crate::remote::azure_token`] pins; the three `compute` fields read below
 /// have been present since well before it.
-const IMDS_API_VERSION: &str = crate::azure_token::IMDS_API_VERSION;
+const IMDS_API_VERSION: &str = crate::remote::azure_token::IMDS_API_VERSION;
 
 /// The VM this process is running on, as IMDS reports it.
 ///

@@ -6,13 +6,13 @@
 use super::CmdError;
 
 pub async fn local(bind: String, port: i64, interval: i64) -> Result<(), CmdError> {
-    crate::control_plane::run_local(&bind, port, interval)
+    crate::remote::control_plane::run_local(&bind, port, interval)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))
 }
 
 pub async fn cloud(bind: String, port: i64, interval: i64) -> Result<(), CmdError> {
-    crate::control_plane::run_cloud(&bind, port, interval)
+    crate::remote::control_plane::run_cloud(&bind, port, interval)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))
 }

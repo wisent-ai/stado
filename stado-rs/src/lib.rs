@@ -8,14 +8,12 @@
 pub mod artifacts;
 pub mod artifacts_models;
 pub mod autonomy;
-pub mod build_identity;
+pub mod binary;
 pub mod capabilities;
 pub mod catalog;
 pub mod cli;
 pub mod config;
 pub mod config_file;
-pub mod constants;
-pub mod control_plane;
 pub mod coordinator;
 pub mod coverage;
 pub mod credential_store;
@@ -23,7 +21,6 @@ pub mod dashboard;
 pub mod declaration;
 pub mod deploy;
 pub mod doctor;
-pub mod failure;
 pub mod failure_fixer;
 pub mod fleet_shape;
 pub mod github_identity;
@@ -34,17 +31,16 @@ pub mod mail;
 pub mod mcp;
 pub mod models;
 pub mod monitor;
-pub mod object_store;
 pub mod observations;
 pub mod placement;
+pub mod primitives;
 pub mod profiles;
-pub mod provenance;
 pub mod providers;
 pub mod public_origin;
 pub mod queue;
 pub mod rate_limit;
 pub mod registry_import;
-pub mod release;
+pub mod remote;
 pub mod release_agent;
 pub mod release_cause;
 pub mod release_control;
@@ -60,13 +56,9 @@ pub mod service_resolution;
 pub mod sizing;
 pub mod skarbiec;
 pub mod stream;
-pub mod tailnet;
 pub mod targets;
 pub mod transcripts;
 pub mod watchdog;
-
-pub(crate) mod azure_token;
-pub(crate) mod procutil;
 
 /// Root of the source tree's `data/` directory for build-time tooling.
 ///

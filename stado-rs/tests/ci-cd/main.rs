@@ -243,10 +243,10 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
     let _ = agent.wait();
 
     assert_eq!(delivery["pinned_host"], consumer);
-    assert_eq!(delivery["priority"], stado::constants::RELEASE_JOB_PRIORITY);
+    assert_eq!(delivery["priority"], stado::primitives::constants::RELEASE_JOB_PRIORITY);
     assert_eq!(
         delivery["command"],
-        stado::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
+        stado::primitives::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
     );
     assert!(
         delivery["output_uri"]

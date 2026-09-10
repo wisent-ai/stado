@@ -18,7 +18,7 @@ impl BlobBackend for ReadFailoverBackend {
     /// differently — the object API being the one that does — so a store with
     /// a backup configured addressed every object one way and a store without
     /// one addressed it the other.
-    fn blob_path(&self, object: &crate::object_store::ObjectRef) -> String {
+    fn blob_path(&self, object: &crate::remote::object_store::ObjectRef) -> String {
         self.primary.blob_path(object)
     }
 
@@ -74,7 +74,7 @@ impl BlobBackend for ReadFailoverBackend {
                 Some(content) => {
                     let path = self
                         .primary
-                        .blob_path(&crate::object_store::ObjectRef::parse(uri)?);
+                        .blob_path(&crate::remote::object_store::ObjectRef::parse(uri)?);
                     if let Err(error) = self.primary.upload_bytes(&path, &content).await {
                         Self::report_replica_error("heal", &path, &error);
                     }

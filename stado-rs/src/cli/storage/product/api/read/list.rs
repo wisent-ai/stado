@@ -22,7 +22,7 @@ impl RemoteObjectApi {
             .await?;
         let mut values = Vec::with_capacity(payload.objects.len());
         for item in payload.objects {
-            let object = crate::object_store::ObjectRef::parse(&item.uri).map_err(|error| {
+            let object = crate::remote::object_store::ObjectRef::parse(&item.uri).map_err(|error| {
                 CmdError::click(format!(
                     "Stado object API returned an invalid object-list URI: {error}"
                 ))

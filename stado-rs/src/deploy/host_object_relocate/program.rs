@@ -2,7 +2,7 @@
 //! pass's script.
 
 use crate::deploy::shlex_quote;
-use crate::object_store::ROOT_PREFIX;
+use crate::remote::object_store::ROOT_PREFIX;
 
 /// The fixed remote program. [`remote_script`] splices the store root, the
 /// key prefixes, the apply flag and the pass bound.

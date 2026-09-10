@@ -35,7 +35,7 @@ pub(in crate::cli::storage) async fn get(args: &StorageGetArgs) -> Result<(), Cm
 
 pub(in crate::cli::storage) async fn objects(args: &StorageObjectsArgs) -> Result<(), CmdError> {
     let storage_prefix =
-        crate::object_store::ObjectRef::namespace_prefix(&args.namespace, &args.prefix)?;
+        crate::remote::object_store::ObjectRef::namespace_prefix(&args.namespace, &args.prefix)?;
     let values = if let Some(remote) =
         RemoteObjectApi::configured_for_list(&args.namespace, &args.prefix)?
     {
@@ -48,7 +48,7 @@ pub(in crate::cli::storage) async fn objects(args: &StorageObjectsArgs) -> Resul
             .await?;
         let mut values = Vec::with_capacity(blobs.len());
         for blob in blobs {
-            let object = crate::object_store::ObjectRef::from_storage_path(&blob.name)?;
+            let object = crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?;
             values.push(json!({
                 "uri": object.to_string(),
                 "namespace": object.namespace(),

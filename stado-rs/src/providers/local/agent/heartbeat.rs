@@ -2,9 +2,9 @@
 //!
 //! # Why this exists
 //!
-//! [`crate::constants::CAPACITY_STALE_SECONDS`] (180 s) is the window the fleet
+//! [`crate::primitives::constants::CAPACITY_STALE_SECONDS`] (180 s) is the window the fleet
 //! judges a host's liveness by, and
-//! [`crate::constants::CAPACITY_HEARTBEAT_INTERVAL_S`] is the design's own
+//! [`crate::primitives::constants::CAPACITY_HEARTBEAT_INTERVAL_S`] is the design's own
 //! answer to it: publish at a third of the window. The agent tick published
 //! once per iteration, so the cadence was really "however long an iteration
 //! takes", and on a saturated object store an iteration takes as long as the
@@ -34,7 +34,7 @@
 //!
 //! So the tick stamps [`CapacityHeartbeat::record_tick_start`] at the top of
 //! every iteration, and this task republishes the last snapshot ONLY while
-//! that stamp is younger than [`crate::constants::AGENT_TICK_PROGRESS_TTL_S`].
+//! that stamp is younger than [`crate::primitives::constants::AGENT_TICK_PROGRESS_TTL_S`].
 //! A loop that is slow keeps its host selectable; a loop that has stopped
 //! going around stops being spoken for, its row ages past the window, and
 //! `host gates` refuses dispatch to it exactly as before. The signal still
@@ -48,7 +48,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::queue::capacity::{publish_capacity, CapacitySnapshot};
 use crate::queue::JobStorage;
 struct Shared {

@@ -1,7 +1,7 @@
 //! Does a declared public origin's hostname exist for a client outside this
 //! deployment?
 //!
-//! This machine is the worst possible witness. [`crate::tailnet`] exists
+//! This machine is the worst possible witness. [`crate::remote::tailnet`] exists
 //! because a Stado origin in this fleet is a MagicDNS name and the local
 //! resolver has to be told where the tailnet's names live; a workstation on
 //! the tailnet therefore resolves `charless-mac-mini.tail6443b3.ts.net`

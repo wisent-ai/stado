@@ -247,7 +247,7 @@ fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), 
             .iter()
             .any(|read| read.state == crate::deploy::host_gates::ReadState::TimedOut)
         {
-            return Err(failure.stating(crate::failure::FailureCode::Timeout));
+            return Err(failure.stating(crate::primitives::failure::FailureCode::Timeout));
         }
         return Err(failure);
     }

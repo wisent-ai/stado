@@ -34,7 +34,7 @@
 //!   proven-to-run version readback before anything is activated.
 //! - **`--version` is an exact coordinate**, not a channel and not an
 //!   alias. `latest` is a legal path segment, which is exactly why nothing
-//!   here resolves one — see [`crate::release::canonical_coordinate`].
+//!   here resolves one — see [`crate::binary::release::canonical_coordinate`].
 //! - **The digest comes from the canonical release manifest.** The control
 //!   plane reads `release-manifest-<platform>.json` through the same Stado release API
 //!   and storage contract that serves the artifact, validates its immutable

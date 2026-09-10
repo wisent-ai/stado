@@ -21,7 +21,7 @@ impl CleanupReport {
             target_name: None,
             policy_digest: None,
             writer: "unknown",
-            writer_version: crate::build_identity::BUILD_IDENTITY,
+            writer_version: crate::binary::build_identity::BUILD_IDENTITY,
             policy_defaulted: false,
             mode: None,
             check_interval_seconds: None,

@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 
-use crate::release::canonical_coordinate;
+use crate::binary::release::canonical_coordinate;
 
 use super::error::SelfUpdateError;
 

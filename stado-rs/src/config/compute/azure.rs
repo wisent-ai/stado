@@ -127,7 +127,7 @@ pub fn azure_ssh_public_key() -> &'static str {
 /// path under
 /// `.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/`.
 /// This is how the agent gets Azure credentials at all — on the VM the
-/// token chain in [`crate::azure_token`] has no service-principal env
+/// token chain in [`crate::remote::azure_token`] has no service-principal env
 /// vars and no `az` CLI, so it falls through to IMDS, which answers only
 /// for a VM that carries an identity. Empty (the default) emits no
 /// identity block at VM create, leaving the agent unable to reach the

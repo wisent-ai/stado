@@ -132,7 +132,7 @@ impl RemoteObjectApi {
     }
 
     pub(in crate::cli::storage) fn configured_for_object(
-        object: &crate::object_store::ObjectRef,
+        object: &crate::remote::object_store::ObjectRef,
     ) -> Result<Option<Self>, CmdError> {
         if Self::release_authorized(object.namespace(), object.key()) {
             Self::configured_release_writer()

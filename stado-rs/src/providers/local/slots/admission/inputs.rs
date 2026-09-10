@@ -48,7 +48,7 @@ pub(crate) async fn materialize_stado_inputs(
                 "input {name} relative_path must stay inside the job work directory"
             )));
         }
-        let object = crate::object_store::ObjectRef::parse(uri)?;
+        let object = crate::remote::object_store::ObjectRef::parse(uri)?;
         // A software release lives in its own namespace and is served by the
         // public release channel; the plain blob read would silently ask the
         // job store's namespace for it and call the published artifact

@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::object_store::OBJECT_API_CHUNK_BYTES;
+use crate::remote::object_store::OBJECT_API_CHUNK_BYTES;
 use crate::queue::copy::{
     self, CopyOptions, CopyPlan, CopyReport, Endpoint, Outcome, CANONICAL_PREFIXES,
 };

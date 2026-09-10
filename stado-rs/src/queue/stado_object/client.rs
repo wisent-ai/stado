@@ -7,7 +7,7 @@
 
 use reqwest::{Client, Url};
 
-use crate::object_store::ObjectRef;
+use crate::remote::object_store::ObjectRef;
 use crate::queue::StorageError;
 
 use super::StadoObjectBackend;
@@ -179,7 +179,7 @@ impl StadoObjectBackend {
             // when a request is written into it, which surfaces as an
             // occasional failed object operation rather than a clean re-dial.
             .tcp_keepalive(std::time::Duration::from_secs(60));
-        if let Some(address) = crate::tailnet::address_of(host) {
+        if let Some(address) = crate::remote::tailnet::address_of(host) {
             // Use the same tailnet map as the artifact client. The hostname
             // remains unchanged for SNI and certificate verification.
             builder = builder.resolve(host, std::net::SocketAddr::new(address, 0));

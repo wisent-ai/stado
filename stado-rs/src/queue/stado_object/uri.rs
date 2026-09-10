@@ -6,7 +6,7 @@
 
 use reqwest::{Method, Url};
 
-use crate::object_store::ObjectRef;
+use crate::remote::object_store::ObjectRef;
 use crate::queue::StorageError;
 
 use super::StadoObjectBackend;

@@ -154,7 +154,7 @@ pub(super) async fn terminate_cancelled_slot(
     let pgid = slot.pid();
     let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM);
     match tokio::time::timeout(
-        Duration::from_secs(crate::constants::POLL_INTERVAL_S),
+        Duration::from_secs(crate::primitives::constants::POLL_INTERVAL_S),
         slot.child.wait(),
     )
     .await

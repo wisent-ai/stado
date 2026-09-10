@@ -10,7 +10,7 @@
 //! `"name@location"`.
 //!
 //! Authentication is shared with the Azure Blob queue backend through
-//! [`crate::azure_token`]: an Azure managed identity is preferred, then the
+//! [`crate::remote::azure_token`]: an Azure managed identity is preferred, then the
 //! `stado-azure` service-principal item is read from Skarbiec. This module
 //! requests the ARM audience (`https://management.azure.com`).
 //!

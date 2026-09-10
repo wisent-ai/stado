@@ -33,7 +33,7 @@ use nix::unistd::Pid;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::models::{
     activation_extraction_must_share_gpu, deprecated_activation_command_reason, isoformat_utc,
     job_state, Job,

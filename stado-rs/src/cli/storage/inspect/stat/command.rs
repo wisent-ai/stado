@@ -50,7 +50,7 @@ pub(in crate::cli::storage) async fn stat(args: &StorageStatArgs) -> Result<(), 
     // very same store serves cannot be reported unreachable because the path
     // was spelled without a scheme.
     let parsed = if args.path.starts_with("stado://") {
-        crate::object_store::ObjectRef::parse(&args.path)
+        crate::remote::object_store::ObjectRef::parse(&args.path)
     } else {
         Err(crate::queue::StorageError::Other(
             "a bare path addresses the queue store, not a namespace".to_string(),

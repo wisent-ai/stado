@@ -17,7 +17,7 @@ pub(in crate::cli::storage) fn max_object_api_json_body() -> usize {
 }
 
 pub(in crate::cli::storage) fn max_object_api_download_body() -> usize {
-    crate::object_store::max_object_bytes()
+    crate::remote::object_store::max_object_bytes()
 }
 
 pub(in crate::cli::storage) enum RemoteObjectAuth {

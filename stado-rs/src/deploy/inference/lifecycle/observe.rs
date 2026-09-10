@@ -3,7 +3,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 
-use super::support::{report, safe_runtime};
+use crate::deploy::inference::support::{report, safe_runtime};
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::inference::schema::Deployment;
 use crate::targets::ComputeTarget;

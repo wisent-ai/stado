@@ -18,7 +18,7 @@ pub trait BlobBackend: Send + Sync {
     /// The blob name THIS backend addresses one `stado://` object by.
     ///
     /// Two spellings of one object exist in this crate and they are both
-    /// plain strings, so every caller holding an [`crate::object_store::
+    /// plain strings, so every caller holding an [`crate::remote::object_store::
     /// ObjectRef`] has had to guess which one its backend wanted: the
     /// qualified store path `ecosystem/<namespace>/<key>`, which is where a
     /// filesystem or bucket backend keeps the bytes, or the bare `<key>`,
@@ -32,14 +32,14 @@ pub trait BlobBackend: Send + Sync {
     ///
     /// So the backend answers it. The default is the qualified path, which is
     /// what every storage backend but one uses.
-    fn blob_path(&self, object: &crate::object_store::ObjectRef) -> String {
+    fn blob_path(&self, object: &crate::remote::object_store::ObjectRef) -> String {
         object.storage_path()
     }
 
     /// The listing prefix THIS backend takes for a `stado://<namespace>/`
     /// prefix, which may name a whole namespace and carry no key.
     fn blob_prefix(&self, namespace: &str, prefix: &str) -> Result<String, StorageError> {
-        crate::object_store::ObjectRef::namespace_prefix(namespace, prefix)
+        crate::remote::object_store::ObjectRef::namespace_prefix(namespace, prefix)
     }
 
     /// Unconditional overwrite of a text blob.
@@ -64,7 +64,7 @@ pub trait BlobBackend: Send + Sync {
     /// default falls back to the namespaced path so disk-backed stores,
     /// which hold releases under their literal storage path, keep working.
     async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let object = crate::object_store::ObjectRef::parse(uri)
+        let object = crate::remote::object_store::ObjectRef::parse(uri)
             .map_err(|error| StorageError::Other(error.to_string()))?;
         self.download_bytes(&object.storage_path()).await
     }

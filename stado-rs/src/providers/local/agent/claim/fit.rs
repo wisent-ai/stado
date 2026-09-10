@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde_json::{Map, Value};
 
 use crate::config::estimate_gpu_memory;
-use crate::constants;
+use crate::primitives::constants;
 use crate::models::{isoformat_utc, Job};
 use crate::providers::local::agent::vram_safety_buffer_gb;
 use crate::providers::local::helpers;

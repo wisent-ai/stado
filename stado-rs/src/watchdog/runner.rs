@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use crate::procutil::{run_capture, Capture};
+use crate::primitives::procutil::{run_capture, Capture};
 
 /// Outcome of one diagnostic command (Python `subprocess.run` result or a
 /// `TimeoutExpired` after the child was killed).

@@ -100,7 +100,7 @@ async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
                 Ok(snapshot) => return Ok(snapshot),
                 Err(error) => {
                     let code = error.failure.unwrap_or_else(|| {
-                        crate::failure::classify_message(
+                        crate::primitives::failure::classify_message(
                             error.message.as_deref().unwrap_or_default(),
                         )
                     });
@@ -117,7 +117,7 @@ async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
         Ok(result) => result,
         Err(_) => Err(last_error.unwrap_or_else(|| {
             CmdError::click("the registry did not answer within 30 seconds after unit activation")
-                .stating(crate::failure::FailureCode::InfraDown)
+                .stating(crate::primitives::failure::FailureCode::InfraDown)
         })),
     }
 }

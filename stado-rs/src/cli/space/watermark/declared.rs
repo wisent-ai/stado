@@ -15,7 +15,7 @@ use super::args::WatermarkArgs;
 use super::fields::strip_nulls;
 use crate::cli::space::print_json;
 use crate::cli::CmdError;
-use crate::failure::FailureCode;
+use crate::primitives::failure::FailureCode;
 use crate::providers::local::host_memory::declaration::policies;
 use crate::providers::local::host_memory::declaration::policies::automatic_verdict;
 

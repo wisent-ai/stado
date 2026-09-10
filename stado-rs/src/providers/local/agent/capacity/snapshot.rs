@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::providers::local::disk::gate::DiskGateDiag;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;

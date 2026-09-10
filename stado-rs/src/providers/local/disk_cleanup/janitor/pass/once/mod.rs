@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::LockState;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::takeover::{
     acquire_lock_state, pid_alive, retired_locks_active,
@@ -46,7 +46,7 @@ pub(crate) async fn cleanup_once(
     let hostname = crate::providers::vast::system_hostname();
     let mut report = CleanupReport::base(active_job_count, &hostname);
     report.writer = writer.as_str();
-    report.writer_version = crate::build_identity::BUILD_IDENTITY;
+    report.writer_version = crate::binary::build_identity::BUILD_IDENTITY;
 
     // Python's outer `except BaseException` half: any failure before the
     // policy resolves lands in `runtime` and leaves the default outcome.

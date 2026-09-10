@@ -39,7 +39,7 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
             "disk_cleanup": {
                 "mode": "off",
                 "check_interval_seconds": i64::try_from(
-                    crate::constants::MIN_RUNTIME_BEFORE_YIELD_S
+                    crate::primitives::constants::MIN_RUNTIME_BEFORE_YIELD_S
                 ).expect("cleanup interval fits i64"),
                 "low_free_gb": policy_unit,
                 "target_free_gb": policy_unit.saturating_add(policy_unit),

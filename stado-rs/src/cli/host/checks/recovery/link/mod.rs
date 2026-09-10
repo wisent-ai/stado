@@ -35,7 +35,7 @@ fn reason_counts(refusals: &crate::monitor::host_silence::RefusalSummary) -> Str
 ///
 /// The blockers stay in the report and deliberately out of this sentence. They
 /// carry the reader's and the channel's own words — "ssh connect Operation
-/// timed out" among them — and [`crate::failure::classify_message`] reads
+/// timed out" among them — and [`crate::primitives::failure::classify_message`] reads
 /// "timed out" in a command's failure message as a retryable failure, which
 /// would remap this command's exit status away from the 1 that every
 /// non-healthy verdict owes its caller.

@@ -19,7 +19,7 @@ use super::*;
 /// of itself, none of them reachable at the address the pipeline recorded. The
 /// newest arrived twenty minutes before this was written, so it was not history.
 /// One function now, used by both directions.
-pub(crate) fn store_name(object: &crate::object_store::ObjectRef) -> String {
+pub(crate) fn store_name(object: &crate::remote::object_store::ObjectRef) -> String {
     if object.namespace() == crate::config::wc_stado_storage_namespace() {
         object.key().to_string()
     } else {
@@ -37,7 +37,7 @@ pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dy
     if uri.is_empty() {
         return;
     }
-    let base = match crate::object_store::ObjectRef::parse(uri) {
+    let base = match crate::remote::object_store::ObjectRef::parse(uri) {
         Ok(base) => base,
         Err(error) => {
             log_fn(&format!(
@@ -68,7 +68,7 @@ pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dy
             .map(|component| component.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()
             .join("/");
-        let object = match crate::object_store::ObjectRef::new(
+        let object = match crate::remote::object_store::ObjectRef::new(
             base.namespace(),
             &format!("{}/{relative}", base.key().trim_end_matches('/')),
         ) {

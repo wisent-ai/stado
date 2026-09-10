@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::{MAX_PATHS, POLICY_KEY, PUBLICATIONS};
 use crate::targets::{ssh_hostname, ComputeTarget};
 
-/// Suffix of a tailnet MagicDNS name, matching [`crate::tailnet`].
+/// Suffix of a tailnet MagicDNS name, matching [`crate::remote::tailnet`].
 const MAGICDNS_SUFFIX: &str = ".ts.net";
 
 /// Loopback origins a publication may forward to. A public origin's upstream

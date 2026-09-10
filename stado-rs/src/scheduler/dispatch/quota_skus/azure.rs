@@ -44,7 +44,7 @@ pub async fn azure_catalog() -> Vec<Value> {
         })];
     }
     let http = reqwest::Client::new();
-    let token = match crate::azure_token::identity_bearer_token(
+    let token = match crate::remote::azure_token::identity_bearer_token(
         &http,
         "https://management.azure.com/.default",
         "https://management.azure.com",

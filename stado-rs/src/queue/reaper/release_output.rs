@@ -64,7 +64,7 @@ pub(super) async fn verified_release_completion(
     else {
         return Ok(None);
     };
-    let request_object = match crate::object_store::ObjectRef::parse(request_uri) {
+    let request_object = match crate::remote::object_store::ObjectRef::parse(request_uri) {
         Ok(object) => object,
         Err(error) => {
             log(&format!(

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::models::Job;
 use crate::providers::local::agent::{Step, POLL_INTERVAL_S};
 use crate::providers::local::helpers;
@@ -102,10 +102,10 @@ pub(crate) async fn claimable(
     if pressure_active {
         queued.retain(|job| {
             job.gpu_mem_gb == 0
-                && job.priority == crate::constants::RELEASE_JOB_PRIORITY
+                && job.priority == crate::primitives::constants::RELEASE_JOB_PRIORITY
                 && !job.run_id.is_empty()
                 && !job.pinned_host.is_empty()
-                && job.command == crate::constants::RELEASE_DELIVERY_JOB_COMMAND
+                && job.command == crate::primitives::constants::RELEASE_DELIVERY_JOB_COMMAND
                 && job
                     .output_uri
                     .starts_with("stado://probierz/runs/release-pipeline/stado/")

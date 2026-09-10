@@ -29,7 +29,7 @@ impl MachineFacade {
         let replayed_reservation = reserved.replayed_reservation;
         let staged_source = &mut reserved.staged_source;
         if source_requested {
-            let source_object = crate::object_store::ObjectRef::new(
+            let source_object = crate::remote::object_store::ObjectRef::new(
                 "machine-inputs",
                 &format!("{request_id}/{source_sha}.tar.gz"),
             )?;

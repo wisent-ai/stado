@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::constants;
+use crate::primitives::constants;
 use crate::providers::local::agent::heartbeat::CapacityHeartbeat;
 use crate::providers::local::agent::janitor::{JanitorReports, JanitorTask};
 use crate::providers::local::disk_cleanup;
@@ -61,7 +61,7 @@ pub(super) fn bound_store(log_fn: &mut dyn FnMut(&str)) -> (&'static str, bool) 
 pub(super) fn spawn_janitor() -> (JanitorReports, JanitorTask) {
     let janitor_reports = JanitorReports::new();
     let janitor = janitor_reports.spawn_janitor(
-        std::time::Duration::from_secs(crate::constants::POLL_INTERVAL_S),
+        std::time::Duration::from_secs(crate::primitives::constants::POLL_INTERVAL_S),
         |active_jobs| async move {
             // Off the critical path, beside the disk pass, for the same reason:
             // an expired lease is host garbage, and the host is the only thing

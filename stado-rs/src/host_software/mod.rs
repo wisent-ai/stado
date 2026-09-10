@@ -50,7 +50,7 @@
 //! still counted and still visible in `stado release host-state`; it just does
 //! not decide the gate. Accountability is resolved against the live registry on
 //! every read rather than frozen into the record, for the reason
-//! [`crate::provenance`] does not store reachability: a declaration added an
+//! [`crate::binary::provenance`] does not store reachability: a declaration added an
 //! hour after a report must bring that program into scope, and a stored verdict
 //! would still be answering the older question.
 //!

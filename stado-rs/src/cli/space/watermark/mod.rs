@@ -29,7 +29,7 @@ pub async fn dispatch(args: WatermarkArgs) -> Result<(), CmdError> {
             "--authorize-graphical-session authorizes the graphical_session repair of a policy \
              named by --policy; on its own it authorizes nothing",
         )
-        .stating(crate::failure::FailureCode::Refused)
+        .stating(crate::primitives::failure::FailureCode::Refused)
         .machine_readable(args.json));
     }
     let store = crate::targets::RegistryStore::open().await?;

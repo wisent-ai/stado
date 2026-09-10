@@ -6,9 +6,9 @@
 //! builder: `cli::release_submit::builder` reads live consumer capacity and
 //! refuses outright when nothing fresh names the platform, and
 //! `queue::capacity::read_consumer_capacity_at` drops any publication older
-//! than [`crate::constants::CAPACITY_STALE_SECONDS`] (180s). The design's own
+//! than [`crate::primitives::constants::CAPACITY_STALE_SECONDS`] (180s). The design's own
 //! answer to that cutoff is
-//! [`crate::constants::CAPACITY_HEARTBEAT_INTERVAL_S`] — "always fresh before
+//! [`crate::primitives::constants::CAPACITY_HEARTBEAT_INTERVAL_S`] — "always fresh before
 //! the stale threshold" — one third of it.
 //!
 //! The agent tick used to `await run_cleanup_once` BEFORE it reached its

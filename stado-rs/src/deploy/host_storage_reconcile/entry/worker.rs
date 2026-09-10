@@ -22,8 +22,8 @@ pub async fn reconcile_host_worker(
             "native reconciliation worker is not resident on its captured target".to_string(),
         ));
     }
-    if source_revision != crate::build_identity::SOURCE_REVISION
-        || source_revision == crate::build_identity::UNKNOWN_REVISION
+    if source_revision != crate::binary::build_identity::SOURCE_REVISION
+        || source_revision == crate::binary::build_identity::UNKNOWN_REVISION
         || source_revision.ends_with("-dirty")
     {
         return Err(DeployError(
