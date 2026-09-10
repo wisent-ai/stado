@@ -35,6 +35,7 @@ struct PendingClearance: Identifiable {
 /// `@State` belongs to the view rather than to any one of its sections.
 struct ReleasesView: View {
     @ObservedObject var store: ReleaseEvidenceStore
+    @ObservedObject var fleetStore: FleetControlStore
     let scope: String
 
     @State var selection: ReleaseInventoryPair?
@@ -67,7 +68,7 @@ struct ReleasesView: View {
                 WisentAction(
                     "Resume selected run",
                     symbol: "play",
-                    isEnabled: selectedRun != nil && !store.mutation.isWorking
+                    isEnabled: selectedRun != nil && fleetStore.isConfigured && !store.mutation.isWorking
                 ) {
                     resumption = selectedRun
                 }
@@ -140,6 +141,10 @@ struct ReleasesView: View {
         }
         .sheet(item: $clearance) { pending in
             clearDialog(pending)
+        }
+        .onChange(of: fleetStore.requestGeneration) { _, _ in
+            resumption = nil
+            store.clearMutation()
         }
         .sheet(item: $resumption) { run in
             resumeDialog(run)

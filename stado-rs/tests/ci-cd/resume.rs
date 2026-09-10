@@ -161,6 +161,10 @@ fn failed_delivery_resumes_original_source_after_checkout_changes() {
     );
     let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut command, home.path(), &storage, &vault);
+    command.env(
+        "WC_RELEASE_SIGNING_SKARBIEC_TOKEN_FILE",
+        home.path().join("absent-signing-grant"),
+    );
     let repeated: Value = serde_json::from_slice(
         &run(command
             .current_dir(&source)

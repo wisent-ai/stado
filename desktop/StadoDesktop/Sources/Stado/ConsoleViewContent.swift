@@ -63,7 +63,7 @@ extension ConsoleView {
             case .fleets:
                 FleetsView(groupStore: groupStore, fleetStore: fleetStore, scope: scopeName)
             case .releases:
-                ReleasesView(store: releaseStore, scope: scopeName)
+                ReleasesView(store: releaseStore, fleetStore: fleetStore, scope: scopeName)
             case .deployments:
                 DeploymentsView(
                     deploymentStore: deploymentStore,

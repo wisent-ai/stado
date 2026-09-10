@@ -4,15 +4,6 @@ import WisentDesignSystem
 
 // MARK: - Release evidence
 
-/// What each product should be running, what its host is actually running,
-/// and the two things that stop a rollout dead: a quarantined digest nobody
-/// can clear from a screen, and a candidate that died with its reason in a
-/// file on the host.
-///
-/// The inventory of product/target pairs is one cheap read; every diagnosis
-/// after it reaches a host, so they are issued concurrently and each row is
-/// published the moment its own host answers. One unreachable host leaves one
-/// row carrying the command's sentence, never a blank table.
 @MainActor
 final class ReleaseEvidenceStore: ObservableObject {
     @Published private(set) var rows: [ReleaseRow] = []
@@ -257,31 +248,49 @@ final class ReleaseEvidenceStore: ObservableObject {
         }
     }
 
-    func resume(_ run: ReleasePipelineRunRecord) async {
+    func resume(_ run: ReleasePipelineRunRecord, fleet: FleetControlStore) async {
         guard !mutation.isWorking else { return }
-        mutation = .working("Resuming \(run.product) \(run.version)")
+        guard let address = fleet.address else {
+            mutation = .failed("No Stado API is configured.")
+            return
+        }
+        let generation = fleet.requestGeneration
+        let token = fleet.authorizationToken
+        mutation = .working("Resuming \(run.product) \(run.version) on \(address.displayString)")
         resumeDetails = ""
         do {
-            let result = try await cli.jsonResult(
-                ReleasePipelineRunRecord.self,
+            let result = try await fleet.client.run(
                 arguments: Self.resumeArguments(runID: run.runID),
-                timeoutSeconds: nil
+                confirmsMutation: true, at: address, authorizationToken: token,
+                timeoutSeconds: 300
             )
-            resumeDetails = String(decoding: result.stdout, as: UTF8.self)
-                + "\n" + String(decoding: result.stderr, as: UTF8.self)
-            mutation = result.exitCode == 0
-                ? .succeeded("Release \(result.value.version): \(result.value.state)")
-                : .failed(result.refusal ?? "Release resume failed")
-        } catch {
-            if case let StadoCLIError.response(_, stdout, stderr, _) = error {
-                resumeDetails = String(decoding: stdout, as: UTF8.self)
-                    + "\n" + String(decoding: stderr, as: UTF8.self)
-            } else {
-                resumeDetails = Self.message(for: error)
+            guard generation == fleet.requestGeneration else { return }
+            resumeDetails = result.standardOutput + "\n" + result.standardError
+            guard result.ok else { mutation = .failed(result.message); return }
+            let resumed = try JSONDecoder().decode(
+                ReleasePipelineRunRecord.self, from: Data(result.standardOutput.utf8)
+            )
+            guard resumed.runID == run.runID else {
+                mutation = .failed("The Stado API returned a different release run.")
+                return
             }
+            mutation = .succeeded("Release \(resumed.version): \(resumed.state)")
+            let readback = try await fleet.client.run(
+                arguments: ["release", "status", run.product, "--json"],
+                confirmsMutation: false, at: address, authorizationToken: token
+            )
+            guard generation == fleet.requestGeneration else { return }
+            resumeDetails += "\n" + readback.standardOutput + "\n" + readback.standardError
+            guard readback.ok else { mutation = .failed(readback.message); return }
+            let inventory = try JSONDecoder().decode(
+                ReleaseInventory.self, from: Data(readback.standardOutput.utf8)
+            )
+            pipelineRuns = inventory.runs
+        } catch {
+            guard generation == fleet.requestGeneration else { return }
+            resumeDetails += "\n" + Self.message(for: error)
             mutation = .failed(Self.message(for: error))
         }
-        await refresh()
     }
 
     func clearMutation() {
