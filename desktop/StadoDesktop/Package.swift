@@ -79,5 +79,13 @@ let package = Package(
             dependencies: ["Stado"],
             path: "tests/workload"
         ),
+        .testTarget(
+            name: "RouteTests",
+            dependencies: [
+                "Stado",
+                .product(name: "WisentDesignSystem", package: "wisent-components"),
+            ],
+            path: "tests/routes"
+        ),
     ]
 )
