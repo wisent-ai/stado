@@ -13,11 +13,11 @@ use serde_json::{json, Value};
 
 use super::args::WatermarkArgs;
 use super::fields::strip_nulls;
-use crate::cli::space::policies::automatic_verdict;
 use crate::cli::space::print_json;
 use crate::cli::CmdError;
 use crate::failure::FailureCode;
 use crate::providers::local::host_memory::declaration::policies;
+use crate::providers::local::host_memory::declaration::policies::automatic_verdict;
 
 /// Every refusal here is one thing: an explicit declaration refused this
 /// write. Saying so at the site keeps the classifier from reading the

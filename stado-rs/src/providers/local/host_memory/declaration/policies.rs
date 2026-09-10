@@ -30,6 +30,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use super::schema::{MemoryReclaimPolicy, REPAIR_GRAPHICAL_SESSION};
 
@@ -213,4 +214,79 @@ pub fn fitting(release_platform: &str, role: Option<&str>) -> Vec<&'static Decla
                 .collect()
         },
     )
+}
+
+/// One declared policy as a row every surface renders: the CLI listing, the
+/// dashboard projection and the desktop console all read this shape, so a
+/// field one of them shows and another cannot is a bug rather than a habit.
+pub fn policy_json(policy: &DeclaredPolicy) -> Value {
+    json!({
+        "name": policy.name,
+        "summary": policy.summary,
+        "platforms": policy.platforms,
+        "roles": policy.roles,
+        "mode": policy.policy.mode,
+        "repairs": policy.policy.repairs.keys().collect::<Vec<&String>>(),
+        "refuse_placement": policy.policy.refuse_placement,
+        "ends_graphical_session": policy.ends_graphical_session(),
+        "session_processes": policy.session_processes(),
+        "policy": policy.policy,
+    })
+}
+
+/// Which declared policy this document IS, when it is one of them.
+///
+/// Compared as declarations rather than as bytes: an empty repair list and an
+/// absent one are the same declaration, and a console that writes one where
+/// the catalog writes the other has still armed the host with that policy.
+pub fn matching_name(declared: &Value) -> Option<&'static str> {
+    let parsed: MemoryReclaimPolicy = serde_json::from_value(declared.clone()).ok()?;
+    all()
+        .ok()?
+        .iter()
+        .find(|candidate| candidate.policy == parsed)
+        .map(|candidate| candidate.name.as_str())
+}
+
+/// Whether a host's declaration repairs anything, and the sentence that says
+/// why not.
+///
+/// This is the verdict charless-mac-mini did not have on 2026-09-06: a
+/// readable declaration is not a managed host, and a surface that prints the
+/// fields and leaves the judgement to the reader is how a `report`-mode
+/// policy sat through an out-of-memory incident looking like configuration.
+pub fn automatic_verdict(declared: Option<&Value>) -> Value {
+    let Some(document) = declared else {
+        return json!({
+            "armed": false,
+            "reviewed_policy": null,
+            "detail": "declares no memory_reclaim policy, so it is measured against the \
+                       reporting default, which reports and repairs nothing",
+        });
+    };
+    let mode = document.get("mode").and_then(Value::as_str).unwrap_or("");
+    let repairs: Vec<&str> = document
+        .get("repairs")
+        .and_then(Value::as_object)
+        .map(|repairs| repairs.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    let armed = mode == "enforce" && !repairs.is_empty();
+    let detail = if armed {
+        format!(
+            "enforces its watermarks and may perform {}",
+            repairs.join(", ")
+        )
+    } else if mode == "enforce" {
+        "enforces its watermarks and names no repair, so it reports pressure it cannot act on"
+            .to_string()
+    } else {
+        format!("declares mode {mode:?}, so no repair is ever performed on this host")
+    };
+    json!({
+        "armed": armed,
+        "reviewed_policy": matching_name(document),
+        "mode": mode,
+        "repairs": repairs,
+        "detail": detail,
+    })
 }

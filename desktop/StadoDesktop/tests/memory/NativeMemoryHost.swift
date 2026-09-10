@@ -50,8 +50,12 @@ final class NativeMemoryHost {
         }
         do {
             try record(["revision": revision, "binaries": [try identity(stado), try identity(skarbiec)]], named: "source.json")
+            // The role is part of the declaration a policy is written for:
+            // without it no declared policy fits this fixture and the catalog
+            // path could not be exercised at all.
             let target: [String: Any] = ["name": name, "kind": "local", "ssh": NSNull(),
-                "release_platform": "darwin-arm64", "hostnames": [ProcessInfo.processInfo.hostName], "services": []]
+                "release_platform": "darwin-arm64", "role": "always-on",
+                "hostnames": [ProcessInfo.processInfo.hostName], "services": []]
             try JSONSerialization.data(withJSONObject: ["schema_version": 2, "targets": [target], "coordinators": []])
                 .write(to: registry)
             try record(["storage": ["backend": "local", "local": ["path": storage.path]]], named: "config.json")

@@ -11,76 +11,9 @@
 use serde_json::{json, Value};
 
 use super::{print_json, CmdError};
-use crate::providers::local::host_memory::declaration::policies::{self, DeclaredPolicy};
-
-/// What one declared policy looks like as a row.
-fn policy_json(policy: &DeclaredPolicy) -> Value {
-    json!({
-        "name": policy.name,
-        "summary": policy.summary,
-        "platforms": policy.platforms,
-        "roles": policy.roles,
-        "mode": policy.policy.mode,
-        "repairs": policy.policy.repairs.keys().collect::<Vec<&String>>(),
-        "refuse_placement": policy.policy.refuse_placement,
-        "ends_graphical_session": policy.ends_graphical_session(),
-        "session_processes": policy.session_processes(),
-        "policy": policy.policy,
-    })
-}
-
-/// Which declared policy this document IS, when it is one of them.
-pub fn matching_name(declared: &Value) -> Option<&'static str> {
-    let policies = policies::all().ok()?;
-    policies
-        .iter()
-        .find(|candidate| {
-            serde_json::to_value(&candidate.policy).is_ok_and(|document| &document == declared)
-        })
-        .map(|candidate| candidate.name.as_str())
-}
-
-/// Whether a host's declaration repairs anything, and the sentence saying why.
-pub fn automatic_verdict(declared: Option<&Value>) -> Value {
-    let Some(document) = declared else {
-        return json!({
-            "armed": false,
-            "reviewed_policy": null,
-            "detail": "declares no memory_reclaim policy, so it is measured against the \
-                       reporting default, which reports and repairs nothing",
-        });
-    };
-    let mode = document.get("mode").and_then(Value::as_str).unwrap_or("");
-    let repairs: Vec<&String> = document
-        .get("repairs")
-        .and_then(Value::as_object)
-        .map(|repairs| repairs.keys().collect())
-        .unwrap_or_default();
-    let reviewed = matching_name(document);
-    let armed = mode == "enforce" && !repairs.is_empty();
-    let detail = if armed {
-        format!(
-            "enforces its watermarks and may perform {}",
-            repairs
-                .iter()
-                .map(|name| name.as_str())
-                .collect::<Vec<&str>>()
-                .join(", ")
-        )
-    } else if mode == "enforce" {
-        "enforces its watermarks and names no repair, so it reports pressure it cannot act on"
-            .to_string()
-    } else {
-        format!("declares mode {mode:?}, so no repair is ever performed on this host")
-    };
-    json!({
-        "armed": armed,
-        "reviewed_policy": reviewed,
-        "mode": mode,
-        "repairs": repairs,
-        "detail": detail,
-    })
-}
+use crate::providers::local::host_memory::declaration::policies::{
+    self, automatic_verdict, policy_json, DeclaredPolicy,
+};
 
 /// `space policies` body.
 pub async fn dispatch(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {

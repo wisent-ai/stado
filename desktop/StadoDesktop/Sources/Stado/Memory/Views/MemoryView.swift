@@ -64,6 +64,15 @@ struct MemoryView: View {
                 MemoryReadingSection(state: state)
                 MemoryPassSection(state: state)
                 MemoryRepairsSection(state: state)
+                MemoryDeclaredPoliciesSection(
+                    state: state,
+                    declared: fleetStore.declaredMemoryPolicies,
+                    fit: fleetStore.target(named: state.target)?.memoryPolicies,
+                    isWriting: fleetStore.mutation.isWorking,
+                    fill: { policy in
+                        drafts[state.target] = MemoryPolicyDraft(declared: policy, state: state)
+                    }
+                )
                 MemoryEditorSection(
                     state: state,
                     draft: draftBinding(for: state),

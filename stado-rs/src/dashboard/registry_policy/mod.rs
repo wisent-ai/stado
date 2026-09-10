@@ -22,9 +22,11 @@ use super::{constant_time_eq, http_status, send_json, Request, Response};
 use crate::config;
 
 mod cleanup;
+mod memory;
 mod write;
 
 pub(super) use cleanup::{get_cleanup, run_cleanup};
+pub(super) use memory::get_memory_policies;
 pub(super) use write::set_policy;
 
 /// Policy fields an operator client may read and write.
@@ -144,6 +146,7 @@ fn project_target(entry: &Value) -> Option<Value> {
         }
         projected.insert("memory_reclaim".to_string(), Value::Object(whitelisted));
     }
+    projected.insert("memory_policies".to_string(), memory::projected_for(entry));
     // The recordings directory is the one path this projection carries,
     // because `host weles-recordings-dir` already exposes it as an operator
     // control and the desktop app displays it beside the policy.

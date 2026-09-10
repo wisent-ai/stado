@@ -27,6 +27,30 @@ struct MemoryPolicyDraft: Sendable {
         repairsDocument = document
     }
 
+    /// A draft seeded from a declared policy rather than from what the host
+    /// carries: applying one is a whole-document write, so every field the
+    /// declaration names is filled and the review dialog shows the complete
+    /// patch before it is posted.
+    ///
+    /// `repairsDocument` is assigned beside `repairsText` because a property
+    /// observer does not run during initialization: seeding the text alone
+    /// left the repairs of the previous state in place, and the backend
+    /// refused the resulting `enforce`-with-no-repair document. The refusal
+    /// was right and the draft was wrong.
+    init(declared: DeclaredMemoryPolicy, state: MemoryPolicyState) {
+        mode = MemoryReclaimMode(rawValue: declared.policy.mode ?? "")
+        numbers = Dictionary(
+            uniqueKeysWithValues: MemoryReclaimNumericField.allCases.map { field in
+                (field, declared.policy.value(of: field).map(String.init) ?? "")
+            }
+        )
+        refusePlacement = declared.policy.refusePlacement ?? false
+        let document = StorageReconciliationJSON
+            .object(declared.policy.repairs.mapValues(\.jsonValue))
+        repairsText = document.prettyJSON
+        repairsDocument = document
+    }
+
     func text(for field: MemoryReclaimNumericField) -> String {
         numbers[field] ?? ""
     }
