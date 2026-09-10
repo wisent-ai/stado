@@ -87,5 +87,10 @@ let package = Package(
             ],
             path: "tests/routes"
         ),
+        .testTarget(
+            name: "InferenceTests",
+            dependencies: ["Stado"],
+            path: "tests/inference"
+        ),
     ]
 )
