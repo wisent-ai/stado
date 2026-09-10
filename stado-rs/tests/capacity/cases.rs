@@ -111,3 +111,75 @@ fn a_declared_memory_refusal_publishes_its_numbers_and_blocks_claiming() {
         "the report printed no memory line: {text}"
     );
 }
+
+/// A host whose cleanup lock is held publishes that it is not accepting
+/// jobs, and names the janitor as the reason.
+///
+/// On 2026-09-10 lukasz-macbook's janitor pass held the exclusive cleanup
+/// lock for two hours inside a directory open macOS had parked behind a
+/// consent dialog. Every claim answered `cleanup_in_progress` and took
+/// nothing, the capacity publication kept saying `accepting_jobs: true`,
+/// `stado host gates` read `claiming: yes`, and the queued release delivery
+/// sat pinned to a host that could not start it. The publication is the
+/// document the coordinator and the gate judge by, so it has to say what
+/// the claim will do.
+#[test]
+fn a_held_cleanup_lock_publishes_cleanup_in_progress_and_blocks_claiming() {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut journey = Journey::new();
+    let state_dir = journey.home.path().join(".cache").join("wisent-compute");
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(
+        journey.home.path().join(".cache"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(state_dir.join("disk-cleanup.lock"))
+        .unwrap();
+    // What a janitor pass holds for its whole duration.
+    fs2::FileExt::lock_exclusive(&lock).unwrap();
+
+    journey.start_agent();
+    journey.wait_for(
+        "a capacity publication naming the held cleanup lock",
+        Duration::from_secs(30),
+        |state| {
+            state.newest_capacity().is_some_and(|capacity| {
+                capacity["diag"]["admission_reason"] == json!("cleanup_in_progress")
+            })
+        },
+    );
+    let capacity = journey.newest_capacity().expect("a published capacity");
+    assert_eq!(capacity["accepting_jobs"], json!(false), "{capacity}");
+    let verdict = journey.invoke(&["host", "gates", TARGET]);
+    let text = String::from_utf8_lossy(&verdict.stdout).into_owned();
+    assert!(
+        text.contains("cleanup_in_progress"),
+        "the verdict hid the refusal: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("claiming:") && line.contains("no")),
+        "the verdict still said the host claims: {text}"
+    );
+
+    // Releasing the lock is the whole remedy: the next publication admits.
+    fs2::FileExt::unlock(&lock).unwrap();
+    journey.wait_for(
+        "a publication that admits again",
+        Duration::from_secs(30),
+        |state| {
+            state
+                .newest_capacity()
+                .is_some_and(|capacity| capacity["accepting_jobs"] == json!(true))
+        },
+    );
+}

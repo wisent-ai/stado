@@ -87,6 +87,7 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "diagnostics": gates.published_diagnostics,
             "age_seconds": gates.age_seconds,
             "accepting_jobs": gates.accepting_jobs,
+            "admission_reason": gates.admission_reason,
             "running_jobs": gates.running_jobs,
             "available_cpu_cores": gates.available_cpu_cores,
             "total_cpu_cores": gates.total_cpu_cores,

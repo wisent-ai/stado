@@ -10,6 +10,7 @@ use std::time::Instant;
 use crate::providers::local::disk_cleanup::build_caches::walk::tag::Tag;
 use crate::providers::local::disk_cleanup::build_caches::walk::{Progress, Walk};
 use crate::providers::local::disk_cleanup::build_caches::{entry_names, same_object};
+use crate::providers::local::disk_cleanup::consent::{self, Gated};
 use crate::providers::local::disk_cleanup::{
     euid, ifmt, safefs, CleanupReport, JanitorError, IFDIR, IFLNK,
 };
@@ -74,8 +75,16 @@ impl<'a> Walk<'a> {
                 self.next_child = Some(relative);
                 return Ok(Progress::Halt);
             }
-            let child = match safefs::open_dir_at(parent_fd, name) {
-                Ok(child) => child,
+            let child = match consent::open_dir_at(&self.gated, parent_fd, name, &absolute) {
+                Ok(Gated::Opened(child)) => child,
+                Ok(Gated::Pending) => {
+                    // The consent question is with the person at the keyboard.
+                    // The pass keeps its place and ends, so the lock it holds
+                    // is not what waits for the answer.
+                    self.next_child = Some(relative);
+                    report.skip_builds("consent_pending", 1);
+                    return Ok(Progress::Halt);
+                }
                 Err(exc)
                     if matches!(
                         exc.raw_os_error(),

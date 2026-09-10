@@ -9,6 +9,19 @@ use crate::providers::local::disk_cleanup::janitor::pass::lock::file::{
 use crate::providers::local::disk_cleanup::janitor::pass::lock::{ensure_state_dir, secure_home};
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 
+/// The agent's word for "a standalone cleanup holds the exclusive lock, so
+/// no workload can take its shared hold": published as `admission_reason`
+/// in the capacity broadcast and as `disk_cleanup_admission` beside a claim
+/// that stopped for it, and read back verbatim by `stado host gates`.
+pub const CLEANUP_IN_PROGRESS: &str = "cleanup_in_progress";
+
+/// The agent's word for "the workload lock could not be probed at all":
+/// the state directory or the lock file refused the open. A claim stops for
+/// this exactly as it stops for [`CLEANUP_IN_PROGRESS`], so the publication
+/// carries it as the `admission_reason`, with the error code appended under
+/// `disk_cleanup_admission`.
+pub const CLEANUP_LOCK_ERROR: &str = "cleanup_lock_error";
+
 /// A shared-mode hold on the cleanup lock for one live workload
 /// (Python's opaque `int` handle from `acquire_workload_lock`).
 #[derive(Debug)]

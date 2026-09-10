@@ -55,6 +55,16 @@ pub struct HostGates {
     /// The worker's current admission decision and the measured resources that
     /// explain it. `None` means this host published no corresponding value.
     pub accepting_jobs: Option<bool>,
+    /// The agent's own word for why `accepting_jobs` is false, read verbatim
+    /// from `diag.admission_reason` of a live publication. A resource in use
+    /// (`cpu_busy`, `ram_headroom_low`, `exclusive_job_running`) stays a
+    /// transient state and never a blocker; a maintenance hold
+    /// ([`CLEANUP_IN_PROGRESS`]) is the claim path's own refusal and blocks.
+    /// Reported on the capacity line either way, because "busy or gated" sent
+    /// an operator to `ps` for a word the host had already published.
+    ///
+    /// [`CLEANUP_IN_PROGRESS`]: super::CLEANUP_IN_PROGRESS
+    pub admission_reason: Option<String>,
     pub running_jobs: Option<i64>,
     pub available_cpu_cores: Option<i64>,
     pub total_cpu_cores: Option<i64>,

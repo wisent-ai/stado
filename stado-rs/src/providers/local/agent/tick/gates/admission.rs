@@ -96,12 +96,51 @@ pub(crate) async fn publish_and_admit(
         "agent_source_revision".into(),
         Value::from(crate::build_identity::SOURCE_REVISION),
     );
+    // Whether a claim could take the workload lock right now. The claim path
+    // asks the same question and answers `cleanup_in_progress` without a
+    // claim, so a publication that said `accepting_jobs: true` meanwhile was a
+    // host promising work it could not start: on 2026-09-10 lukasz-macbook
+    // published that for two hours while its janitor thread held the lock
+    // inside a consent-gated `openat`, `host gates` read `claiming: yes`, and
+    // a required release delivery sat queued against it. The probe takes the
+    // shared lock and releases it at once, which is what the claim would do,
+    // and what it saw is published under the same key the claim path writes.
+    let lock_reason = match crate::providers::local::disk_cleanup::acquire_workload_lock() {
+        Ok(Some(probe)) => {
+            crate::providers::local::disk_cleanup::release_workload_lock(probe, log_fn);
+            agent_diag.remove("disk_cleanup_admission");
+            None
+        }
+        Ok(None) => {
+            agent_diag.insert(
+                "disk_cleanup_admission".into(),
+                Value::from(crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS),
+            );
+            Some(crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS)
+        }
+        Err(exc) => {
+            // The claim path stops for this too, so the publication says so.
+            log_fn(&format!(
+                "disk cleanup workload lock unavailable: {}",
+                exc.code
+            ));
+            agent_diag.insert(
+                "disk_cleanup_admission".into(),
+                Value::from(format!(
+                    "{}:{}",
+                    crate::providers::local::disk_cleanup::CLEANUP_LOCK_ERROR,
+                    exc.code
+                )),
+            );
+            Some(crate::providers::local::disk_cleanup::CLEANUP_LOCK_ERROR)
+        }
+    };
     let policy_reason = if queue_control.paused {
         Some("queue_paused")
     } else if pressure_active {
         Some("disk_pressure_active")
     } else {
-        None
+        lock_reason
     };
     let snapshot = measured_capacity(
         slots,

@@ -33,6 +33,17 @@ impl Journey {
             .unwrap();
         let storage = home.path().join("store");
         fs::create_dir_all(&storage).unwrap();
+        // `host gates` reads the host's effective storage configuration through
+        // the installed product path its services use; without it the verdict
+        // is incomplete and decides nothing.
+        let bin = home.path().join(".stado/bin");
+        fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(
+            std::env::var_os("STADO_TEST_BINARY")
+                .unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+            bin.join("stado"),
+        )
+        .unwrap();
         let hostname =
             String::from_utf8(Command::new("hostname").arg("-f").output().unwrap().stdout)
                 .unwrap()

@@ -13,9 +13,10 @@ use crate::deploy::host_disk;
 use crate::deploy::host_gates::gates::HostGates;
 use crate::deploy::host_gates::words::{
     AGENT_STORE_DEVICE_ONLY, AGENT_STORE_UNKNOWN, AGENT_STORE_UNREADABLE,
-    CAPACITY_PUBLICATION_STALE, DISK_CLEANUP_LOCK_HELD, DISK_CLEANUP_POLICY_UNKNOWN,
-    DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED, LOCAL_SNAPSHOTS_UNRECLAIMABLE,
-    NO_CAPACITY_PUBLICATION, PINNED_ONLY, QUEUE_PAUSED, STALL_INTERVALS,
+    CAPACITY_PUBLICATION_STALE, CLEANUP_IN_PROGRESS, DISK_CLEANUP_LOCK_HELD,
+    DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED,
+    LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY, QUEUE_PAUSED,
+    STALL_INTERVALS,
 };
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
 use crate::providers::local::disk_cleanup;
@@ -226,6 +227,7 @@ pub fn assemble(
         accepting_jobs: payload
             .and_then(|value| value.get("accepting_jobs"))
             .and_then(Value::as_bool),
+        admission_reason: None,
         running_jobs: payload
             .and_then(|value| value.get("running_jobs"))
             .and_then(Value::as_i64),
@@ -259,5 +261,26 @@ pub fn assemble(
         published_diagnostics: payload.and_then(|value| value.get("diag")).cloned(),
     };
     super::memory::apply(&mut gates, payload, publication_current, now);
+    // The agent's reason for refusing, in its own word. A live publication
+    // only: a stale one is the agent no longer talking, which
+    // `capacity_publication_stale` already says. The memory refusal above
+    // publishes its reason under the same key and has already been joined,
+    // so it is not listed twice.
+    if publication_current && gates.accepting_jobs == Some(false) {
+        gates.admission_reason = payload
+            .and_then(|value| value.get("diag"))
+            .and_then(|diag| diag.get("admission_reason"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if gates.admission_reason.as_deref() == Some(CLEANUP_IN_PROGRESS)
+            && !gates
+                .blockers
+                .iter()
+                .any(|blocker| blocker == CLEANUP_IN_PROGRESS)
+        {
+            gates.blockers.push(CLEANUP_IN_PROGRESS.to_string());
+            gates.claiming = false;
+        }
+    }
     gates
 }

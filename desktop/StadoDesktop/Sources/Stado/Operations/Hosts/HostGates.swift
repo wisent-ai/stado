@@ -212,6 +212,9 @@ struct HostGatesCapacity: Decodable, Sendable {
     let publishedAt: String?
     let ageSeconds: Double?
     let acceptingJobs: Bool?
+    /// The agent's own word for why it is not accepting, verbatim from the
+    /// report; nil while the host accepts or published no reason.
+    let admissionReason: String?
     let runningJobs: Int?
     let availableCPUCores: Int?
     let totalCPUCores: Int?
@@ -226,6 +229,7 @@ struct HostGatesCapacity: Decodable, Sendable {
         case publishedAt = "published_at"
         case ageSeconds = "age_seconds"
         case acceptingJobs = "accepting_jobs"
+        case admissionReason = "admission_reason"
         case runningJobs = "running_jobs"
         case availableCPUCores = "available_cpu_cores"
         case totalCPUCores = "total_cpu_cores"
@@ -242,6 +246,7 @@ struct HostGatesCapacity: Decodable, Sendable {
         publishedAt = try values.decodeIfPresent(String.self, forKey: .publishedAt)
         ageSeconds = try values.decodeIfPresent(Double.self, forKey: .ageSeconds)
         acceptingJobs = try values.decodeIfPresent(Bool.self, forKey: .acceptingJobs)
+        admissionReason = try values.decodeIfPresent(String.self, forKey: .admissionReason)
         runningJobs = try values.decodeIfPresent(Int.self, forKey: .runningJobs)
         availableCPUCores = try values.decodeIfPresent(Int.self, forKey: .availableCPUCores)
         totalCPUCores = try values.decodeIfPresent(Int.self, forKey: .totalCPUCores)

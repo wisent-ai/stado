@@ -101,10 +101,11 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
     }
     match gates.published_at.as_deref() {
         Some(published) => {
-            let admission = match gates.accepting_jobs {
-                Some(true) => "accepting jobs",
-                Some(false) => "busy or gated",
-                None => "admission unstated",
+            let admission = match (gates.accepting_jobs, gates.admission_reason.as_deref()) {
+                (Some(true), _) => "accepting jobs".to_string(),
+                (Some(false), Some(reason)) => format!("not accepting jobs: {reason}"),
+                (Some(false), None) => "busy or gated".to_string(),
+                (None, _) => "admission unstated".to_string(),
             };
             let cpu = gates
                 .available_cpu_cores

@@ -171,6 +171,27 @@ pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 /// above the watermark refusing work creates no space. It is a note there.
 pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
 
+/// This host's agent cannot take the shared workload hold on the cleanup
+/// lock because a standalone cleanup pass holds it exclusively, so every
+/// claim stops before it starts. The agent's own word
+/// ([`disk_cleanup::CLEANUP_IN_PROGRESS`]), published as `admission_reason`
+/// in its capacity broadcast.
+///
+/// A BLOCKER whatever the disk says, unlike [`DISK_CLEANUP_STALLED`] and
+/// [`DISK_CLEANUP_LOCK_HELD`], because it is not a prediction about space:
+/// it is the claim path's own answer, read back. On 2026-09-10
+/// lukasz-macbook's janitor pass held the lock for two hours inside a
+/// directory open macOS had parked behind a consent dialog; every claim
+/// answered this word and took nothing, the publication kept saying
+/// `accepting_jobs: true`, this command read `claiming: yes` with
+/// `disk_cleanup_stalled` as a note, and the queued release delivery sat
+/// pinned to a host that could not start it. The remedy is the same as for
+/// the held lock: `stado space report` names the holder in
+/// `cleanup_lock.holders`.
+///
+/// [`disk_cleanup::CLEANUP_IN_PROGRESS`]: crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS
+pub const CLEANUP_IN_PROGRESS: &str = crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS;
+
 /// How many of its own check intervals a janitor may miss before
 /// [`DISK_CLEANUP_STALLED`] fires.
 ///

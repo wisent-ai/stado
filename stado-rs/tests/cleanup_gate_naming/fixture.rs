@@ -85,6 +85,13 @@ impl Fixture {
         let fixture = Self { root };
         std::fs::create_dir_all(fixture.state_path().parent().expect("a state directory"))
             .expect("the janitor state directory");
+        // The host configuration reader executes the installed product path
+        // its services use; without it the verdict is incomplete and decides
+        // nothing.
+        let bin = fixture.home().join(".stado/bin");
+        std::fs::create_dir_all(&bin).expect("the isolated product installation");
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_stado"), bin.join("stado"))
+            .expect("install the real product binary in the isolated host");
         let (low, target) = headroom.watermarks();
         let registry = serde_json::json!({
             "schema_version": 2,

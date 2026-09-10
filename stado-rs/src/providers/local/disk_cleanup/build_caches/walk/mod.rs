@@ -23,6 +23,7 @@ use nix::sys::stat::FileStat;
 use crate::providers::local::disk_cleanup::build_caches::cursor::CursorPath;
 use crate::providers::local::disk_cleanup::build_caches::walk::tag::Tag;
 use crate::providers::local::disk_cleanup::build_caches::MAX_DEPTH;
+use crate::providers::local::disk_cleanup::consent::{self, Gated};
 use crate::providers::local::disk_cleanup::{euid, safefs, CleanupReport, JanitorError};
 use crate::targets::{DiskCleanerPolicy, DiskCleanupPolicy};
 
@@ -54,6 +55,10 @@ pub(super) struct Walk<'a> {
     /// Roots the walk must not even look inside, because looking is what
     /// costs: a macOS privacy prompt, or a cloud download.
     pub(super) privacy: Vec<PathBuf>,
+    /// Folders macOS gates behind a consent dialog and this walk still
+    /// enters: the first open under each is bounded, so a dialog nobody
+    /// answers costs this pass one cleaner and never the host.
+    pub(super) gated: Vec<PathBuf>,
     /// Bytes this pass expects to have freed, against `max_bytes_per_pass`.
     pub(super) deleted_bytes: i64,
     /// Directories discovered but not yet fully examined, in breadth-first
@@ -136,12 +141,20 @@ impl<'a> Walk<'a> {
             }
             // A durable queue is only a location hint. Reopen and revalidate
             // every component against today's tree and policy before using it.
-            let parent_fd = (|| -> Result<std::os::fd::OwnedFd, JanitorError> {
+            let parent_fd = (|| -> Result<Option<std::os::fd::OwnedFd>, JanitorError> {
                 let mut descriptor = safefs::dup_fd(root_fd)?;
                 let mut absolute = root.to_path_buf();
                 for part in parent.components() {
                     absolute.push(part);
-                    let child = safefs::open_dir_at(descriptor.as_raw_fd(), part.as_os_str())?;
+                    let child = match consent::open_dir_at(
+                        &self.gated,
+                        descriptor.as_raw_fd(),
+                        part.as_os_str(),
+                        &absolute,
+                    )? {
+                        Gated::Opened(child) => child,
+                        Gated::Pending => return Ok(None),
+                    };
                     let info = safefs::fstat(child.as_raw_fd())?;
                     if info.st_uid != euid()
                         || info.st_dev != self.root_dev
@@ -157,10 +170,18 @@ impl<'a> Walk<'a> {
                     }
                     descriptor = child;
                 }
-                Ok(descriptor)
+                Ok(Some(descriptor))
             })();
             let parent_fd = match parent_fd {
-                Ok(descriptor) => descriptor,
+                Ok(Some(descriptor)) => descriptor,
+                Ok(None) => {
+                    // The person at the keyboard has the question; the pass
+                    // keeps its place and ends here, so the lock it holds is
+                    // not what waits for the answer.
+                    self.frontier.push_front(parent.into());
+                    report.skip_builds("consent_pending", 1);
+                    return Ok(Progress::Halt);
+                }
                 Err(_) => {
                     self.next_child = None;
                     report.skip_builds("entry_replaced", 1);

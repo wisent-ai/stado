@@ -86,14 +86,17 @@ pub(crate) async fn start_candidate(
                 "disk cleanup workload lock unavailable: {}",
                 exc.code
             ));
-            agent_diag.insert("disk_cleanup_admission".into(), Value::from("lock_error"));
+            agent_diag.insert(
+                "disk_cleanup_admission".into(),
+                Value::from(format!("{}:{}", disk_cleanup::CLEANUP_LOCK_ERROR, exc.code)),
+            );
             return Ok(true);
         }
     };
     let Some(workload_lock) = workload_lock else {
         agent_diag.insert(
             "disk_cleanup_admission".into(),
-            Value::from("cleanup_in_progress"),
+            Value::from(disk_cleanup::CLEANUP_IN_PROGRESS),
         );
         return Ok(true);
     };

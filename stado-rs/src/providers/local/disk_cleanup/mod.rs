@@ -18,6 +18,7 @@ pub mod backup_twins;
 pub mod build_caches;
 pub mod catalogue;
 pub mod chromium_clones;
+pub mod consent;
 pub mod hf;
 mod janitor;
 pub mod queue_workdirs;
@@ -28,6 +29,7 @@ pub mod weles;
 pub use janitor::pass::cleaners::budget::ScanBudget;
 pub use janitor::pass::lock::workload::{
     acquire_workload_lock, acquire_workload_lock_in, release_workload_lock, WorkloadLock,
+    CLEANUP_IN_PROGRESS, CLEANUP_LOCK_ERROR,
 };
 pub use janitor::pass::lock::{ensure_state_dir, secure_home};
 pub use janitor::pass::once::entry::{

@@ -54,8 +54,7 @@ use std::time::Instant;
 
 use nix::sys::stat::FileStat;
 
-use super::safefs;
-use super::{euid, ifmt, CleanupReport, JanitorError};
+use super::{consent, euid, ifmt, safefs, CleanupReport, JanitorError};
 use crate::targets::DiskCleanupPolicy;
 
 use cursor::CursorPath;
@@ -143,7 +142,14 @@ pub(super) fn scan_build_caches(
             }
             None => home.to_path_buf(),
         };
-        let root_fd = safefs::open_dir_path(&root)?;
+        let gated = consent::gated_folders(home);
+        let root_fd = match consent::open_dir_path(&gated, &root)? {
+            consent::Gated::Opened(root_fd) => root_fd,
+            consent::Gated::Pending => {
+                report.skip_builds("consent_pending", 1);
+                return Ok(());
+            }
+        };
         let root_info = safefs::fstat(root_fd.as_raw_fd())?;
         if root_info.st_uid != euid() {
             return Err(JanitorError::os("build cache root ownership mismatch"));
@@ -163,6 +169,7 @@ pub(super) fn scan_build_caches(
             root_dev: root_info.st_dev,
             reserved: reserved_roots(home, policy),
             privacy: privacy_protected_roots(home),
+            gated,
             deleted_bytes: 0,
             frontier: cursor.frontier,
             next_child: cursor.next_child.map(PathBuf::from),
