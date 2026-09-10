@@ -2,11 +2,11 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::{host_channel, shlex_quote, DeployError, Runner};
+use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::inference::schema::Registry;
 use crate::targets::ComputeTarget;
 
-fn report(target: &ComputeTarget, output: &super::CommandOutput, ok: &str) -> Value {
+fn report(target: &ComputeTarget, output: &crate::deploy::CommandOutput, ok: &str) -> Value {
     let mut body = host_channel::base_report(target);
     host_channel::finish_report(&mut body, output, ok, "inference route operation failed");
     Value::Object(body)

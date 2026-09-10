@@ -25,7 +25,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let initial_signal =
-        crate::deploy::host_ping::grade_beacon(&initial_health, chrono::Utc::now());
+        crate::deploy::host_state::ping::grade_beacon(&initial_health, chrono::Utc::now());
     let threshold = crate::monitor::host_silence::silence_threshold_seconds();
     if initial_signal
         .age_seconds
@@ -87,7 +87,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         tokio::time::sleep(std::time::Duration::from_secs(LINK_REPAIR_POLL_SECONDS)).await;
         match crate::monitor::host_health::load_host_health(&store, &resolved.name).await {
             Ok(health) => {
-                let signal = crate::deploy::host_ping::grade_beacon(&health, chrono::Utc::now());
+                let signal = crate::deploy::host_state::ping::grade_beacon(&health, chrono::Utc::now());
                 last_observation = format!(
                     "newest beacon is {:?}s old and was reported at {}",
                     signal.age_seconds,
@@ -99,7 +99,7 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
                     let newest_beacon_at = signal
                         .reported_at
                         .as_deref()
-                        .and_then(crate::deploy::host_ping::parse_timestamp);
+                        .and_then(crate::deploy::host_state::ping::parse_timestamp);
                     crate::monitor::host_silence::observe_beacon_age(
                         &store,
                         &resolved.name,

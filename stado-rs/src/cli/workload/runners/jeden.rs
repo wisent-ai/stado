@@ -6,7 +6,7 @@ use std::process::Stdio;
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, ssh_key};
+use crate::deploy::{host_channel, host_access::ssh_key};
 use crate::targets::ComputeTarget;
 
 pub(crate) fn current_workspace() -> String {

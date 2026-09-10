@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::{click, route_host, ABSENT};
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference_routes, production_runner};
+use crate::deploy::{host_channel, inference::routes, production_runner};
 use crate::inference::schema;
 
 /// One alias, as the registry declares it and as the gateway host serves it.
@@ -37,7 +37,7 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
     };
     let runner = production_runner();
     let target = host_channel::canonical_target(host).await.map_err(click)?;
-    let live = inference_routes::live(&target, &runner)
+    let live = routes::live(&target, &runner)
         .await
         .map_err(click)?;
     // `stage` writes the serialized registry SECTION, not a whole registry
@@ -79,22 +79,22 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
         }));
     }
     let repaired = if repair && !diverged.is_empty() {
-        let transaction = inference_routes::transaction(&registry).map_err(click)?;
-        let staged = inference_routes::stage(&target, &registry, &transaction, &runner)
+        let transaction = routes::transaction(&registry).map_err(click)?;
+        let staged = routes::stage(&target, &registry, &transaction, &runner)
             .await
             .map_err(click)?;
-        if !inference_routes::ready(&staged, "routes_staged") {
+        if !routes::ready(&staged, "routes_staged") {
             return Err(CmdError::click("could not stage inference routes"));
         }
-        let committed = inference_routes::commit(&target, &transaction, &runner)
+        let committed = routes::commit(&target, &transaction, &runner)
             .await
             .map_err(click)?;
-        if !inference_routes::ready(&committed, "routes_committed") {
+        if !routes::ready(&committed, "routes_committed") {
             return Err(CmdError::click(
                 "the gateway refused the declared route table",
             ));
         }
-        Some(inference_routes::summary(&transaction, staged, committed))
+        Some(routes::summary(&transaction, staged, committed))
     } else {
         None
     };

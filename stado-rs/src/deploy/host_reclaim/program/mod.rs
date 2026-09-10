@@ -47,7 +47,7 @@ const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
 /// The fixed remote program.
 ///
 /// stderr is deliberately NOT redirected, for the reason
-/// [`crate::deploy::host_cleanup`] gives: it travels back into the channel's
+/// [`crate::deploy::host_state::cleanup`] gives: it travels back into the channel's
 /// own stderr, which is where [`crate::deploy::host_channel::finish_report`]
 /// reads the last line from, and it is the one sentence explaining why a stage
 /// failed.

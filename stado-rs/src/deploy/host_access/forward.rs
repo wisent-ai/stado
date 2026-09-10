@@ -12,7 +12,7 @@ use std::{
 
 use serde::Serialize;
 
-use super::{host_channel, production_runner, DeployError};
+use crate::deploy::{host_channel, production_runner, DeployError};
 use crate::targets::ComputeTarget;
 
 #[derive(Debug, Clone, Serialize)]

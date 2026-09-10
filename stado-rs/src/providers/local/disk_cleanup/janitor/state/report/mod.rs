@@ -104,7 +104,7 @@ pub struct CleanupReport {
     /// A pass that did not reach its cleaners now emits `cleaners: null`
     /// rather than a measurement it never made. Both readers of the table
     /// already tolerate its absence
-    /// ([`crate::deploy::host_cleanup::cleaner_plans`] returns no rows and
+    /// ([`crate::deploy::host_state::cleanup::cleaner_plans`] returns no rows and
     /// `stado space report` keeps janitor state separate), and the `outcome`
     /// vocabulary is unchanged: `lock_busy`, `interval_noop`,
     /// `invalid_or_unavailable_policy` and `healthy_noop` already say which

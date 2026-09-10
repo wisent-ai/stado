@@ -2,7 +2,7 @@
 //! of one registry-managed host.
 //!
 //! NO Python original: item two of `stado.wisent.com/docs/missing-commands`. Shape and
-//! rules come from [`crate::deploy::host_reboot`] via
+//! rules come from [`crate::deploy::host_state::reboot`] via
 //! [`crate::deploy::host_channel`] — registry-authorized target, a FIXED
 //! remote program, the shared ssh option set, the [`Runner`] seam, and a
 //! report carrying `exit_code`, `status` and the last stderr line.
@@ -24,8 +24,8 @@
 
 use serde_json::{json, Map, Value};
 
-use super::host_channel;
-use super::{DeployError, Runner};
+use crate::deploy::host_channel;
+use crate::deploy::{DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// `status` for a clean read.

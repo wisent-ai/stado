@@ -13,7 +13,7 @@
 //! so the combination is a plain `max`).
 //!
 //! Signal one is the shared ssh channel ([`crate::deploy::host_channel`],
-//! itself the option set of [`crate::deploy::host_reboot`]) running a
+//! itself the option set of [`crate::deploy::host_state::reboot`]) running a
 //! fixed, read-only remote program. Signal two is the beacon under
 //! [`crate::monitor::host_health::HEALTH_PREFIX`], read through the
 //! configured [`JobStorage`] backend by
@@ -24,8 +24,8 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::{json, Map, Value};
 
-use super::host_channel;
-use super::{DeployError, Runner};
+use crate::deploy::host_channel;
+use crate::deploy::{DeployError, Runner};
 use crate::monitor::host_health::{self, HostHealthReport};
 use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;

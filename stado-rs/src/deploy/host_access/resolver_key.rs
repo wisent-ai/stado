@@ -55,7 +55,7 @@
 
 use serde_json::{json, Value};
 
-use super::{host_channel, production_runner, CommandOutput, DeployError};
+use crate::deploy::{host_channel, production_runner, CommandOutput, DeployError};
 
 /// Where a resolver looks for its own key, matching the default in
 /// [`crate::cli::resolver`]'s `ssh_command`. An operator who has pointed a

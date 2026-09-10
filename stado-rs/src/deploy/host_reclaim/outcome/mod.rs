@@ -7,7 +7,7 @@
 use serde_json::{json, Value};
 
 use crate::deploy::host_channel;
-use crate::deploy::host_cleanup::cleaner_plans;
+use crate::deploy::host_state::cleanup::cleaner_plans;
 
 use super::{APPLY_MODE, DRY_RUN_MODE, UNAVAILABLE_SUFFIX};
 

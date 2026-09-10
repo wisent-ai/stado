@@ -28,9 +28,9 @@
 
 use serde_json::{json, Map, Value};
 
-use super::host_channel;
-use super::host_recovery::WC_CANDIDATES;
-use super::{DeployError, Runner};
+use crate::deploy::host_channel;
+use crate::deploy::host_recovery::WC_CANDIDATES;
+use crate::deploy::{DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// `status` for a preview that ran and produced a plan.

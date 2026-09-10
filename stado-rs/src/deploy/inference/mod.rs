@@ -2,7 +2,9 @@
 
 mod install;
 mod observe;
+pub mod process;
 mod retire;
+pub mod routes;
 mod support;
 
 pub use install::{install, update_reservation};

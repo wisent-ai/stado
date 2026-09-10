@@ -2,7 +2,7 @@
 //! memory usage beside the registry cleanup policy and janitor state.
 //!
 //! NO Python original: item four of `stado.wisent.com/docs/missing-commands`. Shape and
-//! rules come from [`crate::deploy::host_reboot`] via
+//! rules come from [`crate::deploy::host_state::reboot`] via
 //! [`crate::deploy::host_channel`].
 //!
 //! Three parts, deliberately reported together. "97% full" on its own does

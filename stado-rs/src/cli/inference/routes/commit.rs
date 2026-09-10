@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::click;
 use crate::cli::CmdError;
-use crate::deploy::{host_channel, inference_routes, production_runner};
+use crate::deploy::{host_channel, inference::routes, production_runner};
 use crate::inference::schema;
 
 /// What one route mutation reports once the registry and the gateway agree.
@@ -37,11 +37,11 @@ pub(super) async fn commit_routes(
     let mut transaction = String::new();
     let target = if let Some(host) = host {
         let target = host_channel::canonical_target(host).await.map_err(click)?;
-        transaction = inference_routes::transaction(registry).map_err(click)?;
-        staged = inference_routes::stage(&target, registry, &transaction, &runner)
+        transaction = routes::transaction(registry).map_err(click)?;
+        staged = routes::stage(&target, registry, &transaction, &runner)
             .await
             .map_err(click)?;
-        if !inference_routes::ready(&staged, "routes_staged") {
+        if !routes::ready(&staged, "routes_staged") {
             return Err(CmdError::click("could not stage inference routes"));
         }
         Some(target)
@@ -54,28 +54,28 @@ pub(super) async fn commit_routes(
         Ok(generation) => generation,
         Err(error) => {
             if let Some(target) = &target {
-                let _ = inference_routes::discard(target, &transaction, &runner).await;
+                let _ = routes::discard(target, &transaction, &runner).await;
             }
             return Err(error);
         }
     };
     let committed = if let Some(target) = &target {
-        let result = inference_routes::commit(target, &transaction, &runner).await;
+        let result = routes::commit(target, &transaction, &runner).await;
         let committed = result
             .as_ref()
-            .is_ok_and(|value| inference_routes::ready(value, "routes_committed"));
+            .is_ok_and(|value| routes::ready(value, "routes_committed"));
         if !committed {
             let rollback = schema::write(&next, previous_registry).map_err(click)?;
             let registry_rollback =
                 crate::cli::registry::push_document_if(&rollback, &generation).await;
             let old_transaction =
-                inference_routes::transaction(previous_registry).map_err(click)?;
+                routes::transaction(previous_registry).map_err(click)?;
             let runtime_rollback =
-                if inference_routes::stage(target, previous_registry, &old_transaction, &runner)
+                if routes::stage(target, previous_registry, &old_transaction, &runner)
                     .await
                     .is_ok()
                 {
-                    inference_routes::commit(target, &old_transaction, &runner)
+                    routes::commit(target, &old_transaction, &runner)
                         .await
                         .is_ok()
                 } else {
@@ -107,7 +107,7 @@ pub(super) async fn commit_routes(
     if json_output {
         let mut report = change.report;
         report["generation"] = json!(generation);
-        report["runtime"] = inference_routes::summary(&transaction, staged, committed);
+        report["runtime"] = routes::summary(&transaction, staged, committed);
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!("{} generation={generation}", change.line);

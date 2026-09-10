@@ -2,13 +2,13 @@
 
 use serde_json::{json, Value};
 
-use super::{host_channel, DeployError, Runner};
+use crate::deploy::{host_channel, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-const LIST_SCRIPT: &str = include_str!("inference_process_list.txt");
-const RELEASE_SCRIPT: &str = include_str!("inference_process_release.txt");
+const LIST_SCRIPT: &str = include_str!("list.txt");
+const RELEASE_SCRIPT: &str = include_str!("release.txt");
 
-fn report(target: &ComputeTarget, output: &super::CommandOutput, ok: &str) -> Value {
+fn report(target: &ComputeTarget, output: &crate::deploy::CommandOutput, ok: &str) -> Value {
     let mut body = host_channel::base_report(target);
     host_channel::finish_report(&mut body, output, ok, "GPU process operation failed");
     body.insert("stdout".to_string(), Value::String(output.stdout.clone()));

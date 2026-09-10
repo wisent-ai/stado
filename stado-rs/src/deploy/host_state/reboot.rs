@@ -6,7 +6,7 @@
 
 use serde_json::{json, Map, Value};
 
-use super::{host_channel, py_str_repr, DeployError, Runner};
+use crate::deploy::{host_channel, py_str_repr, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
 fn resolve_target<'a>(

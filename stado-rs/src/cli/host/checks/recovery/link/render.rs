@@ -14,7 +14,7 @@ pub(super) fn render(
     resolved: &ComputeTarget,
     verdict: &str,
     blockers: Vec<String>,
-    signal: &crate::deploy::host_ping::BeaconSignal,
+    signal: &crate::deploy::host_state::ping::BeaconSignal,
     beacon_publisher: Option<Value>,
     ssh_error: Option<String>,
     connection_probe_error: Option<String>,

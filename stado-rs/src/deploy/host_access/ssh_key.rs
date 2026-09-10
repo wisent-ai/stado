@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::DeployError;
+use crate::deploy::DeployError;
 use crate::skarbiec::{Client, SkarbiecError};
 
 const ITEM_PREFIX: &str = "stado-ssh-";
@@ -139,7 +139,7 @@ fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
 /// channel when that broker is unavailable. Private material never enters
 /// argv, stdout, logs, or registry data.
 pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
-    if let Some(key) = super::host_channel::session_key(target) {
+    if let Some(key) = crate::deploy::host_channel::session_key(target) {
         return Ok(key);
     }
     if let Some(key) = owner_key_override()? {

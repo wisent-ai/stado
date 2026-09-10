@@ -8,7 +8,7 @@ use serde::Serialize;
 use tokio::io::AsyncReadExt;
 
 use crate::deploy::{
-    host_channel, production_runner, shlex_quote, ssh_key, CommandSpec, DeployError,
+    host_channel, production_runner, shlex_quote, host_access::ssh_key, CommandSpec, DeployError,
 };
 use crate::targets::ComputeTarget;
 

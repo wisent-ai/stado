@@ -43,7 +43,7 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
         // The janitor's OWN planning phase: same canonical policy, same
         // lock, same scanners, with an `enforce` policy pinned to its
         // `report` mode and no state written. The `registry_cleanup` stage
-        // (`deploy::host_cleanup`) runs exactly this on the target being
+        // (`deploy::host_state::cleanup`) runs exactly this on the target being
         // previewed.
         let report = disk_cleanup::preview_cleanup_once(&mut |_message| {}).await;
         println!("{}", disk_cleanup::canonical_json(&report));
