@@ -76,26 +76,14 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
     {
         return Err(CmdError::click("delivery input identity mismatch"));
     }
-    // The job's own scratch, not an immutable release directory: a queue
-    // retry runs this worker again in the same job directory, and on
+    // A queue retry runs this worker again in the same job directory. On
     // 2026-09-10 the second attempt of Stado 0.20.5's delivery to
-    // fleet-macbook was refused for the tree its first attempt left behind.
-    // Whatever an earlier attempt unpacked is discarded; the source is
-    // re-extracted from the archive whose digest was just verified.
-    let source_root = std::env::current_dir()?.join("delivery-source");
-    if source_root.exists() {
-        std::fs::remove_dir_all(&source_root).map_err(|error| {
-            CmdError::click(format!(
-                "cannot clear the previous attempt's delivery source {}: {error}",
-                source_root.display()
-            ))
-        })?;
-    }
-    release_control::safe_extract_archive(&source_archive, &source_root)
-        .map_err(CmdError::click)?;
-    // release directory already exists" before it read a byte. The extractor's
-    // refusal is right where a release lands in its own immutable path; here
-    // the tree is scratch, so each attempt gets a name nothing else holds.
+    // fleet-macbook died with "immutable release directory already exists"
+    // before it read a byte, because the first attempt's tree was still at
+    // the fixed name. The extractor's refusal is right where a release lands
+    // in its own immutable path; here the tree is scratch, so each attempt
+    // gets a name nothing else holds, re-extracted from the archive whose
+    // digest was just verified.
     let source_root =
         std::env::current_dir()?.join(format!("delivery-source-{}", uuid::Uuid::new_v4().simple()));
     release_control::safe_extract_archive(&source_archive, &source_root)
