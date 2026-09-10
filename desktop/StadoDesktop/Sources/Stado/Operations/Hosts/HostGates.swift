@@ -18,6 +18,11 @@ struct HostGates: Decodable, Identifiable, Sendable {
     /// blocker is a second source of truth about why work is not being taken.
     let blockers: [String]
     let disk: HostGatesDisk?
+    /// What this host published about its own memory. The disk half of this
+    /// panel has always been complete; a host refusing every job for memory
+    /// pressure showed two RAM totals and no reason at all, which is how a
+    /// `skarbiec` Linux publication failed unexplained on 2026-09-10.
+    let memory: HostGatesMemory?
     let capacity: HostGatesCapacity?
     /// Queued jobs pinned to this host, oldest first — the refusal's own
     /// consequence, so "not claiming" arrives with a size and an age.
@@ -39,7 +44,7 @@ struct HostGates: Decodable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case host, claiming, blockers, disk, capacity
+        case host, claiming, blockers, disk, memory, capacity
         case complete, observations
         case waitingJobs = "waiting_jobs"
     }
@@ -53,8 +58,69 @@ struct HostGates: Decodable, Identifiable, Sendable {
         blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
         disk = try values.decodeIfPresent(HostGatesDisk.self, forKey: .disk)
         capacity = try values.decodeIfPresent(HostGatesCapacity.self, forKey: .capacity)
+        memory = try values.decodeIfPresent(HostGatesMemory.self, forKey: .memory)
         waitingJobs =
             try values.decodeIfPresent([HostGatesWaitingJob].self, forKey: .waitingJobs) ?? []
+    }
+}
+
+/// The memory half of `stado host gates <host> --json`.
+///
+/// The host's own declaration decides whether memory pressure withholds it
+/// from job selection, so this carries the refusal, the reading it was made
+/// on and both watermarks rather than a colour.
+struct HostGatesMemory: Decodable, Sendable {
+    let pressureActive: Bool?
+    let refusePlacement: Bool?
+    let availableGB: Double?
+    let totalGB: Double?
+    let lowWatermarkGB: Double?
+    /// Swap over its watermark while memory still has headroom: reported,
+    /// never a reason this host takes no work.
+    let swapPressureOnly: Bool?
+    let swapUsedPct: Int?
+    let swapHighWatermarkPct: Int?
+    let policyMode: String?
+    let passOutcome: String?
+
+    enum CodingKeys: String, CodingKey {
+        case pressureActive = "pressure_active"
+        case refusePlacement = "refuse_placement"
+        case availableGB = "available_gb"
+        case totalGB = "total_gb"
+        case lowWatermarkGB = "low_watermark_gb"
+        case swapUsedPct = "swap_used_pct"
+        case swapPressureOnly = "swap_pressure_only"
+        case swapHighWatermarkPct = "swap_high_watermark_pct"
+        case policyMode = "policy_mode"
+        case passOutcome = "pass_outcome"
+    }
+
+    /// This host is withholding itself from selection right now.
+    var isRefusingPlacement: Bool { pressureActive == true }
+
+    /// The operator's sentence, in the same shape the CLI prints.
+    var summary: String {
+        var clauses: [String] = []
+        if let availableGB {
+            clauses.append(
+                lowWatermarkGB.map { "\(StadoFormat.decimal(availableGB)) GB available against a \(StadoFormat.decimal($0)) GB watermark" }
+                    ?? "\(StadoFormat.decimal(availableGB)) GB available, no watermark published"
+            )
+        }
+        if let swapUsedPct, let swapHighWatermarkPct {
+            clauses.append("swap \(swapUsedPct)% against \(swapHighWatermarkPct)%")
+        }
+        if isRefusingPlacement {
+            clauses.append("refusing placement (memory_pressure_active)")
+        } else if swapPressureOnly == true {
+            clauses.append("taking work; swap over its watermark with memory headroom (memory_swap_over_watermark)")
+        } else if refusePlacement == false {
+            clauses.append("reporting only; this host does not refuse placement")
+        } else if !clauses.isEmpty {
+            clauses.append("taking work")
+        }
+        return clauses.isEmpty ? "Not observed" : clauses.joined(separator: " · ")
     }
 }
 

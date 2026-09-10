@@ -244,9 +244,10 @@ pub fn assemble(
         notes.push(AGENT_STORE_UNREADABLE.to_string());
     }
 
-    HostGates {
+    let mut gates = HostGates {
         host: target.name.clone(),
         claiming: blockers.is_empty(),
+        memory: super::MemoryGate::default(),
         blockers,
         disk_pressure_unresolved,
         free_bytes,
@@ -294,5 +295,7 @@ pub fn assemble(
         observations: Vec::new(),
         pressure_source,
         published_diagnostics: payload.and_then(|value| value.get("diag")).cloned(),
-    }
+    };
+    super::memory::apply(&mut gates, payload, publication_current, now);
+    gates
 }

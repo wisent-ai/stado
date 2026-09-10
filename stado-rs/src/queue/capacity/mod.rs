@@ -91,7 +91,7 @@ pub async fn publish_capacity(
     kind: &str,
     snapshot: &CapacitySnapshot,
 ) -> Result<(), StorageError> {
-    let memory_refusal = crate::providers::local::host_memory::placement_refusal();
+    let memory = crate::providers::local::host_memory::placement_decision();
     let mut payload = Map::new();
     payload.insert("consumer_id".into(), Value::String(consumer_id.to_string()));
     payload.insert("kind".into(), Value::String(kind.to_string()));
@@ -101,7 +101,7 @@ pub async fn publish_capacity(
     );
     payload.insert(
         "accepting_jobs".into(),
-        Value::from(snapshot.accepting_jobs && memory_refusal.is_none()),
+        Value::from(snapshot.accepting_jobs && memory.reason.is_none()),
     );
     payload.insert(
         "running_jobs".into(),
@@ -134,10 +134,7 @@ pub async fn publish_capacity(
         payload.insert("total_ram_gb".into(), Value::from(value));
     }
     let mut diag = snapshot.diag.clone();
-    if let Some(reason) = memory_refusal {
-        diag.insert("memory_pressure_active".into(), Value::Bool(true));
-        diag.insert("admission_reason".into(), Value::String(reason.to_string()));
-    }
+    diag.append(&mut memory.diagnostics());
     payload.insert("diag".into(), Value::Object(diag));
     payload.insert(
         "stado_version".into(),

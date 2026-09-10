@@ -68,6 +68,15 @@ extension HostsView {
             )
             WisentField(label: "Disk reading time", value: gates.disk?.observedAt ?? "Not observed")
             WisentField(label: "Disk pressure evidence", value: gates.disk?.pressureSource ?? "Not observed")
+            // Beside the disk fields and never merged into them: the two
+            // watermarks withhold a host for different reasons and are
+            // repaired by different commands. A builder refusing every job for
+            // memory pressure had no field on this panel at all.
+            WisentField(
+                label: "Memory",
+                value: gates.memory?.summary ?? "Not observed",
+                tone: gates.memory?.isRefusingPlacement == true ? .danger : .neutral
+            )
             if let bytes = gates.disk?.freeBytes {
                 WisentField(label: "Measured available bytes", value: bytes.formatted(.number))
             }

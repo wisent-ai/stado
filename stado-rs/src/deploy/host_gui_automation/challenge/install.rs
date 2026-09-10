@@ -129,7 +129,7 @@ async fn sign_helper(
     // Apple's intermediate is not on every Mac, and its absence makes the
     // certificate unusable without saying so, so the issuer travels with it.
     let issuers = String::from_utf8(
-        pinned_artifact(
+        crate::deploy::native_signing::pinned_artifact(
             &format!("apple-issuers-{APPLE_ISSUER_CHAIN_SHA256}.pem"),
             APPLE_ISSUER_CHAIN_SHA256,
         )
@@ -199,85 +199,13 @@ async fn signing_credential(field: &str) -> Result<String, DeployError> {
 }
 
 /// Resolve the pinned shared signer this fleet signs native code with,
-/// installing it into its Stado-owned cache when the host has none.
-///
-/// Deliberately not a PATH lookup: the signature a host produces has to come
-/// from one reviewed signer revision, and a machine's own `wisent-products`
-/// may be any older one.
+/// installing it into its Stado-owned cache when the host has none. The
+/// pin, the payload and the receipt check live in
+/// [`crate::deploy::native_signing`], shared with the release worker.
 async fn signing_program(
     target: &ComputeTarget,
     home: &str,
     runner: &Runner,
 ) -> Result<String, DeployError> {
-    bootstrap_signer(target, home, runner).await
-}
-
-async fn bootstrap_signer(
-    target: &ComputeTarget,
-    home: &str,
-    runner: &Runner,
-) -> Result<String, DeployError> {
-    use base64::Engine;
-
-    // Private build input from wisent-products 7aa6f1f, never a public release.
-    const SOURCE_SHA256: &str = "6a2781e2a70a1fa7160ac5562332f29954e2c81f799ff50a69f12eef94c9bd24";
-    let program = format!("{home}/.stado/cache/native-signing/{SOURCE_SHA256}/bin/wisent-products");
-    if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&program)), runner).await? {
-        return Ok(program);
-    }
-    let source = pinned_artifact(&format!("{SOURCE_SHA256}.tar.gz"), SOURCE_SHA256).await?;
-    let input = serde_json::json!({
-        "archive": base64::engine::general_purpose::STANDARD.encode(source),
-        "sha256": SOURCE_SHA256,
-    });
-    let output = host_channel::run_program_with_stdin(
-        target,
-        &[
-            "/usr/bin/python3",
-            "-c",
-            include_str!("../../../host_payloads/native_signing/runtime.py"),
-        ],
-        &input.to_string(),
-        runner,
-    )
-    .await?;
-    if !output.ok() {
-        return Err(DeployError(format!(
-            "{}: native signing runtime preparation failed: {}",
-            target.name,
-            output.detail().trim()
-        )));
-    }
-    let observed: serde_json::Value = serde_json::from_str(&output.stdout)
-        .map_err(|error| DeployError(format!("invalid native signing runtime receipt: {error}")))?;
-    if observed["program"].as_str() != Some(program.as_str())
-        || observed["source_sha256"].as_str() != Some(SOURCE_SHA256)
-    {
-        return Err(DeployError(
-            "native signing runtime returned another source or program".into(),
-        ));
-    }
-    Ok(program)
-}
-
-/// One immutable native-signing input, addressed by its own digest in the
-/// fleet's object namespace and verified before anything uses it.
-async fn pinned_artifact(leaf: &str, sha256: &str) -> Result<Vec<u8>, DeployError> {
-    let namespace = crate::config::wc_stado_storage_namespace();
-    if namespace.is_empty() {
-        return Err(DeployError(
-            "storage.stado.namespace is not configured, so no native signing input can be read"
-                .into(),
-        ));
-    }
-    let uri = format!("stado://{namespace}/artifacts/native-signing/{leaf}");
-    let bytes = crate::cli::storage::fetch_object(&uri)
-        .await
-        .map_err(|error| DeployError(format!("cannot read native signing input {uri}: {error}")))?;
-    if crate::release_control::sha256_bytes(&bytes) != sha256 {
-        return Err(DeployError(format!(
-            "native signing input digest mismatch: {uri}"
-        )));
-    }
-    Ok(bytes)
+    crate::deploy::native_signing::bootstrap_remote_signer(target, home, runner).await
 }

@@ -14,6 +14,9 @@ use serde_json::{json, Map, Value};
 use super::reading::MemoryReading;
 use super::state;
 
+mod placement;
+pub use placement::{placement_decision, PlacementDecision};
+
 /// No pass has ever completed on this host.
 pub const NEVER_RUN: &str = "never_run";
 /// The canonical registry could not be read, or what it declares is not a
@@ -234,21 +237,15 @@ pub fn persisted_watermark() -> Option<PublishedWatermark> {
     persisted_watermark_in(&crate::config_file::expand_tilde("~"))
 }
 
-/// Whether a live reading is over a published watermark.
+/// Whether a live reading withholds this host from job selection, against the
+/// watermark it published for itself. The rule and its incident live with the
+/// reading, in [`MemoryReading::withholds_placement`], so the pass's report
+/// and this publication can never disagree about whether work is refused.
 pub fn over_published_watermark(
     watermark: PublishedWatermark,
     reading: &MemoryReading,
 ) -> Option<bool> {
-    let by_memory = reading
-        .available_bytes
-        .map(|available| available < watermark.low_bytes);
-    let by_swap = reading
-        .swap_used_pct()
-        .map(|pct| pct >= watermark.high_swap_used_pct);
-    match (by_memory, by_swap) {
-        (None, None) => None,
-        (memory, swap) => Some(memory.unwrap_or(false) || swap.unwrap_or(false)),
-    }
+    reading.withholds_placement(watermark.low_bytes, watermark.high_swap_used_pct)
 }
 
 /// The admission reason a capacity publication must carry, or `None` when

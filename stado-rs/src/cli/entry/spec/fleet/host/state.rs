@@ -73,12 +73,16 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Report HOST's measured disk space, published admission decision and
-    /// the source, duration and error of every diagnostic read.
+    /// Report HOST's measured disk space, its published memory refusal and
+    /// the watermarks behind it, the published admission decision and the
+    /// source, duration and error of every diagnostic read.
     ///
     /// Read-only. Each registry, host, storage, capacity and queue read has a
     /// ten-second budget. Completed readings survive failures; incomplete
-    /// reports use claiming=null and never turn missing space into a full disk.
+    /// reports use claiming=null and never turn missing space into a full
+    /// disk. A host whose own declaration refuses placement for memory
+    /// pressure reports `memory_pressure_active` as a blocker with the
+    /// reading and both watermarks beside it.
     Gates {
         host: String,
         /// Emit the gates as JSON.

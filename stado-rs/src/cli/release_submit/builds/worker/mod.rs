@@ -175,23 +175,43 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     }
     let mut build = execute("build", &recipe.build.argv, &source, &environment)?;
     if build.status == StepStatus::Passed && request.platform.starts_with("darwin-") {
-        let signing = execute(
-            "macos-code-signing",
-            &[
-                "wisent-products".into(),
-                "signing".into(),
-                "stage".into(),
-                "--manifest".into(),
-                source.join(".wisent-release.json").display().to_string(),
-                "--output".into(),
-                output.display().to_string(),
-                "--platform".into(),
-                request.platform.clone(),
-                "--json".into(),
-            ],
-            &source,
-            &environment,
-        )?;
+        // The signer is the fleet's pinned revision, installed into this
+        // builder's Stado-owned cache when absent - never whatever
+        // `wisent-products` the builder's PATH happens to carry, which on
+        // 2026-09-10 was nothing, and which ended weles-worker 0.6.6 before
+        // its first signature with "cannot run wisent-products".
+        let signing = match crate::deploy::native_signing::bootstrap_local_signer(
+            &crate::deploy::production_runner(),
+        )
+        .await
+        {
+            Ok(signer) => execute(
+                "macos-code-signing",
+                &[
+                    signer,
+                    "signing".into(),
+                    "stage".into(),
+                    "--manifest".into(),
+                    source.join(".wisent-release.json").display().to_string(),
+                    "--output".into(),
+                    output.display().to_string(),
+                    "--platform".into(),
+                    request.platform.clone(),
+                    "--json".into(),
+                ],
+                &source,
+                &environment,
+            )?,
+            Err(error) => {
+                println!("[release-worker] step macos-code-signing: {error}");
+                StepReceipt {
+                    name: "macos-code-signing".into(),
+                    argv: vec![crate::deploy::native_signing::SIGNER_SOURCE_SHA256.into()],
+                    status: StepStatus::Failed,
+                    exit_code: None,
+                }
+            }
+        };
         if signing.status != StepStatus::Passed {
             build = signing;
         } else {

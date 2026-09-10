@@ -167,8 +167,12 @@ pub async fn run_memory_pass_once(
 
     report.before = reading::read_host_memory();
     report.pressure_active = report.before.over_watermark(&policy);
-    report.placement_refusal =
-        report::refusal_reason(policy.refuse_placement, report.pressure_active);
+    report.placement_refusal = report::refusal_reason(
+        policy.refuse_placement,
+        report
+            .before
+            .withholds_placement(policy.low_free_bytes(), policy.high_swap_used_pct),
+    );
     let value = finish_pass(&mut report, &policy, active_job_count, started, log_fn);
     let _ = state::write_state(&state_dir, &value, writer.as_str(), attempted_at);
     value

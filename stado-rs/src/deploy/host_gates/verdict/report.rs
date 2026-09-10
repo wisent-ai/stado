@@ -79,6 +79,7 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "cleanup_prevented_age_seconds": gates.cleanup_prevented_age_seconds,
         }),
     );
+    report.insert("memory".to_string(), gates.memory.to_value());
     report.insert(
         "capacity".to_string(),
         json!({
@@ -159,5 +160,13 @@ pub fn gates_section(gates: &HostGates) -> Value {
         "free_bytes": gates.free_bytes,
         "free_gb": gates.free_gb,
         "low_watermark_gb": gates.low_watermark_gb,
+        // The memory half rides here for the same reason: a release verdict is
+        // where this fleet actually looks, and on 2026-09-10 the builder that
+        // stopped every `skarbiec` Linux publication was refusing placement
+        // for memory pressure while every surface reported only its disk.
+        "memory_pressure_active": gates.memory.pressure_active,
+        "memory_available_gb": gates.memory.available_gb,
+        "memory_low_watermark_gb": gates.memory.low_watermark_gb,
+        "memory_swap_used_pct": gates.memory.swap_used_pct,
     })
 }

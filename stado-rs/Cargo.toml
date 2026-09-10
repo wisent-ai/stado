@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.20.2"
+version = "0.20.3"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
@@ -114,6 +114,10 @@ path = "tests/host_run/main.rs"
 [[test]]
 name = "apple_challenge"
 path = "tests/apple_challenge/main.rs"
+
+[[test]]
+name = "native_signing"
+path = "tests/native_signing/main.rs"
 
 [[test]]
 name = "service_convergence"
