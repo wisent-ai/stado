@@ -35,7 +35,7 @@ pub async fn grant_item_read(
     let vault = credential_host.vault;
     let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
@@ -108,7 +108,8 @@ pub async fn grant_show(
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
-    let (resolved, listing) = remote_skarbiec_json(target, &[String::from("tokens")]).await?;
+    let (resolved, listing) =
+        remote_skarbiec_json(target, &[String::from("grant"), String::from("list")]).await?;
     let grant = listing
         .as_array()
         .ok_or_else(|| {

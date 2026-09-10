@@ -122,7 +122,11 @@ pub(crate) async fn inspect_host_vault(
     Ok(())
 }
 
-pub(crate) fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
+pub(crate) fn inspect_vault(
+    path: &str,
+    matching: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
     let metadata = std::fs::symlink_metadata(path)?;
     let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
     if !metadata.is_file()
@@ -134,9 +138,17 @@ pub(crate) fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
         ));
     }
     let launcher = skarbiec_launcher()?;
-    let items = vault_items(&launcher, std::path::Path::new(path))?;
+    let mut items = vault_items(&launcher, std::path::Path::new(path))?;
+    if let Some(text) = matching {
+        let needle = text.to_lowercase();
+        items.retain(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.to_lowercase().contains(&needle))
+        });
+    }
     let grants_output = std::process::Command::new(&launcher)
-        .arg("tokens")
+        .args(["grant", "list"])
         .env("SKARBIEC_VAULT_FILE", path)
         .output()?;
     if !grants_output.status.success() {

@@ -1,10 +1,6 @@
-//! `stado secrets put|get` against the real Skarbiec binary.
-//!
-//! These tests are ignored by the ordinary Stado suite because the Skarbiec
-//! executable is a separate product artifact. Run them with
-//! `SKARBIEC_TEST_BIN=/path/to/skarbiec cargo test --test secrets -- --ignored`.
-//! Every process uses an isolated HOME, GnuPG home, vault, token, storage root,
-//! and loopback port; no operator configuration or vault is reachable.
+//! Credential commands against the real Skarbiec binary and an isolated vault.
+//! SKARBIEC_BIN selects a qualified artifact; the installed binary is the default.
+//! GnuPG's short product-owned root is removed on drop.
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -16,6 +12,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
+
+mod inventory;
 
 struct SkarbiecFixture {
     root: PathBuf,
@@ -36,11 +34,13 @@ impl SkarbiecFixture {
             .as_nanos();
         // GnuPG creates Unix sockets below GNUPGHOME. Keep this deliberately
         // short so macOS's AF_UNIX path limit cannot break key generation.
-        let root = PathBuf::from("/private/tmp").join(format!(
-            "stsb{:x}{:08x}",
-            std::process::id(),
-            unique & 0xffff_ffff
-        ));
+        let root = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
+            .join(".stado/test-runs")
+            .join(format!(
+                "stsb{:x}{:08x}",
+                std::process::id(),
+                unique & 0xffff_ffff
+            ));
         let gnupg = root.join("g");
         let storage = root.join("storage");
         fs::create_dir_all(&gnupg).expect("create isolated GnuPG home");
@@ -48,11 +48,16 @@ impl SkarbiecFixture {
         fs::set_permissions(&gnupg, fs::Permissions::from_mode(0o700))
             .expect("protect isolated GnuPG home");
 
-        let skarbiec = PathBuf::from(
-            std::env::var("SKARBIEC_TEST_BIN")
-                .expect("SKARBIEC_TEST_BIN must name the real Skarbiec executable"),
+        let skarbiec = std::env::var_os("SKARBIEC_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
+                    .join(".stado/bin/skarbiec")
+            });
+        assert!(
+            skarbiec.is_file(),
+            "the real Skarbiec binary is required; set SKARBIEC_BIN"
         );
-        assert!(skarbiec.is_file(), "SKARBIEC_TEST_BIN names no file");
         let port = TcpListener::bind("127.0.0.1:0")
             .expect("reserve loopback port")
             .local_addr()
@@ -120,6 +125,13 @@ impl SkarbiecFixture {
             .env("STADO_CONFIG", self.root.join("no-such-config.json"))
             .env("STADO_CREDENTIALS_STORE", "skarbiec")
             .env("SKARBIEC_BIN", &self.skarbiec)
+            .env("SKARBIEC_LAUNCHER", &self.skarbiec)
+            .env(
+                "STADO_CREDENTIALS_ADMIN_URL",
+                format!("http://127.0.0.1:{}", self.port),
+            )
+            .env("STADO_CREDENTIALS_ADMIN_CONSUMER", "stado-control-plane")
+            .env("STADO_CREDENTIALS_ADMIN_TOKEN_FILE", &self.token)
             .env("WC_SKARBIEC_URL", format!("http://127.0.0.1:{}", self.port))
             .env("WC_SKARBIEC_CONSUMER", "stado-control-plane")
             .env("WC_SKARBIEC_TOKEN_FILE", &self.token)
@@ -160,7 +172,8 @@ impl SkarbiecFixture {
 
     fn grant_username(&self) {
         let minted = self.skarbiec(&[
-            "token-mint",
+            "grant",
+            "issue",
             "stado-control-plane",
             "--capabilities",
             "read:stado-cli-login#username",
@@ -237,18 +250,13 @@ fn assert_success(output: &Output, action: &str) {
 }
 
 #[test]
-#[ignore = "requires SKARBIEC_TEST_BIN pointing at the separately built Skarbiec product"]
 fn secrets_put_writes_a_typed_item_to_real_skarbiec() {
     let fixture = SkarbiecFixture::new();
     let put = fixture.stado(
-        &["secrets", "put", "stado-cli-login", "--type", "login"],
+        &["credentials", "put", "stado-cli-login", "--type", "login"],
         Some(r#"{"username":"alice","password":"not-returned"}"#),
     );
-    assert_success(&put, "stado secrets put");
-    assert_eq!(
-        String::from_utf8_lossy(&put.stdout),
-        "stored credential item \"stado-cli-login\" as \"login\"\n"
-    );
+    assert_success(&put, "stado credentials put");
 
     let stored = fixture.skarbiec(&["get", "stado-cli-login"]);
     assert_success(&stored, "read fixture state with Skarbiec");
@@ -259,22 +267,34 @@ fn secrets_put_writes_a_typed_item_to_real_skarbiec() {
 }
 
 #[test]
-#[ignore = "requires SKARBIEC_TEST_BIN pointing at the separately built Skarbiec product"]
 fn secrets_get_reads_only_the_granted_field_from_real_skarbiec() {
     let mut fixture = SkarbiecFixture::new();
     fixture.seed_login();
     fixture.grant_username();
     fixture.start_server();
+    let before = fs::read(&fixture.vault).expect("read the declared credential state");
 
     let get = fixture.stado(
-        &["secrets", "get", "stado-cli-login", "--field", "username"],
+        &[
+            "credentials",
+            "get",
+            "stado-cli-login",
+            "--field",
+            "username",
+        ],
         None,
     );
-    assert_success(&get, "stado secrets get");
+    assert_success(&get, "stado credentials get");
     assert_eq!(String::from_utf8_lossy(&get.stdout), "alice\n");
 
     let refused = fixture.stado(
-        &["secrets", "get", "stado-cli-login", "--field", "password"],
+        &[
+            "credentials",
+            "get",
+            "stado-cli-login",
+            "--field",
+            "password",
+        ],
         None,
     );
     assert!(!refused.status.success());
@@ -284,4 +304,5 @@ fn secrets_get_reads_only_the_granted_field_from_real_skarbiec() {
         "unexpected refusal: {}",
         String::from_utf8_lossy(&refused.stderr)
     );
+    assert_eq!(fs::read(&fixture.vault).unwrap(), before);
 }
