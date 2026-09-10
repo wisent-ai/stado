@@ -31,6 +31,11 @@
       "roots_from": "stado-rs/data/products.json superseded_roots"
     },
     {
+      "name": "delivery_leftovers",
+      "description": "Attestation copies and retained archives of delivered versions other than the installed and newest ones, and dated binary backups older than the newest, which every release install leaves under ~/.stado/releases and ~/.stado/bin.",
+      "roots": ["~/.stado/releases", "~/.stado/bin"]
+    },
+    {
       "name": "rebuildable_caches",
       "description": "Declared product-owned package, browser, probe, download, and build caches.",
       "roots": [

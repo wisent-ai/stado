@@ -92,15 +92,21 @@ fi
 printf 'STADO_RECLAIM_STAGE\tforeign_home_trees\t%s\t%s\n' "$before" "$(free_kb)"
 fi
 
-if stage_enabled delivered_trees; then
-before=$(free_kb)
-# One directory of versions: keep what `current` resolves to, keep the newest,
-# take the stale unheld rest. A function because the same rules have to hold
-# for the services root and for every superseded delivery root a product
-# declares -- two copies would be two policies, and only one of them would be
-# the tested one.
+# One directory of versions: keep what `current` resolves to, keep a pinned
+# version, keep the newest, take the stale unheld rest. A function because the
+# same rules have to hold for the services root, for every superseded delivery
+# root a product declares, and for the delivered-release trees below -- three
+# copies would be three policies, and only one of them would be the tested one.
+# Defined outside every stage gate so each stage that needs it finds it.
 sweep_versions() {
   product="$1"
+  # The stage each taken tree is reported under: an item is drained into the
+  # stage line that names it, so a tree this function takes for one stage and
+  # reports under another is a tree the report attributes to the wrong sweep.
+  sweep_stage="$2"
+  # Versions the caller pins by name, space-separated, kept beside `current`
+  # and the newest. Empty pins nothing.
+  pins=" ${3:-} "
   # What `current` resolves to, in the spelling the version glob produces,
   # so the comparison below is an equality and not a guess.
   keep=""
@@ -147,16 +153,19 @@ sweep_versions() {
       */current) continue ;;
     esac
     [ "$tree" = "$keep" ] && continue
+    case "$pins" in *" ${tree##*/} "*) continue ;; esac
     [ "$tree" = "$newest" ] && continue
     stale "$tree" || continue
-    reclaim "$tree" delivered_trees
+    reclaim "$tree" "$sweep_stage"
   done
 }
 
+if stage_enabled delivered_trees; then
+before=$(free_kb)
 if [ -d "$services" ]; then
   for product in "$services"/*; do
     [ -d "$product" ] || continue
-    sweep_versions "$product"
+    sweep_versions "$product" delivered_trees
   done
 fi
 # Where an EARLIER delivery mechanism staged one directory per version, taken
@@ -165,9 +174,74 @@ fi
 # product's version directory, one level shallower than the services layout.
 for superseded in @SUPERSEDED_ROOTS@; do
   [ -d "$superseded" ] || continue
-  sweep_versions "$superseded"
+  sweep_versions "$superseded" delivered_trees
 done
 printf 'STADO_RECLAIM_STAGE\tdelivered_trees\t%s\t%s\n' "$before" "$(free_kb)"
+fi
+
+if stage_enabled delivery_leftovers; then
+before=$(free_kb)
+# What `stado release install-local` leaves behind on every host it delivers
+# to, and nothing else reclaims: under `~/.stado/releases/<product>/<version>/`
+# the attestation copy and retained archive of each delivered version, and
+# under `~/.stado/bin` one dated backup of the binary per install day. Each
+# Stado release adds roughly 200 MB of both per host; on 2026-09-10 the Linux
+# builder carried 3.0 GiB of the former and 1.35 GiB of the latter, and the
+# always-on mini 9.1 GiB, while every declared cleaner reported nothing to
+# take.
+#
+# The version the host is running is pinned by the installed coordinate the
+# same delivery writes (`~/.stado/bin/<product>.release-version`): its
+# attestation copy is what `stado service converge` byte-compares the
+# installed binary against, and deleting it turns a delivered host into an
+# unattested one. The newest version stays as the same rules keep for
+# services; the stale rest is taken.
+releases="$HOME/.stado/releases"
+if [ -d "$releases" ]; then
+  for product in "$releases"/*; do
+    [ -d "$product" ] || continue
+    name=${product##*/}
+    pins=""
+    handshake="$HOME/.stado/bin/$name.release-version"
+    if [ -r "$handshake" ]; then
+      read -r pins < "$handshake" || pins=""
+    fi
+    # The version whose attestation copy IS the installed binary, byte for
+    # byte, is pinned whether or not a coordinate names it: that copy is the
+    # one `stado service converge` attests the host with, and a product
+    # delivered by the other delivery path writes no coordinate at all. `cmp`
+    # stops at the first differing byte, so every copy but the matching one
+    # costs a few kilobytes to rule out.
+    if [ -f "$HOME/.stado/bin/$name" ]; then
+      for copy in "$product"/*/*/"$name"; do
+        [ -f "$copy" ] || continue
+        if /usr/bin/cmp -s "$copy" "$HOME/.stado/bin/$name" 2>/dev/null; then
+          version=${copy%/*/"$name"}
+          pins="$pins ${version##*/}"
+        fi
+      done
+    fi
+    sweep_versions "$product" delivery_leftovers "$pins"
+  done
+fi
+# One backup per name survives: the newest, which is the binary the last
+# install replaced and the one a rollback by hand would reach for. The rest
+# are older binaries with nothing left to roll back to.
+bin="$HOME/.stado/bin"
+if [ -d "$bin" ]; then
+  for newest_backup in "$bin"/*.release-backup-*; do
+    [ -f "$newest_backup" ] || continue
+    name=${newest_backup##*/}
+    name=${name%.release-backup-*}
+    # The newest by stamp, once per name: the loop reaches every backup of a
+    # name, and every backup of the same name resolves the same newest.
+    newest=$(/bin/ls -d -- "$bin/$name".release-backup-* 2>/dev/null | /usr/bin/sort | /usr/bin/tail -n 1)
+    [ "$newest_backup" = "$newest" ] && continue
+    stale "$newest_backup" || continue
+    reclaim "$newest_backup" delivery_leftovers
+  done
+fi
+printf 'STADO_RECLAIM_STAGE\tdelivery_leftovers\t%s\t%s\n' "$before" "$(free_kb)"
 fi
 
 "#;
