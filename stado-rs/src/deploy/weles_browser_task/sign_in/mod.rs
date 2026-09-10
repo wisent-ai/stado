@@ -53,7 +53,7 @@ pub const WELES_API_CAPABILITY_FILE: &str = "$HOME/.stado/weles-api-capabilities
 /// 105`).
 ///
 /// Note for anyone declaring a route here: that launcher REINSTALLS this file
-/// from `weles/scripts/worker/deploy/weles-capability-routes.json` on every
+/// from `weles/src/worker/deploy/weles-capability-routes.json` on every
 /// start, so a route declared on the host lasts until the unit next launches.
 /// The durable place for a new one is that checked-in file.
 pub const WELES_API_ROUTES_FILE: &str = "$HOME/.stado/weles-api-capability-routes.json";
