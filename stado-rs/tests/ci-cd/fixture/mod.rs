@@ -69,7 +69,7 @@ pub(crate) fn release_env(
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", storage)
         .env("WC_STADO_STORAGE_NAMESPACE", "ci-release")
-        .env("STADO_CONFIG", home.join("nonexistent-config.json"))
+        .env("STADO_CONFIG", home.join(".config/stado/config.json"))
         .env("WC_SKARBIEC_URL", vault.url())
         .env(
             "WC_RELEASE_SIGNING_SKARBIEC_CONSUMER",
@@ -277,6 +277,22 @@ pub(crate) fn registry(
     fs::write(
         storage.join("registry.json"),
         serde_json::to_string_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    // Workloads intentionally do not inherit agent-only storage variables.
+    // Their ordinary profile must address the same isolated persisted state.
+    let profile = home.join(".config/stado/config.json");
+    fs::create_dir_all(profile.parent().unwrap()).unwrap();
+    fs::write(
+        profile,
+        serde_json::to_vec(&json!({
+            "storage": {
+                "backend": "local",
+                "local": {"path": storage},
+                "stado": {"namespace": "ci-release"}
+            }
+        }))
+        .unwrap(),
     )
     .unwrap();
 }
