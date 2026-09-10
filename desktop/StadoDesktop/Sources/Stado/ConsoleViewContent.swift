@@ -54,6 +54,8 @@ extension ConsoleView {
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .memory:
                 MemoryView(cleanupStore: cleanupStore, fleetStore: fleetStore, scope: scopeName)
+            case .inference:
+                InferenceView(store: inferenceStore, scope: scopeName)
             case .databases:
                 DatabasesView(store: databasesStore, scope: scopeName)
             case .registry:

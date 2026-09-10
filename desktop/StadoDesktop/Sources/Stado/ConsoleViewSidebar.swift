@@ -212,7 +212,7 @@ extension ConsoleView {
             guard let memory = cleanupStore.report?.memoryReclaim else { return nil }
             if memory.isRefusingPlacement { return (1, .danger) }
             return memory.pressureActive == true ? (1, .warning) : nil
-        case .registry, .deployments, .fleets, .products, .databases, .cloudflare:
+        case .registry, .deployments, .fleets, .products, .databases, .cloudflare, .inference:
             return nil
         }
     }

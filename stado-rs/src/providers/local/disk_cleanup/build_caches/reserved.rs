@@ -1,6 +1,8 @@
 //! The caches this cleaner may never reclaim: the janitor's own state root,
 //! the HuggingFace hub cache and the weles recordings root (both owned by
-//! stricter cleaners), cargo's package registry, and the running executable.
+//! stricter cleaners), cargo's package registry, and the running executable —
+//! plus, on macOS, the personal locations the operating system puts behind a
+//! consent dialog.
 
 use std::path::{Path, PathBuf};
 
@@ -82,4 +84,47 @@ pub(super) fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<Pat
         roots.push(crate::config_file::expand_tilde(hf_root));
     }
     roots
+}
+
+/// The macOS locations a build tool never writes a tagged cache into, and
+/// which cost a privacy prompt or a network download to look inside.
+///
+/// `$HOME` is this cleaner's default root, so the walk reaches `~/Pictures`
+/// like any other directory — and on 2026-09-09 it did, from the always-on
+/// agent: `tccd` recorded `kTCCServicePhotos` requests attributed to
+/// `~/.stado/bin/stado` while the pass was walking. macOS answers such a
+/// request by asking the person at the keyboard, so an unattended cleaner
+/// scanning a photo library produces a dialog nobody asked for, and produces
+/// it again for every code identity that asks. The scan cannot win anything
+/// there either: the media libraries are bundles their own applications
+/// manage, and no build tool tags them with `CACHEDIR.TAG`.
+///
+/// `Library/Mobile Documents` and `Library/CloudStorage` are worse than
+/// useless: their entries can be evicted placeholders, and reading one
+/// downloads it. A disk cleaner that fills the disk to look for free space is
+/// the opposite of the capability.
+///
+/// `Documents`, `Desktop` and `Downloads` are deliberately NOT here. They are
+/// consent-gated too, but real build trees live in them — this fleet's own
+/// checkouts are under `~/Documents` — so the honest cost is one grant
+/// decision for a stably signed binary, not a permanent blind spot.
+#[cfg(target_os = "macos")]
+pub(super) fn privacy_protected_roots(home: &Path) -> Vec<PathBuf> {
+    ["Pictures", "Music", "Movies", ".Trash"]
+        .iter()
+        .map(|part| home.join(part))
+        .chain(
+            ["Mobile Documents", "CloudStorage"]
+                .iter()
+                .map(|part| home.join("Library").join(part)),
+        )
+        .collect()
+}
+
+/// No operating system outside macOS gates these directories behind a consent
+/// dialog, and a Linux build host may legitimately keep a tagged tree in any
+/// of them.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn privacy_protected_roots(_home: &Path) -> Vec<PathBuf> {
+    Vec::new()
 }
