@@ -107,7 +107,11 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         // storage configuration. Children must use the configured object API.
         .env_remove("WC_STORAGE_BACKEND")
         .env_remove("WC_LOCAL_STORAGE_PATH")
-        .stdin(if request.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if request.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -151,7 +155,9 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         let status = status.map_err(|error| {
             ConsoleError::unavailable(format!("could not wait for Stado command: {error}"))
         })?;
-        let stdin_error = input.err().map(|error| format!("could not write command stdin: {error}"));
+        let stdin_error = input
+            .err()
+            .map(|error| format!("could not write command stdin: {error}"));
         Ok::<_, ConsoleError>((stdout, stderr, status, stdin_error))
     };
     let ((stdout, stdout_truncated), (stderr, stderr_truncated), status, stdin_error) =

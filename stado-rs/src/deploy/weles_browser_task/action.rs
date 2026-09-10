@@ -17,8 +17,7 @@ pub const ALLOWLIST_KEY: &str = "WELES_ACTION_ALLOWLIST";
 pub const DEFAULT_ACTION: &str = "generic_browser_task";
 
 /// The immutable action catalog shipped by the active Weles release.
-pub const DEFAULT_ALLOWLIST_FILE: &str =
-    "$HOME/weles/src/worker/deploy/weles-action-allowlist.txt";
+pub const DEFAULT_ALLOWLIST_FILE: &str = "$HOME/weles/src/worker/deploy/weles-action-allowlist.txt";
 
 /// Every action one host will accept, in the order the file lists them.
 ///
