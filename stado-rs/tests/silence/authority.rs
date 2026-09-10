@@ -1,7 +1,6 @@
 //! An authority this host cannot reach, and the refusal it publishes.
 use super::*;
 
-
 /// This machine's kernel hostname, normalized the way the registry
 /// validator demands ("must be normalized as '<lowercase>'").
 fn hostname() -> String {

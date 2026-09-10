@@ -294,7 +294,6 @@ async fn a_host_that_never_published_starts_its_silence_at_the_observation() {
 /// two tests here that touch the process environment.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-
 mod authority;
 mod threshold;
 mod truth_table;
