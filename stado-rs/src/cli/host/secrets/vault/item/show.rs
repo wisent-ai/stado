@@ -40,7 +40,6 @@ pub async fn vault_item_show(
     let vault = credential_host.vault;
     let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
     let refused = |detail: String| {
         CmdError::click(format!(
             "{}: {item} could not be read: {detail}",
@@ -62,6 +61,7 @@ pub async fn vault_item_show(
             resolved.name
         )));
     }
+    let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
 
     let summary_text = crate::deploy::host_channel::run_command(
         &resolved,

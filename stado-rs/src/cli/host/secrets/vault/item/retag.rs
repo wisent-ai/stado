@@ -37,7 +37,7 @@ pub async fn retag_vault_item(
     let vault = credential_host.vault;
     let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
 
     // A remote refusal names the check that failed, in the words the retired
     // script printed to stderr.

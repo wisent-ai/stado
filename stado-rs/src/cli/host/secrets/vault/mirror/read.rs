@@ -32,7 +32,7 @@ pub(in crate::cli::host) async fn remote_skarbiec_json_at(
     let vault = credential_host.vault;
     let gnupg_home = credential_host.gnupg_home;
     let runner = crate::deploy::production_runner();
-    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
     let vault_environment = match vault_relative {
         Some(relative) => format!("SKARBIEC_VAULT_FILE={home}/{relative}"),
         None => format!("SKARBIEC_VAULT_FILE={vault}"),

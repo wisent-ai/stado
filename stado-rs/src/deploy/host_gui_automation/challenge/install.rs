@@ -63,22 +63,7 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
         runner,
     )
     .await?;
-    run(
-        target,
-        &[
-            &signer,
-            "signing",
-            "sign",
-            "--identifier",
-            APPLE_CHALLENGE_HELPER_BUNDLE_ID,
-            "--previous",
-            path,
-            &staged,
-        ],
-        "sign Apple challenge helper",
-        runner,
-    )
-    .await?;
+    sign_helper(target, &signer, &staged, path, runner).await?;
     run_sudo(
         target,
         &["/bin/mkdir", "-p", "/usr/local/libexec"],
@@ -128,22 +113,91 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
     Ok(identity)
 }
 
+/// Sign the staged helper with the fleet's stored Apple certificate.
+///
+/// A build host holds no signing identity of its own. The certificate and its
+/// key live in Skarbiec, are read here, and reach the host on stdin; the signer
+/// puts them in a temporary keychain it deletes again, so no host keychain and
+/// no login item is changed and no system dialog is opened.
+async fn sign_helper(
+    target: &ComputeTarget,
+    signer: &str,
+    staged: &str,
+    previous: &str,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    let request = serde_json::json!({
+        "program": signer,
+        "identifier": APPLE_CHALLENGE_HELPER_BUNDLE_ID,
+        "target": staged,
+        "previous": previous,
+        "certificate": signing_credential("certificate").await?,
+        "private_key": signing_credential("private_key").await?,
+    });
+    let output = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/python3",
+            "-c",
+            include_str!("../../../host_payloads/native_signing/sign.py"),
+        ],
+        &request.to_string(),
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: sign Apple challenge helper failed: {}",
+            target.name,
+            output.detail().trim()
+        )));
+    }
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
+        DeployError(format!("invalid Apple challenge signing receipt: {error}"))
+    })?;
+    if report["state"].as_str() != Some("stable") {
+        return Err(DeployError(format!(
+            "{}: Apple challenge helper signature is {}",
+            target.name, report["state"]
+        )));
+    }
+    Ok(())
+}
+
+/// One field of the fleet's Apple signing certificate: the broker grant first,
+/// then the owner vault, naming both failures rather than one.
+async fn signing_credential(field: &str) -> Result<String, DeployError> {
+    let broker = crate::credential_store::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).await;
+    if let Ok(Some(value)) = &broker {
+        if !value.is_empty() {
+            return Ok(value.clone());
+        }
+    }
+    let broker = match broker {
+        Ok(_) => format!("{APPLE_SIGNING_CERTIFICATE_ITEM} has no {field}"),
+        Err(error) => error.to_string(),
+    };
+    crate::credential_store::owner::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).map_err(
+        |owner| {
+            DeployError(format!(
+                "cannot read {APPLE_SIGNING_CERTIFICATE_ITEM}#{field} for native signing: \
+                 broker: {broker}; owner vault: {owner}"
+            ))
+        },
+    )
+}
+
+/// Resolve the pinned shared signer this fleet signs native code with,
+/// installing it into its Stado-owned cache when the host has none.
+///
+/// Deliberately not a PATH lookup: the signature a host produces has to come
+/// from one reviewed signer revision, and a machine's own `wisent-products`
+/// may be any older one.
 async fn signing_program(
     target: &ComputeTarget,
     home: &str,
     runner: &Runner,
 ) -> Result<String, DeployError> {
-    let lookup =
-        host_channel::run_program(target, &["/usr/bin/which", "wisent-products"], runner).await?;
-    if lookup.ok() && !lookup.stdout.trim().is_empty() {
-        return Ok(lookup.stdout.trim().to_string());
-    }
-    // pipx exposes the shared signer here even when SSH's PATH omits it.
-    let installed = format!("{home}/.local/bin/wisent-products");
-    if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&installed)), runner).await?
-    {
-        return Ok(installed);
-    }
     bootstrap_signer(target, home, runner).await
 }
 
@@ -154,8 +208,8 @@ async fn bootstrap_signer(
 ) -> Result<String, DeployError> {
     use base64::Engine;
 
-    // Private build input from wisent-products 43f83a7, never a public release.
-    const SOURCE_SHA256: &str = "01c9d50de40f7f6ca5fbbacabd5f4f1faa4f7b8c95d07a0e628832e6ad158259";
+    // Private build input from wisent-products 319a6fb, never a public release.
+    const SOURCE_SHA256: &str = "277271b7a548d0d09a0889d063c997baeef6de90787255249800705aac2ad484";
     let program = format!("{home}/.stado/cache/native-signing/{SOURCE_SHA256}/bin/wisent-products");
     if host_channel::remote_test(target, &format!("-x {}", shlex_quote(&program)), runner).await? {
         return Ok(program);
@@ -184,7 +238,7 @@ async fn bootstrap_signer(
         &[
             "/usr/bin/python3",
             "-c",
-            include_str!("../../../host_payloads/native-signing-runtime.py"),
+            include_str!("../../../host_payloads/native_signing/runtime.py"),
         ],
         &input.to_string(),
         runner,
