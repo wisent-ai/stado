@@ -104,6 +104,20 @@ indirect enum StorageReconciliationJSON: Codable, Sendable {
         }
     }
 
+    /// Foundation's JSON writer consumes the same value without reparsing text.
+    var foundationValue: Any {
+        switch self {
+        case let .object(value): value.mapValues(\.foundationValue)
+        case let .array(value): value.map(\.foundationValue)
+        case let .string(value): value
+        case let .integer(value): value
+        case let .unsigned(value): value
+        case let .number(value): value
+        case let .boolean(value): value
+        case .null: NSNull()
+        }
+    }
+
     var prettyJSON: String {
         encoded(options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }

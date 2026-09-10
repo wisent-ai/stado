@@ -4,18 +4,15 @@ import WisentDesignSystem
 /// Every declared repair, by name, with the subjects it named and what the
 /// last pass did with them.
 ///
-/// Read-only, and it says so on the screen. A repair authorizes a restart of
-/// a named unit or the termination of a person's session process; arming one
-/// belongs in the registry declaration, where the subject list is declared
-/// beside it, not behind a switch in a console that cannot show what that
-/// process is doing right now.
+/// Reports the last observed state. The declaration editor below this section
+/// can change the same repairs and subjects as the CLI, through a reviewed write.
 struct MemoryRepairsSection: View {
     let state: MemoryPolicyState
 
     var body: some View {
         WisentSectionBox(
             title: "Repairs",
-            detail: "Declared in the canonical registry and read-only here: this console can change the mode, the watermarks, the per-pass budget and the placement refusal, and it never arms or disarms an individual repair.",
+            detail: "Declared repairs and their last observed result. Use Change the declaration below to add, remove or edit repairs and their subjects.",
             trailing: trailingLabel
         ) {
             if rows.isEmpty {
@@ -119,7 +116,7 @@ struct MemoryRepairsSection: View {
 
     private var emptyDetail: String {
         if state.isDefaulted {
-            return "This target declares no repair, so no repair exists to control. The reporting default arms none on purpose: no memory repair is reversible, and a host that declares an interest in its memory has not authorized a restart of anything. Declare a repair in the canonical registry to change that."
+            return "This target declares no repair. Add repair declarations in the editor below; the reporting default performs none."
         }
         return "This target's memory_reclaim declares an empty repair map, so its passes read the host's memory and change nothing."
     }
