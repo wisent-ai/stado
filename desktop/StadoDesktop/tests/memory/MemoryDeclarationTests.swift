@@ -46,7 +46,7 @@ final class MemoryDeclarationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: host.registry), beforeRefusal)
 
         var invalid = MemoryPolicyDraft(state: savedState)
-        invalid.numbers[.targetFreeMB] = "1"
+        invalid.numbers[.targetFreeMB] = "512"
         let invalidPatch = try XCTUnwrap(MemoryReclaimPatch(draft: invalid, current: savedState))
         do {
             _ = try await client.updatePolicy(at: address, target: host.name, patch: .memoryReclaim(invalidPatch))
