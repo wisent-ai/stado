@@ -65,7 +65,7 @@ impl Verdict {
 
 /// How old a beacon may be before it counts as stale.
 ///
-/// Both beacon writers — `deploy/host_health_beacon.sh` under a systemd
+/// Both beacon writers — `deploy/beacon/host_health_beacon.sh` under a systemd
 /// timer on Linux, the `com.wisent.host-health-beacon` LaunchAgent on
 /// macOS — publish on a one-minute tick, the same cadence as the per-slot
 /// heartbeat in [`crate::providers::local::slots`]. That heartbeat's

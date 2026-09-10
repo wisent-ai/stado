@@ -91,7 +91,7 @@ pub enum EnvironmentGap {
 /// declaration's own syntax or compared it against another declaration:
 /// `declared_units` (`cli/registry.rs:935`) reads a record's label and
 /// nothing else, the beacon publishes one `state` word per unit
-/// (`deploy/host_health_beacon_macos.sh:108`), and the only comparison of a
+/// (`deploy/beacon/host_health_beacon_macos.sh:108`), and the only comparison of a
 /// product against a host asks `policy.targets.get(host)` first, so the
 /// host missing from every target map is the loop's skip condition rather
 /// than its finding.

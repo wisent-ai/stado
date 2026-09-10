@@ -19,7 +19,7 @@ report() {
 
 home_dir=${HOME:-/home/ubuntu}
 
-report "$home_dir/wisent-compute-deploy/deploy/host_health_beacon.sh"
+report "$home_dir/wisent-compute-deploy/deploy/beacon/host_health_beacon.sh"
 report /etc/stado/host-health.env
 report "$home_dir/.stado/host-health-beacon-skarbiec-token"
 report "$home_dir/.stado/bin/stado"
