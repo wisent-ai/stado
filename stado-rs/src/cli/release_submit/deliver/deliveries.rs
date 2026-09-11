@@ -183,8 +183,14 @@ pub(crate) async fn run_deliveries(
             ))
         };
         if d.required && !ok {
+            // The delivery's own failure, not only its name. This refusal used
+            // to end the release with `required delivery fleet-macbook failed`
+            // and nothing else, while the cause - the delivery job's error and
+            // the tail of its output - sat one field away in the run document
+            // this loop had just written.
+            let cause = updated.failure.clone().unwrap_or_else(|| job.state.clone());
             return Err(CmdError::click(format!(
-                "required delivery {} failed",
+                "required delivery {} failed: {cause}",
                 d.name
             )));
         }
