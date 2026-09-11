@@ -70,6 +70,26 @@
       ],
       "accepts_repository_scope": true,
       "developer_id_account_item": "apple-account-holder"
+    },
+    {
+      "name": "product-precheck",
+      "slug": "stado-product-precheck",
+      "labels": [
+        "stado",
+        "stado-precheck",
+        "stado-product-precheck"
+      ],
+      "github_runner_group": "Default",
+      "unit_label": "stado-product-precheck-runner",
+      "installers": {
+        "darwin-arm64": "kronika-launchd",
+        "linux-amd64": "kronika-systemd"
+      },
+      "secrets": [
+        "GITHUB_TOKEN",
+        "probierz-agent"
+      ],
+      "accepts_repository_scope": true
     }
   ]
 }
