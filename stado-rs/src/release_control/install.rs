@@ -7,14 +7,23 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::release_control::{
     ProductReleasePolicy, ReleaseManifest, ReleaseTargetPolicy, MAX_ARCHIVE_ENTRIES,
-    MAX_EXTRACTED_BYTES, MAX_RELEASE_BYTES,
+    MAX_EXTRACTED_BYTES, MAX_RELEASE_BYTES, MAX_SOURCE_ARCHIVE_ENTRIES,
 };
 
 pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), String> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_RELEASE_BYTES {
         return Err("release archive size is outside the supported range".to_string());
     }
-    safe_extract_archive_reader(bytes, destination)
+    safe_extract_archive_reader(bytes, destination, MAX_ARCHIVE_ENTRIES)
+}
+
+/// Extract a source snapshot - a whole repository, not a release payload -
+/// under the same byte and path rules and the entry bound sized for one.
+pub fn safe_extract_source_archive(bytes: &[u8], destination: &Path) -> Result<(), String> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_RELEASE_BYTES {
+        return Err("source archive size is outside the supported range".to_string());
+    }
+    safe_extract_archive_reader(bytes, destination, MAX_SOURCE_ARCHIVE_ENTRIES)
 }
 
 /// Extract an already-verified archive without reading it back into memory.
@@ -43,10 +52,14 @@ pub fn safe_extract_archive_file(
     {
         return Err("release archive size differs from its signed manifest".to_string());
     }
-    safe_extract_archive_reader(file, destination)
+    safe_extract_archive_reader(file, destination, MAX_ARCHIVE_ENTRIES)
 }
 
-fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<(), String> {
+fn safe_extract_archive_reader(
+    reader: impl Read,
+    destination: &Path,
+    max_entries: usize,
+) -> Result<(), String> {
     if destination.exists() {
         return Err(format!(
             "immutable release directory already exists: {}",
@@ -75,10 +88,8 @@ fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<
         let mut extracted_bytes = 0_u64;
         for entry in entries {
             count += 1;
-            if count > MAX_ARCHIVE_ENTRIES {
-                return Err(format!(
-                    "release archive exceeds {MAX_ARCHIVE_ENTRIES} entries"
-                ));
+            if count > max_entries {
+                return Err(format!("release archive exceeds {max_entries} entries"));
             }
             let mut entry = entry.map_err(|error| format!("cannot read release entry: {error}"))?;
             let archived_path = entry

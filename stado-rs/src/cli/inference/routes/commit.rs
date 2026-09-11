@@ -68,8 +68,7 @@ pub(super) async fn commit_routes(
             let rollback = schema::write(&next, previous_registry).map_err(click)?;
             let registry_rollback =
                 crate::cli::registry::push_document_if(&rollback, &generation).await;
-            let old_transaction =
-                routes::transaction(previous_registry).map_err(click)?;
+            let old_transaction = routes::transaction(previous_registry).map_err(click)?;
             let runtime_rollback =
                 if routes::stage(target, previous_registry, &old_transaction, &runner)
                     .await

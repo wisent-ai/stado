@@ -87,7 +87,8 @@ pub(crate) async fn apply_link_repair(target: &str) -> Result<Value, CmdError> {
         tokio::time::sleep(std::time::Duration::from_secs(LINK_REPAIR_POLL_SECONDS)).await;
         match crate::monitor::host_health::load_host_health(&store, &resolved.name).await {
             Ok(health) => {
-                let signal = crate::deploy::host_state::ping::grade_beacon(&health, chrono::Utc::now());
+                let signal =
+                    crate::deploy::host_state::ping::grade_beacon(&health, chrono::Utc::now());
                 last_observation = format!(
                     "newest beacon is {:?}s old and was reported at {}",
                     signal.age_seconds,

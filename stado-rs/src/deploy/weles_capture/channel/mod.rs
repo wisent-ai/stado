@@ -124,7 +124,8 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
         format!("127.0.0.1:{local_port}:127.0.0.1:{}", admission.port),
         destination,
     ]);
-    let key = crate::deploy::host_access::ssh_key::materialize(admission.target.channel_key()).await?;
+    let key =
+        crate::deploy::host_access::ssh_key::materialize(admission.target.channel_key()).await?;
     let argv = crate::deploy::host_access::ssh_key::add_identity(argv, &key)?;
     let (program, arguments) = argv
         .split_first()

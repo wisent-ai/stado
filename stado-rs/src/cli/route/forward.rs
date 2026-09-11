@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use super::directory::{directory, endpoint, parsed_registry, selected_target, service, target};
 use crate::cli::{registry, CmdError};
-use crate::deploy::{host_channel, host_access::forward};
+use crate::deploy::{host_access::forward, host_channel};
 
 pub async fn list(as_json: bool) -> Result<(), CmdError> {
     let document = registry::fetch_document().await?;
@@ -23,8 +23,7 @@ pub async fn list(as_json: bool) -> Result<(), CmdError> {
                 })
             })
             .collect::<Vec<_>>();
-        let open =
-            forward::read_local(name).map_err(|error| CmdError::click(error.to_string()))?;
+        let open = forward::read_local(name).map_err(|error| CmdError::click(error.to_string()))?;
         rows.push(json!({
             "service": name,
             "authority": &directory.authority,

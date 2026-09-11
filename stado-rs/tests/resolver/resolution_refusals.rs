@@ -5,7 +5,6 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-
 use crate::fixture::{children_named, http_get, wait_listening, wait_published, Policy, Serving};
 use crate::resolution::{CONCURRENT_READS, GENERATION};
 use crate::{said, stderr, Host, CONSUMER, SERVICE, TARGET};

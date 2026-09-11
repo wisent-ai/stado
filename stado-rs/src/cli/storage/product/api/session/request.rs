@@ -65,7 +65,8 @@ impl RemoteObjectApi {
         namespace: &str,
         key_or_prefix: &str,
     ) -> Result<Option<String>, CmdError> {
-        let Some(policy_key) = crate::remote::object_store::release_policy_key(namespace, key_or_prefix)
+        let Some(policy_key) =
+            crate::remote::object_store::release_policy_key(namespace, key_or_prefix)
         else {
             if Self::release_authorized(namespace, key_or_prefix) {
                 return Err(CmdError::click(format!(

@@ -82,13 +82,16 @@ impl AzureBlobBackend {
                 Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
             );
         if self.inner.auth {
-            let token =
-                crate::remote::azure_token::bearer_token(&self.inner.http, STORAGE_SCOPE, STORAGE_RESOURCE)
-                    .await
-                    .map_err(|err| match err {
-                        crate::remote::azure_token::TokenError::Auth(msg) => StorageError::Auth(msg),
-                        crate::remote::azure_token::TokenError::Http(err) => StorageError::Http(err),
-                    })?;
+            let token = crate::remote::azure_token::bearer_token(
+                &self.inner.http,
+                STORAGE_SCOPE,
+                STORAGE_RESOURCE,
+            )
+            .await
+            .map_err(|err| match err {
+                crate::remote::azure_token::TokenError::Auth(msg) => StorageError::Auth(msg),
+                crate::remote::azure_token::TokenError::Http(err) => StorageError::Http(err),
+            })?;
             request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         }
         for (name, value) in headers {

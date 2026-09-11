@@ -16,8 +16,8 @@ use crate::providers::local::agent::capacity::snapshot::{
 use crate::providers::local::agent::{Step, POLL_INTERVAL_S};
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
-use crate::providers::local::slots::ActiveSlot;
 use crate::providers::local::probe::version_check::{self, DriftOutcome};
+use crate::providers::local::slots::ActiveSlot;
 use crate::queue::capacity::CapacitySnapshot;
 use crate::queue::JobStorage;
 use crate::sizing::Sizing;

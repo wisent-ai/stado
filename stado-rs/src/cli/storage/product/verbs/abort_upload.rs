@@ -40,29 +40,30 @@ pub(in crate::cli::storage) async fn abort_upload(
     // 59,768,832 bytes, were still on the store, and the same command run
     // with the publisher's credential listed every one of them.
     let mut listed_via = "local backend";
-    let parts =
-        if let Some(remote) = RemoteObjectApi::configured_for_list(object.namespace(), &prefix)? {
-            listed_via = "object API list route, publisher-scoped for release prefixes";
-            remote.list(object.namespace(), &prefix).await?
-        } else {
-            let storage_prefix =
-                crate::remote::object_store::ObjectRef::namespace_prefix(object.namespace(), &prefix)?;
-            let store = JobStorage::new().await?;
-            let mut values = Vec::new();
-            for blob in store
-                .backend()
-                .list_blobs_with_meta(&storage_prefix)
-                .await?
-            {
-                let part = crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?;
-                values.push(json!({
-                    "uri": part.to_string(),
-                    "key": part.key(),
-                    "size": blob.size,
-                }));
-            }
-            values
-        };
+    let parts = if let Some(remote) =
+        RemoteObjectApi::configured_for_list(object.namespace(), &prefix)?
+    {
+        listed_via = "object API list route, publisher-scoped for release prefixes";
+        remote.list(object.namespace(), &prefix).await?
+    } else {
+        let storage_prefix =
+            crate::remote::object_store::ObjectRef::namespace_prefix(object.namespace(), &prefix)?;
+        let store = JobStorage::new().await?;
+        let mut values = Vec::new();
+        for blob in store
+            .backend()
+            .list_blobs_with_meta(&storage_prefix)
+            .await?
+        {
+            let part = crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?;
+            values.push(json!({
+                "uri": part.to_string(),
+                "key": part.key(),
+                "size": blob.size,
+            }));
+        }
+        values
+    };
     let mut discarded: Vec<String> = Vec::with_capacity(parts.len());
     let mut bytes = 0u64;
     for part in &parts {

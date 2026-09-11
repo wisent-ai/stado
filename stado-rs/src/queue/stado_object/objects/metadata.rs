@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 
-use crate::remote::object_store::ObjectRef;
 use crate::queue::StorageError;
+use crate::remote::object_store::ObjectRef;
 
 use super::super::{ObjectDescriptor, StadoObjectBackend};
 

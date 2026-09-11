@@ -9,7 +9,9 @@ use crate::remote::object_store::ObjectRef;
 
 use crate::dashboard::listener::{http_status, parse_qs, query_value, send_json, Response};
 
-pub(crate) fn object_from_query(query: &str) -> Result<crate::remote::object_store::ObjectRef, Response> {
+pub(crate) fn object_from_query(
+    query: &str,
+) -> Result<crate::remote::object_store::ObjectRef, Response> {
     let values = parse_qs(query);
     let uri = query_value(&values, "uri").unwrap_or_default();
     if uri.is_empty() {

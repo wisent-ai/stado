@@ -3,7 +3,9 @@
 
 use serde_json::{json, Value};
 
-use crate::deploy::host_precheck_runner::accounts::github::{repository_name, set_repository_secret};
+use crate::deploy::host_precheck_runner::accounts::github::{
+    repository_name, set_repository_secret,
+};
 use crate::deploy::{host_capability, host_channel, production_runner, DeployError, Runner};
 use crate::targets::ComputeTarget;
 

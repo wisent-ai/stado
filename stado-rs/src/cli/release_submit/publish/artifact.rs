@@ -23,8 +23,11 @@ pub(crate) async fn publish(
     // A platform the manifest marks optional gets a bounded wait: see
     // `constants::OPTIONAL_PLATFORM_CLAIM_GRACE_S` for the release this
     // taught.
-    let grace = (!m.platforms[p].required)
-        .then(|| std::time::Duration::from_secs(crate::primitives::constants::OPTIONAL_PLATFORM_CLAIM_GRACE_S));
+    let grace = (!m.platforms[p].required).then(|| {
+        std::time::Duration::from_secs(
+            crate::primitives::constants::OPTIONAL_PLATFORM_CLAIM_GRACE_S,
+        )
+    });
     let job = terminal_within(store, &rec.job_id, grace).await?;
     if !matches!(
         job.state.as_str(),

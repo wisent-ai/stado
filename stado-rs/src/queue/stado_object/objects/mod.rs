@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::{Method, StatusCode};
 
-use crate::remote::object_store::ObjectRef;
 use crate::queue::{BlobBackend, BlobInfo, StorageError, VersionedText};
+use crate::remote::object_store::ObjectRef;
 
 use super::StadoObjectBackend;
 
@@ -61,7 +61,10 @@ impl BlobBackend for StadoObjectBackend {
         // ceiling and a reply that declares more than that never lands in
         // this process at all.
         let Some(bytes) = self
-            .download_bytes_limited(path, Some(crate::primitives::constants::STORE_DOCUMENT_MAX_BYTES))
+            .download_bytes_limited(
+                path,
+                Some(crate::primitives::constants::STORE_DOCUMENT_MAX_BYTES),
+            )
             .await?
         else {
             return Ok(None);

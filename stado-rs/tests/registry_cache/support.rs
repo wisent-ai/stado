@@ -52,9 +52,11 @@ pub(crate) const SEEDED_REGISTRY_GROWN: &str = r#"{
 /// loader.
 /// What the authority actually served on 2026-08-31 for about nine minutes.
 /// Schema-valid, contract-clean, and empty.
-pub(crate) const EMPTY_FLEET_REGISTRY: &str = r#"{"schema_version": 2, "coordinators": [], "targets": []}"#;
+pub(crate) const EMPTY_FLEET_REGISTRY: &str =
+    r#"{"schema_version": 2, "coordinators": [], "targets": []}"#;
 
-pub(crate) const CONTRACT_VIOLATING_REGISTRY: &str = r#"{"schema_version": 2, "targets": "not-a-list"}"#;
+pub(crate) const CONTRACT_VIOLATING_REGISTRY: &str =
+    r#"{"schema_version": 2, "targets": "not-a-list"}"#;
 
 /// The authority's own words when the store cannot be read, copied from a
 /// live run: `stado registry beacon-age` against a local store whose

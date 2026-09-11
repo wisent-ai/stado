@@ -7,8 +7,8 @@ use std::time::Instant;
 use chrono::Utc;
 use serde_json::{Map, Value};
 
-use crate::primitives::constants;
 use crate::models::{activation_extraction_must_share_gpu, isoformat_utc, Job};
+use crate::primitives::constants;
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;

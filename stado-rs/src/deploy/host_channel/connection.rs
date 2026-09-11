@@ -6,7 +6,7 @@ use super::{
     last_error_line, ssh_program_argv, target_is_this_host, SshConnection, SshConnectionProbe,
     CONNECTION_PROBE_PROGRAM, CONNECTION_PROBE_TIMEOUT, HOST_SESSION,
 };
-use crate::deploy::{py_str_repr, host_access::ssh_key, CommandSpec, DeployError, Runner};
+use crate::deploy::{host_access::ssh_key, py_str_repr, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 fn declared_connections(target: &ComputeTarget) -> impl Iterator<Item = SshConnection<'_>> {

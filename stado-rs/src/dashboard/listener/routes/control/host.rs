@@ -35,9 +35,9 @@ impl Dashboard {
                     Ok(()) => (0, None),
                     Err(error) => {
                         let message = error.message.unwrap_or_default();
-                        let failure = error
-                            .failure
-                            .unwrap_or_else(|| crate::primitives::failure::classify_message(&message));
+                        let failure = error.failure.unwrap_or_else(|| {
+                            crate::primitives::failure::classify_message(&message)
+                        });
                         let code = if error.code == crate::cli::CLICK_ERROR_CODE {
                             failure.exit_code(error.code)
                         } else {

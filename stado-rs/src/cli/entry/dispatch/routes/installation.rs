@@ -2,9 +2,9 @@
 
 use crate::cli::entry::spec::root::installation::InstallationCommands;
 use crate::cli::hosts::disk_cleanup;
-use crate::cli::work::autonomy;
 use crate::cli::integrations::mail;
 use crate::cli::setup::onboarding;
+use crate::cli::work::autonomy;
 use crate::cli::*;
 
 pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdError> {

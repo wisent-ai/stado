@@ -58,7 +58,8 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         .prefix(".stado-release-worker-")
         .tempdir_in(&queue_work_dir)?;
     let source = temp.path().join("source");
-    release_control::safe_extract_archive(&source_bytes, &source).map_err(CmdError::click)?;
+    release_control::safe_extract_source_archive(&source_bytes, &source)
+        .map_err(CmdError::click)?;
     let inputs_root = temp.path().join("inputs");
     std::fs::create_dir_all(&inputs_root)?;
     let mut receipt_inputs = BTreeMap::new();

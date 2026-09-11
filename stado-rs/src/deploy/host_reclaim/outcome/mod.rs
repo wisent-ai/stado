@@ -84,6 +84,57 @@ fn drain_evidence(pending: &mut Vec<(String, Value)>, stage: &str) -> Vec<Value>
     mine
 }
 
+/// The janitor's own account of one pass, in one line an operator can act on.
+///
+/// `registry_cleanup` is the only stage that reads the host's declared cleaner
+/// policy, and it used to report `items: 0` with `detail: null` — so a pass
+/// that decided there was no pressure, a pass whose declared roots hold
+/// nothing eligible, and a pass that deleted nothing under a report-only
+/// policy all looked identical. On 2026-09-10 that cost an afternoon on
+/// `ubuntu-server-rtx-pro-6000`: 29 GiB free against a 24 GiB watermark, a
+/// declared model cache of 3.2 GiB beside it, and a receipt that said nothing.
+fn janitor_sentence(
+    plan: &Value,
+    plans: &[crate::deploy::host_state::cleanup::CleanerPlan],
+    apply: bool,
+) -> String {
+    let word = |key: &str| {
+        plan.get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+    };
+    let outcome = word("outcome").unwrap_or("no outcome reported");
+    let mut sentence = format!("host janitor: {outcome}");
+    if let Some(mode) = word("mode") {
+        sentence.push_str(&format!(", policy mode {mode}"));
+    }
+    if plans.is_empty() {
+        sentence.push_str(", and it declares no cleaners");
+        return sentence;
+    }
+    let mut cleaners: Vec<String> = plans
+        .iter()
+        .map(|cleaner| {
+            let acted = if apply {
+                cleaner.deleted_items
+            } else {
+                cleaner.eligible_items
+            };
+            format!(
+                "{} scanned {} eligible {} {} {}",
+                cleaner.name,
+                cleaner.scanned_items,
+                cleaner.eligible_items,
+                if apply { "deleted" } else { "would delete" },
+                acted
+            )
+        })
+        .collect();
+    cleaners.sort();
+    sentence.push_str(&format!("; {}", cleaners.join("; ")));
+    sentence
+}
+
 /// Fold the marker lines of stdout into a reclamation.
 ///
 /// Item lines always precede the stage marker that closes their stage, because
@@ -185,7 +236,8 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                         .push(unavailable(REGISTRY_CLEANUP_STAGE, &detail));
                     continue;
                 }
-                let counted: i64 = cleaner_plans(&parsed)
+                let plans = cleaner_plans(&parsed);
+                let counted: i64 = plans
                     .iter()
                     .map(|cleaner| {
                         if apply {
@@ -195,6 +247,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                         }
                     })
                     .sum();
+                let detail = janitor_sentence(&parsed, &plans, apply);
                 reclamation.janitor_plan = Some(parsed);
                 reclamation.stages.push(Stage {
                     stage: REGISTRY_CLEANUP_STAGE.to_string(),
@@ -202,7 +255,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     free_kb_after: blocks(after),
                     items: usize::try_from(counted).unwrap_or_default(),
                     paths: Vec::new(),
-                    detail: None,
+                    detail: Some(detail),
                     refused: Vec::new(),
                     local_terminality_evidence: Vec::new(),
                 });

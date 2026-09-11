@@ -30,9 +30,9 @@
 //! scan that poll ends in.
 
 pub mod capacity;
+pub mod claim;
 pub mod heartbeat;
 pub mod janitor;
-pub mod claim;
 pub mod probes;
 pub mod tick;
 
