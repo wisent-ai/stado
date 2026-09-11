@@ -51,6 +51,14 @@ pub fn to_report(target: &ComputeTarget, reclamation: &Reclamation) -> Map<Strin
                 .collect(),
         ),
     );
+    // The janitor's own report, verbatim, because `registry_cleanup` is the
+    // one stage whose candidates come from the host's declared cleaner policy
+    // rather than from a fixed root here: its per-cleaner scanned, eligible
+    // and deleted counts are the only evidence of what that policy covers.
+    // Absent when no janitor ran, never an empty object standing in for one.
+    if let Some(plan) = &reclamation.janitor_plan {
+        report.insert("janitor".to_string(), plan.clone());
+    }
     report.insert(
         "free_gb_before".to_string(),
         free(reclamation.free_kb_before),

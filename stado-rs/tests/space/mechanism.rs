@@ -111,6 +111,60 @@ fn the_human_report_retains_the_actual_pass_refusals_and_exhausted_limits() {
     assert!(text.contains("cleaner build_caches:"));
 }
 
+/// A janitor pass that frees nothing still has to say what it looked at.
+///
+/// `registry_cleanup` is the only reclaim stage whose candidates come from the
+/// host's declared cleaner policy, so its row is the only place an operator
+/// can read what that policy covered. On `ubuntu-server-rtx-pro-6000` on
+/// 2026-09-10 it answered `items: 0`, `detail: null` and carried no janitor
+/// section at all - the same receipt a clean host produces. The scope here
+/// holds one untagged tree, which is a real candidate the cleaner examines and
+/// refuses, so the pass frees nothing and the receipt must still carry the
+/// janitor's own numbers.
+#[test]
+fn a_reclaim_pass_that_frees_nothing_still_carries_the_janitors_counts() {
+    let host = Host::new();
+    let untagged = host.seed_tree(&host.cache_root, "untagged-tree", 4, false);
+    let report = host.json(&[
+        "space",
+        "reclaim",
+        TARGET,
+        "--stage",
+        "registry_cleanup",
+        "--apply",
+        "--reason",
+        "space area: proving a pass that frees nothing reports its scope",
+        "--json",
+    ]);
+    let stage = report["stages"]
+        .as_array()
+        .and_then(|stages| stages.iter().find(|row| row["stage"] == "registry_cleanup"))
+        .expect("the selected stage is missing from the receipt")
+        .clone();
+    assert_eq!(stage["items"].as_u64(), Some(0));
+    assert!(
+        untagged.join("payload.bin").is_file(),
+        "the pass deleted a tree no build tool tagged as regenerable"
+    );
+
+    let janitor = &report["janitor"]["cleaners"]["build_caches"];
+    let scanned = janitor["scanned_items"]
+        .as_i64()
+        .expect("the receipt carries the janitor's own report");
+    assert!(scanned >= 1, "the janitor scanned nothing: {janitor}");
+    assert_eq!(janitor["eligible_items"].as_i64(), Some(0));
+    assert_eq!(janitor["deleted_items"].as_i64(), Some(0));
+    let detail = stage["detail"]
+        .as_str()
+        .expect("a stage that freed nothing must say why");
+    assert!(
+        detail.contains(&format!(
+            "build_caches scanned {scanned} eligible 0 deleted 0"
+        )),
+        "the stage row does not carry the janitor's counts: {detail}"
+    );
+}
+
 #[test]
 fn a_backup_override_cannot_treat_the_primary_as_a_second_copy() {
     let host = Host::new();
