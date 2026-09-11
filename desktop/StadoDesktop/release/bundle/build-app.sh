@@ -1,7 +1,7 @@
 #!/bin/sh
 # The product catalogue calls this build. Installation belongs to wisent-products.
 set -eu
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 REPO=$(CDPATH= cd -- "$ROOT/../.." && pwd)
 BUILD_DIR=${STADO_BUILD_DIR:-"$ROOT/.build"}
 BUNDLE="$BUILD_DIR/Stado.app"
