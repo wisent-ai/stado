@@ -180,7 +180,14 @@ impl Host {
 
     /// Run the built binary with nothing of the operator's environment left.
     pub fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_stado"))
+        self.run_with(args, &[])
+    }
+
+    /// The same run with extra variables, for the bounds an operator sets
+    /// through the environment rather than through the registry.
+    pub fn run_with(&self, args: &[&str], environment: &[(&str, &str)]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        command
             .args(args)
             .env_clear()
             .env("HOME", &self.home)
@@ -191,7 +198,11 @@ impl Host {
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
             .env("WC_PROVIDERS", "local")
             .env("WC_STADO_STORAGE_NAMESPACE", "space-fixture")
-            .env("NO_COLOR", "1")
+            .env("NO_COLOR", "1");
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        command
             .output()
             .expect("the built stado binary did not start")
     }
