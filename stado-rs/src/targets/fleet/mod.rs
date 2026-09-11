@@ -3,11 +3,13 @@
 //! decide both.
 
 mod capabilities;
+mod connections;
 mod coordinator;
 mod placement;
 mod policies;
 
 pub use capabilities::*;
+pub use connections::*;
 pub use coordinator::*;
 pub use placement::*;
 pub use policies::*;
