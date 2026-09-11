@@ -25,7 +25,7 @@ pub use documents::policy::{
 pub use documents::revision::{CoordinateRevision, VersionRevision};
 pub use install::{
     install_directory, install_root_path, release_directory, safe_extract_archive,
-    safe_extract_archive_file,
+    safe_extract_archive_file, safe_extract_source_archive,
 };
 pub use publisher::{
     canonical_manifest, control, generate_signing_key, release_base, release_version_base,
@@ -65,4 +65,16 @@ pub const RELEASE_VERSION_REVISION_NAME: &str = "source-revision.json";
 
 const MAX_RELEASE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Entries one release archive may carry. A release is a handful of
+/// executables and their manifests, so a payload past this is not a release.
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
+/// Entries one source snapshot may carry. A snapshot is a whole repository -
+/// `git archive` of `wisent-ai/stado` listed 4,230 entries at `07fd9ba7`,
+/// files and directories together - and the build worker used to extract it
+/// under [`MAX_ARCHIVE_ENTRIES`], the bound sized for a release payload. On
+/// 2026-09-10 the 0.20.9 build was refused on every builder with `release
+/// archive exceeds 4096 entries` the moment the module split pushed the tree
+/// over, and the coordinate stayed bound to a commit no installed worker
+/// could unpack. The byte bounds still apply; only the count is sized for
+/// what a repository is.
+const MAX_SOURCE_ARCHIVE_ENTRIES: usize = 65_536;

@@ -2,7 +2,6 @@
 //! and the immutable objects it writes before anything is built.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -68,12 +67,46 @@ pub(crate) fn committed_file(root: &Path, commit: &str, path: &str) -> Result<Ve
     git(root, &["show", &format!("{commit}:{path}")])
 }
 
+/// The committed tree as one gzip tar of its regular files.
+///
+/// `git archive` also writes one entry per directory and a pax global header
+/// naming the commit. Neither carries anything: Git tracks no empty
+/// directory, every extractor in this product creates a file's parents
+/// itself, and the commit is recorded on the object and in the run. What
+/// they did carry was a count - 975 directories at `07fd9ba7`, against a
+/// worker bound of 4,096 entries - and on 2026-09-10 they were what pushed
+/// the 0.20.9 snapshot past the bound every installed worker enforced, so a
+/// tree of 3,255 files was refused as an archive of 4,230 entries. A
+/// snapshot is its files. Anything that is not a file or a directory -
+/// a symlink, a device - is refused here, as every extractor refuses it,
+/// rather than dropped on the way.
 pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
     let tar = git(root, &["archive", "--format=tar", commit])?;
     let mut gz = GzBuilder::new()
         .mtime(0)
         .write(Vec::new(), Compression::best());
-    gz.write_all(&tar)?;
+    {
+        let mut files = tar::Builder::new(&mut gz);
+        let mut archive = tar::Archive::new(&tar[..]);
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let kind = entry.header().entry_type();
+            if kind.is_dir() || kind.is_pax_global_extensions() || kind.is_pax_local_extensions() {
+                continue;
+            }
+            let path = entry.path()?.into_owned();
+            if !kind.is_file() {
+                return Err(CmdError::click(format!(
+                    "the committed tree carries {}, which is not a regular file; a source \
+                     snapshot is made of files only",
+                    path.display()
+                )));
+            }
+            let mut header = entry.header().clone();
+            files.append_data(&mut header, &path, &mut entry)?;
+        }
+        files.finish()?;
+    }
     Ok(gz.finish()?)
 }
 pub(crate) async fn immutable(
