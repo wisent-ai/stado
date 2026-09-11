@@ -92,6 +92,39 @@ pub async fn report_declaration_on_host(
     .await
 }
 
+/// The environment override for the verdict's wall-clock bound, in seconds.
+/// Fractional values are accepted so a case can prove the bound fires.
+const VERDICT_BUDGET_ENV: &str = "STADO_CACHE_VERDICT_BUDGET_SECONDS";
+
+/// How long one verdict walk may take before it is killed and reported.
+///
+/// The remote branch has always carried [`SSH_TIMEOUT_SECONDS`]; the local
+/// branch carried nothing at all, and the local branch is the one an operator
+/// standing on a wedged machine uses. On `lukasz-macbook`, whose declared
+/// cleaner root is `$HOME`, `stado space report lukasz-macbook` returned
+/// neither an answer nor a refusal after 420 seconds on 2026-09-10: the walk
+/// this function starts had no deadline, so the whole read waited on it. One
+/// bound now governs both branches, and an operator whose root really needs
+/// longer raises it rather than losing the command.
+fn verdict_budget() -> Result<Duration, DeployError> {
+    match std::env::var(VERDICT_BUDGET_ENV) {
+        Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs(SSH_TIMEOUT_SECONDS)),
+        Ok(value) => value
+            .parse::<f64>()
+            .ok()
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .map(Duration::from_secs_f64)
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "{VERDICT_BUDGET_ENV} must be a positive number of seconds"
+                ))
+            }),
+        Err(error) => Err(DeployError(format!(
+            "cannot read {VERDICT_BUDGET_ENV}: {error}"
+        ))),
+    }
+}
+
 /// Report or prune on one registry host.
 pub async fn run_on_host(
     target: &ComputeTarget,
@@ -110,14 +143,19 @@ pub async fn run_on_host(
         report.error = Some(error.0);
         return report;
     }
+    let budget = match verdict_budget() {
+        Ok(budget) => budget,
+        Err(error) => {
+            report.error = Some(error.0);
+            return report;
+        }
+    };
     let command = remote_command(root, days, apply, force);
+    let started = std::time::Instant::now();
     let result = if target_is_local(target) {
-        runner(CommandSpec::new(vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            command,
-        ]))
-        .await
+        let mut spec = CommandSpec::new(vec!["/bin/sh".to_string(), "-c".to_string(), command]);
+        spec.timeout = Some(budget);
+        runner(spec).await
     } else if !target.has_ssh_connection() {
         report.error = Some(format!(
             "target {} has no SSH connection path and is not this host",
@@ -125,20 +163,25 @@ pub async fn run_on_host(
         ));
         return report;
     } else {
-        host_channel::run_script_with_timeout(
-            target,
-            &command,
-            Duration::from_secs(SSH_TIMEOUT_SECONDS),
-            runner,
-        )
-        .await
-        .map_err(|error| error.0)
+        host_channel::run_script_with_timeout(target, &command, budget, runner)
+            .await
+            .map_err(|error| error.0)
     };
     match result {
         Ok(output) if output.ok() => report.entries = parse_report(&output.stdout),
         Ok(output) => {
             report.entries = parse_report(&output.stdout);
             report.error = Some(output.detail().trim().to_string());
+        }
+        // A killed walk reports the bound it hit and what to do about it: the
+        // runner's own sentence names a truncated second count and no root.
+        Err(_) if started.elapsed() >= budget => {
+            report.error = Some(format!(
+                "the build-cache verdict for {root} did not finish within {}s; \
+                 raise {VERDICT_BUDGET_ENV} or declare a narrower \
+                 cleaners.build_caches.root",
+                budget.as_secs_f64()
+            ))
         }
         Err(error) => report.error = Some(error),
     }

@@ -153,6 +153,82 @@ fn a_scope_declared_wrongly_is_refused_with_its_own_sentence() {
     );
 }
 
+/// The environment bound on the verdict walk, and the two answers it owes an
+/// operator: a walk that cannot finish is killed and named, and a malformed
+/// bound is refused before anything is walked at all.
+///
+/// This is the local branch, which is the one that had no bound: on
+/// `lukasz-macbook`, whose declared root is `$HOME`,
+/// `stado space report lukasz-macbook` returned nothing at all after 420
+/// seconds on 2026-09-10 while the remote branch had been bounded to 120 the
+/// whole time. A read that cannot answer is worse than a read that says why.
+#[test]
+fn a_verdict_walk_is_bounded_and_a_malformed_bound_is_refused() {
+    let host = Host::new();
+    let root = host.cache_root.display().to_string();
+
+    let output = host.run_with(
+        &["space", "report", TARGET, "--json"],
+        &[("STADO_CACHE_VERDICT_BUDGET_SECONDS", "0.001")],
+    );
+    let sentence = format!(
+        "the build-cache verdict for {root} did not finish within 0.001s; raise \
+         STADO_CACHE_VERDICT_BUDGET_SECONDS or declare a narrower cleaners.build_caches.root"
+    );
+    let bounded = answered(&output);
+    assert_eq!(
+        bounded["build_caches"]["error"].as_str(),
+        Some(sentence.as_str()),
+        "the bounded walk did not name its bound: {}",
+        bounded["build_caches"]
+    );
+    assert!(
+        bounded["usage"]["available_kb"].is_string(),
+        "the rest of the read was lost with the walk: {bounded}"
+    );
+
+    let output = host.run_with(
+        &["space", "report", TARGET, "--json"],
+        &[("STADO_CACHE_VERDICT_BUDGET_SECONDS", "soon")],
+    );
+    let refused = answered(&output);
+    assert_eq!(
+        refused["build_caches"]["error"].as_str(),
+        Some("STADO_CACHE_VERDICT_BUDGET_SECONDS must be a positive number of seconds"),
+        "a malformed bound was not refused: {}",
+        refused["build_caches"]
+    );
+    assert_eq!(
+        refused["build_caches"]["entries"].as_array().map(Vec::len),
+        Some(0),
+        "a refused bound still walked the root: {}",
+        refused["build_caches"]
+    );
+}
+
+/// The printed document of a read whose cache section failed: the command
+/// exits 1 naming that section, and the document it already printed is still
+/// on stdout, which is the half of the contract a bound has to preserve.
+///
+/// The section's own sentence is read back from that document rather than
+/// from stderr, where the failure layer truncates it.
+fn answered(output: &std::process::Output) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(CLICK_EXIT),
+        "expected the section refusal, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        said(&output.stderr)
+    );
+    // Two documents reach stdout here: the report, then the machine-readable
+    // refusal. The report is the first one and the one under test.
+    serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter::<serde_json::Value>()
+        .next()
+        .expect("the read prints its document before refusing")
+        .expect("the read prints JSON")
+}
+
 /// A reporting policy whose cleaner table is `cleaners`. The watermark and
 /// budget values are registry configuration for the fixture and are never
 /// reached here: every case using this policy is refused before a pass runs.
