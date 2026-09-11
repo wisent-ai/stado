@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value};
 
 use crate::primitives::constants;
-use crate::providers::local::disk_cleanup;
 use crate::providers::local::disk::fleet_flush::spawn_fleet_flush;
+use crate::providers::local::disk_cleanup;
 use crate::providers::local::slots::ActiveSlot;
 use crate::queue::capacity::CapacitySnapshot;
 use crate::queue::JobStorage;

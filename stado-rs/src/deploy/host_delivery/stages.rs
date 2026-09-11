@@ -5,7 +5,9 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::deploy::{host_channel, shlex_quote, host_access::ssh_key, CommandSpec, DeployError, Runner};
+use crate::deploy::{
+    host_access::ssh_key, host_channel, shlex_quote, CommandSpec, DeployError, Runner,
+};
 use crate::targets::ComputeTarget;
 
 use super::plan::{DeliveryPlan, SourceKind};

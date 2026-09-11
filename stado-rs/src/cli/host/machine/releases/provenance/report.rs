@@ -124,11 +124,13 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
             };
             let reachable = match (&commit, &repository) {
                 (None, _) => Some(false),
-                (Some(commit), _) if !crate::binary::provenance::is_commit_id(commit) => Some(false),
-                (Some(_), None) => None,
-                (Some(commit), Some(repository)) => {
-                    Some(crate::binary::provenance::reachable_in_repo(commit, repository))
+                (Some(commit), _) if !crate::binary::provenance::is_commit_id(commit) => {
+                    Some(false)
                 }
+                (Some(_), None) => None,
+                (Some(commit), Some(repository)) => Some(
+                    crate::binary::provenance::reachable_in_repo(commit, repository),
+                ),
             };
             let stamp = match (&record, &receipt) {
                 (Some(record), _) => Some(record.at.clone()),

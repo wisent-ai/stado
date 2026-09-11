@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-
 pub(crate) struct SkarbiecFixture {
     /// Owns the removal of everything below, and — because the name is
     /// drawn at random rather than from a clock reading two stories can
@@ -32,8 +31,8 @@ impl SkarbiecFixture {
     pub(crate) fn new() -> Self {
         // GnuPG creates Unix sockets below GNUPGHOME. Keep this deliberately
         // short so macOS's AF_UNIX path limit cannot break key generation.
-        let runs = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
-            .join(".stado/test-runs");
+        let runs =
+            PathBuf::from(std::env::var_os("HOME").expect("HOME is set")).join(".stado/test-runs");
         fs::create_dir_all(&runs).expect("create the isolated test-run root");
         let run = tempfile::Builder::new()
             .prefix("sts")

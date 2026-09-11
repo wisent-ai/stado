@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::primitives::constants;
 use crate::models::Job;
+use crate::primitives::constants;
 use crate::providers::local::agent::{Step, POLL_INTERVAL_S};
 use crate::providers::local::helpers;
 use crate::providers::local::slots::{job_system_packages_eligible, ActiveSlot};

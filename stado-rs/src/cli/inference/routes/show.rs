@@ -37,9 +37,7 @@ pub async fn show(repair: bool, json_output: bool) -> Result<(), CmdError> {
     };
     let runner = production_runner();
     let target = host_channel::canonical_target(host).await.map_err(click)?;
-    let live = routes::live(&target, &runner)
-        .await
-        .map_err(click)?;
+    let live = routes::live(&target, &runner).await.map_err(click)?;
     // `stage` writes the serialized registry SECTION, not a whole registry
     // document, so the host's table has `routes` at its top level and
     // `schema::parse` — which reads `document["inference"]` — would report every

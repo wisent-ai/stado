@@ -100,7 +100,8 @@ pub(crate) fn wait_for_recovery_delivery(
                 let Ok(job) = serde_json::from_slice::<Value>(&bytes) else {
                     continue;
                 };
-                if job["command"] == stado::primitives::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
+                if job["command"]
+                    == stado::primitives::constants::PRODUCT_RELEASE_DELIVERY_JOB_COMMAND
                     && job["pinned_host"] == consumer
                 {
                     return job;

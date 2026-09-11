@@ -48,7 +48,10 @@ pub(crate) async fn fetch_candidate(
     if manifest.qualification.status != QualificationStatus::Passed {
         return Err("release candidate has not passed qualification".to_string());
     }
-    if crate::binary::release::version_newer(env!("CARGO_PKG_VERSION"), &manifest.minimum_stado_version) {
+    if crate::binary::release::version_newer(
+        env!("CARGO_PKG_VERSION"),
+        &manifest.minimum_stado_version,
+    ) {
         return Err(format!(
             "release requires Stado {}, host runs {}",
             manifest.minimum_stado_version,

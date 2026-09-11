@@ -66,7 +66,8 @@ pub(super) fn spawn_janitor() -> (JanitorReports, JanitorTask) {
             // Off the critical path, beside the disk pass, for the same reason:
             // an expired lease is host garbage, and the host is the only thing
             // that always knows it holds one.
-            crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
+            crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg))
+                .await;
             disk_cleanup::run_cleanup_once(
                 active_jobs,
                 false,

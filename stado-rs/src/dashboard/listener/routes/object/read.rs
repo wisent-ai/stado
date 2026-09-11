@@ -129,7 +129,8 @@ impl Dashboard {
                 &json!({"error": "unauthorized"}),
             ));
         };
-        let storage_prefix = crate::remote::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)?;
+        let storage_prefix =
+            crate::remote::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)?;
         let objects = self
             .store
             .backend()

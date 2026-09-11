@@ -7,7 +7,7 @@ use super::probe_state;
 use crate::deploy::scratch::lease::{self, ScratchLease};
 use crate::deploy::scratch::registry_out;
 use crate::deploy::scratch::remote::{self, HostLease};
-use crate::deploy::{host_channel, host_access::user_delete, DeployError, Runner};
+use crate::deploy::{host_access::user_delete, host_channel, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 /// The row a just-created lease would have had, for the rollback path.

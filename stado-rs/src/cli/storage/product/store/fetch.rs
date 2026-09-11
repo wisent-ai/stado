@@ -94,7 +94,8 @@ pub(crate) async fn list_object_uris(
     namespace: &str,
     prefix: &str,
 ) -> Result<Vec<String>, CmdError> {
-    let storage_prefix = crate::remote::object_store::ObjectRef::namespace_prefix(namespace, prefix)?;
+    let storage_prefix =
+        crate::remote::object_store::ObjectRef::namespace_prefix(namespace, prefix)?;
     if let Some(remote) = RemoteObjectApi::configured_for_list(namespace, prefix)? {
         return remote
             .list(namespace, prefix)
@@ -116,7 +117,9 @@ pub(crate) async fn list_object_uris(
         .list_blobs_with_meta(&storage_prefix)
         .await?
     {
-        uris.push(crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?.to_string());
+        uris.push(
+            crate::remote::object_store::ObjectRef::from_storage_path(&blob.name)?.to_string(),
+        );
     }
     uris.sort();
     Ok(uris)

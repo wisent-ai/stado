@@ -37,9 +37,8 @@ use serde_json::{json, Value};
 
 use checks::{check_against_this_machine, local_route};
 use fixture::{
-    beacon_time, blockers, document, stderr, stdout, Fixture,
-    REFUSAL_WINDOW_SECONDS, THRESHOLD_SECONDS,
+    beacon_time, blockers, document, stderr, stdout, Fixture, REFUSAL_WINDOW_SECONDS,
+    THRESHOLD_SECONDS,
 };
-
 
 mod cases;

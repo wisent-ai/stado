@@ -62,7 +62,9 @@ fn an_action_the_registry_row_does_not_list_is_refused_before_the_host_is_touche
     assert_eq!(out.status.code(), Some(1), "{}", said(&out));
     assert_eq!(
         refusal(&out),
-        format!("{TARGET} declares no weles-browser-task; add it to stado-rs/data/work/workloads.json")
+        format!(
+            "{TARGET} declares no weles-browser-task; add it to stado-rs/data/work/workloads.json"
+        )
     );
     assert!(
         fleet.files_naming_the_session().is_empty(),

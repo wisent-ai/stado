@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::directory::{directory, parsed_registry, service, target};
 use crate::cli::{placement, registry, CmdError};
-use crate::deploy::{host_capability, host_access::resolver_key};
+use crate::deploy::{host_access::resolver_key, host_capability};
 
 pub async fn capability(name: &str, as_json: bool) -> Result<(), CmdError> {
     let document = registry::fetch_document().await?;

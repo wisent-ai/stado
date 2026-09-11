@@ -59,7 +59,10 @@ impl RemoteObjectApi {
             let presented = crate::remote::object_store::ObjectRef::parse(uri)
                 .ok()
                 .and_then(|object| {
-                    crate::remote::object_store::release_policy_key(object.namespace(), object.key())
+                    crate::remote::object_store::release_policy_key(
+                        object.namespace(),
+                        object.key(),
+                    )
                 })
                 .and_then(|key| {
                     crate::config::release_client_publisher_for_key(&key)

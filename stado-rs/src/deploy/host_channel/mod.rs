@@ -25,7 +25,10 @@
 use std::future::Future;
 use std::time::Duration;
 
-use super::{host_state::reboot, host_recovery, py_str_repr, shlex_quote, host_access::ssh_key, DeployError, Runner};
+use super::{
+    host_access::ssh_key, host_recovery, host_state::reboot, py_str_repr, shlex_quote, DeployError,
+    Runner,
+};
 use crate::targets::{ComputeTarget, Registry};
 
 /// The `status` value every command in this family reports when the remote

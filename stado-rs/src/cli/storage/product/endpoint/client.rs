@@ -145,7 +145,9 @@ fn configured_origin_hosts() -> Vec<String> {
             continue;
         };
         let Some(host) = url.host_str() else { continue };
-        if crate::remote::tailnet::is_magicdns_name(host) && !hosts.iter().any(|known| known == host) {
+        if crate::remote::tailnet::is_magicdns_name(host)
+            && !hosts.iter().any(|known| known == host)
+        {
             hosts.push(host.to_string());
         }
     }

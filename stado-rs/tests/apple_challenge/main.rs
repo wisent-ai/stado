@@ -10,14 +10,14 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use reqwest::StatusCode;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
-use serde_json::{json, Value};
 
 use support::{
     plan_file, prepare, registered_host, report, retain, stado_binary, status, Report,
-    APPLE_ONLY_PLAN, API_COMMAND_SECONDS,
+    API_COMMAND_SECONDS, APPLE_ONLY_PLAN,
 };
 
 mod cases;
