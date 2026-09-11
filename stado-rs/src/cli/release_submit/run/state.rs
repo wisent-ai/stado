@@ -6,7 +6,7 @@ use chrono::Utc;
 use crate::cli::release_submit::run::source::run_state_path;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
-use crate::release_pipeline::{ReleaseRun, ReleaseRunState};
+use crate::release_pipeline::{PlatformRunState, ReleaseRun, ReleaseRunState};
 
 pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
     run.updated_at = Utc::now().to_rfc3339();
@@ -66,9 +66,21 @@ pub(crate) async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
         .transpose()
 }
 
-/// The newest submitted run is the delivery fence. Delivery workers already
-/// carry the queue storage identity needed to read run state, while fleet
-/// targets deliberately do not carry a product publisher credential.
+/// The newest run holding a published platform is the delivery fence.
+/// Delivery workers already carry the queue storage identity needed to read
+/// run state, while fleet targets deliberately do not carry a product
+/// publisher credential.
+///
+/// A run that has published nothing fences nothing: there is no artifact of
+/// it a host could receive, so no older delivery is stale relative to it.
+/// The newest run of any state used to be the fence, and on 2026-09-11 two
+/// 0.20.10 runs that failed before a builder was found - created thirty
+/// seconds after the 0.20.11 run - made every 0.20.11 delivery refuse itself
+/// as superseded, on every host, by runs that would never deliver a byte.
+/// The day before, an abandoned 0.20.9 run whose builds had both failed did
+/// the same to the 0.20.8 delivery to lukasz-macbook. A run starts fencing
+/// the moment it publishes a platform, which is when its deliveries can
+/// begin.
 pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdError> {
     let store = JobStorage::new()
         .await
@@ -91,7 +103,12 @@ pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<Release
         };
         let run: ReleaseRun = serde_json::from_str(&text)
             .map_err(|error| CmdError::click(format!("invalid release run {path}: {error}")))?;
-        if run.product != product {
+        if run.product != product
+            || !run
+                .platforms
+                .values()
+                .any(|platform| platform.state == PlatformRunState::Published)
+        {
             continue;
         }
         let created_at =

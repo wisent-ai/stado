@@ -21,6 +21,7 @@ mod skarbiec_support;
 use skarbiec_support::{SkarbiecFixture, SkarbiecItem};
 
 mod commit;
+mod fence;
 mod fixture;
 mod leftover;
 mod preflight;
