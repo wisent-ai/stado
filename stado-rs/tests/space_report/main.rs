@@ -10,8 +10,10 @@
 //! lost with it.
 //!
 //! So the walk now has its own budget, and exceeding it is reported rather
-//! than fatal. The budget is forced to one second here, which is the only way
-//! to reach that branch without a host large enough to be slow.
+//! than fatal. A budget of zero is that same branch without a race: it says
+//! the walk was not attempted, so the cheap report an operator needs on a
+//! host whose walk costs minutes is one environment value away, and the
+//! branch is provable on a warm machine instead of only on a slow one.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -108,7 +110,8 @@ impl Fixture {
         }
     }
 
-    /// The report with the attribution walk held to `budget_seconds`.
+    /// The report with the attribution walk held to `budget_seconds`, where
+    /// `0` means the walk is not attempted at all.
     fn report(&self, budget_seconds: &str, extra: &[&str]) -> Output {
         let mut args = vec!["space", "report", TARGET];
         args.extend_from_slice(extra);
@@ -148,28 +151,28 @@ impl Fixture {
 }
 
 #[test]
-fn a_walk_that_exceeds_its_budget_still_reports_free_space_and_the_janitor() {
+fn a_report_without_the_walk_still_carries_free_space_memory_and_the_janitor() {
     let fixture = Fixture::new();
-    let output = fixture.report("1", &[]);
+    let output = fixture.report("0", &[]);
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     assert_eq!(
         output.status.code(),
         Some(0),
-        "a slow walk is not a failed command; stderr: {stderr}"
+        "a skipped walk is not a failed command; stderr: {stderr}"
     );
     assert!(
         text.contains("disk:") && text.contains("free:") && text.contains("GiB"),
-        "the disk and free-space lines survive the slow walk: {text}"
+        "the disk and free-space lines survive the missing walk: {text}"
     );
     assert!(
         text.contains("memory:"),
-        "the memory reading survives the slow walk: {text}"
+        "the memory reading survives the missing walk: {text}"
     );
     assert!(
         text.contains("janitor:"),
-        "the janitor's own outcome survives the slow walk: {text}"
+        "the janitor's own outcome survives the missing walk: {text}"
     );
     assert!(
         text.contains("inventory incomplete:"),
@@ -179,19 +182,41 @@ fn a_walk_that_exceeds_its_budget_still_reports_free_space_and_the_janitor() {
 }
 
 #[test]
-fn the_report_names_the_walk_it_could_not_finish() {
+fn the_report_names_the_walk_it_did_not_run() {
     let fixture = Fixture::new();
-    let output = fixture.report("1", &["--json"]);
+    let output = fixture.report("0", &["--json"]);
     let document: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the report is one JSON document");
     let detail = document
         .get("inventory_incomplete")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| panic!("the report names the unfinished walk: {document}"));
+        .unwrap_or_else(|| panic!("the report names the walk it did not run: {document}"));
 
     assert!(
-        detail.contains("inventory read failed:") && detail.contains("1 seconds"),
+        detail.contains("inventory not read:")
+            && detail.contains("STADO_INVENTORY_BUDGET_SECONDS is 0"),
         "{detail}"
+    );
+    fixture.cleanup();
+}
+
+/// A bound that is not a whole number of seconds is refused before anything
+/// is walked, and the refusal says what zero means.
+#[test]
+fn a_malformed_walk_bound_is_refused_with_its_own_sentence() {
+    let fixture = Fixture::new();
+    let output = fixture.report("soon", &["--json"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a malformed bound was accepted: {stderr}"
+    );
+    assert!(
+        stderr.contains("STADO_INVENTORY_BUDGET_SECONDS must be a whole number of seconds")
+            && stderr.contains("0 reads the report without the attribution walk"),
+        "the refusal did not name the bound and what zero means: {stderr}"
     );
     fixture.cleanup();
 }
