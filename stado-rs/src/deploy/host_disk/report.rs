@@ -195,17 +195,23 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
 const INVENTORY_BUDGET: std::time::Duration = std::time::Duration::from_secs(900);
 const INVENTORY_BUDGET_ENV: &str = "STADO_INVENTORY_BUDGET_SECONDS";
 
-fn inventory_budget() -> Result<std::time::Duration, DeployError> {
+/// The walk's own bound. `Some` is the time it may take; `None` is a declared
+/// zero, which is the operator asking for the cheap report without the
+/// attribution walk at all. Zero used to be refused as malformed, so the only
+/// way to reach the incomplete-inventory branch was to own a tree slow enough
+/// to exceed a one-second budget — a race on a warm machine, and no answer at
+/// all for an operator who already knows the walk costs minutes.
+fn inventory_budget() -> Result<Option<std::time::Duration>, DeployError> {
     match std::env::var(INVENTORY_BUDGET_ENV) {
-        Err(std::env::VarError::NotPresent) => Ok(INVENTORY_BUDGET),
+        Err(std::env::VarError::NotPresent) => Ok(Some(INVENTORY_BUDGET)),
         Ok(value) => value
             .parse::<u64>()
             .ok()
-            .filter(|seconds| *seconds > 0)
-            .map(std::time::Duration::from_secs)
+            .map(|seconds| (seconds > 0).then(|| std::time::Duration::from_secs(seconds)))
             .ok_or_else(|| {
                 DeployError(format!(
-                    "{INVENTORY_BUDGET_ENV} must be a positive whole number of seconds"
+                    "{INVENTORY_BUDGET_ENV} must be a whole number of seconds; 0 reads the \
+                     report without the attribution walk"
                 ))
             }),
         Err(error) => Err(DeployError(format!(
@@ -234,11 +240,22 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
         runner,
     )
     .await?;
-    let full =
-        host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await;
+    let full = match budget {
+        Some(budget) => {
+            Some(host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await)
+        }
+        None => None,
+    };
     let (output, attribution) = match full {
-        Ok(output) if output.code == 0 => (output, None),
-        Ok(output) => (
+        None => (
+            gates,
+            Some(format!(
+                "inventory not read: {INVENTORY_BUDGET_ENV} is 0, so the attribution walk was \
+                 not attempted"
+            )),
+        ),
+        Some(Ok(output)) if output.code == 0 => (output, None),
+        Some(Ok(output)) => (
             gates,
             Some(format!(
                 "inventory command exited {}: {}",
@@ -246,7 +263,7 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
                 output.stderr.trim()
             )),
         ),
-        Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
+        Some(Err(error)) => (gates, Some(format!("inventory read failed: {error}"))),
     };
     let reading = parse_output(&output.stdout, interval);
     let mut report = to_report(target, &reading);

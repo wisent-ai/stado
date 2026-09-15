@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "connection_providers": [
+    {
+      "name": "primary",
+      "summary": "The preferred destination of the host's own SSH entry; always tried first and never carries a priority."
+    },
+    {
+      "name": "lan",
+      "summary": "The address the host answers on inside its own local network."
+    },
+    {
+      "name": "tailscale",
+      "summary": "The host's Tailscale address, reachable wherever both machines are signed into the same tailnet."
+    },
+    {
+      "name": "nebula",
+      "summary": "The host's Nebula overlay address, reached through the fleet's own lighthouse."
+    },
+    {
+      "name": "wireguard",
+      "summary": "The host's WireGuard address inside the tunnel the fleet configures itself."
+    }
+  ]
+}

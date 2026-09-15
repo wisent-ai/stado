@@ -2,19 +2,51 @@ import Combine
 import Foundation
 import WisentDesignSystem
 
-/// Registry connection-path writes made through the product CLI.
+/// Registry connection-path writes made through the product CLI, and the read
+/// of the networks the product declares.
 ///
 /// The Hosts inspector reads route health through `host link`; this store owns
-/// only the two registry mutations behind its editor. Both ask for JSON so the
-/// app reads a typed receipt instead of scraping the terminal sentence.
+/// the two registry mutations behind its editor and the listing its editor
+/// offers a choice from. All three ask for JSON so the app reads a typed
+/// receipt instead of scraping the terminal sentence.
 @MainActor
 final class HostConnectionPathStore: ObservableObject {
     @Published private(set) var mutation: WisentMutationOutcome = .idle
+    /// The host's routes and the networks the product describes, as the last
+    /// listing reported them. Empty until one has been read: the editor shows
+    /// no vocabulary rather than one of its own.
+    @Published private(set) var listing: HostConnectionPathListing?
+    /// Why the listing could not be read, in the product's own words.
+    @Published private(set) var listingRefusal: String?
 
     private let cli: StadoCLI
 
     init(cli: StadoCLI = StadoCLI()) {
         self.cli = cli
+    }
+
+    nonisolated static func listArguments(host: String) -> [String] {
+        ["registry", "host", "path", "list", host, "--json"]
+    }
+
+    /// Read the host's declared routes and the product's own network
+    /// vocabulary. A refusal is kept beside the empty listing, because an
+    /// editor that silently offers nothing looks like a product that declares
+    /// nothing.
+    @discardableResult
+    func loadListing(host: String) async -> Bool {
+        do {
+            listing = try await cli.json(
+                HostConnectionPathListing.self,
+                arguments: Self.listArguments(host: host)
+            )
+            listingRefusal = nil
+            return true
+        } catch {
+            listing = nil
+            listingRefusal = Self.message(for: error)
+            return false
+        }
     }
 
     nonisolated static func setArguments(

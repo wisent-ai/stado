@@ -56,6 +56,38 @@ final class ConnectionPathStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.registry), before,
             "a refused route change rewrote the registry document")
     }
+
+    /// The editor's choice of network comes from the product, not from this
+    /// window: the store's listing carries exactly the vocabulary the binary
+    /// publishes, and a network the host already has a route for is no longer
+    /// offered as a new one.
+    func testTheStoreReadsTheNetworksTheProductDeclares() async throws {
+        let fixture = try RegistryFixture()
+        let store = HostConnectionPathStore(cli: StadoCLI(executable: fixture.binary.path))
+
+        let read = await store.loadListing(host: RegistryFixture.host)
+        XCTAssertTrue(read, store.listingRefusal ?? "no refusal reported")
+        let listing = try XCTUnwrap(store.listing)
+        XCTAssertNil(store.listingRefusal)
+        XCTAssertEqual(listing.target, RegistryFixture.host)
+        XCTAssertEqual(listing.knownProviders.map(\.name), try fixture.declaredNetworks(),
+            "the window's vocabulary is not the one the binary publishes")
+        XCTAssertTrue(listing.knownProviders.allSatisfy { !$0.summary.isEmpty },
+            "a network offered without a sentence explaining it")
+        XCTAssertFalse(listing.networksToOffer.contains { $0.name == "primary" },
+            "the preferred position was offered as a network")
+
+        let target = try XCTUnwrap(listing.networksToOffer.first)
+        let declared = await store.set(host: RegistryFixture.host, name: target.name,
+            destination: "operator@routes-\(target.name).example", priority: 1)
+        XCTAssertTrue(declared, store.mutation.message ?? "no mutation reported")
+        let reread = await store.loadListing(host: RegistryFixture.host)
+        XCTAssertTrue(reread, store.listingRefusal ?? "no refusal reported")
+        let after = try XCTUnwrap(store.listing)
+        XCTAssertTrue(after.describes(target.name))
+        XCTAssertFalse(after.networksToOffer.contains { $0.name == target.name },
+            "a network this host already has a route for is still offered as a new one")
+    }
 }
 
 /// What this fixture refuses, in its own words.
@@ -156,6 +188,27 @@ private final class RegistryFixture {
                 "preferred": String(connection["preferred"] as? Bool ?? false),
             ]
         }
+    }
+
+    /// The networks the product itself declares, read out of the same listing
+    /// the window reads, so the case compares the window against the binary
+    /// rather than against a list written in this file.
+    func declaredNetworks() throws -> [String] {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = binary
+        process.arguments = ["registry", "host", "path", "list", Self.host, "--json"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let printed = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let listed = try JSONSerialization.jsonObject(with: printed) as? [String: Any],
+              let networks = listed["known_providers"] as? [[String: Any]]
+        else { throw RegistryFixtureRefusal("the product did not publish its connection networks") }
+        try printed.write(to: root.appendingPathComponent("networks.json"))
+        return networks.compactMap { $0["name"] as? String }
     }
 
     func retain(_ outcome: WisentMutationOutcome, named name: String) throws {
