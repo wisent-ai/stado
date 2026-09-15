@@ -81,9 +81,11 @@ impl Host {
     /// A fixture declaring the enforcing policy, whose one cleaner is rooted
     /// at a build-cache directory inside this tempdir.
     pub fn new() -> Self {
+        let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/disk-scope-test-runs");
+        fs::create_dir_all(&build).expect("create disk-scope fixture root");
         let dir = tempfile::Builder::new()
             .prefix("stado-disk-scope-")
-            .tempdir()
+            .tempdir_in(build)
             .expect("create the isolated disk-scope host");
         let root = dir.path().to_path_buf();
         let home = root.join("home");
