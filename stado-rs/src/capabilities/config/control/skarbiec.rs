@@ -53,6 +53,11 @@ pub const RELEASE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
     "WC_RELEASE_SKARBIEC",
     "release_api.skarbiec"
 );
+pub const RELEASE_PUBLISHER_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "release-publisher-skarbiec",
+    "WC_RELEASE_PUBLISHER_SKARBIEC",
+    "release.publisher_skarbiec"
+);
 pub const MACHINE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
     "machine-api-skarbiec",
     "WC_MACHINE_SKARBIEC",

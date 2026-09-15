@@ -1,17 +1,17 @@
 //! Real CLI custody and broker reads over an isolated host, vault, and keyring.
 
 use std::fs;
-use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::Path;
-use std::process::{Child, Output};
-use std::time::{Duration, Instant};
+use std::process::Output;
 
 use serde_json::json;
 
 use super::{
     host::{said, IsolatedHost, TARGET},
-    put, report, ITEM, PASSWORD,
+    put, report,
+    servers::Server,
+    ITEM, PASSWORD,
 };
 
 const CONSUMER: &str = "credentials-delivery";
@@ -71,45 +71,7 @@ fn write_private(path: &Path, bytes: &[u8]) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-struct Broker {
-    child: Child,
-    url: String,
-}
-
-impl Broker {
-    fn start(host: &IsolatedHost) -> Self {
-        let port = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let child = host
-            .broker_command()
-            .args(["serve", "--port", &port.to_string()])
-            .stdout(fs::File::create(host.home.join("broker.out")).unwrap())
-            .stderr(fs::File::create(host.home.join("broker.err")).unwrap())
-            .spawn()
-            .expect("start the real broker");
-        let mut broker = Self {
-            child,
-            url: format!("http://127.0.0.1:{port}"),
-        };
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline {
-            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                return broker;
-            }
-            if broker.child.try_wait().unwrap().is_some() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        panic!(
-            "real broker did not start: {}",
-            fs::read_to_string(host.home.join("broker.err")).unwrap()
-        );
-    }
-
+impl Server {
     fn read(&self, token_file: &Path) -> (u16, serde_json::Value) {
         let token = fs::read_to_string(token_file).unwrap();
         tokio::runtime::Runtime::new().unwrap().block_on(async {
@@ -128,13 +90,6 @@ impl Broker {
     }
 }
 
-impl Drop for Broker {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 #[test]
 fn token_delivery_restores_a_real_read_without_changing_grants_and_is_idempotent() {
     let host = IsolatedHost::new(true);
@@ -145,7 +100,7 @@ fn token_delivery_restores_a_real_read_without_changing_grants_and_is_idempotent
     let source_before = fs::read(&source).unwrap();
     let vault_before = host.vault_bytes();
     write_private(&destination, b"unregistered-isolated-bearer");
-    let broker = Broker::start(&host);
+    let broker = Server::broker(&host);
     assert_eq!(broker.read(&destination).0, 403);
     assert!(!sync(&host, SOURCE, DESTINATION, true).status.success());
     assert_eq!(
@@ -190,7 +145,7 @@ fn a_revoked_grant_cannot_be_restored_by_delivering_its_old_bearer() {
     assert!(!sync(&host, SOURCE, DESTINATION, false).status.success());
     assert_eq!(host.vault_bytes(), vault);
     assert_eq!(fs::read(&destination).unwrap(), before);
-    let broker = Broker::start(&host);
+    let broker = Server::broker(&host);
     assert_eq!(broker.read(&destination).0, 403);
 }
 

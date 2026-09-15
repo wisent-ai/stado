@@ -21,7 +21,9 @@
 //! sentence and with the vault left untouched.
 
 mod host;
+mod publication;
 mod refusals;
+mod servers;
 #[path = "../support/skarbiec.rs"]
 mod skarbiec;
 mod tokens;
