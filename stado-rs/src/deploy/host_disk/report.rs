@@ -241,9 +241,9 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
     )
     .await?;
     let full = match budget {
-        Some(budget) => {
-            Some(host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await)
-        }
+        Some(budget) => Some(
+            host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await,
+        ),
         None => None,
     };
     let (output, attribution) = match full {
