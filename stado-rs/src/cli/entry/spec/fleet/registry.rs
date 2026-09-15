@@ -142,7 +142,9 @@ pub(crate) enum RegistryHostPathCommands {
     /// Add or replace one connection path.
     Set {
         host: String,
-        /// Path identifier (`primary`, `nebula`, `tailscale`, `lan`, ...).
+        /// Path identifier naming the network under the destination; `path
+        /// list` prints the networks this product describes, and any other
+        /// fleet name is accepted.
         path: String,
         /// SSH destination ([user@]host[:port]) for this path.
         #[arg(long)]
