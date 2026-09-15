@@ -306,8 +306,8 @@ jobs:
       STADO_WRITER_API_URL: http://127.0.0.1:18776
       STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
-      WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+      
+      
     steps:
       # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
       # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
@@ -995,8 +995,8 @@ jobs:
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
-      WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+      
+      
       STADO_CONTROL_PLATFORM: ${{ vars.STADO_CONTROL_PLATFORM }}
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}

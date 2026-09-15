@@ -42,7 +42,7 @@ const OWNER_ONLY_DIRECTORY: u32 = 0o700;
 pub struct IsolatedHost {
     root: tempfile::TempDir,
     pub home: PathBuf,
-    storage: PathBuf,
+    pub storage: PathBuf,
     gnupg: PathBuf,
     vault: PathBuf,
     broker: PathBuf,
@@ -173,15 +173,9 @@ impl IsolatedHost {
         command
     }
 
-    /// One `stado` invocation against the isolated host.
-    ///
-    /// `SKARBIEC_VAULT_FILE` is deliberately absent from this environment: the
-    /// only thing that can point the command at the isolated vault is the
-    /// declaration the host itself carries, which is what these cases are
-    /// about.
-    pub fn run(&self, arguments: &[&str], stdin: Option<&str>) -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_stado"))
-            .args(arguments)
+    pub fn command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        command
             .current_dir(self.root.path())
             .env_clear()
             .env("HOME", &self.home)
@@ -189,7 +183,20 @@ impl IsolatedHost {
             .env("GNUPGHOME", &self.gnupg)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
-            .env("STADO_CONFIG", self.root.path().join("no-such-config.json"))
+            .env("STADO_CONFIG", self.root.path().join("no-such-config.json"));
+        command
+    }
+
+    /// One `stado` invocation against the isolated host.
+    ///
+    /// `SKARBIEC_VAULT_FILE` is deliberately absent from this environment: the
+    /// only thing that can point the command at the isolated vault is the
+    /// declaration the host itself carries, which is what these cases are
+    /// about.
+    pub fn run(&self, arguments: &[&str], stdin: Option<&str>) -> Output {
+        let mut child = self
+            .command()
+            .args(arguments)
             .stdin(if stdin.is_some() {
                 Stdio::piped()
             } else {

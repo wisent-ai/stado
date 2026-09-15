@@ -1,6 +1,5 @@
-//! The vault stretch of `config show`: the four skarbiec audiences this
-//! deployment reads and writes through — object, release, service and agent —
-//! each with its endpoint, its consumer, its token file and the policy map
+//! The vault boundaries this deployment reads and writes through, each with
+//! its endpoint, consumer, token file and policy map
 //! that says what it may touch. A policy map that will not resolve is
 //! reported in place, under an `errors` key, rather than failing the command:
 //! `config show` is what an operator runs to find out why.
@@ -95,6 +94,18 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
     resolved.insert(
         "release_skarbiec_token_file".into(),
         Value::from(config::release_skarbiec_token_file()),
+    );
+    resolved.insert(
+        "release_publisher_skarbiec_url".into(),
+        Value::from(config::release_publisher_skarbiec_url()),
+    );
+    resolved.insert(
+        "release_publisher_skarbiec_consumer".into(),
+        Value::from(config::release_publisher_skarbiec_consumer()),
+    );
+    resolved.insert(
+        "release_publisher_skarbiec_token_file".into(),
+        Value::from(config::release_publisher_skarbiec_token_file()),
     );
     let release_publishers = match config::release_api_publishers() {
         Ok(publishers) => Value::Object(

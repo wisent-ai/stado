@@ -1,8 +1,8 @@
-//! Skarbiec endpoints of the release-serving and release-signing grants.
+//! Separate Skarbiec bindings for serving, publishing and signing releases.
 
 use std::sync::LazyLock;
 
-use super::{RELEASE_API_VERIFIER_CONSUMER, RELEASE_SIGNING_CONSUMER};
+use super::{RELEASE_API_VERIFIER_CONSUMER, RELEASE_PUBLISHER_CONSUMER, RELEASE_SIGNING_CONSUMER};
 use crate::config::skarbiec_url;
 use crate::config_file::{expand_tilde, resolve as cfg};
 
@@ -65,6 +65,30 @@ static RELEASE_SIGNING_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| 
     .into_owned()
 });
 
+static RELEASE_PUBLISHER_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RELEASE_PUBLISHER_SKARBIEC_URL",
+        "release.publisher_skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static RELEASE_PUBLISHER_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RELEASE_PUBLISHER_SKARBIEC_CONSUMER",
+        "release.publisher_skarbiec.consumer",
+        RELEASE_PUBLISHER_CONSUMER,
+    )
+});
+static RELEASE_PUBLISHER_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    expand_tilde(&cfg(
+        "WC_RELEASE_PUBLISHER_SKARBIEC_TOKEN_FILE",
+        "release.publisher_skarbiec.token_file",
+        "~/.stado/stado-release-publisher-acquisition-token",
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
 pub fn release_skarbiec_url() -> &'static str {
     RELEASE_SKARBIEC_URL.as_str()
 }
@@ -83,4 +107,16 @@ pub fn release_signing_skarbiec_consumer() -> &'static str {
 
 pub fn release_signing_skarbiec_token_file() -> &'static str {
     RELEASE_SIGNING_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn release_publisher_skarbiec_url() -> &'static str {
+    RELEASE_PUBLISHER_SKARBIEC_URL.as_str()
+}
+
+pub fn release_publisher_skarbiec_consumer() -> &'static str {
+    RELEASE_PUBLISHER_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn release_publisher_skarbiec_token_file() -> &'static str {
+    RELEASE_PUBLISHER_SKARBIEC_TOKEN_FILE.as_str()
 }

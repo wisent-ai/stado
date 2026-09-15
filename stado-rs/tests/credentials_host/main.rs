@@ -17,11 +17,13 @@
 //! the host's declared vault and the declaration reads back from persisted
 //! state; the inspection verb reports what the host holds — kind, schema,
 //! state, revision, and per field its length and digest — and never a value;
-//! and in `refusals.rs`, the refusals that matter, each with its exact
-//! sentence and with the vault left untouched.
+//! and in `refusals.rs`, invalid host, item, field and vault authority inputs
+//! cannot select another usable source or change persisted data.
 
 mod host;
+mod publication;
 mod refusals;
+mod servers;
 #[path = "../support/skarbiec.rs"]
 mod skarbiec;
 mod tokens;

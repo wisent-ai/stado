@@ -1,6 +1,5 @@
-//! Least-privilege readers for one credential each: the key the paging path
-//! needs and the release authority's private key. Neither read travels on the
-//! coordinator's broad grant, and each has its own grant file on disk.
+//! Separate credential readers for paging, release signing and publication.
+//! Each boundary chooses its own grant rather than borrowing the coordinator's.
 
 use super::super::client::Client;
 use super::super::{GrantMode, SkarbiecError};
@@ -52,6 +51,32 @@ impl Client {
             crate::config::release_signing_skarbiec_consumer(),
             crate::config::release_signing_skarbiec_token_file(),
             GrantMode::RereadPerRequest,
+        )
+    }
+
+    /// A publisher acquires only its declared product bearer. A refused read
+    /// must not mutate the grant, especially on a synchronized replica.
+    pub fn release_publisher_reader() -> Result<Self, SkarbiecError> {
+        let token_file = crate::config::release_publisher_skarbiec_token_file();
+        let consumer = crate::config::release_publisher_skarbiec_consumer();
+        if token_file == crate::config::skarbiec_token_file()
+            || token_file == crate::config::release_skarbiec_token_file()
+            || token_file == crate::config::release_signing_skarbiec_token_file()
+            || consumer == crate::config::skarbiec_consumer()
+            || consumer == crate::config::release_skarbiec_consumer()
+            || consumer == crate::config::release_signing_skarbiec_consumer()
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "release publisher consumer {consumer:?} uses token file {token_file:?}; \
+                 the publisher identity and file must be distinct from the control-plane, \
+                 release verifier and signing identities"
+            )));
+        }
+        Self::direct(
+            crate::config::release_publisher_skarbiec_url(),
+            consumer,
+            token_file,
+            GrantMode::for_grant_file(token_file),
         )
     }
 }

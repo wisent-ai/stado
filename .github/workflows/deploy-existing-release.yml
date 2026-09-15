@@ -414,8 +414,8 @@ jobs:
       - name: Resume the exact immutable publication
         env:
           STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}
-          WC_SKARBIEC_CONSUMER: stado-release-publisher
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+          
+          
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
@@ -510,8 +510,8 @@ jobs:
           # So the 0.13.47 delivery died in this step, on a coordinate whose
           # bytes were already complete and public, with a message about vault
           # configuration rather than about the release.
-          WC_SKARBIEC_CONSUMER: stado-release-publisher
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+          
+          
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
@@ -523,8 +523,8 @@ jobs:
       - name: Publish the exact tag native release
         env:
           STADO_API_URL: ${{ env.STADO_WRITER_API_URL }}
-          WC_SKARBIEC_CONSUMER: stado-release-publisher
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+          
+          
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
@@ -679,8 +679,8 @@ jobs:
           # A client of the release channel, so the publisher's acquisition
           # grant — see the linux leg above for why the server's verifier grant
           # is refused here.
-          WC_SKARBIEC_CONSUMER: stado-release-publisher
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+          
+          
         run: |
           set -euo pipefail
           version='${{ inputs.version }}'
@@ -706,6 +706,6 @@ jobs:
         env:
           STADO_API_URL: ${{ env.STADO_PUBLIC_RELEASE_API_URL }}
           STADO_BIN: ${{ github.workspace }}/stado-rs/target/release/stado
-          WC_SKARBIEC_CONSUMER: stado-release-publisher
-          WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+          
+          
         run: bash "$RUNNER_TEMP/stado-release-tools/deploy_existing_stado_release.sh" '${{ inputs.version }}'

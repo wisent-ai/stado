@@ -189,9 +189,12 @@ pub(in crate::cli::storage) async fn put(args: &StoragePutArgs) -> Result<(), Cm
         args.if_absent,
         &BTreeMap::new(),
     )
-    .await?;
+    .await
+    .map_err(|error| error.machine_readable(args.json))?;
     if args.json {
-        let stored = fetch_object_from_writer(&outcome.uri).await?;
+        let stored = fetch_object_from_writer(&outcome.uri)
+            .await
+            .map_err(|error| error.machine_readable(true))?;
         echo_json(&serde_json::to_value(StoragePutReceipt {
             schema: "stado.storage-put-receipt.v1".into(),
             state: if outcome.created {

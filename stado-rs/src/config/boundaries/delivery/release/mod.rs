@@ -21,6 +21,10 @@ pub const ACTIVE_RELEASE_PUBLISHERS: &[&str] = &[
 
 pub const RELEASE_API_VERIFIER_CONSUMER: &str = "stado-release-api-verifier";
 
+/// Publication reads product-scoped bearer items, never signing material or
+/// the control-plane's host credentials.
+pub const RELEASE_PUBLISHER_CONSUMER: &str = "stado-release-publisher";
+
 /// The consumer the vault already authorizes to read the release authority's
 /// private key, and nothing else: its single minted capability is
 /// `read:stado-release-signing#private_key`.

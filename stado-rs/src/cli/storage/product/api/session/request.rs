@@ -97,21 +97,14 @@ impl RemoteObjectApi {
                 ))
             })?
         } else {
-            // Read with the publisher command's configured consumer, whose grant
-            // is settled here. The server has a separate release verifier; using
-            // that identity in the client would ignore the grant just acquired.
-            // An existing authorized read must still work when this caller lacks
-            // the owner credentials required to extend its grant.
-            if let Err(error) =
-                crate::credential_store::grant::settle_field_reads(publisher.item(), &["token"])
-            {
-                eprintln!(
-                    "could not widen the grant on release publisher item {} before reading it, \
-                 continuing with the grant as it stands: {error}",
-                    publisher.item()
-                );
-            }
-            crate::credential_store::read_string(publisher.item(), "token")
+            crate::skarbiec::Client::release_publisher_reader()
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot acquire release publisher credentials: {error}"
+                    ))
+                    .stating(crate::primitives::failure::FailureCode::Refused)
+                })?
+                .read_string(publisher.item(), "token")
                 .await
                 .map_err(|error| {
                     CmdError::click(format!(

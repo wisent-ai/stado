@@ -21,8 +21,8 @@ jobs:
       # address that loopback-only service directly.
       STADO_WRITER_API_URL: http://127.0.0.1:18776
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
-      WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+      
+      
     steps:
       - uses: actions/checkout@v5
         with:
