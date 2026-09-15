@@ -97,7 +97,12 @@ impl RemoteObjectApi {
                 ))
             })?
         } else {
-            crate::skarbiec::Client::release_publisher_reader()?
+            crate::skarbiec::Client::release_publisher_reader()
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot acquire release publisher credentials: {error}"
+                    ))
+                })?
                 .read_string(publisher.item(), "token")
                 .await
                 .map_err(|error| {
