@@ -34,7 +34,7 @@ pub enum RuntimeCommands {
 
     /// Restore upstream signed macOS GitHub runner apphosts without restarting.
     RepairRunnerRuntime {
-        /// An adopted service that directly launches GitHub's runsvc.sh.
+        /// An adopted service launching runsvc.sh or its declared Stado runner launcher.
         name: String,
         #[arg(long)]
         host: String,

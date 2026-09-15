@@ -35,9 +35,20 @@ pub async fn repair_runtime(
     let program = service::parse_unit_program(&unit)?
         .ok_or_else(|| DeployError("runner unit declares no executable".to_string()))?;
     let path = std::path::Path::new(&program);
-    if !path.is_absolute() || path.file_name().is_none_or(|name| name != "runsvc.sh") {
+    let declared_launcher = crate::deploy::host_precheck_runner::declaration::runner_declaration()?
+        .profiles
+        .iter()
+        .any(|profile| {
+            managed.unit_id() == format!("com.wisent.{}", profile.unit_label)
+                && path
+                    == std::path::Path::new(&Platform::DarwinArm64.runner_root(profile))
+                        .join("start-runner.sh")
+        });
+    if !path.is_absolute()
+        || (!declared_launcher && path.file_name().is_none_or(|name| name != "runsvc.sh"))
+    {
         return Err(DeployError(
-            "runner unit must directly declare GitHub's runsvc.sh".to_string(),
+            "runner unit must directly declare GitHub's runsvc.sh or its matching declared Stado runner launcher".to_string(),
         ));
     }
     let mut root = path
@@ -48,10 +59,13 @@ pub async fn repair_runtime(
             .parent()
             .ok_or_else(|| DeployError("runner has no install directory".to_string()))?;
     }
+    let home = host_channel::remote_home(target, runner).await?;
+    let signer = crate::deploy::native_signing::bootstrap_remote_signer(target, &home, runner).await?;
     let script = replace(
         MACOS_RUNTIME_REPAIR,
         &[
             ("__RUNNER_ROOT__", shlex_quote(&root.to_string_lossy())),
+            ("__SIGNER_PROGRAM__", shlex_quote(&signer)),
             (
                 "__MACOS_RUNTIME_FUNCTIONS__",
                 MACOS_RUNTIME_FUNCTIONS.to_string(),
