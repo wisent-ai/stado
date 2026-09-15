@@ -66,6 +66,28 @@ struct HostConnectionPathEditor: View {
         )
     }
 
+    /// The networks the product describes and this host has no route for yet.
+    /// Read from the listing, never written here.
+    private var offered: [HostConnectionNetwork] {
+        store.listing?.networksToOffer ?? []
+    }
+
+    /// The product's own sentence for the network being typed, the names it
+    /// offers, or the reason the listing could not be read.
+    private var pathNameHint: String {
+        if let summary = store.listing?.summary(of: cleanName) {
+            return summary
+        }
+        if let refusal = store.listingRefusal {
+            return "The networks this product describes could not be read: \(refusal)"
+        }
+        let names = offered.map(\.name)
+        if names.isEmpty {
+            return "Any lowercase name this fleet uses for the network underneath the destination."
+        }
+        return "This product describes \(names.joined(separator: ", ")); any other fleet name is accepted too."
+    }
+
     var body: some View {
         Group {
             if reviewing {
@@ -77,6 +99,9 @@ struct HostConnectionPathEditor: View {
         .onAppear {
             store.clearMutation()
         }
+        .task {
+            await store.loadListing(host: host)
+        }
     }
 
     private var form: some View {
@@ -85,16 +110,29 @@ struct HostConnectionPathEditor: View {
                 Text(existing == nil ? "Add a host-control route" : "Edit \(existing?.name ?? "")")
                     .font(WisentTypography.heading(17))
                     .foregroundStyle(WisentDesign.ink)
-                Text("A route is an SSH destination over any working Layer 3 network: Nebula, Tailscale, WireGuard, ZeroTier, LAN or a public address.")
+                Text("A route is an SSH destination over a network this product describes, or any other network this fleet runs.")
                     .font(WisentTypeScale.body())
                     .foregroundStyle(WisentDesign.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            field(title: "Path name", hint: "nebula, tailscale, lan") {
-                TextField("nebula", text: $name)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(existing != nil)
+            field(title: "Path name", hint: pathNameHint) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                    TextField("nebula", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(existing != nil)
+                    if existing == nil, !offered.isEmpty {
+                        HStack(spacing: WisentDesign.Space.x2) {
+                            ForEach(offered) { network in
+                                WisentActionButton(
+                                    action: WisentAction(network.name, kind: .secondary) {
+                                        name = network.name
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
             field(title: "SSH destination", hint: "[user@]host[:port]") {
                 TextField("operator@host.nebula", text: $destination)
