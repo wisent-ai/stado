@@ -39,7 +39,10 @@ where
     Ok(next_generation.get())
 }
 
-fn consumer_entry<'a>(document: &'a mut Value, name: &str) -> Result<&'a mut Map<String, Value>, CmdError> {
+fn consumer_entry<'a>(
+    document: &'a mut Value,
+    name: &str,
+) -> Result<&'a mut Map<String, Value>, CmdError> {
     document
         .get_mut(DIRECTORY_KEY)
         .and_then(Value::as_object_mut)
@@ -58,7 +61,9 @@ fn bind_consumer(
     bind: std::net::SocketAddr,
 ) -> Result<(), CmdError> {
     if !bind.ip().is_loopback() || bind.port() == 0 {
-        return Err(click("consumer binding requires a loopback IP and a nonzero port"));
+        return Err(click(
+            "consumer binding requires a loopback IP and a nonzero port",
+        ));
     }
     let target_entry = document
         .get_mut("targets")
@@ -69,13 +74,20 @@ fn bind_consumer(
         .get_mut("service_resolver")
         .and_then(|config| config.get_mut("adapters"))
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| click(format!("resolver target {target:?} has no configured adapters")))?;
+        .ok_or_else(|| {
+            click(format!(
+                "resolver target {target:?} has no configured adapters"
+            ))
+        })?;
     let mut existing = None;
     for (index, adapter) in adapters.iter().enumerate() {
-        if adapter["service"] == service && adapter["consumer"] == consumer
+        if adapter["service"] == service
+            && adapter["consumer"] == consumer
             && existing.replace(index).is_some()
         {
-            return Err(click(format!("resolver target {target:?} has ambiguous bindings for {service}/{consumer}")));
+            return Err(click(format!(
+                "resolver target {target:?} has ambiguous bindings for {service}/{consumer}"
+            )));
         }
     }
     if let Some(index) = existing {
@@ -168,7 +180,9 @@ pub(in crate::cli::directory) async fn consumer_rm(
                     .and_then(Value::as_array_mut)
                 {
                     let previous = adapters.len();
-                    adapters.retain(|adapter| adapter["service"] != name || adapter["consumer"] != consumer);
+                    adapters.retain(|adapter| {
+                        adapter["service"] != name || adapter["consumer"] != consumer
+                    });
                     removed += previous - adapters.len();
                 }
             }

@@ -28,6 +28,7 @@
 //! refusal sentence is copied from a live run of this fixture.
 
 mod answers;
+mod consumers;
 mod declaration;
 mod fixture;
 mod published;
@@ -119,9 +120,11 @@ pub struct Host {
 
 impl Host {
     pub fn new(document: &Value) -> Self {
+        fs::create_dir_all(env!("CARGO_TARGET_TMPDIR"))
+            .expect("the checkout's test build directory");
         let root = tempfile::Builder::new()
             .prefix("stado-resolver-real-")
-            .tempdir()
+            .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
             .expect("an isolated resolver root");
         let home = root.path().join("home");
         let storage = root.path().join("storage");
