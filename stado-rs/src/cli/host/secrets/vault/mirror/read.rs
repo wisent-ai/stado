@@ -100,7 +100,7 @@ fi
         crate::deploy::host_channel::run_program_with_stdin(
             &resolved,
             &invocation,
-            include_str!("../../../../../host_payloads/vault-token-from-item.py"),
+            include_str!("../../../../../host_payloads/vault_token/from_item.py"),
             &runner,
         )
         .await

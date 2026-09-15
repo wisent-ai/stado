@@ -41,7 +41,7 @@ const OWNER_ONLY_DIRECTORY: u32 = 0o700;
 
 pub struct IsolatedHost {
     root: tempfile::TempDir,
-    home: PathBuf,
+    pub home: PathBuf,
     storage: PathBuf,
     gnupg: PathBuf,
     vault: PathBuf,
@@ -56,13 +56,19 @@ impl IsolatedHost {
     /// either way, so an undeclared host refuses because nothing declares an
     /// authority and not because there is no file to find.
     pub fn new(declared: bool) -> Self {
+        // GnuPG's Darwin Unix sockets must fit sockaddr_un, including suffixes.
+        let scratch = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join(".build/ct");
+        fs::create_dir_all(&scratch).expect("create ignored test workspace");
         let root = tempfile::Builder::new()
-            .prefix("credentials-host-")
-            .tempdir()
+            .prefix("c-")
+            .tempdir_in(scratch)
             .expect("create the isolated journey root");
         let home = root.path().join("home");
         let storage = root.path().join("storage");
-        let gnupg = root.path().join("gnupg");
+        let gnupg = root.path().join("g");
         for directory in [
             &home,
             &storage,

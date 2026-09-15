@@ -119,6 +119,26 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 )
                 .await
             }
+            CredentialTokenCommands::Sync {
+                consumer,
+                from_host,
+                host,
+                source_token_file,
+                token_file,
+                check,
+                json,
+            } => {
+                super::host::vault_token_sync(
+                    &from_host,
+                    &host,
+                    &consumer,
+                    &source_token_file,
+                    &token_file,
+                    check,
+                    json,
+                )
+                .await
+            }
         },
         SecretsCommands::Vaults { host, json } => super::host::vaults(host, json).await,
         SecretsCommands::AcquisitionScopes { command } => match command {
