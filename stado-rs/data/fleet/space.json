@@ -32,7 +32,7 @@
     },
     {
       "name": "delivery_leftovers",
-      "description": "Attestation copies and retained archives of delivered versions other than the installed and newest ones, and dated binary backups older than the newest, which every release install leaves under ~/.stado/releases and ~/.stado/bin.",
+      "description": "Attestation copies and retained archives of delivered versions other than the installed and newest ones, and the binary copies an install leaves beside each installed binary under ~/.stado/bin: <name>.release-backup-<stamp>, <name>.<version>-backup-<stamp>, <name>.bak-<stamp> and <name>.pre-<label>, all but the newest of them. <name>.previous is the rollback target of the binary installed now and is never taken; a copy whose shape this stage does not recognise is named in the preview and retained.",
       "roots": ["~/.stado/releases", "~/.stado/bin"]
     },
     {

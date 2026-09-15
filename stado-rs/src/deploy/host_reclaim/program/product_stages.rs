@@ -224,21 +224,41 @@ if [ -d "$releases" ]; then
     sweep_versions "$product" delivery_leftovers "$pins"
   done
 fi
-# One backup per name survives: the newest, which is the binary the last
-# install replaced and the one a rollback by hand would reach for. The rest
-# are older binaries with nothing left to roll back to.
+# Keep the newest recognised copy by modification time, as for deliveries.
+# The independent .previous rollback target is never a sweep candidate.
+backup_shape() {
+  case "$1" in
+    release-backup-?*|bak-?*|pre-?*) return 0 ;;
+    [0-9]*.[0-9]*.[0-9]*-backup-?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 bin="$HOME/.stado/bin"
 if [ -d "$bin" ]; then
-  for newest_backup in "$bin"/*.release-backup-*; do
-    [ -f "$newest_backup" ] || continue
-    name=${newest_backup##*/}
-    name=${name%.release-backup-*}
-    # The newest by stamp, once per name: the loop reaches every backup of a
-    # name, and every backup of the same name resolves the same newest.
-    newest=$(/bin/ls -d -- "$bin/$name".release-backup-* 2>/dev/null | /usr/bin/sort | /usr/bin/tail -n 1)
-    [ "$newest_backup" = "$newest" ] && continue
-    stale "$newest_backup" || continue
-    reclaim "$newest_backup" delivery_leftovers
+  for installed in "$bin"/*; do
+    [ -f "$installed" ] && [ -x "$installed" ] || continue
+    name=${installed##*/}
+    case "$name" in *.*) continue ;; esac
+    newest=""
+    listing=$(LC_ALL=C /bin/ls -td -- "$installed".* 2>/dev/null || true)
+    saved_ifs=$IFS
+    set -f
+    IFS='
+'
+    for copy in $listing; do
+      [ -f "$copy" ] && [ ! -L "$copy" ] || continue
+      suffix=${copy#"$installed".}
+      [ "$suffix" = previous ] && continue
+      if backup_shape "$suffix"; then
+        if [ -z "$newest" ]; then newest="$copy"; continue; fi
+        stale "$copy" || continue
+        reclaim "$copy" delivery_leftovers
+      elif [ "$apply" = 0 ] && { [ -x "$copy" ] || /usr/bin/cmp -s "$copy" "$installed"; }; then
+        printf 'STADO_RECLAIM_REFUSED\tdelivery_leftovers\t%s\t%s\n' "$copy" 'unrecognised binary copy; retained'
+      fi
+    done
+    IFS=$saved_ifs
+    set +f
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tdelivery_leftovers\t%s\t%s\n' "$before" "$(free_kb)"
