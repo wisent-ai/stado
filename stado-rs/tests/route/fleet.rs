@@ -60,10 +60,7 @@ pub struct Fleet {
 
 impl Fleet {
     pub fn new() -> Self {
-        let root = tempfile::Builder::new()
-            .prefix("stado-route-real-")
-            .tempdir()
-            .expect("an isolated journey root");
+        let root = crate::skarbiec::isolated_gnupg_home();
         let home = root.path().join("home");
         let storage = root.path().join("storage");
         for directory in [&home, &storage] {

@@ -29,23 +29,11 @@ pub(crate) struct SkarbiecFixture {
 
 impl SkarbiecFixture {
     pub(crate) fn new() -> Self {
-        // GnuPG creates Unix sockets below GNUPGHOME. Keep this deliberately
-        // short so macOS's AF_UNIX path limit cannot break key generation.
-        let runs =
-            PathBuf::from(std::env::var_os("HOME").expect("HOME is set")).join(".stado/test-runs");
-        fs::create_dir_all(&runs).expect("create the isolated test-run root");
-        let run = tempfile::Builder::new()
-            .prefix("sts")
-            .rand_bytes(8)
-            .tempdir_in(&runs)
-            .expect("reserve an isolated run directory");
+        let run = crate::skarbiec_support::isolated_gnupg_home();
         let root = run.path().to_path_buf();
-        let gnupg = root.join("g");
+        let gnupg = root.clone();
         let storage = root.join("storage");
-        fs::create_dir_all(&gnupg).expect("create isolated GnuPG home");
         fs::create_dir_all(&storage).expect("create isolated Stado storage");
-        fs::set_permissions(&gnupg, fs::Permissions::from_mode(0o700))
-            .expect("protect isolated GnuPG home");
 
         let skarbiec = std::env::var_os("SKARBIEC_BIN")
             .map(PathBuf::from)

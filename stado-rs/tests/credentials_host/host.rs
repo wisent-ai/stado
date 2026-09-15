@@ -16,13 +16,12 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::{json, Value};
 
-use crate::skarbiec::real_skarbiec_binary;
+use crate::skarbiec::{isolated_gnupg_home, real_skarbiec_binary};
 
 /// The registry name of the isolated entry standing for this machine.
 pub const TARGET: &str = "credentials-host-isolated";
@@ -37,7 +36,6 @@ pub const OWNER: &str = "Stado credentials area <credentials-area@example.invali
 const SYSTEM_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 const REGISTRY_SCHEMA: u32 = 2;
 const CONFIG_SCHEMA: u32 = 1;
-const OWNER_ONLY_DIRECTORY: u32 = 0o700;
 
 pub struct IsolatedHost {
     root: tempfile::TempDir,
@@ -56,19 +54,10 @@ impl IsolatedHost {
     /// either way, so an undeclared host refuses because nothing declares an
     /// authority and not because there is no file to find.
     pub fn new(declared: bool) -> Self {
-        // GnuPG's Darwin Unix sockets must fit sockaddr_un, including suffixes.
-        let scratch = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join(".build/ct");
-        fs::create_dir_all(&scratch).expect("create ignored test workspace");
-        let root = tempfile::Builder::new()
-            .prefix("c-")
-            .tempdir_in(scratch)
-            .expect("create the isolated journey root");
+        let root = isolated_gnupg_home();
         let home = root.path().join("home");
         let storage = root.path().join("storage");
-        let gnupg = root.path().join("g");
+        let gnupg = root.path().to_path_buf();
         for directory in [
             &home,
             &storage,
@@ -78,8 +67,6 @@ impl IsolatedHost {
         ] {
             fs::create_dir_all(directory).expect("create an isolated journey directory");
         }
-        fs::set_permissions(&gnupg, fs::Permissions::from_mode(OWNER_ONLY_DIRECTORY))
-            .expect("keep the isolated GnuPG home owner-only");
 
         let vault = home.join(".stado/credentials-area.vault.json");
         fs::write(
@@ -136,6 +123,12 @@ impl IsolatedHost {
 
     /// Create the vault with real GnuPG keys, through the real broker.
     fn initialise_vault(&self) {
+        let agent_log = self.gnupg.join("agent.log");
+        fs::write(
+            self.gnupg.join("gpg-agent.conf"),
+            format!("log-file {}\n", agent_log.display()),
+        )
+        .expect("configure the isolated GnuPG agent log");
         let created = self
             .broker_command()
             .args(["init", OWNER])
@@ -143,8 +136,11 @@ impl IsolatedHost {
             .expect("the real Skarbiec broker runs");
         assert!(
             created.status.success(),
-            "blocked: the real Skarbiec broker could not initialise an isolated vault\n{}",
-            said(&created)
+            "blocked: the real Skarbiec broker could not initialise a vault with GnuPG home {}\n{}\nGnuPG agent log:\n{}",
+            self.gnupg.display(),
+            said(&created),
+            fs::read_to_string(&agent_log)
+                .unwrap_or_else(|error| format!("{}: {error}", agent_log.display()))
         );
         assert!(
             self.vault.is_file(),

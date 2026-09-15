@@ -49,6 +49,9 @@ mod fixture;
 mod journal;
 mod safety;
 
+#[path = "../support/skarbiec.rs"]
+mod skarbiec_support;
+
 use crate::fixture::{
     finding, mentions, stdout, Fixture, EMPTY_FIELD_ITEM, HEALTHY_ITEM, LOCKED_ITEM, OTHER_SEED,
     STORED_SEED,

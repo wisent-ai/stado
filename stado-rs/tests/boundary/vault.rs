@@ -77,12 +77,12 @@ fn binary() -> PathBuf {
 
 pub struct Vault {
     home: PathBuf,
-    gnupg: PathBuf,
+    gnupg: tempfile::TempDir,
     vault: PathBuf,
     port: u16,
     /// How this broker mints a consumer grant, asked of the broker itself.
     mint: Vec<String>,
-    server: Child,
+    server: Option<Child>,
 }
 
 /// The subcommand this broker mints consumer grants with.
@@ -119,10 +119,7 @@ impl Vault {
     /// Initialise a vault inside `home`, seed one `token` item per name, and
     /// serve it on a loopback port.
     pub fn start(home: &Path, items: &[String]) -> Self {
-        let gnupg = home.join("gnupg");
-        fs::create_dir_all(&gnupg).expect("create the temporary GnuPG home");
-        fs::set_permissions(&gnupg, fs::Permissions::from_mode(0o700))
-            .expect("the GnuPG home takes owner-only mode");
+        let gnupg = crate::skarbiec_support::isolated_gnupg_home();
         let vault = home.join("skarbiec.json");
         let mut fixture = Self {
             home: home.to_path_buf(),
@@ -130,15 +127,13 @@ impl Vault {
             vault,
             port: reserved_port(),
             mint: mint_verb(&binary()),
-            server: Command::new("/usr/bin/true")
-                .spawn()
-                .expect("the placeholder child starts"),
+            server: None,
         };
         fixture.run(&["init", OWNER], None);
         for item in items {
             fixture.seed(item);
         }
-        fixture.server = fixture.serve();
+        fixture.server = Some(fixture.serve());
         fixture
     }
 
@@ -196,7 +191,7 @@ impl Vault {
         command
             .env_clear()
             .env("HOME", &self.home)
-            .env("GNUPGHOME", &self.gnupg)
+            .env("GNUPGHOME", self.gnupg.path())
             .env(
                 "PATH",
                 std::env::var("PATH").expect("the caller has a PATH"),
@@ -281,12 +276,14 @@ pub fn reserved_port() -> u16 {
 
 impl Drop for Vault {
     fn drop(&mut self) {
-        let _ = self.server.kill();
-        let _ = self.server.wait();
+        if let Some(server) = &mut self.server {
+            let _ = server.kill();
+            let _ = server.wait();
+        }
         let _ = Command::new("gpgconf")
             .args([
                 "--homedir",
-                &self.gnupg.to_string_lossy(),
+                &self.gnupg.path().to_string_lossy(),
                 "--kill",
                 "gpg-agent",
             ])

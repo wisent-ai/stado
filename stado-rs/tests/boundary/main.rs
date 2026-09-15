@@ -19,6 +19,9 @@ mod frozen;
 mod policy;
 mod vault;
 
+#[path = "../support/skarbiec.rs"]
+mod skarbiec_support;
+
 use serde_json::Value;
 
 use fixture::{past_cooldown, Env, OBJECT_UNAVAILABLE};

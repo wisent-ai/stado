@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -58,6 +59,32 @@ pub fn real_skarbiec_binary() -> PathBuf {
         installed.display()
     );
     installed
+}
+
+/// Reserve an owner-only GnuPG home without exceeding this platform's socket paths.
+pub fn isolated_gnupg_home() -> tempfile::TempDir {
+    let mut parent = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    parent.pop();
+    parent.push(".build");
+    fs::create_dir_all(&parent).expect("create the ignored GnuPG fixture root");
+    let mut filename = "XXXXXXXX";
+    // libassuan rejects strlen(name) + 1 >= sizeof(sun_path); reserve one extra byte.
+    while SocketAddr::from_pathname(parent.join(filename).join("S.gpg-agent.browser_")).is_err() {
+        filename = &filename[..filename.len() - 1];
+        assert!(
+            !filename.is_empty(),
+            "GnuPG sockets cannot fit inside the checkout build directory {}",
+            parent.display()
+        );
+    }
+    let home = tempfile::Builder::new()
+        .prefix("")
+        .rand_bytes(filename.len())
+        .tempdir_in(&parent)
+        .expect("reserve an isolated GnuPG home inside the build directory");
+    fs::set_permissions(home.path(), fs::Permissions::from_mode(0o700))
+        .expect("protect the isolated GnuPG home");
+    home
 }
 
 /// Fail unless the broker at `url` serves declared route resolution.
@@ -125,13 +152,7 @@ impl SkarbiecFixture {
         F: FnOnce(&Path, &Path),
     {
         let binary = real_skarbiec_binary();
-        let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/work");
-        fs::create_dir_all(&scratch).unwrap();
-        let gnupg = tempfile::Builder::new()
-            .prefix("skarbiec-fixture-gpg-")
-            .tempdir_in(scratch)
-            .unwrap();
-        fs::set_permissions(gnupg.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let gnupg = isolated_gnupg_home();
         let vault = home.join("skarbiec.json");
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()

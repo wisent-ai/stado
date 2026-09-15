@@ -8,17 +8,16 @@
 //! and fleet store are never read and never written.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 
 use serde_json::{json, Value};
 
-use crate::broker::real_skarbiec;
 use crate::listeners::{
     await_listener, free_port, owner_only_file, start_dashboard, start_skarbiec, stop_key_agent,
-    Vault, OWNER_ONLY_DIRECTORY, SYSTEM_PATH,
+    Vault, SYSTEM_PATH,
 };
+use crate::skarbiec_support::{isolated_gnupg_home, real_skarbiec_binary};
 
 /// The registry name of the isolated entry standing for this machine.
 pub const TARGET: &str = "beacon-current-host";
@@ -40,18 +39,13 @@ pub struct Fleet {
 
 impl Fleet {
     pub fn new() -> Self {
-        let root = tempfile::Builder::new()
-            .prefix("beacon-")
-            .tempdir()
-            .expect("create the isolated beacon root");
+        let root = isolated_gnupg_home();
         let home = root.path().join("home");
         let storage = root.path().join("storage");
-        let gnupg = root.path().join("gnupg");
+        let gnupg = root.path().to_path_buf();
         for directory in [&home, &storage, &gnupg] {
             fs::create_dir_all(directory).expect("create an isolated beacon directory");
         }
-        fs::set_permissions(&gnupg, fs::Permissions::from_mode(OWNER_ONLY_DIRECTORY))
-            .expect("keep the isolated keyring owner-only");
         let host = hostname();
         fs::write(
             storage.join("registry.json"),
@@ -73,7 +67,7 @@ impl Fleet {
         // The credential authority the host-health route reads through: a real
         // vault, a real grant, both created here and thrown away with the case.
         let vault = Vault::provision(
-            real_skarbiec(),
+            real_skarbiec_binary(),
             &home,
             &gnupg,
             home.join("beacon-area.vault.json"),

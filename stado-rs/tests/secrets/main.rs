@@ -5,6 +5,9 @@
 mod inventory;
 mod support;
 
+#[path = "../support/skarbiec.rs"]
+mod skarbiec_support;
+
 use std::fs;
 
 use serde_json::Value;

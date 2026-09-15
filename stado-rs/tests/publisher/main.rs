@@ -256,7 +256,7 @@ fn the_shipped_github_identity_declaration_states_a_declarable_route() {
 /// naming no route and no way to point Stado at another credential.
 #[test]
 fn a_github_route_nothing_declares_is_refused_by_name() {
-    let home = tempfile::tempdir().expect("a temp home");
+    let home = skarbiec_support::isolated_gnupg_home();
     let fixture = broker(home.path(), false);
     let text = credential_report(home.path(), &fixture);
     for needle in [
@@ -276,7 +276,7 @@ fn a_github_route_nothing_declares_is_refused_by_name() {
 /// never name the id this declaration replaced.
 #[test]
 fn the_declared_github_route_decides_which_coordinate_stado_reads() {
-    let home = tempfile::tempdir().expect("a temp home");
+    let home = skarbiec_support::isolated_gnupg_home();
     let fixture = broker(home.path(), true);
     let text = credential_report(home.path(), &fixture);
     assert!(

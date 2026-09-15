@@ -6,7 +6,6 @@
 //! Split out of `main.rs` so each file stays inside the three hundred line
 //! limit this repository enforces on itself.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -69,7 +68,7 @@ impl Fixture {
     /// A host declaring this machine, with its own vault, its own GnuPG home
     /// and this build installed where the command looks for a host's Stado.
     pub fn new() -> Self {
-        let root = tempfile::tempdir().expect("an isolated storage root");
+        let root = crate::skarbiec_support::isolated_gnupg_home();
         let fixture = Self { root };
         for directory in [
             fixture.home().join(".stado/bin"),
@@ -78,9 +77,6 @@ impl Fixture {
         ] {
             std::fs::create_dir_all(&directory).expect("an isolated host directory");
         }
-        std::fs::create_dir_all(fixture.gnupg_home()).expect("an isolated GnuPG home");
-        std::fs::set_permissions(fixture.gnupg_home(), std::fs::Permissions::from_mode(0o700))
-            .expect("GnuPG refuses a world-readable home");
         std::os::unix::fs::symlink(
             env!("CARGO_BIN_EXE_stado"),
             fixture.home().join(".stado/bin/stado"),
@@ -133,7 +129,7 @@ impl Fixture {
     }
 
     pub fn gnupg_home(&self) -> PathBuf {
-        self.home().join("gnupg")
+        self.root.path().to_path_buf()
     }
 
     pub fn journal(&self) -> PathBuf {

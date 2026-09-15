@@ -21,7 +21,7 @@ use serde_json::json;
 
 use super::fleet::Fleet;
 use super::historical_skarbiec::historical_skarbiec;
-use super::skarbiec::real_skarbiec_binary;
+use super::skarbiec::{isolated_gnupg_home, real_skarbiec_binary};
 
 pub const ITEM: &str = "route-real-login";
 pub const FIELD: &str = "username";
@@ -83,8 +83,8 @@ pub fn stale() -> PathBuf {
 }
 /// One real vault on the isolated host, opened by one real broker.
 pub struct Vault {
-    /// Only the GnuPG home needs a short product-owned test root: macOS Unix
-    /// socket paths cannot exceed 104 bytes. TempDir removes it on drop.
+    /// The keyring lives in its own build directory, fitted to GnuPG's socket
+    /// limit on this platform. TempDir removes it on drop.
     gnupg: tempfile::TempDir,
     binary: PathBuf,
     vault: PathBuf,
@@ -106,13 +106,7 @@ impl Vault {
         fs::copy(binary, &installed).expect("install the real broker on the isolated host");
         fs::set_permissions(&installed, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/test-runs");
-        fs::create_dir_all(&scratch).unwrap();
-        let gnupg = tempfile::Builder::new()
-            .prefix("route-real-gpg-")
-            .tempdir_in(scratch)
-            .unwrap();
-        fs::set_permissions(gnupg.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let gnupg = isolated_gnupg_home();
 
         let vault = Self {
             gnupg,

@@ -38,7 +38,6 @@ const BEARER: &str = "beacon-area-publisher-bearer";
 pub const SYSTEM_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 const OWNER_ONLY: u32 = 0o600;
-pub const OWNER_ONLY_DIRECTORY: u32 = 0o700;
 
 /// How long a fixture waits for a listener it started to accept. Generous:
 /// the machine may be compiling another area at the same time.

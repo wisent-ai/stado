@@ -64,7 +64,7 @@ pub struct Env {
 
 impl Env {
     pub fn new() -> Self {
-        let root = tempfile::tempdir().expect("an isolated root");
+        let root = crate::skarbiec_support::isolated_gnupg_home();
         let env = Self { root };
         std::fs::create_dir_all(env.home()).expect("create the isolated home");
         std::fs::create_dir_all(env.store()).expect("create the isolated store");
