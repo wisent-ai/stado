@@ -22,8 +22,8 @@ impl Home {
         std::fs::create_dir_all(&bin).expect("create the isolated bin directory");
         let source = Path::new(env!("CARGO_BIN_EXE_stado"));
         let destination = bin.join("stado");
-        if std::fs::hard_link(&source, &destination).is_err() {
-            std::fs::copy(&source, &destination).expect("copy the managed binary into the home");
+        if std::fs::hard_link(source, &destination).is_err() {
+            std::fs::copy(source, &destination).expect("copy the managed binary into the home");
         }
         Self { root }
     }
