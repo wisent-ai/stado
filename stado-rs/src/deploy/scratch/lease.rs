@@ -48,6 +48,9 @@ pub struct ScratchLease {
     /// The machine and account that asked, so an operator reading a stranded
     /// lease knows which run to go and look at.
     pub requested_by: String,
+    /// Caller-local registry root. Only that caller may remove these bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_root: Option<PathBuf>,
 }
 
 impl ScratchLease {
@@ -73,6 +76,7 @@ impl ScratchLease {
             created_at: stamp(created),
             expires_at: stamp(expires),
             requested_by: requested_by(),
+            storage_root: None,
         })
     }
 
@@ -143,7 +147,7 @@ pub fn generate_name() -> String {
 }
 
 /// Who asked, in the form `machine/account`.
-fn requested_by() -> String {
+pub(crate) fn requested_by() -> String {
     let machine = crate::providers::vast::system_hostname();
     let account = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
     format!("{machine}/{account}")

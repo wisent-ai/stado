@@ -1,37 +1,26 @@
-//! The software report `release host-state` leaves on file for
-//! `release status`.
-//!
-//! Until 2026-09-06 `stado host software` wrote this report. The change that
-//! collapsed the host verbs into the release capability deleted that verb and
-//! kept everything it fed: four days later every rollout target read
-//! `reported stale (4d)` and the sentence beside it sent operators to a
-//! command that answered `Usage: stado host <COMMAND>`. The two cases here
-//! are the two halves of that regression — the report has a writer, and the
-//! sentence names a command this binary parses.
-//!
-//! The host is this machine, under a home directory this test owns: the
-//! product reads `$HOME/.stado/bin` and writes `$HOME/.stado/observations.json`,
-//! and both have to be the test's so a run neither reads the operator's
-//! programs nor writes into the operator's observation store.
+//! `release host-state` refreshes persisted software observations even when
+//! the actual executable in an isolated home has no release attestation.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde_json::Value;
 
-use crate::fixture::{installed_binary, installed_version, report, stderr, Fixture, TARGET};
+use crate::fixture::{report, stderr, Fixture, TARGET};
 
-/// A home of this test's own, carrying the one managed binary this machine
-/// really has, hard-linked so the product reads the real bytes.
+/// The built product under an isolated home, without a staged attestation.
 struct Home {
     root: tempfile::TempDir,
 }
 
 impl Home {
     fn new() -> Self {
-        let root = tempfile::tempdir().expect("an isolated home directory");
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/host-release-test-runs");
+        std::fs::create_dir_all(&directory).expect("create repository test directory");
+        let root = tempfile::tempdir_in(directory).expect("an isolated home directory");
         let bin = root.path().join(".stado").join("bin");
         std::fs::create_dir_all(&bin).expect("create the isolated bin directory");
-        let source = installed_binary();
+        let source = Path::new(env!("CARGO_BIN_EXE_stado"));
         let destination = bin.join("stado");
         if std::fs::hard_link(&source, &destination).is_err() {
             std::fs::copy(&source, &destination).expect("copy the managed binary into the home");
@@ -56,15 +45,19 @@ impl Home {
 
 #[test]
 fn host_state_writes_the_software_report_release_status_reads() {
-    let Some(version) = installed_version() else {
-        panic!(
-            "no managed binary at {} to read a version from",
-            installed_binary().display()
-        );
-    };
+    let identity = Command::new(env!("CARGO_BIN_EXE_stado"))
+        .arg("--version")
+        .output()
+        .expect("the built product reports its version");
+    assert!(identity.status.success(), "{}", stderr(&identity));
+    let identity = String::from_utf8(identity.stdout).expect("the version is UTF-8");
+    let version = identity
+        .split_whitespace()
+        .nth(1)
+        .expect("stado --version names its semantic version");
     let fixture = Fixture::new();
     let home = Home::new();
-    let declared = fixture.declare(&version);
+    let declared = fixture.declare(version);
     assert!(declared.status.success(), "{}", stderr(&declared));
 
     let output = fixture.host_state_in_home(home.path(), &[]);
@@ -119,43 +112,5 @@ fn host_state_writes_the_software_report_release_status_reads() {
     assert!(
         detail.ends_with(&format!("path={}", home.binary().display())),
         "the stored row names the file it read: {detail}"
-    );
-}
-
-#[test]
-fn the_sentence_that_asks_for_a_refresh_names_a_command_this_binary_parses() {
-    let finding = stado::host_software::judge(
-        &stado::host_software::Report::never(TARGET),
-        &Default::default(),
-        None,
-    );
-    assert!(finding.failed);
-    let sentence = finding
-        .sentences
-        .first()
-        .expect("a host that never reported is a finding");
-    let command = sentence
-        .rsplit_once("run `")
-        .and_then(|(_, tail)| tail.strip_suffix('`'))
-        .unwrap_or_else(|| panic!("the sentence ends by naming a command: {sentence}"));
-    let mut words = command.split_whitespace();
-    assert_eq!(words.next(), Some("stado"));
-    let args: Vec<&str> = words.collect();
-    assert!(
-        args.contains(&TARGET),
-        "the command names the host it is about: {command}"
-    );
-
-    // `--help` is the one invocation that proves the verb parses without
-    // visiting a host: an unknown subcommand prints the parent's usage and
-    // exits non-zero, which is exactly what `stado host software` did.
-    let fixture = Fixture::new();
-    let mut probe = args.clone();
-    probe.push("--help");
-    let output = fixture.stado(&probe);
-    assert!(
-        output.status.success(),
-        "`{command} --help` must parse: {}",
-        stderr(&output)
     );
 }

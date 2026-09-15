@@ -27,10 +27,17 @@ pub fn stado() -> Command {
 
 /// Run one command and hand back everything it said.
 pub fn run(arguments: &[&str]) -> Output {
-    stado()
+    let output = stado()
         .args(arguments)
         .output()
-        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"))
+        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"));
+    eprintln!(
+        "stado {arguments:?}\nexit: {}\n{}{}",
+        output.status,
+        stdout(&output),
+        stderr(&output)
+    );
+    output
 }
 
 /// stdout as text.

@@ -20,6 +20,9 @@ const POLL_SECONDS: u64 = 10;
 fn a_lease_is_created_entered_and_destroyed_on_a_leasable_host() {
     let _turn = host_turn();
     let host = leasable_host();
+    let run_root = registry_root();
+    let registry = run_root.path().join("registry");
+    let registry_arg = registry.to_str().expect("a UTF-8 build directory");
     let arguments = [
         "scratch",
         "create",
@@ -29,6 +32,8 @@ fn a_lease_is_created_entered_and_destroyed_on_a_leasable_host() {
         &host.profile,
         "--ttl",
         "15m",
+        "--root",
+        registry_arg,
         "--json",
     ];
     let created = run(&arguments);
@@ -112,6 +117,27 @@ fn a_lease_is_created_entered_and_destroyed_on_a_leasable_host() {
         &host.target,
         "--json",
     ];
+    let marker = Path::new(&root).join("scratch-lease.json");
+    let identity = std::fs::read(&marker).expect("the emitted lease identity");
+    let mut replaced: serde_json::Value =
+        serde_json::from_slice(&identity).expect("the lease identity is JSON");
+    replaced["name"] = serde_json::Value::from("scratch-another-lease");
+    let replaced = serde_json::to_vec(&replaced).expect("the replaced lease identity");
+    std::fs::write(&marker, &replaced).expect("replace only this test's lease identity");
+    let refused = run(&arguments);
+    assert!(
+        !refused.status.success(),
+        "a replaced registry root was removed"
+    );
+    assert_eq!(
+        std::fs::read(&marker).expect("the root was preserved"),
+        replaced
+    );
+    assert!(
+        lease_row(&host.target, &name).is_some(),
+        "a cleanup refusal must retain the remote lease record for retry"
+    );
+    std::fs::write(&marker, identity).expect("restore this test's lease identity");
     let destroyed = run(&arguments);
     let report = document(&destroyed, &arguments);
     assert_eq!(report["status"], "destroyed");
@@ -136,12 +162,15 @@ fn a_lease_is_created_entered_and_destroyed_on_a_leasable_host() {
     );
 }
 
-/// The safety property: a lease nobody destroys is destroyed anyway once its
-/// declared lifetime is over, and the sweep says so before it does it.
+/// Expiry can be swept by the host's janitor before this caller's sweep.
+/// Either path must revoke the disposable target and remove its lease.
 #[test]
 fn an_expired_lease_is_swept_by_the_reaper() {
     let _turn = host_turn();
     let host = leasable_host();
+    let run_root = registry_root();
+    let registry = run_root.path().join("registry");
+    let registry_arg = registry.to_str().expect("a UTF-8 build directory");
     let arguments = [
         "scratch",
         "create",
@@ -151,13 +180,16 @@ fn an_expired_lease_is_swept_by_the_reaper() {
         &host.profile,
         "--ttl",
         "1m",
+        "--root",
+        registry_arg,
         "--json",
     ];
     let created = run(&arguments);
     let report = document(&created, &arguments);
     let name = report["name"].as_str().expect("a lease name").to_string();
 
-    let expired = wait_for_expiry(&host.target, &name);
+    let expires_at = report["expires_at"].as_str().expect("a recorded expiry");
+    let expired = wait_for_expiry(&host.target, &name, expires_at);
     assert!(
         expired,
         "the lease did not read as expired within {EXPIRY_WAIT_SECONDS} seconds, so the sweep cannot be tested"
@@ -166,16 +198,18 @@ fn an_expired_lease_is_swept_by_the_reaper() {
     let arguments = ["scratch", "reap", "--host", &host.target, "--json"];
     let previewed = run(&arguments);
     let report = document(&previewed, &arguments);
-    let row = row_for(&report, &name).expect("the preview names the expired lease");
-    assert_eq!(row["action"], "would-destroy");
+    if let Some(row) = row_for(&report, &name) {
+        assert_eq!(row["action"], "would-destroy");
+    }
     assert_eq!(report["destroyed"], 0);
-    assert_eq!(
-        lease_row(&host.target, &name)
-            .map(|row| row["account"].clone())
-            .unwrap_or_default(),
-        serde_json::Value::from("present"),
-        "a preview changes nothing on the host"
+    assert!(
+        registry.join("scratch-lease.json").is_file(),
+        "a preview removed the local registry"
     );
+    let probe = run_root.path().join("revoked-target");
+    std::fs::create_dir(&probe).expect("the readback registry directory");
+    std::fs::copy(registry.join("registry.json"), probe.join("registry.json"))
+        .expect("retain the actual leased target for the post-expiry login probe");
 
     let arguments = [
         "scratch",
@@ -187,20 +221,53 @@ fn an_expired_lease_is_swept_by_the_reaper() {
     ];
     let applied = run(&arguments);
     let report = document(&applied, &arguments);
-    let row = row_for(&report, &name).expect("the sweep names the lease it took");
-    assert_eq!(row["action"], "destroyed");
+    if let Some(row) = row_for(&report, &name) {
+        assert_eq!(row["action"], "destroyed");
+    }
     assert_eq!(report["failures"], serde_json::json!([]));
     assert!(
         lease_row(&host.target, &name).is_none(),
         "the swept lease is gone from the host"
     );
+    let expired_target = Command::new(env!("CARGO_BIN_EXE_stado"))
+        .args(["host", "uptime", &name])
+        .env("WC_STORAGE_BACKEND", "local")
+        .env("WC_LOCAL_STORAGE_PATH", &probe)
+        .env("STADO_CONFIG", probe.join("no-such-config.json"))
+        .output()
+        .expect("the expired target is probed through its emitted registry");
+    eprintln!(
+        "expired target {name}: {:?}\n{}{}",
+        expired_target.status,
+        stdout(&expired_target),
+        stderr(&expired_target)
+    );
+    assert!(
+        !expired_target.status.success(),
+        "an expired lease still accepts work"
+    );
+    let parent = run(&["host", "uptime", &host.target]);
+    assert!(
+        parent.status.success(),
+        "a parent-host outage cannot prove lease revocation: {}",
+        stderr(&parent)
+    );
 }
 
-/// Read the host until its own report calls the lease expired.
-fn wait_for_expiry(target: &str, name: &str) -> bool {
+/// Wait for expiry, permitting the independent host janitor to finish first.
+fn wait_for_expiry(target: &str, name: &str, expires_at: &str) -> bool {
+    let expires_at = chrono::DateTime::parse_from_rfc3339(expires_at).expect("the recorded expiry");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(EXPIRY_WAIT_SECONDS);
     while std::time::Instant::now() < deadline {
-        if lease_row(target, name)
+        let row = lease_row(target, name);
+        if row.is_none() {
+            assert!(
+                chrono::Utc::now() >= expires_at,
+                "the lease was removed before its expiry"
+            );
+            return true;
+        }
+        if row
             .and_then(|row| row["expired"].as_bool())
             .unwrap_or_default()
         {
@@ -218,4 +285,10 @@ fn row_for(report: &serde_json::Value, name: &str) -> Option<serde_json::Value> 
         .iter()
         .find(|row| row["name"].as_str() == Some(name))
         .cloned()
+}
+
+fn registry_root() -> tempfile::TempDir {
+    let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/scratch-test-runs");
+    std::fs::create_dir_all(&build).expect("the scratch test build directory");
+    tempfile::tempdir_in(build).expect("an isolated scratch registry parent")
 }

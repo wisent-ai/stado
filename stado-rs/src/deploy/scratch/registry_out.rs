@@ -22,6 +22,7 @@ use crate::targets::{ComputeTarget, REGISTRY_SCHEMA_VERSION};
 
 /// The one object every backend reads a registry from, store-relative.
 pub const REGISTRY_FILE: &str = "registry.json";
+const LEASE_FILE: &str = "scratch-lease.json";
 
 /// The role a leased target declares, so a document found later says what it
 /// was for without anyone having to guess from the name.
@@ -126,7 +127,7 @@ pub fn write(
     ssh: &str,
     trust: Option<Value>,
 ) -> Result<PathBuf, DeployError> {
-    if root.exists() {
+    if root.symlink_metadata().is_ok() {
         return Err(DeployError(format!(
             "{} already exists; refusing to write a scratch registry over it",
             root.display()
@@ -157,16 +158,95 @@ pub fn write(
         .map_err(|exc| DeployError(format!("scratch registry is not serializable: {exc}")))?;
     std::fs::write(&path, format!("{body}\n"))
         .map_err(|exc| DeployError(format!("{} is not writable: {exc}", path.display())))?;
+    let receipt = serde_json::to_vec(lease)
+        .map_err(|error| DeployError(format!("scratch lease is not serializable: {error}")))?;
+    std::fs::write(root.join(LEASE_FILE), receipt).map_err(|error| {
+        DeployError(format!(
+            "{} lease identity is not writable: {error}",
+            root.display()
+        ))
+    })?;
     Ok(path)
 }
 
-/// Remove one lease's store root, and say whether there was anything to
-/// remove. Only ever called for a root this capability created.
-pub fn remove(root: &Path) -> Result<&'static str, DeployError> {
-    if !root.exists() {
-        return Ok("absent");
+/// Remove only the caller-local root identified by this lease. A different
+/// machine can reap the remote account, but cannot judge the caller's disk.
+pub fn remove(lease: Option<&ScratchLease>) -> Result<&'static str, DeployError> {
+    let Some(lease) = lease else {
+        return Ok("unrecorded");
+    };
+    if lease.requested_by != super::lease::requested_by() {
+        return Ok("on-another-caller");
+    }
+    let default_root;
+    let root = match lease.storage_root.as_deref() {
+        Some(root) => root,
+        None => {
+            default_root = super::lease::local_root(&lease.name);
+            &default_root
+        }
+    };
+    let metadata = match root.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("absent"),
+        Err(error) => {
+            return Err(DeployError(format!(
+                "{} is not readable: {error}",
+                root.display()
+            )))
+        }
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(DeployError(format!(
+            "{} is not a real scratch directory; nothing there was removed",
+            root.display()
+        )));
+    }
+    if lease.storage_root.is_some() {
+        let bytes = std::fs::read(root.join(LEASE_FILE)).map_err(|error| {
+            DeployError(format!(
+                "{} lease identity is not readable: {error}",
+                root.display()
+            ))
+        })?;
+        let identity: ScratchLease = serde_json::from_slice(&bytes).map_err(|error| {
+            DeployError(format!(
+                "{} lease identity is invalid: {error}",
+                root.display()
+            ))
+        })?;
+        if identity != *lease {
+            return Err(DeployError(format!(
+                "{} belongs to another scratch lease; nothing there was removed",
+                root.display()
+            )));
+        }
+    } else {
+        // Existing v1 records predate the explicit root. Their default root
+        // must still contain the matching scratch target before it can go.
+        let bytes = std::fs::read(root.join(REGISTRY_FILE)).map_err(|error| {
+            DeployError(format!(
+                "{} registry is not readable: {error}",
+                root.display()
+            ))
+        })?;
+        let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
+            DeployError(format!("{} registry is invalid: {error}", root.display()))
+        })?;
+        let targets = document["targets"].as_array();
+        if !targets.is_some_and(|targets| {
+            targets.len() == 1
+                && targets[0]["name"] == lease.name
+                && targets[0]["role"] == SCRATCH_ROLE
+                && targets[0]["ssh_key_target"] == lease.target
+        }) {
+            return Err(DeployError(format!(
+                "{} does not identify this scratch lease; nothing there was removed",
+                root.display()
+            )));
+        }
     }
     std::fs::remove_dir_all(root)
-        .map_err(|exc| DeployError(format!("{} is not removable: {exc}", root.display())))?;
+        .map_err(|error| DeployError(format!("{} is not removable: {error}", root.display())))?;
     Ok("removed")
 }

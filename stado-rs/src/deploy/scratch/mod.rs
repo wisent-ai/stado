@@ -95,14 +95,17 @@ pub async fn create(
         .root
         .clone()
         .unwrap_or_else(|| lease::local_root(&name));
-    if root.exists() {
+    let root = std::path::absolute(&root)
+        .map_err(|error| DeployError(format!("{} is not resolvable: {error}", root.display())))?;
+    if root.symlink_metadata().is_ok() {
         return Err(DeployError(format!(
             "{} already exists; refusing to write a scratch registry over it",
             root.display()
         )));
     }
 
-    let record = ScratchLease::new(&name, &profile.name, &target.name, ttl)?;
+    let mut record = ScratchLease::new(&name, &profile.name, &target.name, ttl)?;
+    record.storage_root = Some(root.clone());
     open_account(&target, &name, &profile.shell, runner).await?;
 
     let ssh = scratch_ssh(&target, &name)?;

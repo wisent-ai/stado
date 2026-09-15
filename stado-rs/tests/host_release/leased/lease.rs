@@ -1,14 +1,14 @@
-//! One lease's whole life: taken, given a Stado to deliver over, declared,
-//! read back, and destroyed.
+//! A disposable target's actual release declaration, first delivery and
+//! destruction. No bootstrap helper or operator binary is a prerequisite.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use serde_json::Value;
 
 use crate::fixture::{stderr, stdout, BINARY};
 
-use super::fleet::{document, fleet, leased, release_api, report};
+use super::fleet::{document, fleet, leased, report};
 
 /// A leased target, destroyed when the case leaves it — including through a
 /// panic, so a failed assertion never leaves an account on a fleet host.
@@ -16,12 +16,16 @@ pub struct Lease {
     target: String,
     pub name: String,
     root: String,
-    home: String,
     destroyed: bool,
+    _run_root: tempfile::TempDir,
 }
 
 impl Lease {
     pub fn take(target: &str, profile: &str) -> Self {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/host-release-test-runs");
+        std::fs::create_dir_all(&directory).expect("create repository test directory");
+        let run_root = tempfile::tempdir_in(directory).expect("an isolated lease directory");
+        let registry_root = run_root.path().join("registry");
         let arguments = [
             "scratch",
             "create",
@@ -29,6 +33,10 @@ impl Lease {
             target,
             "--profile",
             profile,
+            "--root",
+            registry_root
+                .to_str()
+                .expect("the repository path is UTF-8"),
             "--ttl",
             "30m",
             "--json",
@@ -46,84 +54,13 @@ impl Lease {
             target: target.to_string(),
             name: field("name"),
             root: field("storage_root"),
-            home: field("home_path"),
             destroyed: false,
+            _run_root: run_root,
         }
     }
 
     fn stado(&self, arguments: &[&str]) -> Output {
         leased(&self.root, arguments)
-    }
-
-    /// Give the account Stado the way this repository documents giving it to
-    /// a machine that has none: deliver `install-stado.sh` and the adapter
-    /// that hands it its three environment coordinates, then run the adapter.
-    ///
-    /// This is a precondition, not the claim under test. `--apply` delivers
-    /// `host-behind` and `unattested` rows only, and both need a version the
-    /// reporter could read, so a blank account reads `unknown` and is
-    /// delivered nothing. What the installer leaves behind is the state the
-    /// capability calls `no-delivery-history`: installed, nothing staged.
-    ///
-    /// The receipt's exit status is deliberately not the evidence. `host
-    /// run-attached` sends a script that assigns `status=`, which is
-    /// read-only in zsh, so a program that succeeded on a zsh account is
-    /// reported as having failed. The installer's own success line and
-    /// [`Lease::installed`] are the evidence instead.
-    pub fn bootstrap(&self, version: &str, platform: &str) {
-        let run = Command::new("uuidgen").output().expect("uuidgen runs");
-        let run = String::from_utf8_lossy(&run.stdout).trim().to_lowercase();
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for (source, name) in [
-            (manifest.join("../install-stado.sh"), "install-stado.sh"),
-            (
-                manifest.join("tests/host_release/bootstrap_leased_account.sh"),
-                "bootstrap_leased_account.sh",
-            ),
-        ] {
-            let source = source.to_string_lossy().to_string();
-            let destination = format!(".stado/work/runs/{run}/{name}");
-            let arguments = [
-                "host",
-                "deliver",
-                &self.name,
-                &source,
-                &destination,
-                "--json",
-            ];
-            let delivered = document(&self.stado(&arguments), &arguments);
-            assert_eq!(delivered["status"], "delivered", "{delivered}");
-        }
-        let program = format!(
-            "{}/.stado/work/runs/{run}/bootstrap_leased_account.sh",
-            self.home
-        );
-        let api = release_api();
-        let arguments = [
-            "host",
-            "run-attached",
-            &self.name,
-            "--program",
-            &program,
-            "--arg",
-            &api,
-            "--arg",
-            version,
-            "--arg",
-            platform,
-            "--json",
-        ];
-        let output = self.stado(&arguments);
-        let receipt = report(&output, "the bootstrap");
-        assert_eq!(
-            receipt["stdout"].as_str().unwrap_or_default().trim(),
-            format!(
-                "installed Stado {version} for {platform} in {}/.stado/bin",
-                self.home
-            ),
-            "the documented installer did not report installing {version}: {receipt}{}",
-            stderr(&output)
-        );
     }
 
     /// What the host itself says about the managed binary, through a command
@@ -166,7 +103,7 @@ impl Lease {
     }
 
     /// One `host-state` report and the single declared binary's row in it.
-    pub fn host_state(&self, extra: &[&str]) -> (Value, Value) {
+    pub fn host_state(&self, extra: &[&str]) -> (Output, Value, Value) {
         let mut arguments = vec!["release", "host-state", "--host", &self.name, "--json"];
         arguments.extend_from_slice(extra);
         let output = self.stado(&arguments);
@@ -180,7 +117,7 @@ impl Lease {
             "one declared binary was expected: {state}"
         );
         let row = binaries[0].clone();
-        (state, row)
+        (output, state, row)
     }
 
     /// The one delivery the pass recorded for the managed binary.

@@ -28,10 +28,17 @@ pub fn host_turn() -> MutexGuard<'static, ()> {
 /// configuration a lease resolves its host through is the operator's, and
 /// this area deliberately does not fake it.
 pub fn fleet(arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stado"))
+    let output = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(arguments)
         .output()
-        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"))
+        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"));
+    eprintln!(
+        "stado {arguments:?}: exit {:?}\n{}\n{}",
+        output.status.code(),
+        stdout(&output),
+        stderr(&output)
+    );
+    output
 }
 
 /// The same binary pointed at ONE lease's emitted registry, which is the only
@@ -39,13 +46,21 @@ pub fn fleet(arguments: &[&str]) -> Output {
 /// environment is otherwise the operator's, because the release channel a
 /// delivery fetches from is declared there.
 pub fn leased(root: &str, arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stado"))
+    let output = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(arguments)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", root)
         .env("STADO_CONFIG", Path::new(root).join("no-such-config.json"))
+        .env("STADO_API_URL", release_api())
         .output()
-        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"))
+        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"));
+    eprintln!(
+        "lease registry {root}; stado {arguments:?}: exit {:?}\n{}\n{}",
+        output.status.code(),
+        stdout(&output),
+        stderr(&output)
+    );
+    output
 }
 
 /// The one JSON document a successful `--json` command printed.
@@ -71,9 +86,13 @@ pub fn report(output: &Output, what: &str) -> Value {
 
 /// The release channel origin this run reads and delivers through.
 pub fn release_api() -> String {
-    std::env::var("STADO_API_URL").expect(
-        "STADO_API_URL selects the release channel; this area runs with the fleet environment",
-    )
+    let arguments = ["config", "show"];
+    let configuration = document(&fleet(&arguments), &arguments);
+    configuration["resolved"]["stado_api_url"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .expect("the product must resolve its canonical release origin")
+        .to_string()
 }
 
 /// One host a lease may be taken on, as the fleet itself describes it:
@@ -127,49 +146,39 @@ pub fn channel_state(uri: &str) -> String {
         })
 }
 
-/// Whether one coordinate is complete for a delivery to a LEASED target on
-/// `platform`: the legacy manifest, its archive and its digest list all
-/// served, and no signed pipeline manifest beside them.
-///
-/// The last condition is the one that is easy to get wrong. Delivery prefers
-/// a pipeline manifest wherever it exists and verifies its signature against
-/// `registry.release_control.trusted_keys` — which the registry `scratch
-/// create` emits does not carry, so such a version refuses with `registry
-/// declares no release trust keys` before a byte is fetched.
-pub fn legacy_complete(version: &str, platform: &str) -> bool {
-    let base = format!("stado://releases/{BINARY}/{version}/{platform}");
-    channel_state(&format!("{base}/{BINARY}-v{version}-{platform}.tar.gz")) == "present"
-        && channel_state(&format!("{base}/release-manifest-{platform}.json")) == "present"
-        && channel_state(&format!("{base}/SHA256SUMS")) == "present"
-        && channel_state(&format!("{base}/release.json")) == "absent"
-}
-
-/// The two newest versions the channel can deliver to a leased target on
-/// `platform`, newest first: the one to declare, and the older one to
-/// bootstrap the account with.
-///
-/// Walked down from this build's own version because the channel publishes no
-/// listing endpoint. A channel that cannot serve two such coordinates blocks
-/// the run rather than letting a case pretend around it.
-pub fn deliverable_versions(platform: &str) -> (String, String) {
-    let (major, minor, patch) = {
-        let mut parts = env!("CARGO_PKG_VERSION").split('.');
-        let mut next = || parts.next().unwrap_or("0").parse::<u32>().unwrap_or(0);
-        (next(), next(), next())
-    };
-    let mut found: Vec<String> = Vec::new();
-    for candidate in (0..=patch).rev() {
-        let version = format!("{major}.{minor}.{candidate}");
-        if legacy_complete(&version, platform) {
-            found.push(version);
-            if found.len() == 2 {
-                return (found.remove(0), found.remove(0));
-            }
+/// Select a completed signed release from the product's recorded runs, then
+/// require that the canonical channel serves its manifest and archive.
+pub fn deliverable_version(platform: &str) -> String {
+    let arguments = ["release", "status", BINARY, "--json"];
+    let status = document(&fleet(&arguments), &arguments);
+    let mut runs: Vec<&Value> = status["runs"]
+        .as_array()
+        .expect("release status carries its recorded runs")
+        .iter()
+        .filter(|run| {
+            run["state"] == "completed" && run["platforms"][platform]["state"] == "published"
+        })
+        .collect();
+    runs.sort_by(|left, right| {
+        right["created_at"]
+            .as_str()
+            .cmp(&left["created_at"].as_str())
+    });
+    for run in runs {
+        let version = run["version"].as_str().expect("a recorded release version");
+        let base = format!("stado://releases/{BINARY}/{version}/{platform}");
+        let manifest = channel_state(&format!("{base}/release.json"));
+        let archive = channel_state(&format!("{base}/release.tar.gz"));
+        assert!(
+            matches!(manifest.as_str(), "present" | "absent")
+                && matches!(archive.as_str(), "present" | "absent"),
+            "the canonical channel did not establish availability for {base}: {manifest}, {archive}"
+        );
+        if manifest == "present" && archive == "present" {
+            return version.to_string();
         }
     }
     panic!(
-        "the channel serves fewer than two complete legacy {BINARY} coordinates for \
-         {platform} below {major}.{minor}.{patch}, so no delivery can be driven and this \
-         run is blocked rather than passed; it served {found:?}"
+        "no completed signed {BINARY} release for {platform} is served by the canonical channel"
     );
 }

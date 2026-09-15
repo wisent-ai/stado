@@ -37,12 +37,12 @@ pub async fn destroy_row(
         .map_or_else(|| row.name.clone(), |held| held.username.clone());
     user_delete::validate_deletable(&username)?;
     let deleted = user_delete::delete_user(&username, target, false, runner).await;
+    let root = registry_out::remove(row.lease.as_ref())?;
     let record_path = lease::record_path(home, &row.name);
     let command = remote::forget_command(&record_path);
     let forgotten =
         host_channel::run_program(target, &["/bin/sh", "-c", command.as_str()], runner).await?;
     let state = probe_state(target, &username, &record_path, runner).await?;
-    let root = registry_out::remove(&lease::local_root(&row.name))?;
     if !state.is_clear() {
         let said = deleted
             .error
