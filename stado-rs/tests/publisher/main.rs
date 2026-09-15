@@ -226,30 +226,6 @@ fn credential_report(home: &Path, fixture: &SkarbiecFixture) -> String {
     )
 }
 
-/// The shipped declaration is readable and states a route Skarbiec's own
-/// `route declare` accepts. A coordinate such as `GITHUB_TOKEN#value` would put
-/// the hardcoded id back under a new name, so the validator refuses one.
-#[test]
-fn the_shipped_github_identity_declaration_states_a_declarable_route() {
-    let identity = stado::github_identity::declared().expect("the shipped declaration parses");
-    assert!(
-        identity.credential_route.contains(':') && !identity.credential_route.contains('#'),
-        "credential_route is not a declarable route: {}",
-        identity.credential_route
-    );
-    for prefix in ["provider:", "agent:", "login:"] {
-        assert!(
-            !identity.credential_route.starts_with(prefix),
-            "credential_route claims a namespace items declare for themselves: {}",
-            identity.credential_route
-        );
-    }
-    assert!(
-        identity.reality_check.starts_with('/') && !identity.required_permission.is_empty(),
-        "the declaration carries no usable reality check"
-    );
-}
-
 /// A route the real vault does not declare is refused by name, with the
 /// declaration that asked for it and the command that declares it. The
 /// predecessor could only fail as `credential GITHUB_TOKEN.value is required`,

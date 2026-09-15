@@ -122,7 +122,9 @@ impl DashboardFixture {
                     );
                     assert!(
                         minted.status.success(),
-                        "built Stado failed to provision the verifier bearer: {}",
+                        "built Stado could not provision the verifier (exit {}):\nstdout:\n{}\nstderr:\n{}",
+                        minted.status,
+                        String::from_utf8_lossy(&minted.stdout),
                         String::from_utf8_lossy(&minted.stderr)
                     );
                     receipt = Some(

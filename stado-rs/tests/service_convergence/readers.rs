@@ -13,10 +13,12 @@ pub(crate) fn mint_verifier(
 ) -> Output {
     Command::new(env!("CARGO_BIN_EXE_stado"))
         .args([
-            "host",
-            "vault-token-mint",
-            HOST,
+            "credentials",
+            "token",
+            "mint",
             "stado-registry-api-verifier",
+            "--host",
+            HOST,
             "--capabilities",
             capabilities,
             "--audience",
@@ -41,27 +43,34 @@ pub(crate) fn mint_verifier(
 }
 
 pub(crate) fn binary_version(binary: &Path, home: &Path) -> String {
+    #[derive(serde::Deserialize)]
+    struct VersionReport {
+        version: String,
+    }
     let output = Command::new(binary)
         .arg("--version")
         .env_clear()
         .env("HOME", home)
         .env("PATH", PATH_ENV)
         .output()
-        .expect("real binary version probe runs");
+        .unwrap_or_else(|error| panic!("{} --version could not run: {error}", binary.display()));
     assert!(
         output.status.success(),
-        "real binary version probe failed: {}",
+        "{} --version exited with {}\nstdout:\n{}\nstderr:\n{}",
+        binary.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout)
-        .expect("real binary version is UTF-8")
-        .split_whitespace()
-        .find(|candidate| {
-            let parts = candidate.split('.').collect::<Vec<_>>();
-            parts.len() == 3 && parts.iter().all(|part| part.parse::<u64>().is_ok())
-        })
-        .expect("real binary reports an exact semantic version")
-        .to_string()
+    let report: VersionReport = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "{} --version did not return a JSON version: {error}\nstdout:\n{}\nstderr:\n{}",
+            binary.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    report.version
 }
 
 pub(crate) fn next_patch_version(version: &str) -> String {
@@ -141,7 +150,20 @@ pub(crate) fn skarbiec_generated_bearer() -> String {
 }
 
 pub(crate) fn digest(path: &Path) -> String {
-    hex::encode(Sha256::digest(fs::read(path).expect("read fixture file")))
+    let mut file = File::open(path)
+        .unwrap_or_else(|error| panic!("could not open fixture {}: {error}", path.display()));
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let size = file
+            .read(&mut buffer)
+            .unwrap_or_else(|error| panic!("could not read fixture {}: {error}", path.display()));
+        if size == 0 {
+            break;
+        }
+        hash.update(&buffer[..size]);
+    }
+    hex::encode(hash.finalize())
 }
 
 pub(crate) fn binary_rows(report: &Value) -> BTreeMap<&str, &Value> {
