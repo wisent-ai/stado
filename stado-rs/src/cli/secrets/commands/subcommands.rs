@@ -62,6 +62,23 @@ pub enum CredentialTokenCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Deliver an existing bearer between matching declared vault copies, without changing grants.
+    Sync {
+        consumer: String,
+        #[arg(long)]
+        from_host: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        source_token_file: String,
+        #[arg(long)]
+        token_file: String,
+        /// Verify the destination without changing its file.
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

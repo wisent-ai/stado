@@ -17,6 +17,13 @@ enum NativeCredentialOperations {
         .init(id: "vault-sync", title: "Check or synchronize the declared vault", path: ["credentials", "vault", "sync"], fields: [
             .init(id: "check", label: "Check without replacing the vault", option: "--check", flag: true, initial: "true"),
         ]),
+        .init(id: "token-sync", title: "Check or synchronize a bearer without changing grants", path: ["credentials", "token", "sync"], fields: [
+            .init(id: "consumer", label: "Exact consumer identity", required: true),
+            .init(id: "source-host", label: "Source registry host", option: "--from-host", required: true),
+            .init(id: "source-token", label: "Owner-only bearer file on source host", option: "--source-token-file", required: true),
+            .init(id: "destination-token", label: "Owner-only bearer file on selected host", option: "--token-file", required: true),
+            .init(id: "check", label: "Check only; do not replace the selected host's file", option: "--check", flag: true, initial: "true"),
+        ]),
         .init(id: "acquisition-sync", title: "Synchronize acquisition scope catalogue", path: ["credentials", "acquisition-scopes", "sync"],
             payload: .file(option: nil, label: "Acquisition scope catalogue contents", initial: "")),
         .init(id: "grant-read", title: "Grant an exact item field read", path: ["credentials", "grant", "item-read"], fields: [

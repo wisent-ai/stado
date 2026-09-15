@@ -60,6 +60,7 @@ pub use crate::cli::host::secrets::vault::item::retag::retag_vault_item;
 pub use crate::cli::host::secrets::vault::item::show::vault_item_show;
 pub use crate::cli::host::secrets::vault::mirror::sync::sync_vault;
 pub use crate::cli::host::secrets::vault::token::vault_token_mint;
+pub use crate::cli::host::secrets::vault::token::vault_token_sync;
 pub use crate::cli::host::secrets::vault::vaults;
 pub use crate::cli::host::secrets::weles::sync_acquisition_scopes;
 pub use crate::cli::host::secrets::weles::trust::render::render_spis_admission_trust;

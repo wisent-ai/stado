@@ -125,3 +125,142 @@ pub async fn vault_token_mint(
     }
     Ok(())
 }
+
+/// Deliver a bootstrap bearer without minting, renewing, or widening a grant.
+/// Both declared vaults must already hold the same owner and complete grant.
+pub async fn vault_token_sync(
+    from_host: &str,
+    target: &str,
+    consumer: &str,
+    source_token_file: &str,
+    token_file: &str,
+    check: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    use crate::cli::host::machine::users::credentials::credential_host;
+    use crate::deploy::host_channel;
+    use crate::primitives::failure::FailureCode;
+
+    vault_word("consumer", consumer).map_err(|error| error.machine_readable(json_output))?;
+    if source_token_file.trim().is_empty() || token_file.trim().is_empty() {
+        return Err(
+            CmdError::usage("source and destination token files must be named")
+                .machine_readable(json_output),
+        );
+    }
+    // Resolve both declarations before reading any bearer. The payload only
+    // crosses encrypted host channels in memory; it is never a CLI argument.
+    let source = credential_host(from_host)
+        .await
+        .map_err(|error| error.machine_readable(json_output))?;
+    let destination = credential_host(target)
+        .await
+        .map_err(|error| error.machine_readable(json_output))?;
+    let runner = crate::deploy::production_runner();
+    let program = include_str!("../../../../host_payloads/vault_token/sync.py");
+    let exported = host_channel::run_program(
+        &source.target,
+        &[
+            "/usr/bin/python3",
+            "-c",
+            program,
+            "export",
+            &source.vault,
+            consumer,
+            source_token_file,
+        ],
+        &runner,
+    )
+    .await
+    .map_err(|error| {
+        CmdError::click(format!(
+            "{}: token export failed: {error}",
+            source.target.name
+        ))
+        .machine_readable(json_output)
+    })?;
+    if !exported.ok() {
+        return Err(CmdError::click(format!(
+            "{}: token export refused: {}",
+            source.target.name,
+            host_channel::last_error_line(&exported, "host token export failed")
+        ))
+        .stating(FailureCode::Refused)
+        .machine_readable(json_output));
+    }
+    let installed = host_channel::run_program_with_stdin(
+        &destination.target,
+        &[
+            "/usr/bin/python3",
+            "-c",
+            program,
+            if check { "check" } else { "install" },
+            &destination.vault,
+            consumer,
+            token_file,
+        ],
+        &exported.stdout,
+        &runner,
+    )
+    .await
+    .map_err(|error| {
+        CmdError::click(format!(
+            "{}: token delivery failed: {error}",
+            destination.target.name
+        ))
+        .machine_readable(json_output)
+    })?;
+    drop(exported);
+    if !installed.ok() {
+        return Err(CmdError::click(format!(
+            "{}: token delivery refused: {}",
+            destination.target.name,
+            host_channel::last_error_line(&installed, "host token delivery failed")
+        ))
+        .stating(FailureCode::Refused)
+        .machine_readable(json_output));
+    }
+    let mut report: Value = serde_json::from_str(installed.stdout.trim()).map_err(|error| {
+        CmdError::click(format!(
+            "token delivery returned unreadable metadata: {error}"
+        ))
+        .machine_readable(json_output)
+    })?;
+    report["target"] = json!(destination.target.name);
+    report["source_host"] = json!(source.target.name);
+    let status = report["status"]
+        .as_str()
+        .filter(|status| {
+            matches!(
+                *status,
+                "token_synced" | "token_unchanged" | "token_checked"
+            )
+        })
+        .ok_or_else(|| {
+            CmdError::click("token delivery returned no recognized outcome")
+                .machine_readable(json_output)
+        })?;
+    let delivered_path = report["skarbiec"]["token_file"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| {
+            CmdError::click("token delivery returned no verified file")
+                .machine_readable(json_output)
+        })?;
+    if report["skarbiec"]["ok"] != true || report["skarbiec"]["consumer"] != consumer {
+        return Err(
+            CmdError::click("token delivery did not verify the requested consumer")
+                .machine_readable(json_output),
+        );
+    }
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "{}: {} for {consumer}; source {}; grants unchanged",
+            destination.target.name, status, source.target.name,
+        );
+        println!("Bearer file: {delivered_path}");
+    }
+    Ok(())
+}

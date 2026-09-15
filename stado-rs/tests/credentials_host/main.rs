@@ -24,6 +24,7 @@ mod host;
 mod refusals;
 #[path = "../support/skarbiec.rs"]
 mod skarbiec;
+mod tokens;
 
 use std::process::Output;
 
