@@ -32,12 +32,9 @@ use crate::deploy::{host_channel, production_runner, DeployError};
 /// journal, and until a reader can see where it was pointed that state cannot
 /// be told apart from any other quiet refusal.
 ///
-/// The memory lines exist for the failure this fleet actually keeps hitting:
-/// `Failed to create CoreCLR, HRESULT: 0x8007000C` with exit 137 is the .NET
-/// runtime refusing to reserve its heap, and a reader who sees only that line
-/// cannot tell a machine out of memory from a unit whose own limits are too
-/// small. Both readings are taken here, on the host, in the same pass as the
-/// log.
+/// Capture host memory and unit limits beside the runtime log. A CoreCLR
+/// startup failure does not by itself identify an allocation failure, and a
+/// current memory reading does not establish what was available at failure.
 const LINUX_DIAGNOSTICS: &str = r#"set -eu
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/opt/wisent/stado-precheck-runner
@@ -81,6 +78,7 @@ listener=$runner_root/bin/Runner.Listener
 printf 'ListenerBinary=%s\n' "$(if [ -x "$listener" ]; then printf 'present'; else printf 'absent'; fi)"
 printf 'ListenerArchitectures=%s\n' "$(root lipo -archs "$listener" 2>/dev/null || printf 'unreadable')"
 printf 'ListenerCodesign=%s\n' "$(root codesign --verify --verbose=1 "$listener" 2>&1 | tr -s ' \n' ' ' || true)"
+printf 'ListenerSignature=%s\n' "$(root codesign --display --verbose=4 --entitlements - --xml "$listener" 2>&1 | tr -s ' \n' ' ' || true)"
 printf 'ListenerQuarantine=%s\n' "$(root xattr -p com.apple.quarantine "$listener" 2>/dev/null || printf 'none')"
 printf 'BundleExtractDir=%s\n' "$(root sh -c "[ -d \"$runner_root/.dotnet\" ] && ls -ld \"$runner_root/.dotnet\" | tr -s ' '" 2>/dev/null || printf 'absent')"
 printf 'TemporaryDir=%s\n' "$(root sh -c "[ -d \"$runner_root/.tmp\" ] && ls -ld \"$runner_root/.tmp\" | tr -s ' '" 2>/dev/null || printf 'absent')"
@@ -99,16 +97,8 @@ fn field(head: &str, key: &str) -> String {
         .to_string()
 }
 
-/// The memory half of the diagnosis: what the host had, what the unit was
-/// allowed, what the fleet declared about reclaiming it, and whether this
-/// failure is the runtime refusing to reserve its heap.
-///
-/// `0x8007000C` is `E_OUTOFMEMORY` and 137 is `SIGKILL`. Both were printed
-/// on charless-mac-mini from 2026-09-06 on, and reading them alone sent
-/// operators to the runner's registration, its token and its labels — none of
-/// which were wrong. The sentence below is the one fact that mattered, and it
-/// is stated rather than left to be recognised.
-fn memory(head: &str, tail: &str, target: &crate::targets::ComputeTarget) -> Value {
+/// Current host memory, unit limits and the declared reclaim policy.
+fn memory(head: &str, target: &crate::targets::ComputeTarget) -> Value {
     let kib = |key: &str| -> Option<i64> {
         field(head, key)
             .trim()
@@ -116,8 +106,6 @@ fn memory(head: &str, tail: &str, target: &crate::targets::ComputeTarget) -> Val
             .ok()
             .map(|value| value as i64)
     };
-    let exhausted = tail.contains("0x8007000C") || tail.contains("HRESULT: 0x8007000c");
-    let killed = field(head, "ExecMainStatus").trim() == "137";
     let declaration = crate::providers::local::host_memory::schema::declared(target)
         .map(|policy| serde_json::to_value(policy).unwrap_or(Value::Null));
     json!({
@@ -125,22 +113,12 @@ fn memory(head: &str, tail: &str, target: &crate::targets::ComputeTarget) -> Val
         "total_mb": kib("MemoryTotalKB").map(|value| value / 1024),
         "swap": field(head, "SwapUsage").trim(),
         "unit_limits": field(head, "UnitLimits").trim(),
-        "runtime_refused_memory": exhausted,
-        "killed_by_signal": killed,
         "reclaim": crate::providers::local::host_memory::declaration::policies::automatic_verdict(
             declaration.as_ref(),
         ),
-        "detail": if exhausted {
-            "the runtime refused to reserve memory (E_OUTOFMEMORY, 0x8007000C); compare the \
-             available reading with the unit's own limits below before touching the \
-             registration"
-        } else if killed {
-            "the process was killed by a signal rather than exiting; the readings below are \
-             the host's own at the time of this diagnosis"
-        } else {
-            "no memory refusal is recorded in this log; the readings are the host's own at the \
-             time of this diagnosis"
-        },
+        "detail": "these are current host memory readings and unit limits, not measurements \
+                   taken at the logged failure; the runtime log alone does not establish \
+                   a memory shortage",
     })
 }
 
@@ -185,14 +163,19 @@ pub async fn diagnostics_declared(
         "standard_output": field(head, "StandardOutput"),
         "standard_error": field(head, "StandardError"),
         "runtime": json!({
+            "last_coreclr_start_failure": tail.lines().rev().find(|line| {
+                line.contains("Failed to create CoreCLR")
+            }),
             "listener_binary": field(head, "ListenerBinary"),
             "architectures": field(head, "ListenerArchitectures"),
             "codesign": field(head, "ListenerCodesign"),
+            "signature": field(head, "ListenerSignature"),
             "quarantine": field(head, "ListenerQuarantine"),
             "bundle_extract_dir": field(head, "BundleExtractDir"),
             "temporary_dir": field(head, "TemporaryDir"),
         }),
-        "memory": memory(head, tail, &target),
+        "memory": memory(head, &target),
+        "tail": tail,
         "read": if output.ok() { "complete" } else { "partial" },
         "stderr": output.stderr.trim(),
     }))

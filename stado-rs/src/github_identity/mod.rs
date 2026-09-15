@@ -168,7 +168,7 @@ pub async fn resolve() -> Result<ResolvedCredential, String> {
     );
     let response = reqwest::Client::new()
         .post(&endpoint)
-        .json(&json!({}))
+        .json(&json!({"names": [route]}))
         .send()
         .await
         .map_err(|error| {
@@ -182,22 +182,34 @@ pub async fn resolve() -> Result<ResolvedCredential, String> {
         return Err(unanswered(
             route,
             &format!(
-                "Skarbiec answered HTTP {} — {}",
+                "Skarbiec at {endpoint} answered HTTP {} — {}",
                 status.as_u16(),
                 body.trim()
             ),
         ));
     }
-    let document: Value = serde_json::from_str(&body)
-        .map_err(|error| format!("Skarbiec route report for {route:?} is invalid: {error}"))?;
-    let row = document
+    let document: Value = serde_json::from_str(&body).map_err(|error| {
+        format!("Skarbiec route report from {endpoint} for {route:?} is invalid: {error}")
+    })?;
+    let rows = document
         .get("routes")
         .and_then(Value::as_array)
-        .and_then(|rows| {
-            rows.iter()
-                .find(|row| row.get("resource").and_then(Value::as_str) == Some(route))
-        })
-        .ok_or_else(|| unanswered(route, "its route report names no such resource"))?;
+        .ok_or_else(|| format!("Skarbiec at {endpoint} returned no routes array for {route:?}"))?;
+    let row = rows
+        .iter()
+        .find(|row| row.get("resource").and_then(Value::as_str) == Some(route))
+        .ok_or_else(|| {
+            let table = document
+                .get("table")
+                .and_then(Value::as_str)
+                .unwrap_or("not reported");
+            unanswered(
+                route,
+                &format!(
+                    "the response from {endpoint} names no such resource; route table: {table}"
+                ),
+            )
+        })?;
     if row.get("item_present") != Some(&Value::Bool(true))
         || row.get("field_present") != Some(&Value::Bool(true))
     {

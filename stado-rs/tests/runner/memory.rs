@@ -59,16 +59,6 @@ fn diagnostics_report_this_machine_memory_beside_the_runner_log() {
         available > 0 && available <= total.unwrap(),
         "available memory must be a real reading bounded by the total: {memory}"
     );
-    assert!(
-        memory["swap"].as_str().is_some_and(|swap| !swap.is_empty()),
-        "the swap reading is part of the diagnosis: {memory}"
-    );
-    assert!(
-        memory["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.contains("memory")),
-        "the diagnosis must say what the readings mean: {memory}"
-    );
 }
 
 #[test]

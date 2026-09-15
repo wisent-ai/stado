@@ -39,7 +39,12 @@ impl Fixture {
     /// An isolated registry naming this machine, so every runner read takes the
     /// current-host path and executes this machine's own service tooling.
     pub fn new() -> Self {
-        let root = tempfile::tempdir().expect("an isolated storage root");
+        let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/runner-tests");
+        std::fs::create_dir_all(&build).expect("create the ignored runner test directory");
+        let root = tempfile::Builder::new()
+            .prefix("observation-")
+            .tempdir_in(build)
+            .expect("an isolated storage root");
         let registry = json!({
             "schema_version": 2,
             "targets": [{

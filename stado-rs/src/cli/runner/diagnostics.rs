@@ -45,12 +45,24 @@ pub(super) async fn render(target: &str, profile: &str, json: bool) -> Result<()
     line("stdout", report.get("standard_output"));
     line("stderr", report.get("standard_error"));
     line("log", report.get("log"));
+    line("read", report.get("read"));
+    if let Some(error) = report.get("stderr").and_then(Value::as_str) {
+        if !error.is_empty() {
+            eprintln!("\nhost read errors:\n{error}");
+        }
+    }
     let tail = report
         .get("tail")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if tail.is_empty() {
-        println!("\nthe runner has written no diagnostic log");
+        if report.get("read").and_then(Value::as_str) == Some("partial") {
+            println!("\nthe diagnostic read was incomplete; no log content was returned");
+        } else if report.get("log").and_then(Value::as_str) == Some("none") {
+            println!("\nthe runner has written no diagnostic log");
+        } else {
+            println!("\nthe selected diagnostic log is empty");
+        }
     } else {
         println!("\n{tail}");
     }

@@ -10,10 +10,20 @@ struct RunnerSection: View {
     let host: WorkerNode
     @ObservedObject var fleetStore: FleetControlStore
 
-    @State private var profile = "precheck"
+    @StateObject private var runner = RunnerStore()
+    @State private var profile = ""
     @State private var repository = ""
 
     private var target: String { host.targetName ?? host.displayName }
+
+    private var canRunProfile: Bool {
+        !runner.isLoading && !fleetStore.runnerMutation.isWorking && runner.profiles.contains(profile)
+    }
+
+    private func readProfiles() async {
+        await runner.load(fleet: fleetStore)
+        if !runner.profiles.contains(profile) { profile = runner.profiles.first ?? "" }
+    }
 
     private var report: HostRunnerReport? {
         guard fleetStore.runnerHost == target,
@@ -35,12 +45,15 @@ struct RunnerSection: View {
             title: "GitHub runners",
             detail: "Profiles come from runner-profiles.json. Each host admits one job across every installed profile."
         ) {
+            Button("Read profiles") {
+                Task { await readProfiles() }
+            }.disabled(runner.isLoading || fleetStore.runnerMutation.isWorking)
             Picker("Profile", selection: $profile) {
-                Text("Precheck").tag("precheck")
-                Text("Repository precheck").tag("repository-precheck")
-                Text("Publisher").tag("publisher")
+                Text("Choose a declared profile…").tag("")
+                ForEach(runner.profiles, id: \.self) { Text($0).tag($0) }
             }
-            .pickerStyle(.segmented)
+            .disabled(runner.isLoading || fleetStore.runnerMutation.isWorking)
+            if runner.isLoading { ProgressView("Reading runner…") }
 
             WisentField(label: "Profile", value: report?.profile ?? profile)
             WisentField(label: "Registration scope", value: report?.runnerScope ?? "Not read")
@@ -73,9 +86,18 @@ struct RunnerSection: View {
                 action: WisentAction(
                     "Read runner",
                     symbol: "arrow.clockwise",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
+                    isEnabled: canRunProfile
                 ) {
                     Task { await fleetStore.readHostRunner(host: target, profile: profile) }
+                }
+            )
+            WisentActionButton(
+                action: WisentAction(
+                    "Read diagnostics",
+                    symbol: "doc.text.magnifyingglass",
+                    isEnabled: canRunProfile
+                ) {
+                    Task { await runner.readDiagnostics(target: target, profile: profile, fleet: fleetStore) }
                 }
             )
 
@@ -97,7 +119,7 @@ struct RunnerSection: View {
                 action: WisentAction(
                     "Install or reconcile",
                     symbol: "square.and.arrow.down",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
+                    isEnabled: canRunProfile
                 ) {
                     Task {
                         await fleetStore.installHostRunner(
@@ -112,7 +134,7 @@ struct RunnerSection: View {
                 action: WisentAction(
                     "Restart in place",
                     symbol: "arrow.triangle.2.circlepath",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
+                    isEnabled: canRunProfile
                 ) {
                     Task { await fleetStore.restartHostRunner(host: target, profile: profile) }
                 }
@@ -121,7 +143,7 @@ struct RunnerSection: View {
                 action: WisentAction(
                     "Remove",
                     symbol: "trash",
-                    isEnabled: !fleetStore.runnerMutation.isWorking
+                    isEnabled: canRunProfile
                 ) {
                     Task {
                         await fleetStore.removeHostRunner(
@@ -170,6 +192,28 @@ struct RunnerSection: View {
                     detail: stderr
                 )
             }
+            if let failure = runner.failure {
+                WisentAlertPanel(tone: .danger, title: "Runner read failed", detail: failure)
+            }
+            if let diagnostic = runner.diagnostic,
+               diagnostic.target == target, diagnostic.profile == profile {
+                WisentField(label: "Diagnostic read", value: diagnostic.read)
+                WisentField(label: "Diagnostic log", value: diagnostic.log)
+                Text(diagnostic.tail).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                if !diagnostic.stderr.isEmpty {
+                    WisentAlertPanel(tone: .warning, title: "Diagnostic read errors", detail: diagnostic.stderr)
+                }
+            }
+            if let receipt = runner.lastReceipt {
+                DisclosureGroup("Complete runner receipt") {
+                    Text(receipt.standardOutput).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                    Text(receipt.standardError).font(WisentTypeScale.identifier()).textSelection(.enabled)
+                }
+            }
+        }
+        .task(id: "\(target)|\(fleetStore.requestGeneration)") {
+            profile = ""
+            await readProfiles()
         }
     }
 }

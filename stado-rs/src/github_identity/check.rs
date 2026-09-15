@@ -106,8 +106,8 @@ pub async fn report(json_output: bool) -> Result<(), CmdError> {
     Err(click(format!(
         "the credential the declared GitHub route {:?} names, {}.{}, is not allowed on \
          {endpoint}: GitHub answered HTTP {} — {message}. That identity grants {}, and the \
-         endpoint answers {}. Point {:?} at the intended credential with `skarbiec routes \
-         add --resource {} --item <item> --field <field> --reason <text>`; the route is \
+         endpoint answers {}. Point {:?} at the intended credential with `skarbiec route \
+         declare --resource {} --item <item> --field <field> --reason <text>`; the route is \
          declared in {DECLARATION_PATH}",
         resolved.route,
         resolved.item,

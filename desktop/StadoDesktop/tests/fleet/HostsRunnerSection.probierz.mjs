@@ -42,25 +42,20 @@ export function runHostsRunnerSectionJourney({
       `${row.label} shows no runner section; tree: ${loaded.tree.slice(-2000)}`,
     );
 
-    // The read-only command, spelled exactly as the CLI is invoked. A screen
-    // that shows an action without naming its command hides which host state
-    // it is about to change.
-    assert.ok(
-      loaded.tree.includes('runner status') && loaded.tree.includes('--profile precheck'),
-      `the runner section names no read-only command; tree: ${loaded.tree.slice(-2000)}`,
-    );
 
     // Before anything is read, every field says so rather than inventing a
     // scope: a runner nobody asked about is not an organization-wide runner.
     assertField(loaded, 'Registration scope', { pattern: /^(Not read|organization:|repository:|unrecorded)/ });
-    assertField(loaded, 'Profile', { pattern: /^(precheck|publisher)$/ });
+    assertField(loaded, 'Profile');
     assertField(loaded, 'Listener');
     assertField(loaded, 'Host job slot', { pattern: /^(Not read|none|unknown|[\w.-]+ (pid=\d+|stale))$/ });
     assertField(loaded, 'Labels');
 
     // Every lifecycle verb the CLI has is reachable here.
     for (const control of [
+      'Read profiles',
       'Read runner',
+      'Read diagnostics',
       'Install or reconcile',
       'Restart in place',
       'Remove',

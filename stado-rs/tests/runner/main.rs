@@ -92,19 +92,23 @@ fn diagnostics_report_the_log_this_machine_actually_has() {
         "the runner root is a path on this machine: {root}"
     );
 
-    let standard_error = report["standard_error"]
-        .as_str()
-        .expect("the diagnostics name the error log they read");
     let log = report["log"].as_str().expect("a log verdict");
-    if Path::new(standard_error).is_file() {
-        assert_ne!(
-            log, "none",
-            "a log that exists was reported as absent: {standard_error}"
-        );
+    let tail = report["tail"]
+        .as_str()
+        .expect("diagnostics return the observed log content, not just its path");
+    if log == "none" {
+        assert!(tail.is_empty(), "an absent log supplied invented content");
     } else {
+        let contents =
+            std::fs::read_to_string(log).expect("the diagnostic log is readable on this machine");
         assert_eq!(
-            log, "none",
-            "a log that does not exist was reported as read: {standard_error}"
+            tail.is_empty(),
+            contents.is_empty(),
+            "diagnostics discarded the runner's recorded output"
+        );
+        assert!(
+            contents.contains(tail),
+            "diagnostics changed the runner's recorded output"
         );
     }
 }

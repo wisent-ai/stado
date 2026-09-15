@@ -235,10 +235,12 @@ fn a_github_route_nothing_declares_is_refused_by_name() {
     let home = skarbiec_support::isolated_gnupg_home();
     let fixture = broker(home.path(), false);
     let text = credential_report(home.path(), &fixture);
+    let endpoint = fixture.url();
     for needle in [
         "github:org-runner-admin",
         "stado-rs/data/fleet/github-identity.json",
         "skarbiec route declare",
+        endpoint.as_str(),
     ] {
         assert!(text.contains(needle), "refusal omits {needle:?}: {text}");
     }
