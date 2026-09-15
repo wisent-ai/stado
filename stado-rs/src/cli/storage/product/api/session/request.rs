@@ -102,6 +102,7 @@ impl RemoteObjectApi {
                     CmdError::click(format!(
                         "cannot acquire release publisher credentials: {error}"
                     ))
+                    .stating(crate::primitives::failure::FailureCode::Refused)
                 })?
                 .read_string(publisher.item(), "token")
                 .await

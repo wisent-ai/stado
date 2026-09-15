@@ -166,6 +166,7 @@ fn publication_uses_its_own_grant_and_cannot_restore_a_revoked_permission() {
     let before = publication.host.vault_bytes();
     let refused = publication.publish("first.bin");
     assert!(!refused.status.success(), "{}", said(&refused));
+    assert_eq!(super::report(&refused)["error_code"], "auth");
     assert_eq!(publication.host.vault_bytes(), before);
     assert!(!publication.persisted("first.bin").exists());
 
@@ -189,6 +190,7 @@ fn publication_uses_its_own_grant_and_cannot_restore_a_revoked_permission() {
     let revoked_state = publication.host.vault_bytes();
     let refused = publication.publish("after-revocation.bin");
     assert!(!refused.status.success(), "{}", said(&refused));
+    assert_eq!(super::report(&refused)["error_code"], "auth");
     assert_eq!(publication.host.vault_bytes(), revoked_state);
     assert!(!publication.persisted("after-revocation.bin").exists());
     assert_eq!(
@@ -211,6 +213,9 @@ fn a_publisher_cannot_use_the_release_verifiers_identity() {
     let before = publication.host.vault_bytes();
     let refused = publication.publish("verifier.bin");
     assert!(!refused.status.success(), "{}", said(&refused));
+    let refusal = super::report(&refused);
+    assert_eq!(refusal["error_code"], "refused");
+    assert_eq!(refusal["retryable"], false);
     assert_eq!(publication.host.vault_bytes(), before);
     assert!(!publication.persisted("verifier.bin").exists());
 }
