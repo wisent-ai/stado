@@ -111,7 +111,13 @@ fn withdrawing_authority_cannot_fall_back_to_a_usable_default_vault() {
     let default_vault = host.home.join(".stado/skarbiec.vault.json");
     std::fs::rename(host.vault_path(), &default_vault).unwrap();
     let withdrawn = host.run(
-        &["host", "config-set", TARGET, "secrets.skarbiec.vault_file", "null"],
+        &[
+            "host",
+            "config-set",
+            TARGET,
+            "secrets.skarbiec.vault_file",
+            "null",
+        ],
         None,
     );
     assert!(withdrawn.status.success(), "{}", said(&withdrawn));
