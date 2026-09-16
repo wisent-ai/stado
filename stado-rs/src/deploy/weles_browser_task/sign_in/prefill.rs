@@ -181,6 +181,7 @@ mod tests {
             allow_login: true,
             headless: false,
             credential_prefill: prefill,
+            replay: None,
             login_item: None,
             account_id: None,
             fresh_profile: false,

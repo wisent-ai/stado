@@ -41,6 +41,11 @@ pub struct BrowserTask<'a> {
     /// Vault-backed field prefills, each a capability REFERENCE the worker
     /// redeems locally. Empty for a run that carries no sign-in.
     pub credential_prefill: Vec<Value>,
+    /// Deterministic replay steps from the plan (`replay` array), passed to
+    /// the run as `GENERIC_TASK_REPLAY` with replay-only mode set, so Weles
+    /// executes exactly these steps instead of model navigation. `None` puts
+    /// exactly the bytes on the wire the run always did — no `env` key.
+    pub replay: Option<Value>,
 }
 
 impl BrowserTask<'_> {
@@ -85,6 +90,14 @@ impl BrowserTask<'_> {
             "headless": self.headless,
             "constraints": Value::Object(constraints),
         });
+        if let Some(replay) = &self.replay {
+            params["env"] = json!({
+                "GENERIC_TASK_REPLAY": serde_json::to_string(replay)
+                    .expect("replay steps serialize"),
+                "GENERIC_TASK_REPLAY_ONLY": "1",
+                "GENERIC_TASK_SKIP_SAVED_FLOW_REPLAY": "1",
+            });
+        }
         if let Some(login_item) = self.login_item {
             params["login_item"] = json!(login_item);
         }
@@ -107,6 +120,7 @@ mod tests {
             allow_login: false,
             headless: true,
             credential_prefill: Vec::new(),
+            replay: None,
             login_item: None,
             account_id: None,
             fresh_profile: false,
@@ -120,8 +134,8 @@ mod tests {
             ..task
         };
         let params = permitted.params();
-        assert_eq!(params["constraints"]["no_login"], json!(false));
         assert_eq!(params["constraints"]["no_mutation"], json!(false));
+        assert_eq!(params["constraints"]["no_login"], json!(false));
         // The schema stays the one the `weles-image-inspect` workload sends.
         assert_eq!(params["proxy"], json!("none"));
         assert!(params["flow_name"]
@@ -144,6 +158,7 @@ mod tests {
             headless: true,
             credential_prefill: Vec::new(),
             login_item: None,
+            replay: None,
             account_id: None,
             fresh_profile: false,
         };

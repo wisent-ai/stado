@@ -34,7 +34,7 @@ pub const PLAN_SCHEMA: &str = "wisent.weles-browser-task-plan.v1";
 pub const SESSION_LABEL: &str = "weles-browser-task-area";
 
 /// The catalog the worker reads its gate out of, relative to the target home.
-pub const ALLOWLIST_PATH: &str = "weles/scripts/worker/deploy/weles-action-allowlist.txt";
+pub const ALLOWLIST_PATH: &str = "weles/src/worker/deploy/weles-action-allowlist.txt";
 
 /// This machine, as the kernel names it.
 pub fn this_machine() -> String {
@@ -66,9 +66,11 @@ impl Fleet {
     }
 
     fn seed(name: &str, weles: Option<Value>) -> Self {
+        let scratch = Path::new(env!("CARGO_TARGET_TMPDIR"));
+        std::fs::create_dir_all(scratch).expect("test scratch directory");
         let fleet = Self {
-            home: tempfile::tempdir().expect("temp home"),
-            store: tempfile::tempdir().expect("temp store"),
+            home: tempfile::tempdir_in(scratch).expect("temp home"),
+            store: tempfile::tempdir_in(scratch).expect("temp store"),
         };
         let mut target = json!({
             "name": name,
