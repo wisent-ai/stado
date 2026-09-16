@@ -46,6 +46,12 @@ pub(super) async fn render(target: &str, profile: &str, json: bool) -> Result<()
     line("stderr", report.get("standard_error"));
     line("log", report.get("log"));
     line("read", report.get("read"));
+    for section in ["runtime", "memory"] {
+        if let Some(observation) = report.get(section) {
+            println!("\n{section}:");
+            print_json(observation);
+        }
+    }
     if let Some(error) = report.get("stderr").and_then(Value::as_str) {
         if !error.is_empty() {
             eprintln!("\nhost read errors:\n{error}");

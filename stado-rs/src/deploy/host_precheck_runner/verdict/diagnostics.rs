@@ -59,6 +59,13 @@ const MACOS_DIAGNOSTICS: &str = r#"set -eu
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/Users/Shared/stado-precheck-runner
 runner_user=stado-precheck
+probe_runtime() {
+  key=$1
+  shift
+  if observed=$(root "$@" 2>&1); then status=0; else status=$?; fi
+  printf '%sCommand=%s\n%sStatus=%s\n%sOutput=%s\n' \
+    "$key" "$*" "$key" "$status" "$key" "$(printf '%s' "$observed" | tr -s ' \n' ' ')"
+}
 state=$(root launchctl print system/com.wisent.stado-precheck-runner 2>/dev/null || true)
 printf 'ActiveState=%s\n' "$(printf '%s' "$state" | sed -n 's/.*state = \([a-z]*\).*/\1/p' | head -n 1)"
 printf 'ExecMainStatus=%s\n' "$(printf '%s' "$state" | sed -n 's/.*last exit code = \([0-9-]*\).*/\1/p' | head -n 1)"
@@ -82,6 +89,12 @@ printf 'ListenerSignature=%s\n' "$(root codesign --display --verbose=4 --entitle
 printf 'ListenerQuarantine=%s\n' "$(root xattr -p com.apple.quarantine "$listener" 2>/dev/null || printf 'none')"
 printf 'BundleExtractDir=%s\n' "$(root sh -c "[ -d \"$runner_root/.dotnet\" ] && ls -ld \"$runner_root/.dotnet\" | tr -s ' '" 2>/dev/null || printf 'absent')"
 printf 'TemporaryDir=%s\n' "$(root sh -c "[ -d \"$runner_root/.tmp\" ] && ls -ld \"$runner_root/.tmp\" | tr -s ' '" 2>/dev/null || printf 'absent')"
+coreclr=$runner_root/bin/libcoreclr.dylib
+probe_runtime CoreclrArchitectures /usr/bin/lipo -archs "$coreclr"
+probe_runtime CoreclrSignature /usr/bin/codesign --display --verbose=4 --entitlements - --xml "$coreclr"
+probe_runtime CoreclrVerification /usr/bin/codesign --verify --strict --verbose=1 "$coreclr"
+probe_runtime SystemIntegrity /usr/bin/csrutil status
+probe_runtime RuntimeConfiguration /bin/cat "$runner_root/bin/Runner.Listener.runtimeconfig.json"
 printf 'DiagnosticLog=%s\n' "${newest:-none}"
 printf '%s\n' '--- tail ---'
 if [ -n "$newest" ]; then root tail -n 120 "$newest"; fi
@@ -95,6 +108,16 @@ fn field(head: &str, key: &str) -> String {
         .find_map(|line| line.strip_prefix(&prefix))
         .unwrap_or("-")
         .to_string()
+}
+
+/// A metadata command can fail while the log remains readable. Keep its
+/// actual exit status and combined output instead of calling that read healthy.
+fn runtime_probe(head: &str, key: &str) -> Value {
+    json!({
+        "command": field(head, &format!("{key}Command")),
+        "exit_status": field(head, &format!("{key}Status")).parse::<i32>().ok(),
+        "output": field(head, &format!("{key}Output")),
+    })
 }
 
 /// Current host memory, unit limits and the declared reclaim policy.
@@ -173,6 +196,17 @@ pub async fn diagnostics_declared(
             "quarantine": field(head, "ListenerQuarantine"),
             "bundle_extract_dir": field(head, "BundleExtractDir"),
             "temporary_dir": field(head, "TemporaryDir"),
+            "platform_probes": if matches!(platform, Platform::DarwinArm64) {
+                json!({
+                    "coreclr_architectures": runtime_probe(head, "CoreclrArchitectures"),
+                    "coreclr_signature": runtime_probe(head, "CoreclrSignature"),
+                    "coreclr_verification": runtime_probe(head, "CoreclrVerification"),
+                    "system_integrity": runtime_probe(head, "SystemIntegrity"),
+                    "runtime_configuration": runtime_probe(head, "RuntimeConfiguration"),
+                })
+            } else {
+                Value::Null
+            },
         }),
         "memory": memory(head, &target),
         "tail": tail,

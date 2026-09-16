@@ -113,6 +113,59 @@ fn diagnostics_report_the_log_this_machine_actually_has() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn runtime_metadata_keeps_native_command_results_including_refusals() {
+    let fixture = Fixture::new();
+    let profiles = fixture.declared_profiles();
+    let name = profiles[0]["name"].as_str().expect("a profile name");
+    let output = fixture.diagnostics(name);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let report = report(&output);
+    let root = Path::new(
+        report["runner_root"]
+            .as_str()
+            .expect("the observed runner root"),
+    );
+    let coreclr = root.join("bin/libcoreclr.dylib");
+    let probes = &report["runtime"]["platform_probes"];
+
+    for (key, program, arguments) in [
+        ("system_integrity", "/usr/bin/csrutil", vec!["status"]),
+        (
+            "coreclr_verification",
+            "/usr/bin/codesign",
+            vec![
+                "--verify",
+                "--strict",
+                "--verbose=1",
+                coreclr.to_str().expect("a UTF-8 runner path"),
+            ],
+        ),
+    ] {
+        let native = std::process::Command::new("/usr/bin/sudo")
+            .args(["-n", program])
+            .args(arguments)
+            .output()
+            .expect("the native metadata reader starts without requesting a password");
+        assert_eq!(
+            probes[key]["exit_status"],
+            serde_json::json!(native.status.code()),
+            "a failed native read must not become a healthy metadata observation: {probes}"
+        );
+        let observed = format!("{}{}", fixture::stdout(&native), stderr(&native));
+        assert_eq!(
+            probes[key]["output"]
+                .as_str()
+                .expect("the actual metadata output")
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            observed.split_whitespace().collect::<Vec<_>>(),
+            "the diagnostic must retain the native result or refusal for {key}"
+        );
+    }
+}
+
 #[test]
 fn a_host_outside_the_registry_is_refused_by_every_verb() {
     let fixture = Fixture::new();
