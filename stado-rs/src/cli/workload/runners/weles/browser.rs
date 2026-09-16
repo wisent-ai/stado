@@ -121,12 +121,18 @@ pub(crate) async fn run_weles_browser_task(
     let replay = match plan.get("replay") {
         None => None,
         Some(value) => {
-            let steps = value.as_array().filter(|steps| !steps.is_empty()).ok_or_else(|| {
-                CmdError::usage("workload plan replay must be a nonempty array of steps")
-            })?;
+            let steps = value
+                .as_array()
+                .filter(|steps| !steps.is_empty())
+                .ok_or_else(|| {
+                    CmdError::usage("workload plan replay must be a nonempty array of steps")
+                })?;
             for (index, step) in steps.iter().enumerate() {
                 if !step.is_object()
-                    || step.get("tool").and_then(Value::as_str).is_none_or(|tool| tool.trim().is_empty())
+                    || step
+                        .get("tool")
+                        .and_then(Value::as_str)
+                        .is_none_or(|tool| tool.trim().is_empty())
                     || step.get("args").is_some_and(|args| !args.is_object())
                 {
                     return Err(CmdError::usage(format!(
@@ -135,7 +141,9 @@ pub(crate) async fn run_weles_browser_task(
                 }
             }
             if action != "generic_browser_task" {
-                return Err(CmdError::usage("workload plan replay requires action generic_browser_task"));
+                return Err(CmdError::usage(
+                    "workload plan replay requires action generic_browser_task",
+                ));
             }
             Some(value.clone())
         }

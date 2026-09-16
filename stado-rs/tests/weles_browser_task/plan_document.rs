@@ -118,7 +118,12 @@ fn deferring_and_prefilling_at_once_is_refused() {
 #[test]
 fn malformed_replay_is_refused_before_host_access_or_credential_issue() {
     let fleet = Fleet::declaring(&[DEFAULT_ACTION]);
-    for replay in [json!({}), json!([]), json!([{"tool": ""}]), json!([{"tool": "read", "args": []}])] {
+    for replay in [
+        json!({}),
+        json!([]),
+        json!([{"tool": ""}]),
+        json!([{"tool": "read", "args": []}]),
+    ] {
         let plan = fleet.plan(json!({
             "allow_login": true,
             "sign_in_origin": "https://accounts.google.com",
@@ -127,7 +132,11 @@ fn malformed_replay_is_refused_before_host_access_or_credential_issue() {
         }));
         let out = fleet.run(Some(TARGET), &plan);
         assert_eq!(out.status.code(), Some(2), "{}", said(&out));
-        assert!(refusal(&out).starts_with("workload plan replay"), "{}", said(&out));
+        assert!(
+            refusal(&out).starts_with("workload plan replay"),
+            "{}",
+            said(&out)
+        );
         assert!(fleet.files_naming_the_session().is_empty());
     }
 }

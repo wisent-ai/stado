@@ -220,12 +220,15 @@ pub async fn run(schedule_id: &str, retry_token: &str, json: bool) -> Result<(),
             ))
         })?;
     if json {
-        println!("{}", serde_json::json!({
-            "schedule_id": schedule_id,
-            "retry_token": retry_token,
-            "job_id": job.job_id,
-            "run_id": job.run_id,
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "schedule_id": schedule_id,
+                "retry_token": retry_token,
+                "job_id": job.job_id,
+                "run_id": job.run_id,
+            })
+        );
     } else {
         println!(
             "fired {schedule_id} -> job {} (run {})",

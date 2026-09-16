@@ -219,9 +219,19 @@ fn recurring_work_has_a_retained_creation_identity_and_retry_safe_real_execution
     fs::write(&payload, &contents).unwrap();
     let command = format!("/bin/cp '{}' output/receipt.json", payload.display());
     let create = [
-        "schedule", "create", "--id", &identity, "--json", "--disabled",
-        "--cron", "0 9 1 * *", "--tz", "Europe/Warsaw",
-        "--pinned-host", harness::TARGET, &command,
+        "schedule",
+        "create",
+        "--id",
+        &identity,
+        "--json",
+        "--disabled",
+        "--cron",
+        "0 9 1 * *",
+        "--tz",
+        "Europe/Warsaw",
+        "--pinned-host",
+        harness::TARGET,
+        &command,
     ];
     let created = area.stado(&create);
     assert!(created.status.success(), "{}", said(&created.stderr));
@@ -233,7 +243,10 @@ fn recurring_work_has_a_retained_creation_identity_and_retry_safe_real_execution
     assert_eq!(stored["enabled"], false);
 
     let repeated = area.stado(&create);
-    assert!(!repeated.status.success(), "a repeated creation overwrote an existing schedule");
+    assert!(
+        !repeated.status.success(),
+        "a repeated creation overwrote an existing schedule"
+    );
     assert_eq!(area.record("schedules", id), stored);
     let listed = area.stado(&["schedule", "list", "--json"]);
     assert!(listed.status.success(), "{}", said(&listed.stderr));
@@ -261,7 +274,11 @@ fn recurring_work_has_a_retained_creation_identity_and_retry_safe_real_execution
     assert_eq!(after_retry["fire_count"], first["fire_count"]);
     area.drain();
     assert_eq!(area.record("completed", job)["state"], "completed");
-    assert_eq!(area.read(&format!("status/{job}/output/receipt.json")).as_bytes(), contents);
+    assert_eq!(
+        area.read(&format!("status/{job}/output/receipt.json"))
+            .as_bytes(),
+        contents
+    );
 
     assert!(area.stado(&["schedule", "rm", id]).status.success());
     assert_eq!(area.record("schedules", id)["deleted"], true);
@@ -269,5 +286,8 @@ fn recurring_work_has_a_retained_creation_identity_and_retry_safe_real_execution
     assert!(!removed.status.success());
     let empty = area.stado(&["schedule", "list", "--json"]);
     assert!(empty.status.success(), "{}", said(&empty.stderr));
-    assert_eq!(serde_json::from_slice::<Value>(&empty.stdout).unwrap(), serde_json::json!([]));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&empty.stdout).unwrap(),
+        serde_json::json!([])
+    );
 }
