@@ -105,10 +105,12 @@ pub async fn settle(
         host_channel::run_program(parent, &["/bin/sh", "-c", command.as_str()], runner).await?;
     if !recorded.ok() {
         return Err(DeployError(format!(
-            "the lease record for '{}' could not be written on '{}': {}",
+            "the lease record for '{}' could not be written on '{}': exit {}; stderr: {}; stdout: {}",
             record.name,
             parent.name,
-            host_channel::last_error_line(&recorded, "the record program printed nothing")
+            recorded.code,
+            recorded.stderr.trim(),
+            recorded.stdout.trim()
         )));
     }
 
