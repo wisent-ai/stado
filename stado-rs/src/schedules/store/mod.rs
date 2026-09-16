@@ -67,7 +67,8 @@ pub async fn list_schedule_ids(store: &JobStorage) -> Result<Vec<String>, Storag
         .collect())
 }
 
-/// Read one schedule; `None` when it does not exist.
+/// Read the stored record, including deletion tombstones needed to settle an
+/// in-flight occurrence. User-facing readers must exclude deleted records.
 pub async fn read_schedule(
     store: &JobStorage,
     schedule_id: &str,

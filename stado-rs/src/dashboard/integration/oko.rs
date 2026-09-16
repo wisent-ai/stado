@@ -31,10 +31,10 @@ struct AdoptRequest {
 }
 
 pub(super) fn supports(action: &str) -> bool {
-    matches!(action, "transcript-sources" | "transcript-sources-adopt")
+    matches!(action, "transcript-sources" | "transcript-sources-adopt") || super::oko_automation::supports(action)
 }
 
-async fn target(host_id: &str) -> Result<crate::targets::ComputeTarget, HandlerError> {
+pub(super) async fn target(host_id: &str) -> Result<crate::targets::ComputeTarget, HandlerError> {
     if host_id.is_empty() || host_id.trim() != host_id {
         return Err(HandlerError::BadRequest);
     }
@@ -212,6 +212,7 @@ async fn adopt(body: &[u8]) -> HandlerResult {
 }
 
 pub(super) async fn handle(action: &str, body: &[u8]) -> HandlerResult {
+    if super::oko_automation::supports(action) { return super::oko_automation::handle(action, body).await; }
     match action {
         "transcript-sources" => sources(body).await,
         "transcript-sources-adopt" => adopt(body).await,

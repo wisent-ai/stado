@@ -14,6 +14,7 @@
 
 mod enterprise;
 mod oko;
+mod oko_automation;
 
 use serde_json::{json, Value};
 

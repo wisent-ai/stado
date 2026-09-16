@@ -43,7 +43,10 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     let next_due = compute_next_due(&args.cron, now, &args.tz).map_err(|exc| {
         CmdError::click(format!("could not compute next run ({}): {exc}", args.tz))
     })?;
-    let sid = generate_schedule_id();
+    let sid = args
+        .id
+        .map(|id| format!("sch-{}", id.simple()))
+        .unwrap_or_else(generate_schedule_id);
     let mut sched = Schedule::new(&sid, &args.cron, &args.command);
     sched.tz = args.tz.clone();
     sched.enabled = !args.disabled;
@@ -71,6 +74,10 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.next_due_at = isoformat_utc(next_due);
     let store = JobStorage::new().await?;
     schedules::write_schedule(&store, &sched).await?;
+    if args.json {
+        println!("{}", sched.to_json());
+        return Ok(());
+    }
     let state = if sched.enabled { "enabled" } else { "DISABLED" };
     println!("created schedule {sid} ({state})");
     println!("  cron:     {}  ({})", args.cron, args.tz);
@@ -83,7 +90,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
 }
 
 /// `schedule list`: all schedules, sorted by next run (paused last).
-pub async fn list() -> Result<(), CmdError> {
+pub async fn list(json: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let mut scheds = schedules::list_schedules(&store).await?;
     // Python sort key: s.next_due_at or "~" — plain string sort, paused
@@ -95,6 +102,14 @@ pub async fn list() -> Result<(), CmdError> {
             s.next_due_at.clone()
         }
     });
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&scheds)
+                .map_err(|error| CmdError::click(error.to_string()))?
+        );
+        return Ok(());
+    }
     if scheds.is_empty() {
         println!("(no schedules)");
         return Ok(());
@@ -131,7 +146,10 @@ pub async fn list() -> Result<(), CmdError> {
 /// `schedule show ID`: print a schedule's full JSON.
 pub async fn show(schedule_id: &str) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let Some(s) = read_schedule(&store, schedule_id).await? else {
+    let Some(s) = read_schedule(&store, schedule_id)
+        .await?
+        .filter(|schedule| !schedule.deleted)
+    else {
         return Err(CmdError::click(format!("schedule {schedule_id} not found")));
     };
     println!("{}", s.to_json());
@@ -186,7 +204,7 @@ pub async fn resume(schedule_id: &str) -> Result<(), CmdError> {
 
 /// `schedule run ID --retry-token TOKEN`: fire a schedule exactly once for
 /// the caller-retained token, regardless of its next run time.
-pub async fn run(schedule_id: &str, retry_token: &str) -> Result<(), CmdError> {
+pub async fn run(schedule_id: &str, retry_token: &str, json: bool) -> Result<(), CmdError> {
     if retry_token.trim().is_empty() {
         return Err(CmdError::click("--retry-token must not be empty"));
     }
@@ -201,9 +219,18 @@ pub async fn run(schedule_id: &str, retry_token: &str) -> Result<(), CmdError> {
                 "schedule {schedule_id} occurrence is being submitted by another owner"
             ))
         })?;
-    println!(
-        "fired {schedule_id} -> job {} (run {})",
-        job.job_id, job.run_id
-    );
+    if json {
+        println!("{}", serde_json::json!({
+            "schedule_id": schedule_id,
+            "retry_token": retry_token,
+            "job_id": job.job_id,
+            "run_id": job.run_id,
+        }));
+    } else {
+        println!(
+            "fired {schedule_id} -> job {} (run {})",
+            job.job_id, job.run_id
+        );
+    }
     Ok(())
 }

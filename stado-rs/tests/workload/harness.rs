@@ -99,6 +99,18 @@ impl Area {
             "could not read the tested Stado identity"
         );
         eprintln!("workload evidence: {}", area.root.display());
+        for (name, args) in [
+            ("source-revision", ["rev-parse", "HEAD"].as_slice()),
+            ("source.patch", ["diff", "--binary", "HEAD"].as_slice()),
+        ] {
+            let source = Command::new("git")
+                .args(args)
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .output()
+                .expect("record tested source identity");
+            assert!(source.status.success(), "{}", said(&source.stderr));
+            fs::write(area.root.join(name), source.stdout).expect("retain tested source identity");
+        }
         area
     }
 

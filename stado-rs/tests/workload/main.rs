@@ -209,3 +209,65 @@ fn watching_a_workload_that_was_never_placed_is_refused() {
         said(&output.stderr)
     );
 }
+
+#[test]
+fn recurring_work_has_a_retained_creation_identity_and_retry_safe_real_execution() {
+    let area = Area::new();
+    let identity = uuid::Uuid::new_v4().to_string();
+    let payload = area.root.join("scheduled-input.json");
+    let contents = serde_json::to_vec(&serde_json::json!({"request": identity})).unwrap();
+    fs::write(&payload, &contents).unwrap();
+    let command = format!("/bin/cp '{}' output/receipt.json", payload.display());
+    let create = [
+        "schedule", "create", "--id", &identity, "--json", "--disabled",
+        "--cron", "0 9 1 * *", "--tz", "Europe/Warsaw",
+        "--pinned-host", harness::TARGET, &command,
+    ];
+    let created = area.stado(&create);
+    assert!(created.status.success(), "{}", said(&created.stderr));
+    let schedule: Value = serde_json::from_slice(&created.stdout).unwrap();
+    let id = schedule["schedule_id"].as_str().unwrap();
+    let stored = area.record("schedules", id);
+    assert_eq!(stored["command"], command);
+    assert_eq!(stored["tz"], "Europe/Warsaw");
+    assert_eq!(stored["enabled"], false);
+
+    let repeated = area.stado(&create);
+    assert!(!repeated.status.success(), "a repeated creation overwrote an existing schedule");
+    assert_eq!(area.record("schedules", id), stored);
+    let listed = area.stado(&["schedule", "list", "--json"]);
+    assert!(listed.status.success(), "{}", said(&listed.stderr));
+    let records: Vec<Value> = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(records, vec![stored]);
+    assert!(area.stado(&["schedule", "resume", id]).status.success());
+    assert_eq!(area.record("schedules", id)["enabled"], true);
+    assert!(area.stado(&["schedule", "pause", id]).status.success());
+    assert_eq!(area.record("schedules", id)["enabled"], false);
+
+    let fire = ["schedule", "run", id, "--retry-token", &identity, "--json"];
+    let fired = area.stado(&fire);
+    assert!(fired.status.success(), "{}", said(&fired.stderr));
+    let first = area.record("schedules", id);
+    let job = first["last_job_id"].as_str().unwrap();
+    let receipt: Value = serde_json::from_slice(&fired.stdout).unwrap();
+    assert_eq!(receipt["job_id"], job);
+    assert_eq!(receipt["schedule_id"], id);
+    let retried = area.stado(&fire);
+    assert!(retried.status.success(), "{}", said(&retried.stderr));
+    let repeated_receipt: Value = serde_json::from_slice(&retried.stdout).unwrap();
+    assert_eq!(repeated_receipt, receipt);
+    let after_retry = area.record("schedules", id);
+    assert_eq!(after_retry["last_job_id"], job);
+    assert_eq!(after_retry["fire_count"], first["fire_count"]);
+    area.drain();
+    assert_eq!(area.record("completed", job)["state"], "completed");
+    assert_eq!(area.read(&format!("status/{job}/output/receipt.json")).as_bytes(), contents);
+
+    assert!(area.stado(&["schedule", "rm", id]).status.success());
+    assert_eq!(area.record("schedules", id)["deleted"], true);
+    let removed = area.stado(&["schedule", "show", id]);
+    assert!(!removed.status.success());
+    let empty = area.stado(&["schedule", "list", "--json"]);
+    assert!(empty.status.success(), "{}", said(&empty.stderr));
+    assert_eq!(serde_json::from_slice::<Value>(&empty.stdout).unwrap(), serde_json::json!([]));
+}

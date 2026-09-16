@@ -62,6 +62,15 @@ pub(crate) fn inherit_safe_agent_environment(command: &mut tokio::process::Comma
             command.env(name, value);
         }
     }
+    // Foundation ignores HOME on macOS. Keep its declared runtime home when
+    // present, otherwise align it with the HOME used by the workload's POSIX tools.
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("CFFIXED_USER_HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("HOME").filter(|value| !value.is_empty()))
+    {
+        command.env("CFFIXED_USER_HOME", home);
+    }
     command.envs(WORKLOAD_LIVENESS_ENV);
 }
 

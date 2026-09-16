@@ -138,7 +138,11 @@ pub(crate) enum ScheduleCommands {
     /// Create a recurring schedule that submits COMMAND on a cron schedule.
     Create(Box<ScheduleCreateArgs>),
     /// List all schedules.
-    List,
+    List {
+        /// Emit the full persisted records as JSON, including an empty array.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print a schedule's full JSON.
     Show { schedule_id: String },
     /// Delete a schedule (does not affect jobs it already submitted).
@@ -152,6 +156,9 @@ pub(crate) enum ScheduleCommands {
         schedule_id: String,
         #[arg(long)]
         retry_token: String,
+        /// Emit the submitted job identity as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -160,6 +167,12 @@ pub(crate) enum ScheduleCommands {
 #[derive(clap::Args)]
 pub struct ScheduleCreateArgs {
     pub(crate) command: String,
+    /// Caller-retained creation identity. A repeated ID refuses instead of overwriting.
+    #[arg(long)]
+    pub(crate) id: Option<uuid::Uuid>,
+    /// Emit the persisted schedule as JSON.
+    #[arg(long)]
+    pub(crate) json: bool,
     /// 5-field cron expression, e.g. "0 2 * * *" (daily 02:00).
     #[arg(long, required = true)]
     pub(crate) cron: String,
