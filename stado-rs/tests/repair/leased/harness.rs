@@ -40,21 +40,23 @@ pub const REFUSED: i32 = 1;
 /// configuration a lease needs to resolve its host is the operator's, and
 /// this area deliberately does not fake it.
 pub fn run(arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stado"))
+    let output = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(arguments)
         .output()
-        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"))
+        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"));
+    crate::fixture::retain(Path::new("fleet"), arguments, output)
 }
 
 /// The binary driven through one lease's emitted registry and nothing else.
 pub fn leased(root: &str, arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stado"))
+    let output = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(arguments)
         .env("WC_STORAGE_BACKEND", "local")
         .env("WC_LOCAL_STORAGE_PATH", root)
         .env("STADO_CONFIG", Path::new(root).join("no-such-config.json"))
         .output()
-        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"))
+        .unwrap_or_else(|exc| panic!("stado {arguments:?} did not start: {exc}"));
+    crate::fixture::retain(Path::new(root), arguments, output)
 }
 
 /// The one JSON document a `--json` command printed.

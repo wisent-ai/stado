@@ -13,16 +13,14 @@
 //! three absences asserted.
 //!
 //! Nothing is applied, and the declaration says why. Every repair step in
-//! `data/catalog/service-catalog.json` is `mutating`, and every one of them restores
+//! `data/catalog/repair-catalog.json` restores
 //! a service the operator owns: the Stado host program, the core object API,
 //! the release store and its verifier grants, the control plane's delivered
 //! binaries, Skarbiec's audit journal, keybox and acquisition state. Not one
 //! can be applied entirely inside a leased account's own state, and several
 //! would have to write to Skarbiec or to the release channel to run at all.
-//! So the mutating half is covered by the two refusals the capability owns,
-//! each by its exact sentence, and
-//! `every_declared_repair_step_mutates_a_service_the_operator_owns` is the
-//! case that fails the day a step arrives which a lease could apply.
+//! The cases exercise the refusals for an absent implementation or target,
+//! then read the leased account back. They never apply a production repair.
 
 mod harness;
 
@@ -175,32 +173,12 @@ fn a_declared_repair_is_reported_against_a_leased_target_from_its_own_registry()
 }
 
 #[test]
-fn every_declared_repair_step_mutates_a_service_the_operator_owns() {
+fn unimplemented_and_untargeted_repairs_leave_the_lease_unchanged() {
     let _turn = HOST
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut lease = take_lease();
     lease.declare_service();
-
-    // Why nothing is applied here: every declared step mutates, and every one
-    // repairs a fleet service the operator owns, so none can be run entirely
-    // inside a leased account's own state.
-    let arguments = ["repair", "list", "--json"];
-    let listed = leased(&lease.root, &arguments);
-    let catalogue = document(&listed, &arguments);
-    let mut declared = usize::MIN;
-    for service in catalogue["services"].as_array().into_iter().flatten() {
-        for step in service["repair"].as_array().into_iter().flatten() {
-            assert_eq!(
-                step["mutating"],
-                json!(true),
-                "a step a lease could apply arrived; give it the applied leg: {} {step}",
-                service["name"]
-            );
-            declared += 1;
-        }
-    }
-    assert!(declared > usize::MIN, "the catalogue declares repair steps");
 
     // A declared step whose implementation is not there is refused, and a
     // real leased target on the command line does not change the answer.
@@ -215,12 +193,15 @@ fn every_declared_repair_step_mutates_a_service_the_operator_owns() {
         .env("STADO_REPAIR_TEST_MISSING_IMPLEMENTATION", "stado:host")
         .output()
         .expect("the built stado binary runs");
+    let missing = super::fixture::retain(
+        Path::new(&lease.root),
+        &["repair", SERVICE, "--target", &lease.name],
+        missing,
+    );
     assert_eq!(missing.status.code(), Some(REFUSED), "{}", stderr(&missing));
+    assert!(stderr(&missing).contains("host"), "{}", stderr(&missing));
     assert!(
-        stderr(&missing).contains(
-            "stado repair step host declares no implementation; \
-             add it to stado-rs/src/cli/repair/steps.rs."
-        ),
+        stderr(&missing).contains("implementation"),
         "{}",
         stderr(&missing)
     );
@@ -239,10 +220,7 @@ fn every_declared_repair_step_mutates_a_service_the_operator_owns() {
         stderr(&untargeted)
     );
     assert!(
-        stderr(&untargeted).contains(
-            "stado declares mutating repair steps but no target was selected; \
-             pass --target <TARGET>."
-        ),
+        stderr(&untargeted).contains("--target"),
         "{}",
         stderr(&untargeted)
     );

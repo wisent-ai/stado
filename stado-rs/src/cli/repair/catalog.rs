@@ -3,20 +3,53 @@
 
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
+
 use crate::cli::CmdError;
-use crate::deploy::service_catalog::{CatalogRepair, CatalogService};
 
 use super::steps::{implementation_visible, RepairStep, REPAIR_STEPS};
-
-pub(super) const DECLARATION: &str = "stado-rs/data/catalog/service-catalog.json";
-
-pub(super) fn catalog() -> Result<Vec<CatalogService>, CmdError> {
-    let services = crate::deploy::service_catalog::all().map_err(CmdError::click)?;
-    validate(&services)?;
-    Ok(services)
+/// One repair the service declares. The catalog owns the operator-facing
+/// incident description and proof; the typed repair table owns executable
+/// code, and the capability refuses unless the two sets match exactly.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CatalogRepair {
+    pub name: String,
+    pub summary: String,
+    pub mutating: bool,
+    pub proof: String,
 }
 
-fn validate(services: &[CatalogService]) -> Result<(), CmdError> {
+/// Repair ownership is independent of the generated installable-product picker.
+#[derive(Deserialize)]
+pub(super) struct RepairService {
+    pub name: String,
+    pub summary: String,
+    #[serde(default)]
+    pub unit: Option<String>,
+    pub repair: Vec<CatalogRepair>,
+}
+
+#[derive(Deserialize)]
+struct CatalogDocument {
+    services: Vec<RepairService>,
+}
+
+pub(super) const DECLARATION: &str = "stado-rs/data/catalog/repair-catalog.json";
+
+pub(super) fn catalog() -> Result<Vec<RepairService>, CmdError> {
+    let document: CatalogDocument = serde_json::from_str(include_str!(
+        "../../../data/catalog/repair-catalog.json"
+    ))
+    .map_err(|error| {
+        CmdError::click(format!(
+            "the compiled repair catalog {DECLARATION} is not valid JSON: {error}"
+        ))
+    })?;
+    validate(&document.services)?;
+    Ok(document.services)
+}
+
+fn validate(services: &[RepairService]) -> Result<(), CmdError> {
     let mut declarations = BTreeSet::new();
     for service in services {
         for step in &service.repair {
@@ -62,9 +95,9 @@ fn validate(services: &[CatalogService]) -> Result<(), CmdError> {
 }
 
 pub(super) fn declared_service<'a>(
-    services: &'a [CatalogService],
+    services: &'a [RepairService],
     name: &str,
-) -> Result<&'a CatalogService, CmdError> {
+) -> Result<&'a RepairService, CmdError> {
     services
         .iter()
         .find(|service| service.name == name || service.unit.as_deref() == Some(name))
@@ -76,7 +109,7 @@ pub(super) fn declared_service<'a>(
 }
 
 pub(super) fn declared_step<'a>(
-    service: &'a CatalogService,
+    service: &'a RepairService,
     name: &str,
 ) -> Result<&'a CatalogRepair, CmdError> {
     service

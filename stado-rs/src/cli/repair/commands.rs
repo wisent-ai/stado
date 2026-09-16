@@ -4,10 +4,12 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::deploy::service_catalog::{CatalogRepair, CatalogService};
 
 use super::args::{reject_extra, RepairArgs};
-use super::catalog::{catalog, declared_service, declared_step, implementation, DECLARATION};
+use super::catalog::{
+    catalog, declared_service, declared_step, implementation, CatalogRepair, RepairService,
+    DECLARATION,
+};
 use super::steps::RepairExecution;
 
 fn step_json(step: &CatalogRepair) -> Value {
@@ -19,7 +21,7 @@ fn step_json(step: &CatalogRepair) -> Value {
     })
 }
 
-async fn list(args: &RepairArgs, services: &[CatalogService]) -> Result<(), CmdError> {
+async fn list(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdError> {
     reject_extra(args, "list")?;
     if args.step_argument.is_some() || args.service_argument.is_some() {
         return Err(CmdError::usage(
@@ -60,7 +62,7 @@ async fn list(args: &RepairArgs, services: &[CatalogService]) -> Result<(), CmdE
     Ok(())
 }
 
-async fn show(args: &RepairArgs, services: &[CatalogService]) -> Result<(), CmdError> {
+async fn show(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdError> {
     reject_extra(args, "show")?;
     if args.service.is_some() {
         return Err(CmdError::usage(
@@ -150,7 +152,7 @@ fn proof_refusal(service: &str, step: &str, target: &str, proof: &Value) -> Opti
     }
 }
 
-async fn run(args: &RepairArgs, services: &[CatalogService]) -> Result<(), CmdError> {
+async fn run(args: &RepairArgs, services: &[RepairService]) -> Result<(), CmdError> {
     if args.service_argument.is_some() || args.step_argument.is_some() || args.service.is_some() {
         return Err(CmdError::usage(
             "repair SERVICE accepts --step, --target, --apply, and --json.",
