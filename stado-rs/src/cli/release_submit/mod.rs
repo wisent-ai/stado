@@ -28,6 +28,7 @@ pub use crate::cli::release_submit::builds::worker::worker;
 pub use crate::cli::release_submit::deliver::redelivery::entry::redeliver;
 pub use crate::cli::release_submit::deliver::worker::delivery_worker;
 pub use crate::cli::release_submit::run::resume::resume;
+pub use crate::cli::release_submit::run::finish::finish_ready_runs;
 pub use crate::cli::release_submit::run::submit::submit;
 
 pub(crate) use crate::cli::release_submit::run::reports::recent_runs;

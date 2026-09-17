@@ -133,6 +133,16 @@ pub async fn agent(
                 state.product, state.target, state.rollout_generation, state.phase, state.detail
             );
         }
+        // Submissions are queued, not waited for: on the control host this is
+        // where their builds turn into signed, published, delivered releases.
+        match crate::cli::release_submit::finish_ready_runs().await {
+            Ok(finished) => {
+                for run in finished {
+                    eprintln!("stado release agent run={run} finished");
+                }
+            }
+            Err(reason) => eprintln!("stado release agent finish pass failed: {reason}"),
+        }
         if once {
             return Ok(());
         }

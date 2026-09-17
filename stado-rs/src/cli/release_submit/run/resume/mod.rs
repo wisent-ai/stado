@@ -12,6 +12,16 @@ use super::state::load;
 use super::submit::continue_run;
 
 pub async fn resume(args: &ReleaseResumeArgs) -> Result<(), CmdError> {
+    finish_run(&args.run_id, args.json).await
+}
+
+/// Walk a recorded run to its end: enqueue what was never submitted, wait for
+/// the builds, sign, publish, deliver. `stado release resume` does this on
+/// request; the control host's release agent does it on its own for every
+/// run whose builds have finished, which is why `submit` no longer waits.
+pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError> {
+    let args = ReleaseResumeArgs { run_id: run_id.to_string(), json };
+    let args = &args;
     // source::identity takes 32 lowercase SHA-256 characters; validate that
     // existing identity contract before constructing any storage path.
     if args.run_id.len() != 32
@@ -66,5 +76,5 @@ pub async fn resume(args: &ReleaseResumeArgs) -> Result<(), CmdError> {
     require_rollback_compatibility(&manifest, &run.version).await?;
     // The same reconciler as submit verifies published bytes, retains pending
     // jobs, and retries only terminal failures. It never snapshots this cwd.
-    continue_run(run, manifest, args.json).await
+    continue_run(run, manifest, args.json, true).await
 }

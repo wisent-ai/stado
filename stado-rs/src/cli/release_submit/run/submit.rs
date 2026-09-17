@@ -143,13 +143,17 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     {
         return Err(CmdError::click("durable release run identity mismatch"));
     }
-    continue_run(run, m, args.json).await
+    // Submitting is queueing. The builds run in the fleet, and the control
+    // host's release agent signs, publishes and delivers when they are done;
+    // the operator's terminal is not the place to wait an hour for a builder.
+    continue_run(run, m, args.json, false).await
 }
 
 pub(super) async fn continue_run(
     mut run: ReleaseRun,
     m: ReleasePipelineManifest,
     json: bool,
+    finish: bool,
 ) -> Result<(), CmdError> {
     let version = run.version.clone();
     let id = run.run_id.clone();
@@ -215,6 +219,17 @@ pub(super) async fn continue_run(
     }
     run.state = ReleaseRunState::Waiting;
     save(&mut run).await?;
+    if !finish {
+        if json {
+            println!("{}", serde_json::to_string_pretty(&run)?)
+        } else {
+            println!(
+                "release run {} product={} version={} state={:?}: builds queued; the control host's release agent publishes and delivers when they finish, `stado release status {}` follows them",
+                run.run_id, run.product, run.version, run.state, run.product
+            )
+        }
+        return Ok(());
+    }
     let mut signing_material = None;
     run.state = ReleaseRunState::Publishing;
     save(&mut run).await?;
