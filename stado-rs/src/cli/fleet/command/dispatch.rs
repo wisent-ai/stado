@@ -2,7 +2,7 @@
 //! into one implementation call and translates the fleet's verdict into the
 //! CLI's exit contract.
 
-use crate::cli::fleet::{doctor, enroll, fleets, ingress, invite, key, ops};
+use crate::cli::fleet::{doctor, enroll, fleets, ingress, invite, key, needs, ops};
 use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 use super::{FleetCommands, IngressCommands, KeyCommands};
@@ -30,6 +30,7 @@ pub async fn run(command: FleetCommands) -> Result<(), CmdError> {
 async fn execute(command: FleetCommands) -> Result<bool, String> {
     match command {
         FleetCommands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
+        FleetCommands::Needs { json, days } => needs::run(json, days).await,
         FleetCommands::List { json } => fleets::list(json).await,
         FleetCommands::Status { name } => fleets::status(&name).await,
         FleetCommands::Create { name, notes } => ops::create(&name, &notes).await,

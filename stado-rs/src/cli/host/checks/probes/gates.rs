@@ -141,6 +141,41 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
                         .unwrap_or_else(|_| "{}".to_string())
                 );
             }
+            if let Some(held) = gates.running_workloads.filter(|held| *held > 0) {
+                let reserved = gates.reserved.as_ref();
+                let number = |key: &str| {
+                    reserved
+                        .and_then(|value| value.get(key))
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0)
+                };
+                println!(
+                    "reserved: {held} placed workload(s) hold {} core(s), {:.1} GiB RAM, {} GiB VRAM; the capacity line is net of them",
+                    number("cpu_cores"),
+                    number("ram_gb"),
+                    number("vram_gb")
+                );
+                for reservation in &gates.reservations {
+                    let text = |key: &str| {
+                        reservation
+                            .get(key)
+                            .map(|value| match value {
+                                serde_json::Value::String(text) => text.clone(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_else(|| "?".to_string())
+                    };
+                    println!(
+                        "          {} ({}) held by {} since {}: {} core(s), {} GiB",
+                        text("kind"),
+                        text("product"),
+                        text("holder"),
+                        text("acquired_at"),
+                        text("cpu_cores"),
+                        text("ram_gb")
+                    );
+                }
+            }
         }
         None => {
             println!("capacity: nothing published for this host, so the scheduler cannot see it")

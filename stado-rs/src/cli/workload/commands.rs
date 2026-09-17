@@ -123,12 +123,38 @@ async fn run(
     };
     let resolved = place(declaration, requested_target.or(plan_target), allowance).await?;
     let target = resolved.name.as_str();
+    // The host is chosen; take the kind's declared hold on it for the whole
+    // run, so the host publishes itself net of this work from its next tick.
+    let holder = format!(
+        "{} {kind} pid {}",
+        crate::fleet_needs::this_requester(),
+        std::process::id()
+    );
+    let held = match crate::cli::capacity::reserve_for_workload(declaration, &resolved, holder)
+        .await?
+    {
+        Ok(held) => held,
+        Err(refusal) => return Err(refusal.into_error()),
+    };
+    let outcome = run_kind(kind, target, plan.as_ref(), document, json_output).await;
+    if let Err(error) = held.release().await {
+        eprintln!("the workload's reservation could not be released: {error}");
+    }
+    outcome
+}
 
+async fn run_kind(
+    kind: &str,
+    target: &str,
+    plan: Option<&(Value, &str)>,
+    document: Option<&Value>,
+    json_output: bool,
+) -> Result<(), CmdError> {
     match kind {
         "weles-capture" => {
             run_weles_capture(
                 target,
-                required_plan_path(plan.as_ref(), kind)?,
+                required_plan_path(plan, kind)?,
                 json_output,
             )
             .await
@@ -246,7 +272,7 @@ async fn attach(
             let workspace = workspace
                 .map(str::to_string)
                 .unwrap_or_else(current_workspace);
-            connect_jeden(&workspace, target.as_deref(), resume).await
+            connect_jeden(declaration, &workspace, target.as_deref(), resume).await
         }
         _ => Err(CmdError::click(format!(
             "{kind} declares no stream attachment; add it to {DECLARATION_PATH}"

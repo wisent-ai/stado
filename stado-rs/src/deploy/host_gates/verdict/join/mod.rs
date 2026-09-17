@@ -231,6 +231,15 @@ pub fn assemble(
         running_jobs: payload
             .and_then(|value| value.get("running_jobs"))
             .and_then(Value::as_i64),
+        running_workloads: payload
+            .and_then(|value| value.get("running_workloads"))
+            .and_then(Value::as_i64),
+        reserved: payload.and_then(|value| value.get("reserved")).cloned(),
+        reservations: payload
+            .and_then(|value| value.get("reservations"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
         available_cpu_cores: payload
             .and_then(|value| value.get("available_cpu_cores"))
             .and_then(Value::as_i64),

@@ -22,6 +22,7 @@ pub mod fleets;
 pub mod ingress;
 pub mod invite;
 pub mod key;
+pub mod needs;
 pub mod ops;
 
 pub use command::{run, FleetCommands, IngressCommands, KeyCommands};

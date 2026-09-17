@@ -208,4 +208,42 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               without command arguments or environment values; it is read-only and identifies \
               the exact systemd unit behind a duplicate queue agent",
     },
+    ApprovedCommand {
+        argv: &["/usr/bin/lscpu"],
+        why: "reads the processor the kernel found: model, socket count, cores, threads and \
+              caches. Takes no argument, opens no path an operator names, and writes nothing. \
+              Added 2026-09-11: an operator asked what his own GPU host actually is before \
+              buying parts for it, and the fleet could answer disk and services but not one \
+              fact about the processor, so the only routes left were an unapproved command \
+              or a guess",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/free", "-h"],
+        why: "reads installed, used and available memory plus swap in fixed human units. No \
+              path, no operator word, no write. It says how much memory a host has, which is \
+              the first question any capacity decision asks and the one the health beacon \
+              never carried",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/hostnamectl"],
+        why: "reads the machine's own identity record: hardware vendor and model, firmware \
+              version, chassis kind, kernel and operating system. One fixed word, read-only, \
+              and it is how a host names its own motherboard without a privileged DMI dump",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/lsblk", "-dO"],
+        why: "lists the whole block devices a host carries, one line each, with every column \
+              lsblk knows: model, capacity, transport and mount point. -d keeps partitions \
+              out and -O is a fixed display flag; no path is accepted, no file content is \
+              read, and lsblk writes nothing. A comma-separated column list would be a word \
+              the shell barrier refuses, so the flag that needs no commas is the spelling \
+              that can actually be typed",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/nvidia-smi", "-q"],
+        why: "reads the installed NVIDIA boards in full: product name, serial, bus position, \
+              memory, the enforced and default power caps, temperatures and clocks. -q is the \
+              query verb and sets nothing; `stado host gpu-power-limit` already owns the \
+              write side, and without this read the fleet can change a cap it cannot see",
+    },
 ];

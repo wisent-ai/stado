@@ -162,6 +162,9 @@ pub(crate) enum PlatformCommands {
     /// Place declared work on an eligible fleet host and return its stream or receipt.
     #[command(subcommand)]
     Workload(workload::WorkloadCommands),
+    /// What every host has, what is held on it, and a fixed-time hold on one.
+    #[command(subcommand)]
+    Capacity(capacity::CapacityCommands),
     /// Inspect and apply the ordered repair steps services declare.
     Repair(repair::RepairArgs),
     /// Operate declared GitHub runner profiles across registry hosts.

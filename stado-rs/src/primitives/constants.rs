@@ -69,6 +69,38 @@ pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 = if POLL_INTERVAL_S > CAPACITY_STA
     CAPACITY_STALE_SECONDS / 3
 };
 
+/// Capacity reservations: the hold a placed workload (a Jeden session, a
+/// browser task) keeps on a host while it runs, subtracted from the host's
+/// broadcast. The TTL is three heartbeats, the same ratio the broadcast
+/// itself uses: one missed heartbeat is a slow store, three is a holder that
+/// is gone. GC keeps an expired row for an hour so an operator can still see
+/// what just ended, and is capped per tick like the broadcast GC.
+pub const RESERVATION_SCHEMA_VERSION: u64 = 1;
+pub const RESERVATION_HEARTBEAT_SECONDS: u64 = 60;
+pub const RESERVATION_TTL_SECONDS: u64 = RESERVATION_HEARTBEAT_SECONDS * 3;
+pub const RESERVATION_GC_AGE_SECONDS: i64 = 3600;
+pub const RESERVATION_GC_CAP_PER_TICK: usize = 200;
+/// A host whose net capacity after reservations is below this many cores or
+/// this much RAM publishes `accepting_jobs: false` with
+/// `admission_reason: reservations_exhausted`.
+pub const RESERVATION_MIN_FREE_CORES: i64 = 1;
+pub const RESERVATION_MIN_FREE_RAM_GB: f64 = 1.0;
+
+/// `stado fleet needs`: the advisor's own knobs. A queued job older than
+/// ten minutes is demand the fleet is failing to serve; the advisor reads
+/// the oldest 500 queued jobs; three refusals in the window make a host
+/// "full" rather than momentarily busy; a host over its memory watermark is
+/// suggested half again as much memory, and one whose swap is over its
+/// watermark twice as much, because swap that high means the working set
+/// already exceeds the box.
+pub const NEEDS_SCHEMA_VERSION: u64 = 1;
+pub const NEEDS_STALE_QUEUE_SECONDS: i64 = 600;
+pub const NEEDS_QUEUE_WINDOW: usize = 500;
+pub const NEEDS_REFUSALS_FOR_CPU: usize = 3;
+pub const NEEDS_RAM_GROWTH_PRESSURE: f64 = 1.5;
+pub const NEEDS_RAM_GROWTH_SWAP_OVER: f64 = 2.0;
+pub const NEEDS_DEFAULT_WINDOW_DAYS: i64 = 7;
+
 /// Wall-clock budget for ONE store read an agent performs on a path where a
 /// capacity broadcast is waiting behind it.
 ///

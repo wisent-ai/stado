@@ -74,8 +74,7 @@ pub async fn repair_runtime(
         ],
     );
     let output =
-        host_channel::run_script_with_timeout(target, &script, Duration::from_secs(300), runner)
-            .await?;
+        crate::deploy::native_signing::run_runner_reconciliation(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(format!(
             "{}: runner runtime repair failed: {} {}",

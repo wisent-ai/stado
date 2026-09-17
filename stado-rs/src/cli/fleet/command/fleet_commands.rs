@@ -16,6 +16,17 @@ pub enum FleetCommands {
         #[arg(long)]
         fleet: Option<String>,
     },
+    /// What the fleet lacks: RAM on which host, storage where, a GPU, a
+    /// platform nobody declared — from the capacity publications, the
+    /// declared watermarks, the queue and the recorded refusals.
+    Needs {
+        /// Emit the machine-readable report instead of the text.
+        #[arg(long)]
+        json: bool,
+        /// How many days of refusals and queue history to read.
+        #[arg(long, default_value_t = crate::primitives::constants::NEEDS_DEFAULT_WINDOW_DAYS)]
+        days: i64,
+    },
     /// List the fleets declared in the registry with their members.
     List {
         /// Emit the machine-readable document instead of the table.

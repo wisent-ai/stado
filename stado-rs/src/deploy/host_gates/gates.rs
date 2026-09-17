@@ -66,6 +66,12 @@ pub struct HostGates {
     /// [`CLEANUP_IN_PROGRESS`]: super::CLEANUP_IN_PROGRESS
     pub admission_reason: Option<String>,
     pub running_jobs: Option<i64>,
+    /// Placed workloads (Jeden sessions, browser tasks) holding this host,
+    /// and what they hold. The CPU, RAM and VRAM figures below are already
+    /// net of them; this is the other side of that subtraction.
+    pub running_workloads: Option<i64>,
+    pub reserved: Option<serde_json::Value>,
+    pub reservations: Vec<serde_json::Value>,
     pub available_cpu_cores: Option<i64>,
     pub total_cpu_cores: Option<i64>,
     pub available_accelerators: BTreeMap<String, i64>,

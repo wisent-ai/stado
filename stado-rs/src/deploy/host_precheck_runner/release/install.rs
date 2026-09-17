@@ -163,13 +163,22 @@ async fn install_profile(
             reconfigure,
         },
     )?;
-    let output = host_channel::run_script_with_timeout(
-        &target,
-        &script,
-        Duration::from_secs(15 * 60),
-        &production_runner(),
-    )
-    .await?;
+    let output = if platform == Platform::DarwinArm64 {
+        crate::deploy::native_signing::run_runner_reconciliation(
+            &target,
+            &script,
+            &production_runner(),
+        )
+        .await?
+    } else {
+        host_channel::run_script_with_timeout(
+            &target,
+            &script,
+            Duration::from_secs(15 * 60),
+            &production_runner(),
+        )
+        .await?
+    };
     let mut value = report(&target, &output, "install", profile);
     if !output.ok() {
         return Err(DeployError(format!(

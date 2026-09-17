@@ -94,7 +94,11 @@ probe_runtime CoreclrArchitectures /usr/bin/lipo -archs "$coreclr"
 probe_runtime CoreclrSignature /usr/bin/codesign --display --verbose=4 --entitlements - --xml "$coreclr"
 probe_runtime CoreclrVerification /usr/bin/codesign --verify --strict --verbose=1 "$coreclr"
 probe_runtime SystemIntegrity /usr/bin/csrutil status
+probe_runtime BootArguments /usr/sbin/sysctl kern.bootargs
 probe_runtime RuntimeConfiguration /bin/cat "$runner_root/bin/Runner.Listener.runtimeconfig.json"
+probe_runtime KernelProtection /usr/bin/log show --last 2m --style compact --predicate 'process == "kernel" AND (eventMessage CONTAINS[c] "AMFI" OR eventMessage CONTAINS[c] "mprotect" OR eventMessage CONTAINS[c] "CODE SIGNING")'
+probe_runtime Launcher /bin/cat "$runner_root/start-runner.sh"
+probe_runtime Unit /bin/cat /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 printf 'DiagnosticLog=%s\n' "${newest:-none}"
 printf '%s\n' '--- tail ---'
 if [ -n "$newest" ]; then root tail -n 120 "$newest"; fi
@@ -167,6 +171,21 @@ pub async fn diagnostics_declared(
         .stdout
         .split_once("--- tail ---\n")
         .unwrap_or((output.stdout.as_str(), ""));
+    let platform_probes = if matches!(platform, Platform::DarwinArm64) {
+        json!({
+            "coreclr_architectures": runtime_probe(head, "CoreclrArchitectures"),
+            "coreclr_signature": runtime_probe(head, "CoreclrSignature"),
+            "coreclr_verification": runtime_probe(head, "CoreclrVerification"),
+            "system_integrity": runtime_probe(head, "SystemIntegrity"),
+            "boot_arguments": runtime_probe(head, "BootArguments"),
+            "runtime_configuration": runtime_probe(head, "RuntimeConfiguration"),
+            "kernel_protection": runtime_probe(head, "KernelProtection"),
+            "launcher": runtime_probe(head, "Launcher"),
+            "unit": runtime_probe(head, "Unit"),
+        })
+    } else {
+        Value::Null
+    };
     Ok(json!({
         "target": target.name,
         "profile": profile.name,
@@ -196,17 +215,7 @@ pub async fn diagnostics_declared(
             "quarantine": field(head, "ListenerQuarantine"),
             "bundle_extract_dir": field(head, "BundleExtractDir"),
             "temporary_dir": field(head, "TemporaryDir"),
-            "platform_probes": if matches!(platform, Platform::DarwinArm64) {
-                json!({
-                    "coreclr_architectures": runtime_probe(head, "CoreclrArchitectures"),
-                    "coreclr_signature": runtime_probe(head, "CoreclrSignature"),
-                    "coreclr_verification": runtime_probe(head, "CoreclrVerification"),
-                    "system_integrity": runtime_probe(head, "SystemIntegrity"),
-                    "runtime_configuration": runtime_probe(head, "RuntimeConfiguration"),
-                })
-            } else {
-                Value::Null
-            },
+            "platform_probes": platform_probes,
         }),
         "memory": memory(head, &target),
         "tail": tail,

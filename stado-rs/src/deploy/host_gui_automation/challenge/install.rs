@@ -126,6 +126,7 @@ async fn sign_helper(
     previous: &str,
     runner: &Runner,
 ) -> Result<(), DeployError> {
+    use crate::deploy::native_signing::{signing_credential, APPLE_ISSUER_CHAIN_SHA256};
     // Apple's intermediate is not on every Mac, and its absence makes the
     // certificate unusable without saying so, so the issuer travels with it.
     let issuers = String::from_utf8(
@@ -173,29 +174,6 @@ async fn sign_helper(
         )));
     }
     Ok(())
-}
-
-/// One field of the fleet's Apple signing certificate: the broker grant first,
-/// then the owner vault, naming both failures rather than one.
-async fn signing_credential(field: &str) -> Result<String, DeployError> {
-    let broker = crate::credential_store::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).await;
-    if let Ok(Some(value)) = &broker {
-        if !value.is_empty() {
-            return Ok(value.clone());
-        }
-    }
-    let broker = match broker {
-        Ok(_) => format!("{APPLE_SIGNING_CERTIFICATE_ITEM} has no {field}"),
-        Err(error) => error.to_string(),
-    };
-    crate::credential_store::owner::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).map_err(
-        |owner| {
-            DeployError(format!(
-                "cannot read {APPLE_SIGNING_CERTIFICATE_ITEM}#{field} for native signing: \
-                 broker: {broker}; owner vault: {owner}"
-            ))
-        },
-    )
 }
 
 /// Resolve the pinned shared signer this fleet signs native code with,

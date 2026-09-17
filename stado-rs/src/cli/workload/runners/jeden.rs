@@ -27,6 +27,7 @@ const MANAGED_STADO: &str = ".stado/bin/stado";
 const PLACEMENT_PREFIX: &str = "STADO_JEDEN_PLACEMENT ";
 
 pub(crate) async fn connect_jeden(
+    declaration: &crate::cli::workload::WorkloadKind,
     workspace: &str,
     requested_target: Option<&str>,
     resume: Option<&str>,
@@ -109,7 +110,33 @@ printf ready
         );
         match host_channel::run_script(&target, &probe, &runner).await {
             Ok(output) if output.ok() && output.stdout.trim() == "ready" => {
-                return attach_jeden(target, workspace, &checkout, resume).await;
+                // The host is ready; take the session's declared hold on it
+                // before the runtime starts, so the host publishes itself net
+                // of this session from its next tick. A refused hold moves on
+                // to the next candidate exactly like a failed probe.
+                let holder = format!(
+                    "{} jeden-session {workspace} pid {}",
+                    crate::fleet_needs::this_requester(),
+                    std::process::id()
+                );
+                let held = match crate::cli::capacity::reserve_for_workload(
+                    declaration,
+                    &target,
+                    holder,
+                )
+                .await?
+                {
+                    Ok(held) => held,
+                    Err(refusal) => {
+                        refusals.push(refusal.sentence);
+                        continue;
+                    }
+                };
+                let outcome = attach_jeden(target, workspace, &checkout, resume).await;
+                if let Err(error) = held.release().await {
+                    eprintln!("the session's reservation could not be released: {error}");
+                }
+                return outcome;
             }
             Ok(output) => {
                 let detail = output.detail();

@@ -3,8 +3,10 @@
 
 pub(crate) const MACOS_RUNTIME_FUNCTIONS: &str = r#"
 runner_signatures_valid() {
-  root /usr/bin/codesign --verify --strict -R '=anchor apple generic' "$runner_root/bin/Runner.Listener" >/dev/null 2>&1 &&
-  root /usr/bin/codesign --verify --strict -R '=anchor apple generic' "$runner_root/bin/Runner.Worker" >/dev/null 2>&1
+  for executable in Runner.Listener Runner.Worker; do
+    root /usr/bin/codesign --verify --strict -R '=anchor apple generic and entitlement["com.apple.security.cs.allow-jit"] exists and entitlement["com.apple.security.cs.allow-unsigned-executable-memory"] exists and entitlement["com.apple.security.cs.disable-library-validation"] exists' "$runner_root/bin/$executable" || return 1
+    root /usr/bin/codesign --display --verbose=4 "$runner_root/bin/$executable" 2>&1 | grep 'flags=.*(runtime)' >/dev/null || return 1
+  done
 }
 resolve_runner_release() {
   version=$(jq -er '.libraries | keys | map(select(startswith("Runner.Listener/"))) | if length == 1 then .[0] | ltrimstr("Runner.Listener/") else error("ambiguous runner version") end' "$runner_root/bin/Runner.Listener.deps.json")
@@ -29,7 +31,9 @@ restore_runner_apphosts() {
   for executable in Runner.Listener Runner.Worker; do
     /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
   done
-  "${WISENT_PRODUCTS_BIN:-$HOME/.local/bin/wisent-products}" signing sign --product stado \
+  signer=${WISENT_PRODUCTS_BIN:-$HOME/.local/bin/wisent-products}
+  signer_python="$(dirname "$(dirname "$signer")")/tools/wisent-products/bin/python"
+  "$signer_python" -c "$STADO_RUNNER_APPHOST_SIGNER" \
     "$signed_runtime/bin/Runner.Listener" "$signed_runtime/bin/Runner.Worker"
   for executable in Runner.Worker Runner.Listener; do
     owner=$(stat -f '%u:%g' "$runner_root/bin/$executable")

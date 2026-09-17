@@ -23,7 +23,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         }
         PlatformCommands::Schedule(sub) => match sub {
             ScheduleCommands::Create(args) => schedule::create(&args).await,
-            ScheduleCommands::List => schedule::list().await,
+            ScheduleCommands::List { json } => schedule::list(json).await,
             ScheduleCommands::Show { schedule_id } => schedule::show(&schedule_id).await,
             ScheduleCommands::Rm { schedule_id } => schedule::rm(&schedule_id).await,
             ScheduleCommands::Pause { schedule_id } => schedule::pause(&schedule_id).await,
@@ -31,7 +31,8 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
             ScheduleCommands::Run {
                 schedule_id,
                 retry_token,
-            } => schedule::run(&schedule_id, &retry_token).await,
+                json,
+            } => schedule::run(&schedule_id, &retry_token, json).await,
         },
         PlatformCommands::Artifact(sub) => artifact::dispatch(sub).await,
         PlatformCommands::Release(sub) => release_cmd::dispatch(sub).await,
@@ -66,6 +67,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Stream(sub) => stream::dispatch(sub).await,
         PlatformCommands::Doctor(args) => doctor::dispatch(args).await,
         PlatformCommands::Workload(command) => workload::dispatch(command).await,
+        PlatformCommands::Capacity(command) => capacity::dispatch(command).await,
         PlatformCommands::Repair(args) => repair::dispatch(args).await,
         PlatformCommands::Runner(sub) => runner::run(sub).await,
         PlatformCommands::Space(command) => space::dispatch(command).await,

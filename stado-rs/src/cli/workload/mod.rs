@@ -10,5 +10,6 @@ mod commands;
 mod plan;
 mod runners;
 
-pub use catalog::{WorkloadKind, DECLARATION_PATH};
+pub use catalog::{WorkloadKind, WorkloadReservation, DECLARATION_PATH};
+pub use catalog::workload as declared;
 pub use commands::{dispatch, WorkloadCommands};

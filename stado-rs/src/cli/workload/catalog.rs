@@ -20,6 +20,17 @@ pub(crate) struct WorkloadCatalog {
     pub(crate) workloads: Vec<WorkloadKind>,
 }
 
+/// What one placed workload holds on its host while it runs. The numbers
+/// are the declaration's, never a caller's guess: `stado workload attach`
+/// and `stado workload run` acquire exactly this much before the process
+/// starts, and the host's agent subtracts it from what it publishes.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+pub struct WorkloadReservation {
+    pub cpu_cores: i64,
+    pub ram_gb: f64,
+    pub vram_gb: i64,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkloadKind {
     pub kind: String,
@@ -27,7 +38,21 @@ pub struct WorkloadKind {
     pub interactive: bool,
     pub registry_allowance: Option<String>,
     pub plan_schema: Option<String>,
+    pub reservation: Option<WorkloadReservation>,
     pub report: Vec<String>,
+}
+
+impl WorkloadKind {
+    /// The declared hold, refused loudly when the declaration forgot it:
+    /// a kind that reserves nothing is a kind the fleet cannot pool.
+    pub fn reservation(&self) -> Result<WorkloadReservation, CmdError> {
+        self.reservation.ok_or_else(|| {
+            CmdError::click(format!(
+                "workload kind '{}' declares no reservation; add it to {DECLARATION_PATH}",
+                self.kind
+            ))
+        })
+    }
 }
 
 static CATALOG: LazyLock<Result<WorkloadCatalog, String>> = LazyLock::new(|| {
@@ -67,6 +92,25 @@ static CATALOG: LazyLock<Result<WorkloadCatalog, String>> = LazyLock::new(|| {
                 workload.kind
             ));
         }
+        match workload.reservation {
+            None => {
+                return Err(format!(
+                    "workload kind '{}' declares no reservation; add it to {DECLARATION_PATH}",
+                    workload.kind
+                ))
+            }
+            Some(reservation)
+                if reservation.cpu_cores < 0
+                    || reservation.ram_gb < 0.0
+                    || reservation.vram_gb < 0 =>
+            {
+                return Err(format!(
+                    "workload kind '{}' declares a negative reservation; fix it in {DECLARATION_PATH}",
+                    workload.kind
+                ))
+            }
+            Some(_) => {}
+        }
     }
     Ok(parsed)
 });
@@ -77,7 +121,7 @@ pub(crate) fn catalog() -> Result<&'static WorkloadCatalog, CmdError> {
         .map_err(|message| CmdError::click(message.clone()))
 }
 
-pub(crate) fn workload(kind: &str) -> Result<&'static WorkloadKind, CmdError> {
+pub fn workload(kind: &str) -> Result<&'static WorkloadKind, CmdError> {
     catalog()?
         .workloads
         .iter()
