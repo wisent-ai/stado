@@ -47,11 +47,53 @@ extension FleetsView {
                 )
             }
         } else {
-            WisentInspector(eyebrow: "Selection", title: "No fleet selected") {
-                Text("Select a fleet to read its machines and to change it. New fleets are made from the New fleet button above.")
+            WisentInspector(eyebrow: "Fleet", title: "What the fleet lacks") {
+                Text("Select a fleet to read its machines and to change it. New fleets are made from the New fleet button above. Below: what stado fleet needs computes from the capacity publications, the declared watermarks, the queue and the recorded refusals — the same sentences the CLI prints.")
                     .font(WisentTypeScale.body())
                     .foregroundStyle(WisentDesign.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                needsSection
             }
+        }
+    }
+
+    @ViewBuilder
+    var needsSection: some View {
+        if let failure = groupStore.needsFailure {
+            WisentAlertPanel(
+                tone: .warning,
+                title: "Needs could not be read",
+                detail: failure,
+                actions: [
+                    WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !groupStore.isReadingNeeds) {
+                        Task { await groupStore.refreshNeeds(days: needsWindowDays) }
+                    },
+                ]
+            )
+        } else if let report = groupStore.needs {
+            if report.needs.isEmpty {
+                WisentField(label: "Needs", value: report.emptySentence)
+            }
+            ForEach(report.needs) { need in
+                WisentSectionBox(
+                    title: "\(need.severity) \(need.need) (\(need.subject))",
+                    detail: need.summary
+                ) {
+                    ForEach(need.evidence) { evidence in
+                        WisentField(label: evidence.source, value: evidence.detail)
+                    }
+                    WisentField(label: "Suggestion", value: need.suggestion, tone: need.severity == "high" ? .danger : .warning)
+                }
+            }
+            WisentField(label: "Window", value: "\(report.windowDays) days · generated \(report.generatedAt)")
+        } else if groupStore.isReadingNeeds {
+            WisentField(label: "Needs", value: "Reading…")
+        } else {
+            WisentActionButton(
+                action: WisentAction("Read what the fleet lacks", symbol: "chart.bar.doc.horizontal", isEnabled: groupStore.isConfigured) {
+                    Task { await groupStore.refreshNeeds(days: needsWindowDays) }
+                }
+            )
         }
     }
 }

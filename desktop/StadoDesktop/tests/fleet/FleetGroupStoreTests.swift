@@ -116,13 +116,37 @@ final class FleetGroupStoreTests: XCTestCase {
         )
         XCTAssertNil(store.lastReadAt)
     }
+
+    /// `stado fleet needs` through the same bridge: an idle deployment
+    /// answers the CLI's own empty sentence with an empty list, and a
+    /// deployment whose store cannot be read answers with the failure.
+    func testWhatTheFleetLacksIsTheCLIsOwnAnswer() async throws {
+        let fleet = try RealFleet()
+        defer { fleet.stop() }
+        let store = try await fleet.store()
+
+        await store.refreshNeeds(days: 7)
+
+        let report = try XCTUnwrap(store.needs)
+        XCTAssertEqual(report.needs, [])
+        XCTAssertEqual(report.windowDays, 7)
+        XCTAssertEqual(report.emptySentence, "the fleet reports no unmet need in the last 7 days")
+        XCTAssertNil(store.needsFailure)
+
+        try fleet.removeRegistryDocument()
+        await store.refreshNeeds(days: 7)
+        XCTAssertEqual(
+            RealFleet.sentence(of: try XCTUnwrap(store.needsFailure)),
+            "Error: no registry document at local:registry.json"
+        )
+    }
 }
 
 /// One real Stado deployment: a temp storage root, a temp `HOME`, the registry
 /// object `stado registry push` created inside it, and the product's own
 /// operator API on a loopback port the kernel chose.
 @MainActor
-private final class RealFleet {
+final class RealFleet {
     private let binary: URL
     private let root: URL
     private let home: URL
@@ -293,7 +317,7 @@ private final class RealFleet {
     }
 }
 
-private struct RealFleetFailure: LocalizedError {
+struct RealFleetFailure: LocalizedError {
     let errorDescription: String?
     init(_ sentence: String) { errorDescription = sentence }
 }

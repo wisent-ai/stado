@@ -104,6 +104,24 @@ extension HostsView {
                 tone: (gates.capacity?.ageSeconds ?? 0) > 900 ? .warning : .neutral
             )
             WisentField(label: "Capacity", value: capacityDescription(gates.capacity))
+            // What placed workloads hold, beside the net figures they were
+            // subtracted from: a host running three Jeden sessions used to
+            // read as free here.
+            WisentField(
+                label: "Reserved by placed workloads",
+                value: gates.capacity?.reservedSummary ?? "Nothing held",
+                tone: gates.capacity?.admissionReason == "reservations_exhausted" ? .warning : .neutral
+            )
+            if let reservations = gates.capacity?.reservations, !reservations.isEmpty {
+                WisentField(
+                    label: "Reservations",
+                    value: reservations.map(\.summary).joined(separator: "\n")
+                )
+            }
+            WisentField(
+                label: "Accelerator",
+                value: gates.capacity?.acceleratorSummary ?? "Not reported"
+            )
             WisentActionButton(
                 action: WisentAction(
                     "Reclaim disk…",

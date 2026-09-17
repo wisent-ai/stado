@@ -22,6 +22,8 @@ struct FleetsView: View {
     @State var showsCreate = false
     @State var assignTarget: SheetID?
     @State var deleteCandidate: FleetGroup?
+    /// The CLI's own default window for `stado fleet needs`.
+    let needsWindowDays = 7
 
     var body: some View {
         WisentScreen(
@@ -33,7 +35,10 @@ struct FleetsView: View {
                     showsCreate = true
                 },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !groupStore.isReading) {
-                    Task { await groupStore.refresh() }
+                    Task {
+                        await groupStore.refresh()
+                        await groupStore.refreshNeeds(days: needsWindowDays)
+                    }
                 },
             ],
             scrolls: false,
@@ -87,6 +92,7 @@ struct FleetsView: View {
         }
         .task {
             if groupStore.fleets.isEmpty { await groupStore.refresh() }
+            if groupStore.needs == nil { await groupStore.refreshNeeds(days: needsWindowDays) }
         }
     }
 
@@ -119,6 +125,16 @@ struct FleetsView: View {
                     showsCreate = true
                 }
             )
+            // What the fleet lacks does not wait for a fleet to be declared:
+            // a registry with hosts and no fleet still has hosts short of
+            // memory, and the answer belongs on this screen either way.
+            WisentSectionBox(
+                title: "What the fleet lacks",
+                detail: "stado fleet needs, computed from the capacity publications, the declared watermarks, the queue and the recorded refusals."
+            ) {
+                needsSection
+            }
+            .padding(.top, WisentDesign.Space.x4)
         }
     }
 }

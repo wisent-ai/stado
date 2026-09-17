@@ -55,10 +55,15 @@ final class FleetGroupStore: ObservableObject {
     @Published private(set) var failure: String?
     @Published private(set) var lastReadAt: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
+    /// `stado fleet needs`: what the fleet lacks, read beside the fleets so
+    /// the screen that declares machines also says which machine to add.
+    @Published var needs: FleetNeedsReport?
+    @Published var needsFailure: String?
+    @Published var isReadingNeeds = false
 
-    private let client: FleetControlClient
+    let client: FleetControlClient
     private var addressString = ""
-    private var authorizationToken: String?
+    private(set) var authorizationToken: String?
     private var readGeneration = 0
 
     init(client: FleetControlClient = FleetControlClient()) {
