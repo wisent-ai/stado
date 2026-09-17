@@ -51,6 +51,11 @@ pub const RUN_REAP_PER_TICK: i64 = 50;
 /// so it runs forever with a wrapping cursor rather than latching complete.
 /// Bounds per-tick work to a names-only listing plus this many bodies.
 pub const MARKER_REPAIR_PER_TICK: usize = 500;
+/// Bounds the settled-sentinel sweep to this many bodies per tick, per
+/// prefix. The listing itself is names and mtimes; only objects older than
+/// `SETTLED_SENTINEL_MIN_AGE` are downloaded, and a queued job that old costs
+/// one read per tick, which is the price of never deleting a live one.
+pub const SETTLED_SENTINEL_RETIRE_PER_TICK: usize = 100;
 
 // --- Coverage verifier + retry orchestrator defaults ---
 /// After this many submit attempts on the same group_key the orchestrator

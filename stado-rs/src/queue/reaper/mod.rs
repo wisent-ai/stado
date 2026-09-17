@@ -89,6 +89,10 @@ pub struct ReaperSummary {
     /// least once, which is what lets the listing walk drop its
     /// whole-prefix pass. Reported, not acted on, here.
     pub index_swept: bool,
+    /// Cleaned transition sentinels of terminal jobs deleted from `queue/`
+    /// and `running/` this pass, so the prefixes hold live work and not the
+    /// history of every job that ever passed through.
+    pub sentinels_retired: usize,
 }
 
 /// One reaper pass over the queue: repair the marker index, recover phantom
@@ -131,5 +135,28 @@ pub async fn reap_expired_leases(
         .await?;
     }
     clear_silent_assignments(store, now, log, &mut summary).await?;
+    // Last, because it is bookkeeping: a sentinel retired one tick later
+    // costs nothing, a live job read one tick too early is the case the
+    // 24-hour floor exists for. Bounded per prefix, so a backlog of hundreds
+    // drains over a few ticks instead of holding one.
+    for prefix in ["queue", "running"] {
+        let sweep = store
+            .retire_settled_sentinels(prefix, now, config::SETTLED_SENTINEL_RETIRE_PER_TICK)
+            .await?;
+        if sweep.retired > 0 || sweep.budget_exhausted {
+            log(&format!(
+                "reaper: {prefix}/ settled sentinels retired={} kept={} inspected={}{}",
+                sweep.retired,
+                sweep.kept,
+                sweep.inspected,
+                if sweep.budget_exhausted {
+                    " (budget reached; continues next tick)"
+                } else {
+                    ""
+                }
+            ));
+        }
+        summary.sentinels_retired += sweep.retired;
+    }
     Ok(summary)
 }

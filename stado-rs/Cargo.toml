@@ -108,6 +108,10 @@ name = "space_report"
 path = "tests/space_report/main.rs"
 
 [[test]]
+name = "host_gates"
+path = "tests/host_gates/main.rs"
+
+[[test]]
 name = "host_run"
 path = "tests/host_run/main.rs"
 

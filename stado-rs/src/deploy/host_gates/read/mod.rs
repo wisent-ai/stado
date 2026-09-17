@@ -130,11 +130,16 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
             publication_read.detail =
                 Some("no capacity publication names this registry target".to_string());
         }
-        if let Some(jobs) = queued.0 {
-            waiting = jobs;
+        let mut queue_read = queued.1;
+        if let Some(read) = queued.0 {
+            waiting = read.jobs;
+            if let Some(partial) = read.partial {
+                queue_read.state = ReadState::Partial;
+                queue_read.detail = Some(partial);
+            }
         }
         observations.push(publication_read);
-        observations.push(queued.1);
+        observations.push(queue_read);
     } else {
         observations.push(DiagnosticRead::skipped(
             "capacity",
