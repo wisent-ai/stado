@@ -147,8 +147,13 @@ fn the_installed_and_newest_versions_and_the_newest_backup_survive_the_rest_is_t
 fn recognised_copies_keep_the_newest_and_refuse_unknown_shapes() {
     let host = Host::new();
     let live = host.under_home(".stado/bin/stado");
-    let old = ["release-backup-20260801", "0.7.0-backup-20260810", "bak-20260811", "pre-converge"]
-        .map(|suffix| host.under_home(&format!(".stado/bin/stado.{suffix}")));
+    let old = [
+        "release-backup-20260801",
+        "0.7.0-backup-20260810",
+        "bak-20260811",
+        "pre-converge",
+    ]
+    .map(|suffix| host.under_home(&format!(".stado/bin/stado.{suffix}")));
     let previous = host.under_home(".stado/bin/stado.previous");
     let unknown = host.under_home(".stado/bin/stado.fleet-during-verify-20260818");
     for path in old.iter().chain([&previous, &unknown]) {
@@ -157,17 +162,63 @@ fn recognised_copies_keep_the_newest_and_refuse_unknown_shapes() {
         age(path);
     }
     let newest = backup(&host, "20260701"); // Newest by mtime, not stamp; past the age gate.
-    File::open(&newest).unwrap().set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(2 * 86400))).unwrap();
-    let preview = host.json(&["space", "reclaim", TARGET, "--stage", "delivery_leftovers", "--dry-run", "--json"]);
+    File::open(&newest)
+        .unwrap()
+        .set_times(
+            FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(2 * 86400)),
+        )
+        .unwrap();
+    let preview = host.json(&[
+        "space",
+        "reclaim",
+        TARGET,
+        "--stage",
+        "delivery_leftovers",
+        "--dry-run",
+        "--json",
+    ]);
     let stage = only_stage(&preview, "delivery_leftovers");
-    let mut paths = reported_paths(stage); assert_inside(&host.root, &paths); paths.sort();
-    let mut expected: Vec<_> = old.iter().map(|path| path.to_string_lossy().to_string()).collect(); expected.sort();
+    let mut paths = reported_paths(stage);
+    assert_inside(&host.root, &paths);
+    paths.sort();
+    let mut expected: Vec<_> = old
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    expected.sort();
     assert_eq!(paths, expected, "{stage}");
-    assert_eq!(stage["refused"], serde_json::json!([format!("{}: unrecognised binary copy; retained", unknown.display())]));
-    assert!(old.iter().all(|path| path.is_file()), "preview removed a copy");
-    let report = host.json(&["space", "reclaim", TARGET, "--stage", "delivery_leftovers", "--apply", "--reason", "space area: binary copy shapes", "--json"]);
-    assert_eq!(only_stage(&report, "delivery_leftovers")["items"], old.len());
-    assert!(old.iter().all(|path| !path.exists()) && [live, newest, previous, unknown].iter().all(|path| path.is_file()));
+    assert_eq!(
+        stage["refused"],
+        serde_json::json!([format!(
+            "{}: unrecognised binary copy; retained",
+            unknown.display()
+        )])
+    );
+    assert!(
+        old.iter().all(|path| path.is_file()),
+        "preview removed a copy"
+    );
+    let report = host.json(&[
+        "space",
+        "reclaim",
+        TARGET,
+        "--stage",
+        "delivery_leftovers",
+        "--apply",
+        "--reason",
+        "space area: binary copy shapes",
+        "--json",
+    ]);
+    assert_eq!(
+        only_stage(&report, "delivery_leftovers")["items"],
+        old.len()
+    );
+    assert!(
+        old.iter().all(|path| !path.exists())
+            && [live, newest, previous, unknown]
+                .iter()
+                .all(|path| path.is_file())
+    );
 }
 #[test]
 fn a_host_with_no_installed_coordinate_keeps_only_its_newest_version() {

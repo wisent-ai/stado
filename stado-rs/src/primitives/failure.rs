@@ -114,7 +114,10 @@ const FILESYSTEM_REFUSAL_NEEDLES: &[&str] = &[
 
 /// SSH's own refusal is a credential failure however it is spelled around a
 /// path, and it must keep winning over the filesystem reading.
-const SSH_AUTH_NEEDLES: &[&str] = &["permission denied (publickey", "permission denied (password"];
+const SSH_AUTH_NEEDLES: &[&str] = &[
+    "permission denied (publickey",
+    "permission denied (password",
+];
 
 const RATE_LIMIT_NEEDLES: &[&str] = &[
     "rate limit",

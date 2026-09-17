@@ -60,7 +60,8 @@ pub async fn repair_runtime(
             .ok_or_else(|| DeployError("runner has no install directory".to_string()))?;
     }
     let home = host_channel::remote_home(target, runner).await?;
-    let signer = crate::deploy::native_signing::bootstrap_remote_signer(target, &home, runner).await?;
+    let signer =
+        crate::deploy::native_signing::bootstrap_remote_signer(target, &home, runner).await?;
     let script = replace(
         MACOS_RUNTIME_REPAIR,
         &[
