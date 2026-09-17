@@ -31,7 +31,10 @@ enum NativeHostReleaseOperations {
 
 enum NativeReleaseSourceOperations {
     static let all: [NativeCapabilityOperation] = [
-        .init(id: "submit-source", title: "Submit a release source", path: ["release", "submit"], hostPlacement: .none, fields: [
+        // Submitting queues the platform builds and returns the run id; the
+        // control host's release agent signs, publishes and delivers once the
+        // builds end, and the Releases screen follows the run.
+        .init(id: "submit-source", title: "Submit a release source (queues the builds; the release agent finishes the run)", path: ["release", "submit"], hostPlacement: .none, fields: [
             .init(id: "source", label: "Git repository path on the selected Stado API host", option: "--source", required: true),
             .init(id: "commit", label: "Full Git commit (blank requires a clean HEAD)", option: "--commit"),
             .init(id: "version", label: "Version declared by that source", option: "--version", required: true),
