@@ -139,28 +139,53 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         // `wisent-products` the builder's PATH happens to carry, which on
         // 2026-09-10 was nothing, and which ended weles-worker 0.6.6 before
         // its first signature with "cannot run wisent-products".
+        //
+        // The identity is the fleet's too: the Apple certificate and key
+        // Skarbiec holds, handed to the signer's own temporary keychain
+        // through its environment, the way runner reconciliation already
+        // hands them over. Until 2026-09-17 the step signed with whatever
+        // identity the builder's login keychain held, so a build placed on
+        // the operator's laptop signed and the same build placed on
+        // charless-mac-mini - the host with the most free disk that day -
+        // died at `no Apple signing identity is available`, spending the
+        // brama 0.4.21 coordinate on a placement decision.
         let signing = match crate::deploy::native_signing::bootstrap_local_signer(
             &crate::deploy::production_runner(),
         )
         .await
         {
-            Ok(signer) => execute(
-                "macos-code-signing",
-                &[
-                    signer,
-                    "signing".into(),
-                    "stage".into(),
-                    "--manifest".into(),
-                    source.join(".wisent-release.json").display().to_string(),
-                    "--output".into(),
-                    output.display().to_string(),
-                    "--platform".into(),
-                    request.platform.clone(),
-                    "--json".into(),
-                ],
-                &source,
-                &environment,
-            )?,
+            Ok(signer) => match crate::deploy::native_signing::signing_environment().await {
+                Ok(identity) => {
+                    let mut signing_environment = environment.clone();
+                    signing_environment.extend(identity);
+                    execute(
+                        "macos-code-signing",
+                        &[
+                            signer,
+                            "signing".into(),
+                            "stage".into(),
+                            "--manifest".into(),
+                            source.join(".wisent-release.json").display().to_string(),
+                            "--output".into(),
+                            output.display().to_string(),
+                            "--platform".into(),
+                            request.platform.clone(),
+                            "--json".into(),
+                        ],
+                        &source,
+                        &signing_environment,
+                    )?
+                }
+                Err(error) => {
+                    println!("[release-worker] step macos-code-signing: {error}");
+                    StepReceipt {
+                        name: "macos-code-signing".into(),
+                        argv: vec![crate::deploy::native_signing::SIGNER_SOURCE_SHA256.into()],
+                        status: StepStatus::Failed,
+                        exit_code: None,
+                    }
+                }
+            },
             Err(error) => {
                 println!("[release-worker] step macos-code-signing: {error}");
                 StepReceipt {
