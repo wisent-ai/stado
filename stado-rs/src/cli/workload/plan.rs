@@ -122,12 +122,81 @@ pub(crate) async fn place(
         .cloned()
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.name.cmp(&right.name));
-    candidates.into_iter().next().ok_or_else(|| {
-        CmdError::click(format!(
-            "the fleet declares no {}; add it to {DECLARATION_PATH}",
-            declaration.kind
-        ))
-    })
+    match candidates.into_iter().next() {
+        Some(target) => Ok(target),
+        None => {
+            // A fleet with no host for this kind is demand the fleet cannot
+            // serve; write it down so `stado fleet needs` can say so with a
+            // count instead of a guess.
+            record_no_eligible_target(declaration, allowance, &registry).await;
+            Err(CmdError::click(format!(
+                "the fleet declares no {}; add it to {DECLARATION_PATH}",
+                declaration.kind
+            )))
+        }
+    }
+}
+
+/// The platform a kind needs, when its declaration pins one. Only
+/// `gui-automation` does today; every other kind is refused for a missing
+/// Weles or mobile declaration, which is a registry gap and not a machine
+/// the fleet lacks.
+fn required_platform(declaration: &WorkloadKind) -> Option<&'static str> {
+    match declaration.kind.as_str() {
+        "gui-automation" => Some("darwin-arm64"),
+        _ => None,
+    }
+}
+
+async fn record_no_eligible_target(
+    declaration: &WorkloadKind,
+    allowance: Option<&str>,
+    registry: &crate::targets::Registry,
+) {
+    use crate::fleet_needs::{
+        record_unmet, this_requester, Candidate, Requirement, UnmetPlacement, UnmetReason,
+    };
+    let reservation = declaration.reservation.unwrap_or(super::catalog::WorkloadReservation {
+        cpu_cores: 0,
+        ram_gb: 0.0,
+        vram_gb: 0,
+    });
+    let record = UnmetPlacement::new(
+        &declaration.kind,
+        &declaration.product,
+        this_requester(),
+        Requirement {
+            platform: required_platform(declaration).map(str::to_string),
+            gpu_type: None,
+            vram_gb: reservation.vram_gb,
+            ram_gb: reservation.ram_gb,
+            cpu_cores: reservation.cpu_cores,
+            exclusive: false,
+            pinned_host: None,
+        },
+        UnmetReason::NoEligibleTarget,
+        registry
+            .targets
+            .iter()
+            .map(|target| Candidate {
+                target: target.name.clone(),
+                refusal: format!(
+                    "{} declares no {}{}",
+                    target.name,
+                    declaration.kind,
+                    allowance
+                        .map(|action| format!(" with action {action}"))
+                        .unwrap_or_default()
+                ),
+            })
+            .collect(),
+    );
+    let Ok(store) = crate::queue::submit::default_store("").await else {
+        return;
+    };
+    if let Err(error) = record_unmet(&store, &record).await {
+        eprintln!("the refusal could not be recorded for `stado fleet needs`: {error}");
+    }
 }
 
 pub(crate) fn required_text<'a>(

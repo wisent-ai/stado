@@ -112,6 +112,14 @@ name = "host_gates"
 path = "tests/host_gates/main.rs"
 
 [[test]]
+name = "capacity_reservations"
+path = "tests/capacity_reservations/main.rs"
+
+[[test]]
+name = "fleet_needs"
+path = "tests/fleet_needs/main.rs"
+
+[[test]]
 name = "host_run"
 path = "tests/host_run/main.rs"
 
