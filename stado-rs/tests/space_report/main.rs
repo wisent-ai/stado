@@ -242,9 +242,7 @@ fn an_unreadable_directory_is_one_row_and_a_refused_root_is_never_opened() {
     )
     .expect("write cache tag");
     for closed in [&cloud, &secret] {
-        let mut permissions = fs::metadata(closed)
-            .expect("stat closed directory")
-            .permissions();
+        let mut permissions = fs::metadata(closed).expect("stat closed directory").permissions();
         permissions.set_mode(0o000);
         fs::set_permissions(closed, permissions).expect("close fixture directory");
     }
@@ -253,9 +251,7 @@ fn an_unreadable_directory_is_one_row_and_a_refused_root_is_never_opened() {
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     for closed in [&cloud, &secret] {
-        let mut permissions = fs::metadata(closed)
-            .expect("stat closed directory")
-            .permissions();
+        let mut permissions = fs::metadata(closed).expect("stat closed directory").permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(closed, permissions).expect("reopen fixture directory");
     }
@@ -291,10 +287,9 @@ fn an_unreadable_directory_is_one_row_and_a_refused_root_is_never_opened() {
         "the tagged cache beside the unreadable directory was still found: {entries:?}"
     );
     assert!(
-        entries.iter().all(|entry| !entry["path"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("CloudStorage")),
+        entries
+            .iter()
+            .all(|entry| !entry["path"].as_str().unwrap_or_default().contains("CloudStorage")),
         "the refused root was opened: {entries:?}"
     );
     assert!(

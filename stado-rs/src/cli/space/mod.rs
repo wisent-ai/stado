@@ -3,6 +3,7 @@ use serde_json::{json, Map, Value};
 
 use super::{host, CmdError};
 
+mod accelerators;
 mod cleaners;
 mod coverage;
 mod ops;

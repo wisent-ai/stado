@@ -173,3 +173,43 @@ fn a_reservation_whose_holder_stopped_answering_is_retired() {
         "the expired reservation was not retired by the agent"
     );
 }
+
+/// The publication says who holds the accelerator, and `space report`
+/// repeats it from the same publication. On Apple silicon that is the
+/// unified-memory answer; on a discrete-GPU host it is the driver's
+/// per-process list with the memory nobody listed accounts for.
+#[test]
+fn the_publication_names_who_holds_the_accelerator() {
+    let mut journey = Journey::new();
+    journey.start_agent();
+    journey.wait_for("a measured publication", PUBLISH_WAIT, |j| {
+        j.newest_capacity()
+            .is_some_and(|capacity| capacity["diag"]["accelerator_memory_model"].is_string())
+    });
+    let capacity = journey.newest_capacity().unwrap();
+    let model = capacity["diag"]["accelerator_memory_model"].as_str().unwrap();
+    let expected_model = if cfg!(target_os = "macos") {
+        "unified"
+    } else {
+        "discrete"
+    };
+    assert_eq!(model, expected_model, "{capacity}");
+    assert!(
+        capacity["diag"]["accelerator_holders"].is_array(),
+        "the holders list is published even when empty: {capacity}"
+    );
+
+    let output = journey.invoke(&["space", "report", TARGET, "--json"]);
+    let report = json_stdout(&output.stdout);
+    assert_eq!(report["accelerators"]["memory_model"], expected_model, "{}", report["accelerators"]);
+    let line = report["accelerators"]["line"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the report carries the holders sentence: {}", report["accelerators"]));
+    if cfg!(target_os = "macos") {
+        assert_eq!(line, "accelerator shares the host's memory; no per-process VRAM");
+    } else {
+        assert!(line.starts_with("held by") || line.starts_with("no process holds"), "{line}");
+    }
+    let text = String::from_utf8_lossy(&journey.invoke(&["space", "report", TARGET]).stdout).into_owned();
+    assert!(text.contains(&format!("accelerators: {line}")), "{text}");
+}

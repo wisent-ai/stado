@@ -141,6 +141,14 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
                         .unwrap_or_else(|_| "{}".to_string())
                 );
             }
+            if let Some(line) = gates
+                .published_diagnostics
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .and_then(crate::providers::local::accelerators::accelerator_holders_line)
+            {
+                println!("accelerator: {line}");
+            }
             if let Some(held) = gates.running_workloads.filter(|held| *held > 0) {
                 let reserved = gates.reserved.as_ref();
                 let number = |key: &str| {

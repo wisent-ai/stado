@@ -100,6 +100,11 @@ pub(crate) async fn before_admission(
     if smi_free >= 0 && smi_free < free_vram_gb {
         free_vram_gb = smi_free;
     }
+    // Who holds the cards, published beside the free/total figures so a
+    // `0/95 GiB free` line can name the process behind it.
+    crate::providers::local::accelerators::holders::measure(slots)
+        .await
+        .insert_into(agent_diag, total_vram_gb, free_vram_gb);
     if let Some(reservation) = &inference_reservation {
         agent_diag.insert(
             "inference_reservation".into(),

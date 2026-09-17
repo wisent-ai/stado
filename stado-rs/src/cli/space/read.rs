@@ -116,6 +116,10 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     );
     let mut document = report.as_object().cloned().unwrap_or_else(Map::new);
     document.insert("coverage".to_string(), coverage.clone());
+    document.insert(
+        "accelerators".to_string(),
+        super::accelerators::accelerators_json(&target).await,
+    );
     let report = Value::Object(document);
     if json_output {
         print_json(&report)?;
@@ -149,6 +153,13 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         super::coverage::print_coverage(&coverage, &free_space);
         println!("last pass: {last_pass}");
         print_memory(report.get("memory_reclaim").unwrap_or(&Value::Null));
+        if let Some(line) = report
+            .get("accelerators")
+            .and_then(|block| block.get("line"))
+            .and_then(Value::as_str)
+        {
+            println!("accelerators: {line}");
+        }
         for entry in &cache_report.entries {
             println!("cache\t{}\t{}\t{}", entry.state, entry.kib, entry.path);
         }
@@ -173,6 +184,7 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     }
     Ok(())
 }
+
 
 /// The memory lines of the human-readable report.
 ///

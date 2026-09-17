@@ -22,6 +22,8 @@ const DISK_TARGET_FREE_GB: i64 = 2;
 const DISK_MAX_BYTES_PER_PASS: u64 = 1_073_741_824;
 const DISK_MAX_ITEMS_PER_PASS: i64 = 10;
 const DISK_MAX_SCAN_ITEMS: i64 = 100;
+/// The one cleaner `space report` requires a target to declare; one day.
+const BUILD_CACHE_MIN_AGE_SECONDS: i64 = 86_400;
 /// A publication in the agent's shape for a host with no core to give.
 const FULL_HOST_TOTAL_CPU_CORES: i64 = 8;
 const FULL_HOST_AVAILABLE_CPU_CORES: i64 = 0;
@@ -83,7 +85,7 @@ impl Journey {
                     "max_bytes_per_pass": DISK_MAX_BYTES_PER_PASS,
                     "max_items_per_pass": DISK_MAX_ITEMS_PER_PASS,
                     "max_scan_items": DISK_MAX_SCAN_ITEMS,
-                    "cleaners": {}
+                    "cleaners": {"build_caches": {"min_age_seconds": BUILD_CACHE_MIN_AGE_SECONDS}}
                 }
             }],
             "coordinators": []
@@ -188,7 +190,10 @@ impl Journey {
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
             .env("WC_PROVIDERS", "local")
-            .env("WC_VAST_AUTO_LIST", "false");
+            .env("WC_VAST_AUTO_LIST", "false")
+            // The stories read the cheap sections of `space report`; the
+            // attribution walk is another test's subject.
+            .env("STADO_INVENTORY_BUDGET_SECONDS", "0");
         command
     }
 
