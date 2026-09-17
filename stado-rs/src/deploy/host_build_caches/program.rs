@@ -12,6 +12,11 @@ pub const ROOT_ENV: &str = "STADO_CACHE_ROOT";
 pub const AGE_ENV: &str = "STADO_CACHE_MIN_AGE_DAYS";
 pub const APPLY_ENV: &str = "STADO_CACHE_APPLY";
 pub const FORCE_ENV: &str = "STADO_CACHE_FORCE";
+/// Newline-separated home-relative directories the walk never opens. The
+/// value is the janitor's own refused-root list for the target's platform
+/// (`privacy_protected_parts`), so the verdict and the janitor refuse the
+/// same doors.
+pub const PRUNE_ENV: &str = "STADO_CACHE_PRUNE";
 
 /// Two phases. First one `find` pass collects the tag files, so the walk is
 /// never mutated underneath itself — deleting during the walk made `find`
@@ -19,6 +24,12 @@ pub const FORCE_ENV: &str = "STADO_CACHE_FORCE";
 /// each owning directory is judged by its own mtime and, when applying,
 /// removed. A cache nested inside a cache needs no special case: its parent
 /// is reported and removed whole.
+///
+/// The walk prunes every root named in `STADO_CACHE_PRUNE` before opening
+/// it, and reads `find`'s own error lines instead of its exit status: a
+/// directory it could not open is one `permission-denied` row and the walk
+/// goes on. `scan-failed` is kept for the case where `find` failed and
+/// produced no tag at all.
 pub const REMOTE_SCRIPT: &str = r#"root="${STADO_CACHE_ROOT:-}"
 days="${STADO_CACHE_MIN_AGE_DAYS:-}"
 apply="${STADO_CACHE_APPLY:-}"
@@ -56,9 +67,62 @@ if [ -z "$root" ] || [ ! -d "$root" ]; then
   exit
 fi
 
-if ! tags=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG); then
+prune="${STADO_CACHE_PRUNE:-}"
+set --
+if [ -n "$prune" ]; then
+  saved_ifs=$IFS
+  IFS='
+'
+  for part in $prune; do
+    [ -n "$part" ] || continue
+    if [ $# -eq 0 ]; then
+      set -- -path "$HOME/$part"
+    else
+      set -- "$@" -o -path "$HOME/$part"
+    fi
+  done
+  IFS=$saved_ifs
+fi
+if [ $# -gt 0 ]; then
+  listing=$(/usr/bin/find "$root" \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>&1)
+else
+  listing=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG -print 2>&1)
+fi
+find_status=$?
+tags=""
+other_errors=""
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  case "$line" in
+    find:\ *)
+      case "$line" in
+        *": Permission denied"|*": Operation not permitted")
+          dir=${line#find: }
+          dir=${dir%: Permission denied}
+          dir=${dir%: Operation not permitted}
+          printf 'STADO_BUILD_CACHE\tpermission-denied\t%s\t%s\n' "$dir" -
+          ;;
+        *)
+          other_errors="$other_errors$line
+"
+          ;;
+      esac
+      ;;
+    *)
+      tags="$tags$line
+"
+      ;;
+  esac
+done <<STADO_LISTING
+$listing
+STADO_LISTING
+if [ -z "$tags" ] && [ "$find_status" -ne 0 ] && [ -n "$other_errors" ]; then
+  printf '%s' "$other_errors" >&2
   printf 'STADO_BUILD_CACHE\tscan-failed\t%s\t%s\n' "$root" -
   exit 1
+fi
+if [ -n "$other_errors" ]; then
+  printf '%s' "$other_errors" >&2
 fi
 if [ -z "$tags" ]; then
   printf 'STADO_BUILD_CACHE\tno-cache-tags\t%s\t%s\n' "$root" -

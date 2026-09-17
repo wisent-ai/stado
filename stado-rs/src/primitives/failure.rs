@@ -94,6 +94,28 @@ const AUTH_NEEDLES: &[&str] = &[
     "token expired",
 ];
 
+/// A file or directory the host itself would not open. The words overlap
+/// with [`AUTH_NEEDLES`] — `find: /x: Permission denied` and an object
+/// gateway's `permission denied` are spelled the same — but the meaning
+/// does not: no credential of ours was rejected, and telling the operator
+/// "retrying will not help, check your credentials" sends them to the vault
+/// for a `chmod`. On 2026-09-17 `stado space report lukasz-macbook` did
+/// exactly that over one unreadable Google Drive `.tmp`. These are checked
+/// before the auth needles and land in `unknown` with the detail intact,
+/// because the seven-code vocabulary has no code for "the host refused a
+/// file operation" and inventing one here is not this crate's call.
+const FILESYSTEM_REFUSAL_NEEDLES: &[&str] = &[
+    "find: ",
+    "operation not permitted",
+    "(os error 13)",
+    "eacces",
+    "eperm",
+];
+
+/// SSH's own refusal is a credential failure however it is spelled around a
+/// path, and it must keep winning over the filesystem reading.
+const SSH_AUTH_NEEDLES: &[&str] = &["permission denied (publickey", "permission denied (password"];
+
 const RATE_LIMIT_NEEDLES: &[&str] = &[
     "rate limit",
     "rate-limit",
@@ -196,6 +218,12 @@ pub fn classify_message(message: &str) -> FailureCode {
     let haystack = message.to_lowercase();
     if matches_any(&haystack, CONFIG_NEEDLES) {
         return FailureCode::Config;
+    }
+    if matches_any(&haystack, SSH_AUTH_NEEDLES) {
+        return FailureCode::Auth;
+    }
+    if matches_any(&haystack, FILESYSTEM_REFUSAL_NEEDLES) {
+        return FailureCode::Unknown;
     }
     if matches_any(&haystack, AUTH_NEEDLES) {
         return FailureCode::Auth;

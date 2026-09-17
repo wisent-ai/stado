@@ -62,6 +62,7 @@ use reserved::{privacy_protected_roots, reserved_roots};
 use walk::Walk;
 
 pub(super) use cursor::BuildCachesCursor;
+pub use reserved::privacy_protected_parts;
 
 /// One open directory per level is held while the walk is inside it, so the
 /// depth limit is also the fd budget. 64 is far below any macOS descriptor

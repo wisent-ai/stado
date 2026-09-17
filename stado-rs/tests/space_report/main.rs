@@ -220,3 +220,81 @@ fn a_malformed_walk_bound_is_refused_with_its_own_sentence() {
     );
     fixture.cleanup();
 }
+
+/// The build-cache verdict walks the whole undeclared root, and on 2026-09-17
+/// that walk opened `~/Library/CloudStorage`, met one unreadable Google Drive
+/// `.tmp`, and reported lukasz-macbook as `scan-failed`, exit 1, classified
+/// as rejected credentials. The walk now prunes the janitor's own refused
+/// roots before opening them, and a directory it cannot open elsewhere is one
+/// `permission-denied` row while the tagged cache beside it is still found.
+#[test]
+fn an_unreadable_directory_is_one_row_and_a_refused_root_is_never_opened() {
+    let fixture = Fixture::new();
+    let cloud = fixture.home.join("Library/CloudStorage/drive/.tmp");
+    let secret = fixture.home.join("secret");
+    let cache = fixture.home.join("work/target");
+    for directory in [&cloud, &secret, &cache] {
+        fs::create_dir_all(directory).expect("create fixture directory");
+    }
+    fs::write(
+        cache.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )
+    .expect("write cache tag");
+    for closed in [&cloud, &secret] {
+        let mut permissions = fs::metadata(closed).expect("stat closed directory").permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(closed, permissions).expect("close fixture directory");
+    }
+
+    let output = fixture.report("0", &["--json"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    for closed in [&cloud, &secret] {
+        let mut permissions = fs::metadata(closed).expect("stat closed directory").permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(closed, permissions).expect("reopen fixture directory");
+    }
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "one unreadable directory failed the whole host; stderr: {stderr}"
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the report is one JSON document");
+    let caches = &document["build_caches"];
+    assert!(
+        caches["error"].is_null(),
+        "the verdict carried an error instead of rows: {}",
+        caches["error"]
+    );
+    let entries = caches["entries"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the verdict lists its rows: {document}"));
+    let state_of = |path: &Path| {
+        entries
+            .iter()
+            .find(|entry| entry["path"].as_str() == Some(path.to_str().unwrap()))
+            .map(|entry| entry["verdict"].as_str().unwrap_or_default().to_string())
+    };
+    assert_eq!(
+        state_of(&secret).as_deref(),
+        Some("permission-denied"),
+        "the unreadable directory outside the refused roots is its own row: {entries:?}"
+    );
+    assert!(
+        state_of(&cache).is_some_and(|state| state != "scan-failed"),
+        "the tagged cache beside the unreadable directory was still found: {entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !entry["path"].as_str().unwrap_or_default().contains("CloudStorage")),
+        "the refused root was opened: {entries:?}"
+    );
+    assert!(
+        !stderr.contains("credentials this command used were rejected"),
+        "a file the host would not open was reported as rejected credentials: {stderr}"
+    );
+    fixture.cleanup();
+}

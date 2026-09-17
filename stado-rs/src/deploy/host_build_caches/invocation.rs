@@ -2,7 +2,7 @@
 
 use crate::deploy::{shlex_quote, DeployError};
 
-use super::program::{AGE_ENV, APPLY_ENV, FORCE_ENV, REMOTE_SCRIPT, ROOT_ENV};
+use super::program::{AGE_ENV, APPLY_ENV, FORCE_ENV, PRUNE_ENV, REMOTE_SCRIPT, ROOT_ENV};
 
 /// Reject a root that is not an absolute path, so a relative argument cannot
 /// resolve against whatever directory the remote shell happens to start in.
@@ -24,9 +24,13 @@ pub fn validate_days(days: &str) -> Result<(), DeployError> {
 /// The remote invocation. Unlike the other host commands this one does not
 /// escalate: build caches belong to the user that produced them, and running
 /// as root would let it delete another account's files.
-pub fn remote_command(root: &str, days: &str, apply: bool, force: bool) -> String {
+///
+/// `prune` is the home-relative list of directories the walk must not open,
+/// chosen for the target's platform by the caller; it travels as one
+/// newline-separated variable so a path with spaces stays one path.
+pub fn remote_command(root: &str, days: &str, apply: bool, force: bool, prune: &[&str]) -> String {
     format!(
-        "/usr/bin/env {}={} {}={} {}={} {}={} /bin/sh -c {}",
+        "/usr/bin/env {}={} {}={} {}={} {}={} {}={} /bin/sh -c {}",
         ROOT_ENV,
         shlex_quote(root),
         AGE_ENV,
@@ -35,6 +39,8 @@ pub fn remote_command(root: &str, days: &str, apply: bool, force: bool) -> Strin
         shlex_quote(if apply { "apply" } else { "" }),
         FORCE_ENV,
         shlex_quote(if force { "force" } else { "" }),
+        PRUNE_ENV,
+        shlex_quote(&prune.join("\n")),
         shlex_quote(REMOTE_SCRIPT)
     )
 }

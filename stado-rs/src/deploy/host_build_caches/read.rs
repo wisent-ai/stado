@@ -150,7 +150,17 @@ pub async fn run_on_host(
             return report;
         }
     };
-    let command = remote_command(root, days, apply, force);
+    // The refused roots are the target's, not this machine's: a Linux
+    // operator reading a Mac still prunes the Mac's photo library. A local
+    // target that declares no platform is this binary's platform.
+    let darwin = if target.release_platform.is_empty() {
+        target_is_local(target) && cfg!(target_os = "macos")
+    } else {
+        target.release_platform.starts_with("darwin")
+    };
+    let prune =
+        crate::providers::local::disk_cleanup::build_caches::privacy_protected_parts(darwin);
+    let command = remote_command(root, days, apply, force, prune);
     let started = std::time::Instant::now();
     let result = if target_is_local(target) {
         let mut spec = CommandSpec::new(vec!["/bin/sh".to_string(), "-c".to_string(), command]);

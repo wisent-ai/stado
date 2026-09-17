@@ -108,23 +108,37 @@ pub(super) fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<Pat
 /// consent-gated too, but real build trees live in them — this fleet's own
 /// checkouts are under `~/Documents` — so the honest cost is one grant
 /// decision for a stably signed binary, not a permanent blind spot.
-#[cfg(target_os = "macos")]
-pub(super) fn privacy_protected_roots(home: &Path) -> Vec<PathBuf> {
-    ["Pictures", "Music", "Movies", ".Trash"]
-        .iter()
-        .map(|part| home.join(part))
-        .chain(
-            ["Mobile Documents", "CloudStorage"]
-                .iter()
-                .map(|part| home.join("Library").join(part)),
-        )
-        .collect()
+///
+/// The list is given as home-relative parts, for the platform a walk runs
+/// on. This is the one list: the janitor's own walk reads it through
+/// [`privacy_protected_roots`], and the build-cache verdict script that
+/// `stado space report` sends to a host reads it through
+/// `STADO_CACHE_PRUNE`. Two lists drifted on 2026-09-17: the janitor refused
+/// `~/Library/CloudStorage` while the verdict's `find` walked straight into a
+/// Google Drive `.tmp` on lukasz-macbook and reported the whole host as
+/// `scan-failed`.
+pub fn privacy_protected_parts(darwin: bool) -> &'static [&'static str] {
+    if darwin {
+        &[
+            "Pictures",
+            "Music",
+            "Movies",
+            ".Trash",
+            "Library/Mobile Documents",
+            "Library/CloudStorage",
+        ]
+    } else {
+        // No operating system outside macOS gates these directories behind a
+        // consent dialog, and a Linux build host may legitimately keep a
+        // tagged tree in any of them.
+        &[]
+    }
 }
 
-/// No operating system outside macOS gates these directories behind a consent
-/// dialog, and a Linux build host may legitimately keep a tagged tree in any
-/// of them.
-#[cfg(not(target_os = "macos"))]
-pub(super) fn privacy_protected_roots(_home: &Path) -> Vec<PathBuf> {
-    Vec::new()
+/// The refused roots under one home, for the platform this binary runs on.
+pub(super) fn privacy_protected_roots(home: &Path) -> Vec<PathBuf> {
+    privacy_protected_parts(cfg!(target_os = "macos"))
+        .iter()
+        .map(|part| home.join(part))
+        .collect()
 }
