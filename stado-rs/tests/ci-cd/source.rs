@@ -153,7 +153,7 @@ fn a_tree_of_more_files_than_a_release_may_carry_builds_from_a_snapshot_of_its_f
             .spawn()
             .unwrap(),
     );
-    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage, &vault);
     drop(submit);
     drop(agent);
     let stdout = fs::read(home.path().join("submit.out")).unwrap();

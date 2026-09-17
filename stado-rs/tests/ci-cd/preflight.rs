@@ -99,7 +99,7 @@ fn a_build_with_no_room_is_refused_before_its_first_gate() {
             .spawn()
             .unwrap(),
     );
-    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage, &vault);
     drop(agent);
     let reported = format!(
         "{}{}",

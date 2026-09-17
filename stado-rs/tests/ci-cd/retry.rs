@@ -167,7 +167,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
 
     let mut agent = claiming_agent(home.path(), &storage, &vault);
     let mut retry_submit = submit(home.path(), &storage, &vault, &source, "submit");
-    let status = wait_for_submit(&mut retry_submit.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut retry_submit.0, &mut agent.0, home.path(), &storage, &vault);
     let result = Output {
         status,
         stdout: fs::read(home.path().join("submit.out")).unwrap(),
@@ -227,7 +227,7 @@ fn a_build_with_no_room_is_refused_before_its_first_gate() {
     let mut agent = claiming_agent(home.path(), &storage, &vault);
 
     let mut running = submit(home.path(), &storage, &vault, &source, "submit");
-    let status = wait_for_submit(&mut running.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut running.0, &mut agent.0, home.path(), &storage, &vault);
     drop(agent);
     let reported = said_by(home.path(), "submit");
     assert!(

@@ -73,7 +73,7 @@ fn failed_delivery_resumes_original_source_after_checkout_changes() {
             .spawn()
             .unwrap(),
     );
-    let status = wait_for_submit(&mut submission.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut submission.0, &mut agent.0, home.path(), &storage, &vault);
     assert!(
         !status.success(),
         "an occupied installation destination passed"
@@ -123,7 +123,7 @@ fn failed_delivery_resumes_original_source_after_checkout_changes() {
             .spawn()
             .unwrap(),
     );
-    let status = wait_for_submit(&mut resumed.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut resumed.0, &mut agent.0, home.path(), &storage, &vault);
     let stdout = fs::read(home.path().join("submit.out")).unwrap();
     let stderr = fs::read(home.path().join("submit.err")).unwrap();
     assert!(

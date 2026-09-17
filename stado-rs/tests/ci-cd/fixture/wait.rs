@@ -199,13 +199,55 @@ pub(crate) fn store_snapshot(storage: &Path) -> String {
     out
 }
 
+/// Wait for a release submission to reach its end.
+///
+/// `stado release submit` ends when the builds are queued; in the fleet the
+/// control host's release agent finishes the run once they are done. These
+/// journeys have no such agent, so when the submission returns `waiting`
+/// the same journey continues it with `stado release resume`, under the same
+/// watch over the builder and the same deadline, and `submit.out` ends up
+/// holding what the finished run reported — exactly what the assertions read.
 pub(crate) fn wait_for_submit(
     child: &mut Child,
     agent: &mut Child,
     home: &Path,
     storage: &Path,
+    vault: &SkarbiecFixture,
 ) -> std::process::ExitStatus {
     let deadline = Instant::now() + Duration::from_secs(180);
+    let status = wait_for_release_process(child, agent, home, storage, deadline);
+    if !status.success() {
+        return status;
+    }
+    let queued: Option<Value> = fs::read(home.join("submit.out"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let Some(run_id) = queued
+        .filter(|run| run["state"] == "waiting")
+        .and_then(|run| run["run_id"].as_str().map(str::to_owned))
+    else {
+        return status;
+    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    release_env(&mut command, home, storage, vault);
+    let mut resume = command
+        .args(["release", "resume", &run_id, "--json"])
+        .stdout(Stdio::from(File::create(home.join("submit.out")).unwrap()))
+        .stderr(Stdio::from(
+            fs::OpenOptions::new().append(true).open(home.join("submit.err")).unwrap(),
+        ))
+        .spawn()
+        .unwrap();
+    wait_for_release_process(&mut resume, agent, home, storage, deadline)
+}
+
+fn wait_for_release_process(
+    child: &mut Child,
+    agent: &mut Child,
+    home: &Path,
+    storage: &Path,
+    deadline: Instant,
+) -> std::process::ExitStatus {
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;

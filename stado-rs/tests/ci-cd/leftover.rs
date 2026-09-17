@@ -122,7 +122,7 @@ fn a_delivery_rerun_in_its_own_work_tree_delivers_from_a_fresh_source_tree() {
             .unwrap(),
     );
     let job_id = plant_leftover_source_tree(&mut submit.0, home.path(), &storage);
-    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage, &vault);
     drop(submit);
     drop(agent);
     let stdout = fs::read(home.path().join("submit.out")).unwrap();

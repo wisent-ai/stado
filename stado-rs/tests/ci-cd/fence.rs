@@ -212,7 +212,7 @@ fn a_run_that_published_nothing_does_not_fence_an_older_release_delivery() {
         "the later submission did not fail for want of a builder: {later_stderr}"
     );
 
-    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage, &vault);
     drop(submit);
     drop(agent);
     let stdout = fs::read(home.path().join("submit.out")).unwrap();

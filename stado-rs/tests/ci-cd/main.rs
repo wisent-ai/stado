@@ -99,7 +99,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         .stderr(Stdio::from(submit_err))
         .spawn()
         .unwrap();
-    let status = wait_for_submit(&mut submit, &mut agent, home.path(), &storage);
+    let status = wait_for_submit(&mut submit, &mut agent, home.path(), &storage, &vault);
     let result = Output {
         status,
         stdout: fs::read(home.path().join("submit.out")).unwrap(),

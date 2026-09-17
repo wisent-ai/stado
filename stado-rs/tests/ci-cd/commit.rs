@@ -143,7 +143,7 @@ fn committed_submission_preserves_active_work_and_installs_the_selected_source()
             .spawn()
             .unwrap(),
     );
-    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage);
+    let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage, &vault);
     let stdout = fs::read(home.path().join("submit.out")).unwrap();
     let stderr = fs::read(home.path().join("submit.err")).unwrap();
     assert!(
