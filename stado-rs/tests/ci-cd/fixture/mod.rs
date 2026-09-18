@@ -70,8 +70,8 @@ impl SkarbiecFixture {
     }
 }
 
-/// One field of a fleet secret, read through the operator's own Skarbiec CLI
-/// - the owner read, which is also the fallback the signing step itself uses
+/// One field of a fleet secret, read through the operator's own Skarbiec CLI:
+/// the owner read, which is also the fallback the signing step itself uses
 /// when the broker will not serve the item. The Stado profile's broker read
 /// refuses `local-operator` for this item with 403, so `stado secrets get`
 /// is not the route. A refusal blocks the journey and says so.
