@@ -69,7 +69,7 @@
         "MACOS_SIGN_IDENTITY"
       ],
       "accepts_repository_scope": true,
-      "developer_id_account_item": "apple-account-holder"
+      "developer_id_account_item": "weles-apple-control-account"
     },
     {
       "name": "product-precheck",
