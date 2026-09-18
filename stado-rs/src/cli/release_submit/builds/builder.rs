@@ -67,20 +67,13 @@ pub(crate) async fn builder(
             }
             let (consumer, publication) = live_consumers.get(&target.name)?;
             // An operator's workstation - role `interactive` in the registry -
-            // never builds a release unless the job is pinned to it by name.
-            // On 2026-09-17 two Stado builds landed on lukasz-macbook because it
-            // published the most free disk, while the operator was using it.
-            if target.role.as_deref() == Some("interactive") && pinned.is_none() {
-                considered.push((
-                    target.name.clone(),
-                    Claimability::Unfit {
-                        reason:
-                            "interactive host: an operator's workstation does not build releases"
-                                .into(),
-                    },
-                ));
-                return None;
-            }
+            // may build, but only after every always-on or burst builder of
+            // the platform that can take the job. On 2026-09-17 two Stado
+            // builds landed on lukasz-macbook because it published the most
+            // free disk, while the operator was playing a game on it; the
+            // claim gate's cpu_busy and ram_headroom_low still hold it back
+            // while it is loaded.
+            let interactive = target.role.as_deref() == Some("interactive");
             let mut verdict = claimability(publication);
             if let Some(short) = scratch.and_then(|need| scratch_verdict(publication, need)) {
                 verdict = match verdict {
@@ -111,19 +104,26 @@ pub(crate) async fn builder(
                 _ => return None,
             };
             let free = published_free_bytes(publication).unwrap_or_default();
-            Some((waiting_for_resources, free, target, consumer.clone()))
+            Some((
+                waiting_for_resources,
+                interactive,
+                free,
+                target,
+                consumer.clone(),
+            ))
         })
         .collect();
     candidates.sort_by(|left, right| {
         left.0
             .cmp(&right.0)
-            .then_with(|| right.1.cmp(&left.1))
-            .then_with(|| left.2.name.cmp(&right.2.name))
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| right.2.cmp(&left.2))
+            .then_with(|| left.3.name.cmp(&right.3.name))
     });
     candidates
         .into_iter()
         .next()
-        .map(|(_, _, target, consumer)| (target, consumer))
+        .map(|(_, _, _, target, consumer)| (target, consumer))
         .ok_or_else(|| {
             // Name the store this looked in. Builders are selected from capacity
             // publications, not from the registry's platform declaration, so a host

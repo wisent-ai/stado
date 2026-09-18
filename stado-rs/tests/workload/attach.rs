@@ -55,10 +55,22 @@ fn install_runtime(area: &Area) {
 }
 
 fn attach(area: &Area, name: &str, resume: Option<&str>, requests: &[Value]) -> Output {
-    attach_with_root(area, &area.home.join(".jeden/sessions"), name, resume, requests)
+    attach_with_root(
+        area,
+        &area.home.join(".jeden/sessions"),
+        name,
+        resume,
+        requests,
+    )
 }
 
-fn attach_with_root(area: &Area, root: &Path, name: &str, resume: Option<&str>, requests: &[Value]) -> Output {
+fn attach_with_root(
+    area: &Area,
+    root: &Path,
+    name: &str,
+    resume: Option<&str>,
+    requests: &[Value],
+) -> Output {
     let directory = area.root.join("attachments").join(name);
     fs::create_dir_all(&directory).unwrap();
     let mut args = vec![
@@ -235,8 +247,15 @@ fn native_attachment_follows_a_moved_session_root() {
     );
     let created = reply(&opened, "create");
     let ledger = fs::canonicalize(created["sessionPath"].as_str().unwrap()).unwrap();
-    assert!(ledger.starts_with(&moved), "Jeden wrote outside the moved root: {}", ledger.display());
-    assert!(!home.join(".jeden/sessions").exists(), "the default root must stay untouched");
+    assert!(
+        ledger.starts_with(&moved),
+        "Jeden wrote outside the moved root: {}",
+        ledger.display()
+    );
+    assert!(
+        !home.join(".jeden/sessions").exists(),
+        "the default root must stay untouched"
+    );
     let session = ledger.file_name().unwrap().to_str().unwrap();
     let state = fs::read(ledger.join("state.json")).unwrap();
 
@@ -260,17 +279,14 @@ fn native_attachment_follows_a_moved_session_root() {
         .expect("the placement line names the ledger root");
     assert_eq!(placement["ledger"], moved.to_string_lossy().as_ref());
 
-    let missing = attach_with_root(
-        &area,
-        &moved,
-        "missing-moved",
-        Some("absent-session"),
-        &[],
-    );
+    let missing = attach_with_root(&area, &moved, "missing-moved", Some("absent-session"), &[]);
     assert_eq!(missing.status.code(), Some(1));
     let refusal = said(&missing.stderr);
     assert!(
-        refusal.contains(&format!("session ledger is missing: {}/absent-session", moved.display())),
+        refusal.contains(&format!(
+            "session ledger is missing: {}/absent-session",
+            moved.display()
+        )),
         "{refusal}"
     );
 }
