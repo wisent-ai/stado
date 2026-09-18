@@ -18,6 +18,10 @@ pub enum ReleaseRunState {
     Reconciled,
     Completed,
     Failed,
+    /// A newer submission of the same product and channel replaced this run
+    /// before it published: its queued builds were cancelled, a build already
+    /// running is left to end and is not published. `failure` names the run.
+    Superseded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

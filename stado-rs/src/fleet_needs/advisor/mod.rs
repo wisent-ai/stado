@@ -133,7 +133,7 @@ pub async fn advise(
         &queued,
         now,
     ));
-    needs.sort_by(|left, right| right.severity.cmp(&left.severity));
+    needs.sort_by_key(|need| std::cmp::Reverse(need.severity));
     Ok(NeedsReport {
         schema_version: constants::NEEDS_SCHEMA_VERSION,
         generated_at: now.to_rfc3339(),

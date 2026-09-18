@@ -211,7 +211,9 @@ pub(crate) static REPAIR_STEPS: &[RepairStep] = &[
 pub(super) fn implementation_visible(step: &RepairStep) -> bool {
     // Integration tests must prove the runtime mismatch refusal through the
     // real binary. Debug builds may hide one implementation from validation;
-    // release binaries have no declaration override or implementation switch.
+    // release binaries have no declaration override or implementation switch,
+    // so there the step is read by nobody.
+    let _ = step;
     #[cfg(debug_assertions)]
     {
         if let Ok(hidden) = std::env::var("STADO_REPAIR_TEST_MISSING_IMPLEMENTATION") {

@@ -17,6 +17,7 @@ use crate::cli::release_submit::run::source::{
     snapshot,
 };
 use crate::cli::release_submit::run::state::{load, persist_failure, save};
+use crate::cli::release_submit::run::supersede::{newer_than, supersede_older};
 use crate::cli::release_submit::ReleaseSubmitArgs;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
@@ -143,6 +144,14 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     {
         return Err(CmdError::click("durable release run identity mismatch"));
     }
+    // One run per product and channel is worth building: the older live runs
+    // lose their queued builds now and are not published later.
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    for replaced in supersede_older(&store, &run).await? {
+        eprintln!("release run {replaced} superseded by {}", run.run_id);
+    }
     // Submitting is queueing. The builds run in the fleet, and the control
     // host's release agent signs, publishes and delivers when they are done;
     // the operator's terminal is not the place to wait an hour for a builder.
@@ -226,6 +235,25 @@ pub(super) async fn continue_run(
             println!(
                 "release run {} product={} version={} state={:?}: builds queued; the control host's release agent publishes and delivers when they finish, `stado release status {}` follows them",
                 run.run_id, run.product, run.version, run.state, run.product
+            )
+        }
+        return Ok(());
+    }
+    // A run a newer submission has replaced is not published, even when its
+    // builds ran to the end: the fleet wants the newest source, not every
+    // source ten agents submitted in the same minute.
+    if let Some(newer) = newer_than(&store, &run).await? {
+        run.state = ReleaseRunState::Superseded;
+        run.failure = Some(format!(
+            "superseded by release run {newer} before publication"
+        ));
+        save(&mut run).await?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&run)?)
+        } else {
+            println!(
+                "release run {} product={} version={} state={:?}: superseded by {newer}, not published",
+                run.run_id, run.product, run.version, run.state
             )
         }
         return Ok(());

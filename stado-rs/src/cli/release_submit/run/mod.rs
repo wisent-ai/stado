@@ -8,3 +8,4 @@ pub(in crate::cli::release_submit) mod resume;
 pub(in crate::cli::release_submit) mod source;
 pub(in crate::cli::release_submit) mod state;
 pub(in crate::cli::release_submit) mod submit;
+pub(in crate::cli::release_submit) mod supersede;
