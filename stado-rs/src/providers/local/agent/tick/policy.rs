@@ -78,8 +78,31 @@ pub(super) async fn disk_policy(
         }
         *disk_low_bytes = Some(declared_low);
     }
-    // Python: shutil.disk_usage(expanduser("~")).free, OSError -> None.
-    let current_free_bytes = disk_cleanup::free_bytes(&crate::config_file::expand_tilde("~")).ok();
+    // The work root is declared into this process once, from the target the
+    // registry names for this host. A root that changes under a running
+    // agent is not followed: half the live job trees would sit on each
+    // side of the move. It is logged every tick until the agent's unit
+    // restarts it, which is when the new root takes.
+    if let Some(root) = registry_target
+        .as_ref()
+        .and_then(|target| target.work_root.as_deref())
+    {
+        let declared = std::path::Path::new(root);
+        if crate::providers::local::work_base::declare(declared) {
+            log_fn(&format!(
+                "loop: work root {root} declared by the canonical registry; job trees, build \
+                 caches and the published free space are measured there"
+            ));
+        } else if crate::providers::local::work_base::declared().as_deref() != Some(declared) {
+            log_fn(&format!(
+                "loop: the canonical registry now declares work root {root}; this agent keeps \
+                 the one it started with until its unit restarts it"
+            ));
+        }
+    }
+    // The volume the fleet writes to: the declared work root, or the home.
+    let current_free_bytes =
+        disk_cleanup::free_bytes(&crate::providers::local::work_base::measured_volume()).ok();
     // Two different questions used to share one answer, and the conflation
     // is what froze the always-on mac. "Can this agent read its disk policy
     // at all" is a reason to fail admission closed: an agent that does not

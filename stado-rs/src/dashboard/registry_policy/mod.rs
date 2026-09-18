@@ -128,6 +128,12 @@ fn project_target(entry: &Value) -> Option<Value> {
     if let Some(pinned) = entry.get("pinned_only").and_then(Value::as_bool) {
         projected.insert("pinned_only".to_string(), Value::from(pinned));
     }
+    // The work root is the second path this projection carries: the disk
+    // policy's watermarks are measured on the volume it names, and an
+    // operator reading "8 GiB low" needs to know which disk that is.
+    if let Some(root) = entry.get("work_root").and_then(Value::as_str) {
+        projected.insert("work_root".to_string(), Value::from(root));
+    }
     if let Some(policy) = entry.get("disk_cleanup").and_then(Value::as_object) {
         let mut whitelisted = Map::new();
         for field in POLICY_FIELDS {

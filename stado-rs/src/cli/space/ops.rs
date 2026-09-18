@@ -124,6 +124,50 @@ pub(super) async fn remove_file(
     }
 }
 
+pub(super) async fn mount_volume(
+    target: &str,
+    device: &str,
+    mount_point: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let (target, mount) =
+        crate::deploy::host_volume::mount_volume(target, device, mount_point, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+    let report = Value::Object(crate::deploy::host_volume::to_report(&target, &mount));
+    if json_output {
+        print_json(&report)?;
+    } else if mount.error.is_none() {
+        println!(
+            "{}: {} ({}, {}) {} at {}; {} free KiB of {}; fstab {}",
+            target.name,
+            mount.device,
+            mount.fstype,
+            crate::deploy::host_disk::gib_from_blocks(mount.size_bytes as f64 / 1024.0),
+            if mount.mounted_now {
+                "mounted"
+            } else {
+                "already mounted"
+            },
+            mount.mounted_on,
+            mount.available_kb,
+            mount.blocks_kb,
+            if mount.fstab_written {
+                "line written"
+            } else {
+                "line already present"
+            },
+        );
+    }
+    if let Some(error) = mount.error {
+        return Err(
+            CmdError::click(format!("{}: {error}", target.name)).machine_readable(json_output)
+        );
+    }
+    Ok(())
+}
+
 pub(super) async fn retire_file(
     target: &str,
     request: host::RetireFileRequest<'_>,

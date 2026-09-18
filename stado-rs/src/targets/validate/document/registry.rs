@@ -217,6 +217,22 @@ pub(crate) fn validate_registry_body(
             validate_disk_cleanup(cleanup, &format!("{location}.disk_cleanup"))?;
         }
 
+        if let Some(work_root) = target.get("work_root") {
+            if !crate::capabilities::ProviderId::Local.matches(kind) {
+                return Err(verr(
+                    &format!("{location}.work_root"),
+                    "is allowed only for kind='local'",
+                ));
+            }
+            if let Err(problem) = work_root
+                .as_str()
+                .ok_or_else(|| "must be a string".to_string())
+                .and_then(crate::providers::local::work_base::validate_declared)
+            {
+                return Err(verr(&format!("{location}.work_root"), &problem));
+            }
+        }
+
         if let Some(reclaim) = target.get("memory_reclaim") {
             if !crate::capabilities::ProviderId::Local.matches(kind) {
                 return Err(verr(

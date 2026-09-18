@@ -44,6 +44,21 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
               path argument it cannot be pointed at anything",
     },
     ApprovedCommand {
+        argv: &[
+            "/usr/bin/lsblk",
+            "-b",
+            "-P",
+            "-o",
+            "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID,MODEL",
+        ],
+        why: "lists every block device the Linux kernel sees, mounted or not, with a fixed \
+              column set and no path argument; lsblk writes nothing. Added 2026-09-18: a \
+              multi-terabyte disk was attached to ubuntu-server-rtx-pro-6000 and `df -h` \
+              could not show it, because an unmounted disk has no filesystem row, so the \
+              only approved read of the host's storage said the host had 29 GiB while the \
+              operator knew it had terabytes",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "2", "/"],
         why: "attributes a full root filesystem two directory levels deep; -x stays on one \
               filesystem, -k is a fixed unit, the depth and the root are fixed words, and du \

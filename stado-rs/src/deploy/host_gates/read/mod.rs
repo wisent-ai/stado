@@ -104,7 +104,12 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
     );
     let state_observed = state.0.is_some();
     let mut reading = state.0.unwrap_or_default();
-    reading.usage = usage.0.and_then(|reading| reading.usage);
+    if let Some(usage) = usage.0 {
+        reading.usage = usage.usage;
+        reading.volumes = usage.volumes;
+        reading.block_devices = usage.block_devices;
+        reading.block_devices_read = usage.block_devices_read;
+    }
     let mut observations = vec![registry_read, usage.1, state.1, agent.1, storage.1];
     let mut publication_value = None;
     let mut publication_observed = false;

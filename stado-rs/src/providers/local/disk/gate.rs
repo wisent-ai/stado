@@ -120,9 +120,11 @@ fn round1(x: f64) -> f64 {
 ///
 /// The historical name remains as the local-agent API, but this function
 /// never deletes data. The policy engine runs separately before admission.
+/// `free_disk_gb` and the write probe measure the volume the fleet writes
+/// to: the declared work root, or the home.
 pub fn gate_and_maybe_evict(log_fn: &mut dyn FnMut(&str)) -> (bool, DiskGateDiag) {
-    let home = crate::config_file::expand_tilde("~");
-    let obs = observe(&home);
+    let volume = crate::providers::local::work_base::measured_volume();
+    let obs = observe(&volume);
     let refuse = decide(&obs, log_fn);
     let diag = DiskGateDiag {
         free_disk_gb: round1(obs.home_free_gb),

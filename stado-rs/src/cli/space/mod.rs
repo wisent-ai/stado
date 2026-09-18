@@ -10,6 +10,7 @@ mod ops;
 mod policies;
 mod read;
 pub mod watermark;
+mod work_root;
 
 use ops::{reclaim, relocate, remove_file, retire_file};
 use read::{print_json, report};
@@ -68,6 +69,26 @@ pub enum SpaceCommands {
         #[command(subcommand)]
         command: SpaceFileCommands,
     },
+    /// Mount a disk the host has attached, durably, so the fleet can be told to use it.
+    Volume {
+        #[command(subcommand)]
+        command: SpaceVolumeCommands,
+    },
+    /// Read or declare where TARGET's agent keeps the fleet's work: job trees, build caches, published free space.
+    ///
+    /// With no `--path` this prints the declaration in force. With `--path`
+    /// it creates the directory on the host owned by the agent's account,
+    /// refuses a path on the root volume, and writes `targets[].work_root`
+    /// through the canonical registry's compare-and-swap. The agent uses the
+    /// new root once its unit restarts it.
+    WorkRoot {
+        target: String,
+        /// An absolute directory on a mounted data volume, such as /mnt/wd16tb/stado.
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Relocate object-store keys on the host that holds their bytes.
     Relocate {
         target: String,
@@ -85,6 +106,26 @@ pub enum SpaceCommands {
         apply: bool,
         #[arg(long, default_value_t = 0)]
         limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SpaceVolumeCommands {
+    /// Mount one block device at a mount point and write its fstab line by UUID.
+    ///
+    /// Mounts, never formats: a device with no filesystem is refused by
+    /// name. `stado space report TARGET` lists the host's block devices and
+    /// which of them nothing has mounted.
+    Mount {
+        target: String,
+        /// The /dev leaf, such as sdb1 or nvme0n1p2.
+        #[arg(long)]
+        device: String,
+        /// The absolute directory the filesystem is mounted at, such as /mnt/wd16tb.
+        #[arg(long)]
+        mount_point: String,
         #[arg(long)]
         json: bool,
     },
@@ -155,6 +196,17 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
             reason,
             json,
         } => reclaim(&target, &stages, apply, reason.as_deref(), json).await,
+        SpaceCommands::Volume { command } => match command {
+            SpaceVolumeCommands::Mount {
+                target,
+                device,
+                mount_point,
+                json,
+            } => ops::mount_volume(&target, &device, &mount_point, json).await,
+        },
+        SpaceCommands::WorkRoot { target, path, json } => {
+            work_root::dispatch(&target, path.as_deref(), json).await
+        }
         SpaceCommands::File { command } => match command {
             SpaceFileCommands::Remove { target, path, json } => {
                 remove_file(&target, &path, json).await

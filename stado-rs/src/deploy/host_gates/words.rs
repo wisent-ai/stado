@@ -118,6 +118,18 @@ pub const AGENT_STORE_UNREADABLE: &str = "agent_store_unreadable";
 /// [`host_disk::LocalSnapshots`]: crate::deploy::host_disk::LocalSnapshots
 pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 
+/// This host has a disk attached that nothing has mounted.
+///
+/// A NOTE and never a blocker: the fleet writes to the volume under the
+/// agent's home, and that volume's free space is the verdict above. It is
+/// reported because an operator reading "29 GiB free" on a box they know to
+/// hold terabytes has been told a true number about the wrong disk: on
+/// 2026-09-18 ubuntu-server-rtx-pro-6000 refused a 22 GiB build for want of
+/// room while a multi-terabyte disk sat attached and unmounted, and no
+/// command in the product could say so. `stado space report <host>` names
+/// the device, its size and its filesystem, if it has one.
+pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
+
 /// This host's janitor has not completed a pass within
 /// [`STALL_INTERVALS`] times its own declared `check_interval_seconds`.
 ///

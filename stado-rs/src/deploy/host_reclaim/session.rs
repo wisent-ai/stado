@@ -140,6 +140,21 @@ pub async fn reclaim_host(
         .disk_cleanup
         .as_ref()
         .map(|policy| policy.target_free_gb);
+    // The queue's job trees live under the host's declared work root when it
+    // has one; the home root is swept as well, for the trees an agent left
+    // there before the declaration.
+    let work_roots = match target.work_root.as_deref() {
+        Some(root) => format!(
+            "{} {DEFAULT_WORK_ROOTS}",
+            crate::deploy::shlex_quote(
+                &std::path::Path::new(root)
+                    .join(crate::providers::local::work_base::JOBS_LEAF)
+                    .display()
+                    .to_string()
+            )
+        ),
+        None => DEFAULT_WORK_ROOTS.to_string(),
+    };
     let script = if host_channel::target_is_this_host(&target) {
         // A local reclaim must use the binary that owns this invocation.
         // Release capacity builds the corrected tree before installation;
@@ -154,7 +169,7 @@ pub async fn reclaim_host(
             apply,
             stages,
             live_jobs.as_deref(),
-            DEFAULT_WORK_ROOTS,
+            &work_roots,
             target_free_gb,
             Some(&current_stado),
         )
@@ -163,7 +178,7 @@ pub async fn reclaim_host(
             apply,
             stages,
             live_jobs.as_deref(),
-            DEFAULT_WORK_ROOTS,
+            &work_roots,
             target_free_gb,
         )
     };

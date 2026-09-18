@@ -229,6 +229,15 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
             );
             continue;
         }
+        if note == crate::deploy::host_gates::DISK_ATTACHED_UNMOUNTED {
+            println!(
+                "note:     {note} — {}; the fleet writes under the agent's home and cannot \
+                 use a disk nothing has mounted. `stado space report {}` lists every volume",
+                gates.unmounted_disks.join(", "),
+                gates.host,
+            );
+            continue;
+        }
         println!("note:     {note}");
     }
     claiming_outcome(&gates)

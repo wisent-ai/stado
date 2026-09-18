@@ -73,6 +73,20 @@ pub struct ComputeTarget {
     pub account_ref: Option<String>,
     #[serde(default)]
     pub disk_cleanup: Option<DiskCleanupPolicy>,
+    /// The directory this host's agent keeps the fleet's work in — job trees
+    /// under `<work_root>/jobs`, build caches under `<work_root>/build-cache`
+    /// — and the volume whose free space it publishes. Absent means the
+    /// agent's own home (`~/.stado/work`, `~/.stado/build-cache`), which is
+    /// what every host is until somebody declares otherwise.
+    ///
+    /// Declared with `stado space work-root TARGET --path PATH`, which also
+    /// creates the directory on the host owned by the agent's account. It
+    /// exists because on 2026-09-18 ubuntu-server-rtx-pro-6000 refused a
+    /// 22 GiB build for want of room on its 98 GiB root volume while 13 TiB
+    /// sat free on `/mnt/wd16tb`, and nothing in the product could tell the
+    /// agent to work there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_root: Option<String>,
     /// The memory twin of [`ComputeTarget::disk_cleanup`]: what this host is
     /// allowed to reclaim when its memory, rather than its disk, is the scarce
     /// resource. A target that declares none is not exempt — it is measured

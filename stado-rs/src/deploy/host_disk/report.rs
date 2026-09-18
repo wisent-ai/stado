@@ -62,20 +62,45 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
     }
 }
 
+fn usage_json(usage: &DiskUsage) -> Value {
+    json!({
+        "filesystem": usage.filesystem,
+        "blocks_kb": usage.blocks_kb,
+        "used_kb": usage.used_kb,
+        "available_kb": usage.available_kb,
+        "capacity": usage.capacity,
+        "mounted_on": usage.mounted_on,
+    })
+}
+
 /// The reading as the `--json` report, in `host reboot`'s report shape.
 pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, Value> {
     let mut report = host_channel::base_report(target);
     report.insert(
         "usage".to_string(),
-        reading.usage.as_ref().map_or(Value::Null, |usage| {
-            json!({
-                "filesystem": usage.filesystem,
-                "blocks_kb": usage.blocks_kb,
-                "used_kb": usage.used_kb,
-                "available_kb": usage.available_kb,
-                "capacity": usage.capacity,
-                "mounted_on": usage.mounted_on,
-            })
+        reading.usage.as_ref().map_or(Value::Null, usage_json),
+    );
+    // Where the rest of the host's storage is. `usage` above is the one
+    // volume the fleet writes to; a host can hold terabytes on another
+    // mount, or on a disk nothing has mounted, and neither shows in `usage`.
+    report.insert(
+        "volumes".to_string(),
+        Value::Array(reading.volumes.iter().map(usage_json).collect()),
+    );
+    report.insert(
+        "block_devices".to_string(),
+        json!({
+            "read": reading.block_devices_read,
+            "devices": reading.block_devices.iter().map(|device| json!({
+                "name": device.name,
+                "size_bytes": device.size_bytes,
+                "type": device.kind,
+                "fstype": device.fstype,
+                "mountpoint": device.mountpoint,
+                "uuid": device.uuid,
+                "model": device.model,
+                "unmounted": device.unmounted_among(&reading.block_devices),
+            })).collect::<Vec<Value>>(),
         }),
     );
     // Beside the disk, because a host that cannot allocate and a host that

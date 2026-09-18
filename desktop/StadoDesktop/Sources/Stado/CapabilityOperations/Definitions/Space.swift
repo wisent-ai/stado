@@ -37,5 +37,16 @@ enum NativeSpaceOperations {
             hostPlacement: .positional, fields: relocationFields, fixedArguments: ["--dry-run"], mutates: false),
         .init(id: "apply-relocation", title: "Apply object relocation", path: ["space", "relocate"],
             hostPlacement: .positional, fields: relocationFields, fixedArguments: ["--apply"]),
+        .init(id: "mount-volume", title: "Mount an attached disk durably", path: ["space", "volume", "mount"],
+            hostPlacement: .positional, fields: [
+                .init(id: "device", label: "Device leaf, such as sdb1", option: "--device", required: true),
+                .init(id: "mountPoint", label: "Mount point, such as /mnt/wd16tb", option: "--mount-point", required: true),
+            ]),
+        .init(id: "read-work-root", title: "Read where the agent keeps the fleet's work", path: ["space", "work-root"],
+            hostPlacement: .positional, fields: [], mutates: false),
+        .init(id: "declare-work-root", title: "Declare the work root on a data volume", path: ["space", "work-root"],
+            hostPlacement: .positional, fields: [
+                .init(id: "path", label: "Absolute directory on a mounted data volume, such as /mnt/wd16tb/stado", option: "--path", required: true),
+            ]),
     ]
 }

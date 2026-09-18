@@ -106,6 +106,10 @@ pub struct HostGates {
     /// How many local APFS snapshots the host is holding, or `None` where the
     /// host could not be asked (every Linux host).
     pub local_snapshots: Option<usize>,
+    /// Disks this host has attached that nothing has mounted, each as
+    /// `/dev/<name> <size> GiB <filesystem or "no filesystem">`. Empty on a
+    /// host with none, and on every host without `lsblk` (macOS).
+    pub unmounted_disks: Vec<String>,
     /// Queued jobs pinned to this host, oldest first. This is the gate's
     /// consequence made visible: a host that claims nothing while work is
     /// pinned to it is starving that exact list, and "blocked" without the

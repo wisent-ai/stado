@@ -160,6 +160,10 @@ pub async fn start_slot(
         .env("WC_JOB_ID", &job.job_id)
         .env("WC_ARTIFACT_INPUTS_JSON", &artifact_inputs_json)
         .env("WC_ARTIFACT_INPUTS_FILE", &artifact_inputs_file)
+        .envs(
+            crate::providers::local::work_base::declared()
+                .map(|root| (crate::providers::local::work_base::ENV, root)),
+        )
         .envs(secret_environment)
         .stdout(std::process::Stdio::from(stdout_file))
         // subprocess.STDOUT parity: stderr lands in the same log file.

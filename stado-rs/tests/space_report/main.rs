@@ -200,6 +200,164 @@ fn the_report_names_the_walk_it_did_not_run() {
     fixture.cleanup();
 }
 
+/// The `disk:` line measures the fleet's volume; `volumes[]` names every
+/// device-backed filesystem beside it, the fleet's among them, and
+/// `block_devices.read` says whether the host could list its disks at all.
+/// On 2026-09-18 a 16 TiB disk sat attached and unmounted on the Linux
+/// builder while the report said the host had 29 GiB.
+#[test]
+fn the_report_lists_every_volume_and_says_whether_disks_were_listed() {
+    let fixture = Fixture::new();
+    let output = fixture.report("0", &["--json"]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the report is one JSON document");
+    let fleet_volume = document["usage"]["filesystem"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the report names the fleet's volume: {document}"));
+    let volumes = document["volumes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the report carries volumes[]: {document}"));
+    assert!(
+        volumes
+            .iter()
+            .any(|volume| volume["filesystem"].as_str() == Some(fleet_volume)),
+        "the fleet's volume {fleet_volume} is among the volumes: {volumes:?}"
+    );
+    assert!(
+        volumes.iter().all(|volume| {
+            volume["filesystem"]
+                .as_str()
+                .is_some_and(|device| device.starts_with("/dev/"))
+                && volume["mounted_on"]
+                    .as_str()
+                    .is_some_and(|point| point.starts_with('/'))
+        }),
+        "every volume is device-backed and mounted: {volumes:?}"
+    );
+    let listed = document["block_devices"]["read"]
+        .as_bool()
+        .unwrap_or_else(|| panic!("the report says whether disks were listed: {document}"));
+    let has_lsblk = Path::new("/usr/bin/lsblk").exists();
+    assert_eq!(
+        listed, has_lsblk,
+        "block_devices.read follows whether this host has lsblk: {document}"
+    );
+    fixture.cleanup();
+}
+
+/// `space volume mount` refuses a device word that is not one `/dev` leaf
+/// and a mount point under a system tree before it reaches any host: the
+/// refusal is the command's own sentence, and the exit is nonzero.
+#[test]
+fn volume_mount_refuses_a_device_path_and_a_system_mount_point_before_the_host() {
+    let fixture = Fixture::new();
+    for (device, mount_point, expected) in [
+        ("../sda", "/mnt/data", "--device names one /dev leaf"),
+        ("sdb1", "/etc/data", "is under a system tree"),
+        ("sdb1", "mnt/data", "absolute directory path"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_stado"))
+            .args([
+                "space",
+                "volume",
+                "mount",
+                TARGET,
+                "--device",
+                device,
+                "--mount-point",
+                mount_point,
+            ])
+            .env_clear()
+            .env("HOME", &fixture.home)
+            .env("PATH", SYSTEM_PATH)
+            .env("TMPDIR", fixture.root.join("tmp"))
+            .env("STADO_CONFIG", &fixture.config)
+            .env("WC_STORAGE_BACKEND", "local")
+            .env("WC_LOCAL_STORAGE_PATH", &fixture.storage)
+            .env("WC_PROVIDERS", "local")
+            .env("NO_COLOR", "1")
+            .output()
+            .expect("run stado space volume mount");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        fs::write(
+            fixture
+                .root
+                .join(format!("volume-mount-{}.stderr", device.replace('/', "_"))),
+            &output.stderr,
+        )
+        .unwrap();
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{device} at {mount_point} was not refused: {stderr}"
+        );
+        assert!(
+            stderr.contains(expected),
+            "{device} at {mount_point}: the refusal lost its sentence {expected:?}: {stderr}"
+        );
+    }
+    fixture.cleanup();
+}
+
+/// `space work-root` without `--path` reads the declaration; a target that
+/// declares none is told where its agent works by default. With `--path`,
+/// a relative path and a path under a system tree are refused with the
+/// registry's own sentence before any host is reached, and the registry is
+/// left as it was.
+#[test]
+fn work_root_reads_the_default_and_refuses_bad_paths_before_the_host() {
+    let fixture = Fixture::new();
+    let run = |extra: &[&str]| {
+        let mut args = vec!["space", "work-root", TARGET];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_stado"))
+            .args(&args)
+            .env_clear()
+            .env("HOME", &fixture.home)
+            .env("PATH", SYSTEM_PATH)
+            .env("TMPDIR", fixture.root.join("tmp"))
+            .env("STADO_CONFIG", &fixture.config)
+            .env("WC_STORAGE_BACKEND", "local")
+            .env("WC_LOCAL_STORAGE_PATH", &fixture.storage)
+            .env("WC_PROVIDERS", "local")
+            .env("NO_COLOR", "1")
+            .output()
+            .expect("run stado space work-root")
+    };
+    let read = run(&["--json"]);
+    fs::write(fixture.root.join("work-root-read.stdout"), &read.stdout).unwrap();
+    let document: serde_json::Value =
+        serde_json::from_slice(&read.stdout).expect("the read is one JSON document");
+    assert_eq!(read.status.code(), Some(0));
+    assert!(
+        document["work_root"].is_null(),
+        "an undeclared target reads as undeclared: {document}"
+    );
+    for (path, expected) in [
+        ("mnt/data", "must be an absolute path"),
+        ("/etc/stado-work", "is under a system tree"),
+        ("/", "must name a directory below /"),
+    ] {
+        let refused = run(&["--path", path]);
+        let stderr = String::from_utf8_lossy(&refused.stderr).into_owned();
+        assert_ne!(
+            refused.status.code(),
+            Some(0),
+            "--path {path} was not refused: {stderr}"
+        );
+        assert!(
+            stderr.contains(expected),
+            "--path {path}: the refusal lost its sentence {expected:?}: {stderr}"
+        );
+    }
+    let registry = fs::read_to_string(fixture.storage.join("registry.json")).unwrap();
+    assert!(
+        !registry.contains("work_root"),
+        "a refused declaration reached the registry: {registry}"
+    );
+    fixture.cleanup();
+}
+
 /// A bound that is not a whole number of seconds is refused before anything
 /// is walked, and the refusal says what zero means.
 #[test]

@@ -123,6 +123,29 @@ const DISK_USAGE_SECTION: &str = r#"/bin/df -Pk / 2>/dev/null | while IFS= read 
 done
 "#;
 
+/// Every device-backed filesystem and, on Linux, every block device the
+/// kernel sees — the `volumes` and `block_devices` fields. Read by both
+/// scopes. `df -Pk /` above measures the volume the fleet writes to; this
+/// section answers where the rest of the host's storage is. On 2026-09-18 a
+/// multi-terabyte disk was attached to ubuntu-server-rtx-pro-6000, `df`
+/// showed nothing of it because nothing had mounted it, and the only
+/// reading the product offered said the host had 29 GiB free. A disk with
+/// no mountpoint is reported as attached and unmounted, never left out.
+const VOLUMES_SECTION: &str = r#"/bin/df -Pk 2>/dev/null | while IFS= read -r row; do
+  set -- $row
+  case "${1:-}" in
+    /dev/*) printf 'STADO_VOLUME\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" ;;
+  esac
+done
+if [ -x /usr/bin/lsblk ]; then
+  /usr/bin/lsblk -b -P -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID,MODEL 2>/dev/null | while IFS= read -r row; do
+    printf 'STADO_BLOCK_DEVICE\t%s\n' "$row"
+  done
+  printf 'STADO_BLOCK_DEVICES_END\t%s\n' 'listed'
+fi
+"#;
+
 /// The janitor's state file — the `state` field, which carries
 /// `last_success_at` and `low_bytes`. Read by both scopes: it is where
 /// `cleanup_success_age_seconds` and `disk_cleanup_stalled` come from.
@@ -244,10 +267,12 @@ pub fn remote_script_for(scope: DiskScope) -> String {
     let mut script = String::from("set -u\n");
     if scope == DiskScope::UsageOnly {
         script.push_str(DISK_USAGE_SECTION);
+        script.push_str(VOLUMES_SECTION);
         return script;
     }
     if scope != DiskScope::StateOnly {
         script.push_str(DISK_USAGE_SECTION);
+        script.push_str(VOLUMES_SECTION);
         script.push_str(MEMORY_SECTION);
         script.push_str(MEMORY_STATE_SECTION);
     }

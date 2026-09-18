@@ -14,6 +14,84 @@ pub struct DiskUsage {
     pub mounted_on: String,
 }
 
+/// One block device as the host's `lsblk -b -P` named it: a disk, a
+/// partition or a mapper volume, with the filesystem on it and where it is
+/// mounted, when it is. `mountpoint` empty on a `disk` or `part` with no
+/// children is the fact this record exists for: storage the host has and
+/// the fleet cannot write to.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlockDevice {
+    pub name: String,
+    pub size_bytes: i64,
+    pub kind: String,
+    pub fstype: String,
+    pub mountpoint: String,
+    pub uuid: String,
+    pub model: String,
+}
+
+impl BlockDevice {
+    /// A whole disk or partition holding no mounted filesystem, no partition
+    /// of its own that is listed, and no filesystem that is in use without
+    /// a mountpoint (an LVM physical volume, a LUKS container, swap):
+    /// attached, and unused by anything the kernel mounts.
+    pub fn unmounted_among(&self, all: &[BlockDevice]) -> bool {
+        if (self.kind != "disk" && self.kind != "part")
+            || !self.mountpoint.is_empty()
+            || self.size_bytes <= 0
+        {
+            return false;
+        }
+        if matches!(self.fstype.as_str(), "LVM2_member" | "crypto_LUKS" | "swap") {
+            return false;
+        }
+        !all.iter().any(|other| {
+            other.name != self.name
+                && other.name.starts_with(&self.name)
+                && (other.kind == "part" || !other.mountpoint.is_empty())
+        })
+    }
+}
+/// `lsblk -P` prints `KEY="value"` pairs; the values are what the kernel
+/// said, quotes and all, so an embedded quote arrives as `\"`.
+pub fn parse_lsblk_pairs(row: &str) -> BlockDevice {
+    let mut device = BlockDevice::default();
+    let mut rest = row;
+    while let Some(equals) = rest.find("=\"") {
+        let key = rest[..equals].trim();
+        let after = &rest[equals + 2..];
+        let mut value = String::new();
+        let mut chars = after.char_indices();
+        let mut end = after.len();
+        while let Some((index, ch)) = chars.next() {
+            match ch {
+                '\\' => {
+                    if let Some((_, escaped)) = chars.next() {
+                        value.push(escaped);
+                    }
+                }
+                '"' => {
+                    end = index + 1;
+                    break;
+                }
+                other => value.push(other),
+            }
+        }
+        match key {
+            "NAME" => device.name = value,
+            "SIZE" => device.size_bytes = value.parse().unwrap_or_default(),
+            "TYPE" => device.kind = value,
+            "FSTYPE" => device.fstype = value,
+            "MOUNTPOINT" => device.mountpoint = value,
+            "UUID" => device.uuid = value,
+            "MODEL" => device.model = value,
+            _ => {}
+        }
+        rest = &after[end.min(after.len())..];
+    }
+    device
+}
+
 /// `df -Pk` 1024-byte blocks as GiB, one decimal.
 ///
 /// This module owns the unit because it owns the `df` invocation, and both
@@ -167,6 +245,13 @@ pub type MemoryReading = crate::providers::local::host_memory::reading::MemoryRe
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiskReading {
     pub usage: Option<DiskUsage>,
+    /// Every device-backed filesystem `df -Pk` listed, the fleet's volume
+    /// among them.
+    pub volumes: Vec<DiskUsage>,
+    /// Every block device the kernel sees, mounted or not. Empty with
+    /// `block_devices_read` false means the host has no `lsblk` (macOS).
+    pub block_devices: Vec<BlockDevice>,
+    pub block_devices_read: bool,
     pub clone_summaries: Vec<CloneSummary>,
     pub clone_root: Option<String>,
     pub state: CleanupState,
@@ -204,6 +289,18 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
                     mounted_on: (*mounted).to_string(),
                 });
             }
+            ["STADO_VOLUME", filesystem, blocks, used, available, capacity, mounted] => {
+                reading.volumes.push(DiskUsage {
+                    filesystem: (*filesystem).to_string(),
+                    blocks_kb: (*blocks).to_string(),
+                    used_kb: (*used).to_string(),
+                    available_kb: (*available).to_string(),
+                    capacity: (*capacity).to_string(),
+                    mounted_on: (*mounted).to_string(),
+                });
+            }
+            ["STADO_BLOCK_DEVICE", row] => reading.block_devices.push(parse_lsblk_pairs(row)),
+            ["STADO_BLOCK_DEVICES_END", _] => reading.block_devices_read = true,
             ["STADO_CLEANUP_STATE", payload] => {
                 reading.state = parse_state(payload, policy_interval_seconds);
             }

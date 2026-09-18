@@ -13,10 +13,10 @@ use crate::deploy::host_disk;
 use crate::deploy::host_gates::gates::HostGates;
 use crate::deploy::host_gates::words::{
     AGENT_STORE_DEVICE_ONLY, AGENT_STORE_UNKNOWN, AGENT_STORE_UNREADABLE,
-    CAPACITY_PUBLICATION_STALE, CLEANUP_IN_PROGRESS, DISK_CLEANUP_LOCK_HELD,
-    DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED, DISK_PRESSURE_UNRESOLVED,
-    LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY, QUEUE_PAUSED,
-    STALL_INTERVALS,
+    CAPACITY_PUBLICATION_STALE, CLEANUP_IN_PROGRESS, DISK_ATTACHED_UNMOUNTED,
+    DISK_CLEANUP_LOCK_HELD, DISK_CLEANUP_POLICY_UNKNOWN, DISK_CLEANUP_STALLED,
+    DISK_PRESSURE_UNRESOLVED, LOCAL_SNAPSHOTS_UNRECLAIMABLE, NO_CAPACITY_PUBLICATION, PINNED_ONLY,
+    QUEUE_PAUSED, STALL_INTERVALS,
 };
 use crate::deploy::host_gates::DISK_PRESSURE_ACTIVE;
 use crate::providers::local::disk_cleanup;
@@ -206,6 +206,29 @@ pub fn assemble(
     if agent_store.is_none() {
         notes.push(AGENT_STORE_UNREADABLE.to_string());
     }
+    // Storage the host has that the fleet's volume is not on. Always a note,
+    // pressure or not: the operator who reads this host as short of disk is
+    // the operator who attached the disk.
+    let unmounted = reading
+        .block_devices
+        .iter()
+        .filter(|device| device.unmounted_among(&reading.block_devices))
+        .map(|device| {
+            format!(
+                "/dev/{} {:.1} GiB {}",
+                device.name,
+                device.size_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+                if device.fstype.is_empty() {
+                    "no filesystem"
+                } else {
+                    device.fstype.as_str()
+                }
+            )
+        })
+        .collect::<Vec<String>>();
+    if !unmounted.is_empty() {
+        notes.push(DISK_ATTACHED_UNMOUNTED.to_string());
+    }
 
     let mut gates = HostGates {
         host: target.name.clone(),
@@ -263,6 +286,7 @@ pub fn assemble(
         fleet_store_backend: crate::config::wc_storage_backend().to_string(),
         notes,
         local_snapshots,
+        unmounted_disks: unmounted,
         waiting_jobs: Vec::new(),
         complete: true,
         observations: Vec::new(),

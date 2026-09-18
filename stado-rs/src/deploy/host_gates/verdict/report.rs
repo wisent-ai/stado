@@ -69,6 +69,9 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             // "free 2 GiB, watermark 55 GiB" knows the declared APFS stage may
             // need to thin local Time Machine snapshots. Null where unsupported.
             "local_snapshots": gates.local_snapshots,
+            // Storage the host has and the fleet cannot reach: disks
+            // attached and unmounted, each named with its size.
+            "unmounted_disks": gates.unmounted_disks,
             // Whether anything is still trying to keep the two numbers above
             // apart, and how long since it last managed to.
             "cleanup_stalled": state_known.then_some(gates.disk_cleanup_stalled),

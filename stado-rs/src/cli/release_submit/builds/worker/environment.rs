@@ -51,12 +51,13 @@ pub(super) fn build_environment(
     // of the same product recompiles only what its commit changed. Cargo
     // locks the directory itself, so two jobs of one product on one host
     // take turns rather than corrupt it. A recipe step that names its own
-    // `--target-dir` keeps it; the stage map relies on that.
+    // `--target-dir` keeps it; the stage map relies on that. The cache sits
+    // under the host's declared work root when it has one — the agent hands
+    // the declaration to every job — and under `~/.stado` otherwise.
     if let Some(home) = std::env::var_os("HOME") {
         environment.insert(
             "CARGO_TARGET_DIR".into(),
-            Path::new(&home)
-                .join(".stado/build-cache")
+            crate::providers::local::work_base::build_cache_root(Path::new(&home))
                 .join(&request.product)
                 .join(&request.platform)
                 .join("cargo-target")

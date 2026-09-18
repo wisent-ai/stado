@@ -1,10 +1,11 @@
 //! The owned root components, and admission of one job's canonical tree.
 //!
 //! Every path this cleaner may touch is built here. Each component below the
-//! physically resolved home is opened separately with
-//! `O_DIRECTORY|O_NOFOLLOW` and re-validated as an owned directory, so no
-//! component symlink and no foreign owner can redirect either admission or
-//! cleanup.
+//! physically resolved work base — the declared `targets[].work_root`, or
+//! the agent's home ([`crate::providers::local::work_base`]) — is opened
+//! separately with `O_DIRECTORY|O_NOFOLLOW` and re-validated as an owned
+//! directory, so no component symlink and no foreign owner can redirect
+//! either admission or cleanup.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -16,27 +17,29 @@ use nix::sys::stat::{FileStat, Mode};
 
 use crate::providers::local::disk_cleanup::queue_workdirs::WORKDIR_PREFIX;
 use crate::providers::local::disk_cleanup::{euid, ifmt, safefs, IFDIR};
+use crate::providers::local::work_base;
 
-/// Queue-owned workdir root, relative to the account that runs the agent.
+/// Queue-owned workdir root, relative to the account that runs an agent
+/// with no declared work root.
 pub const WORK_ROOT: &str = ".stado/work/jobs";
-
-/// Queue root components below the already-resolved agent home. Each is opened
-/// separately with `O_DIRECTORY|O_NOFOLLOW`; no component symlink is supported.
-const WORK_ROOT_COMPONENTS: [&str; 3] = [".stado", "work", "jobs"];
 
 /// Canonical owner-visible root beneath an already-resolved agent home.
 pub fn work_root_in(home: &Path) -> PathBuf {
     home.join(WORK_ROOT)
 }
 
-fn resolved_home(home: &Path) -> io::Result<PathBuf> {
-    std::fs::canonicalize(home)
+fn resolved(base: &Path) -> io::Result<PathBuf> {
+    std::fs::canonicalize(base)
 }
 
 /// Canonical owner-visible root for every local queue job.
 pub fn work_root() -> PathBuf {
-    let home = crate::config_file::expand_tilde("~");
-    work_root_in(&resolved_home(&home).unwrap_or(home))
+    let (base, components) = work_base::base_and_jobs_components();
+    let mut root = resolved(&base).unwrap_or(base);
+    for component in components {
+        root.push(component);
+    }
+    root
 }
 
 fn validate_owned_directory(fd: RawFd, label: &Path) -> io::Result<FileStat> {
@@ -73,35 +76,55 @@ fn open_owned_component(
     Ok(opened)
 }
 
-pub(super) fn open_work_root_in(
-    home: &Path,
+/// Open the queue root below the work base this process was told about,
+/// component by component, creating the missing ones when asked. The base
+/// itself is never created: a declared root is made on the host by `stado
+/// space work-root`, owned by the agent's account, and a base that is not
+/// an owned directory is refused here as it always was for the home.
+pub(super) fn open_work_root(create: bool) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
+    let (base, components) = work_base::base_and_jobs_components();
+    open_work_root_at(&base, components, create)
+}
+
+fn open_work_root_at(
+    base: &Path,
+    components: &[&str],
     create: bool,
 ) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
-    let home = resolved_home(home)?;
-    let home_fd = safefs::open_dir_path(&home)?;
-    let home_info = validate_owned_directory(home_fd.as_raw_fd(), &home)?;
-    let mut parent = home_fd;
-    let mut path = home.clone();
-    for component in WORK_ROOT_COMPONENTS {
+    let base = resolved(base)?;
+    let base_fd = safefs::open_dir_path(&base)?;
+    let base_info = validate_owned_directory(base_fd.as_raw_fd(), &base)?;
+    let mut parent = base_fd;
+    let mut path = base.clone();
+    for component in components {
         path.push(component);
         parent = open_owned_component(parent.as_raw_fd(), OsStr::new(component), &path, create)?;
     }
-    Ok((path, parent, home_info.st_dev))
+    Ok((path, parent, base_info.st_dev))
 }
 
+/// The cleanup root: the queue root itself, or a declared override beneath
+/// the work base. `home` is the base an undeclared host cleans under; a
+/// declared work root replaces it for both the default and the override.
 pub(super) fn open_cleanup_root(
     home: &Path,
     configured: Option<&str>,
 ) -> io::Result<(PathBuf, OwnedFd, dev_t)> {
-    let Some(configured) = configured else {
-        return open_work_root_in(home, false);
+    let (declared_base, components) = work_base::base_and_jobs_components();
+    let base = if work_base::declared().is_some() {
+        declared_base
+    } else {
+        home.to_path_buf()
     };
-    let home = resolved_home(home)?;
+    let Some(configured) = configured else {
+        return open_work_root_at(&base, components, false);
+    };
+    let home = resolved(&base)?;
     let expanded = crate::config_file::expand_tilde(configured);
     let relative = expanded.strip_prefix(&home).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "queue cleanup root must be beneath the host home",
+            "queue cleanup root must be beneath the host's work base (its declared work_root, or its home)",
         )
     })?;
     if relative.as_os_str().is_empty() {
@@ -156,7 +179,7 @@ pub fn create_work_dir(job_id: &str) -> io::Result<PathBuf> {
             "queue job id must be job- followed by 24 lowercase hex digits",
         ));
     }
-    let (root, root_fd, _) = open_work_root_in(&crate::config_file::expand_tilde("~"), true)?;
+    let (root, root_fd, _) = open_work_root(true)?;
     let name = OsString::from(format!("{WORKDIR_PREFIX}{job_id}"));
     let work = root.join(&name);
     let work_fd = open_owned_component(root_fd.as_raw_fd(), &name, &work, true)?;
