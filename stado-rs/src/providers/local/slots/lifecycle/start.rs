@@ -201,6 +201,7 @@ pub async fn start_slot(
         job.job_id,
         head_chars(&job.command, 60)
     ));
+    hold_awake_while_running(pid, &job.job_id, log_fn);
     write_heartbeat(store, &job.job_id).await?;
     let hb_task = start_heartbeat_task(store.clone(), job.job_id.clone(), pid);
     let slot = Slot {
@@ -220,4 +221,34 @@ pub async fn start_slot(
         disk_cleanup_lock: None,
         gpu_uuid: gpu_uuid.map(str::to_string),
     }))
+}
+
+/// A workstation that goes to sleep takes its running job with it: the
+/// process stops, the heartbeat stops, and the queue records `worker lease
+/// expired` — which is how the darwin build of jeden 0.1.9 (job-b6bb) died
+/// at 02:06 on 2026-09-18, eighteen minutes after this laptop entered sleep
+/// with the build at 183 crates. The host is interactive by declaration, so
+/// sleep is expected; a claimed job is the reason not to. On Darwin the job's
+/// lifetime holds an idle-sleep assertion through the system's own
+/// `caffeinate`, released the moment the job's pid ends; a closed lid still
+/// sleeps, because the operator closing the lid is a decision and idling is
+/// not. Other platforms have no such assertion and nothing to hold.
+fn hold_awake_while_running(pid: i32, job_id: &str, log_fn: &mut dyn FnMut(&str)) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    match std::process::Command::new("/usr/bin/caffeinate")
+        .args(["-i", "-w", &pid.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => log_fn(&format!(
+            "holding this host awake while {job_id} runs (caffeinate -i -w {pid})"
+        )),
+        Err(error) => log_fn(&format!(
+            "cannot hold this host awake while {job_id} runs: /usr/bin/caffeinate: {error}; idle sleep will end the job"
+        )),
+    }
 }
