@@ -119,7 +119,14 @@ fn a_tree_of_more_files_than_a_release_may_carry_builds_from_a_snapshot_of_its_f
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home.path(), &private);
-    registry(home.path(), &storage, &public_key, platform, None);
+    registry(
+        home.path(),
+        &storage,
+        &public_key,
+        platform,
+        None,
+        &vault.url(),
+    );
 
     let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut agent_command, home.path(), &storage, &vault);

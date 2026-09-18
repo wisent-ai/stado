@@ -142,7 +142,14 @@ fn a_run_that_published_nothing_does_not_fence_an_older_release_delivery() {
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home.path(), &private);
-    registry(home.path(), &storage, &public_key, platform, None);
+    registry(
+        home.path(),
+        &storage,
+        &public_key,
+        platform,
+        None,
+        &vault.url(),
+    );
 
     let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut agent_command, home.path(), &storage, &vault);
@@ -156,30 +163,35 @@ fn a_run_that_published_nothing_does_not_fence_an_older_release_delivery() {
     );
     wait_for_claimable_capacity(&storage, home.path(), &mut agent.0);
 
-    // The release: its build is queued to the live worker and its coordinator
-    // waits on it.
+    // The release: its builds are queued to the live worker, and the run is
+    // then finished by `resume`, which is the process this journey watches.
     let mut submit_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut submit_command, home.path(), &storage, &vault);
-    let mut submit = Running(
-        submit_command
-            .args([
-                "release",
-                "submit",
-                "--source",
-                source.to_str().unwrap(),
-                "--commit",
-                &released,
-                "--version",
-                "1.0.0",
-                "--channel",
-                "candidate",
-                "--json",
-            ])
-            .stdout(File::create(home.path().join("submit.out")).unwrap())
-            .stderr(File::create(home.path().join("submit.err")).unwrap())
-            .spawn()
-            .unwrap(),
-    );
+    let queued = submit_command
+        .args([
+            "release",
+            "submit",
+            "--source",
+            source.to_str().unwrap(),
+            "--commit",
+            &released,
+            "--version",
+            "1.0.0",
+            "--channel",
+            "candidate",
+            "--json",
+        ])
+        .stdout(File::create(home.path().join("submit.out")).unwrap())
+        .stderr(File::create(home.path().join("submit.err")).unwrap())
+        .spawn()
+        .unwrap();
+    let mut submit = Running(follow_submission(
+        queued,
+        home.path(),
+        &storage,
+        &vault,
+        "submit",
+    ));
 
     // The release is on record and waiting on its build before the later
     // submission is made, so the two never race for the product's catalog

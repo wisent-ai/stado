@@ -61,7 +61,14 @@ fn a_build_with_no_room_is_refused_before_its_first_gate() {
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home.path(), &private);
-    registry(home.path(), &storage, &public_key, platform, None);
+    registry(
+        home.path(),
+        &storage,
+        &public_key,
+        platform,
+        None,
+        &vault.url(),
+    );
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
@@ -173,7 +180,14 @@ fn an_unknown_recipe_key_is_refused_by_name_before_a_job_is_queued() {
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home.path(), &private);
-    registry(home.path(), &storage, &public_key, platform, None);
+    registry(
+        home.path(),
+        &storage,
+        &public_key,
+        platform,
+        None,
+        &vault.url(),
+    );
 
     let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut submit, home.path(), &storage, &vault);

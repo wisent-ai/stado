@@ -144,14 +144,6 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     {
         return Err(CmdError::click("durable release run identity mismatch"));
     }
-    // One run per product and channel is worth building: the older live runs
-    // lose their queued builds now and are not published later.
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    for replaced in supersede_older(&store, &run).await? {
-        eprintln!("release run {replaced} superseded by {}", run.run_id);
-    }
     // Submitting is queueing. The builds run in the fleet, and the control
     // host's release agent signs, publishes and delivers when they are done;
     // the operator's terminal is not the place to wait an hour for a builder.
@@ -229,6 +221,14 @@ pub(super) async fn continue_run(
     run.state = ReleaseRunState::Waiting;
     save(&mut run).await?;
     if !finish {
+        // One run per product and channel is worth building: now that this
+        // run has builds queued, the older live runs lose theirs and are not
+        // published later. A submission that queued nothing supersedes
+        // nothing - a run no builder will take must not take the fleet's
+        // release away from the run that is building.
+        for replaced in supersede_older(&store, &run).await? {
+            eprintln!("release run {replaced} superseded by {}", run.run_id);
+        }
         if json {
             println!("{}", serde_json::to_string_pretty(&run)?)
         } else {

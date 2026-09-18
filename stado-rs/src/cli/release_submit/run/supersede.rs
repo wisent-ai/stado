@@ -38,8 +38,17 @@ async fn live_runs_of(
         else {
             continue;
         };
-        let run: ReleaseRun = serde_json::from_str(&text)
-            .map_err(|error| CmdError::click(format!("invalid release run {path}: {error}")))?;
+        // A run record this build cannot read whole - written by another
+        // version, or seeded partially - is not one this submission may
+        // supersede; it is left alone and named, never a reason to refuse
+        // the submission.
+        let run: ReleaseRun = match serde_json::from_str(&text) {
+            Ok(run) => run,
+            Err(error) => {
+                eprintln!("release run {path} left alone: {error}");
+                continue;
+            }
+        };
         if run.product == product
             && run.channel == channel
             && matches!(

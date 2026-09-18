@@ -219,29 +219,75 @@ pub(crate) fn wait_for_submit(
     if !status.success() {
         return status;
     }
-    let queued: Option<Value> = fs::read(home.join("submit.out"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-    let Some(run_id) = queued
-        .filter(|run| run["state"] == "waiting")
-        .and_then(|run| run["run_id"].as_str().map(str::to_owned))
-    else {
+    let Some(mut resume) = resume_after_queueing(home, storage, vault, "submit") else {
         return status;
     };
+    wait_for_release_process(&mut resume, agent, home, storage, deadline)
+}
+
+/// The process a watcher follows after `submit` queued its builds: `submit`
+/// itself while it runs, then `stado release resume` on the run it recorded.
+/// A journey that watches the store while "the submission" runs - for its
+/// run state, a queued delivery, a builder's claim - watches this child.
+/// `name` is the stem of the retained output files, `submit` by default.
+pub(crate) fn follow_submission(
+    mut child: Child,
+    home: &Path,
+    storage: &Path,
+    vault: &SkarbiecFixture,
+    name: &str,
+) -> Child {
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            if !status.success() {
+                return child;
+            }
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "release submit did not queue its builds within 180 seconds\nsubmit stdout:\n{}\nsubmit stderr:\n{}",
+            fs::read_to_string(home.join(format!("{name}.out"))).unwrap_or_default(),
+            fs::read_to_string(home.join(format!("{name}.err"))).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    resume_after_queueing(home, storage, vault, name).unwrap_or(child)
+}
+
+/// When `<name>.out` holds a run in state `waiting`, the resume of that run,
+/// writing over `<name>.out` and appending to `<name>.err` so the retained
+/// files end with what the finished run reported.
+fn resume_after_queueing(
+    home: &Path,
+    storage: &Path,
+    vault: &SkarbiecFixture,
+    name: &str,
+) -> Option<Child> {
+    let queued: Option<Value> = fs::read(home.join(format!("{name}.out")))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let run_id = queued
+        .filter(|run| run["state"] == "waiting")
+        .and_then(|run| run["run_id"].as_str().map(str::to_owned))?;
     let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut command, home, storage, vault);
-    let mut resume = command
-        .args(["release", "resume", &run_id, "--json"])
-        .stdout(Stdio::from(File::create(home.join("submit.out")).unwrap()))
-        .stderr(Stdio::from(
-            fs::OpenOptions::new()
-                .append(true)
-                .open(home.join("submit.err"))
-                .unwrap(),
-        ))
-        .spawn()
-        .unwrap();
-    wait_for_release_process(&mut resume, agent, home, storage, deadline)
+    Some(
+        command
+            .args(["release", "resume", &run_id, "--json"])
+            .stdout(Stdio::from(
+                File::create(home.join(format!("{name}.out"))).unwrap(),
+            ))
+            .stderr(Stdio::from(
+                fs::OpenOptions::new()
+                    .append(true)
+                    .open(home.join(format!("{name}.err")))
+                    .unwrap(),
+            ))
+            .spawn()
+            .unwrap(),
+    )
 }
 
 fn wait_for_release_process(

@@ -41,6 +41,7 @@ fn failed_delivery_resumes_original_source_after_checkout_changes() {
         &fs::read_to_string(public).unwrap(),
         platform,
         None,
+        &vault.url(),
     );
     let installed = home.path().join(".stado/bin/ci-release-probe");
     fs::create_dir(&installed).unwrap();

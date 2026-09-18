@@ -66,7 +66,14 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home.path(), &private);
-    registry(home.path(), &storage, &public_key, platform, None);
+    registry(
+        home.path(),
+        &storage,
+        &public_key,
+        platform,
+        None,
+        &vault.url(),
+    );
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
@@ -202,6 +209,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
         &public_key,
         platform,
         Some((target, "offline-recovery.invalid")),
+        &vault.url(),
     );
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
@@ -221,7 +229,7 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
     let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut submit, home.path(), &storage, &vault);
-    let mut submit = submit
+    let queued = submit
         .args([
             "release",
             "submit",
@@ -237,6 +245,8 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
         .stderr(Stdio::from(submit_err))
         .spawn()
         .unwrap();
+    // The recovery delivery is queued by the process that finishes the run.
+    let mut submit = follow_submission(queued, home.path(), &storage, &vault, "submit");
     let delivery =
         wait_for_recovery_delivery(&mut submit, &mut agent, home.path(), &storage, consumer);
     let _ = submit.kill();

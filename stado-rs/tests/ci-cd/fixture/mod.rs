@@ -40,7 +40,17 @@ impl SkarbiecFixture {
                 "context": {"service": "native-signing"}
             }),
         );
-        let fixture = Self::start(
+        // Inside the build job the signing step reads the identity through
+        // the broker as consumer `stado-control-plane`, with the grant file
+        // at `$HOME/.stado/control-plane-skarbiec-token` - the route a fleet
+        // builder takes. The grant is minted before the broker serves, in the
+        // fixture's provision hook, because the broker reads its vault once
+        // at start: a grant written to the file afterwards answered 403.
+        let token = home.join(".stado/control-plane-skarbiec-token");
+        fs::create_dir_all(token.parent().unwrap()).unwrap();
+        let token_for_hook = token.clone();
+        let home_for_hook = home.to_path_buf();
+        Self::start(
             home,
             &[item, apple],
             home.join("release-signing-grant"),
@@ -48,25 +58,33 @@ impl SkarbiecFixture {
                 "stado-release-coordinator",
                 "read:ci-release-signing#private_key",
             )),
-            |_, _| {},
-        );
-        // The signing step's owner-vault read runs `$HOME/.stado/bin/skarbiec`
-        // of the isolated home against `$HOME/.stado/skarbiec.vault.json`;
-        // give it the same real binary the fixture's broker runs and the
-        // fixture's own vault, at the paths the product looks in.
-        let installed = home.join(".stado/bin");
-        fs::create_dir_all(&installed).unwrap();
-        std::os::unix::fs::symlink(
-            skarbiec_support::real_skarbiec_binary(),
-            installed.join("skarbiec"),
+            move |gnupg, vault| {
+                let minted = Command::new(skarbiec_support::real_skarbiec_binary())
+                    .env_clear()
+                    .env("HOME", &home_for_hook)
+                    .env("GNUPGHOME", gnupg)
+                    .env("SKARBIEC_VAULT_FILE", vault)
+                    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                    .args([
+                        "grant",
+                        "issue",
+                        "stado-control-plane",
+                        "--capabilities",
+                        "read:desktop-signing-apple-development#certificate,\
+                         read:desktop-signing-apple-development#private_key",
+                    ])
+                    .output()
+                    .expect("the Skarbiec CLI runs");
+                assert!(
+                    minted.status.success(),
+                    "real Skarbiec refused the control-plane signing grant: {}",
+                    String::from_utf8_lossy(&minted.stderr)
+                );
+                let grant: Value = serde_json::from_slice(&minted.stdout).unwrap();
+                fs::write(&token_for_hook, grant["token"].as_str().unwrap()).unwrap();
+                fs::set_permissions(&token_for_hook, fs::Permissions::from_mode(0o600)).unwrap();
+            },
         )
-        .unwrap();
-        std::os::unix::fs::symlink(
-            home.join("skarbiec.json"),
-            home.join(".stado/skarbiec.vault.json"),
-        )
-        .unwrap();
-        fixture
     }
 }
 
@@ -228,6 +246,7 @@ pub(crate) fn registry(
     public_key: &str,
     platform: &str,
     recovery_target: Option<(&str, &str)>,
+    broker_url: &str,
 ) {
     let hostname = String::from_utf8(run(Command::new("hostname").arg("-f")).stdout)
         .unwrap()
@@ -346,7 +365,7 @@ pub(crate) fn registry(
         serde_json::to_string_pretty(&document).unwrap(),
     )
     .unwrap();
-    profile::configure(home, storage);
+    profile::configure(home, storage, broker_url);
     if platform.starts_with("darwin-") {
         signing::seed_native_signing_input(home, storage);
     }

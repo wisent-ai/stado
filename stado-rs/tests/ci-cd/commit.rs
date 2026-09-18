@@ -77,6 +77,7 @@ fn committed_submission_preserves_active_work_and_installs_the_selected_source()
         &fs::read_to_string(public).unwrap(),
         platform,
         None,
+        &vault.url(),
     );
     let arguments = [
         "release",

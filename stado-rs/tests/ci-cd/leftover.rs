@@ -85,7 +85,14 @@ fn a_delivery_rerun_in_its_own_work_tree_delivers_from_a_fresh_source_tree() {
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home.path(), &private);
-    registry(home.path(), &storage, &public_key, platform, None);
+    registry(
+        home.path(),
+        &storage,
+        &public_key,
+        platform,
+        None,
+        &vault.url(),
+    );
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
@@ -103,24 +110,30 @@ fn a_delivery_rerun_in_its_own_work_tree_delivers_from_a_fresh_source_tree() {
 
     let mut submit_command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut submit_command, home.path(), &storage, &vault);
-    let mut submit = Running(
-        submit_command
-            .args([
-                "release",
-                "submit",
-                "--source",
-                source.to_str().unwrap(),
-                "--version",
-                "1.0.0",
-                "--channel",
-                "candidate",
-                "--json",
-            ])
-            .stdout(File::create(home.path().join("submit.out")).unwrap())
-            .stderr(File::create(home.path().join("submit.err")).unwrap())
-            .spawn()
-            .unwrap(),
-    );
+    let queued = submit_command
+        .args([
+            "release",
+            "submit",
+            "--source",
+            source.to_str().unwrap(),
+            "--version",
+            "1.0.0",
+            "--channel",
+            "candidate",
+            "--json",
+        ])
+        .stdout(File::create(home.path().join("submit.out")).unwrap())
+        .stderr(File::create(home.path().join("submit.err")).unwrap())
+        .spawn()
+        .unwrap();
+    // The delivery is queued by the process that finishes the run.
+    let mut submit = Running(follow_submission(
+        queued,
+        home.path(),
+        &storage,
+        &vault,
+        "submit",
+    ));
     let job_id = plant_leftover_source_tree(&mut submit.0, home.path(), &storage);
     let status = wait_for_submit(&mut submit.0, &mut agent.0, home.path(), &storage, &vault);
     drop(submit);

@@ -87,7 +87,14 @@ fn a_builder_short_of_the_last_measured_scratch_is_refused_before_queuing() {
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home.path(), &private);
-    registry(home.path(), &storage, &public_key, platform, None);
+    registry(
+        home.path(),
+        &storage,
+        &public_key,
+        platform,
+        None,
+        &vault.url(),
+    );
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();

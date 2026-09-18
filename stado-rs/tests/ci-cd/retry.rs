@@ -52,7 +52,7 @@ fn signed_fleet(home: &Path, storage: &Path, platform: &str, with_worker: bool) 
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start_release(home, &private);
-    registry(home, storage, &public_key, platform, None);
+    registry(home, storage, &public_key, platform, None, &vault.url());
     vault
 }
 
@@ -81,29 +81,27 @@ fn submit(
     vault: &SkarbiecFixture,
     source: &Path,
     name: &str,
-) -> Running {
+) -> Child {
     let out = File::create(home.join(format!("{name}.out"))).unwrap();
     let err = File::create(home.join(format!("{name}.err"))).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut command, home, storage, vault);
-    Running(
-        command
-            .args([
-                "release",
-                "submit",
-                "--source",
-                source.to_str().unwrap(),
-                "--version",
-                "1.0.0",
-                "--channel",
-                "candidate",
-                "--json",
-            ])
-            .stdout(Stdio::from(out))
-            .stderr(Stdio::from(err))
-            .spawn()
-            .unwrap(),
-    )
+    command
+        .args([
+            "release",
+            "submit",
+            "--source",
+            source.to_str().unwrap(),
+            "--version",
+            "1.0.0",
+            "--channel",
+            "candidate",
+            "--json",
+        ])
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err))
+        .spawn()
+        .unwrap()
 }
 
 fn said_by(home: &Path, name: &str) -> String {
@@ -138,7 +136,16 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     let vault = signed_fleet(home.path(), &storage, platform, true);
     drop(claiming_agent(home.path(), &storage, &vault));
 
-    let mut first_submit = submit(home.path(), &storage, &vault, &source, "submit-first");
+    let first_submit = submit(home.path(), &storage, &vault, &source, "submit-first");
+    // `submit` returns once the build is queued; the run is then finished
+    // by `resume`, and that is the process the cancellation is reported by.
+    let mut first_submit = Running(follow_submission(
+        first_submit,
+        home.path(),
+        &storage,
+        &vault,
+        "submit-first",
+    ));
     let first_job = wait_for_queued_release_build(&mut first_submit.0, home.path(), &storage);
     let first_job_id = first_job["job_id"].as_str().unwrap().to_string();
     let mut cancel = Command::new(env!("CARGO_BIN_EXE_stado"));
@@ -166,7 +173,7 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
     );
 
     let mut agent = claiming_agent(home.path(), &storage, &vault);
-    let mut retry_submit = submit(home.path(), &storage, &vault, &source, "submit");
+    let mut retry_submit = Running(submit(home.path(), &storage, &vault, &source, "submit"));
     let status = wait_for_submit(
         &mut retry_submit.0,
         &mut agent.0,
@@ -232,7 +239,7 @@ fn a_build_with_no_room_is_refused_before_its_first_gate() {
     let vault = signed_fleet(home.path(), &storage, platform, true);
     let mut agent = claiming_agent(home.path(), &storage, &vault);
 
-    let mut running = submit(home.path(), &storage, &vault, &source, "submit");
+    let mut running = Running(submit(home.path(), &storage, &vault, &source, "submit"));
     let status = wait_for_submit(&mut running.0, &mut agent.0, home.path(), &storage, &vault);
     drop(agent);
     let reported = said_by(home.path(), "submit");
