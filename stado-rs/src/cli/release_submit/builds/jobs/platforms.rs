@@ -77,6 +77,32 @@ pub(crate) async fn enqueue_platforms(
                 save(run).await?;
             }
         }
+        // Since submit stopped waiting for builds, a platform stays recorded
+        // as Submitted while its job runs, and nothing wrote Failed when the
+        // job ended badly. A resubmission then saw Submitted, kept the dead
+        // job, and reported the run as waiting for builds that would never
+        // come: jeden 0.1.8 sat on a cancelled darwin job and a failed linux
+        // job for three hours on 2026-09-18 while three resubmissions each
+        // answered "builds queued". The job is the truth; a terminal failure
+        // or cancellation behind Submitted is a failed platform.
+        if run
+            .platforms
+            .get(p)
+            .is_some_and(|platform| platform.state == PlatformRunState::Submitted)
+        {
+            let job_id = run.platforms[p].job_id.clone();
+            if let Some(job) = read_terminal_job(store, &job_id).await? {
+                if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) {
+                    let platform = run.platforms.get_mut(p).expect("checked above");
+                    platform.state = PlatformRunState::Failed;
+                    platform.failure = Some(format!(
+                        "release job {job_id} ended {}; a new build is enqueued in its place",
+                        job.state
+                    ));
+                    save(run).await?;
+                }
+            }
+        }
         if run
             .platforms
             .get(p)
