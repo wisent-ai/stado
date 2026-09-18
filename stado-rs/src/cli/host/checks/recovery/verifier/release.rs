@@ -107,6 +107,12 @@ pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value,
 /// not the encrypted vault envelope. Reading those through Skarbiec keeps the
 /// operator boundary intact and avoids transporting the whole vault over the host
 /// channel.
+///
+/// `command` is the metadata Skarbiec is asked for: `grants`, `vaults` or
+/// `list`. Grants were `skarbiec tokens` until Skarbiec retired that word for
+/// `grant list`; on 2026-09-18 every `release-verifier` repair on the fleet
+/// answered `unknown command: tokens` for that reason, so the words Skarbiec
+/// actually takes are chosen here.
 pub(super) async fn remote_skarbiec_metadata(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
@@ -118,20 +124,21 @@ pub(super) async fn remote_skarbiec_metadata(
     let path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
-    let output = crate::deploy::host_channel::run_program(
-        target,
-        &[
-            "/usr/bin/env",
-            path,
-            gnupg_environment.as_str(),
-            vault_environment.as_str(),
-            skarbiec,
-            command,
-        ],
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let words: &[&str] = match command {
+        "grants" | "tokens" => &["grant", "list"],
+        other => &[other],
+    };
+    let mut invocation = vec![
+        "/usr/bin/env",
+        path,
+        gnupg_environment.as_str(),
+        vault_environment.as_str(),
+        skarbiec,
+    ];
+    invocation.extend_from_slice(words);
+    let output = crate::deploy::host_channel::run_program(target, &invocation, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec {command} metadata unavailable: {}",

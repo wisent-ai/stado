@@ -21,17 +21,29 @@ pub async fn vault_item_put(
     item_type: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    vault_word("vault item", item)?;
-    vault_word("credential type", item_type)?;
-
     let mut payload = String::new();
     std::io::stdin().lock().read_to_string(&mut payload)?;
+    store_vault_item(target, item, item_type, &payload, json_output).await
+}
+
+/// The write itself, for a caller that composed the payload in memory: the
+/// publisher declaration mints its bearer this way, so the secret never
+/// touches a shell or an argument vector on its way to the host.
+pub(crate) async fn store_vault_item(
+    target: &str,
+    item: &str,
+    item_type: &str,
+    payload: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    vault_word("vault item", item)?;
+    vault_word("credential type", item_type)?;
     if payload.is_empty() || payload.len() > usize::from(u16::MAX) {
         return Err(CmdError::usage(
             "vault item payload must contain between one and 65535 bytes",
         ));
     }
-    let document: Value = serde_json::from_str(&payload).map_err(|error| {
+    let document: Value = serde_json::from_str(payload).map_err(|error| {
         CmdError::usage(format!("vault item payload is not valid JSON: {error}"))
     })?;
     let payload_type = document
@@ -72,7 +84,7 @@ pub async fn vault_item_put(
     let stored = crate::deploy::host_channel::run_program_with_stdin(
         &resolved,
         &invocation,
-        &payload,
+        payload,
         &runner,
     )
     .await

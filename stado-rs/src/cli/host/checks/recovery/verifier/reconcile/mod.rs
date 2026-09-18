@@ -90,7 +90,7 @@ pub(super) async fn reconcile_verifier(
     .map_err(|error| CmdError::click(error.to_string()))?;
 
     let token_metadata =
-        remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "tokens")
+        remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "grants")
             .await?;
     let grant = token_metadata
         .as_array()

@@ -12,6 +12,7 @@ use super::CmdError;
 
 mod central;
 mod checkout;
+mod publisher;
 
 use central::sync_catalog;
 use checkout::sync;
@@ -37,6 +38,29 @@ enum CatalogCommands {
     },
     /// Audit Stado's catalog without contacting repository hosts.
     Audit {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Declare one product's release publisher across the fleet: mint its
+    /// item on the vault owner, let the release client read it, declare it on
+    /// every host that serves or submits releases, reconcile the verifier.
+    DeclarePublisher {
+        /// The product, as its release manifest names it.
+        product: String,
+        /// The registry host whose vault is authoritative.
+        #[arg(long)]
+        owner: String,
+        /// The registry host that runs `release submit`.
+        #[arg(long)]
+        client: String,
+        /// Further hosts that serve the release API; repeat for several.
+        #[arg(long = "target")]
+        targets: Vec<String>,
+        /// HOST=SERVICE: a managed unit whose process caches the publisher
+        /// table for its lifetime, reconciled after the declaration lands
+        /// on that host; repeat for several.
+        #[arg(long = "reload")]
+        reloads: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -175,5 +199,15 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
             )),
         },
         CatalogCommands::Audit { json } => audit(json).await,
+        CatalogCommands::DeclarePublisher {
+            product,
+            owner,
+            client,
+            targets,
+            reloads,
+            json,
+        } => {
+            publisher::declare_publisher(&product, &owner, &client, &targets, &reloads, json).await
+        }
     }
 }

@@ -15,6 +15,26 @@ pub(in crate::cli::host) struct RetagPhase {
     tags: String,
 }
 
+/// Whether TARGET's owner vault holds `item`: `absent`, `active` or the
+/// lifecycle state the vault records. Read by the publisher declaration,
+/// which mints an item only when the host does not hold one.
+pub(crate) async fn vault_item_state(
+    target: &str,
+    item: &str,
+) -> Result<String, crate::cli::CmdError> {
+    let credential_host =
+        crate::cli::host::machine::users::credentials::credential_host(target).await?;
+    let phase = read_vault_phase(
+        &credential_host.target,
+        &credential_host.vault,
+        item,
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(crate::cli::CmdError::click)?;
+    Ok(phase.state)
+}
+
 /// One item of the host's vault, read as a retag phase: its state, revision
 /// and tags, or `absent` when the vault holds no such item. The vault is read
 /// over the channel and parsed here — the phase rendering the retired

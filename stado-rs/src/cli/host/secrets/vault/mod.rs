@@ -176,7 +176,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
 /// Checked here because these words are interpolated into a script that
 /// performs an owner write, and a name that arrived from an inventory is no
 /// more trustworthy than one an operator typed.
-pub(in crate::cli::host) fn vault_word(kind: &str, value: &str) -> Result<(), CmdError> {
+pub(crate) fn vault_word(kind: &str, value: &str) -> Result<(), CmdError> {
     if value.is_empty()
         || !value
             .bytes()
