@@ -13,11 +13,13 @@ use super::{words, HostMemory, ReliefRow, RELOCATION_COOLDOWN_SECONDS};
 use crate::placement::{self, PlacementProfile};
 use crate::targets::Registry;
 
-/// One declared host other than the placed one, and why it was or was not
-/// chosen.
+/// One host other than the placed one, and why it was or was not chosen.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Candidate {
     pub host: String,
+    /// The profile declares this host; a move may go there now. An
+    /// undeclared host is a place `placement standby` can prepare.
+    pub declared: bool,
     /// `eligible`, or the one reason this host was refused.
     pub verdict: String,
     pub memory: Option<HostMemory>,
@@ -34,11 +36,21 @@ pub mod verdicts {
     pub const NO_MORE_HEADROOM: &str = "no_more_headroom_than_source";
 }
 
-/// A move the pass should attempt, beside the row that argues it.
+/// What the pass should attempt for a profile, beside the row that argues it.
+#[derive(Debug, Clone)]
+pub enum DueAction {
+    /// Move the profile to a declared host with more headroom.
+    Move,
+    /// No declared host has headroom; prepare this registered host for the
+    /// profile, so a later tick can move there.
+    Standby,
+}
+
 #[derive(Debug, Clone)]
 pub struct Due {
     pub profile: PlacementProfile,
     pub to_host: String,
+    pub action: DueAction,
 }
 
 #[derive(Debug, Clone)]
@@ -107,33 +119,61 @@ fn plan_profile(
             format!("{placed_on}: {}", source.describe()),
         );
     }
-    row.candidates = profile
-        .hosts
-        .keys()
-        .filter(|host| **host != placed_on)
-        .map(|host| candidate(host, hosts.get(host), source))
-        .collect();
-    let chosen = row
-        .candidates
+    let declared = |host: &String| profile.hosts.contains_key(host);
+    row.candidates = registry
+        .targets
         .iter()
-        .filter(|candidate| candidate.verdict == verdicts::ELIGIBLE)
-        .max_by(|a, b| {
-            let headroom = |candidate: &Candidate| {
-                candidate
-                    .memory
-                    .as_ref()
-                    .and_then(|memory| memory.available_gb)
-                    .unwrap_or_default()
-            };
-            headroom(a).total_cmp(&headroom(b))
+        .filter(|target| target.kind == "local" && target.name != placed_on)
+        .map(|target| {
+            candidate(
+                &target.name,
+                declared(&target.name),
+                hosts.get(&target.name),
+                source,
+            )
         })
-        .map(|candidate| candidate.host.clone());
-    let Some(to_host) = chosen else {
+        .collect();
+    let best = |wanted_declared: bool| {
+        row.candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.declared == wanted_declared && candidate.verdict == verdicts::ELIGIBLE
+            })
+            .max_by(|a, b| {
+                let headroom = |candidate: &Candidate| {
+                    candidate
+                        .memory
+                        .as_ref()
+                        .and_then(|memory| memory.available_gb)
+                        .unwrap_or_default()
+                };
+                headroom(a).total_cmp(&headroom(b))
+            })
+            .map(|candidate| candidate.host.clone())
+    };
+    let Some(to_host) = best(true) else {
+        if let Some(standby) = best(false) {
+            row.destination = Some(standby.clone());
+            row.detail = format!(
+                "{placed_on} is over its watermark ({}) and no declared host has more headroom; \
+                 {standby} is registered with more and can be prepared to stand by",
+                source.describe()
+            );
+            return ReliefOutcome {
+                row,
+                due: Some(Due {
+                    profile,
+                    to_host: standby,
+                    action: DueAction::Standby,
+                }),
+            };
+        }
         return settle(
             row,
             words::NO_DESTINATION,
             format!(
-                "{placed_on} is over its watermark ({}) and no other declared host has more headroom",
+                "{placed_on} is over its watermark ({}) and no other host, declared or \
+                 registered, has more headroom",
                 source.describe()
             ),
         );
@@ -166,11 +206,20 @@ fn plan_profile(
     );
     ReliefOutcome {
         row,
-        due: Some(Due { profile, to_host }),
+        due: Some(Due {
+            profile,
+            to_host,
+            action: DueAction::Move,
+        }),
     }
 }
 
-fn candidate(host: &str, memory: Option<&HostMemory>, source: &HostMemory) -> Candidate {
+fn candidate(
+    host: &str,
+    declared: bool,
+    memory: Option<&HostMemory>,
+    source: &HostMemory,
+) -> Candidate {
     let verdict = match memory {
         None => verdicts::NO_PUBLICATION,
         Some(memory) if memory.stale => verdicts::STALE,
@@ -184,6 +233,7 @@ fn candidate(host: &str, memory: Option<&HostMemory>, source: &HostMemory) -> Ca
     };
     Candidate {
         host: host.to_string(),
+        declared,
         verdict: verdict.to_string(),
         memory: memory.cloned(),
     }

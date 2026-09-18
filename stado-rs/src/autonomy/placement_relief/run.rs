@@ -7,8 +7,8 @@ use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::queue::{JobStorage, StorageError};
 
 use super::{
-    host_memory, plan, words, ReliefReport, ReliefSummary, LATEST_REPORT, MAX_RELOCATIONS_PER_TICK,
-    REPORT_PREFIX, SCHEMA_VERSION,
+    host_memory, plan, words, DueAction, ReliefReport, ReliefSummary, LATEST_REPORT,
+    MAX_RELOCATIONS_PER_TICK, REPORT_PREFIX, SCHEMA_VERSION,
 };
 
 pub async fn reconcile(
@@ -64,8 +64,12 @@ pub async fn reconcile(
                 )
             } else {
                 format!(
-                    "{}; report mode: the move was planned but not executed",
-                    row.detail
+                    "{}; report mode: the {} was planned but not executed",
+                    row.detail,
+                    match due.action {
+                        DueAction::Move => "move",
+                        DueAction::Standby => "standby",
+                    }
                 )
             };
             rows.push(row);
@@ -128,6 +132,73 @@ pub async fn reconcile(
             continue;
         };
         relocated += 1;
+        if matches!(due.action, DueAction::Standby) {
+            let reason = format!(
+                "placement relief: {} is over its memory watermark and no declared host has \
+                 more headroom",
+                row.placed_on.as_deref().unwrap_or_default()
+            );
+            let prepared =
+                crate::cli::placement::standby::prepare(&due.profile.name, &due.to_host, &reason)
+                    .await;
+            let released = crate::autonomy::storage::release_placement_lease(
+                store,
+                &lease_subject,
+                &lease.token,
+            )
+            .await;
+            match (prepared, released) {
+                (Ok(report), Ok(true)) => {
+                    let standby_words = crate::cli::placement::standby::words::DECLARED;
+                    row.classification = if report.outcome == standby_words {
+                        words::STANDBY_PREPARED.to_string()
+                    } else {
+                        words::STANDBY_PENDING.to_string()
+                    };
+                    row.detail = format!("{}; {}: {}", row.detail, report.outcome, report.detail);
+                    summary.relocated += 1;
+                    crate::autonomy::storage::record_mutation_outcome(
+                        store,
+                        true,
+                        None,
+                        policy.limits.circuit_breaker_failures,
+                        policy.limits.circuit_breaker_cooldown_seconds,
+                    )
+                    .await?;
+                }
+                (Ok(_), Ok(false)) => {
+                    row.classification = words::STANDBY_REFUSED.to_string();
+                    row.detail = format!(
+                        "{}; standby finished, but mutation lease ownership changed before release",
+                        row.detail
+                    );
+                    summary.failures += 1;
+                }
+                (Ok(_), Err(error)) => {
+                    row.classification = words::STANDBY_REFUSED.to_string();
+                    row.detail = format!(
+                        "{}; standby finished, but mutation lease release failed: {error}",
+                        row.detail
+                    );
+                    summary.failures += 1;
+                }
+                (Err(error), _) => {
+                    row.classification = words::STANDBY_REFUSED.to_string();
+                    row.detail = format!("{}; {error}", row.detail);
+                    summary.failures += 1;
+                    crate::autonomy::storage::record_mutation_outcome(
+                        store,
+                        false,
+                        Some(&error.to_string()),
+                        policy.limits.circuit_breaker_failures,
+                        policy.limits.circuit_breaker_cooldown_seconds,
+                    )
+                    .await?;
+                }
+            }
+            rows.push(row);
+            continue;
+        }
         let mut result = crate::cli::placement::relocate(
             document.clone(),
             generation.clone(),

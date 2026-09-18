@@ -54,6 +54,25 @@ pub enum PlacementCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Make a registered host a place this profile may move to: deliver each
+    /// service's program (a managed program now; a release-controlled tree
+    /// through the host's own agent), assert each unit from the service
+    /// catalog, and write the host into the profile and the directory once
+    /// every unit is declared. Idempotent; a pass that stops at a pending
+    /// rollout says so, and the next pass continues.
+    Standby {
+        /// The placement profile to prepare the host for.
+        profile: String,
+        /// Registered host that must stand by for it.
+        #[arg(long)]
+        host: String,
+        /// Why this host must stand by; recorded beside every unit declared.
+        #[arg(long)]
+        reason: String,
+        /// Emit the receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
@@ -69,5 +88,11 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             json,
         } => evict(&service, &host, json).await,
         PlacementCommands::Relief { json } => relief(json).await,
+        PlacementCommands::Standby {
+            profile,
+            host,
+            reason,
+            json,
+        } => crate::cli::placement::standby::standby(&profile, &host, &reason, json).await,
     }
 }

@@ -57,8 +57,13 @@ pub(super) async fn relief(json_output: bool) -> Result<(), CmdError> {
         );
         for candidate in &row.candidates {
             println!(
-                "\t{}\t{}\t{}",
+                "\t{}\t{}\t{}\t{}",
                 candidate.host,
+                if candidate.declared {
+                    "declared"
+                } else {
+                    "registered"
+                },
                 candidate.verdict,
                 candidate
                     .memory

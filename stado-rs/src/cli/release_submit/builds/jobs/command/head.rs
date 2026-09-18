@@ -24,7 +24,17 @@ old=$(/bin/pwd -P) || exit 1
 home_root=$(CDPATH= cd "$HOME" && /bin/pwd -P) || exit 1
 legacy_root=$(CDPATH= cd /tmp && /bin/pwd -P) || exit 1
 stado_root="$home_root/.stado"
-work_parent="$stado_root/work"
+# The agent hands every job the host's declared work root as
+# STADO_WORK_ROOT; the persistent job root hangs from it. Undeclared, the
+# home layout stands: ~/.stado/work/jobs.
+if [ -n "${STADO_WORK_ROOT:-}" ]; then
+  work_parent=$(CDPATH= cd "$STADO_WORK_ROOT" && /bin/pwd -P) || {
+    printf '%s\n' "[release-worker-bootstrap] declared work root is not a directory: $STADO_WORK_ROOT" >&2
+    exit 1
+  }
+else
+  work_parent="$stado_root/work"
+fi
 root="$work_parent/jobs"
 work_name="wc-$WC_JOB_ID"
 work="$root/$work_name"

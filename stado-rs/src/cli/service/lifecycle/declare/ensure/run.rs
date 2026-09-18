@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// What one `ensure` pass left on the host and in the registry.
+pub(crate) struct EnsureReceipt {
+    pub(crate) host: String,
+    pub(crate) name: String,
+    pub(crate) label: String,
+    pub(crate) domain: String,
+    pub(crate) action: String,
+    pub(crate) pid: Option<u32>,
+    pub(crate) audited: Option<String>,
+}
+
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
 ///
 /// The idempotent half of `deploy`, and the only one that works on an ssh
@@ -10,6 +21,46 @@ use super::*;
 /// process under it is actually running. See
 /// [`crate::deploy::service::ensure_service`].
 pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
+    let as_json = options.as_json;
+    let receipt = ensure_unit(options).await?;
+    if as_json {
+        // Exactly the contract's keys: a desktop client consumes this shape.
+        // Where the record landed goes to stderr rather than into the object.
+        if let Some(audited) = receipt.audited.as_deref() {
+            eprintln!("audit record {audited}");
+        }
+        return print_json(&json!({
+            "host": receipt.host,
+            "name": receipt.name,
+            "label": receipt.label,
+            "domain": receipt.domain,
+            "action": receipt.action,
+            "pid": receipt.pid,
+        }));
+    }
+    table::print(
+        &["HOST", "SERVICE", "LABEL", "DOMAIN", "ACTION", "PID"],
+        &[vec![
+            receipt.host,
+            receipt.name,
+            receipt.label,
+            receipt.domain,
+            receipt.action,
+            receipt
+                .pid
+                .map_or_else(|| "-".to_string(), |pid| pid.to_string()),
+        ]],
+    );
+    if let Some(audited) = receipt.audited.as_deref() {
+        println!("audit record {audited}");
+    }
+    Ok(())
+}
+
+/// The pass itself, for every caller that asserts a unit and reads the
+/// receipt rather than printing it: `service ensure`, and placement standby
+/// preparing a host for a profile.
+pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureReceipt, CmdError> {
     let reason = options.reason.trim();
     if reason.is_empty() {
         return Err(CmdError::usage(
@@ -236,34 +287,13 @@ pub(crate) async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         error
     })?;
 
-    if options.as_json {
-        // Exactly the contract's keys: a desktop client consumes this shape.
-        // Where the record landed goes to stderr rather than into the object.
-        if let Some(audited) = audited.as_deref() {
-            eprintln!("audit record {audited}");
-        }
-        return print_json(&json!({
-            "host": host,
-            "name": record.name,
-            "label": record.unit_id(),
-            "domain": outcome.domain_word(),
-            "action": outcome.action,
-            "pid": outcome.pid.trim().parse::<u32>().ok(),
-        }));
-    }
-    table::print(
-        &["HOST", "SERVICE", "LABEL", "DOMAIN", "ACTION", "PID"],
-        &[vec![
-            host,
-            record.name.clone(),
-            record.unit_id().to_string(),
-            outcome.domain_word().to_string(),
-            outcome.action.clone(),
-            dash(outcome.pid.trim()),
-        ]],
-    );
-    if let Some(audited) = audited.as_deref() {
-        println!("audit record {audited}");
-    }
-    Ok(())
+    Ok(EnsureReceipt {
+        host,
+        name: record.name.clone(),
+        label: record.unit_id().to_string(),
+        domain: outcome.domain_word().to_string(),
+        action: outcome.action.clone(),
+        pid: outcome.pid.trim().parse::<u32>().ok(),
+        audited,
+    })
 }

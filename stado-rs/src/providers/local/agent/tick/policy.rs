@@ -80,9 +80,15 @@ pub(super) async fn disk_policy(
     }
     // The work root is declared into this process once, from the target the
     // registry names for this host. A root that changes under a running
-    // agent is not followed: half the live job trees would sit on each
-    // side of the move. It is logged every tick until the agent's unit
-    // restarts it, which is when the new root takes.
+    // agent with live jobs is not followed: half the live job trees would sit
+    // on each side of the move. With no job running there is nothing to
+    // split, and the agent replaces its own process image with the same
+    // binary and argv, the way a completed self-update does, so the new
+    // root takes on the next start. On 2026-09-18 the RTX host declared
+    // `/mnt/wd16tb/stado` on a 16 TiB volume and its agent kept measuring
+    // and writing the 33 GiB root volume for a day, logging every tick that
+    // the declaration would take "when its unit restarts it" — and nothing
+    // in the fleet restarts an agent's unit for a registry change.
     if let Some(root) = registry_target
         .as_ref()
         .and_then(|target| target.work_root.as_deref())
@@ -94,10 +100,23 @@ pub(super) async fn disk_policy(
                  caches and the published free space are measured there"
             ));
         } else if crate::providers::local::work_base::declared().as_deref() != Some(declared) {
-            log_fn(&format!(
-                "loop: the canonical registry now declares work root {root}; this agent keeps \
-                 the one it started with until its unit restarts it"
-            ));
+            if slots.is_empty() {
+                log_fn(&format!(
+                    "loop: the canonical registry now declares work root {root} and no job is \
+                     running; restarting this agent's process onto it"
+                ));
+                let error = crate::self_update::reexec();
+                log_fn(&format!(
+                    "loop: could not restart onto work root {root}: {error}; this agent keeps \
+                     the one it started with"
+                ));
+            } else {
+                log_fn(&format!(
+                    "loop: the canonical registry now declares work root {root}; this agent \
+                     keeps the one it started with until its {} running job(s) finish",
+                    slots.len()
+                ));
+            }
         }
     }
     // The volume the fleet writes to: the declared work root, or the home.

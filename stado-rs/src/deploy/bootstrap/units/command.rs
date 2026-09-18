@@ -29,15 +29,17 @@ pub fn sibling_bin(stado_bin: &str, name: &str) -> String {
 }
 
 /// The two (unit name, unit text, command) installs for one target, given
-/// the resolved remote stado path and WC_PYTHON.
+/// the resolved remote stado path, WC_PYTHON, and the environment the agent
+/// runs with (its dedicated Skarbiec grant, at bootstrap).
 pub fn unit_installs(
     target: &ComputeTarget,
     ssh_target: &str,
     stado_bin: &str,
     wc_python: &str,
+    environment: &[(&'static str, String)],
 ) -> Vec<(String, String, CommandSpec)> {
     let user = remote_user(ssh_target);
-    let agent_text = agent_unit_text(&target.name, stado_bin, wc_python, &user);
+    let agent_text = agent_unit_text(&target.name, stado_bin, wc_python, &user, environment);
     let watchdog_text = watchdog_unit_text(
         &target.name,
         &sibling_bin(stado_bin, "stado-watchdog"),
@@ -64,5 +66,14 @@ fn remote_user(ssh_target: &str) -> String {
     match ssh_target.split_once('@') {
         Some((user, _)) => user.to_string(),
         None => "root".to_string(),
+    }
+}
+
+/// The remote account's home, for a path a systemd unit must carry
+/// absolute: `/root` for root, `/home/<user>` otherwise.
+pub fn remote_home(ssh_target: &str) -> String {
+    match remote_user(ssh_target).as_str() {
+        "root" => "/root".to_string(),
+        user => format!("/home/{user}"),
     }
 }

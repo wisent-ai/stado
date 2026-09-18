@@ -1,19 +1,28 @@
 //! The bootstrap command's second half: preparing the work root, running the
 //! worker, and uploading and reading back its output at both coordinates.
 
-pub(super) const RELEASE_WORKER_COMMAND_TAIL: &str = r#"cd "$home_root" || exit 1
-[ "$(/bin/pwd -P)" = "$home_root" ] || exit 1
-owned_directory . || exit 1
-prepare_component .stado "$stado_root" || exit 1
-cd .stado || exit 1
-[ "$(/bin/pwd -P)" = "$stado_root" ] || exit 1
-owned_directory . || exit 1
-/bin/chmod 700 . || exit 1
-prepare_component work "$work_parent" || exit 1
-cd work || exit 1
-[ "$(/bin/pwd -P)" = "$work_parent" ] || exit 1
-owned_directory . || exit 1
-/bin/chmod 700 . || exit 1
+pub(super) const RELEASE_WORKER_COMMAND_TAIL: &str = r#"if [ -n "${STADO_WORK_ROOT:-}" ]; then
+  cd "$work_parent" || exit 1
+  [ "$(/bin/pwd -P)" = "$work_parent" ] || exit 1
+  if ! owned_directory .; then
+    printf '%s\n' "[release-worker-bootstrap] declared work root is not an owned directory: $work_parent" >&2
+    exit 1
+  fi
+else
+  cd "$home_root" || exit 1
+  [ "$(/bin/pwd -P)" = "$home_root" ] || exit 1
+  owned_directory . || exit 1
+  prepare_component .stado "$stado_root" || exit 1
+  cd .stado || exit 1
+  [ "$(/bin/pwd -P)" = "$stado_root" ] || exit 1
+  owned_directory . || exit 1
+  /bin/chmod 700 . || exit 1
+  prepare_component work "$work_parent" || exit 1
+  cd work || exit 1
+  [ "$(/bin/pwd -P)" = "$work_parent" ] || exit 1
+  owned_directory . || exit 1
+  /bin/chmod 700 . || exit 1
+fi
 prepare_component jobs "$root" || exit 1
 cd jobs || exit 1
 if [ "$(/bin/pwd -P)" != "$root" ] || ! owned_directory .; then

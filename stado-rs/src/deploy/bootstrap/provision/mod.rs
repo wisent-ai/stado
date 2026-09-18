@@ -2,17 +2,19 @@
 //! the SSH channel, install or re-qualify the release binaries, hand a Darwin
 //! host to its own per-user installer, then write and enable the Linux units.
 
+mod agent_grant;
 mod unit_install;
 
 use crate::deploy::{host_channel, shlex_quote, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
+use self::agent_grant::{provision_agent_grant, AgentGrant};
 use self::unit_install::run_unit_install;
 use super::install::{
     install_spec, installed_spec, parse_remote_install, retire_superseded_agent_units_spec,
     ssh_argv, WC_BIN_DEFAULT, WC_PYTHON_DEFAULT,
 };
-use super::units::unit_installs;
+use super::units::{remote_home, unit_installs};
 
 /// Provision one registry target (Python `_provision`'s shape, Rust
 /// binaries). Echoes the `[skip]`/`[install]`/`[unit]`/`[ok]` lines; `Err`
@@ -45,8 +47,10 @@ pub async fn provision_target(
     };
 
     let (platform, wc_python, stado_bin) = if dry_run {
+        // The registry's declaration of the host, not a fixed platform: a
+        // dry run for a Darwin host used to preview systemd units.
         (
-            "linux-amd64".to_string(),
+            target.release_platform.clone(),
             WC_PYTHON_DEFAULT.to_string(),
             WC_BIN_DEFAULT.to_string(),
         )
@@ -100,119 +104,27 @@ pub async fn provision_target(
         (platform, python, bin)
     };
 
+    // Both platforms receive the dedicated workload-agent grant; a host
+    // without one declines every job that declares a secret.
+    let remote_home = remote_home(&ssh_target);
+    let grant = if dry_run {
+        AgentGrant::declared(&remote_home)
+    } else {
+        provision_agent_grant(&ssh_target, &remote_home, runner).await?
+    };
+
     if platform == "darwin-arm64" {
-        // A remote workstation receives only its dedicated workload-agent
-        // consumer. Reusing either the control-plane consumer or its token
-        // path is a closed failure before SCP runs.
-        let grant_path = crate::config::agent_skarbiec_token_file();
-        let agent_consumer = crate::config::agent_skarbiec_consumer();
-        let agent_url = crate::config::agent_skarbiec_url();
-        let same_path = std::fs::canonicalize(grant_path)
-            .ok()
-            .zip(std::fs::canonicalize(crate::config::skarbiec_token_file()).ok())
-            .is_some_and(|(agent, control)| agent == control);
-        if grant_path.is_empty()
-            || same_path
-            || agent_consumer != "stado-local-agent"
-            || agent_consumer == crate::config::skarbiec_consumer()
-        {
-            return Err(DeployError(
-                "remote Darwin bootstrap requires consumer stado-local-agent and a distinct agent token_file"
-                    .to_string(),
+        if dry_run {
+            echo(&format!(
+                "--- {} launchd install (would run): {}stado bootstrap --local ---",
+                target.name,
+                grant.shell_prefix()
             ));
+            return Ok(());
         }
-        if !agent_url.starts_with("https://") {
-            return Err(DeployError(
-                "remote Darwin bootstrap requires agent.skarbiec.url on authenticated HTTPS"
-                    .to_string(),
-            ));
-        }
-        // This validates the grant from wherever bootstrap runs, so the grant
-        // file's placement is the fact available: an owner-only provisioned file
-        // on the control plane, the platform's handoff on an agent host.
-        let agent_vault = crate::skarbiec::Client::new(
-            agent_url,
-            agent_consumer,
-            grant_path,
-            crate::skarbiec::GrantMode::for_grant_file(grant_path),
-        )
-        .map_err(|error| {
-            DeployError(format!(
-                "cannot configure dedicated remote agent grant: {error}"
-            ))
-        })?;
-        let mut visible = agent_vault
-            .list_items()
-            .await
-            .map_err(|error| DeployError(format!("cannot authorize remote agent grant: {error}")))?
-            .into_iter()
-            .map(|item| item.id)
-            .collect::<Vec<_>>();
-        visible.sort();
-        let mut expected = crate::config::agent_skarbiec_items().to_vec();
-        expected.sort();
-        expected.dedup();
-        if visible != expected {
-            return Err(DeployError(format!(
-                "stado-local-agent grant exposes {visible:?}; expected exactly {expected:?}"
-            )));
-        }
-        let remote_grant = "$HOME/.stado/local-agent-skarbiec-token";
-        let prepare = runner(CommandSpec::new(ssh_argv(
-            &ssh_target,
-            "umask u=rwx,go=; mkdir -p \"$HOME/.stado\"",
-        )))
-        .await
-        .map_err(DeployError)?;
-        if !prepare.ok() {
-            return Err(DeployError(format!(
-                "cannot prepare remote agent grant directory: {}",
-                prepare.detail()
-            )));
-        }
-        let copy = runner(CommandSpec::new(vec![
-            "scp".to_string(),
-            "-q".to_string(),
-            grant_path.to_string(),
-            format!("{ssh_target}:.stado/local-agent-skarbiec-token"),
-        ]))
-        .await
-        .map_err(DeployError)?;
-        if !copy.ok() {
-            return Err(DeployError(format!(
-                "cannot provision dedicated remote agent grant: {}",
-                copy.detail()
-            )));
-        }
-        let secure = runner(CommandSpec::new(ssh_argv(
-            &ssh_target,
-            &format!("chmod u=rw,go= \"{remote_grant}\""),
-        )))
-        .await
-        .map_err(DeployError)?;
-        if !secure.ok() {
-            return Err(DeployError(format!(
-                "cannot secure dedicated remote agent grant: {}",
-                secure.detail()
-            )));
-        }
-        let items = crate::config::agent_skarbiec_items().join(",");
-        let secret_fields = crate::config::agent_skarbiec_secret_fields().join(",");
-        let skarbiec_prefix = format!(
-            "WC_AGENT_SKARBIEC_URL={} WC_AGENT_SKARBIEC_CONSUMER={} \
-             WC_AGENT_SKARBIEC_TOKEN_FILE=\"{remote_grant}\" \
-             WC_AGENT_SKARBIEC_ITEMS={} WC_AGENT_SKARBIEC_SECRET_FIELDS={} \
-             WC_SKARBIEC_URL={} WC_SKARBIEC_CONSUMER={} \
-             WC_SKARBIEC_TOKEN_FILE=\"{remote_grant}\" ",
-            shlex_quote(agent_url),
-            shlex_quote(agent_consumer),
-            shlex_quote(&items),
-            shlex_quote(&secret_fields),
-            shlex_quote(agent_url),
-            shlex_quote(agent_consumer),
-        );
         let command = format!(
-            "{skarbiec_prefix}{} bootstrap --local --target {}",
+            "{}{} bootstrap --local --target {}",
+            grant.shell_prefix(),
             shlex_quote(&stado_bin),
             shlex_quote(&target.name)
         );
@@ -233,7 +145,8 @@ pub async fn provision_target(
         return Ok(());
     }
 
-    let installs = unit_installs(target, &ssh_target, &stado_bin, &wc_python);
+    let environment = grant.assignments();
+    let installs = unit_installs(target, &ssh_target, &stado_bin, &wc_python, &environment);
 
     if dry_run {
         let [(agent_name, agent_text, _), (watchdog_name, watchdog_text, _)] = &installs[..] else {

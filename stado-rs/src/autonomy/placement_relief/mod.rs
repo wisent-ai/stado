@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub use evidence::{host_memory, HostMemory};
-pub use plan::{plan, Candidate, ReliefOutcome};
+pub use plan::{plan, Candidate, DueAction, ReliefOutcome};
 pub use run::reconcile;
 
 pub(crate) const LATEST_REPORT: &str = "state/autonomy/placement_relief/latest.json";
@@ -92,6 +92,14 @@ pub mod words {
     pub const RELOCATED: &str = "relocated";
     /// The move ran and failed; the row carries the failure and its rollback.
     pub const RELOCATION_FAILED: &str = "relocation_failed";
+    /// No declared host had headroom; a registered host was prepared to
+    /// stand by, and the next tick may move there.
+    pub const STANDBY_PREPARED: &str = "standby_prepared";
+    /// The standby pass declared deliveries and stopped at a rollout the
+    /// host's own agent still has to stage; a later tick continues.
+    pub const STANDBY_PENDING: &str = "standby_pending";
+    /// The standby pass was refused; the row carries the refusal.
+    pub const STANDBY_REFUSED: &str = "standby_refused";
 }
 
 /// One profile's row.

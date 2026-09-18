@@ -18,6 +18,7 @@
 mod candidates;
 mod commands;
 mod policy;
+pub(crate) mod standby;
 mod transfer;
 
 pub(crate) use candidates::ensure_profile_lifecycle_mutable;

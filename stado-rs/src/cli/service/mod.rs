@@ -56,6 +56,8 @@ mod runtime;
 pub use commands::{dispatch, ServiceCommands};
 
 pub(crate) use lifecycle::declare::ensure::program::{declared_label, unit_program};
+pub(crate) use lifecycle::declare::ensure::run::ensure_unit;
+pub(crate) use lifecycle::declare::ensure::EnsureOptions;
 pub(crate) use lifecycle::deploy::catalog::{
     ensure_local_dependency, reconcile_after_config_change,
 };

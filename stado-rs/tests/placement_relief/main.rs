@@ -4,12 +4,13 @@
 //! stale publication moves nothing; a pressured or smaller candidate is
 //! refused by name; and a profile relocated within the cooldown stays.
 
+mod standby;
 mod support;
 
 use support::{
     fleet, memory, publish, relief, row, stado, stderr, stdout, verdict, FRESH_SECONDS, LAPTOP,
     LAPTOP_AVAILABLE_GB, LAPTOP_TOTAL_GB, MINI, MINI_AVAILABLE_GB, MINI_SWAP_PCT, MINI_TOTAL_GB,
-    PROFILE, RELIEF_SCHEMA_VERSION, STALE_SECONDS,
+    PROFILE, RELIEF_SCHEMA_VERSION, RTX, STALE_SECONDS,
 };
 
 fn pressured_mini() -> serde_json::Value {
@@ -160,6 +161,67 @@ fn a_candidate_that_never_published_is_refused_by_name() {
     assert_eq!(verdict(&row, LAPTOP), "no_publication");
 }
 
+/// The declared laptop is as short as the mini, but a registered Linux
+/// workstation the profile does not declare has headroom: the plan names it
+/// as the host to prepare, and the tick's standby pass is what would run.
+#[test]
+fn a_registered_host_with_headroom_is_planned_as_a_standby_when_no_declared_host_has_any() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(
+        store.path(),
+        LAPTOP,
+        FRESH_SECONDS,
+        memory(MINI_AVAILABLE_GB, LAPTOP_TOTAL_GB, 0.0, false),
+    );
+    publish(store.path(), RTX, FRESH_SECONDS, roomy_laptop());
+
+    let row = row(&relief(store.path()));
+    assert_eq!(row["destination"], RTX, "{row}");
+    assert_eq!(verdict(&row, LAPTOP), "no_more_headroom_than_source");
+    assert_eq!(verdict(&row, RTX), "eligible");
+    let rtx = row["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["host"] == RTX)
+        .cloned()
+        .unwrap();
+    assert_eq!(rtx["declared"], false, "{row}");
+    assert!(
+        row["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("can be prepared to stand by")),
+        "{row}"
+    );
+}
+
+/// With no other host at all, declared or registered, the refusal says so.
+#[test]
+fn no_host_anywhere_with_headroom_is_refused_by_name() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(
+        store.path(),
+        LAPTOP,
+        FRESH_SECONDS,
+        memory(MINI_AVAILABLE_GB, LAPTOP_TOTAL_GB, 0.0, false),
+    );
+    publish(
+        store.path(),
+        RTX,
+        FRESH_SECONDS,
+        memory(MINI_AVAILABLE_GB, LAPTOP_TOTAL_GB, 0.0, false),
+    );
+
+    let row = row(&relief(store.path()));
+    assert_eq!(
+        row["classification"], "no_destination_with_headroom",
+        "{row}"
+    );
+    assert_eq!(verdict(&row, RTX), "no_more_headroom_than_source");
+}
+
 #[test]
 fn a_profile_relocated_within_the_cooldown_stays_where_it_landed() {
     let store = fleet(MINI);
@@ -207,5 +269,8 @@ fn the_plain_listing_names_the_move_and_every_candidate() {
         text.contains(&format!("{PROFILE}\t{MINI}\t\t{LAPTOP}\t")),
         "{text}"
     );
-    assert!(text.contains(&format!("\t{LAPTOP}\teligible\t")), "{text}");
+    assert!(
+        text.contains(&format!("\t{LAPTOP}\tdeclared\teligible\t")),
+        "{text}"
+    );
 }

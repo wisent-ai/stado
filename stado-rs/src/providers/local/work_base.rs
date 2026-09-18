@@ -50,9 +50,10 @@ pub fn declared() -> Option<PathBuf> {
 
 /// Declare the work root for this process. The first declaration wins: the
 /// agent reads its target once per tick, and a root that changed under a
-/// running agent would leave half the job trees on each side of it. The
-/// agent restarts for a registry change the same way it does for
-/// `env_overrides`.
+/// running agent would leave half the job trees on each side of it. An
+/// agent that sees a different root declared while it has no running job
+/// re-execs itself onto it ([`crate::self_update::reexec`]); with jobs
+/// running it waits for them.
 pub fn declare(path: &Path) -> bool {
     DECLARED.set(path.to_path_buf()).is_ok()
 }

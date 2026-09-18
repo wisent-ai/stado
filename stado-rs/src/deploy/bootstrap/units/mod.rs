@@ -4,4 +4,4 @@
 mod command;
 mod text;
 
-pub(super) use command::unit_installs;
+pub(super) use command::{remote_home, unit_installs};

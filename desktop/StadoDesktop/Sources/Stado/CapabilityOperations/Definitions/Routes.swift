@@ -34,5 +34,9 @@ enum NativeRouteOperations {
             .init(id: "services", label: "Logical services naming one placement profile (one per line)", required: true, multiple: true),
             .init(id: "to_host", label: "Destination host declared by the profile", option: "--to-host", required: true),
         ]),
+        .init(id: "placement-standby", title: "Prepare a registered host to stand by for a placement profile", path: ["placement", "standby"], hostPlacement: .option("--host"), fields: [
+            .init(id: "profile", label: "Placement profile", required: true),
+            .init(id: "reason", label: "Why this host must stand by (recorded beside every unit declared)", option: "--reason", required: true),
+        ]),
     ]
 }

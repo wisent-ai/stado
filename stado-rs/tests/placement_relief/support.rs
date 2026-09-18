@@ -11,6 +11,8 @@ use serde_json::Value;
 pub(crate) const MINI: &str = "mini";
 pub(crate) const LAPTOP: &str = "laptop";
 pub(crate) const PROFILE: &str = "brama-skarbiec";
+/// A Linux workstation in the registry that the profile does not declare.
+pub(crate) const RTX: &str = "rtx";
 
 /// The mini's live memory reading on 2026-09-18, the incident this stage was
 /// written after: total, available, and swap in use, as its agent published
@@ -106,6 +108,13 @@ pub(crate) fn registry(active_host: &str) -> Value {
                 "release_platform": "darwin-arm64",
                 "hostnames": ["laptop.local"],
                 "services": laptop_services
+            },
+            {
+                "name": RTX,
+                "kind": "local",
+                "ssh": "root@10.0.0.108",
+                "release_platform": "linux-amd64",
+                "hostnames": ["rtx-box"]
             }
         ],
         "coordinators": [],
