@@ -23,7 +23,7 @@ use crate::targets::ComputeTarget;
 const APPLE_SIGNING_CERTIFICATE_ITEM: &str = "desktop-signing-apple-development";
 /// Apple's WWDR G3 intermediate, the issuer of that certificate. A Mac without
 /// it builds no chain and reports the certificate as no identity at all.
-pub(crate) const APPLE_ISSUER_CHAIN_SHA256: &str =
+pub const APPLE_ISSUER_CHAIN_SHA256: &str =
     "e9473d95d06080920600a0101bf47581906ea21810c67b71ad39616be3c55b4b";
 
 /// Private build input from wisent-products 7aa6f1f, never a public release.

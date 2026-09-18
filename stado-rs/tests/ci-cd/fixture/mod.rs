@@ -20,17 +20,77 @@ impl SkarbiecFixture {
                 "context": {"service": "stado-release"}
             }),
         );
-        Self::start(
+        // The darwin signing step reads the Apple identity from
+        // `desktop-signing-apple-development` - through the broker, and when
+        // the broker cannot serve it, straight from the owner vault this
+        // isolated home points at. The journey signs with the fleet's real
+        // identity, read through the product's own secret command the way a
+        // fleet builder reads it; without it every darwin journey ended at
+        // `cannot read desktop-signing-apple-development#certificate`.
+        let apple = SkarbiecItem::new(
+            "desktop-signing-apple-development",
+            "bundle",
+            json!({
+                "schema": "skarbiec.item.v2",
+                "kind": "bundle",
+                "fields": {
+                    "certificate": fleet_secret("desktop-signing-apple-development", "certificate"),
+                    "private_key": fleet_secret("desktop-signing-apple-development", "private_key"),
+                },
+                "context": {"service": "native-signing"}
+            }),
+        );
+        let fixture = Self::start(
             home,
-            &[item],
+            &[item, apple],
             home.join("release-signing-grant"),
             Some((
                 "stado-release-coordinator",
                 "read:ci-release-signing#private_key",
             )),
             |_, _| {},
+        );
+        // The signing step's owner-vault read runs `$HOME/.stado/bin/skarbiec`
+        // of the isolated home against `$HOME/.stado/skarbiec.vault.json`;
+        // give it the same real binary the fixture's broker runs and the
+        // fixture's own vault, at the paths the product looks in.
+        let installed = home.join(".stado/bin");
+        fs::create_dir_all(&installed).unwrap();
+        std::os::unix::fs::symlink(
+            skarbiec_support::real_skarbiec_binary(),
+            installed.join("skarbiec"),
         )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            home.join("skarbiec.json"),
+            home.join(".stado/skarbiec.vault.json"),
+        )
+        .unwrap();
+        fixture
     }
+}
+
+/// One field of a fleet secret, read through the operator's own Skarbiec CLI
+/// - the owner read, which is also the fallback the signing step itself uses
+/// when the broker will not serve the item. The Stado profile's broker read
+/// refuses `local-operator` for this item with 403, so `stado secrets get`
+/// is not the route. A refusal blocks the journey and says so.
+fn fleet_secret(item: &str, field: &str) -> String {
+    let binary = skarbiec_support::real_skarbiec_binary();
+    let read = Command::new(&binary)
+        .args(["get", item, "--field", field])
+        .output()
+        .expect("the Skarbiec CLI runs");
+    assert!(
+        read.status.success(),
+        "blocked: the fleet secret {item}#{field} could not be read with {}: {}",
+        binary.display(),
+        String::from_utf8_lossy(&read.stderr)
+    );
+    String::from_utf8(read.stdout)
+        .unwrap()
+        .trim_end()
+        .to_owned()
 }
 
 pub(crate) fn release_platform() -> &'static str {
