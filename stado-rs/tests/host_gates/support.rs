@@ -222,7 +222,10 @@ impl Journey {
             .trim_end_matches(|c: char| !c.is_ascii_alphanumeric())
             .to_string();
         assert!(
-            self.storage.join("queue").join(format!("{id}.json")).exists(),
+            self.storage
+                .join("queue")
+                .join(format!("{id}.json"))
+                .exists(),
             "submit did not write queue/{id}.json"
         );
         id

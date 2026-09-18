@@ -185,7 +185,6 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     Ok(())
 }
 
-
 /// The memory lines of the human-readable report.
 ///
 /// Three facts, in the order an operator needs them: what the host has, what

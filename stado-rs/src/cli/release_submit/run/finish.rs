@@ -40,7 +40,9 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
         if !live {
             continue;
         }
-        let Some(id) = run["run_id"].as_str() else { continue };
+        let Some(id) = run["run_id"].as_str() else {
+            continue;
+        };
         if !builds_terminal(&store, &run).await? {
             continue;
         }
@@ -77,4 +79,3 @@ async fn builds_terminal(store: &JobStorage, run: &serde_json::Value) -> Result<
     }
     Ok(true)
 }
-

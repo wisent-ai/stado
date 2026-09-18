@@ -242,10 +242,7 @@ pub async fn publish_capacity(
     if let Some(value) = snapshot.total_ram_gb {
         payload.insert("total_ram_gb".into(), Value::from(value));
     }
-    payload.insert(
-        "reserved".into(),
-        serde_json::to_value(held.reserved)?,
-    );
+    payload.insert("reserved".into(), serde_json::to_value(held.reserved)?);
     payload.insert(
         "reservations".into(),
         Value::Array(held.live.iter().map(Reservation::published).collect()),

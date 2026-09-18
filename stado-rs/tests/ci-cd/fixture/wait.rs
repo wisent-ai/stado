@@ -234,7 +234,10 @@ pub(crate) fn wait_for_submit(
         .args(["release", "resume", &run_id, "--json"])
         .stdout(Stdio::from(File::create(home.join("submit.out")).unwrap()))
         .stderr(Stdio::from(
-            fs::OpenOptions::new().append(true).open(home.join("submit.err")).unwrap(),
+            fs::OpenOptions::new()
+                .append(true)
+                .open(home.join("submit.err"))
+                .unwrap(),
         ))
         .spawn()
         .unwrap();

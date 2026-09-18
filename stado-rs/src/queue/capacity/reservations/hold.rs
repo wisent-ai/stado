@@ -57,7 +57,10 @@ pub async fn acquire(
         ttl_seconds: request.ttl_seconds,
     };
     let body = serde_json::to_string(&reservation)?;
-    if !store.create_text_if_absent(&reservation.key(), &body).await? {
+    if !store
+        .create_text_if_absent(&reservation.key(), &body)
+        .await?
+    {
         return Err(StorageError::StorageConflict(format!(
             "reservation {} already exists",
             reservation.reservation_id

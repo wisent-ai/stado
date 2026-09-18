@@ -12,8 +12,7 @@ use crate::fleet_needs::{
     record_unmet, this_requester, Candidate, Requirement, UnmetPlacement, UnmetReason,
 };
 use crate::queue::capacity::{
-    consumer_id_for_target, consumer_names_target, read_publications, reservations,
-    Publication,
+    consumer_id_for_target, consumer_names_target, read_publications, reservations, Publication,
 };
 use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;
@@ -113,7 +112,12 @@ pub async fn reserve_for_workload(
         },
     )
     .await
-    .map_err(|error| CmdError::click(format!("cannot reserve {} on {}: {error}", kind.kind, target.name)))?;
+    .map_err(|error| {
+        CmdError::click(format!(
+            "cannot reserve {} on {}: {error}",
+            kind.kind, target.name
+        ))
+    })?;
     Ok(Ok(reservations::hold(
         lease,
         store,
@@ -127,8 +131,8 @@ fn refusal(
     target: &ComputeTarget,
     room: &NetRoom,
 ) -> Option<ReservationRefusal> {
-    let fits = room.cores >= wanted.cpu_cores
-        && room.ram_gb.is_none_or(|free| free >= wanted.ram_gb);
+    let fits =
+        room.cores >= wanted.cpu_cores && room.ram_gb.is_none_or(|free| free >= wanted.ram_gb);
     if fits && (room.accepting || room.reason.is_empty()) {
         return None;
     }
@@ -196,8 +200,6 @@ async fn record_refusal(
         }],
     );
     if let Err(error) = record_unmet(store, &record).await {
-        eprintln!(
-            "the refusal could not be recorded for `stado fleet needs`: {error}"
-        );
+        eprintln!("the refusal could not be recorded for `stado fleet needs`: {error}");
     }
 }

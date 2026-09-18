@@ -73,7 +73,13 @@ fn failed_delivery_resumes_original_source_after_checkout_changes() {
             .spawn()
             .unwrap(),
     );
-    let status = wait_for_submit(&mut submission.0, &mut agent.0, home.path(), &storage, &vault);
+    let status = wait_for_submit(
+        &mut submission.0,
+        &mut agent.0,
+        home.path(),
+        &storage,
+        &vault,
+    );
     assert!(
         !status.success(),
         "an occupied installation destination passed"

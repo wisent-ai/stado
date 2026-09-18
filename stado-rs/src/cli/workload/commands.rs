@@ -130,12 +130,11 @@ async fn run(
         crate::fleet_needs::this_requester(),
         std::process::id()
     );
-    let held = match crate::cli::capacity::reserve_for_workload(declaration, &resolved, holder)
-        .await?
-    {
-        Ok(held) => held,
-        Err(refusal) => return Err(refusal.into_error()),
-    };
+    let held =
+        match crate::cli::capacity::reserve_for_workload(declaration, &resolved, holder).await? {
+            Ok(held) => held,
+            Err(refusal) => return Err(refusal.into_error()),
+        };
     let outcome = run_kind(kind, target, plan.as_ref(), document, json_output).await;
     if let Err(error) = held.release().await {
         eprintln!("the workload's reservation could not be released: {error}");
@@ -152,12 +151,7 @@ async fn run_kind(
 ) -> Result<(), CmdError> {
     match kind {
         "weles-capture" => {
-            run_weles_capture(
-                target,
-                required_plan_path(plan, kind)?,
-                json_output,
-            )
-            .await
+            run_weles_capture(target, required_plan_path(plan, kind)?, json_output).await
         }
         "weles-browser-task" => {
             run_weles_browser_task(target, required_plan(document, kind)?, json_output).await

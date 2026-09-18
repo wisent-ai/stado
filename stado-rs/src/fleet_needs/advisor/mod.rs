@@ -114,7 +114,11 @@ pub async fn advise(
         .list_jobs("queue", constants::NEEDS_QUEUE_WINDOW)
         .await?;
     let mut needs = Vec::new();
-    for target in registry.targets.iter().filter(|target| target.kind == "local") {
+    for target in registry
+        .targets
+        .iter()
+        .filter(|target| target.kind == "local")
+    {
         let publication = publications
             .iter()
             .find(|(consumer, _)| consumer_names(registry, target, consumer))

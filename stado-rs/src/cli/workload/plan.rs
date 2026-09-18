@@ -156,11 +156,13 @@ async fn record_no_eligible_target(
     use crate::fleet_needs::{
         record_unmet, this_requester, Candidate, Requirement, UnmetPlacement, UnmetReason,
     };
-    let reservation = declaration.reservation.unwrap_or(super::catalog::WorkloadReservation {
-        cpu_cores: 0,
-        ram_gb: 0.0,
-        vram_gb: 0,
-    });
+    let reservation = declaration
+        .reservation
+        .unwrap_or(super::catalog::WorkloadReservation {
+            cpu_cores: 0,
+            ram_gb: 0.0,
+            vram_gb: 0,
+        });
     let record = UnmetPlacement::new(
         &declaration.kind,
         &declaration.product,

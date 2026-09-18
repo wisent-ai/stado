@@ -119,19 +119,16 @@ printf ready
                     crate::fleet_needs::this_requester(),
                     std::process::id()
                 );
-                let held = match crate::cli::capacity::reserve_for_workload(
-                    declaration,
-                    &target,
-                    holder,
-                )
-                .await?
-                {
-                    Ok(held) => held,
-                    Err(refusal) => {
-                        refusals.push(refusal.sentence);
-                        continue;
-                    }
-                };
+                let held =
+                    match crate::cli::capacity::reserve_for_workload(declaration, &target, holder)
+                        .await?
+                    {
+                        Ok(held) => held,
+                        Err(refusal) => {
+                            refusals.push(refusal.sentence);
+                            continue;
+                        }
+                    };
                 let outcome = attach_jeden(target, workspace, &checkout, resume).await;
                 if let Err(error) = held.release().await {
                     eprintln!("the session's reservation could not be released: {error}");

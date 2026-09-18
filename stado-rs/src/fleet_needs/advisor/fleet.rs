@@ -163,16 +163,10 @@ pub(super) fn gpu_needs(
     }
     let mut evidence: Vec<Evidence> = wants
         .iter()
-        .map(|detail| Evidence::new(
-            "queue",
-            detail.clone(),
-        ))
+        .map(|detail| Evidence::new("queue", detail.clone()))
         .collect();
     if let Some(detail) = held.clone() {
-        evidence.push(Evidence::new(
-            "capacity",
-            detail,
-        ));
+        evidence.push(Evidence::new("capacity", detail));
     }
     evidence.push(Evidence::new(
         "registry",
@@ -194,7 +188,10 @@ pub(super) fn gpu_needs(
         summary: if only_held {
             "the only GPU is fully held by something outside the queue".to_string()
         } else {
-            format!("{} request(s) need a GPU the fleet does not have", wants.len())
+            format!(
+                "{} request(s) need a GPU the fleet does not have",
+                wants.len()
+            )
         },
         evidence,
         suggestion: if only_held {

@@ -57,15 +57,24 @@ fn a_hold_is_written_subtracted_listed_and_released() {
     assert_eq!(written["kind"], SMALL_KIND, "{written}");
     assert_eq!(written["target"], TARGET, "{written}");
     let held_cores = written["cpu_cores"].as_i64().unwrap();
-    assert!(held_cores >= 1, "the declaration reserves at least one core: {written}");
+    assert!(
+        held_cores >= 1,
+        "the declaration reserves at least one core: {written}"
+    );
 
     journey.wait_for("a publication net of the hold", PUBLISH_WAIT, |j| {
         j.newest_capacity()
             .is_some_and(|capacity| capacity["running_workloads"] == 1)
     });
     let capacity = journey.newest_capacity().unwrap();
-    assert_eq!(capacity["reserved"]["cpu_cores"], written["cpu_cores"], "{capacity}");
-    assert_eq!(capacity["reserved"]["ram_gb"], written["ram_gb"], "{capacity}");
+    assert_eq!(
+        capacity["reserved"]["cpu_cores"], written["cpu_cores"],
+        "{capacity}"
+    );
+    assert_eq!(
+        capacity["reserved"]["ram_gb"], written["ram_gb"],
+        "{capacity}"
+    );
     let measured = capacity["diag"]["measured_available_cpu_cores"]
         .as_i64()
         .unwrap_or_else(|| panic!("the publication keeps the measured cores: {capacity}"));
@@ -98,7 +107,10 @@ fn a_hold_is_written_subtracted_listed_and_released() {
         .find(|host| host["target"] == TARGET)
         .unwrap_or_else(|| panic!("the fleet table names the target: {table}"));
     assert_eq!(host["running_workloads"], 1, "{host}");
-    assert_eq!(host["reserved"]["cpu_cores"], written["cpu_cores"], "{host}");
+    assert_eq!(
+        host["reserved"]["cpu_cores"], written["cpu_cores"],
+        "{host}"
+    );
 
     let status = hold.wait().unwrap();
     assert!(
@@ -187,7 +199,9 @@ fn the_publication_names_who_holds_the_accelerator() {
             .is_some_and(|capacity| capacity["diag"]["accelerator_memory_model"].is_string())
     });
     let capacity = journey.newest_capacity().unwrap();
-    let model = capacity["diag"]["accelerator_memory_model"].as_str().unwrap();
+    let model = capacity["diag"]["accelerator_memory_model"]
+        .as_str()
+        .unwrap();
     let expected_model = if cfg!(target_os = "macos") {
         "unified"
     } else {
@@ -201,15 +215,29 @@ fn the_publication_names_who_holds_the_accelerator() {
 
     let output = journey.invoke(&["space", "report", TARGET, "--json"]);
     let report = json_stdout(&output.stdout);
-    assert_eq!(report["accelerators"]["memory_model"], expected_model, "{}", report["accelerators"]);
-    let line = report["accelerators"]["line"]
-        .as_str()
-        .unwrap_or_else(|| panic!("the report carries the holders sentence: {}", report["accelerators"]));
+    assert_eq!(
+        report["accelerators"]["memory_model"], expected_model,
+        "{}",
+        report["accelerators"]
+    );
+    let line = report["accelerators"]["line"].as_str().unwrap_or_else(|| {
+        panic!(
+            "the report carries the holders sentence: {}",
+            report["accelerators"]
+        )
+    });
     if cfg!(target_os = "macos") {
-        assert_eq!(line, "accelerator shares the host's memory; no per-process VRAM");
+        assert_eq!(
+            line,
+            "accelerator shares the host's memory; no per-process VRAM"
+        );
     } else {
-        assert!(line.starts_with("held by") || line.starts_with("no process holds"), "{line}");
+        assert!(
+            line.starts_with("held by") || line.starts_with("no process holds"),
+            "{line}"
+        );
     }
-    let text = String::from_utf8_lossy(&journey.invoke(&["space", "report", TARGET]).stdout).into_owned();
+    let text =
+        String::from_utf8_lossy(&journey.invoke(&["space", "report", TARGET]).stdout).into_owned();
     assert!(text.contains(&format!("accelerators: {line}")), "{text}");
 }

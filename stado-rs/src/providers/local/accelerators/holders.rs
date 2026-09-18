@@ -184,7 +184,9 @@ pub fn accelerator_holders_line(diag: &Map<String, Value>) -> Option<String> {
     {
         return Some(format!("accelerator holders unknown: {error}"));
     }
-    let model = diag.get("accelerator_memory_model").and_then(Value::as_str)?;
+    let model = diag
+        .get("accelerator_memory_model")
+        .and_then(Value::as_str)?;
     if model == "unified" {
         return Some("accelerator shares the host's memory; no per-process VRAM".to_string());
     }

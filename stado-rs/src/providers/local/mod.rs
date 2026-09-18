@@ -9,9 +9,9 @@
 //! `scheduler::dispatch::box::output` and is re-exported here for the local
 //! executor.
 
+pub mod accelerators;
 pub mod agent;
 pub mod cloud;
-pub mod accelerators;
 pub mod disk;
 pub mod disk_cleanup;
 pub mod disk_staging;
