@@ -1,0 +1,211 @@
+//! What placement relief decides, read through `stado placement relief`
+//! against an isolated fleet: a placed host over its memory watermark with a
+//! declared host that has more headroom is a planned move to that host; a
+//! stale publication moves nothing; a pressured or smaller candidate is
+//! refused by name; and a profile relocated within the cooldown stays.
+
+mod support;
+
+use support::{
+    fleet, memory, publish, relief, row, stado, stderr, stdout, verdict, FRESH_SECONDS, LAPTOP,
+    LAPTOP_AVAILABLE_GB, LAPTOP_TOTAL_GB, MINI, MINI_AVAILABLE_GB, MINI_SWAP_PCT, MINI_TOTAL_GB,
+    PROFILE, RELIEF_SCHEMA_VERSION, STALE_SECONDS,
+};
+
+fn pressured_mini() -> serde_json::Value {
+    memory(MINI_AVAILABLE_GB, MINI_TOTAL_GB, MINI_SWAP_PCT, true)
+}
+
+fn roomy_laptop() -> serde_json::Value {
+    memory(LAPTOP_AVAILABLE_GB, LAPTOP_TOTAL_GB, 0.0, false)
+}
+
+#[test]
+fn a_pressured_host_with_a_roomier_declared_host_plans_the_move() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(store.path(), LAPTOP, FRESH_SECONDS, roomy_laptop());
+
+    let report = relief(store.path());
+    let row = row(&report);
+    assert_eq!(row["placed_on"], MINI, "{row}");
+    assert_eq!(row["destination"], LAPTOP, "{row}");
+    assert_eq!(verdict(&row, LAPTOP), "eligible");
+    assert_eq!(
+        row["classification"], "",
+        "a due move carries no classification until the tick gates it: {row}"
+    );
+    assert!(
+        row["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("over its watermark")),
+        "{row}"
+    );
+    assert_eq!(report["hosts"][MINI]["pressure_active"], true, "{report}");
+    assert_eq!(
+        report["hosts"][LAPTOP]["pressure_active"], false,
+        "{report}"
+    );
+}
+
+#[test]
+fn a_host_under_its_watermark_is_settled() {
+    let store = fleet(MINI);
+    publish(
+        store.path(),
+        MINI,
+        FRESH_SECONDS,
+        memory(LAPTOP_AVAILABLE_GB, MINI_TOTAL_GB, 0.0, false),
+    );
+    publish(store.path(), LAPTOP, FRESH_SECONDS, roomy_laptop());
+
+    let row = row(&relief(store.path()));
+    assert_eq!(row["classification"], "settled", "{row}");
+    assert!(row["destination"].is_null(), "{row}");
+    assert!(
+        row["candidates"].as_array().is_some_and(Vec::is_empty),
+        "{row}"
+    );
+}
+
+#[test]
+fn a_stale_publication_from_the_placed_host_moves_nothing() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, STALE_SECONDS, pressured_mini());
+    publish(store.path(), LAPTOP, FRESH_SECONDS, roomy_laptop());
+
+    let row = row(&relief(store.path()));
+    assert_eq!(row["classification"], "evidence_stale", "{row}");
+    assert!(row["destination"].is_null(), "{row}");
+}
+
+#[test]
+fn a_placed_host_that_never_published_moves_nothing() {
+    let store = fleet(MINI);
+    publish(store.path(), LAPTOP, FRESH_SECONDS, roomy_laptop());
+
+    let row = row(&relief(store.path()));
+    assert_eq!(row["classification"], "evidence_stale", "{row}");
+    assert!(
+        row["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("published no capacity")),
+        "{row}"
+    );
+}
+
+#[test]
+fn a_candidate_under_pressure_itself_is_refused_by_name() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(
+        store.path(),
+        LAPTOP,
+        FRESH_SECONDS,
+        memory(MINI_AVAILABLE_GB, LAPTOP_TOTAL_GB, MINI_SWAP_PCT, true),
+    );
+
+    let row = row(&relief(store.path()));
+    assert_eq!(
+        row["classification"], "no_destination_with_headroom",
+        "{row}"
+    );
+    assert_eq!(verdict(&row, LAPTOP), "pressured");
+    assert!(row["destination"].is_null(), "{row}");
+}
+
+#[test]
+fn a_candidate_with_no_more_headroom_than_the_source_is_refused_by_name() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(
+        store.path(),
+        LAPTOP,
+        FRESH_SECONDS,
+        memory(MINI_AVAILABLE_GB, LAPTOP_TOTAL_GB, 0.0, false),
+    );
+
+    let row = row(&relief(store.path()));
+    assert_eq!(
+        row["classification"], "no_destination_with_headroom",
+        "{row}"
+    );
+    assert_eq!(verdict(&row, LAPTOP), "no_more_headroom_than_source");
+}
+
+#[test]
+fn a_candidate_whose_publication_is_stale_is_refused_by_name() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(store.path(), LAPTOP, STALE_SECONDS, roomy_laptop());
+
+    let row = row(&relief(store.path()));
+    assert_eq!(
+        row["classification"], "no_destination_with_headroom",
+        "{row}"
+    );
+    assert_eq!(verdict(&row, LAPTOP), "stale");
+}
+
+#[test]
+fn a_candidate_that_never_published_is_refused_by_name() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+
+    let row = row(&relief(store.path()));
+    assert_eq!(
+        row["classification"], "no_destination_with_headroom",
+        "{row}"
+    );
+    assert_eq!(verdict(&row, LAPTOP), "no_publication");
+}
+
+#[test]
+fn a_profile_relocated_within_the_cooldown_stays_where_it_landed() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(store.path(), LAPTOP, FRESH_SECONDS, roomy_laptop());
+    support::write(
+        store.path(),
+        "state/autonomy/placement_relief/latest.json",
+        &serde_json::json!({
+            "schema_version": RELIEF_SCHEMA_VERSION,
+            "decision_id": "placement-relief-previous",
+            "created_at": support::ago(FRESH_SECONDS),
+            "mode": "enforce-safe",
+            "summary": {},
+            "rows": [],
+            "relocations": { PROFILE: support::ago(FRESH_SECONDS) }
+        }),
+    );
+
+    let report = relief(store.path());
+    let row = row(&report);
+    assert_eq!(row["classification"], "moved_recently", "{row}");
+    assert_eq!(
+        row["destination"], LAPTOP,
+        "the row still names where it would go: {row}"
+    );
+    assert_eq!(
+        report["last_report"]["decision_id"], "placement-relief-previous",
+        "{report}"
+    );
+}
+
+/// The plain listing an operator reads at the terminal names the host, the
+/// verdict and the memory behind it on one line each.
+#[test]
+fn the_plain_listing_names_the_move_and_every_candidate() {
+    let store = fleet(MINI);
+    publish(store.path(), MINI, FRESH_SECONDS, pressured_mini());
+    publish(store.path(), LAPTOP, FRESH_SECONDS, roomy_laptop());
+
+    let out = stado(store.path(), &["placement", "relief"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains(&format!("{PROFILE}\t{MINI}\t\t{LAPTOP}\t")),
+        "{text}"
+    );
+    assert!(text.contains(&format!("\t{LAPTOP}\teligible\t")), "{text}");
+}

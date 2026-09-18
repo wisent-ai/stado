@@ -146,6 +146,7 @@ pub(crate) async fn run_autonomy_once(
         ));
     }
     crate::autonomy::service_reconciler::reconcile(store, &policy, log).await?;
+    crate::autonomy::placement_relief::reconcile(store, &policy, log).await?;
     let advice =
         crate::autonomy::advisor::publish_recommendations(store, &inventory, &policy, now).await?;
     if advice.rightsizing > usize::default()

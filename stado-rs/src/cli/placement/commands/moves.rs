@@ -1,6 +1,12 @@
 //! `stado placement move` — the operator half: resolve the profile, decide
 //! whether this host may run the transaction at all, claim it through registry
 //! CAS, then print the receipt or the refusal with its rollback detail.
+//!
+//! The transaction itself is [`relocate`], shared with the autonomy cycle's
+//! placement relief, which moves a profile off a host over its memory
+//! watermark with the same claim, the same execution and the same rollback.
+//! A second executor there would be a second set of rollback rules for one
+//! transaction.
 
 use std::process::Stdio;
 
@@ -16,7 +22,7 @@ use crate::cli::placement::transfer::{
 };
 use crate::cli::{registry, CmdError};
 use crate::deploy::production_runner;
-use crate::placement::{self, PlacementTransaction};
+use crate::placement::{self, PlacementProfile, PlacementTransaction};
 use crate::targets::Registry;
 
 async fn delegate_to_registry_authority(
@@ -31,16 +37,10 @@ async fn delegate_to_registry_authority(
     else {
         return Ok(false);
     };
-    let hostname = crate::providers::vast::system_hostname();
-    let local = registry
-        .lookup_self(&hostname)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "placement host {hostname:?} has no registry target identity"
-            ))
-        })?;
-    if local.name == directory.authority.target {
+    if local_is_authority(document, registry)
+        .map_err(CmdError::click)?
+        .unwrap_or(true)
+    {
         return Ok(false);
     }
     let authority = registry
@@ -93,55 +93,87 @@ async fn delegate_to_registry_authority(
     Ok(true)
 }
 
-pub(super) async fn move_services(
-    requested: &[String],
-    to_host: &str,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let (document, generation) = registry::fetch_versioned_document().await?;
-    crate::targets::validate_registry(&document)
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let parsed_registry = parse_registry(&document)?;
-    let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
-    ensure_profile_lifecycle_mutable(&profile)?;
-    if delegate_to_registry_authority(&document, &parsed_registry, requested, to_host, json_output)
-        .await?
-    {
-        return Ok(());
+/// Which host a profile is placed on. `Err` names the refusal a move would
+/// meet before touching any host, so a planner can read it without claiming.
+pub(crate) fn placed_host(
+    registry: &Registry,
+    profile: &PlacementProfile,
+) -> Result<String, String> {
+    let sources = declared_profile_hosts(registry, profile).map_err(|error| error.to_string())?;
+    match sources.as_slice() {
+        [source] => Ok(source.clone()),
+        [] => Err(format!(
+            "placement profile {:?} has no complete managed source",
+            profile.name
+        )),
+        _ => Err(format!(
+            "placement profile {:?} is active on multiple hosts: {}",
+            profile.name,
+            sources.join(", ")
+        )),
     }
-    let _destination_profile = profile_host(&profile, to_host)?;
-    let destination = target(&parsed_registry, to_host)?.clone();
-    let sources = declared_profile_hosts(&parsed_registry, &profile)?;
-    let source_name = match sources.as_slice() {
-        [source] => source.clone(),
-        [] => {
-            return Err(CmdError::click(format!(
-                "placement profile {:?} has no complete managed source",
-                profile.name
-            )))
-        }
-        _ => {
-            return Err(CmdError::click(format!(
-                "placement profile {:?} is active on multiple hosts: {}",
-                profile.name,
-                sources.join(", ")
-            )))
-        }
+}
+
+/// Whether the host this binary runs on is the directory authority, the one
+/// host allowed to commit a placement transaction. `Ok(None)` is a document
+/// with no directory: every host may then run the transaction itself.
+pub(crate) fn local_is_authority(
+    document: &Value,
+    registry: &Registry,
+) -> Result<Option<bool>, String> {
+    let Some(directory) = crate::service_resolution::directory(document)? else {
+        return Ok(None);
     };
+    let hostname = crate::providers::vast::system_hostname();
+    let local = registry
+        .lookup_self(&hostname)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("placement host {hostname:?} has no registry target identity"))?;
+    Ok(Some(local.name == directory.authority.target))
+}
+
+/// What one relocation left behind.
+pub(crate) struct MoveReceipt {
+    pub(crate) status: &'static str,
+    pub(crate) transaction_id: Option<String>,
+    pub(crate) profile: String,
+    pub(crate) from_host: String,
+    pub(crate) to_host: String,
+    pub(crate) registry_generation: Option<String>,
+}
+
+/// Move `profile` to `to_host` from where it is placed now, on this host.
+///
+/// The caller has already decided this host may run the transaction (it is
+/// the authority, or the document has none). `document` and `generation` are
+/// the registry read the decision was made on; the claim is compare-and-swapped
+/// against that generation, so a document that changed underneath is a
+/// refusal, never a move over someone else's commit.
+pub(crate) async fn relocate(
+    document: Value,
+    generation: String,
+    profile: PlacementProfile,
+    to_host: &str,
+) -> Result<MoveReceipt, String> {
+    let parsed_registry = parse_registry(&document).map_err(|error| error.to_string())?;
+    profile_host(&profile, to_host).map_err(|error| error.to_string())?;
+    let destination = target(&parsed_registry, to_host)
+        .map_err(|error| error.to_string())?
+        .clone();
+    let source_name = placed_host(&parsed_registry, &profile)?;
     if source_name == to_host {
-        let report = json!({
-            "status": "already_placed",
-            "profile": profile.name,
-            "host": to_host,
+        return Ok(MoveReceipt {
+            status: "already_placed",
+            transaction_id: None,
+            profile: profile.name,
+            from_host: source_name,
+            to_host: to_host.to_string(),
+            registry_generation: None,
         });
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        } else {
-            println!("{} is already placed on {}", profile.name, to_host);
-        }
-        return Ok(());
     }
-    let source = target(&parsed_registry, &source_name)?.clone();
+    let source = target(&parsed_registry, &source_name)
+        .map_err(|error| error.to_string())?
+        .clone();
     let transaction = PlacementTransaction {
         id: uuid::Uuid::new_v4().to_string(),
         profile: profile.name.clone(),
@@ -150,8 +182,10 @@ pub(super) async fn move_services(
         started_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
     };
     let mut claimed_document = document;
-    placement::claim_transaction(&mut claimed_document, &transaction).map_err(CmdError::click)?;
-    let claim_generation = registry::push_document_if(&claimed_document, &generation).await?;
+    placement::claim_transaction(&mut claimed_document, &transaction)?;
+    let claim_generation = registry::push_document_if(&claimed_document, &generation)
+        .await
+        .map_err(|error| error.to_string())?;
     let context = MoveContext {
         profile,
         source,
@@ -178,26 +212,14 @@ pub(super) async fn move_services(
                     eprintln!("Warning: {error}");
                 }
             }
-            let report = json!({
-                "status": "moved",
-                "transaction_id": context.transaction.id,
-                "profile": context.profile.name,
-                "from_host": context.source.name,
-                "to_host": context.destination.name,
-                "registry_generation": committed_generation,
-            });
-            if json_output {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!(
-                    "moved {} from {} to {} (registry generation {})",
-                    context.profile.name,
-                    context.source.name,
-                    context.destination.name,
-                    committed_generation
-                );
-            }
-            Ok(())
+            Ok(MoveReceipt {
+                status: "moved",
+                transaction_id: Some(context.transaction.id),
+                profile: context.profile.name,
+                from_host: context.source.name,
+                to_host: context.destination.name,
+                registry_generation: Some(committed_generation),
+            })
         }
         Err(primary) => {
             let rollback_errors = rollback(&context, &progress, &runner).await;
@@ -209,7 +231,53 @@ pub(super) async fn move_services(
             if let Some(error) = release_error {
                 details.push(format!("registry lock release failed: {error}"));
             }
-            Err(CmdError::click(details.join("; ")))
+            Err(details.join("; "))
         }
     }
+}
+
+pub(super) async fn move_services(
+    requested: &[String],
+    to_host: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let (document, generation) = registry::fetch_versioned_document().await?;
+    crate::targets::validate_registry(&document)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let parsed_registry = parse_registry(&document)?;
+    let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
+    ensure_profile_lifecycle_mutable(&profile)?;
+    if delegate_to_registry_authority(&document, &parsed_registry, requested, to_host, json_output)
+        .await?
+    {
+        return Ok(());
+    }
+    let receipt = relocate(document, generation, profile, to_host)
+        .await
+        .map_err(CmdError::click)?;
+    let report = json!({
+        "status": receipt.status,
+        "transaction_id": receipt.transaction_id,
+        "profile": receipt.profile,
+        "from_host": receipt.from_host,
+        "to_host": receipt.to_host,
+        "registry_generation": receipt.registry_generation,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if receipt.status == "already_placed" {
+        println!(
+            "{} is already placed on {}",
+            receipt.profile, receipt.to_host
+        );
+    } else {
+        println!(
+            "moved {} from {} to {} (registry generation {})",
+            receipt.profile,
+            receipt.from_host,
+            receipt.to_host,
+            receipt.registry_generation.as_deref().unwrap_or_default()
+        );
+    }
+    Ok(())
 }

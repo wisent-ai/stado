@@ -29,5 +29,10 @@ enum NativeRouteOperations {
         .init(id: "placement", title: "Publish declared fleet placement policies", path: ["route", "placement", "publish"], hostPlacement: .none, fields: [
             .init(id: "mobile", label: "Only active hosts declaring mobile runtime", option: "--mobile", flag: true),
         ]),
+        .init(id: "placement-relief", title: "Read what placement relief would move off a host over its memory watermark", path: ["placement", "relief"], hostPlacement: .none, mutates: false),
+        .init(id: "placement-move", title: "Move a placement profile to another declared host", path: ["placement", "move"], hostPlacement: .none, fields: [
+            .init(id: "services", label: "Logical services naming one placement profile (one per line)", required: true, multiple: true),
+            .init(id: "to_host", label: "Destination host declared by the profile", option: "--to-host", required: true),
+        ]),
     ]
 }

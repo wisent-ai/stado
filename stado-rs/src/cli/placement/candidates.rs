@@ -37,9 +37,7 @@ pub(in crate::cli::placement) fn managed_unit(
         .ok_or_else(|| release_controlled_refusal(unit))
 }
 
-pub(in crate::cli::placement) fn ensure_profile_lifecycle_mutable(
-    profile: &PlacementProfile,
-) -> Result<(), CmdError> {
+pub(crate) fn ensure_profile_lifecycle_mutable(profile: &PlacementProfile) -> Result<(), CmdError> {
     for logical in &profile.services {
         for host in profile.hosts.values() {
             if let Some(unit) = host.units.get(logical) {

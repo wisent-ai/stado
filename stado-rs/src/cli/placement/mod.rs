@@ -20,7 +20,9 @@ mod commands;
 mod policy;
 mod transfer;
 
+pub(crate) use candidates::ensure_profile_lifecycle_mutable;
 pub use commands::{dispatch, PlacementCommands};
+pub(crate) use commands::{local_is_authority, placed_host, relocate};
 pub(crate) use policy::{
     normalize_hostname, policy_document, policy_effect, publish_placement_policy_report,
     RECONCILED_BY,

@@ -1,0 +1,190 @@
+//! What every placement profile needs, decided from the registry and the
+//! hosts' own memory publications and nothing else. Pure: no store, no host,
+//! no clock but the one passed in, so `stado placement relief` and the
+//! autonomy tick read the same plan from the same facts.
+
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::{words, HostMemory, ReliefRow, RELOCATION_COOLDOWN_SECONDS};
+use crate::placement::{self, PlacementProfile};
+use crate::targets::Registry;
+
+/// One declared host other than the placed one, and why it was or was not
+/// chosen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Candidate {
+    pub host: String,
+    /// `eligible`, or the one reason this host was refused.
+    pub verdict: String,
+    pub memory: Option<HostMemory>,
+}
+
+/// The candidate verdicts. Named once beside the classification words.
+pub mod verdicts {
+    pub const ELIGIBLE: &str = "eligible";
+    pub const NO_PUBLICATION: &str = "no_publication";
+    pub const STALE: &str = "stale";
+    pub const PRESSURED: &str = "pressured";
+    pub const SWAP_OVER: &str = "swap_over";
+    pub const UNMEASURED: &str = "unmeasured";
+    pub const NO_MORE_HEADROOM: &str = "no_more_headroom_than_source";
+}
+
+/// A move the pass should attempt, beside the row that argues it.
+#[derive(Debug, Clone)]
+pub struct Due {
+    pub profile: PlacementProfile,
+    pub to_host: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReliefOutcome {
+    pub row: ReliefRow,
+    pub due: Option<Due>,
+}
+
+/// Every profile's row. `relocations` is the previous report's map of last
+/// relocation instants, for the cooldown.
+pub fn plan(
+    document: &Value,
+    registry: &Registry,
+    hosts: &BTreeMap<String, HostMemory>,
+    relocations: &BTreeMap<String, String>,
+    now: DateTime<Utc>,
+) -> Result<Vec<ReliefOutcome>, String> {
+    let profiles = placement::profiles(document)?;
+    Ok(profiles
+        .into_iter()
+        .map(|profile| plan_profile(profile, registry, hosts, relocations, now))
+        .collect())
+}
+
+fn plan_profile(
+    profile: PlacementProfile,
+    registry: &Registry,
+    hosts: &BTreeMap<String, HostMemory>,
+    relocations: &BTreeMap<String, String>,
+    now: DateTime<Utc>,
+) -> ReliefOutcome {
+    let mut row = ReliefRow {
+        profile: profile.name.clone(),
+        services: profile.services.clone(),
+        placed_on: None,
+        classification: String::new(),
+        destination: None,
+        candidates: Vec::new(),
+        detail: String::new(),
+        transaction_id: None,
+    };
+    let settle = |mut row: ReliefRow, classification: &str, detail: String| {
+        row.classification = classification.to_string();
+        row.detail = detail;
+        ReliefOutcome { row, due: None }
+    };
+    if let Err(refusal) = crate::cli::placement::ensure_profile_lifecycle_mutable(&profile) {
+        return settle(row, words::PROFILE_UNMOVABLE, refusal.to_string());
+    }
+    let placed_on = match crate::cli::placement::placed_host(registry, &profile) {
+        Ok(host) => host,
+        Err(refusal) => return settle(row, words::PROFILE_UNMOVABLE, refusal),
+    };
+    row.placed_on = Some(placed_on.clone());
+    let Some(source) = hosts.get(&placed_on).filter(|memory| !memory.stale) else {
+        let detail = match hosts.get(&placed_on) {
+            Some(memory) => format!("{placed_on} last published memory {}", memory.describe()),
+            None => format!("{placed_on} has published no capacity"),
+        };
+        return settle(row, words::EVIDENCE_STALE, detail);
+    };
+    if !source.pressure_active {
+        return settle(
+            row,
+            words::SETTLED,
+            format!("{placed_on}: {}", source.describe()),
+        );
+    }
+    row.candidates = profile
+        .hosts
+        .keys()
+        .filter(|host| **host != placed_on)
+        .map(|host| candidate(host, hosts.get(host), source))
+        .collect();
+    let chosen = row
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.verdict == verdicts::ELIGIBLE)
+        .max_by(|a, b| {
+            let headroom = |candidate: &Candidate| {
+                candidate
+                    .memory
+                    .as_ref()
+                    .and_then(|memory| memory.available_gb)
+                    .unwrap_or_default()
+            };
+            headroom(a).total_cmp(&headroom(b))
+        })
+        .map(|candidate| candidate.host.clone());
+    let Some(to_host) = chosen else {
+        return settle(
+            row,
+            words::NO_DESTINATION,
+            format!(
+                "{placed_on} is over its watermark ({}) and no other declared host has more headroom",
+                source.describe()
+            ),
+        );
+    };
+    if let Some(last) = relocations.get(&profile.name) {
+        let recent = DateTime::parse_from_rfc3339(last)
+            .ok()
+            .map(|last| {
+                now.signed_duration_since(last.with_timezone(&Utc))
+                    .num_seconds()
+            })
+            .is_some_and(|age| age >= i64::default() && age < RELOCATION_COOLDOWN_SECONDS);
+        if recent {
+            row.destination = Some(to_host);
+            return settle(
+                row,
+                words::MOVED_RECENTLY,
+                format!(
+                    "{placed_on} is over its watermark ({}), but {} was relocated at {last}, within the {RELOCATION_COOLDOWN_SECONDS}s cooldown",
+                    source.describe(),
+                    profile.name
+                ),
+            );
+        }
+    }
+    row.destination = Some(to_host.clone());
+    row.detail = format!(
+        "{placed_on} is over its watermark ({}); {to_host} has more headroom",
+        source.describe()
+    );
+    ReliefOutcome {
+        row,
+        due: Some(Due { profile, to_host }),
+    }
+}
+
+fn candidate(host: &str, memory: Option<&HostMemory>, source: &HostMemory) -> Candidate {
+    let verdict = match memory {
+        None => verdicts::NO_PUBLICATION,
+        Some(memory) if memory.stale => verdicts::STALE,
+        Some(memory) if memory.pressure_active => verdicts::PRESSURED,
+        Some(memory) if memory.swap_pressure_only => verdicts::SWAP_OVER,
+        Some(memory) => match (memory.available_gb, source.available_gb) {
+            (None, _) => verdicts::UNMEASURED,
+            (Some(candidate), Some(placed)) if candidate <= placed => verdicts::NO_MORE_HEADROOM,
+            _ => verdicts::ELIGIBLE,
+        },
+    };
+    Candidate {
+        host: host.to_string(),
+        verdict: verdict.to_string(),
+        memory: memory.cloned(),
+    }
+}

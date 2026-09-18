@@ -11,6 +11,7 @@ pub mod inventory;
 pub mod lifecycle;
 pub mod model;
 pub mod optimizer;
+pub mod placement_relief;
 pub mod policy;
 pub mod reconciler;
 pub mod service_reconciler;
