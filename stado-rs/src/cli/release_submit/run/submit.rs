@@ -219,6 +219,13 @@ pub(super) async fn continue_run(
         }
     }
     run.state = ReleaseRunState::Waiting;
+    // A platform that could not be queued while others were is not a
+    // finished submission: the run says so, and so does the operator's
+    // terminal. On 2026-09-18 stado 0.21.7 queued only darwin-arm64 and
+    // answered "builds queued" while linux-amd64 had found no builder.
+    if let Some(error) = &enqueue_failure {
+        run.failure = Some(format!("not every platform was queued: {error}"));
+    }
     save(&mut run).await?;
     if !finish {
         // One run per product and channel is worth building: now that this
@@ -236,6 +243,12 @@ pub(super) async fn continue_run(
                 "release run {} product={} version={} state={:?}: builds queued; the control host's release agent publishes and delivers when they finish, `stado release status {}` follows them",
                 run.run_id, run.product, run.version, run.state, run.product
             )
+        }
+        if let Some(error) = enqueue_failure {
+            return Err(CmdError::click(format!(
+                "release run {} is waiting on the platforms it could queue, but one was refused: {error}; `stado release resume {}` retries it",
+                run.run_id, run.run_id
+            )));
         }
         return Ok(());
     }
