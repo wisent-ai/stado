@@ -42,8 +42,20 @@ pub(crate) async fn enqueue(
         ),
         None => stable_run_id("release-platform", &format!("{id}\0{platform}")),
     };
-    let request_path = run_path(&m.product, id, &format!("requests/{platform}.json"));
-    let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
+    // The worker request is immutable per attempt. The first build of a
+    // platform keeps `requests/<platform>.json`, and a rebuild after a
+    // terminal failure writes its own under the attempt's id: the saved
+    // request names the builder, and a rebuild that reread the first one
+    // was welded to the host that had just failed - brama 0.4.26's darwin
+    // build died in code signing on charless-mac-mini on 2026-09-18, and
+    // the rebuild was refused on that same host while lukasz-macbook sat
+    // idle.
+    let request_leaf = match prior_terminal_job_id {
+        Some(_) => format!("requests/{platform}/attempts/{submission_run_id}.json"),
+        None => format!("requests/{platform}.json"),
+    };
+    let request_path = run_path(&m.product, id, &request_leaf);
+    let uri = run_uri(&m.product, id, &request_leaf);
     let saved_bytes = store.read_bytes(&request_path).await?;
     let saved_request: Option<WorkerRequest> = saved_bytes
         .as_deref()
