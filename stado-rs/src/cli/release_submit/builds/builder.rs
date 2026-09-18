@@ -66,6 +66,21 @@ pub(crate) async fn builder(
                 return None;
             }
             let (consumer, publication) = live_consumers.get(&target.name)?;
+            // An operator's workstation - role `interactive` in the registry -
+            // never builds a release unless the job is pinned to it by name.
+            // On 2026-09-17 two Stado builds landed on lukasz-macbook because it
+            // published the most free disk, while the operator was using it.
+            if target.role.as_deref() == Some("interactive") && pinned.is_none() {
+                considered.push((
+                    target.name.clone(),
+                    Claimability::Unfit {
+                        reason:
+                            "interactive host: an operator's workstation does not build releases"
+                                .into(),
+                    },
+                ));
+                return None;
+            }
             let mut verdict = claimability(publication);
             if let Some(short) = scratch.and_then(|need| scratch_verdict(publication, need)) {
                 verdict = match verdict {

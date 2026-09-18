@@ -55,6 +55,10 @@ fn install_runtime(area: &Area) {
 }
 
 fn attach(area: &Area, name: &str, resume: Option<&str>, requests: &[Value]) -> Output {
+    attach_with_root(area, &area.home.join(".jeden/sessions"), name, resume, requests)
+}
+
+fn attach_with_root(area: &Area, root: &Path, name: &str, resume: Option<&str>, requests: &[Value]) -> Output {
     let directory = area.root.join("attachments").join(name);
     fs::create_dir_all(&directory).unwrap();
     let mut args = vec![
@@ -86,7 +90,7 @@ fn attach(area: &Area, name: &str, resume: Option<&str>, requests: &[Value]) -> 
     let stderr = directory.join("stderr");
     let mut child = area
         .command(&args)
-        .env("JEDEN_SESSION_ROOT", area.home.join(".jeden/sessions"))
+        .env("JEDEN_SESSION_ROOT", root)
         .env_remove("JEDEN_CONFIG")
         .env_remove("JEDEN_CONFIG_PATH")
         .stdin(Stdio::piped())
@@ -204,4 +208,69 @@ fn native_attachment_creates_a_real_ledger_and_refuses_a_missing_resume_ledger()
     );
     assert!(!area.home.join(".jeden/sessions/absent-session").exists());
     assert_eq!(fs::read(ledger.join("state.json")).unwrap(), state);
+}
+
+/// The harness lets its caller move the ledgers with `JEDEN_SESSION_ROOT`, and
+/// the local `jeden rpc` inherits it. The readiness probe used to test
+/// `~/.jeden/sessions` regardless, so a session that the harness had written
+/// under the moved root was refused as missing while its ledger sat right
+/// there. Now the probe, the placement line and the harness agree on one root.
+#[test]
+fn native_attachment_follows_a_moved_session_root() {
+    let area = Area::new();
+    install_runtime(&area);
+    let home = fs::canonicalize(&area.home).unwrap();
+    let moved = area.root.join("moved-ledgers");
+    fs::create_dir_all(&moved).unwrap();
+    let moved = fs::canonicalize(&moved).unwrap();
+    let opened = attach_with_root(
+        &area,
+        &moved,
+        "create-moved",
+        None,
+        &[
+            json!({"id": "create", "method": "session/new", "params": {"cwd": home}}),
+            json!({"id": "shutdown", "method": "shutdown"}),
+        ],
+    );
+    let created = reply(&opened, "create");
+    let ledger = fs::canonicalize(created["sessionPath"].as_str().unwrap()).unwrap();
+    assert!(ledger.starts_with(&moved), "Jeden wrote outside the moved root: {}", ledger.display());
+    assert!(!home.join(".jeden/sessions").exists(), "the default root must stay untouched");
+    let session = ledger.file_name().unwrap().to_str().unwrap();
+    let state = fs::read(ledger.join("state.json")).unwrap();
+
+    let reconnected = attach_with_root(
+        &area,
+        &moved,
+        "reconnect-moved",
+        Some(session),
+        &[
+            json!({"id": "initialize", "method": "initialize"}),
+            json!({"id": "shutdown", "method": "shutdown"}),
+        ],
+    );
+    let initialized = reply(&reconnected, "initialize");
+    assert_eq!(initialized["protocol"], "jeden-rpc");
+    assert_eq!(fs::read(ledger.join("state.json")).unwrap(), state);
+    let placement = said(&reconnected.stderr)
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_JEDEN_PLACEMENT "))
+        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        .expect("the placement line names the ledger root");
+    assert_eq!(placement["ledger"], moved.to_string_lossy().as_ref());
+
+    let missing = attach_with_root(
+        &area,
+        &moved,
+        "missing-moved",
+        Some("absent-session"),
+        &[],
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    let refusal = said(&missing.stderr);
+    assert!(
+        refusal.contains(&format!("session ledger is missing: {}/absent-session", moved.display())),
+        "{refusal}"
+    );
 }

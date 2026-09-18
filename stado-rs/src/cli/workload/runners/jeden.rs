@@ -25,6 +25,31 @@ const HOME_WORKSPACE: &str = "__home__";
 const MANAGED_JEDEN: &str = ".stado/bin/jeden";
 const MANAGED_STADO: &str = ".stado/bin/stado";
 const PLACEMENT_PREFIX: &str = "STADO_JEDEN_PLACEMENT ";
+const DEFAULT_LEDGER: &str = ".jeden/sessions";
+const SESSION_ROOT_VARIABLE: &str = "JEDEN_SESSION_ROOT";
+
+/// Where the harness keeps its ledgers on `target`: the shell expression the
+/// readiness probe tests, and the path the placement line reports.
+///
+/// The harness lets its caller move the ledgers with `JEDEN_SESSION_ROOT` and
+/// the local `jeden rpc` inherits this process's environment, so a session
+/// this host runs is opened from that root and the probe has to look there
+/// too; before this the probe tested `~/.jeden/sessions` while the session
+/// opened elsewhere, and refused a ledger that was present. Another host
+/// never sees this process's environment, so it keeps the default.
+fn ledger_root(target: &ComputeTarget) -> (String, String) {
+    let moved = host_channel::target_is_this_host(target)
+        .then(|| std::env::var(SESSION_ROOT_VARIABLE).ok())
+        .flatten()
+        .filter(|root| !root.is_empty());
+    match moved {
+        Some(root) => (format!("'{}'", root.replace('\'', "'\\''")), root),
+        None => (
+            format!("\"$HOME\"/{DEFAULT_LEDGER}"),
+            format!("~/{DEFAULT_LEDGER}"),
+        ),
+    }
+}
 
 pub(crate) async fn connect_jeden(
     declaration: &crate::cli::workload::WorkloadKind,
@@ -88,8 +113,9 @@ pub(crate) async fn connect_jeden(
     let mut refusals = Vec::new();
     for target in candidates.drain(..) {
         let checkout = checkout_path(workspace);
+        let (ledger, _) = ledger_root(&target);
         let resume_probe = resume.map(|session| format!(
-            "if [ ! -d \"$HOME\"/.jeden/sessions/{session} ]; then printf 'session ledger is missing: %s\\n' \"$HOME\"/.jeden/sessions/{session} >&2; ready=no; fi\n"
+            "if [ ! -d {ledger}/{session} ]; then printf 'session ledger is missing: %s\\n' {ledger}/{session} >&2; ready=no; fi\n"
         )).unwrap_or_default();
         let probe = format!(
             r#"ready=yes
@@ -232,6 +258,7 @@ async fn attach_jeden(
     checkout: &str,
     resume: Option<&str>,
 ) -> Result<(), CmdError> {
+    let (_, ledger) = ledger_root(&target);
     eprintln!(
         "{PLACEMENT_PREFIX}{}",
         serde_json::to_string(&json!({
@@ -239,7 +266,7 @@ async fn attach_jeden(
             "target": target.name,
             "workspace": workspace,
             "cwd": format!("~/{checkout}"),
-            "ledger": "~/.jeden/sessions",
+            "ledger": ledger,
             "resume": resume,
         }))?
     );
