@@ -149,6 +149,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             Step::Done => continue,
             Step::Stop => return Ok(()),
         }
+        // The grant that lets this host claim work with secrets is kept
+        // alive here, before the scan that would need it.
+        gates::grant::renew_if_due(log_fn);
         let (mut free_vram_gb, mut cards) = match gates::inference::before_admission(
             &store,
             &sizing,

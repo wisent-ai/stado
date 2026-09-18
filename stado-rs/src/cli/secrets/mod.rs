@@ -15,3 +15,6 @@ pub use crate::cli::secrets::commands::subcommands::{
     CredentialItemCommands, CredentialTokenCommands, CredentialVaultCommands,
 };
 pub use crate::cli::secrets::commands::surface::SecretsCommands;
+/// The local Skarbiec launcher and its JSON reports, for the one place
+/// outside this surface that issues a grant: the agent renewing its own.
+pub(crate) use crate::cli::secrets::store::resolve::{launcher_json, skarbiec_launcher};

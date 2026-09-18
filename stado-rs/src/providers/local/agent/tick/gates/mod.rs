@@ -5,5 +5,6 @@
 //! anything at all ([`admission`]).
 
 pub mod admission;
+pub mod grant;
 pub mod inference;
 pub mod resources;
