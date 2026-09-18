@@ -130,6 +130,17 @@ pub enum CredentialGrantCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Renew this host's own workload-agent grant, the way the agent does
+    /// every ten minutes: at the authoritative vault, with the capabilities
+    /// the grant already carries, for thirty days.
+    #[command(name = "agent-renew")]
+    AgentRenew {
+        /// Renew even when more than ten days remain.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

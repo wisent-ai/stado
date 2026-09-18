@@ -164,6 +164,31 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 token_file,
                 json,
             } => super::host::grant_show(&host, &consumer, token_file.as_deref(), json).await,
+            CredentialGrantCommands::AgentRenew { force, json } => {
+                let mut lines = Vec::new();
+                crate::providers::local::agent::tick::gates::grant::renew(force, &mut |line| {
+                    lines.push(line.to_string())
+                })
+                .await;
+                let renewed = lines.iter().any(|line| line.contains("; renewed"));
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"renewed": renewed, "lines": lines})
+                    );
+                } else {
+                    for line in &lines {
+                        println!("{line}");
+                    }
+                }
+                if lines
+                    .iter()
+                    .any(|line| line.contains(" failed") || line.contains("could not"))
+                {
+                    return Err(CmdError::click("agent grant renewal failed"));
+                }
+                Ok(())
+            }
         },
         SecretsCommands::Backup { command } => match command {
             CredentialBackupCommands::Audit {
