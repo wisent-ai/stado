@@ -107,6 +107,28 @@
           "path": "$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist"
         }
       ]
+    },
+    {
+      "name": "jeden",
+      "why": "the operator's coding agent CLI; delivered to workstations at the version the fleet declares, so `jeden import` and every later command exist where the operator types them",
+      "source": {
+        "product": "jeden",
+        "member": "bin/jeden"
+      },
+      "platforms": [
+        "darwin-arm64",
+        "linux-amd64"
+      ],
+      "install": {
+        "kind": "program",
+        "root": "$HOME/.stado/bin"
+      },
+      "version": {
+        "kind": "program",
+        "argument": "--version",
+        "shape": "plain"
+      },
+      "units": []
     }
   ]
 }
