@@ -72,10 +72,27 @@ pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
         return Ok(());
     }
     let client = agent_secret_client().map_err(|error| error.to_string())?;
-    let visible = client
-        .list_items()
-        .await
-        .map_err(|error| format!("the agent's Skarbiec broker did not answer: {error}"))?;
+    let visible = client.list_items().await.map_err(|error| {
+        let text = error.to_string();
+        // The broker did answer: it refused the consumer. Skarbiec says
+        // "consumer grant required" for a grant it does not hold, and a grant
+        // whose expires_at has passed is one it no longer holds. On 2026-09-17
+        // the laptop's stado-local-agent grant expired at 13:11:57 and every
+        // darwin release build declined for seven hours as "did not answer",
+        // which sent the diagnosis at the broker's URL instead of at the grant.
+        if text.contains("consumer grant required") {
+            format!(
+                "this host's agent grant for consumer {} is missing or has expired at the broker ({text}); \
+                 `skarbiec grant list` shows its expires_at, and `skarbiec grant issue {} --capabilities … \
+                 --replace-capabilities --token-file {}` renews it",
+                crate::config::agent_skarbiec_consumer(),
+                crate::config::agent_skarbiec_consumer(),
+                crate::config::agent_skarbiec_token_file(),
+            )
+        } else {
+            format!("the agent's Skarbiec broker did not answer: {text}")
+        }
+    })?;
     for (env_name, reference) in &job.secret_env {
         if !visible.iter().any(|item| item.id == reference.item) {
             return Err(format!(
