@@ -280,5 +280,70 @@ pub(in crate::cli::release_cmd) async fn install_local(
             destination.display()
         );
     }
+    if let Some(version) = stado_version.as_deref() {
+        declare_delivered_version(&name, version).await?;
+    }
+    Ok(())
+}
+
+/// Write the version this delivery installed into the host's own
+/// `targets[].managed_versions`, so the declaration follows the delivery.
+///
+/// Until 2026-09-18 nothing did: a fleet delivery installed 0.21.9 on the
+/// RTX host while its declaration stayed at 0.20.11, and every later
+/// `release host-state` read `host-ahead: the declaration is stale, not the
+/// host` and refused to deliver anything to it until an operator moved the
+/// declaration by hand. The delivery is the fact; the declaration records it.
+async fn declare_delivered_version(binary: &str, version: &str) -> Result<(), CmdError> {
+    let hostname = crate::providers::vast::system_hostname();
+    let binary = binary.to_string();
+    let version = version.to_string();
+    let generation = crate::cli::registry::commit_document(move |current| {
+        let registry = crate::targets::load_registry_from_str(&serde_json::to_string(current)?)
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let target = registry
+            .lookup_self(&hostname)
+            .map_err(|error| CmdError::click(error.to_string()))?
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{hostname} has no registry target identity; the delivered {binary} \
+                     {version} cannot be declared for it"
+                ))
+            })?;
+        let target_name = target.name.clone();
+        let mut next = current.clone();
+        let entry = next
+            .get_mut("targets")
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|targets| {
+                targets.iter_mut().find(|candidate| {
+                    candidate.get("name").and_then(serde_json::Value::as_str)
+                        == Some(target_name.as_str())
+                })
+            })
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or_else(|| {
+                CmdError::click(format!("{target_name} is missing from registry.targets"))
+            })?;
+        let versions = entry
+            .entry("managed_versions".to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{target_name} declares managed_versions as a non-object"
+                ))
+            })?;
+        versions.insert(binary.clone(), serde_json::Value::String(version.clone()));
+        Ok(next)
+    })
+    .await
+    .map_err(|error| {
+        CmdError::click(format!(
+            "the release is installed, but declaring it under targets[].managed_versions \
+             failed: {error}"
+        ))
+    })?;
+    println!("declared under managed_versions (registry generation {generation})");
     Ok(())
 }
