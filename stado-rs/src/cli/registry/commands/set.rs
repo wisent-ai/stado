@@ -131,7 +131,7 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
             &replacement,
             &blob.version,
             None,
-            &store.location().to_string(),
+            store.location(),
         );
     }
     *leaf(&mut document, path)? = replacement.clone();
