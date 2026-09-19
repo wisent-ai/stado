@@ -97,27 +97,30 @@ pub(super) async fn run_store_cleaners(
         crate::config::wc_storage_backend(),
         crate::config::wc_stado_storage_namespace(),
     );
-    let terminal_jobs = match (&status_root, outputs_budget > 0
-        && policy.cleaners.contains_key(job_outputs::CLEANER))
-    {
-        (Some(root), true) => match job_outputs::candidate_job_ids(root, outputs_budget, outputs_deadline) {
-            Ok(candidates) if candidates.is_empty() => Some(BTreeSet::new()),
-            Ok(candidates) => {
-                let budget = outputs_deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(KEEP_LIST_BUDGET);
-                let wait = Instant::now();
-                let ids = fetch_terminal_job_ids(&candidates, budget).await;
-                report.store_wait_ms = report
-                    .store_wait_ms
-                    .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
-                ids
+    let terminal_jobs = match (
+        &status_root,
+        outputs_budget > 0 && policy.cleaners.contains_key(job_outputs::CLEANER),
+    ) {
+        (Some(root), true) => {
+            match job_outputs::candidate_job_ids(root, outputs_budget, outputs_deadline) {
+                Ok(candidates) if candidates.is_empty() => Some(BTreeSet::new()),
+                Ok(candidates) => {
+                    let budget = outputs_deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(KEEP_LIST_BUDGET);
+                    let wait = Instant::now();
+                    let ids = fetch_terminal_job_ids(&candidates, budget).await;
+                    report.store_wait_ms = report
+                        .store_wait_ms
+                        .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
+                    ids
+                }
+                Err(error) => {
+                    report.add_error(job_outputs::CLEANER, &error);
+                    None
+                }
             }
-            Err(error) => {
-                report.add_error(job_outputs::CLEANER, &error);
-                None
-            }
-        },
+        }
         _ => Some(BTreeSet::new()),
     };
     job_outputs::scan_job_outputs(

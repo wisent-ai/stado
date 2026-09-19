@@ -61,12 +61,27 @@ fn a_retired_jobs_aged_payload_is_reclaimed_and_everything_else_stays() {
     );
 
     let done = storage.join("status/job-done/output");
-    assert!(!done.join("release.tar.gz").exists(), "the retired job's aged payload stays");
-    assert!(fresh.exists(), "a payload younger than the floor was removed");
-    assert!(done.join("receipt.json").exists(), "the receipt was removed");
-    assert!(done.join("command_output.log").exists(), "the log was removed");
+    assert!(
+        !done.join("release.tar.gz").exists(),
+        "the retired job's aged payload stays"
+    );
+    assert!(
+        fresh.exists(),
+        "a payload younger than the floor was removed"
+    );
+    assert!(
+        done.join("receipt.json").exists(),
+        "the receipt was removed"
+    );
+    assert!(
+        done.join("command_output.log").exists(),
+        "the log was removed"
+    );
     for job in ["job-live", "job-unlisted"] {
-        let payload = storage.join("status").join(job).join("output/release.tar.gz");
+        let payload = storage
+            .join("status")
+            .join(job)
+            .join("output/release.tar.gz");
         assert!(payload.exists(), "{job}'s payload was removed");
     }
 
