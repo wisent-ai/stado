@@ -18,14 +18,7 @@ impl JobStorage {
         // when the record is already retired.
         self.recover_job_transition(&job.job_id).await?;
         let mut lifecycle_exists = false;
-        for prefix in [
-            "cancelled",
-            "failed",
-            "uploaded",
-            "completed",
-            "running",
-            "queue",
-        ] {
+        for prefix in crate::machine::JOB_PREFIXES {
             if self.read_job(prefix, &job.job_id).await?.is_some() {
                 lifecycle_exists = true;
                 break;

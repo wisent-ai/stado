@@ -5,18 +5,20 @@ use serde_json::{Map, Value};
 
 use crate::models::Job;
 use crate::queue::leases::{LeaseError, ProviderLeaseStore};
+use crate::queue::runs;
 use crate::queue::JobStorage;
 
 /// Prefixes probed by [`crate::machine::MachineFacade::lookup_job`]. Terminal
 /// and running destinations precede queue so a crash-retained source fence
-/// cannot mask the newer lifecycle state.
+/// cannot mask the newer lifecycle state. The order is this facade's; the
+/// names are the queue's.
 pub const JOB_PREFIXES: [&str; 6] = [
-    "cancelled",
-    "failed",
-    "uploaded",
-    "completed",
-    "running",
-    "queue",
+    runs::CANCELLED,
+    runs::FAILED,
+    runs::UPLOADED,
+    runs::COMPLETED,
+    runs::RUNNING,
+    runs::QUEUE,
 ];
 
 /// Machine-facing job view (Python `normalize_job`): the queue/ prefix reads

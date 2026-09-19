@@ -40,14 +40,7 @@ impl JobStorage {
     /// All jobs grouped by prefix. Python `JobStorage.list_all_jobs`.
     pub async fn list_all_jobs(&self) -> Result<BTreeMap<String, Vec<Job>>, StorageError> {
         let mut result = BTreeMap::new();
-        for prefix in [
-            "queue",
-            "running",
-            "completed",
-            "uploaded",
-            "failed",
-            "cancelled",
-        ] {
+        for prefix in crate::queue::runs::ALL_PREFIXES {
             result.insert(prefix.to_string(), self.list_jobs(prefix, 0).await?);
         }
         Ok(result)

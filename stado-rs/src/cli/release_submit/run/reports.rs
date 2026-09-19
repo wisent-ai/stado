@@ -4,6 +4,7 @@
 use serde_json::{Map, Value};
 
 use crate::cli::CmdError;
+use crate::queue::runs;
 use crate::queue::storage::JobStorage;
 
 /// One run object as raw JSON, or nothing when it is absent or unreadable.
@@ -150,12 +151,12 @@ pub(crate) async fn matching_runs(
                 continue;
             };
             for state in [
-                "running",
-                "queue",
-                "completed",
-                "uploaded",
-                "failed",
-                "cancelled",
+                runs::RUNNING,
+                runs::QUEUE,
+                runs::COMPLETED,
+                runs::UPLOADED,
+                runs::FAILED,
+                runs::CANCELLED,
             ] {
                 match store.read_job(state, &job_id).await {
                     Ok(Some(_)) => {

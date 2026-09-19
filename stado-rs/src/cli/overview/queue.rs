@@ -8,11 +8,20 @@
 use serde_json::{json, Map, Value};
 
 use crate::monitor::billing;
+use crate::queue::runs;
 use crate::queue::{JobStorage, StorageError};
 
 pub(super) async fn queue_counts(store: &JobStorage) -> Result<Value, StorageError> {
     let mut counts = Map::new();
-    for state in ["queue", "running", "completed", "uploaded", "failed"] {
+    // Every prefix but `cancelled`: an overview counts work, and a job the
+    // operator cancelled is not work waiting on anyone.
+    for state in [
+        runs::QUEUE,
+        runs::RUNNING,
+        runs::COMPLETED,
+        runs::UPLOADED,
+        runs::FAILED,
+    ] {
         let prefix = format!("{state}/");
         let count = store
             .list_blobs_with_meta(&prefix)

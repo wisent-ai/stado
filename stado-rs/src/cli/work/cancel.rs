@@ -10,6 +10,7 @@
 
 use crate::machine::{canonical_json, recorded_instance, utcnow};
 use crate::models::job_state;
+use crate::queue::runs;
 use crate::queue::submit::default_store;
 use crate::queue::JobStorage;
 
@@ -114,7 +115,14 @@ fn report(outcome: &Termination, job_id: &str) {
 /// Publish one durable terminal transition. The marker is create-if-absent,
 /// and terminal jobs make retries idempotent.
 pub(crate) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
-    for prefix in ["cancelled", "completed", "uploaded", "failed"] {
+    // Cancelled first: cancelling twice is the common retry, and the queue's
+    // own terminal set is what "already terminal" means.
+    for prefix in [
+        runs::CANCELLED,
+        runs::COMPLETED,
+        runs::UPLOADED,
+        runs::FAILED,
+    ] {
         if let Some(job) = store.read_job(prefix, job_id).await? {
             println!("Job {job_id} is already terminal ({})", job.state);
             return Ok(());

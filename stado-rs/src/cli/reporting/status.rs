@@ -4,18 +4,20 @@ use chrono::Utc;
 
 use crate::deploy::fleet_claim;
 use crate::models::Job;
+use crate::queue::runs;
 use crate::queue::submit::default_store;
 
 use crate::cli::CmdError;
 
-/// Canonical lifecycle states in display and direct-lookup order.
+/// Canonical lifecycle states in display and direct-lookup order, composed
+/// from the prefixes the queue declares.
 const STATES: &[&str] = &[
-    "running",
-    "queue",
-    "completed",
-    "uploaded",
-    "failed",
-    "cancelled",
+    runs::RUNNING,
+    runs::QUEUE,
+    runs::COMPLETED,
+    runs::UPLOADED,
+    runs::FAILED,
+    runs::CANCELLED,
 ];
 
 pub async fn run(filter_id: Option<&str>) -> Result<(), CmdError> {

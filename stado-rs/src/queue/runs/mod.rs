@@ -17,7 +17,10 @@ mod terminal;
 
 pub use manifest::{list_runs, read_run, run_status, RunStatus};
 pub use name::derive_run_name;
-pub use prefixes::{ALL_PREFIXES, RUN_PREFIX, TERMINAL_PREFIXES};
+pub use prefixes::{
+    ALL_PREFIXES, CANCELLED, COMPLETED, FAILED, QUEUE, RUNNING, RUN_PREFIX, TERMINAL_PREFIXES,
+    UPLOADED,
+};
 pub use terminal::record_terminal_outcome;
 
 pub(crate) use terminal::{record_terminal_outcome_for_entry, terminal_job_matches_entry};

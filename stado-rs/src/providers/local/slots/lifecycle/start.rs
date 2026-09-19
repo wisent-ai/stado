@@ -57,7 +57,13 @@ pub async fn start_slot(
     if activation_extraction_must_share_gpu(&cmd) {
         job.exclusive = false;
     }
-    for terminal_prefix in ["uploaded", "completed", "cancelled"] {
+    // Not `failed`: a failed job is retried into the queue, so a slot that
+    // finds one must still start. The names are the queue's.
+    for terminal_prefix in [
+        crate::queue::runs::UPLOADED,
+        crate::queue::runs::COMPLETED,
+        crate::queue::runs::CANCELLED,
+    ] {
         if store
             .read_job(terminal_prefix, &job.job_id)
             .await?

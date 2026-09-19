@@ -20,7 +20,12 @@ pub async fn advance_slot(
 ) -> Result<SlotOutcome, StorageError> {
     let pid = slot.pid();
     let job_id = slot.slot.job.job_id.clone();
-    for terminal_prefix in ["uploaded", "completed", "cancelled"] {
+    // The same three the slot refuses to start on; `failed` is retried.
+    for terminal_prefix in [
+        crate::queue::runs::UPLOADED,
+        crate::queue::runs::COMPLETED,
+        crate::queue::runs::CANCELLED,
+    ] {
         if store.read_job(terminal_prefix, &job_id).await?.is_some() {
             terminate_cancelled_slot(&mut slot, log_fn).await?;
             slot.close_log();

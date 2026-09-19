@@ -19,14 +19,9 @@ use super::{
 };
 
 async fn find_job(store: &JobStorage, job_id: &str) -> Result<Option<Job>, SubmitError> {
-    for prefix in [
-        "cancelled",
-        "failed",
-        "uploaded",
-        "completed",
-        "running",
-        "queue",
-    ] {
+    // The order the machine facade declares: terminal and running before
+    // queue, so a retained source fence cannot mask the newer state.
+    for prefix in crate::machine::JOB_PREFIXES {
         if let Some(job) = store.read_job(prefix, job_id).await? {
             return Ok(Some(job));
         }
