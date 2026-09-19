@@ -10,7 +10,7 @@ use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
 use crate::providers::local::disk_cleanup::{
-    backup_twins, chromium_clones, queue_workdirs, release_store,
+    backup_twins, chromium_clones, job_outputs, queue_workdirs, release_store,
 };
 
 // ---------------------------------------------------------------------------
@@ -174,6 +174,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             queue_workdirs::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(queue_workdirs::CLEANER)),
             ),
+            job_outputs::CLEANER: public_cleaner(
+                cleaners.and_then(|c| c.get(job_outputs::CLEANER)),
+            ),
             backup_twins::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(backup_twins::CLEANER)),
             ),
@@ -199,7 +202,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
                         "huggingface_cache" | "weles_recordings" | "build_caches"
                     ) || *name == chromium_clones::CLEANER
                         || *name == queue_workdirs::CLEANER
+                        || *name == job_outputs::CLEANER
                         || *name == backup_twins::CLEANER
+                        || *name == release_store::CLEANER
                 })
                 .map(Value::from)
                 .collect()

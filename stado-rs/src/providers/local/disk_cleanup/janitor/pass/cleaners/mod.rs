@@ -1,30 +1,95 @@
 //! The fixed cleaner order and one pass's run of every declared cleaner.
+//!
+//! The rebuildable-cache cleaners run here; the store-backed ones — job work
+//! trees, job outputs, replica twins, release versions — run in [`store`]
+//! with whatever item and time share the first half left.
 
 pub(crate) mod budget;
+mod store;
 pub(crate) mod summary;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
 
-use crate::providers::local::disk_cleanup::janitor::pass::once::keep_list::fetch_live_job_ids;
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
-use crate::providers::local::disk_cleanup::janitor::{DEADLINE_SECONDS, KEEP_LIST_BUDGET};
+use crate::providers::local::disk_cleanup::janitor::DEADLINE_SECONDS;
 use crate::providers::local::disk_cleanup::{
-    backup_twins, build_caches, chromium_clones, hf, queue_workdirs, release_store, weles,
+    backup_twins, build_caches, chromium_clones, hf, job_outputs, queue_workdirs, release_store,
+    weles,
 };
 use crate::targets::DiskCleanupPolicy;
 
-pub(crate) const CLEANER_ORDER: [&str; 7] = [
+pub(crate) const CLEANER_ORDER: [&str; 8] = [
     "huggingface_cache",
     "weles_recordings",
     "build_caches",
     chromium_clones::CLEANER,
     queue_workdirs::CLEANER,
+    job_outputs::CLEANER,
     backup_twins::CLEANER,
     release_store::CLEANER,
 ];
+
+/// How one pass divides its item and time budget between the declared
+/// cleaners in [`CLEANER_ORDER`].
+///
+/// Every cleaner used to receive `max_scan_items` minus what the ones
+/// before it had spent, which reads as fair and is not: the cleaners run in
+/// a fixed order, and one whose root is large enough to exhaust the cap
+/// takes the whole pass, every pass, forever. Measured on
+/// charless-mac-mini on 2026-08-31 with `max_scan_items: 10000` and six
+/// declared cleaners: `weles_recordings` scanned 15, `build_caches` scanned
+/// 9,985 and found NOTHING eligible, and `chromium_clones`,
+/// `queue_workdirs` and `backup_twins` each received a budget of zero and
+/// scanned nothing — pass after pass, under real disk pressure, with 18 GiB
+/// of proven duplicates sitting in the replica that `backup_twins` exists
+/// to reclaim. The outcome was `cap_reached`, which is true and reads like
+/// work being done.
+///
+/// An equal share of what is left, with everything unspent rolling forward
+/// to the cleaners behind: a cleaner that scans less than its share leaves
+/// more for the rest, and the last declared cleaner is handed whatever
+/// remains. No cleaner is ever handed zero while it is declared, which is
+/// the property that was missing. Item shares alone do not make the fixed
+/// order fair: a cleaner can spend the whole wall-clock allowance while
+/// staying inside its item share, so each declared cleaner also gets an
+/// equal slice of the time that remains at the instant it starts; an unused
+/// slice stays inside the single global deadline and rolls forward.
+pub(super) struct Shares<'a> {
+    policy: &'a DiskCleanupPolicy,
+    pub(super) deadline: Instant,
+}
+
+impl Shares<'_> {
+    /// Declared cleaners still to run after `current`.
+    pub(super) fn declared_after(&self, current: &str) -> i64 {
+        CLEANER_ORDER
+            .iter()
+            .skip_while(|name| **name != current)
+            .skip(1)
+            .filter(|name| self.policy.cleaners.contains_key(**name))
+            .count() as i64
+    }
+
+    /// One cleaner's item share of `remaining` with `behind` cleaners left.
+    pub(super) fn share(&self, remaining: i64, behind: i64) -> i64 {
+        if behind <= 0 {
+            remaining
+        } else {
+            (remaining / (behind + 1)).max(1).min(remaining)
+        }
+    }
+
+    /// The instant `current` must stop by.
+    pub(super) fn time_share(&self, current: &str) -> Instant {
+        let now = Instant::now();
+        let remaining = self.deadline.saturating_duration_since(now);
+        let slots = self.declared_after(current).saturating_add(1) as u32;
+        now + remaining / slots
+    }
+}
 
 /// Run every declared cleaner inside its item and time share of the pass.
 ///
@@ -47,53 +112,10 @@ pub(crate) async fn run_cleaners(
         .filter(|seconds| *seconds > 0)
         .map_or(DEADLINE_SECONDS, |seconds| seconds as f64);
     let deadline = Instant::now() + std::time::Duration::from_secs_f64(pass_seconds);
-    // How much of the pass's remaining scan budget one cleaner may spend while
-    // declared cleaners behind it have not run yet.
-    //
-    // Every cleaner used to receive `max_scan_items` minus what the ones
-    // before it had spent, which reads as fair and is not: the cleaners run in
-    // a fixed order, and one whose root is large enough to exhaust the cap
-    // takes the whole pass, every pass, forever. Measured on
-    // charless-mac-mini on 2026-08-31 with `max_scan_items: 10000` and six
-    // declared cleaners: `weles_recordings` scanned 15, `build_caches` scanned
-    // 9,985 and found NOTHING eligible, and `chromium_clones`,
-    // `queue_workdirs` and `backup_twins` each received a budget of zero and
-    // scanned nothing — pass after pass, under real disk pressure, with 18 GiB
-    // of proven duplicates sitting in the replica that `backup_twins` exists
-    // to reclaim. The outcome was `cap_reached`, which is true and reads like
-    // work being done.
-    //
-    // An equal share of what is left, with everything unspent rolling forward
-    // to the cleaners behind: a cleaner that scans less than its share leaves
-    // more for the rest, and the last declared cleaner is handed whatever
-    // remains. No cleaner is ever handed zero while it is declared, which is
-    // the property that was missing.
-    let declared_after = |current: &str| -> i64 {
-        CLEANER_ORDER
-            .iter()
-            .skip_while(|name| **name != current)
-            .skip(1)
-            .filter(|name| policy.cleaners.contains_key(**name))
-            .count() as i64
-    };
-    let share = |remaining: i64, behind: i64| -> i64 {
-        if behind <= 0 {
-            remaining
-        } else {
-            (remaining / (behind + 1)).max(1).min(remaining)
-        }
-    };
-    // Item shares alone do not make the fixed order fair: a cleaner can spend
-    // the whole wall-clock allowance while staying inside its item share. Give
-    // each declared cleaner an equal slice of the time that remains at the
-    // instant it starts. Any unused slice stays inside the single global
-    // deadline and is therefore rolled into the next cleaner's calculation.
-    let time_share = |current: &str| -> Instant {
-        let now = Instant::now();
-        let remaining = deadline.saturating_duration_since(now);
-        let slots = declared_after(current).saturating_add(1) as u32;
-        now + remaining / slots
-    };
+    let shares = Shares { policy, deadline };
+    let declared_after = |current: &str| shares.declared_after(current);
+    let share = |remaining: i64, behind: i64| shares.share(remaining, behind);
+    let time_share = |current: &str| shares.time_share(current);
     // Past every early return: from here the cleaner table is a measurement
     // this pass actually made, so the report may carry one.
     report.scanned = true;
@@ -169,106 +191,15 @@ pub(crate) async fn run_cleaners(
         - report.builds.scanned_items
         - report.clones.scanned_items)
         .max(0);
-    if remaining_after_clones == 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
-        report.caps.scan = true;
-    }
-    // The queue's own per-job trees, after rebuildable caches.
-    // Candidate names are captured under this same janitor lock. The queue
-    // authority then downloads bodies only for candidates whose names overlap
-    // live and terminal prefixes; everything unreadable remains on the keep
-    // set, and any store failure disables this cleaner for the whole pass.
-    let workdir_budget = share(
-        remaining_after_clones,
-        declared_after(queue_workdirs::CLEANER),
-    );
-    let workdir_deadline = time_share(queue_workdirs::CLEANER);
-    let live_jobs = if workdir_budget > 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
-        match queue_workdirs::candidate_job_ids(
-            home,
-            policy
-                .cleaners
-                .get(queue_workdirs::CLEANER)
-                .and_then(|cleaner| cleaner.root.as_deref()),
-            workdir_budget,
-            workdir_deadline,
-        ) {
-            Ok(candidates) => {
-                let budget = workdir_deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(KEEP_LIST_BUDGET);
-                let wait = Instant::now();
-                let ids = fetch_live_job_ids(&candidates, budget).await;
-                report.store_wait_ms = report
-                    .store_wait_ms
-                    .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
-                ids
-            }
-            Err(error) => {
-                report.add_error(queue_workdirs::CLEANER, &error);
-                None
-            }
-        }
-    } else {
-        Some(Vec::new())
-    };
-    queue_workdirs::scan_queue_workdirs(
-        home,
-        policy,
-        attempted_at,
-        workdir_budget,
-        workdir_deadline,
-        live_jobs.as_deref(),
-        report,
-    );
-    let remaining_after_workdirs = (policy.max_scan_items
-        - report.hf.scanned_items
-        - report.weles.scanned_items
-        - report.builds.scanned_items
-        - report.clones.scanned_items
-        - report.workdirs.scanned_items)
-        .max(0);
-    if remaining_after_workdirs == 0 && policy.cleaners.contains_key(backup_twins::CLEANER) {
-        report.caps.scan = true;
-    }
-    // The disaster-recovery replica's proven duplicates. It is the only
-    // cleaner here that has to READ the bytes it deletes: every object it
-    // removes is hashed against the primary in this same pass. Release-store
-    // cleanup remains behind it and receives its own item/time share.
-    let twins_budget = share(
-        remaining_after_workdirs,
-        declared_after(backup_twins::CLEANER),
-    );
-    backup_twins::scan_backup_twins(
-        home,
-        policy,
-        crate::config::wc_stado_storage_namespace(),
-        twins_budget,
-        time_share(backup_twins::CLEANER),
-        report,
-    );
-    let remaining_after_twins = (policy.max_scan_items
-        - report.hf.scanned_items
-        - report.weles.scanned_items
-        - report.builds.scanned_items
-        - report.clones.scanned_items
-        - report.workdirs.scanned_items
-        - report.backup_twins.scanned_items)
-        .max(0);
-    if remaining_after_twins == 0 && policy.cleaners.contains_key(release_store::CLEANER) {
-        report.caps.scan = true;
-    }
-    // Immutable release versions nothing on this host still names, scanned
-    // last: it deletes whole version directories, so it takes the smallest
-    // share and only after every cleaner that reclaims scratch has had its
-    // turn — a release is the one class here that costs a rebuild to get
-    // back.
-    release_store::scan_release_store(
+    store::run_store_cleaners(
         home,
         policy,
         declared_release_versions,
-        remaining_after_twins,
-        deadline,
+        attempted_at,
+        remaining_after_clones,
+        &shares,
         report,
-    );
+    )
+    .await;
     Ok(())
 }

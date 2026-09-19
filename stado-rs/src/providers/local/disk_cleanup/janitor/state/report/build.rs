@@ -10,7 +10,7 @@ use crate::providers::local::disk_cleanup::janitor::state::report::{
 };
 use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
 use crate::providers::local::disk_cleanup::{
-    backup_twins, build_caches, chromium_clones, queue_workdirs, release_store,
+    backup_twins, build_caches, chromium_clones, job_outputs, queue_workdirs, release_store,
 };
 use crate::targets;
 
@@ -39,6 +39,7 @@ impl CleanupReport {
             builds: CleanerReport::default(),
             clones: CleanerReport::default(),
             workdirs: CleanerReport::default(),
+            job_outputs: CleanerReport::default(),
             backup_twins: CleanerReport::default(),
             release_store: CleanerReport::default(),
             caps: Caps::default(),
@@ -87,6 +88,14 @@ impl CleanupReport {
         *self.workdirs.skipped.entry(reason.to_string()).or_insert(0) += count;
     }
 
+    pub fn skip_job_outputs(&mut self, reason: &str, count: i64) {
+        *self
+            .job_outputs
+            .skipped
+            .entry(reason.to_string())
+            .or_insert(0) += count;
+    }
+
     pub fn skip_backup_twins(&mut self, reason: &str, count: i64) {
         *self
             .backup_twins
@@ -126,6 +135,7 @@ impl CleanupReport {
                 "build_caches": cleaner(&self.builds),
                 chromium_clones::CLEANER: cleaner(&self.clones),
                 queue_workdirs::CLEANER: cleaner(&self.workdirs),
+                job_outputs::CLEANER: cleaner(&self.job_outputs),
                 backup_twins::CLEANER: cleaner(&self.backup_twins),
                 release_store::CLEANER: cleaner(&self.release_store),
             })

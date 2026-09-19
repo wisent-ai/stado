@@ -66,6 +66,14 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         root_override_since: Some("0.17.0"),
     },
     CleanerDeclaration {
+        name: "job_outputs",
+        since: "0.21.17",
+        default_root: super::backup_twins::PRIMARY_ROOT,
+        sweeps: "payload outputs of jobs the queue lists as terminal, past the declared age; receipts and logs stay",
+        min_age_floor_seconds: 604_800,
+        root_override_since: None,
+    },
+    CleanerDeclaration {
         name: "release_store",
         since: "0.15.26",
         default_root: super::release_store::RELEASES_ROOT,

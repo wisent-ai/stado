@@ -23,6 +23,7 @@
 mod cleaners;
 mod consent;
 mod fixture;
+mod job_outputs;
 mod leased;
 mod leftovers;
 mod mechanism;

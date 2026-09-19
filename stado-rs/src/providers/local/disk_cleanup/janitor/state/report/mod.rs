@@ -83,6 +83,7 @@ pub struct CleanupReport {
     pub builds: CleanerReport,
     pub clones: CleanerReport,
     pub workdirs: CleanerReport,
+    pub job_outputs: CleanerReport,
     pub backup_twins: CleanerReport,
     pub release_store: CleanerReport,
     pub caps: Caps,

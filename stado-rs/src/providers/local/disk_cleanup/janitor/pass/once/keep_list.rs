@@ -63,6 +63,48 @@ async fn live_job_ids_for_candidates_within(
     tokio::time::timeout(budget, read).await.ok().flatten()
 }
 
+/// The candidates the queue POSITIVELY lists as terminal: named under a
+/// terminal prefix and under no live one. A candidate the store lists
+/// nowhere stays out of the answer, which is the difference from the
+/// workdir keep-list: a work tree of an unknown job is scratch, but a job's
+/// durable output may be a record this host cannot see the owner of, and
+/// the job-outputs cleaner deletes only what the queue has retired by name.
+async fn terminal_job_ids_for_candidates_within(
+    store: &crate::queue::JobStorage,
+    candidates: &BTreeSet<String>,
+    budget: Duration,
+) -> Option<BTreeSet<String>> {
+    let read = async {
+        let live = listed_live_job_ids(store).await?;
+        let mut terminal = BTreeSet::new();
+        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+            terminal.extend(store.list_job_ids(prefix).await.ok()?);
+        }
+        Some(
+            candidates
+                .iter()
+                .filter(|job_id| terminal.contains(*job_id) && !live.contains(*job_id))
+                .cloned()
+                .collect(),
+        )
+    };
+    tokio::time::timeout(budget, read).await.ok().flatten()
+}
+
+/// The positively terminal subset of `candidates`, against this process's
+/// configured authoritative primary, inside `budget`; `None` when the store
+/// could not be read, so the caller removes nothing.
+pub(crate) async fn fetch_terminal_job_ids(
+    candidates: &BTreeSet<String>,
+    budget: Duration,
+) -> Option<BTreeSet<String>> {
+    let read = async {
+        let store = crate::queue::JobStorage::for_primary_reads().await.ok()?;
+        terminal_job_ids_for_candidates_within(&store, candidates, budget).await
+    };
+    tokio::time::timeout(budget, read).await.ok().flatten()
+}
+
 /// Build the refined keep-list against this process's configured authoritative
 /// primary. Construction and layout validation are part of the same budget as
 /// every listing and versioned read.

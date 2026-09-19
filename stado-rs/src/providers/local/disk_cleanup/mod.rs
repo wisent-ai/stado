@@ -20,6 +20,7 @@ pub mod catalogue;
 pub mod chromium_clones;
 pub mod consent;
 pub mod hf;
+pub mod job_outputs;
 mod janitor;
 pub mod queue_workdirs;
 pub mod release_store;
