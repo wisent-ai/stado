@@ -189,6 +189,29 @@ pub(crate) async fn cause_hold(
     state: &HostReleaseState,
 ) -> Option<CauseHold> {
     let run = cause_run(state)?;
+    let predicate = run.cause.predicate(&run.evidence);
+    let verdict = match &predicate {
+        Some(predicate) => Some(ask_wall(target, predicate).await),
+        None => None,
+    };
+    hold_for(run, verdict)
+}
+
+/// The decision itself, with the answer already in hand.
+///
+/// Separated from the spawn so every verdict can be exercised, including the
+/// ones a real host will not produce on demand — a vault that will not open,
+/// a timeout — and so the tests drive this function rather than a copy of it
+/// that can drift.
+pub(crate) fn hold_for(
+    run: super::run::CauseRun,
+    verdict: Option<(release_cause::WallVerdict, Option<String>)>,
+) -> Option<CauseHold> {
+    // A cause that says nothing about the candidate holds nothing: a host
+    // that could not answer its probe is not a release to wall off.
+    if !run.cause.holds_the_candidate() {
+        return None;
+    }
     let repeated = |unreachable: Option<String>| {
         run.repeats().then(|| CauseHold {
             cause: run.cause,
@@ -201,21 +224,23 @@ pub(crate) async fn cause_hold(
             },
         })
     };
-    let Some(predicate) = run.cause.predicate(&run.evidence) else {
-        return repeated(None);
-    };
-    match ask_wall(target, &predicate).await {
-        (release_cause::WallVerdict::Present, detail) => Some(CauseHold {
+    match verdict {
+        None => repeated(None),
+        Some((release_cause::WallVerdict::Present, detail)) => Some(CauseHold {
             cause: run.cause,
             evidence: run.evidence.clone(),
             digests: run.digests.clone(),
             ground: HoldGround::Observed {
-                check: format!("skarbiec {}", predicate.args.join(" ")),
+                check: run
+                    .cause
+                    .predicate(&run.evidence)
+                    .map(|predicate| format!("skarbiec {}", predicate.args.join(" ")))
+                    .unwrap_or_else(|| "skarbiec route verify".to_string()),
                 detail: detail.unwrap_or_else(|| run.evidence.clone()),
                 at: Utc::now(),
             },
         }),
-        (release_cause::WallVerdict::Gone, _) => None,
-        (release_cause::WallVerdict::Unknown, why) => repeated(why),
+        Some((release_cause::WallVerdict::Gone, _)) => None,
+        Some((release_cause::WallVerdict::Unknown, why)) => repeated(why),
     }
 }

@@ -82,6 +82,19 @@ impl QuarantineCause {
     pub fn is_classified(self) -> bool {
         self != Self::Unclassified
     }
+    /// Does this cause say anything about the candidate itself?
+    ///
+    /// Every cause here but one is about what the release meets on the host —
+    /// a vault that will not open, a route that maps nothing — and a second
+    /// candidate walks into the same wall, which is why a run of them holds
+    /// the next promotion. [`Self::ReadinessProbeUnanswered`] is not that: a
+    /// host that could not answer a three-second probe said nothing about
+    /// the release, and walling the product off after three such records
+    /// keeps a recovered host on the old binary forever. The record, the
+    /// class and the remedy stay; only the hold is dropped.
+    pub fn holds_the_candidate(self) -> bool {
+        !matches!(self, Self::ReadinessProbeUnanswered)
+    }
 
     /// The command or declaration that repairs this cause, when this fleet has
     /// one.

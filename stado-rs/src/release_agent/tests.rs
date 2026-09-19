@@ -54,46 +54,18 @@ const RUN: &[(&str, QuarantineCause, &str)] = &[
     ),
 ];
 
-/// Build the hold the same way `cause_hold` does, but from a supplied
-/// verdict instead of a spawned process.
+/// The product's own decision, with the verdict supplied instead of spawned.
 ///
-/// The decision and the spawn are separated so the decision can be
-/// exercised for every verdict, including the ones a real host will not
-/// produce on demand — a vault that will not open, a timeout. The spawn
-/// itself is [`ask_wall`] and is the part that cannot be tested without a
-/// host; what it returns is exactly this enum.
+/// The decision and the spawn are separated in
+/// [`crate::release_agent::rollout::recover::wall::hold_for`] so the decision
+/// can be exercised for every verdict, including the ones a real host will
+/// not produce on demand — a vault that will not open, a timeout. This calls
+/// that function rather than repeating it, so the two cannot drift.
 fn decide(
     state: &HostReleaseState,
     verdict: Option<(release_cause::WallVerdict, Option<String>)>,
 ) -> Option<CauseHold> {
-    let run = cause_run(state)?;
-    let repeated = |unreachable: Option<String>| {
-        run.repeats().then(|| CauseHold {
-            cause: run.cause,
-            evidence: run.evidence.clone(),
-            digests: run.digests.clone(),
-            ground: HoldGround::Repeated {
-                count: run.len(),
-                since: run.since,
-                unreachable,
-            },
-        })
-    };
-    match verdict {
-        None => repeated(None),
-        Some((release_cause::WallVerdict::Present, detail)) => Some(CauseHold {
-            cause: run.cause,
-            evidence: run.evidence.clone(),
-            digests: run.digests.clone(),
-            ground: HoldGround::Observed {
-                check: "skarbiec route verify provider:kimi".to_string(),
-                detail: detail.unwrap_or_else(|| run.evidence.clone()),
-                at: Utc::now(),
-            },
-        }),
-        Some((release_cause::WallVerdict::Gone, _)) => None,
-        Some((release_cause::WallVerdict::Unknown, why)) => repeated(why),
-    }
+    crate::release_agent::rollout::recover::wall::hold_for(cause_run(state)?, verdict)
 }
 
 const PRESENT: Option<(release_cause::WallVerdict, Option<String>)> =
@@ -271,4 +243,30 @@ fn a_record_written_before_this_change_still_parses() {
         serde_json::from_str(legacy).expect("a legacy record must still parse");
     assert_eq!(record.cause, QuarantineCause::Unclassified);
     assert!(record.evidence.is_empty());
+}
+
+/// Three probes the host could not answer are three statements about the
+/// host. Counting them held charless-mac-mini on a hand-built Brama while
+/// every released candidate was refused before it could try.
+#[test]
+fn a_run_of_probes_the_host_never_answered_does_not_hold_the_next_candidate() {
+    let starved: Vec<(&str, QuarantineCause, &str)> = RUN
+        .iter()
+        .map(|(digest, _, stamp)| (*digest, QuarantineCause::ReadinessProbeUnanswered, *stamp))
+        .collect();
+    assert_eq!(
+        starved.len(),
+        REPEAT_CAUSE_LIMIT,
+        "the run must reach the limit"
+    );
+    assert!(
+        decide(&state_with(&starved), None).is_none(),
+        "a host that could not answer walled off the release"
+    );
+    // The same run of a cause about the release still holds, so this is a
+    // statement about the cause and not a hole in the rule.
+    assert!(
+        decide(&state_with(RUN), None).is_some(),
+        "a repeated credential wall must still hold"
+    );
 }
