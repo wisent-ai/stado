@@ -2,15 +2,14 @@
 //! version.
 
 use crate::cli::CmdError;
+use crate::release_pipeline::ReleaseRunState;
 
-/// The release run states that mean the bytes are published and promoted.
-///
-/// `promoted` is the state `stado release submit` leaves a run in once the
-/// channel pointer has moved; `reconciled` and `completed` are the two
-/// terminal states past it. Anything earlier — `submitting`, `waiting`,
-/// `publishing`, `delivering` — is a build in flight, and deploying from one
-/// would install bytes whose qualification has not been decided.
-const PUBLISHED_RUN_STATES: [&str; 3] = ["promoted", "reconciled", "completed"];
+// Whether a run's bytes are published is the run state's own question:
+// `ReleaseRunState::published`. `promoted` is the state `stado release
+// submit` leaves a run in once the channel pointer has moved; `reconciled`
+// and `completed` are the two states past it. Anything earlier is a build
+// in flight, and deploying from one would install bytes whose qualification
+// has not been decided.
 
 /// The newest published stable version of one product, from the release run
 /// objects `stado release submit` maintains.
@@ -47,7 +46,8 @@ pub(in crate::cli::web::deploy) async fn published_stable_version(
         run["channel"].as_str() == Some("stable")
             && run["state"]
                 .as_str()
-                .is_some_and(|state| PUBLISHED_RUN_STATES.contains(&state))
+                .and_then(ReleaseRunState::named)
+                .is_some_and(|state| state.published())
     });
     let Some(run) = published else {
         let newest = runs.first().expect("a non-empty run list has a first row");

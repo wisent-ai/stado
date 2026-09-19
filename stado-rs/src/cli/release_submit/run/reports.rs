@@ -160,20 +160,18 @@ pub(crate) async fn matching_runs(
             ));
         }
     }
-    let answers: Vec<PlatformJoin> = futures::stream::iter(
-        requests
-            .into_iter()
-            .map(|(index, platform, job_id, prefixes)| {
-                let store = &store;
-                async move {
-                    (
-                        index,
-                        platform,
-                        job_state_and_cost(store, &job_id, prefixes).await,
-                    )
-                }
-            }),
-    )
+    let answers: Vec<PlatformJoin> = futures::stream::iter(requests.into_iter().map(
+        |(index, platform, job_id, prefixes)| {
+            let store = &store;
+            async move {
+                (
+                    index,
+                    platform,
+                    job_state_and_cost(store, &job_id, prefixes).await,
+                )
+            }
+        },
+    ))
     .buffered(8)
     .collect()
     .await;
@@ -190,10 +188,16 @@ pub(crate) async fn matching_runs(
         }
     }
     for run in &mut runs {
-        let live = matches!(
-            run["state"].as_str(),
-            Some("submitting" | "waiting" | "publishing" | "delivering")
-        );
+        // Where the run stands, decided once here: failed, published or
+        // still going. The desktop console used to re-decide it by matching
+        // the state word, which is the same list in a second language.
+        let state = run["state"]
+            .as_str()
+            .and_then(crate::release_pipeline::ReleaseRunState::named);
+        if let Some(state) = &state {
+            run["phase"] = Value::String(state.phase().to_owned());
+        }
+        let live = state.is_some_and(|state| !state.finished() && !state.published());
         if !live {
             continue;
         }

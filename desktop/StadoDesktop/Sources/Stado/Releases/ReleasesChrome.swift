@@ -130,10 +130,14 @@ extension ReleasesView {
         .background(WisentDesign.surface)
     }
 
+    /// The tone follows the phase `release status --json` reports, so the
+    /// screen and the CLI agree by construction. An older Stado that does
+    /// not report a phase leaves the run amber, which is what "still going"
+    /// looks like.
     private func runTone(_ run: ReleasePipelineRunRecord) -> WisentTone {
-        switch run.state {
+        switch run.phase {
         case "failed": .danger
-        case "reconciled", "completed", "promoted": .success
+        case "published": .success
         default: .warning
         }
     }

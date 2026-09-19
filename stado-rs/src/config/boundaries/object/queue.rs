@@ -11,8 +11,10 @@ use serde_json::Value;
 /// [`crate::queue::copy::CANONICAL_PREFIXES`] is read and written there.
 pub const QUEUE_OBJECT_NAMESPACE: &str = "probierz";
 
-/// The five actions the queue performs on its own prefixes.
-const QUEUE_OBJECT_ACTIONS: [&str; 5] = ["get", "put", "list", "stat", "delete"];
+/// The actions the queue performs on its own prefixes: every action the
+/// object API has, because the queue reads, writes, lists, stats and
+/// deletes its own objects. One declaration, in the parent module.
+use super::OBJECT_API_ACTIONS as QUEUE_OBJECT_ACTIONS;
 
 /// Canonical queue prefixes the `probierz` object policy does not grant for
 /// every queue action, sorted; empty when the policy covers the queue.

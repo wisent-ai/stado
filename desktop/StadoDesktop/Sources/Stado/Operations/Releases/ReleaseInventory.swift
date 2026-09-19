@@ -43,6 +43,11 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
     let version: String
     let channel: String
     let state: String
+    /// Where the run stands, as `release status --json` decides it:
+    /// `failed`, `published` or `in_flight`. The screen used to re-decide
+    /// this by matching state words, which is Stado's list in a second
+    /// language; an older Stado that does not report it leaves this empty.
+    let phase: String
     let updatedAt: String
     let failure: String?
     let platforms: [String: PlatformLeg]
@@ -56,6 +61,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         case version
         case channel
         case state
+        case phase
         case updatedAt = "updated_at"
         case failure
         case platforms
@@ -69,6 +75,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         version = try values.decodeIfPresent(String.self, forKey: .version) ?? ""
         channel = try values.decodeIfPresent(String.self, forKey: .channel) ?? ""
         state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
+        phase = try values.decodeIfPresent(String.self, forKey: .phase) ?? ""
         updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
         failure = try values.decodeIfPresent(String.self, forKey: .failure)
         platforms =

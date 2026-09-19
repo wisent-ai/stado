@@ -13,7 +13,18 @@ use serde_json::{json, Value};
 
 use super::{HandlerError, HandlerResult};
 
-const SUPPORTED_RUNTIMES: [&str; 5] = ["claude", "codex", "omp", "droid", "kimi"];
+/// Oko owns which transcript runtimes exist; Stado only carries the call.
+/// Stado used to keep its own five names here and fail the whole dashboard
+/// response when Oko reported a source it had not heard of — which is what
+/// happens the day Oko learns to read one more. The shape of a runtime
+/// token is what this boundary can honestly check.
+fn is_runtime_token(runtime: &str) -> bool {
+    !runtime.is_empty()
+        && runtime
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 const OWNER_RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 
 #[derive(Deserialize)]
@@ -70,7 +81,7 @@ fn validate_sources(value: &Value) -> Result<(), HandlerError> {
             .get("runtime")
             .and_then(Value::as_str)
             .ok_or(HandlerError::UpstreamFailure)?;
-        if !SUPPORTED_RUNTIMES.contains(&runtime)
+        if !is_runtime_token(runtime)
             || !runtimes.insert(runtime)
             || entry.get("available").and_then(Value::as_bool).is_none()
             || entry.get("mode").and_then(Value::as_str).is_none()
@@ -139,7 +150,10 @@ async fn sources(body: &[u8]) -> HandlerResult {
 async fn adopt(body: &[u8]) -> HandlerResult {
     let request: AdoptRequest =
         serde_json::from_slice(body).map_err(|_| HandlerError::BadRequest)?;
-    if !SUPPORTED_RUNTIMES.contains(&request.runtime.as_str())
+    // The runtime is not checked against a list here: the discovery below
+    // is the authority, and it refuses a runtime/root pair this host did
+    // not report.
+    if !is_runtime_token(&request.runtime)
         || !Path::new(&request.root).is_absolute()
         || request.root.contains('\0')
     {
@@ -220,5 +234,47 @@ pub(super) async fn handle(action: &str, body: &[u8]) -> HandlerResult {
         "transcript-sources" => sources(body).await,
         "transcript-sources-adopt" => adopt(body).await,
         _ => Err(HandlerError::BadRequest),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_runtime_token, validate_sources};
+    use serde_json::json;
+
+    /// One entry shaped as `oko-cli transcripts sources --json` returns it.
+    fn entry(runtime: &str) -> serde_json::Value {
+        json!({
+            "runtime": runtime,
+            "available": true,
+            "mode": "transcripts",
+            "roots": ["/Users/someone/.omp/agent/sessions"],
+            "sourceIds": [format!("{runtime}:0123456789abcdef")],
+            "selected": false,
+            "files": 375,
+            "error": null,
+        })
+    }
+
+    #[test]
+    fn a_runtime_stado_has_not_heard_of_still_passes_the_boundary() {
+        // `hooks` is read by Transcript Lake on this fleet and was absent
+        // from the five names Stado used to keep, which failed the whole
+        // dashboard response rather than one row.
+        let listing = json!([entry("claude"), entry("omp"), entry("hooks")]);
+        assert!(validate_sources(&listing).is_ok());
+    }
+
+    #[test]
+    fn a_runtime_that_is_not_a_token_is_still_refused() {
+        assert!(validate_sources(&json!([entry("../etc")])).is_err());
+        assert!(validate_sources(&json!([entry("")])).is_err());
+        assert!(!is_runtime_token("Claude Code"));
+    }
+
+    #[test]
+    fn the_same_runtime_twice_is_still_refused() {
+        let listing = json!([entry("omp"), entry("omp")]);
+        assert!(validate_sources(&listing).is_err());
     }
 }

@@ -62,8 +62,15 @@ pub(in crate::providers::local::disk_cleanup::release_store) fn run_retention_ev
             ) else {
                 continue;
             };
-            let state = run.get("state").and_then(Value::as_str).unwrap_or("");
-            let terminal = matches!(state, "completed" | "failed" | "reconciled");
+            let state = run
+                .get("state")
+                .and_then(Value::as_str)
+                .and_then(crate::release_pipeline::ReleaseRunState::named);
+            // A superseded run published nothing and is not retained as
+            // finished work, so it is pinned like a run still in flight.
+            let terminal = state.as_ref().is_some_and(|state| {
+                state.finished() && *state != crate::release_pipeline::ReleaseRunState::Superseded
+            });
             let young = std::fs::metadata(&record)
                 .map(|meta| now_epoch - meta.mtime() < min_age_seconds)
                 .unwrap_or(true);
@@ -73,7 +80,7 @@ pub(in crate::providers::local::disk_cleanup::release_store) fn run_retention_ev
                     .entry(product.to_string())
                     .or_default()
                     .insert(version.to_string());
-            } else if matches!(state, "completed" | "reconciled") {
+            } else if state.is_some_and(|state| state.published()) {
                 if let Some(source) = run.get("source_commit").and_then(Value::as_str) {
                     evidence
                         .finished
