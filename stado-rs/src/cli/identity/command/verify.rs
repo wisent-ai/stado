@@ -46,12 +46,17 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 Some(false) => "NOT-DRIVABLE",
                 None => "unknown",
             };
+            let reason = row["drivable_reason"]
+                .as_str()
+                .map(|reason| format!("  {reason}"))
+                .unwrap_or_default();
             println!(
-                "{:<24} {:<32} {:<8} {}",
+                "{:<24} {:<32} {:<8} {}{}",
                 row["host"].as_str().unwrap_or("-"),
                 row["identity"].as_str().unwrap_or("-"),
                 observed,
-                session
+                session,
+                reason
             );
         }
     }

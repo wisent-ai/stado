@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use super::probe::{
     drivable_session, is_local_target, local_apple_accounts, observe_apple_accounts,
-    observe_user_apple_accounts, probes_own_user,
+    observe_user_apple_accounts, probes_own_user, Drivability,
 };
 use super::APPLE_ACCOUNT;
 use crate::targets::{ComputeTarget, IdentityBinding, Registry};
@@ -21,7 +21,7 @@ fn binding_row(
     target: &ComputeTarget,
     binding: &IdentityBinding,
     observed: Option<bool>,
-    drivable: Option<bool>,
+    drivable: &Drivability,
 ) -> Value {
     json!({
         // The registry's name for the machine, and deliberately not an address.
@@ -37,7 +37,10 @@ fn binding_row(
         "observed": observed,
         // Whether the fleet can act in this binding's session. `null` when the host
         // could not be asked, and never conflated with `false`.
-        "drivable_session": drivable,
+        "drivable_session": drivable.drivable,
+        // What was actually observed when it cannot: the item that disagreed, or
+        // the error that stopped the probe.
+        "drivable_reason": drivable.reason,
         "verified_at": binding.verified_at,
     })
 }
@@ -81,7 +84,7 @@ async fn verified_bindings(registry: &Registry, kind: &str, identity: &str) -> V
             };
             satisfied |= observed == Some(true);
             let drivable = drivable_session(kind, target, binding).await;
-            rows.push(binding_row(target, binding, observed, drivable));
+            rows.push(binding_row(target, binding, observed, &drivable));
         }
     }
     Verification { rows, satisfied }

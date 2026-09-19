@@ -22,7 +22,10 @@ use state::*;
 
 pub use challenge::capture_apple_challenge;
 pub(crate) use challenge::preflight_apple_challenge;
-pub use driver::{apple_challenge_session_ready_for, automated_session_ready_for};
+pub use driver::{
+    apple_challenge_session_readiness_for, apple_challenge_session_ready_for,
+    automated_session_readiness_for, automated_session_ready_for, SessionReadiness,
+};
 
 pub const CUA_DRIVER_VERSION: &str = "0.23.2";
 pub const CUA_DRIVER_BUNDLE_ID: &str = "com.trycua.driver";

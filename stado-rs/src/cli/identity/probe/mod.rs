@@ -10,4 +10,4 @@ use crate::cli::service;
 
 pub(super) use accounts::{observe_apple_accounts, observe_user_apple_accounts};
 pub(super) use local::{is_local_target, local_apple_accounts, probes_own_user};
-pub(super) use session::drivable_session;
+pub(super) use session::{drivable_session, Drivability};

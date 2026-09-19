@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::binding_row;
+use super::{binding_row, Drivability};
 use crate::cli::CmdError;
 use crate::targets::load_registry_auto;
 
@@ -11,6 +11,9 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
     let registry = load_registry_auto()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
+    // `list` prints the declaration alone and reaches no host, so both measured
+    // columns are absent here rather than guessed.
+    let unasked = Drivability { drivable: None, reason: None };
     let rows: Vec<Value> = registry
         .targets
         .iter()
@@ -18,9 +21,7 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
             target
                 .identities
                 .iter()
-                // `list` prints the declaration alone and reaches no host, so both
-                // measured columns are absent here rather than guessed.
-                .map(move |binding| binding_row(target, binding, None, None))
+                .map(|binding| binding_row(target, binding, None, &unasked))
         })
         .collect();
     if json_output {
