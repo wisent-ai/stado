@@ -72,6 +72,14 @@ pub struct ReleaseAgentArgs {
 #[derive(Args)]
 pub struct ReleaseStatusArgs {
     pub product: Option<String>,
+    /// One pipeline run, by its id or the first characters of it as this
+    /// command prints them; the target rows are left out, because the
+    /// question is about the run. Found however far back it is.
+    #[arg(long)]
+    run: Option<String>,
+    /// Only runs that published this version; with --run, both must hold.
+    #[arg(long)]
+    version: Option<String>,
     #[arg(long)]
     json: bool,
 }

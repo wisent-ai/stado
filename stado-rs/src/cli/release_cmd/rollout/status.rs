@@ -3,6 +3,7 @@
 
 use serde_json::{json, Value};
 
+use crate::cli::release_submit::{matching_runs, recent_runs, RunFilter};
 use crate::cli::CmdError;
 use crate::host_software::ProductBinary;
 use crate::release_control;
@@ -28,6 +29,12 @@ use super::ReleaseStatusArgs;
 /// exits non-zero on any of them with one sentence per row naming the host and
 /// the exact disagreement.
 pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
+    // A question about one run reads that run: on 2026-09-12 the whole
+    // status went into ~/.oko/brama-release-status.json three times to grep
+    // one version's block out of it.
+    if args.run.is_some() || args.version.is_some() {
+        return runs_only(args).await;
+    }
     let document = crate::cli::registry::fetch_document().await?;
     let control = release_control::control(&document)?
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
@@ -78,7 +85,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
             }));
         }
     }
-    let runs = crate::cli::release_submit::recent_runs(args.product.as_deref(), 10).await?;
+    let runs = crate::cli::release_submit::recent_runs(args.product.as_deref(), RUN_WINDOW).await?;
     if reports.is_empty() && runs.is_empty() {
         return Err(CmdError::click("no matching release product"));
     }
@@ -113,56 +120,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
                 println!("  ! {sentence}");
             }
         }
-        if !runs.is_empty() {
-            println!("--- pipeline runs (newest first):");
-        }
-        for run in runs {
-            println!(
-                "run {} {} {} {} {} {}",
-                &run["run_id"].as_str().unwrap_or("-")
-                    [..8.min(run["run_id"].as_str().unwrap_or("-").len())],
-                run["product"].as_str().unwrap_or("-"),
-                run["version"].as_str().unwrap_or("-"),
-                run["channel"].as_str().unwrap_or("-"),
-                run["state"].as_str().unwrap_or("-"),
-                run["updated_at"].as_str().unwrap_or("-"),
-            );
-            // Each platform on its own line: the run-level state alone reads
-            // as a promise, while "linux-amd64 submitted job=4ffae52f
-            // [running]" is a fact an operator can go and watch.
-            for (platform, record) in run["platforms"].as_object().into_iter().flatten() {
-                let mut line = format!(
-                    "  {platform} {} job={}",
-                    record["state"].as_str().unwrap_or("-"),
-                    &record["job_id"].as_str().unwrap_or("-")
-                        [..8.min(record["job_id"].as_str().unwrap_or("-").len())],
-                );
-                if let Some(job_state) = record["job_state"].as_str() {
-                    line.push_str(&format!(" [{job_state}]"));
-                }
-                // An estimate and labelled as one: crates compiled so far
-                // against this platform's previous run, because cargo
-                // publishes no total of its own.
-                if let Some(compiled) = record["compile_progress"]["compiled"].as_u64() {
-                    match record["compile_progress"]["percent"].as_u64() {
-                        Some(percent) => line.push_str(&format!(
-                            " compiled {compiled} crates (~{percent}% of the previous run)"
-                        )),
-                        None => line.push_str(&format!(" compiled {compiled} crates")),
-                    }
-                }
-                println!("{line}");
-                if let Some(failure) = record["failure"].as_str() {
-                    println!("    failure: {}", failure.lines().next().unwrap_or(failure));
-                }
-            }
-            if let Some(failure) = run["failure"].as_str() {
-                // One line of evidence, not the whole log: the first line
-                // names the failing step and host; `submit --json` carries
-                // the rest.
-                println!("  failure: {}", failure.lines().next().unwrap_or(failure));
-            }
-        }
+        print_runs(&runs);
     }
     if failures == usize::default() {
         return Ok(());
@@ -176,4 +134,103 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
         reports.len()
     );
     Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
+}
+
+/// Newest runs first, ten by default; a run named by id is read however
+/// far back it is.
+const RUN_WINDOW: usize = 10;
+
+/// `release status --run ID | --version V`: the runs the filter admits, and
+/// a refusal naming the newest runs when none does.
+async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
+    let filter = RunFilter {
+        product: args.product.as_deref(),
+        run: args.run.as_deref(),
+        version: args.version.as_deref(),
+    };
+    let runs = matching_runs(filter, RUN_WINDOW).await?;
+    if runs.is_empty() {
+        let recent = recent_runs(args.product.as_deref(), RUN_WINDOW).await?;
+        let known: Vec<String> = recent
+            .iter()
+            .map(|run| {
+                format!(
+                    "{} {} {}",
+                    run["run_id"].as_str().unwrap_or("-"),
+                    run["product"].as_str().unwrap_or("-"),
+                    run["version"].as_str().unwrap_or("-")
+                )
+            })
+            .collect();
+        return Err(CmdError::click(format!(
+            "no release run matches run={} version={} product={} among the newest {} runs; the newest are:\n  {}",
+            args.run.as_deref().unwrap_or("*"),
+            args.version.as_deref().unwrap_or("*"),
+            args.product.as_deref().unwrap_or("*"),
+            crate::cli::release_submit::VERSION_SCAN_WINDOW,
+            known.join("\n  ")
+        )));
+    }
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "runs": runs }))?
+        );
+        return Ok(());
+    }
+    print_runs(&runs);
+    Ok(())
+}
+
+fn print_runs(runs: &[Value]) {
+    if !runs.is_empty() {
+        println!("--- pipeline runs (newest first):");
+    }
+    for run in runs {
+        println!(
+            "run {} {} {} {} {} {}",
+            &run["run_id"].as_str().unwrap_or("-")
+                [..8.min(run["run_id"].as_str().unwrap_or("-").len())],
+            run["product"].as_str().unwrap_or("-"),
+            run["version"].as_str().unwrap_or("-"),
+            run["channel"].as_str().unwrap_or("-"),
+            run["state"].as_str().unwrap_or("-"),
+            run["updated_at"].as_str().unwrap_or("-"),
+        );
+        // Each platform on its own line: the run-level state alone reads
+        // as a promise, while "linux-amd64 submitted job=4ffae52f
+        // [running]" is a fact an operator can go and watch.
+        for (platform, record) in run["platforms"].as_object().into_iter().flatten() {
+            let mut line = format!(
+                "  {platform} {} job={}",
+                record["state"].as_str().unwrap_or("-"),
+                &record["job_id"].as_str().unwrap_or("-")
+                    [..8.min(record["job_id"].as_str().unwrap_or("-").len())],
+            );
+            if let Some(job_state) = record["job_state"].as_str() {
+                line.push_str(&format!(" [{job_state}]"));
+            }
+            // An estimate and labelled as one: crates compiled so far
+            // against this platform's previous run, because cargo
+            // publishes no total of its own.
+            if let Some(compiled) = record["compile_progress"]["compiled"].as_u64() {
+                match record["compile_progress"]["percent"].as_u64() {
+                    Some(percent) => line.push_str(&format!(
+                        " compiled {compiled} crates (~{percent}% of the previous run)"
+                    )),
+                    None => line.push_str(&format!(" compiled {compiled} crates")),
+                }
+            }
+            println!("{line}");
+            if let Some(failure) = record["failure"].as_str() {
+                println!("    failure: {}", failure.lines().next().unwrap_or(failure));
+            }
+        }
+        if let Some(failure) = run["failure"].as_str() {
+            // One line of evidence, not the whole log: the first line
+            // names the failing step and host; `submit --json` carries
+            // the rest.
+            println!("  failure: {}", failure.lines().next().unwrap_or(failure));
+        }
+    }
 }

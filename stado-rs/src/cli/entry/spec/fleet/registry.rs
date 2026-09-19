@@ -63,6 +63,12 @@ pub(crate) enum RegistryCommands {
         /// Print only the generation token, for a reconcile loop.
         #[arg(long)]
         generation_only: bool,
+        /// Print one part of the document: a dotted path of object keys,
+        /// array indexes or array element names, such as
+        /// `release_control.products.transcript-lake` or
+        /// `targets.lukasz-macbook.skarbiec`. A string prints bare.
+        #[arg(long, conflicts_with_all = ["with_generation", "generation_only"])]
+        path: Option<String>,
     },
     /// Print which registry target is this machine.
     #[command(name = "self")]

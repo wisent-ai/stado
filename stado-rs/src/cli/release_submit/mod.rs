@@ -31,7 +31,9 @@ pub use crate::cli::release_submit::run::finish::finish_ready_runs;
 pub use crate::cli::release_submit::run::resume::resume;
 pub use crate::cli::release_submit::run::submit::submit;
 
-pub(crate) use crate::cli::release_submit::run::reports::recent_runs;
+pub(crate) use crate::cli::release_submit::run::reports::{
+    matching_runs, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
+};
 
 #[derive(Args)]
 pub struct ReleaseSubmitArgs {
