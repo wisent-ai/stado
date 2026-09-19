@@ -60,7 +60,7 @@ pub(super) fn target_declares_service(target: &Value, service: &str) -> bool {
         .and_then(Value::as_array)
         .is_some_and(|services| {
             services.iter().any(|entry| {
-                ["name", "label", "unit"].iter().any(|field| {
+                crate::deploy::service::NAME_KEYS.iter().any(|field| {
                     let value = entry.get(field).and_then(Value::as_str);
                     value == Some(service)
                         || catalog_unit

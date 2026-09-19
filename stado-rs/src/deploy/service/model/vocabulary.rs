@@ -10,6 +10,22 @@ use crate::deploy::service::*;
 /// the array round-trips through the canonical document untouched.
 pub const SERVICES_KEY: &str = "services";
 
+/// The operator's own name for a declared service.
+pub const LABEL_KEY: &str = "label";
+/// The unit file the service loads from.
+pub const UNIT_KEY: &str = "unit";
+/// A bare name, for a record that carries neither of the above.
+pub const NAME_KEY: &str = "name";
+
+/// The keys a service record may carry its own name under, in the order a
+/// reader should prefer them.
+///
+/// Two readers spelled these three out for themselves — the resolver's
+/// `["name", "label", "unit"]` and converge's `["label", "unit", "name"]` —
+/// in different orders, which is how one of them could start preferring a
+/// different field from the other without anybody seeing it.
+pub const NAME_KEYS: [&str; 3] = [LABEL_KEY, UNIT_KEY, NAME_KEY];
+
 /// Declared in the registry document; adopt / retire / deploy edit these.
 pub const SOURCE_REGISTRY: &str = "registry";
 /// Carried by the fixed `host_recovery::MANAGED_AGENTS` program.

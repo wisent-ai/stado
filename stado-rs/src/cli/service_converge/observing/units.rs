@@ -25,7 +25,7 @@ pub(super) fn declared_service_records(target: &ComputeTarget) -> Vec<(String, S
                 .iter()
                 .filter_map(Value::as_object)
                 .map(|record| {
-                    let label = ["label", "unit", "name"]
+                    let label = service::NAME_KEYS
                         .iter()
                         .map(|key| text(record, key))
                         .find(|value| !value.is_empty())
