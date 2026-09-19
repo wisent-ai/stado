@@ -150,6 +150,13 @@ extension ReleasesView {
                 if let live = leg.jobState {
                     part += " [\(live)]"
                 }
+                // What the build cost, from the job's own clock. A release
+                // that is getting slower is invisible in a row that carries
+                // only states, on this screen as much as in the terminal.
+                if let seconds = leg.buildSeconds {
+                    let running = leg.jobState == "running" || leg.jobState == "queue"
+                    part += " · \(running ? "running for" : "took") \(Self.humanSeconds(seconds))"
+                }
                 if let compiled = leg.compiledCrates {
                     // An estimate, labelled as one: against the previous run.
                     if let percent = leg.compilePercent {
@@ -161,6 +168,22 @@ extension ReleasesView {
                 return part
             }
             .joined(separator: " · ")
+    }
+
+    /// A duration read at a glance: `47s`, `18m34s`, `2h05m`. The same shapes
+    /// `stado release status` prints, so the two surfaces read alike.
+    static func humanSeconds(_ seconds: Int) -> String {
+        let seconds = max(seconds, 0)
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let rest = seconds % 60
+        if hours > 0 {
+            return String(format: "%dh%02dm", hours, minutes)
+        }
+        if minutes > 0 {
+            return String(format: "%dm%02ds", minutes, rest)
+        }
+        return "\(rest)s"
     }
 
     @ViewBuilder

@@ -52,11 +52,13 @@ pub enum ReleaseCommands {
     /// publication attempts.
     ///
     /// The newest pipeline runs are listed with each platform's job, its
-    /// state, and the recorded failure of anything that died - the builder
-    /// that refused the work, the secret that could not be resolved, or the
-    /// job's own last output - so a failed publication can be read back
-    /// without opening the store. Stado Desktop shows the same register and
-    /// the same failure text on its Releases screen.
+    /// state, what the build cost from the job's own clock, and the recorded
+    /// failure of anything that died - the builder that refused the work, the
+    /// secret that could not be resolved, or the job's own last output - so a
+    /// failed publication can be read back without opening the store, and a
+    /// release that is getting slower can be seen without one. Stado Desktop
+    /// shows the same register, the same durations and the same failure text
+    /// on its Releases screen.
     Status(ReleaseStatusArgs),
     /// Resolve the exact policy-derived executable of the active signed release.
     #[command(name = "active-binary")]

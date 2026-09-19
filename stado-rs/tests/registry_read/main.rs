@@ -84,6 +84,27 @@ impl Store {
         std::fs::write(dir.join("run.json"), serde_json::to_vec(&run).unwrap()).unwrap();
     }
 
+    /// One finished build job where the queue keeps them. The run object
+    /// records no duration of its own, so this is the only clock a release
+    /// has, and `release status` joins the two.
+    fn seed_completed_job(&self, job_id: &str, started_at: &str, completed_at: &str) {
+        let dir = self.storage.path().join("completed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let job = json!({
+            "job_id": job_id,
+            "state": "completed",
+            "command": "bash deploy/release/build_stado.sh",
+            "created_at": started_at,
+            "started_at": started_at,
+            "completed_at": completed_at,
+        });
+        std::fs::write(
+            dir.join(format!("{job_id}.json")),
+            serde_json::to_vec(&job).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn stado(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(args)
@@ -242,6 +263,57 @@ fn an_unknown_run_is_refused_naming_the_newest_runs() {
         text.contains("bbbb2222bbbb2222bbbb2222bbbb2222 lake 0.2.3"),
         "{text}"
     );
+}
+
+#[test]
+fn a_finished_build_reports_what_it_cost() {
+    let store = Store::new();
+    let run_id = "dddd4444dddd4444dddd4444dddd4444";
+    store.seed_run(run_id, "lake", "0.2.4", "completed");
+    store.seed_completed_job(
+        &format!("job-{run_id}"),
+        "2026-09-19T21:04:30+00:00",
+        "2026-09-19T21:23:04+00:00",
+    );
+
+    let out = store.stado(&["release", "status", "--run", "dddd4444"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("linux-amd64 published job=job-dddd [completed] took 18m34s"),
+        "the platform line carries the job's own clock: {text}"
+    );
+
+    let out = store.stado(&["release", "status", "--run", "dddd4444", "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let runs: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(
+        runs["runs"][0]["platforms"]["linux-amd64"]["build_seconds"],
+        json!(1114),
+        "the machine answer carries the seconds, not a formatted string"
+    );
+    untouched(store.home.path());
+}
+
+#[test]
+fn a_build_whose_job_the_queue_no_longer_holds_reports_no_cost() {
+    let store = Store::new();
+    store.seed_run(
+        "eeee5555eeee5555eeee5555eeee5555",
+        "lake",
+        "0.2.5",
+        "completed",
+    );
+
+    let out = store.stado(&["release", "status", "--run", "eeee5555"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("eeee5555 lake 0.2.5"), "{text}");
+    assert!(
+        !text.contains("took"),
+        "a run whose job is gone invents no duration: {text}"
+    );
+    untouched(store.home.path());
 }
 
 #[test]

@@ -52,16 +52,8 @@
       ],
       "build": {
         "argv": [
-          "cargo",
-          "build",
-          "--manifest-path",
-          "stado-rs/Cargo.toml",
-          "--locked",
-          "--release",
-          "--bin",
-          "stado",
-          "--target-dir",
-          ".wisent-output/stado-rs/target"
+          "bash",
+          "deploy/release/build_stado.sh"
         ]
       },
       "stage": {
@@ -112,16 +104,8 @@
       ],
       "build": {
         "argv": [
-          "cargo",
-          "build",
-          "--manifest-path",
-          "stado-rs/Cargo.toml",
-          "--locked",
-          "--release",
-          "--bin",
-          "stado",
-          "--target-dir",
-          ".wisent-output/stado-rs/target"
+          "bash",
+          "deploy/release/build_stado.sh"
         ]
       },
       "stage": {

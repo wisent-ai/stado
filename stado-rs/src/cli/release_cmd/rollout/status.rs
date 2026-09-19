@@ -210,6 +210,17 @@ fn print_runs(runs: &[Value]) {
             if let Some(job_state) = record["job_state"].as_str() {
                 line.push_str(&format!(" [{job_state}]"));
             }
+            // What it cost, from the job's own clock. A release that is
+            // getting slower is invisible in a register that prints only
+            // states, and "the build takes hours" was diagnosed by hand.
+            if let Some(seconds) = record["build_seconds"].as_i64() {
+                let running = matches!(record["job_state"].as_str(), Some("running" | "queue"));
+                line.push_str(&format!(
+                    " {} {}",
+                    if running { "running for" } else { "took" },
+                    human_seconds(seconds)
+                ));
+            }
             // An estimate and labelled as one: crates compiled so far
             // against this platform's previous run, because cargo
             // publishes no total of its own.
@@ -233,4 +244,17 @@ fn print_runs(runs: &[Value]) {
             println!("  failure: {}", failure.lines().next().unwrap_or(failure));
         }
     }
+}
+
+/// A duration an operator reads at a glance: `47s`, `18m34s`, `2h05m`.
+pub(crate) fn human_seconds(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let (hours, minutes, rest) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    if hours > 0 {
+        return format!("{hours}h{minutes:02}m");
+    }
+    if minutes > 0 {
+        return format!("{minutes}m{rest:02}s");
+    }
+    format!("{rest}s")
 }

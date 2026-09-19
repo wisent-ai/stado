@@ -1,6 +1,7 @@
 //! Reports read back from the run objects a submission maintains: what `stado
 //! release status` prints and what the operator console serves.
 
+use futures::StreamExt;
 use serde_json::{Map, Value};
 
 use crate::cli::CmdError;
@@ -27,6 +28,11 @@ const RUN_STATE_LEAF: &str = "/run.json";
 /// run, and the whole history is not a bounded question. A run named by id
 /// is picked from the listing before any read, so this never cuts it off.
 pub(crate) const VERSION_SCAN_WINDOW: usize = 120;
+
+/// One platform leg joined to its queue job: which run it belongs to, which
+/// platform it is, and — when the queue still holds the job — the lifecycle
+/// prefix it sits under with the seconds it has cost.
+type PlatformJoin = (usize, String, Option<(String, Option<i64>)>);
 
 /// Which runs a listing is about: one product, one run by id prefix, one
 /// version. Every field left `None` matches every run.
@@ -129,11 +135,60 @@ pub(crate) async fn matching_runs(
     // ones already consumed above cannot be that denominator.
     ordered.drain(..examined.min(ordered.len()));
     let older = ordered;
-    // An in-flight run says only "publishing", which reads as a promise. The
-    // run object already names each platform's queue job, and the queue knows
-    // exactly where that job stands, so the two are joined here: every
-    // platform of a live run carries the job's current queue state. Terminal
-    // runs are left alone — their platform states are already the answer.
+    // An in-flight run says only "publishing", which reads as a promise, and a
+    // finished one says "reconciled" without ever saying what it cost. The run
+    // object already names each platform's queue job, and the job record is
+    // where `started_at` and `completed_at` live, so the two are joined here:
+    // every platform carries the job's queue state and the seconds it spent.
+    // The reads fan out, and a terminal platform is looked for only in the two
+    // prefixes its own state allows, so the join stays cheap enough for a
+    // command the release console polls.
+    let mut requests = Vec::new();
+    for (index, run) in runs.iter().enumerate() {
+        let Some(platforms) = run["platforms"].as_object() else {
+            continue;
+        };
+        for (platform_name, record) in platforms {
+            let Some(job_id) = record["job_id"].as_str().filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            requests.push((
+                index,
+                platform_name.clone(),
+                job_id.to_owned(),
+                candidate_prefixes(record["state"].as_str()),
+            ));
+        }
+    }
+    let answers: Vec<PlatformJoin> = futures::stream::iter(
+        requests
+            .into_iter()
+            .map(|(index, platform, job_id, prefixes)| {
+                let store = &store;
+                async move {
+                    (
+                        index,
+                        platform,
+                        job_state_and_cost(store, &job_id, prefixes).await,
+                    )
+                }
+            }),
+    )
+    .buffered(8)
+    .collect()
+    .await;
+    for (index, platform, found) in answers {
+        let Some((state, seconds)) = found else {
+            continue;
+        };
+        let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
+            continue;
+        };
+        record["job_state"] = Value::String(state);
+        if let Some(seconds) = seconds {
+            record["build_seconds"] = Value::from(seconds);
+        }
+    }
     for run in &mut runs {
         let live = matches!(
             run["state"].as_str(),
@@ -150,23 +205,6 @@ pub(crate) async fn matching_runs(
             let Some(job_id) = record["job_id"].as_str().map(str::to_owned) else {
                 continue;
             };
-            for state in [
-                runs::RUNNING,
-                runs::QUEUE,
-                runs::COMPLETED,
-                runs::UPLOADED,
-                runs::FAILED,
-                runs::CANCELLED,
-            ] {
-                match store.read_job(state, &job_id).await {
-                    Ok(Some(_)) => {
-                        record["job_state"] = Value::String(state.to_string());
-                        break;
-                    }
-                    Ok(None) => continue,
-                    Err(_) => break,
-                }
-            }
             // The build's own progress, from the log the agent streams while
             // the job runs: crates compiled so far, measured against the same
             // count from this platform's previous run. cargo publishes no
@@ -190,6 +228,60 @@ pub(crate) async fn matching_runs(
         }
     }
     Ok(runs)
+}
+
+/// How long one platform's build actually took, in seconds.
+///
+/// The run object records `created_at` and `updated_at` and nothing else, so
+/// until this existed no surface in the fleet could say what a release cost.
+/// The duration is not copied into the run: the job record owns it, and a
+/// second copy is a second answer. A job still running reports the time it
+/// has been running so far.
+fn build_seconds(job: &crate::models::Job) -> Option<i64> {
+    let moment = |value: Option<&str>| {
+        value
+            .filter(|text| !text.is_empty())
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+            .map(|stamp| stamp.with_timezone(&chrono::Utc))
+    };
+    let started = moment(job.started_at.as_deref())?;
+    let ended = moment(job.completed_at.as_deref())
+        .or_else(|| moment(job.failed_at.as_deref()))
+        .unwrap_or_else(chrono::Utc::now);
+    Some((ended - started).num_seconds().max(0))
+}
+
+/// The lifecycle prefixes a platform in this state can be found under, so a
+/// terminal run costs two reads per platform instead of six.
+fn candidate_prefixes(platform_state: Option<&str>) -> &'static [&'static str] {
+    match platform_state {
+        Some("published" | "qualified") => &[runs::COMPLETED, runs::UPLOADED],
+        Some("failed") => &[runs::FAILED, runs::CANCELLED],
+        _ => &[
+            runs::RUNNING,
+            runs::QUEUE,
+            runs::COMPLETED,
+            runs::UPLOADED,
+            runs::FAILED,
+            runs::CANCELLED,
+        ],
+    }
+}
+
+/// The queue state one job sits in and what it has cost so far.
+async fn job_state_and_cost(
+    store: &JobStorage,
+    job_id: &str,
+    prefixes: &[&str],
+) -> Option<(String, Option<i64>)> {
+    for state in prefixes {
+        match store.read_job(state, job_id).await {
+            Ok(Some(job)) => return Some(((*state).to_string(), build_seconds(&job))),
+            Ok(None) => continue,
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// Distinct crates the job's streamed log says were compiled so far.

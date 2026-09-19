@@ -87,6 +87,11 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         /// An estimate against this platform's previous run — cargo publishes
         /// no total of its own, so the previous run is the denominator.
         let compilePercent: Int?
+        /// What this platform's build cost, in seconds, from the job's own
+        /// `started_at` and `completed_at`. A run that is still building
+        /// reports the time it has spent so far. The run object stores no
+        /// duration: the job record owns it and the CLI joins the two.
+        let buildSeconds: Int?
 
         enum CodingKeys: String, CodingKey {
             case state
@@ -94,6 +99,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
             case jobState = "job_state"
             case failure
             case compileProgress = "compile_progress"
+            case buildSeconds = "build_seconds"
         }
 
         enum ProgressKeys: String, CodingKey {
@@ -107,6 +113,7 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
             jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? ""
             jobState = try values.decodeIfPresent(String.self, forKey: .jobState)
             failure = try values.decodeIfPresent(String.self, forKey: .failure)
+            buildSeconds = try values.decodeIfPresent(Int.self, forKey: .buildSeconds)
             if let progress = try? values.nestedContainer(
                 keyedBy: ProgressKeys.self, forKey: .compileProgress
             ) {
