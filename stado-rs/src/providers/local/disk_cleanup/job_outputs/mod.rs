@@ -63,20 +63,22 @@ pub(super) const OUTPUT_DIR: &str = "output";
 
 /// The directory the queue store's `status/` prefix maps to on this host.
 ///
-/// A queue on the device-local backend keeps its keys directly under the
-/// configured local path; a queue on the Stado object backend keeps them
-/// under `ecosystem/<namespace>/` of that same path, the layout the object
-/// API serves. The backend in force decides, so the cleaner never guesses.
-pub fn status_root(local_storage_path: &Path, backend: &str, namespace: &str) -> Option<PathBuf> {
-    match backend {
-        "local" => Some(local_storage_path.join(STATUS_PREFIX)),
-        "stado" if !namespace.trim().is_empty() => Some(
-            local_storage_path
-                .join("ecosystem")
-                .join(namespace)
-                .join(STATUS_PREFIX),
-        ),
-        _ => None,
+/// The host that serves the fleet's object API keeps every namespace's keys
+/// under `ecosystem/<namespace>/` of the local store — the layout the
+/// `backup_twins` cleaner compares its replica against — while a queue on
+/// the device-local backend keeps its keys directly under the configured
+/// path. The janitor's own process does not always carry the queue's
+/// backend setting: on charless-mac-mini on 2026-09-19 it read `local`
+/// beside a store laid out for the object API and answered `root_absent`
+/// for 12 GiB that was there. The layout on disk decides: the namespace
+/// directory when the store holds it, the flat path otherwise.
+pub fn status_root(local_storage_path: &Path, namespace: &str) -> PathBuf {
+    let namespace = namespace.trim();
+    let served = local_storage_path.join("ecosystem").join(namespace);
+    if !namespace.is_empty() && served.is_dir() {
+        served.join(STATUS_PREFIX)
+    } else {
+        local_storage_path.join(STATUS_PREFIX)
     }
 }
 
@@ -93,7 +95,7 @@ fn is_record(name: &str) -> bool {
 /// and this cleaner then removes nothing at all.
 #[allow(clippy::too_many_arguments)]
 pub fn scan_job_outputs(
-    status_root: Option<&Path>,
+    status_root: &Path,
     home: &Path,
     policy: &DiskCleanupPolicy,
     now: f64,
@@ -109,10 +111,7 @@ pub fn scan_job_outputs(
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        let Some(root) = status_root else {
-            report.skip_job_outputs("backend_unresolved", 1);
-            return Ok(());
-        };
+        let root = status_root;
         if !root.is_dir() {
             report.skip_job_outputs("root_absent", 1);
             return Ok(());
