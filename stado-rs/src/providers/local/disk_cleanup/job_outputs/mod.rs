@@ -61,25 +61,34 @@ const STATUS_PREFIX: &str = "status";
 /// The directory inside one job's status prefix that holds its outputs.
 pub(super) const OUTPUT_DIR: &str = "output";
 
-/// The directory the queue store's `status/` prefix maps to on this host.
+/// Every directory the queue store's `status/` prefix maps to on this host.
 ///
-/// The host that serves the fleet's object API keeps every namespace's keys
+/// The host that serves the fleet's object API keeps each namespace's keys
 /// under `ecosystem/<namespace>/` of the local store — the layout the
 /// `backup_twins` cleaner compares its replica against — while a queue on
 /// the device-local backend keeps its keys directly under the configured
-/// path. The janitor's own process does not always carry the queue's
-/// backend setting: on charless-mac-mini on 2026-09-19 it read `local`
-/// beside a store laid out for the object API and answered `root_absent`
-/// for 12 GiB that was there. The layout on disk decides: the namespace
-/// directory when the store holds it, the flat path otherwise.
-pub fn status_root(local_storage_path: &Path, namespace: &str) -> PathBuf {
-    let namespace = namespace.trim();
-    let served = local_storage_path.join("ecosystem").join(namespace);
-    if !namespace.is_empty() && served.is_dir() {
-        served.join(STATUS_PREFIX)
-    } else {
-        local_storage_path.join(STATUS_PREFIX)
+/// path. Neither the backend setting nor the namespace is reliably in the
+/// janitor's own process: on charless-mac-mini on 2026-09-19 it answered
+/// `root_absent` for 12 GiB that was on the disk, twice, once per reading
+/// it tried. The layout on disk is the answer that needs no configuration:
+/// the flat prefix and every namespace's, whichever exist.
+pub fn status_roots(local_storage_path: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let flat = local_storage_path.join(STATUS_PREFIX);
+    if flat.is_dir() {
+        roots.push(flat);
     }
+    let Ok(namespaces) = std::fs::read_dir(local_storage_path.join("ecosystem")) else {
+        return roots;
+    };
+    for namespace in namespaces.flatten() {
+        let served = namespace.path().join(STATUS_PREFIX);
+        if served.is_dir() {
+            roots.push(served);
+        }
+    }
+    roots.sort();
+    roots
 }
 
 /// Whether one output file is a record the register reads, kept regardless
@@ -95,7 +104,7 @@ fn is_record(name: &str) -> bool {
 /// and this cleaner then removes nothing at all.
 #[allow(clippy::too_many_arguments)]
 pub fn scan_job_outputs(
-    status_root: &Path,
+    status_roots: &[PathBuf],
     home: &Path,
     policy: &DiskCleanupPolicy,
     now: f64,
@@ -111,8 +120,7 @@ pub fn scan_job_outputs(
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
-        let root = status_root;
-        if !root.is_dir() {
+        if status_roots.is_empty() {
             report.skip_job_outputs("root_absent", 1);
             return Ok(());
         }
@@ -124,7 +132,10 @@ pub fn scan_job_outputs(
         let min_age = configured.min_age_seconds.max(0) as f64;
         let mut deleted_bytes = 0i64;
         let mut budget = remaining_scan;
-        for job_id in terminal {
+        for (root, job_id) in status_roots
+            .iter()
+            .flat_map(|root| terminal.iter().map(move |job_id| (root, job_id)))
+        {
             if Instant::now() >= deadline {
                 report.caps.deadline = true;
                 report.skip_job_outputs("scan_deadline", 1);

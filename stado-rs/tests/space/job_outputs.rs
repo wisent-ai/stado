@@ -50,6 +50,11 @@ fn a_retired_jobs_aged_payload_is_reclaimed_and_everything_else_stays() {
     seed_output(storage, "job-done", true);
     seed_output(storage, "job-live", true);
     seed_output(storage, "job-unlisted", true);
+    // The layout the host serving the object API keeps: the same job's
+    // outputs under ecosystem/<namespace>/status. On charless-mac-mini this
+    // is where the 12.1 GiB sat while the cleaner read the flat path.
+    let served = storage.join("ecosystem/space-fixture");
+    seed_output(&served, "job-done", true);
     let fresh = storage.join("status/job-done/output/fresh.bin");
     fs::write(&fresh, b"still being read").unwrap();
 
@@ -74,6 +79,16 @@ fn a_retired_jobs_aged_payload_is_reclaimed_and_everything_else_stays() {
         "the receipt was removed"
     );
     assert!(
+        !served
+            .join("status/job-done/output/release.tar.gz")
+            .exists(),
+        "the served layout's aged payload stays"
+    );
+    assert!(
+        served.join("status/job-done/output/receipt.json").exists(),
+        "the served layout's receipt was removed"
+    );
+    assert!(
         done.join("command_output.log").exists(),
         "the log was removed"
     );
@@ -90,7 +105,7 @@ fn a_retired_jobs_aged_payload_is_reclaimed_and_everything_else_stays() {
     )
     .unwrap();
     let cleaner = &state["report"]["cleaners"]["job_outputs"];
-    assert_eq!(cleaner["deleted_items"], 1, "{state}");
-    assert_eq!(cleaner["skipped"]["record_kept"], 2, "{state}");
+    assert_eq!(cleaner["deleted_items"], 2, "{state}");
+    assert_eq!(cleaner["skipped"]["record_kept"], 4, "{state}");
     assert_eq!(cleaner["skipped"]["younger_than_min_age"], 1, "{state}");
 }

@@ -92,13 +92,10 @@ pub(super) async fn run_store_cleaners(
         shares.declared_after(job_outputs::CLEANER),
     );
     let outputs_deadline = shares.time_share(job_outputs::CLEANER);
-    let status_root = job_outputs::status_root(
-        Path::new(crate::config::wc_local_storage_path()),
-        crate::config::wc_stado_storage_namespace(),
-    );
+    let status_roots = job_outputs::status_roots(Path::new(crate::config::wc_local_storage_path()));
     let terminal_jobs = if outputs_budget > 0 && policy.cleaners.contains_key(job_outputs::CLEANER)
     {
-        match job_outputs::candidate_job_ids(&status_root, outputs_budget, outputs_deadline) {
+        match job_outputs::candidate_job_ids(&status_roots, outputs_budget, outputs_deadline) {
             Ok(candidates) if candidates.is_empty() => Some(BTreeSet::new()),
             Ok(candidates) => {
                 let budget = outputs_deadline
@@ -120,7 +117,7 @@ pub(super) async fn run_store_cleaners(
         Some(BTreeSet::new())
     };
     job_outputs::scan_job_outputs(
-        &status_root,
+        &status_roots,
         home,
         policy,
         attempted_at,

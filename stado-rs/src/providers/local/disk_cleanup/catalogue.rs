@@ -67,7 +67,7 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
     },
     CleanerDeclaration {
         name: "job_outputs",
-        since: "0.21.21",
+        since: "0.21.23",
         default_root: super::backup_twins::PRIMARY_ROOT,
         sweeps: "payload outputs of jobs the queue lists as terminal, past the declared age; receipts and logs stay",
         min_age_floor_seconds: 604_800,
