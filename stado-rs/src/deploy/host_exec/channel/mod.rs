@@ -28,6 +28,11 @@ pub struct AccountProgram {
     /// Every path in the account's home this program is installed at, in probe
     /// order. The first executable one runs.
     pub candidates: &'static [&'static str],
+    /// The released product this program belongs to, and the program's path
+    /// inside that release, when the host's own release agent records where
+    /// the installed bundle is. Resolved before [`Self::candidates`], which
+    /// then only covers a host with no recorded rollout.
+    released_program: Option<(&'static str, &'static str)>,
     /// Fixed environment for that program, home-relative where a value is a
     /// path. Compile-time constants of this module: an operator's words select
     /// an entry and never become part of this.
@@ -42,6 +47,17 @@ pub struct AccountProgram {
     pub timeout_seconds: u64,
 }
 
+/// Where the release agent records each product's rollout, home-relative.
+const RELEASE_STATE_DIRECTORY: &str = ".stado/release-state";
+/// Prints `<active.release_dir>/<argv[2]>` for the state document in
+/// `argv[1]`, or nothing when the document names no active release. Fixed
+/// source: the two arguments are compile-time constants of this module.
+const RELEASE_DIRECTORY_READER: &str = "import json,sys\n\
+    state=json.load(open(sys.argv[1]))\n\
+    active=state.get('active') or {}\n\
+    directory=active.get('release_dir') or ''\n\
+    print(f\"{directory}/{sys.argv[2]}\" if directory else '')\n";
+
 /// Every program in the table that the managed account owns.
 pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
     AccountProgram {
@@ -49,15 +65,17 @@ pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
         candidates: &[STADO_CLI],
         environment: &[],
         timeout_seconds: 180,
+        released_program: None,
     },
     AccountProgram {
         program: BRAMA_LAUNCHER,
-        // The launcher is part of the release bundle, and the live bundle is the
-        // `current` link the service unit itself runs through -- never a pinned
-        // version, which would go stale at the next release and send a repair into
-        // a launcher older than the vault it talks to. Both platform directory
-        // spellings the fleet has shipped are probed, newest layout first, and the
-        // standalone copy some accounts keep in `~/.stado/bin` is last.
+        // The launcher is part of the release bundle, and the bundle that
+        // matters is the one the release agent installed - read from its own
+        // state above. These remain as the fallback for a host whose agent has
+        // recorded no active release: both platform directory spellings the
+        // fleet has shipped, then the standalone copy some accounts keep in
+        // `~/.stado/bin`.
+        released_program: Some(("brama", "bin/start-with-skarbiec")),
         candidates: &[
             "~/.stado/services/brama/current/darwin-arm64/bin/start-with-skarbiec",
             "~/.stado/services/brama/current/darwin-arm/bin/start-with-skarbiec",
@@ -89,6 +107,9 @@ pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
         // trajectory's own resolver probes them, so `host exec` and the
         // trajectory cannot disagree about which binary is the Kimi CLI.
         candidates: &["~/.local/bin/kimi", KIMI_CLI, "/opt/homebrew/bin/kimi"],
+        // The Kimi CLI is not a Stado-released product; nothing records an
+        // installed bundle for it.
+        released_program: None,
         // Nothing. Its help is a read; giving it an environment would be
         // giving it a home and a session it has no business reading here.
         environment: &[],
@@ -123,6 +144,27 @@ fn home_anchored(word: &str) -> String {
 /// [`crate::deploy::host_channel::run_program`] path.
 pub fn account_script(account: &AccountProgram, arguments: &[&str]) -> String {
     let mut script = String::from("set -eu\nprogram=\n");
+    if let Some((product, relative)) = account.released_program {
+        // The launcher the repair must run is the one the release agent
+        // actually installed, and the agent records where that is: the
+        // `active.release_dir` of `$HOME/.stado/release-state/<product>.json`.
+        // The static candidates below name a `current/<platform>/bin` layout
+        // the agent never writes, so on 2026-09-19 every `subscription
+        // sign-in` on charless-mac-mini fell through to the standalone copy in
+        // `~/.stado/bin` - a bundle from 8 September, whose sign-in refuses
+        // every Weles release with "does not advertise the login_item
+        // selector", a gate the served release removed on 9 September.
+        script.push_str(&format!(
+            "state=\"$HOME\"/{state}\n\
+             if [ -r \"$state\" ]; then\n\
+             \x20 released=$(/usr/bin/python3 -S -c {reader} \"$state\" {relative} || true)\n\
+             \x20 [ -z \"$released\" ] || [ ! -x \"$released\" ] || program=\"$released\"\n\
+             fi\n",
+            state = shlex_quote(&format!("{RELEASE_STATE_DIRECTORY}/{product}.json")),
+            reader = shlex_quote(RELEASE_DIRECTORY_READER),
+            relative = shlex_quote(relative),
+        ));
+    }
     for candidate in account.candidates {
         script.push_str(&format!(
             "[ -n \"$program\" ] || [ ! -x {candidate} ] || program={candidate}\n",
