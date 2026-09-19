@@ -6,7 +6,7 @@ use std::time::Duration;
 use chrono::Utc;
 
 use super::promote::promote_candidate;
-use crate::release_agent::rollout::candidate::spawn::not_ready_because;
+use crate::release_agent::rollout::candidate::spawn::lost_readiness_because;
 use crate::release_agent::rollout::processes::reconcile::reconcile_stable_proxy;
 use crate::release_agent::rollout::processes::sweep::sweep_leaked_processes;
 use crate::release_agent::rollout::recover::rollback::rollback;
@@ -152,7 +152,7 @@ pub(crate) async fn reconcile_product(
             state.cutover_at.get_or_insert_with(Utc::now);
             save_state(target, &mut state)?;
             tokio::time::sleep(Duration::from_secs(policy.strategy.drain_timeout_seconds)).await;
-            if let Some(why) = not_ready_because(&active, &serving.readiness_path).await {
+            if let Some(why) = lost_readiness_because(&active, &serving.readiness_path).await {
                 if policy.strategy.automatic_rollback {
                     rollback(
                         target,

@@ -7,7 +7,7 @@ use chrono::Utc;
 
 use crate::release_agent::rollout::candidate::fetch::fetch_candidate;
 use crate::release_agent::rollout::candidate::spawn::{
-    await_ready_because, not_ready_because, spawn_release,
+    await_ready_because, lost_readiness_because, spawn_release,
 };
 use crate::release_agent::rollout::candidate::stage::{next_port, stage_release};
 use crate::release_agent::rollout::recover::rollback::rollback;
@@ -176,7 +176,7 @@ pub(crate) async fn promote_candidate(
         .active
         .clone()
         .ok_or_else(|| "routed release lost its active process record".to_string())?;
-    if let Some(why) = not_ready_because(&active, &serving.readiness_path).await {
+    if let Some(why) = lost_readiness_because(&active, &serving.readiness_path).await {
         if policy.strategy.automatic_rollback {
             rollback(
                 target,

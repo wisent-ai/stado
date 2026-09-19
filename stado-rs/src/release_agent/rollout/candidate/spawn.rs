@@ -153,3 +153,130 @@ pub(crate) async fn await_ready_because(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
+
+/// How long a release that is already serving may keep refusing its readiness
+/// probe before the agent treats it as lost. One refused probe is a busy host;
+/// half a minute of them is a release that is not serving.
+pub(crate) const LOST_READINESS_CONFIRMATION_SECONDS: u64 = 30;
+
+/// Why a release that was serving is no longer ready, confirmed over a window,
+/// or `None` when it answers.
+///
+/// One refused probe is not a lost release. On 2026-09-19 brama 0.4.41 was
+/// rolled back and quarantined on charless-mac-mini for `did not answer within
+/// 3s` while its process was alive and its own log, seconds either side, shows
+/// it working through a model-discovery sweep on a host running hundreds of
+/// jobs. A release that is really gone stays gone, so the verdict is confirmed
+/// before it costs a rollback. A process that has exited is reported at once:
+/// there is nothing to wait for, and holding a rollback for half a minute over
+/// a pid that is already gone is time the fleet spends serving nothing.
+pub(crate) async fn lost_readiness_because(
+    record: &ProcessRecord,
+    readiness_path: &str,
+) -> Option<String> {
+    lost_readiness_within(record, readiness_path, LOST_READINESS_CONFIRMATION_SECONDS).await
+}
+
+async fn lost_readiness_within(
+    record: &ProcessRecord,
+    readiness_path: &str,
+    seconds: u64,
+) -> Option<String> {
+    let first = not_ready_because(record, readiness_path).await?;
+    if !pid_alive(record.pid) {
+        return Some(first);
+    }
+    let confirmed = await_ready_because(record, readiness_path, seconds).await?;
+    Some(format!(
+        "{confirmed}, for {seconds}s (first refusal: {first})"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A loopback server that hangs up on its first `refusals` connections and
+    /// answers 200 after that. Returns the port it listens on.
+    async fn flaky_readiness(refusals: usize) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind loopback");
+        let port = listener.local_addr().expect("bound address").port();
+        let seen = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let seen = Arc::clone(&seen);
+                tokio::spawn(async move {
+                    let mut discard = [0_u8; 1024];
+                    let _ = socket.read(&mut discard).await;
+                    if seen.fetch_add(1, Ordering::SeqCst) < refusals {
+                        return;
+                    }
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                        .await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+        port
+    }
+
+    fn record(port: u16, pid: i32) -> ProcessRecord {
+        ProcessRecord {
+            version: "0.0.0-test".into(),
+            artifact_sha256: String::new(),
+            manifest_sha256: String::new(),
+            port,
+            pid,
+            release_dir: String::new(),
+            started_at: Utc::now(),
+        }
+    }
+
+    /// The 2026-09-19 incident: brama 0.4.41 refused one probe while it was
+    /// alive and busy, and was rolled back and quarantined for it.
+    #[tokio::test]
+    async fn a_release_that_refuses_once_and_then_answers_is_not_lost() {
+        let port = flaky_readiness(1).await;
+        let record = record(port, std::process::id() as i32);
+        assert!(
+            not_ready_because(&record, "/readyz").await.is_some(),
+            "the first probe is refused, which is what starts the confirmation"
+        );
+        assert_eq!(lost_readiness_within(&record, "/readyz", 5).await, None);
+    }
+
+    /// A release that never answers is lost, and the verdict carries both the
+    /// first refusal and the confirmed one.
+    #[tokio::test]
+    async fn a_release_that_never_answers_within_the_window_is_lost() {
+        let port = flaky_readiness(usize::MAX).await;
+        let record = record(port, std::process::id() as i32);
+        let why = lost_readiness_within(&record, "/readyz", 1)
+            .await
+            .expect("a release that never answers is lost");
+        assert!(why.contains("for 1s"), "{why}");
+        assert!(why.contains("first refusal"), "{why}");
+    }
+
+    /// A process that is gone is reported without waiting out the window.
+    #[tokio::test]
+    async fn a_dead_process_is_reported_immediately() {
+        let port = flaky_readiness(0).await;
+        let started = std::time::Instant::now();
+        let why = lost_readiness_within(&record(port, i32::MAX), "/readyz", 30)
+            .await
+            .expect("a dead process is lost");
+        assert!(why.contains("is gone"), "{why}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{why}");
+    }
+}

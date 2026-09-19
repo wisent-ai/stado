@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::discover::{exact_proxy_pid, pid_alive, proxy_process_matches};
 use super::legacy::stop_legacy;
 use super::proxy::{start_proxy, write_proxy_target, ProxyState};
-use crate::release_agent::rollout::candidate::spawn::not_ready_because;
+use crate::release_agent::rollout::candidate::spawn::lost_readiness_because;
 use crate::release_agent::rollout::candidate::stage::marker_path;
 use crate::release_agent::state::document::proxy_state_path;
 use crate::release_agent::state::records::{HostReleaseState, ProcessRecord};
@@ -116,7 +116,9 @@ pub(crate) async fn ensure_active_proxy(
     // for two digests in a row, and nothing said whether the candidate answered
     // 503, refused the connection, or took longer than the 3s the probe allows
     // on a host running 242 jobs. Three different repairs, one word.
-    if let Some(why) = not_ready_because(active, &serving.readiness_path).await {
+    // One refused probe is not a lost release either; the confirmation window
+    // lives in `lost_readiness_because`.
+    if let Some(why) = lost_readiness_because(active, &serving.readiness_path).await {
         return Err(format!("active release lost readiness: {why}"));
     }
     // A legacy unit can be loaded again after cutover while the stable proxy

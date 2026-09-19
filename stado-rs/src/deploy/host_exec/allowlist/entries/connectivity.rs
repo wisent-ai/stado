@@ -138,6 +138,13 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
             "codex",
             "--login-item",
             "codex-wisent-google-sso",
+            // Weles holds four active codex subscriptions, and Brama refuses
+            // to guess between them: "Skarbiec lists 4 active subscriptions
+            // for codex; an exact subscription id is required". The `why`
+            // below already named the one this entry is about, so the argv
+            // says it too, and the entry is runnable again.
+            "--subscription-id",
+            "brama-sub-wisent-app-codex-primary",
             "--reason",
             "codex-grant-disowned-2026-08-27-gateway-has-one-live-provider",
             "--login-timeout-ms",
@@ -163,6 +170,8 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
             "claude-code",
             "--login-item",
             "claude-wisent-google-sso",
+            "--subscription-id",
+            "brama-sub-wisent-app-claude-primary",
             "--reason",
             "claude-code-vault-row-yields-no-credential-second-live-provider",
             "--login-timeout-ms",
@@ -185,6 +194,8 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
             "kimi",
             "--login-item",
             "kimi-lukasz-google-sso",
+            "--subscription-id",
+            "brama-sub-wisent-app-kimi-primary",
             "--reason",
             "kimi-vault-row-yields-no-credential-second-live-provider",
             "--login-timeout-ms",
