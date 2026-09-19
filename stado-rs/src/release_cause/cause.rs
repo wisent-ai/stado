@@ -41,6 +41,18 @@ pub enum QuarantineCause {
     /// produced both, because the repair is not the same one and this class
     /// has no repair this product can offer.
     CapabilityRedemptionRefused,
+    /// The candidate's readiness endpoint answered nothing at all before the
+    /// probe's deadline — not an unhealthy answer, no answer.
+    ///
+    /// Its own class because the repair is never in the release: Brama's
+    /// `/readyz` returns a report computed on a timer, so a probe it cannot
+    /// answer within three seconds is a host that could not run the process,
+    /// not a candidate that is broken. On charless-mac-mini on 2026-09-19 the
+    /// desired Brama digest was quarantined for it while the host carried
+    /// 3.6 GiB of swap in use at load 3.9, and the record read
+    /// `unclassified`, so the register blamed the candidate and the host's
+    /// own numbers were never looked at.
+    ReadinessProbeUnanswered,
     /// Nothing in the retained evidence names a cause.
     ///
     /// The default, so a record written before this field existed reads as
@@ -61,6 +73,7 @@ impl QuarantineCause {
             Self::CredentialCannotServe => "credential_cannot_serve",
             Self::CapabilityRoutesUnmapped => "capability_routes_unmapped",
             Self::CapabilityRedemptionRefused => "capability_redemption_refused",
+            Self::ReadinessProbeUnanswered => "readiness_probe_unanswered",
             Self::Unclassified => "unclassified",
         }
     }
@@ -96,6 +109,11 @@ impl QuarantineCause {
                 "map the resource with: skarbiec route declare --resource <resource> \
                  --item <item> --field <field> --reason <text>, and read what the vault \
                  already declares for itself with: skarbiec route resolve",
+            ),
+            Self::ReadinessProbeUnanswered => Some(
+                "read what the host had left when it could not answer: stado space report \
+                 <TARGET> for its memory, swap and disk, then stado release doctor <PRODUCT> \
+                 --target <TARGET>; clear the digest only once the host can run it",
             ),
             // The capability was refused at the far end. Nothing in this
             // product reissues or extends one, and the sibling's own repair

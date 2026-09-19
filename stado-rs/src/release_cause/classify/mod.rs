@@ -7,7 +7,7 @@ mod segments;
 use super::cause::QuarantineCause;
 use needles::{
     CAPABILITY_REDEMPTION_NEEDLES, CAPABILITY_ROUTES_NEEDLES, CREDENTIAL_CANNOT_SERVE_NEEDLES,
-    CREDENTIAL_STORE_NEEDLES, ROLLBACK_COMPATIBILITY_NEEDLES,
+    CREDENTIAL_STORE_NEEDLES, READINESS_UNANSWERED_NEEDLES, ROLLBACK_COMPATIBILITY_NEEDLES,
 };
 use segments::{evidence_for, matches_any, strip_ansi};
 
@@ -88,6 +88,10 @@ pub fn classify(text: &str) -> Classification {
         (
             CAPABILITY_REDEMPTION_NEEDLES,
             QuarantineCause::CapabilityRedemptionRefused,
+        ),
+        (
+            READINESS_UNANSWERED_NEEDLES,
+            QuarantineCause::ReadinessProbeUnanswered,
         ),
     ] {
         if matches_any(&haystack, needles) {
@@ -254,6 +258,46 @@ mod tests {
                 "quoted evidence it does not have"
             );
         }
+    }
+
+    /// Read off charless-mac-mini on 2026-09-19: the desired Brama digest,
+    /// quarantined while the host carried 3.6 GiB of swap at load 3.9. The
+    /// record said `unclassified`, so the register blamed the candidate.
+    const PROBE_UNANSWERED: &str = "active release lost readiness: \
+        http://127.0.0.1:18081/readyz did not answer within 3s; stderr \
+        /Users/charles/.stado/logs/brama-0.4.39.err: \u{1b}[2m2026-09-19T19:06:58.234319Z\u{1b}[0m \
+        \u{1b}[33m WARN\u{1b}[0m credential_sign_in_blocked \
+        blocked_by=\"subscription_identity_missing\"";
+
+    #[test]
+    fn a_probe_that_got_no_answer_is_its_own_class_with_a_host_remedy() {
+        let found = classify(PROBE_UNANSWERED);
+        assert_eq!(found.cause, QuarantineCause::ReadinessProbeUnanswered);
+        assert!(
+            found.evidence.contains("did not answer within 3s"),
+            "quoted {:?}",
+            found.evidence
+        );
+        let remedy = QuarantineCause::ReadinessProbeUnanswered
+            .remedy()
+            .unwrap_or_default();
+        assert!(remedy.contains("stado space report"), "{remedy}");
+    }
+
+    /// A candidate that answered, or one whose process was gone, is not a
+    /// host that could not run it: the deeper sentence in the same record
+    /// still decides.
+    #[test]
+    fn an_answered_probe_keeps_the_cause_its_evidence_names() {
+        assert_eq!(
+            classify(OUTAGE_CREDENTIAL).cause,
+            QuarantineCause::CredentialCannotServe
+        );
+        assert_eq!(
+            classify(REDEMPTION_ONLY).cause,
+            QuarantineCause::CapabilityRedemptionRefused
+        );
+        assert_eq!(classify(NO_EVIDENCE).cause, QuarantineCause::Unclassified);
     }
 
     #[test]

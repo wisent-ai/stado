@@ -51,3 +51,11 @@ pub(super) const CAPABILITY_REDEMPTION_NEEDLES: &[&str] = &[
     "credential_redeem_failed",
     "capability is not issued",
 ];
+
+/// The probe got no answer at all. One sentence only: `answered HTTP 503` is
+/// a candidate saying it is unhealthy, `refused the connection` is a process
+/// that is gone, and the bare `did not become ready before deadline` names
+/// nothing at all — each of those has its own reading. Looked for last, so a
+/// credential or capability sentence in the retained stderr still wins: the
+/// timeout is the outermost symptom, never the deepest cause.
+pub(super) const READINESS_UNANSWERED_NEEDLES: &[&str] = &["did not answer within"];
