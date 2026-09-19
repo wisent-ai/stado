@@ -16,6 +16,11 @@ use crate::release_cause::{self, Classification, QuarantineCause};
 /// same classifier over a superset of the same text, so a record that really
 /// is unclassified stays unclassified.
 ///
+/// Stored first, and that order is load-bearing: the agent classifies the
+/// whole log, while the reason kept here is a bounded tail of it. On
+/// charless-mac-mini the two routing records prove it — their reason stops
+/// before the line their stored evidence quotes.
+///
 /// What re-derivation cannot recover is what the truncated reason no longer
 /// contains. That is a property of the old records, not of this function, and
 /// it is why the agent now classifies from the whole log at the moment it

@@ -1,5 +1,6 @@
 //! Reading a cause out of a recorded reason, deepest cause first.
 
+mod envelope;
 mod needles;
 mod segments;
 
@@ -41,7 +42,13 @@ impl Classification {
 /// checked redemption first would have reported the consequence and sent the
 /// operator to the capability lifecycle instead of the credential.
 ///
-/// So the deepest thing the evidence can name wins:
+/// An envelope the emitting service wrote outranks all five: both of its
+/// keys are declared vocabulary, so it says what broke without anyone
+/// reading English, and its `detail` is the sentence the operator needs.
+/// The sentences below remain for a line written before a product adopted
+/// `wisent-errors`.
+///
+/// Otherwise the deepest thing the evidence can name wins:
 ///
 /// 1. the agent's own refusal, which no log can contradict;
 /// 2. the store not opening, below which nothing can work;
@@ -54,6 +61,12 @@ impl Classification {
 /// there is no honest sentence to quote.
 pub fn classify(text: &str) -> Classification {
     let clean = strip_ansi(text);
+    if let Some(named) = envelope::classify(&clean) {
+        return Classification {
+            cause: named.cause,
+            evidence: named.evidence,
+        };
+    }
     let haystack = clean.to_lowercase();
     for (needles, cause) in [
         (
