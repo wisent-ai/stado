@@ -8,7 +8,8 @@
       "registry_allowance": null,
       "plan_schema": null,
       "reservation": {"cpu_cores": 2, "ram_gb": 4, "vram_gb": 0},
-      "report": ["target", "workspace", "stdio_stream", "durable_session_ledger"]
+      "detachable": true,
+      "report": ["target", "workspace", "stdio_stream", "durable_session_ledger", "detached_job"]
     },
     {
       "kind": "weles-capture",

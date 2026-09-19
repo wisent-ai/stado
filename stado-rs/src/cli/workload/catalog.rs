@@ -39,6 +39,11 @@ pub struct WorkloadKind {
     pub registry_allowance: Option<String>,
     pub plan_schema: Option<String>,
     pub reservation: Option<WorkloadReservation>,
+    /// True when the kind can run without an attached operator: `stado
+    /// workload start` places it as a durable queue job, so the work
+    /// survives the terminal, the editor and the machine that asked for it.
+    #[serde(default)]
+    pub detachable: bool,
     pub report: Vec<String>,
 }
 
@@ -52,6 +57,19 @@ impl WorkloadKind {
                 self.kind
             ))
         })
+    }
+
+    /// Refuse a detached start for a kind whose declaration does not allow
+    /// one. The sentence names the file to change, because that is the only
+    /// place the answer lives.
+    pub fn require_detachable(&self) -> Result<(), CmdError> {
+        if self.detachable {
+            return Ok(());
+        }
+        Err(CmdError::click(format!(
+            "workload kind '{}' is not detachable; add \"detachable\": true to {DECLARATION_PATH}",
+            self.kind
+        )))
     }
 }
 
@@ -133,6 +151,21 @@ pub fn workload(kind: &str) -> Result<&'static WorkloadKind, CmdError> {
         })
 }
 
+/// How a kind runs, in one cell: whether an operator's stream drives it, and
+/// whether the fleet can run it with nobody attached at all.
+fn mode(workload: &WorkloadKind) -> String {
+    let attachment = if workload.interactive {
+        "interactive"
+    } else {
+        "batch"
+    };
+    if workload.detachable {
+        format!("{attachment}+detached")
+    } else {
+        attachment.to_string()
+    }
+}
+
 pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
     let catalog = catalog()?;
     if json_output {
@@ -154,12 +187,7 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
                     vec![
                         workload.kind.clone(),
                         workload.product.clone(),
-                        if workload.interactive {
-                            "interactive"
-                        } else {
-                            "batch"
-                        }
-                        .to_string(),
+                        mode(workload),
                         workload
                             .registry_allowance
                             .as_deref()

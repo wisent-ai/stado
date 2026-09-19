@@ -33,6 +33,7 @@ mod placement;
 mod request;
 
 pub use batch::submit_batch;
+pub use placement::CPU_MACHINE_TYPE;
 pub use request::{
     is_canonical_job_id, stable_run_id, submission_input_digest, submission_job_key,
     submission_source_digest, validate_run_id,
@@ -102,6 +103,15 @@ pub struct SubmitOptions {
     /// Architecture the job requires (`Job::architecture`). Empty is no
     /// constraint. See [`SubmitOptions::platform_os`].
     pub architecture: String,
+    /// CPU cores the job needs on its worker. 0 leaves the worker's own
+    /// default (one core); a placed workload declares the kind's reservation
+    /// here so the host admits it against what is really free.
+    #[serde(default)]
+    pub cpu_cores: i64,
+    /// RAM in GiB the job needs on its worker. 0 leaves the worker's own
+    /// default (one GiB). See [`SubmitOptions::cpu_cores`].
+    #[serde(default)]
+    pub memory_gb: i64,
     pub pre_command: String,
     pub apt_packages: Vec<String>,
     pub output_uri: String,
@@ -142,6 +152,8 @@ impl Default for SubmitOptions {
             resolved_hardware: None,
             platform_os: String::new(),
             architecture: String::new(),
+            cpu_cores: 0,
+            memory_gb: 0,
             pre_command: String::new(),
             apt_packages: vec![],
             output_uri: String::new(),

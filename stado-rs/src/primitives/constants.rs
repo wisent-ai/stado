@@ -38,6 +38,10 @@ pub const PRODUCT_RELEASE_DELIVERY_JOB_COMMAND: &str =
 /// Release qualification and delivery unblock declared fleet versions, so
 /// routine batch work must not leave them at the zero-priority FIFO tail.
 pub const RELEASE_JOB_PRIORITY: i64 = 90_000_000;
+/// A detached agent session is work a person asked for and is waiting on, so
+/// it must not sit behind a batch someone queued overnight; it must also
+/// never outrank a release, which unblocks the fleet's declared versions.
+pub const DETACHED_SESSION_JOB_PRIORITY: i64 = 50_000_000;
 /// How long a platform the manifest marks `required: false` may sit in the
 /// queue unclaimed before the release records it as unbuilt and finishes on
 /// the platforms that are required.

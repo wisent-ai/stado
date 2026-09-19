@@ -13,6 +13,7 @@
 //! simulated executor: a leg that would need one is not written here.
 
 mod attach;
+mod detached;
 mod harness;
 
 use std::fs;

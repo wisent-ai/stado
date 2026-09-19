@@ -106,6 +106,8 @@ pub(super) fn build_planned_job(
     job.machine_type = hardware.machine_type.clone();
     job.platform_os = options.platform_os.clone();
     job.architecture = options.architecture.clone();
+    job.cpu_cores = options.cpu_cores;
+    job.memory_gb = options.memory_gb;
     job.provider = options.provider.clone();
     job.batch_id = options.batch_id.clone();
     job.preemptible = options.preemptible;

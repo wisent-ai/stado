@@ -11,10 +11,11 @@ use super::plan::{
     string_array,
 };
 use super::runners::{
-    connect_jeden, current_workspace, gui_automation_status, mobile_runtime, recordings_status,
-    refresh_weles_api_runtime, run_gui_automation, run_weles_browser_task, run_weles_capture,
-    run_weles_diagnostics, run_weles_image_inspect, set_weles_recordings_dir, weles_activity,
-    weles_browser_runtime, weles_capture_status, weles_run_diagnostics,
+    connect_jeden, current_workspace, gui_automation_status, list_sessions, mobile_runtime,
+    recordings_status, refresh_weles_api_runtime, run_gui_automation, run_weles_browser_task,
+    run_weles_capture, run_weles_diagnostics, run_weles_image_inspect, set_weles_recordings_dir,
+    start_detached, weles_activity, weles_browser_runtime, weles_capture_status,
+    weles_run_diagnostics, DetachedRequest,
 };
 
 #[derive(Subcommand)]
@@ -61,6 +62,43 @@ pub enum WorkloadCommands {
         #[arg(long)]
         resume: Option<String>,
     },
+    /// Start a detachable workload that keeps running without this process.
+    Start {
+        kind: String,
+        /// Pin placement to one registry target.
+        #[arg(long)]
+        target: Option<String>,
+        /// Workspace name on the selected host; __home__ selects its home.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// The work the session is started for.
+        #[arg(long)]
+        task: Option<String>,
+        /// Model route the session runs on; the harness default otherwise.
+        #[arg(long)]
+        model: Option<String>,
+        /// Upper bound on the session's steps.
+        #[arg(long, default_value_t = default_max_steps())]
+        max_steps: u32,
+        /// Let the session write files in its workspace.
+        #[arg(long)]
+        allow_write: bool,
+        /// Let the session run commands in its workspace.
+        #[arg(long)]
+        allow_command: bool,
+        /// Queue priority; higher is claimed first.
+        #[arg(long, default_value_t = crate::primitives::constants::DETACHED_SESSION_JOB_PRIORITY)]
+        priority: i64,
+        /// Emit the placement record as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the detached sessions the fleet is running.
+    Sessions {
+        /// Emit the sessions as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
@@ -91,6 +129,33 @@ pub async fn dispatch(command: WorkloadCommands) -> Result<(), CmdError> {
             )
             .await
         }
+        WorkloadCommands::Start {
+            kind,
+            target,
+            workspace,
+            task,
+            model,
+            max_steps,
+            allow_write,
+            allow_command,
+            priority,
+            json,
+        } => {
+            start(StartArguments {
+                kind: &kind,
+                target: target.as_deref(),
+                workspace: workspace.as_deref(),
+                task: task.as_deref(),
+                model: model.as_deref(),
+                max_steps,
+                allow_write,
+                allow_command,
+                priority,
+                json,
+            })
+            .await
+        }
+        WorkloadCommands::Sessions { json } => list_sessions(json).await,
     }
 }
 
@@ -272,4 +337,51 @@ async fn attach(
             "{kind} declares no stream attachment; add it to {DECLARATION_PATH}"
         ))),
     }
+}
+
+/// How far a detached session may run before the harness stops it. High
+/// enough for real work, bounded because nobody is watching it.
+fn default_max_steps() -> u32 {
+    64
+}
+
+struct StartArguments<'a> {
+    kind: &'a str,
+    target: Option<&'a str>,
+    workspace: Option<&'a str>,
+    task: Option<&'a str>,
+    model: Option<&'a str>,
+    max_steps: u32,
+    priority: i64,
+    allow_write: bool,
+    allow_command: bool,
+    json: bool,
+}
+
+async fn start(arguments: StartArguments<'_>) -> Result<(), CmdError> {
+    let kind = arguments.kind;
+    let declaration = workload(kind)?;
+    declaration.require_detachable()?;
+    let target = match arguments.target {
+        Some(name) => Some(place(declaration, Some(name), None).await?.name),
+        None => None,
+    };
+    let workspace = arguments
+        .workspace
+        .map(str::to_string)
+        .unwrap_or_else(current_workspace);
+    let task = arguments.task.unwrap_or_default();
+    start_detached(DetachedRequest {
+        kind: declaration,
+        workspace: &workspace,
+        target: target.as_deref(),
+        task,
+        model: arguments.model,
+        max_steps: arguments.max_steps,
+        priority: arguments.priority,
+        allow_write: arguments.allow_write,
+        allow_command: arguments.allow_command,
+        json: arguments.json,
+    })
+    .await
 }

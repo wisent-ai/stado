@@ -69,17 +69,31 @@ pub(crate) async fn candidate_fit(
     // the declared figure is the floor, and admitting a job on it when
     // the measured estimate is unknown is how a host claims work that
     // does not fit.
-    let Ok(estimated) =
-        tokio::time::timeout(claim_budget_left(), estimate_gpu_memory(cmd, sizing, store)).await
-    else {
-        log_fn(&format!(
-            "loop: VRAM estimate for {} exhausted this tick's {}s store budget; not claiming it this tick",
-            job.job_id,
-            constants::AGENT_CLAIM_STORE_BUDGET_S
-        ));
-        return Ok(None);
+    //
+    // A submission that resolved to the CPU marker declared that it needs no
+    // accelerator, and re-guessing from its command text overrides a fact
+    // with a heuristic. A detached Jeden session carries its model route in
+    // that text (`jeden run … --model openrouter/openrouter/free`), the
+    // model-name scan read it as a GPU workload needing VRAM, and on a
+    // laptop with one GiB of it every such session was refused silently, on
+    // every poll, while the same session without `--model` ran.
+    let need = if job.gpu_mem_gb == 0 && job.machine_type == crate::queue::submit::CPU_MACHINE_TYPE
+    {
+        0
+    } else {
+        let Ok(estimated) =
+            tokio::time::timeout(claim_budget_left(), estimate_gpu_memory(cmd, sizing, store))
+                .await
+        else {
+            log_fn(&format!(
+                "loop: VRAM estimate for {} exhausted this tick's {}s store budget; not claiming it this tick",
+                job.job_id,
+                constants::AGENT_CLAIM_STORE_BUDGET_S
+            ));
+            return Ok(None);
+        };
+        job.gpu_mem_gb.max(estimated?)
     };
-    let need = job.gpu_mem_gb.max(estimated?);
     // Hard VRAM safety buffer: refuse if declared use after admission
     // would leave less than the dynamic VRAM safety buffer. Use live
     // free VRAM, not only slot-declared usage, so external users such

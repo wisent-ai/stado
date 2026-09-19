@@ -15,7 +15,7 @@ use super::harness::{said, Area, TARGET};
 const RPC_DEADLINE: Duration = Duration::from_secs(60);
 const PROCESS_POLL: Duration = Duration::from_millis(50);
 
-fn install_runtime(area: &Area) {
+pub fn install_runtime(area: &Area) {
     let binary = std::env::var_os("JEDEN_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

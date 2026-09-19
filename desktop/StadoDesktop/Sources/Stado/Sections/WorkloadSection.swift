@@ -16,6 +16,7 @@ struct WorkloadDeclaration: Decodable, Identifiable, Sendable {
     let kind: String
     let product: String
     let interactive: Bool
+    let detachable: Bool
     let registryAllowance: String?
     let planSchema: String?
     let report: [String]
@@ -26,9 +27,21 @@ struct WorkloadDeclaration: Decodable, Identifiable, Sendable {
         case kind
         case product
         case interactive
+        case detachable
         case registryAllowance = "registry_allowance"
         case planSchema = "plan_schema"
         case report
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try values.decode(String.self, forKey: .kind)
+        product = try values.decode(String.self, forKey: .product)
+        interactive = try values.decode(Bool.self, forKey: .interactive)
+        detachable = try values.decodeIfPresent(Bool.self, forKey: .detachable) ?? false
+        registryAllowance = try values.decodeIfPresent(String.self, forKey: .registryAllowance)
+        planSchema = try values.decodeIfPresent(String.self, forKey: .planSchema)
+        report = try values.decode([String].self, forKey: .report)
     }
 }
 
@@ -40,6 +53,7 @@ struct WorkloadSection: View {
     @State private var statusKind = ""
     @State private var receiptID = ""
     @State private var attachment: AttachmentReview?
+    @State private var detachedStart: AttachmentReview?
 
     private struct AttachmentReview: Identifiable {
         let kind: String
@@ -65,7 +79,7 @@ struct WorkloadSection: View {
                                 Text(workload.kind)
                                     .font(WisentTypeScale.identifier())
                                     .foregroundStyle(WisentDesign.ink)
-                                Text("\(workload.product) · \(workload.interactive ? "stream" : "receipt")")
+                                Text("\(workload.product) · \(workload.interactive ? "stream" : "receipt")\(workload.detachable ? " · detachable" : "")")
                                     .font(WisentTypeScale.caption())
                                     .foregroundStyle(WisentDesign.muted)
                             }
@@ -73,6 +87,12 @@ struct WorkloadSection: View {
                             if workload.interactive {
                                 Button("Attach…") {
                                     attachment = AttachmentReview(kind: workload.kind, host: target,
+                                        source: fleet.requestGeneration)
+                                }
+                            }
+                            if workload.detachable {
+                                Button("Start detached…") {
+                                    detachedStart = AttachmentReview(kind: workload.kind, host: target,
                                         source: fleet.requestGeneration)
                                 }
                             }
@@ -84,6 +104,7 @@ struct WorkloadSection: View {
                     .padding(.vertical, WisentDesign.Space.x1)
                 }
             }
+            DetachedSessionList(store: store, fleet: fleet)
             NativeCapabilityActions(host: target, fleet: fleet, operations: store.operations)
             Picker("Workload status", selection: $statusKind) {
                 Text("Choose a workload…").tag("")
@@ -113,10 +134,15 @@ struct WorkloadSection: View {
             WorkloadAttachmentView(kind: review.kind, target: review.host,
                 expectedSource: review.source, fleet: fleet)
         }
+        .sheet(item: $detachedStart) { review in
+            WorkloadStartView(kind: review.kind, target: review.host, store: store, fleet: fleet)
+        }
         .task(id: "\(target)|\(fleet.requestGeneration)") {
             attachment = nil
             statusKind = ""
             receiptID = ""
+            detachedStart = nil
+            await store.loadSessions(fleet: fleet)
             await store.load(target: target, fleet: fleet)
         }
     }
