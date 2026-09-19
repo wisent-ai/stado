@@ -13,7 +13,10 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
         .map_err(|error| CmdError::click(error.to_string()))?;
     // `list` prints the declaration alone and reaches no host, so both measured
     // columns are absent here rather than guessed.
-    let unasked = Drivability { drivable: None, reason: None };
+    let unasked = Drivability {
+        drivable: None,
+        reason: None,
+    };
     let rows: Vec<Value> = registry
         .targets
         .iter()

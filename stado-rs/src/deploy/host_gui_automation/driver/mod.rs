@@ -43,7 +43,10 @@ async fn session_readiness_for(
     .into_iter()
     .filter(|(key, expected)| value(key) != Some(expected))
     .map(|(key, expected)| {
-        format!("{key} is {}, expected {expected}", value(key).unwrap_or("unreported"))
+        format!(
+            "{key} is {}, expected {expected}",
+            value(key).unwrap_or("unreported")
+        )
     })
     .collect();
     Ok(SessionReadiness {
@@ -93,5 +96,12 @@ pub async fn apple_challenge_session_readiness_for(
     password: Option<&str>,
     runner: &Runner,
 ) -> Result<SessionReadiness, DeployError> {
-    session_readiness_for(target, expected_user, "apple-challenge-ready", password, runner).await
+    session_readiness_for(
+        target,
+        expected_user,
+        "apple-challenge-ready",
+        password,
+        runner,
+    )
+    .await
 }
