@@ -18,6 +18,7 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
             generation_only,
             path,
         } => registry::pull(with_generation, generation_only, path.as_deref()).await,
+        RegistryCommands::Set { path, value, json } => registry::set(&path, &value, json).await,
         RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
         RegistryCommands::Doctor { json } => registry::doctor(json).await,
         RegistryCommands::Host(command) => match command {

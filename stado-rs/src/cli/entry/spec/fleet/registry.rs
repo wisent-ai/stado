@@ -70,6 +70,25 @@ pub(crate) enum RegistryCommands {
         #[arg(long, conflicts_with_all = ["with_generation", "generation_only"])]
         path: Option<String>,
     },
+    /// Change one field of the canonical registry, under the generation it
+    /// was read at.
+    ///
+    /// The path is the one `pull --path` reads, so a field a caller can read
+    /// it can write: `registry set --path targets.lukasz-macbook.release_platform
+    /// --value darwin-arm64`. The value is JSON when it parses as JSON and the
+    /// literal text when it does not. A path that does not already exist is
+    /// refused, naming the keys or element names that do; a registry that
+    /// moved since the read is refused with exit 75, as `push --if-generation`
+    /// is.
+    Set {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        value: String,
+        /// Emit a `stado.registry-set-receipt.v1` object instead of the sentence.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print which registry target is this machine.
     #[command(name = "self")]
     SelfTarget {

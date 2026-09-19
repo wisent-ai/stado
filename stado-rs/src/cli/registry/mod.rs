@@ -51,6 +51,7 @@ pub use crate::cli::registry::commands::host::path::set::host_path_set;
 pub use crate::cli::registry::commands::pull::pull;
 pub use crate::cli::registry::commands::push::push;
 pub use crate::cli::registry::commands::self_target;
+pub use crate::cli::registry::commands::set::set;
 pub use crate::cli::registry::commands::validate::import;
 pub use crate::cli::registry::commands::validate::validate;
 pub use crate::cli::registry::doctor::doctor;

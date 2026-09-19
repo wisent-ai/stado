@@ -16,14 +16,7 @@ use serde_json::{json, Value};
 const REGISTRY: &str = r#"{
     "schema_version": 2,
     "coordinators": [],
-    "release_control": {
-        "schema_version": 1,
-        "generation": 3,
-        "trusted_keys": {},
-        "products": {
-            "lake": { "desired": { "version": "0.2.3" }, "targets": {} }
-        }
-    },
+    "public_origins": [],
     "targets": [
         {
             "name": "w1",
@@ -132,15 +125,10 @@ fn one_part_of_the_registry_is_printed_by_key_index_or_name() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "darwin-arm64", "a string prints bare");
 
-    let out = store.stado(&[
-        "registry",
-        "pull",
-        "--path",
-        "release_control.products.lake.desired",
-    ]);
+    let out = store.stado(&["registry", "pull", "--path", "targets.w1"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let desired: Value = serde_json::from_str(&stdout(&out)).expect("a subtree prints as JSON");
-    assert_eq!(desired["version"], "0.2.3");
+    let target: Value = serde_json::from_str(&stdout(&out)).expect("a subtree prints as JSON");
+    assert_eq!(target["hostnames"][0], "w1.local");
 
     let out = store.stado(&["registry", "pull", "--path", "targets.1.name"]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -164,15 +152,11 @@ fn a_missing_segment_is_refused_with_what_exists_there() {
         stderr(&out)
     );
 
-    let out = store.stado(&[
-        "registry",
-        "pull",
-        "--path",
-        "release_control.generation.more",
-    ]);
+    let out = store.stado(&["registry", "pull", "--path", "schema_version.more"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("registry value at `release_control.generation` is a number, which has no `more` inside"),
+        stderr(&out)
+            .contains("registry value at `schema_version` is a number, which has no `more` inside"),
         "{}",
         stderr(&out)
     );
@@ -180,7 +164,7 @@ fn a_missing_segment_is_refused_with_what_exists_there() {
     let out = store.stado(&["registry", "pull", "--path", "nope"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("registry has no `nope` under `<root>`; keys there: coordinators, release_control, schema_version, targets"),
+        stderr(&out).contains("registry has no `nope` under `<root>`; keys there: coordinators, public_origins, schema_version, targets"),
         "{}",
         stderr(&out)
     );
@@ -258,4 +242,67 @@ fn an_unknown_run_is_refused_naming_the_newest_runs() {
         text.contains("bbbb2222bbbb2222bbbb2222bbbb2222 lake 0.2.3"),
         "{text}"
     );
+}
+
+#[test]
+fn one_field_is_written_by_the_path_that_reads_it() {
+    let store = Store::new();
+    let written = store.stado(&[
+        "registry",
+        "set",
+        "--path",
+        "targets.w2.ssh",
+        "--value",
+        "u@10.0.0.9",
+    ]);
+    assert!(written.status.success(), "{}", stderr(&written));
+    assert!(
+        stdout(&written).contains("was u@10.0.0.2"),
+        "the sentence names what it replaced: {}",
+        stdout(&written)
+    );
+
+    let read = store.stado(&["registry", "pull", "--path", "targets.w2.ssh"]);
+    assert_eq!(stdout(&read).trim(), "u@10.0.0.9", "{}", stderr(&read));
+
+    // A second identical write changes nothing and says so.
+    let again = store.stado(&[
+        "registry",
+        "set",
+        "--path",
+        "targets.w2.ssh",
+        "--value",
+        "u@10.0.0.9",
+        "--json",
+    ]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    let receipt: Value = serde_json::from_str(&stdout(&again)).expect("a receipt");
+    assert_eq!(receipt["state"], "unchanged");
+    assert_eq!(receipt["schema"], "stado.registry-set-receipt.v1");
+    untouched(store.home.path());
+}
+
+#[test]
+fn a_write_to_a_path_that_does_not_exist_changes_nothing() {
+    let store = Store::new();
+    let before = std::fs::read_to_string(store.storage.path().join("registry.json"))
+        .expect("read the canonical document");
+    let refused = store.stado(&[
+        "registry",
+        "set",
+        "--path",
+        "targets.w9.release_platform",
+        "--value",
+        "linux-amd64",
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused)
+            .contains("registry array `targets` has no element named `w9`; names there: w1, w2"),
+        "{}",
+        stderr(&refused)
+    );
+    let after = std::fs::read_to_string(store.storage.path().join("registry.json"))
+        .expect("read the canonical document");
+    assert_eq!(before, after, "a refused write left the registry alone");
 }

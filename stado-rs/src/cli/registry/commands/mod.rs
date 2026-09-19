@@ -6,6 +6,7 @@
 pub(in crate::cli::registry) mod host;
 pub(in crate::cli::registry) mod pull;
 pub(in crate::cli::registry) mod push;
+pub(in crate::cli::registry) mod set;
 pub(in crate::cli::registry) mod validate;
 
 use std::path::PathBuf;

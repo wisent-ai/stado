@@ -71,7 +71,9 @@ fn step<'a>(value: &'a Value, segment: &str, walked: &str) -> Result<&'a Value, 
     }
 }
 
-fn kind(value: &Value) -> &'static str {
+/// What a value is, for a refusal that says why a path stopped there. The
+/// writer (`registry set`) refuses with the same sentence.
+pub(in crate::cli::registry) fn kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "boolean",
