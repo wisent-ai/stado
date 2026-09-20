@@ -39,7 +39,10 @@ fn seed_output(storage: &Path, job_id: &str, aged: bool) {
 fn a_retired_jobs_aged_payload_is_reclaimed_and_everything_else_stays() {
     let host = Host::new();
     let mut policy: Value = serde_json::from_str(&host.policy()).unwrap();
-    policy["cleaners"] = json!({ "job_outputs": { "min_age_seconds": FLOOR_SECONDS } });
+    policy["cleaners"] = json!({ "job_outputs": {
+        "min_age_seconds": FLOOR_SECONDS,
+        "root": host.storage.to_string_lossy(),
+    } });
     host.declare(&policy.to_string());
 
     let storage = &host.storage;

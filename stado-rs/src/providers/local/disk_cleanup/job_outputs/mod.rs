@@ -63,22 +63,28 @@ pub(super) const OUTPUT_DIR: &str = "output";
 
 /// Every directory the queue store's `status/` prefix maps to on this host.
 ///
-/// The host that serves the fleet's object API keeps each namespace's keys
-/// under `ecosystem/<namespace>/` of the local store — the layout the
-/// `backup_twins` cleaner compares its replica against — while a queue on
-/// the device-local backend keeps its keys directly under the configured
-/// path. Neither the backend setting nor the namespace is reliably in the
-/// janitor's own process: on charless-mac-mini on 2026-09-19 it answered
-/// `root_absent` for 12 GiB that was on the disk, twice, once per reading
-/// it tried. The layout on disk is the answer that needs no configuration:
-/// the flat prefix and every namespace's, whichever exist.
-pub fn status_roots(local_storage_path: &Path) -> Vec<PathBuf> {
+/// The store root is the account's own, `~/.stado/local-storage`, the same
+/// path `backup_twins` compares its replica against — not the configured
+/// `WC_LOCAL_STORAGE_PATH`, which the janitor's service process does not
+/// carry: on charless-mac-mini on 2026-09-19 that reading answered
+/// `root_absent` for 12 GiB the replica cleaner was walking in the same
+/// pass. A policy `root` override replaces it.
+///
+/// Inside that root, the host serving the fleet's object API keeps each
+/// namespace's keys under `ecosystem/<namespace>/` while a device-local
+/// queue keeps them flat. Both layouts are walked, whichever exist, so no
+/// namespace or backend setting has to be right for the bytes to be found.
+pub fn status_roots(home: &Path, configured_root: Option<&str>) -> Vec<PathBuf> {
+    let store = match configured_root {
+        Some(root) => crate::config_file::expand_tilde(root),
+        None => home.join(super::backup_twins::PRIMARY_ROOT),
+    };
     let mut roots = Vec::new();
-    let flat = local_storage_path.join(STATUS_PREFIX);
+    let flat = store.join(STATUS_PREFIX);
     if flat.is_dir() {
         roots.push(flat);
     }
-    let Ok(namespaces) = std::fs::read_dir(local_storage_path.join("ecosystem")) else {
+    let Ok(namespaces) = std::fs::read_dir(store.join("ecosystem")) else {
         return roots;
     };
     for namespace in namespaces.flatten() {

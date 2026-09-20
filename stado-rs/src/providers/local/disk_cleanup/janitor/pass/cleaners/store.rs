@@ -92,7 +92,13 @@ pub(super) async fn run_store_cleaners(
         shares.declared_after(job_outputs::CLEANER),
     );
     let outputs_deadline = shares.time_share(job_outputs::CLEANER);
-    let status_roots = job_outputs::status_roots(Path::new(crate::config::wc_local_storage_path()));
+    let status_roots = job_outputs::status_roots(
+        home,
+        policy
+            .cleaners
+            .get(job_outputs::CLEANER)
+            .and_then(|cleaner| cleaner.root.as_deref()),
+    );
     let terminal_jobs = if outputs_budget > 0 && policy.cleaners.contains_key(job_outputs::CLEANER)
     {
         match job_outputs::candidate_job_ids(&status_roots, outputs_budget, outputs_deadline) {
