@@ -12,11 +12,14 @@ mod support;
 
 use serde_json::Value;
 
-use support::{Bridge, DAEMON_OBSERVATION_SECONDS};
+use support::Bridge;
 
 /// The idle window a story uses so the first poll already decides.
 const IMMEDIATE: &str = "0";
 const ONE_SECOND: &str = "1";
+/// The line the preview prints once it has decided to list: the poll after
+/// the decision reports the state it would have written.
+const LISTED_STATE: &str = "(listed=True)";
 
 #[test]
 fn a_dry_run_decides_without_any_credential() {
@@ -31,7 +34,7 @@ fn a_dry_run_decides_without_any_credential() {
             "--poll-interval-s",
             ONE_SECOND,
         ],
-        DAEMON_OBSERVATION_SECONDS,
+        LISTED_STATE,
     );
     assert!(
         alive,
@@ -47,7 +50,7 @@ fn a_dry_run_decides_without_any_credential() {
         "a preview that decides to list again every poll is not a preview:\n{stdout}"
     );
     assert!(
-        stdout.contains("(listed=True)"),
+        stdout.contains(LISTED_STATE),
         "after deciding to list, the preview must carry that state:\n{stdout}"
     );
     assert!(
