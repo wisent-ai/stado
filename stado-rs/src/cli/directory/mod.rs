@@ -55,6 +55,26 @@ use crate::cli::directory::routes::connect::connect;
 use crate::cli::directory::routes::consumers::{consumer_add, consumer_rm};
 use crate::cli::directory::routes::endpoints::{bind, endpoint};
 
+/// Which host the directory says currently serves SERVICE.
+///
+/// `None` means the fleet declares nothing about it — no directory block, no
+/// such service, or a service with no active host — and a caller deciding
+/// which host to ask a question of has to say so rather than guess a name.
+pub(crate) async fn active_host(service: &str) -> Result<Option<String>, CmdError> {
+    let registry_document = crate::cli::registry::fetch_document().await?;
+    let Ok(block) = document::directory(&registry_document) else {
+        return Ok(None);
+    };
+    let Ok(entry) = document::service(block, service) else {
+        return Ok(None);
+    };
+    Ok(entry
+        .get("active_host")
+        .and_then(serde_json::Value::as_str)
+        .filter(|host| !host.is_empty())
+        .map(str::to_string))
+}
+
 #[derive(Subcommand)]
 pub enum DirectoryCommands {
     /// Print the whole service directory.

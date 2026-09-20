@@ -29,6 +29,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case releases
     case deployments
     case inference
+    case earning
     case cloudflare
 
     var id: String { rawValue }
@@ -50,6 +51,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .deployments: "Deployments"
         case .cloudflare: "Cloudflare routes"
         case .inference: "Inference"
+        case .earning: "Earning"
         }
     }
 
@@ -70,6 +72,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .deployments: "point.3.connected.trianglepath.dotted"
         case .cloudflare: "network"
         case .inference: "cpu"
+        case .earning: "dollarsign.circle"
         }
     }
 
@@ -90,13 +93,14 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .deployments: "Which Stado backend this console reads, and who else may read it"
         case .cloudflare: "Publish a hostname through a declared Cloudflare Tunnel connector"
         case .inference: "Which model each router alias reaches, and the declared deployments behind it"
+        case .earning: "Whether the idle GPU is listed on Vast.ai, what the bridge would decide now, and what is missing"
         }
     }
 
     var group: ConsoleGroup {
         switch self {
         case .posture, .queue, .products: .work
-        case .hosts, .fleets, .disk, .memory, .services, .inference: .fleet
+        case .hosts, .fleets, .disk, .memory, .services, .inference, .earning: .fleet
         case .databases, .registry, .builds, .releases, .cloudflare, .deployments: .system
         }
     }

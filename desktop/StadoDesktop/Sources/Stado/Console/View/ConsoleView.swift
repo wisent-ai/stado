@@ -38,6 +38,7 @@ struct ConsoleView: View {
     @StateObject var databasesStore = DatabasesStore()
     @StateObject var cloudflareStore = CloudflareRoutesStore()
     @StateObject var inferenceStore = InferenceStore()
+    @StateObject var vastStore = VastStore()
 
     @State var showsDeploymentSetup = false
     @State var showsDeploymentAccess = false

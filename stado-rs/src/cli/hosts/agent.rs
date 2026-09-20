@@ -101,7 +101,14 @@ pub async fn run(
     let explicit_on = matches!(auto_list_env.as_str(), "1" | "true" | "yes" | "on");
     let inference_reservation = crate::inference::reservation::active();
     let env_has_api_key = if inference_reservation.is_none() {
-        vast::vast_api_key_available().await
+        let reading = vast::read_vast_api_key().await;
+        // A channel that answered and refused is worth one line at agent
+        // start; an absent channel is the ordinary state of a host that was
+        // never meant to list capacity and says nothing.
+        if let Some(error) = &reading.error {
+            eprintln!("[vast] cannot read stado-vast/api_key: {error}");
+        }
+        reading.key.is_some()
     } else {
         false
     };
@@ -141,7 +148,7 @@ pub async fn run(
             ..Default::default()
         };
         tokio::spawn(async move {
-            if let Err(exc) = vast::auto_list_loop(&client, &store, &hostname, params, |m| {
+            if let Err(exc) = vast::auto_list_loop(Some(&client), &store, &hostname, params, |m| {
                 println!("[vast] {m}")
             })
             .await

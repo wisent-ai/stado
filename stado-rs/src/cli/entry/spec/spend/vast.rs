@@ -24,6 +24,21 @@ pub(crate) enum VastCommands {
     Unlist,
     /// Show Vast.ai's current view of our machine (rentals, listed).
     Status,
+    /// Whether this machine can earn on Vast.ai, and which provisioning step
+    /// is missing when it cannot: the Skarbiec channel this host holds, the
+    /// vault that would declare stado-vast, and Vast.ai's own answer to our
+    /// key. Exits non-zero unless Vast.ai accepts the credential.
+    Readiness {
+        /// Ask this host's vault instead of the one serving Skarbiec.
+        #[arg(long)]
+        vault_host: Option<String>,
+        /// Do not read the vault; report the channel and Vast.ai only.
+        #[arg(long)]
+        no_vault_check: bool,
+        /// Print the stado.vast-readiness.v1 document.
+        #[arg(long)]
+        json: bool,
+    },
     /// One-shot snapshot of the Vast bridge + wisent-compute state.
     Monitor {
         /// Logical Stado queue namespace (default wisent-compute).
@@ -46,8 +61,13 @@ pub(crate) enum VastCommands {
         /// this offer (default 3600s = 1h). 0 to leave open-ended.
         #[arg(long, default_value_t = 3600)]
         max_duration_s: i64,
-        /// Print the toggle decisions without calling the Vast API.
+        /// Print the toggle decisions without calling the Vast API. Needs no
+        /// credential: the decisions come from the queue, not from Vast.
         #[arg(long)]
         dry_run: bool,
+        /// Evaluate one poll and exit, instead of looping. With --dry-run
+        /// this is the one-shot preview a graphical surface can run.
+        #[arg(long)]
+        once: bool,
     },
 }

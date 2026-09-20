@@ -92,5 +92,10 @@ let package = Package(
             dependencies: ["Stado"],
             path: "tests/inference"
         ),
+        .testTarget(
+            name: "EarningTests",
+            dependencies: ["Stado"],
+            path: "tests/earning"
+        ),
     ]
 )

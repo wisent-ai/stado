@@ -76,6 +76,10 @@ pub struct AutoListParams {
     pub duration_s: Option<i64>,
     /// Print the toggle decisions without calling the Vast API.
     pub dry_run: bool,
+    /// Evaluate one poll and return, instead of looping forever. The
+    /// graphical surface previews the bridge this way: a daemon cannot be
+    /// run through a request that has to answer.
+    pub once: bool,
 }
 
 impl Default for AutoListParams {
@@ -86,6 +90,7 @@ impl Default for AutoListParams {
             price_gpu: 0.50,
             duration_s: Some(15768000),
             dry_run: false,
+            once: false,
         }
     }
 }

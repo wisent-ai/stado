@@ -17,7 +17,9 @@ use serde_json::Value;
 
 use super::VastError;
 
-pub use credentials::{resolve_vast_api_key, vast_api_key_available};
+pub use credentials::{
+    read_vast_api_key, vast_api_key_available, VastCredentialChannel, VastCredentialReading,
+};
 pub use machine::{parse_machine_id_env, system_hostname};
 pub use offers::ListMachineParams;
 
@@ -55,15 +57,16 @@ impl VastClient {
         }
     }
 
-    /// Resolve the key from `stado-vast/api_key` in Skarbiec.
+    /// Resolve the key from `stado-vast/api_key` in Skarbiec. The refusal
+    /// names the channel that answered and what it said, because an empty
+    /// key has three different causes and the operator needs the one in
+    /// front of them.
     pub async fn from_env() -> Result<Self, VastError> {
-        let key = resolve_vast_api_key().await;
-        if key.is_empty() {
-            return Err(VastError::config(
-                "Skarbiec item stado-vast field api_key is required",
-            ));
+        let reading = read_vast_api_key().await;
+        match reading.key.clone() {
+            Some(key) => Ok(Self::new(key)),
+            None => Err(VastError::config(reading.refusal())),
         }
-        Ok(Self::new(key))
     }
 
     /// Python `_request`: Bearer-authenticated call; HTTP error statuses
