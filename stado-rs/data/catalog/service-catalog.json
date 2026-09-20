@@ -74,6 +74,28 @@
         "stream",
         "--json"
       ]
+    },
+    {
+      "name": "brama-grant-sync",
+      "summary": "Every provider grant the harnesses on this machine hold joins Brama's pool, every quarter hour, so a gateway whose own credentials died is repaired by a machine that is still signed in.",
+      "program": "$HOME/.local/bin/brama",
+      "args": [
+        "subscription",
+        "sync",
+        "--gateway-consumer",
+        "oko",
+        "--bearer-item",
+        "brama-desktop-model-router#token",
+        "--every",
+        "900",
+        "--reason",
+        "unattended-harness-grant-sweep",
+        "--json"
+      ],
+      "unit": "com.wisent.compute.service.brama-grant-sync",
+      "env": {
+        "PATH": "$HOME/.local/bin:$HOME/.stado/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+      }
     }
   ]
 }
