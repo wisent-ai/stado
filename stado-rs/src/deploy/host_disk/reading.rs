@@ -320,6 +320,7 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             // the lock" is distinguishable from "this host could not be asked".
             ["STADO_MEMORY", "page_size", value] => {
                 memory_page_size = value.split_whitespace().next().and_then(fold_int);
+                reading.memory.page_size_bytes = memory_page_size;
             }
             ["STADO_MEMORY", "total_bytes", value] => {
                 reading.memory.total_bytes = fold_int(value);

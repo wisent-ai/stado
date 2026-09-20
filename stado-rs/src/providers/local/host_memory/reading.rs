@@ -37,6 +37,9 @@ pub struct MemoryReading {
     pub compressor_pages: Option<i64>,
     /// macOS only: lifetime swapouts.
     pub swapouts: Option<i64>,
+    /// macOS only: the page size those page counts are in, so a reader can
+    /// turn them into bytes without guessing it.
+    pub page_size_bytes: Option<i64>,
 }
 
 impl MemoryReading {

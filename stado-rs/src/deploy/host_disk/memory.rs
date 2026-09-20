@@ -84,6 +84,7 @@ pub fn memory_report(target: &ComputeTarget, reading: &DiskReading) -> Value {
             "swap_used_pct": memory.swap_used_pct(),
             "compressor_pages": memory.compressor_pages,
             "swapouts": memory.swapouts,
+            "page_size_bytes": memory.page_size_bytes,
         },
         "declaration": {
             "declared": declared.is_some(),
