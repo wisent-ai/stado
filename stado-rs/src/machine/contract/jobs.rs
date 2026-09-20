@@ -34,6 +34,14 @@ pub fn normalize_job(job: &Job) -> Value {
     out.insert("run_id".into(), Value::from(job.run_id.as_str()));
     out.insert("batch_id".into(), Value::from(job.batch_id.as_str()));
     out.insert("state".into(), Value::from(state));
+    // Whether this job has stopped moving, decided here from the queue's own
+    // terminal set. Every reader used to decide it again by matching state
+    // words — Oko's routines did it in Swift — and a reader that misses one
+    // waits forever for a job that already finished.
+    out.insert(
+        "terminal".into(),
+        Value::from(runs::TERMINAL_PREFIXES.contains(&state)),
+    );
     out.insert("command".into(), Value::from(job.command.as_str()));
     out.insert("provider".into(), Value::from(job.provider.as_str()));
     out.insert("gpu_type".into(), Value::from(job.gpu_type.as_str()));
@@ -70,6 +78,43 @@ pub fn normalize_job(job: &Job) -> Value {
     );
     out.insert("output_uri".into(), Value::from(job.output_uri.as_str()));
     Value::Object(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_job, JOB_PREFIXES};
+    use crate::models::Job;
+    use crate::queue::runs;
+
+    fn job_in(state: &str) -> Job {
+        let mut job = Job::default();
+        job.job_id = "job-1".into();
+        job.state = state.into();
+        job
+    }
+
+    /// A reader asks the job, not a list of state words it keeps itself.
+    #[test]
+    fn the_view_says_whether_the_job_has_stopped_moving() {
+        for prefix in JOB_PREFIXES {
+            let view = normalize_job(&job_in(prefix));
+            let expected = runs::TERMINAL_PREFIXES.contains(&prefix);
+            assert_eq!(
+                view["terminal"], expected,
+                "{prefix} reported as terminal={}",
+                view["terminal"]
+            );
+        }
+    }
+
+    /// `queue/` is spelled `queued` in the machine view, and a queued job is
+    /// as far from terminal as a job gets.
+    #[test]
+    fn a_queued_job_is_named_queued_and_is_not_terminal() {
+        let view = normalize_job(&job_in(runs::QUEUE));
+        assert_eq!(view["state"], "queued");
+        assert_eq!(view["terminal"], false);
+    }
 }
 
 /// A provider instance a job is recorded as holding, plus the blob the
