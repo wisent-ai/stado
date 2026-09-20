@@ -218,17 +218,26 @@ pub async fn auto_list_loop(
                     }
                 }
             }
-            // Visibility for the "wait for renter to finish" path: if the
-            // offer is already gone AND wisent-compute has queued work AND
-            // the box has near-zero free VRAM, that means a Vast rental is
-            // still on the GPU and the wisent-compute claim loop is going
-            // to sit idle until the renter releases (or hits the duration
-            // cap). Explicit log so the operator can tell this state apart
-            // from a plain dead-agent state.
+            // Visibility for the "wait for renter to finish" path: no offer
+            // of ours is up, wisent-compute has queued work and the box has
+            // near-zero free VRAM, so something is holding the GPU and the
+            // claim loop will sit idle until it lets go. The line says what
+            // was read and marks the rental as the inference it is: on a
+            // machine with no Vast credential at all it said "waiting for
+            // Vast rental to finish" over a queue of two jobs and a laptop
+            // GPU, which is a state that could not exist.
             match decide_action(listed, &state, 0, params.idle_window_s) {
+                AutoListAction::WaitingForRental { free_vram_gb } if client.is_some() => {
+                    log(&format!(
+                        "not listed, queued={}, free_vram_gb={}: something holds the GPU, \
+                         most likely a Vast rental; wisent-compute claims when it releases",
+                        state.queued,
+                        py_float(free_vram_gb)
+                    ))
+                }
                 AutoListAction::WaitingForRental { free_vram_gb } => log(&format!(
-                    "waiting for Vast rental to finish (queued={}, free_vram_gb={}); \
-                     wisent-compute jobs claim as soon as renter releases",
+                    "not listed, queued={}, free_vram_gb={}: the GPU is occupied and this \
+                     host holds no Vast credential, so no rental of ours is on it",
                     state.queued,
                     py_float(free_vram_gb)
                 )),
