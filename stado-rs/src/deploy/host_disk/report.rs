@@ -185,6 +185,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             reading
                 .inventory
                 .iter()
+                .chain(outermost_build_caches(reading).iter())
                 .map(|item| {
                     json!({
                         "path": item.path,
@@ -214,6 +215,36 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
         ),
     );
     report
+}
+
+/// The census rows worth keeping: every tagged tree that is not inside
+/// another tagged tree, and that the depth-bounded inventory did not already
+/// name.
+///
+/// `du -sxk` on a tagged directory counts everything below it, so a tagged
+/// tree nested in another would be charged to the disk twice and the coverage
+/// partition would report more unswept bytes than the host holds.
+fn outermost_build_caches(reading: &DiskReading) -> Vec<crate::deploy::host_disk::DiskItem> {
+    let mut rows = reading.tagged_build_caches.clone();
+    rows.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut kept: Vec<crate::deploy::host_disk::DiskItem> = Vec::new();
+    for row in rows {
+        let nested = kept
+            .last()
+            .is_some_and(|previous| row.path.starts_with(&format!("{}/", previous.path)));
+        if nested {
+            continue;
+        }
+        if reading
+            .inventory
+            .iter()
+            .any(|measured| measured.path == row.path)
+        {
+            continue;
+        }
+        kept.push(row);
+    }
+    kept
 }
 
 /// The inventory traverses whole filesystems; it has an independent bound.

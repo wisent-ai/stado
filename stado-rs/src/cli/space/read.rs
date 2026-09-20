@@ -176,7 +176,15 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         ))
         .machine_readable(json_output));
     }
+    // A verdict that only ran out of seconds is reported, not fatal: every
+    // other figure above it was already read, and the inventory's own budget
+    // has behaved this way since the walk was given one. A host that refused
+    // the read still fails the command.
     if let Some(error) = cache_report.error.filter(|error| !error.is_empty()) {
+        if cache_report.timed_out {
+            eprintln!("{} build cache verdict incomplete: {error}", target.name);
+            return Ok(());
+        }
         return Err(CmdError::click(format!(
             "{} build cache declaration could not be read: {error}",
             target.name

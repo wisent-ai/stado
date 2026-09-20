@@ -110,12 +110,15 @@ impl Fixture {
         }
     }
 
-    /// The report with the attribution walk held to `budget_seconds`, where
-    /// `0` means the walk is not attempted at all.
-    fn report(&self, budget_seconds: &str, extra: &[&str]) -> Output {
+    /// The command with the fixture's own home, storage and configuration,
+    /// and the attribution walk held to `budget_seconds`, where `0` means the
+    /// walk is not attempted at all. A case that needs another bound adds it
+    /// to this command rather than building a second one.
+    fn command(&self, budget_seconds: &str, extra: &[&str]) -> Command {
         let mut args = vec!["space", "report", TARGET];
         args.extend_from_slice(extra);
-        let output = Command::new(env!("CARGO_BIN_EXE_stado"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        command
             .args(&args)
             .env_clear()
             .env("HOME", &self.home)
@@ -126,9 +129,24 @@ impl Fixture {
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
             .env("WC_PROVIDERS", "local")
             .env("NO_COLOR", "1")
-            .env("STADO_INVENTORY_BUDGET_SECONDS", budget_seconds)
+            .env("STADO_INVENTORY_BUDGET_SECONDS", budget_seconds);
+        command
+    }
+
+    /// The report with the attribution walk held to `budget_seconds`, where
+    /// `0` means the walk is not attempted at all.
+    fn report(&self, budget_seconds: &str, extra: &[&str]) -> Output {
+        let output = self
+            .command(budget_seconds, extra)
             .output()
             .expect("run stado space report");
+        self.retain(extra, &output);
+        output
+    }
+
+    /// Every run keeps its own bytes beside the fixture, named by the shape
+    /// of the answer it asked for.
+    fn retain(&self, extra: &[&str], output: &Output) {
         let name = if extra.contains(&"--json") {
             "json"
         } else {
@@ -141,7 +159,6 @@ impl Fixture {
             format!("{:?}", output.status.code()),
         )
         .unwrap();
-        output
     }
 
     fn cleanup(&self) {
@@ -458,6 +475,124 @@ fn an_unreadable_directory_is_one_row_and_a_refused_root_is_never_opened() {
     assert!(
         !stderr.contains("credentials this command used were rejected"),
         "a file the host would not open was reported as rejected credentials: {stderr}"
+    );
+    fixture.cleanup();
+}
+
+/// The inventory walks `$HOME` two levels deep, so build output any deeper
+/// than that was invisible to the coverage report: on 2026-09-19
+/// `lukasz-macbook` held 843 GB of tagged `target/` trees four and five
+/// levels down, the host declared the `build_caches` cleaner all along, the
+/// cleaner's root reached none of them, and every reading said the host was
+/// fine while the volume stood at 97%.
+///
+/// The census finds a tagged tree wherever it is, and the existing partition
+/// then says what no declared mechanism reaches. Both halves are asserted
+/// here: the deep tree is measured at all, and it is named as bytes nothing
+/// sweeps.
+#[test]
+fn build_output_deeper_than_the_walk_is_measured_and_named_as_unswept() {
+    let fixture = Fixture::new();
+    let deep = fixture
+        .home
+        .join("Documents/CodingProjects/Wisent/product/target");
+    fs::create_dir_all(&deep).expect("create the deep build tree");
+    fs::write(
+        deep.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )
+    .expect("write cache tag");
+    fs::write(deep.join("artifact.bin"), vec![0_u8; 512 * 1024]).expect("write build output");
+
+    let output = fixture.report("120", &["--json"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the report is one JSON document");
+
+    let wanted = deep.to_str().expect("the fixture path is utf-8");
+    let measured = document["inventory"]
+        .as_array()
+        .expect("the report carries an inventory")
+        .iter()
+        .find(|row| row["path"].as_str() == Some(wanted));
+    let measured = measured.unwrap_or_else(|| {
+        panic!(
+            "the tagged tree four levels below home was never measured: {}",
+            document["inventory"]
+        )
+    });
+    assert!(
+        measured["bytes"].as_i64().unwrap_or_default() > 0,
+        "the tagged tree was measured at zero bytes: {measured}"
+    );
+
+    let coverage = &document["coverage"];
+    let named = coverage["uncovered"]
+        .as_array()
+        .expect("the coverage section lists what nothing covers")
+        .iter()
+        .any(|row| {
+            row["path"]
+                .as_str()
+                .is_some_and(|path| path == wanted || wanted.starts_with(&format!("{path}/")))
+        });
+    assert!(
+        named,
+        "build output no declared cleaner reaches was not named: {coverage}"
+    );
+    assert!(
+        coverage["unswept_bytes"].as_i64().unwrap_or_default() > 0,
+        "bytes nothing sweeps were reported as none: {coverage}"
+    );
+    fixture.cleanup();
+}
+
+/// The build-cache verdict is a second walk with its own budget, and until
+/// 2026-09-20 exceeding it failed the whole command: on lukasz-macbook
+/// `space report` printed the free space, the watermarks, the janitor's last
+/// pass and every coverage row, then exited 1 with
+/// `the build-cache verdict ... did not finish within 120s`. The attribution
+/// walk beside it has reported its own overrun instead of dying since it was
+/// given a budget; this makes the two agree.
+#[test]
+fn a_verdict_that_runs_out_of_seconds_is_reported_and_the_report_still_stands() {
+    let fixture = Fixture::new();
+    let cache = fixture.home.join("work/target");
+    fs::create_dir_all(&cache).expect("create the tagged tree");
+    fs::write(
+        cache.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )
+    .expect("write cache tag");
+
+    let output = fixture
+        .command("0", &[])
+        // Small enough that the walk cannot finish, and fractional because
+        // the budget accepts fractions exactly so a case can prove the bound.
+        .env("STADO_CACHE_VERDICT_BUDGET_SECONDS", "0.001")
+        .output()
+        .expect("run stado space report");
+    fixture.retain(&[], &output);
+
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a slow verdict failed the whole report; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("build cache verdict incomplete"),
+        "the overrun was not reported: {stderr}"
+    );
+    assert!(
+        stderr.contains("did not finish within"),
+        "the report did not say what ran out: {stderr}"
+    );
+    assert!(
+        text.contains("free:"),
+        "the figures the report had already read were thrown away: {text}"
     );
     fixture.cleanup();
 }

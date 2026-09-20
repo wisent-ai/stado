@@ -247,6 +247,30 @@ else
 fi
 "#;
 
+/// Every directory a build tool tagged as regenerable, wherever it is, with
+/// its size — the `build_caches` census.
+///
+/// The inventory above walks `$HOME` at depth two, which is the whole reason
+/// 843 GB of build output went unwatched on `lukasz-macbook` on 2026-09-19:
+/// `~/Documents/CodingProjects/Wisent` is one depth-two row, the per-repository
+/// `target/` trees under it are four and five deep, and the coverage report
+/// can only reason about paths the inventory named. The host declared the
+/// `build_caches` cleaner all along; the cleaner's root reached none of it and
+/// nothing said so, because nothing had measured it.
+///
+/// The marker is the same one the cleaner itself judges by: a `CACHEDIR.TAG`
+/// written by the tool that produced the bytes. No directory-name matching and
+/// no extension list. The walk is bounded at six levels below the home
+/// directory, and the whole section shares the inventory's own budget.
+const BUILD_CACHE_SECTION: &str = r#"/usr/bin/find "$HOME" -maxdepth 6 -type f -name CACHEDIR.TAG 2>/dev/null |
+  while IFS= read -r tag; do
+    dir=${tag%/CACHEDIR.TAG}
+    blocks=$(/usr/bin/du -sxk "$dir" 2>/dev/null | /usr/bin/cut -f1)
+    [ -n "$blocks" ] || continue
+    printf 'STADO_BUILD_CACHE_ITEM\t%s\t%s\n' "$blocks" "$dir"
+  done
+"#;
+
 /// The remote program for a caller that reads every field.
 ///
 /// Retained as the name the existing callers use, and defined in terms of
@@ -283,6 +307,7 @@ pub fn remote_script_for(scope: DiskScope) -> String {
     script.push_str(SNAPSHOT_SECTION);
     if scope == DiskScope::Full {
         script.push_str(INVENTORY_SECTION);
+        script.push_str(BUILD_CACHE_SECTION);
     }
     script
         .replace(

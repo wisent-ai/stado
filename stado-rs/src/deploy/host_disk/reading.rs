@@ -257,6 +257,11 @@ pub struct DiskReading {
     pub state: CleanupState,
     pub snapshots: LocalSnapshots,
     pub inventory: Vec<DiskItem>,
+    /// Every directory a build tool tagged regenerable, from the census that
+    /// is not bounded by the inventory's depth. Kept apart from `inventory`
+    /// until the nested ones are folded away, because two tagged trees, one
+    /// inside the other, would otherwise be counted twice.
+    pub tagged_build_caches: Vec<DiskItem>,
     /// Who holds the run lock right now. Empty with `lock_read` true means
     /// nothing holds it, which is a different fact from never having looked.
     pub lock_holders: Vec<LockHolder>,
@@ -354,6 +359,14 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             ["STADO_DISK_ITEM", blocks, path] => {
                 if let Ok(blocks_kb) = blocks.parse::<i64>() {
                     reading.inventory.push(DiskItem {
+                        blocks_kb,
+                        path: (*path).to_string(),
+                    });
+                }
+            }
+            ["STADO_BUILD_CACHE_ITEM", blocks, path] => {
+                if let Ok(blocks_kb) = blocks.parse::<i64>() {
+                    reading.tagged_build_caches.push(DiskItem {
                         blocks_kb,
                         path: (*path).to_string(),
                     });
