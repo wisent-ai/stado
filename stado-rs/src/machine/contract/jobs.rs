@@ -87,10 +87,11 @@ mod tests {
     use crate::queue::runs;
 
     fn job_in(state: &str) -> Job {
-        let mut job = Job::default();
-        job.job_id = "job-1".into();
-        job.state = state.into();
-        job
+        Job {
+            job_id: "job-1".into(),
+            state: state.into(),
+            ..Job::default()
+        }
     }
 
     /// A reader asks the job, not a list of state words it keeps itself.
