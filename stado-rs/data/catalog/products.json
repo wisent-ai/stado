@@ -129,6 +129,28 @@
         "shape": "plain"
       },
       "units": []
+    },
+    {
+      "name": "brama",
+      "why": "the gateway's own CLI; delivered to every machine an operator signs a provider into, because `brama subscription sync` is how a live grant on a workstation repairs a gateway whose credentials all died, and on 2026-09-20 that grant sat here for a day while the fleet served nothing",
+      "source": {
+        "product": "brama",
+        "member": "bin/brama"
+      },
+      "platforms": [
+        "darwin-arm64",
+        "linux-amd64"
+      ],
+      "install": {
+        "kind": "program",
+        "root": "$HOME/.stado/bin"
+      },
+      "version": {
+        "kind": "program",
+        "argument": "version",
+        "shape": "json"
+      },
+      "units": []
     }
   ]
 }

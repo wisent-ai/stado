@@ -78,7 +78,7 @@
     {
       "name": "brama-grant-sync",
       "summary": "Every provider grant the harnesses on this machine hold joins Brama's pool, every quarter hour, so a gateway whose own credentials died is repaired by a machine that is still signed in.",
-      "program": "$HOME/.local/bin/brama",
+      "program": "$HOME/.stado/bin/brama",
       "args": [
         "subscription",
         "sync",
