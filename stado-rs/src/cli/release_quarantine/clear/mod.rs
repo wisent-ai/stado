@@ -17,7 +17,7 @@ use super::QuarantineClearArgs;
 mod record;
 mod script;
 
-use record::{actor, audit_path, stamp};
+use record::{actor, stamp};
 use script::CLEAR_TEMPLATE;
 
 pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
@@ -58,7 +58,7 @@ pub(super) async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
     // report a reconciliation that never ran.
     let document = release_agent::state_document_bytes(&state).map_err(CmdError::click)?;
     let audited_at = Utc::now();
-    let audit = audit_path(&target_policy.state_dir, &args.product);
+    let audit = release_agent::quarantine_audit_path(&target_policy.state_dir, &args.product);
     let backup = format!("{path}.quarantine-backup-{}", stamp());
     let staging = format!(
         "{}/.{}.json.stado-quarantine-{}",

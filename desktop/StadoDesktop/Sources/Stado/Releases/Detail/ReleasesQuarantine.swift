@@ -105,6 +105,9 @@ extension ReleasesView {
                     if entry.isDesiredDigest {
                         WisentStatusChip(text: "Desired — blocks the rollout", tone: .danger)
                     }
+                    if entry.agentRetires {
+                        WisentStatusChip(text: "The agent retires this one", tone: .info)
+                    }
                     Text(quarantinedAge(entry))
                         .font(WisentTypeScale.identifierSmall())
                         .foregroundStyle(WisentDesign.muted)

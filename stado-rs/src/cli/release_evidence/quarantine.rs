@@ -3,37 +3,8 @@
 
 use serde_json::{json, Value};
 
-use crate::release_agent::{HostReleaseState, QuarantineRecord};
-use crate::release_cause::{self, Classification, QuarantineCause};
-
-/// The named cause one quarantine record carries, deriving it from the reason
-/// when the record has none of its own.
-///
-/// Every record already on the fleet was written before the agent classified
-/// anything, so reading only the stored field would report this host's entire
-/// month of history as unclassified. Re-deriving costs one pass over a string
-/// the command already holds and is idempotent: the stored name came from the
-/// same classifier over a superset of the same text, so a record that really
-/// is unclassified stays unclassified.
-///
-/// Stored first, and that order is load-bearing: the agent classifies the
-/// whole log, while the reason kept here is a bounded tail of it. On
-/// charless-mac-mini the two routing records prove it — their reason stops
-/// before the line their stored evidence quotes.
-///
-/// What re-derivation cannot recover is what the truncated reason no longer
-/// contains. That is a property of the old records, not of this function, and
-/// it is why the agent now classifies from the whole log at the moment it
-/// quarantines.
-pub(crate) fn record_cause(record: &QuarantineRecord) -> Classification {
-    if record.cause.is_classified() {
-        return Classification {
-            cause: record.cause,
-            evidence: record.evidence.clone(),
-        };
-    }
-    release_cause::classify(&record.reason)
-}
+use crate::release_agent::HostReleaseState;
+use crate::release_cause::{self, QuarantineCause};
 
 /// The host's quarantine map, each entry told what it failed for and whether it
 /// is the digest the registry currently desires.
@@ -51,7 +22,7 @@ pub(super) fn quarantine_entries(
             .quarantined
             .iter()
             .map(|(digest, record)| {
-                let classified = record_cause(record);
+                let classified = record.classification();
                 json!({
                     "digest": digest,
                     "reason": record.reason,
@@ -60,6 +31,12 @@ pub(super) fn quarantine_entries(
                     "cause": classified.cause.as_str(),
                     "evidence": classified.evidence,
                     "remedy": classified.cause.remedy(),
+                    // Whether this row needs an operator at all. A cause that
+                    // says nothing about the candidate is retired by the agent
+                    // itself on a later tick, and an operator reading a table
+                    // of refusals has to be able to see which of them are
+                    // already recovering.
+                    "agent_retires": !classified.cause.holds_the_candidate(),
                 })
             })
             .collect()

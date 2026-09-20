@@ -9,7 +9,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::release_cause::{self, QuarantineCause};
 
-pub(crate) const STATE_SCHEMA: u32 = 1;
+/// The rollout state document's schema version.
+///
+/// Public because a document is only this agent's if it carries this exact
+/// number: `parse_state_document` refuses anything else, and a caller
+/// building one — a test, a recovery tool — has to write the version the
+/// parser will accept rather than a copy of it that drifts.
+pub const STATE_SCHEMA: u32 = 1;
 pub(crate) const STATUS_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +97,34 @@ impl QuarantineRecord {
             cause: classified.cause,
             evidence: classified.evidence,
         }
+    }
+
+    /// The named cause this record carries, derived from its reason when the
+    /// record has none of its own.
+    ///
+    /// Every record written before the agent classified anything carries no
+    /// name, so reading only the stored field reports a host's whole history
+    /// as unclassified. Re-deriving costs one pass over a string the caller
+    /// already holds and is idempotent: the stored name came from the same
+    /// classifier over a superset of the same text, so a record that really is
+    /// unclassified stays unclassified.
+    ///
+    /// Stored first, and that order is load-bearing: the agent classifies the
+    /// whole log, while the reason kept here is a bounded tail of it. On
+    /// charless-mac-mini the two routing records prove it — their reason stops
+    /// before the line their stored evidence quotes.
+    ///
+    /// It lives on the record because three readers need one answer: the
+    /// agent deciding whether it may retire this record by itself,
+    /// `release doctor` and `quarantine list`.
+    pub fn classification(&self) -> release_cause::Classification {
+        if self.cause.is_classified() {
+            return release_cause::Classification {
+                cause: self.cause,
+                evidence: self.evidence.clone(),
+            };
+        }
+        release_cause::classify(&self.reason)
     }
 }
 

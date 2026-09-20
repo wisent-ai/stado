@@ -47,8 +47,6 @@ pub use constants::*;
 pub use doctor::ReleaseDoctorArgs;
 pub use logs::ReleaseLogsArgs;
 
-pub(crate) use quarantine::record_cause;
-
 pub async fn dispatch_logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
     logs(args).await
 }

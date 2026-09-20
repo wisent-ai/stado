@@ -22,13 +22,20 @@ struct ReleaseQuarantineReport: Decodable, Sendable {
 ///
 /// `isDesiredDigest` is the field the section exists for: a quarantined digest
 /// nobody desires is history, and the one that matches desired state is the
-/// rollout being skipped on every pass until a human clears it.
+/// rollout being skipped on every pass until it is retired.
 /// `release doctor` omits the flag; `quarantine list` sets it.
+///
+/// `agentRetires` says who retires it. A refusal that named the host rather
+/// than the candidate — a readiness probe the host never answered — is
+/// retired by the release agent itself on a later tick, so a screen that
+/// offered "clear" for every row asked an operator to do work that is already
+/// happening. Both commands set it.
 struct ReleaseQuarantineEntry: Decodable, Identifiable, Sendable {
     let digest: String
     let reason: String
     let quarantinedAt: String?
     let isDesiredDigest: Bool
+    let agentRetires: Bool
 
     var id: String { digest }
 
@@ -48,6 +55,7 @@ struct ReleaseQuarantineEntry: Decodable, Identifiable, Sendable {
         case digest, reason
         case quarantinedAt = "quarantined_at"
         case isDesiredDigest = "is_desired_digest"
+        case agentRetires = "agent_retires"
     }
 
     init(from decoder: Decoder) throws {
@@ -56,6 +64,7 @@ struct ReleaseQuarantineEntry: Decodable, Identifiable, Sendable {
         reason = try values.decodeIfPresent(String.self, forKey: .reason) ?? ""
         quarantinedAt = try values.decodeIfPresent(String.self, forKey: .quarantinedAt)
         isDesiredDigest = try values.decodeIfPresent(Bool.self, forKey: .isDesiredDigest) ?? false
+        agentRetires = try values.decodeIfPresent(Bool.self, forKey: .agentRetires) ?? false
     }
 }
 

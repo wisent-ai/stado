@@ -23,6 +23,18 @@ pub fn host_state_path(state_dir: &str, product: &str) -> String {
     format!("{state_dir}/{product}.json")
 }
 
+/// The append-only account of every quarantine that was retired, beside the
+/// state document it changed.
+///
+/// Spelled here for the same reason [`host_state_path`] is: two writers append
+/// to it now. `stado release quarantine clear` writes an operator's retirement
+/// over the registry SSH channel, and the agent writes its own when it retires
+/// a record whose cause said nothing about the candidate. A second spelling
+/// would give one host two accounts of the same file.
+pub fn quarantine_audit_path(state_dir: &str, product: &str) -> String {
+    format!("{state_dir}/{product}.quarantine-audit.jsonl")
+}
+
 fn state_path(target: &ReleaseTargetPolicy, product: &str) -> PathBuf {
     PathBuf::from(host_state_path(&target.state_dir, product))
 }

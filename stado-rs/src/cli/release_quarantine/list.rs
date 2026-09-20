@@ -3,7 +3,6 @@
 
 use serde_json::json;
 
-use crate::cli::release_evidence;
 use crate::cli::reporting::table;
 use crate::cli::CmdError;
 use crate::release_agent;
@@ -37,9 +36,9 @@ pub(super) async fn list(args: &QuarantineListArgs) -> Result<(), CmdError> {
     let mut entries = Vec::new();
     if let Some(state) = state.as_ref() {
         for (digest, record) in &state.quarantined {
-            // The same derivation `release doctor` uses, called from the same
-            // place, so the two commands cannot name one digest two things.
-            let classified = release_evidence::record_cause(record);
+            // The same derivation `release doctor` uses, on the record
+            // itself, so the two commands cannot name one digest two things.
+            let classified = record.classification();
             entries.push(json!({
                 "digest": digest,
                 "reason": record.reason,
@@ -47,6 +46,7 @@ pub(super) async fn list(args: &QuarantineListArgs) -> Result<(), CmdError> {
                 "is_desired_digest": desired == Some(digest.as_str()),
                 "cause": classified.cause.as_str(),
                 "evidence": classified.evidence,
+                "agent_retires": !classified.cause.holds_the_candidate(),
             }));
         }
     }

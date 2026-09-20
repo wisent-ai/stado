@@ -9,6 +9,9 @@ use super::promote::promote_candidate;
 use crate::release_agent::rollout::candidate::spawn::lost_readiness_because;
 use crate::release_agent::rollout::processes::reconcile::reconcile_stable_proxy;
 use crate::release_agent::rollout::processes::sweep::sweep_leaked_processes;
+use crate::release_agent::rollout::recover::retire::{
+    retire_host_caused_quarantine, RetireVerdict,
+};
 use crate::release_agent::rollout::recover::rollback::rollback;
 use crate::release_agent::rollout::recover::wall::cause_hold;
 use crate::release_agent::rollout::serving::answer::ensure_active_proxy;
@@ -105,10 +108,27 @@ pub(crate) async fn reconcile_product(
                 return Ok(state);
             }
         }
-        state.phase = RolloutPhase::Quarantined;
-        state.detail = "desired release digest is quarantined on this host".to_string();
+        // A refusal that named the host, not the release, is retired by the
+        // agent itself. `holds_the_candidate` has always said which refusals
+        // those are; until this branch asked, it governed only the next
+        // candidate, and the desired digest stayed refused on every pass
+        // until a person cleared it. On lukasz-macbook that left Skarbiec's
+        // release plane dead for three days over one three-second probe.
+        let verdict = retire_host_caused_quarantine(
+            &target.state_dir,
+            target_name,
+            product,
+            &artifact.artifact_sha256,
+            &mut state,
+        )?;
+        if !matches!(verdict, RetireVerdict::Retire(_)) {
+            state.phase = RolloutPhase::Quarantined;
+            state.detail = verdict.detail();
+            save_state(target, &mut state)?;
+            return Ok(state);
+        }
+        state.detail = verdict.detail();
         save_state(target, &mut state)?;
-        return Ok(state);
     }
 
     if state

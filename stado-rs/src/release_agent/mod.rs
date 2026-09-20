@@ -25,12 +25,20 @@ pub(crate) mod tick;
 
 pub(crate) use rollout::candidate::binary::active_binary;
 pub(crate) use rollout::candidate::fetch::fetch_candidate;
+pub use rollout::recover::retire::{
+    last_auto_retirement, retire_host_caused_quarantine, retire_verdict, RetireVerdict,
+    AGENT_ACTOR, AUTO_RETIRE_COOLDOWN_SECONDS,
+};
 pub use rollout::recover::run::{cause_run, CauseRun};
 pub use rollout::recover::wall::{CauseHold, HoldGround};
 pub use rollout::serving::proxy::proxy;
 pub(crate) use state::document::{acquire_state_lock, atomic_json};
-pub use state::document::{host_state_path, parse_state_document, state_document_bytes};
+pub use state::document::{
+    host_state_path, parse_state_document, quarantine_audit_path, state_document_bytes,
+};
 pub use state::evidence::host_log_path;
-pub use state::records::{HostReleaseState, ProcessRecord, QuarantineRecord, RolloutPhase};
+pub use state::records::{
+    HostReleaseState, ProcessRecord, QuarantineRecord, RolloutPhase, STATE_SCHEMA,
+};
 pub use state::status::{publish_service_release_status, release_status_uri};
 pub use tick::once::{agent, reconcile_once};
