@@ -97,6 +97,20 @@ struct HostExecReceipt {
 /// `status` for a command that ran and exited clean.
 pub const OK_STATUS: &str = "ok";
 
+/// What an approved command's failure says: the command, the status it
+/// exited with, and the remote's own last line quoted as context.
+///
+/// The last line alone was the whole sentence until 2026-09-20, and a
+/// program that logs after its verdict made that sentence name the wrong
+/// thing every time.
+fn exec_failure_sentence(command: &str, code: i32, last_line: &str) -> String {
+    let last_line = last_line.trim();
+    if last_line.is_empty() {
+        return format!("`{command}` exited {code} and said nothing");
+    }
+    format!("`{command}` exited {code}; its last line was: {last_line}")
+}
+
 /// Run one approved command on a canonical registry host.
 ///
 /// The error type is [`ExecRefusal`] rather than [`DeployError`] so the
@@ -195,9 +209,20 @@ pub async fn exec_host(
     };
 
     let ok = output.ok();
-    // Read the remote's own last line before the body is moved into the
-    // receipt.
-    let error = (!ok).then(|| host_channel::last_error_line(&output, "ssh failed"));
+    // The remote's own last stderr line, quoted as context inside a sentence
+    // that names what actually failed. Presenting that line AS the failure
+    // reads as a lie whenever the program logs diagnostics after its verdict:
+    // on 2026-09-20 a codex sign-in whose real failure was
+    // `AUTH_FAILURE ... stage openai_email_first` was reported to the operator
+    // as `Error: [google_sso] 2fa-diag host=myaccount.google.com ...`, a dump
+    // of the page it had already walked past.
+    let error = (!ok).then(|| {
+        exec_failure_sentence(
+            &approved.display(),
+            output.code,
+            &host_channel::last_error_line(&output, "ssh failed"),
+        )
+    });
     let receipt = HostExecReceipt {
         schema: "stado.host-exec-receipt.v1".into(),
         target: target.name,
@@ -225,4 +250,41 @@ pub async fn exec_host(
         error,
     };
     serde_json::to_value(receipt).map_err(|error| DeployError(error.to_string()).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exec_failure_sentence;
+
+    /// The 2026-09-20 report: the codex sign-in's real verdict was
+    /// `AUTH_FAILURE ... stage openai_email_first`, and the operator was shown
+    /// the page dump the trajectory logged after it. The sentence now names
+    /// the command and its status, and quotes the last line as context.
+    #[test]
+    fn a_failure_names_the_command_and_its_status() {
+        let sentence = exec_failure_sentence(
+            "start-with-skarbiec test --model codex/gpt-5.3-codex-spark",
+            1,
+            "[google_sso] 2fa-diag host=myaccount.google.com path=/\n",
+        );
+        assert!(
+            sentence.starts_with(
+                "`start-with-skarbiec test --model codex/gpt-5.3-codex-spark` exited 1;"
+            ),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains("its last line was: [google_sso] 2fa-diag"),
+            "{sentence}"
+        );
+    }
+
+    /// A command that failed silently still says what failed.
+    #[test]
+    fn a_silent_failure_still_names_the_command() {
+        assert_eq!(
+            exec_failure_sentence("uptime", 127, "   \n"),
+            "`uptime` exited 127 and said nothing"
+        );
+    }
 }
