@@ -44,6 +44,19 @@ pub struct WorkloadKind {
     /// survives the terminal, the editor and the machine that asked for it.
     #[serde(default)]
     pub detachable: bool,
+    /// True when the kind repairs the host rather than consuming it.
+    ///
+    /// A capacity hold is right for work that competes for a machine and
+    /// wrong for work that puts one back: on 2026-09-20 charless-mac-mini
+    /// sat below its disk watermark, refused every placement with
+    /// `disk_pressure_active`, and that refusal covered `weles-api-runtime`
+    /// — the deployment that moves that host's worker to a named revision —
+    /// so the fleet's only browser host could not be repaired because it
+    /// needed repairing. A maintenance kind runs on the host it names and
+    /// takes no hold. Every declaration check still applies, so a host that
+    /// does not declare the kind still refuses it.
+    #[serde(default)]
+    pub maintenance: bool,
     pub report: Vec<String>,
 }
 

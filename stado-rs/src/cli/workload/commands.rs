@@ -190,6 +190,11 @@ async fn run(
     let target = resolved.name.as_str();
     // The host is chosen; take the kind's declared hold on it for the whole
     // run, so the host publishes itself net of this work from its next tick.
+    // A maintenance kind takes none: holding capacity on a host in order to
+    // repair it is how a full disk becomes permanent.
+    if declaration.maintenance {
+        return run_kind(kind, target, plan.as_ref(), document, json_output).await;
+    }
     let holder = format!(
         "{} {kind} pid {}",
         crate::fleet_needs::this_requester(),

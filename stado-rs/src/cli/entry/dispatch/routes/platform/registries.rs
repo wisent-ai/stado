@@ -22,6 +22,9 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
         RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
         RegistryCommands::Doctor { json } => registry::doctor(json).await,
         RegistryCommands::Host(command) => match command {
+            RegistryHostCommands::Show { host, path } => {
+                registry::host_show(&host, path.as_deref()).await
+            }
             RegistryHostCommands::Add {
                 host,
                 ssh,

@@ -135,6 +135,14 @@ fn parse_release_platform(raw: &str) -> Result<String, String> {
 
 #[derive(Subcommand)]
 pub(crate) enum RegistryHostCommands {
+    /// One host's registry declaration, answered without pulling the document.
+    Show {
+        host: String,
+        /// Print one field of that host: a dotted path under its own block,
+        /// such as `skarbiec.vault`, `services` or `space.low_watermark_gb`.
+        #[arg(long)]
+        path: Option<String>,
+    },
     /// Onboard HOST into the canonical registry, validated.
     Add {
         host: String,

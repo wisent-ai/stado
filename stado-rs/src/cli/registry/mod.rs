@@ -48,6 +48,7 @@ pub use crate::cli::registry::commands::host::add::host_add;
 pub use crate::cli::registry::commands::host::path::list::host_path_list;
 pub use crate::cli::registry::commands::host::path::remove::host_path_remove;
 pub use crate::cli::registry::commands::host::path::set::host_path_set;
+pub use crate::cli::registry::commands::host::show::host_show;
 pub use crate::cli::registry::commands::pull::pull;
 pub use crate::cli::registry::commands::push::push;
 pub use crate::cli::registry::commands::self_target;

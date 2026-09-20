@@ -3,3 +3,4 @@
 
 pub(in crate::cli::registry) mod add;
 pub(in crate::cli::registry) mod path;
+pub(in crate::cli::registry) mod show;
