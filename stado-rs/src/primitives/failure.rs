@@ -64,122 +64,52 @@ pub fn retry_exit_code() -> i32 {
     FailureCode::RETRY_EXIT
 }
 
-/// A missing or malformed environment variable is our outage, not the
-/// operator's mistake — and neither is a tool we never installed on the box.
-const CONFIG_NEEDLES: &[&str] = &[
-    "is required",
-    "not configured",
-    "is not configured",
-    // `doctor`'s release row says "must all be configured", and the same
-    // shape reaches here as "must be configured". Matching the phrase rather
-    // than the negation keeps a broken configuration out of `unknown`.
-    "be configured",
-    "missing env",
-    "must be set",
-    "env var",
-    "command not found",
-    "executable file not found",
-];
-
-const AUTH_NEEDLES: &[&str] = &[
-    "authentication failed",
-    "unauthorized",
-    "not authorized",
-    "permission denied",
-    "forbidden",
-    "access denied",
-    "invalid credentials",
-    "invalid token",
-    "expired token",
-    "token expired",
-];
-
-/// A file or directory the host itself would not open. The words overlap
-/// with [`AUTH_NEEDLES`] — `find: /x: Permission denied` and an object
-/// gateway's `permission denied` are spelled the same — but the meaning
-/// does not: no credential of ours was rejected, and telling the operator
-/// "retrying will not help, check your credentials" sends them to the vault
-/// for a `chmod`. On 2026-09-17 `stado space report lukasz-macbook` did
-/// exactly that over one unreadable Google Drive `.tmp`. These are checked
-/// before the auth needles and land in `unknown` with the detail intact,
-/// because the seven-code vocabulary has no code for "the host refused a
-/// file operation" and inventing one here is not this crate's call.
-const FILESYSTEM_REFUSAL_NEEDLES: &[&str] = &[
-    "find: ",
-    "operation not permitted",
-    "(os error 13)",
-    "eacces",
-    "eperm",
-];
-
-/// SSH's own refusal is a credential failure however it is spelled around a
-/// path, and it must keep winning over the filesystem reading.
-const SSH_AUTH_NEEDLES: &[&str] = &[
-    "permission denied (publickey",
-    "permission denied (password",
-];
-
-const RATE_LIMIT_NEEDLES: &[&str] = &[
-    "rate limit",
-    "rate-limit",
-    "ratelimit",
-    "too many requests",
-    "quota exceeded",
-    "throttl",
-];
-
-const TIMEOUT_NEEDLES: &[&str] = &[
-    "timed out",
-    "timeout",
-    "deadline has elapsed",
-    "deadline exceeded",
-    "operation was cancelled",
-];
-
-/// Transport-level failures. Every HTTP client words these differently, and
-/// the wording is all we get once the error has been flattened to a string.
-const NETWORK_NEEDLES: &[&str] = &[
-    "error sending request",
-    "connection refused",
-    "connection reset",
-    "connection closed",
-    "broken pipe",
-    "tcp connect error",
-    "dns error",
-    "no route to host",
-    "network is unreachable",
-    "temporary failure in name resolution",
-    "econnrefused",
-    "enotfound",
-    "eai_again",
-    "econnreset",
-    "socket hang up",
-    "service unavailable",
-    "bad gateway",
-];
-
-/// A resource the operator named that does not exist. Checked last among the
-/// needles: "not found" is a substring of far too many sentences that are
-/// really about something else, `command not found` being the worst of them.
-const NOT_FOUND_NEEDLES: &[&str] = &[
-    "not found",
-    "no such",
-    "does not exist",
-    "unknown job",
-    "already gone",
-];
-
-/// Most of this fleet's failures arrive as prose that has an HTTP status
-/// embedded in it — `GCS API error HTTP 503: ...`, `... -> HTTP 429: ...`.
-/// That status is real structured evidence and beats any keyword.
-static UPSTREAM_STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\bhttp(?:/\d(?:\.\d)?)?\s*(?:status\s*(?:code)?)?\s*[:=]?\s*(?P<status>\d{3})\b",
-    )
-    .expect("static regex compiles")
+/// How this fleet's failures are actually worded, declared in
+/// `failure-needles.json` beside this file: one family per failure code,
+/// each with the reason it exists and the reason it sits where it sits in
+/// the order, plus the HTTP status that beats all of them.
+///
+/// The lists were eight arrays in this file. They are a record of what ssh,
+/// rsync, gcloud, curl and a dozen HTTP clients have actually said, and a
+/// record belongs where it can be read and added to.
+static FAILURE_NEEDLES: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("failure-needles.json"))
+        .expect("failure-needles.json beside this file is valid JSON")
 });
 
-fn matches_any(haystack: &str, needles: &[&str]) -> bool {
+/// The declared families, in the order they must be tested.
+fn families() -> Vec<(FailureCode, Vec<String>)> {
+    FAILURE_NEEDLES["families"]
+        .as_array()
+        .expect("failure-needles.json declares a families array")
+        .iter()
+        .map(|family| {
+            let code = FailureCode::or_fallback(
+                family["code"]
+                    .as_str()
+                    .expect("every family declares the code it yields"),
+            );
+            let needles = family["needles"]
+                .as_array()
+                .expect("every family declares its needles")
+                .iter()
+                .filter_map(|needle| needle.as_str().map(str::to_owned))
+                .collect();
+            (code, needles)
+        })
+        .collect()
+}
+
+static UPSTREAM_STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        FAILURE_NEEDLES["upstream_status"]
+            .as_str()
+            .expect("failure-needles.json declares upstream_status"),
+    )
+    .expect("declared upstream status regex compiles")
+});
+
+fn matches_any(haystack: &str, needles: &[String]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
@@ -219,29 +149,10 @@ pub fn classify_message(message: &str) -> FailureCode {
         return code;
     }
     let haystack = message.to_lowercase();
-    if matches_any(&haystack, CONFIG_NEEDLES) {
-        return FailureCode::Config;
-    }
-    if matches_any(&haystack, SSH_AUTH_NEEDLES) {
-        return FailureCode::Auth;
-    }
-    if matches_any(&haystack, FILESYSTEM_REFUSAL_NEEDLES) {
-        return FailureCode::Unknown;
-    }
-    if matches_any(&haystack, AUTH_NEEDLES) {
-        return FailureCode::Auth;
-    }
-    if matches_any(&haystack, RATE_LIMIT_NEEDLES) {
-        return FailureCode::RateLimit;
-    }
-    if matches_any(&haystack, TIMEOUT_NEEDLES) {
-        return FailureCode::Timeout;
-    }
-    if matches_any(&haystack, NETWORK_NEEDLES) {
-        return FailureCode::InfraDown;
-    }
-    if matches_any(&haystack, NOT_FOUND_NEEDLES) {
-        return FailureCode::NotFound;
+    for (code, needles) in families() {
+        if matches_any(&haystack, &needles) {
+            return code;
+        }
     }
     FailureCode::Unknown
 }

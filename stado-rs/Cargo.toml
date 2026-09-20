@@ -88,6 +88,10 @@ name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
 
 [[test]]
+name = "failure_classification"
+path = "tests/failure_classification/main.rs"
+
+[[test]]
 name = "channel"
 path = "tests/channel/main.rs"
 

@@ -1,0 +1,97 @@
+{
+  "why": "A record of how this fleet's failures are actually worded. Stado shells out to ssh, rsync, gcloud, curl, launchctl and a dozen HTTP clients, and by the time an error reaches this crate it is prose. These lists are not a guess at English: each family is a set of spellings that were observed coming back from those tools, and the order they are tested in is load-bearing — a wrong order sent an operator to the credential vault for what was a chmod. Kept as data, with the reason for each family and for its position, so that adding a spelling is adding a line to a record rather than editing a classifier nobody can read. Order of evaluation is the order of the families below.",
+  "families": [
+    {
+      "name": "config",
+      "code": "config",
+      "why": "A missing or malformed environment variable is our outage, not the operator's mistake — and neither is a tool we never installed on the box. Tested first: these sentences often also contain the word 'not found', which would otherwise claim them.",
+      "needles": [
+        "is required",
+        "not configured",
+        "is not configured",
+        "be configured",
+        "missing env",
+        "must be set",
+        "env var",
+        "command not found",
+        "executable file not found"
+      ],
+      "notes": {
+        "be configured": "doctor's release row says 'must all be configured', and the same shape reaches here as 'must be configured'. Matching the phrase rather than the negation keeps a broken configuration out of unknown."
+      }
+    },
+    {
+      "name": "ssh_auth",
+      "code": "auth",
+      "why": "SSH's own refusal is a credential failure however it is spelled around a path, and it must keep winning over the filesystem reading below.",
+      "needles": ["permission denied (publickey", "permission denied (password"]
+    },
+    {
+      "name": "filesystem_refusal",
+      "code": "unknown",
+      "why": "A file or directory the host itself would not open. The words overlap with the auth family — `find: /x: Permission denied` and an object gateway's `permission denied` are spelled the same — but the meaning does not: no credential of ours was rejected, and telling the operator 'retrying will not help, check your credentials' sends them to the vault for a chmod. On 2026-09-17 `stado space report lukasz-macbook` did exactly that over one unreadable Google Drive .tmp. Checked before the auth needles and landed in unknown with the detail intact, because the seven-code vocabulary has no code for 'the host refused a file operation' and inventing one here is not this crate's call.",
+      "needles": ["find: ", "operation not permitted", "(os error 13)", "eacces", "eperm"]
+    },
+    {
+      "name": "auth",
+      "code": "auth",
+      "why": "A credential of ours was rejected: retrying will not help until it is replaced.",
+      "needles": [
+        "authentication failed",
+        "unauthorized",
+        "not authorized",
+        "permission denied",
+        "forbidden",
+        "access denied",
+        "invalid credentials",
+        "invalid token",
+        "expired token",
+        "token expired"
+      ]
+    },
+    {
+      "name": "rate_limit",
+      "code": "rate_limit",
+      "why": "Ours to wait out, exactly like a dead dependency.",
+      "needles": ["rate limit", "rate-limit", "ratelimit", "too many requests", "quota exceeded", "throttl"]
+    },
+    {
+      "name": "timeout",
+      "code": "timeout",
+      "why": "The operation did not answer in time; the work may still be running on the far side.",
+      "needles": ["timed out", "timeout", "deadline has elapsed", "deadline exceeded", "operation was cancelled"]
+    },
+    {
+      "name": "network",
+      "code": "infra_down",
+      "why": "Transport-level failures. Every HTTP client words these differently, and the wording is all we get once the error has been flattened to a string.",
+      "needles": [
+        "error sending request",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "broken pipe",
+        "tcp connect error",
+        "dns error",
+        "no route to host",
+        "network is unreachable",
+        "temporary failure in name resolution",
+        "econnrefused",
+        "enotfound",
+        "eai_again",
+        "econnreset",
+        "socket hang up",
+        "service unavailable",
+        "bad gateway"
+      ]
+    },
+    {
+      "name": "not_found",
+      "code": "not_found",
+      "why": "A resource the operator named that does not exist. Checked last among the needles: 'not found' is a substring of far too many sentences that are really about something else, `command not found` being the worst of them.",
+      "needles": ["not found", "no such", "does not exist", "unknown job", "already gone"]
+    }
+  ],
+  "upstream_status": "(?i)\\bhttp(?:/\\d(?:\\.\\d)?)?\\s*(?:status\\s*(?:code)?)?\\s*[:=]?\\s*(?P<status>\\d{3})\\b",
+  "upstream_status_why": "Most of this fleet's failures arrive as prose that has an HTTP status embedded in it — `GCS API error HTTP 503: ...`, `... -> HTTP 429: ...`. That status is real structured evidence and beats any keyword, so it is read before the families above are tried."
+}
