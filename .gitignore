@@ -11,6 +11,11 @@ wisent_compute/targets/registry.json
 .alert-watcher-*
 stado-rs/target/
 stado-rs/target-*/
+# A build directory at the repository root, and the Jeden session state a
+# detached or attached session writes in the workspace it runs in. Both are
+# one machine's run state, not this product's source.
+/target/
+.jeden/
 # One machine's local assistant and editor state, which is not this product's
 # source and does not belong in a public repository. `.claude/`s scheduled
 # task lock was committed in May 2026 carrying a session id, a pid and the

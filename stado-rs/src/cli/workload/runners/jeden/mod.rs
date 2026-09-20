@@ -226,13 +226,14 @@ pub(super) async fn live_capacity() -> Vec<Value> {
         .unwrap_or_default()
 }
 
-pub(super) fn target_score(target: &ComputeTarget, capacity: &[Value]) -> i64 {
+/// The publication this target's own agent wrote, when it wrote one.
+fn live_entry<'a>(target: &ComputeTarget, capacity: &'a [Value]) -> Option<&'a Value> {
     let hostnames = target
         .hostnames
         .iter()
         .map(|host| crate::targets::normalize_hostname(host))
         .collect::<Vec<_>>();
-    let live = capacity
+    capacity
         .iter()
         .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("local"))
         .find(|entry| {
@@ -246,7 +247,40 @@ pub(super) fn target_score(target: &ComputeTarget, capacity: &[Value]) -> i64 {
                         .strip_prefix("local-")
                         .is_some_and(|value| crate::targets::normalize_hostname(value) == *host)
             })
-        });
+        })
+}
+
+/// Why `target` cannot take work right now, in its own agent's words, or
+/// nothing when it is accepting.
+///
+/// A detached session is pinned to the host its placement chose, so a host
+/// that publishes `accepting_jobs: false` would hold the session queued
+/// until that clears. Both Macs reported `disk_pressure_active` on
+/// 2026-09-19 while a session sat pinned to one of them; refusing here
+/// moves the placement to a host that can claim it.
+pub(super) fn admission_refusal(target: &ComputeTarget, capacity: &[Value]) -> Option<String> {
+    let live = live_entry(target, capacity)?;
+    if live
+        .get("accepting_jobs")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let reason = live
+        .get("diag")
+        .and_then(|diag| diag.get("admission_reason"))
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or("its agent published no reason");
+    Some(format!(
+        "{} is not accepting placements ({reason})",
+        target.name
+    ))
+}
+
+pub(super) fn target_score(target: &ComputeTarget, capacity: &[Value]) -> i64 {
+    let live = live_entry(target, capacity);
     let accepting = live
         .and_then(|entry| entry.get("accepting_jobs"))
         .and_then(Value::as_bool)

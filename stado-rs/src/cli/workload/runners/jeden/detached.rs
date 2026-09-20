@@ -12,8 +12,8 @@
 use serde_json::json;
 
 use super::{
-    candidates, checkout_path, ledger_root, probe_ready, shell_quote, validate_component,
-    workspace_expression, MANAGED_JEDEN,
+    admission_refusal, candidates, checkout_path, ledger_root, live_capacity, probe_ready,
+    shell_quote, validate_component, workspace_expression, MANAGED_JEDEN,
 };
 use crate::cli::workload::catalog::WorkloadKind;
 use crate::cli::CmdError;
@@ -59,8 +59,16 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
         )));
     }
     let checkout = checkout_path(request.workspace);
+    let capacity = live_capacity().await;
     let mut refusals = Vec::new();
     for target in hosts.drain(..) {
+        // A pinned session only ever runs where it was placed, so a host
+        // whose agent says it is not admitting work would hold it queued
+        // instead of running it.
+        if let Some(refusal) = admission_refusal(&target, &capacity) {
+            refusals.push(refusal);
+            continue;
+        }
         if let Err(refusal) = probe_ready(&target, &checkout, None).await {
             refusals.push(refusal);
             continue;
