@@ -27,6 +27,32 @@ pub struct ServiceEndpoint {
     pub extra: Map<String, Value>,
 }
 
+/// One Skarbiec grant a consumer needs to use a service, declared beside the
+/// consumer instead of typed into a command.
+///
+/// Until 2026-09-20 a consumer's grant existed only as flags somebody
+/// remembered: `stado service grant-sync brama --host H --consumer
+/// oko-model-router-client --capability … --token-file …`. Oko's catalogue
+/// holds 26 credentials issued by hand in one week, and the gate that now
+/// refuses them points here: what the product reads is declared where the
+/// service is declared, and `stado service grants <SERVICE> --apply` mints
+/// every declared one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConsumerGrant {
+    /// Exact Skarbiec consumer name the product reads under.
+    pub consumer: String,
+    /// Complete grant capabilities, as Skarbiec spells them.
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub capabilities: Vec<String>,
+    /// The owner-only raw bearer file on the service's host.
+    pub token_file: String,
+    /// Grant audience; the consumer itself when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
 /// What one consumer is entitled to ask a service for. The directory is the
 /// only place this is written down, so a consumer absent from the map is not
 /// authorized rather than unrestricted.
@@ -34,6 +60,9 @@ pub struct ServiceEndpoint {
 pub struct ServiceConsumer {
     #[serde(default, deserialize_with = "de_null_as_default")]
     pub capabilities: Vec<String>,
+    /// The grants this consumer's own credentials need, if it reads any.
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub grants: Vec<ConsumerGrant>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

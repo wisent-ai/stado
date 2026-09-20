@@ -5,6 +5,7 @@
 use super::*;
 
 pub(crate) mod auth_check;
+pub(crate) mod declared_grants;
 pub(crate) mod grant;
 pub(crate) mod sync;
 

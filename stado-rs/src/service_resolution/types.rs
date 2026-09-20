@@ -107,11 +107,27 @@ pub struct ServiceEndpoint {
     pub base_path: Option<String>,
 }
 
+/// One grant a consumer's own credentials need, as the directory declares it.
+/// This reader validates the document and never mints: `stado service grants`
+/// is what acts on these, so only their shape matters here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsumerGrant {
+    pub consumer: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    pub token_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceConsumer {
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub grants: Vec<ConsumerGrant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

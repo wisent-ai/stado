@@ -6,6 +6,9 @@ use crate::cli::service::runtime::env::set::{env_set, EnvSetOptions};
 use crate::cli::service::runtime::env::show::{env_show, EnvShowOptions};
 use crate::cli::service::runtime::env::unset::{env_unset, EnvUnsetOptions};
 use crate::cli::service::runtime::secrets::auth_check::{auth_check, AuthCheckOptions};
+use crate::cli::service::runtime::secrets::declared_grants::{
+    declared_grant_reconcile, DeclaredGrantsOptions,
+};
 use crate::cli::service::runtime::secrets::grant::{
     grant_sync, token_file_sync, GrantSyncOptions, TokenFileSyncOptions,
 };
@@ -91,6 +94,24 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
                 name: &name,
                 host: &host,
                 ports: &ports,
+                as_json: json,
+            })
+            .await
+        }
+        EnvironmentCommands::Grants {
+            name,
+            consumer,
+            vault_file,
+            ttl_seconds,
+            apply,
+            json,
+        } => {
+            declared_grant_reconcile(DeclaredGrantsOptions {
+                name: &name,
+                consumer: consumer.as_deref(),
+                vault_file: &vault_file,
+                ttl_seconds,
+                apply,
                 as_json: json,
             })
             .await

@@ -151,6 +151,32 @@ pub enum EnvironmentCommands {
         json: bool,
     },
 
+    /// The grants this service's consumers declare, and optionally mint them.
+    ///
+    /// Bare, it prints what is declared and mints nothing. `--apply` mints
+    /// every declared grant through the same path `grant-sync` uses, so a
+    /// product's credential need is written where the service is declared
+    /// instead of remembered as flags — which is what 26 grants issued from
+    /// the shell in one week were the absence of.
+    Grants {
+        /// Service whose consumers' grants are read.
+        name: String,
+        /// Only this authorized consumer's grants.
+        #[arg(long)]
+        consumer: Option<String>,
+        /// Authoritative Skarbiec vault on the target, absolute or rooted at $HOME.
+        #[arg(long, default_value = "$HOME/.stado/skarbiec.vault.json")]
+        vault_file: String,
+        /// Lifetime of each minted grant.
+        #[arg(long, default_value_t = 2_592_000)]
+        ttl_seconds: u64,
+        /// Mint the declared grants instead of printing them.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Reconcile one Skarbiec consumer grant with an existing owner-only token file.
     ///
     /// The bearer never leaves the managed host: its local Skarbiec reads the
