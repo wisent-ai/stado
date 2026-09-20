@@ -117,12 +117,7 @@ pub(in crate::cli::release_cmd) async fn install_local(
         )));
     };
     if stado_version.is_some() && Path::new(&archive) != reader_archive {
-        std::fs::rename(&archive, &reader_archive).map_err(|error| {
-            CmdError::click(format!(
-                "cannot retain delivered Stado archive at {}: {error}",
-                reader_archive.display()
-            ))
-        })?;
+        retain_archive(Path::new(&archive), &reader_archive)?;
     }
     let directory = home.join(".stado").join("bin");
     std::fs::create_dir_all(&directory).map_err(|error| {
@@ -284,6 +279,33 @@ pub(in crate::cli::release_cmd) async fn install_local(
         declare_delivered_version(&name, version).await?;
     }
     Ok(())
+}
+
+/// Keep the delivered archive beside the release it installed.
+///
+/// A rename cannot cross filesystems, and on the RTX host the job tree is
+/// on `/mnt/wd16tb` while `~/.stado/releases` is on the root disk: the
+/// delivery of stado 0.21.28 failed there with `Invalid cross-device link
+/// (os error 18)` after both platforms had already been built, signed and
+/// published. A copy then a remove retains the same bytes wherever the two
+/// paths live.
+fn retain_archive(archive: &Path, destination: &Path) -> Result<(), CmdError> {
+    if std::fs::rename(archive, destination).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(archive, destination).map_err(|error| {
+        CmdError::click(format!(
+            "cannot retain delivered Stado archive at {}: {error}",
+            destination.display()
+        ))
+    })?;
+    std::fs::remove_file(archive).map_err(|error| {
+        CmdError::click(format!(
+            "retained the delivered Stado archive at {} but could not remove {}: {error}",
+            destination.display(),
+            archive.display()
+        ))
+    })
 }
 
 /// Write the version this delivery installed into the host's own
