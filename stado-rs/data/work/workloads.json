@@ -36,6 +36,7 @@
       "registry_allowance": null,
       "plan_schema": "wisent.weles-diagnostics-plan.v1",
       "reservation": {"cpu_cores": 1, "ram_gb": 1, "vram_gb": 0},
+      "maintenance": true,
       "report": ["target", "run_id", "artifact_inventory", "artifact_content"]
     },
     {
@@ -54,6 +55,7 @@
       "registry_allowance": null,
       "plan_schema": null,
       "reservation": {"cpu_cores": 1, "ram_gb": 1, "vram_gb": 0},
+      "maintenance": true,
       "report": ["target", "worker_release", "api_runtime", "recorded_runs"]
     },
     {
@@ -63,6 +65,7 @@
       "registry_allowance": null,
       "plan_schema": "wisent.weles-recordings-plan.v1",
       "reservation": {"cpu_cores": 1, "ram_gb": 1, "vram_gb": 0},
+      "maintenance": true,
       "report": ["target", "recordings_directory", "registry_generation", "updated_launch_agents"]
     },
     {
@@ -72,6 +75,7 @@
       "registry_allowance": null,
       "plan_schema": "wisent.weles-api-runtime-plan.v1",
       "reservation": {"cpu_cores": 1, "ram_gb": 1, "vram_gb": 0},
+      "maintenance": true,
       "report": ["target", "revision", "service_restart"]
     },
     {
@@ -81,6 +85,7 @@
       "registry_allowance": null,
       "plan_schema": "wisent.weles-browser-runtime-plan.v1",
       "reservation": {"cpu_cores": 1, "ram_gb": 1, "vram_gb": 0},
+      "maintenance": true,
       "report": ["target", "required_components", "observed_components", "browser_engine", "repairs"]
     },
     {
