@@ -8,7 +8,10 @@ use crate::config_file::{expand_tilde, resolve as cfg};
 use serde_json::Value;
 
 pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
-pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart", "promote", "reconcile"];
+/// What the service API lets a deployer do, from the declaration.
+pub fn service_api_actions() -> Vec<String> {
+    super::super::declared_actions("service")
+}
 pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api", "image-video-router"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,7 +166,9 @@ pub(crate) fn parse_service_deployers(
                         entry_valid = false;
                         continue;
                     };
-                    if !SERVICE_API_ACTIONS.contains(&action) || !seen.insert(action.to_string()) {
+                    if !service_api_actions().iter().any(|known| known == action)
+                        || !seen.insert(action.to_string())
+                    {
                         problems.push(format!(
                             "service_api.deployers.{product}.actions contains unsupported or duplicate {action:?}"
                         ));

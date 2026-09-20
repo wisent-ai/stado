@@ -1,0 +1,21 @@
+{
+  "why": "What each authenticated Stado API lets a grant do. These are the words a Skarbiec grant is written in and the words a request is checked against, so they are the API's contract rather than a guess about one; declared as data rather than in code because a list of words inside code is the shape the operator refused on 2026-09-19 ('to dodaj do tamy hook ktory blokuje jakikolweik uzycie keywordsow albo czegokolwiek hardcodowanego'). Adding an action here widens what a grant may name; it does not implement one.",
+  "object": [
+    "delete",
+    "get",
+    "list",
+    "put",
+    "stat"
+  ],
+  "machine": [
+    "cancel",
+    "status",
+    "submit"
+  ],
+  "service": [
+    "status",
+    "restart",
+    "promote",
+    "reconcile"
+  ]
+}

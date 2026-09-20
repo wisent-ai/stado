@@ -8,7 +8,10 @@ use crate::config_file::{expand_tilde, resolve as cfg};
 use serde_json::Value;
 
 pub const MACHINE_API_VERIFIER_CONSUMER: &str = "stado-machine-api-verifier";
-pub const MACHINE_API_ACTIONS: &[&str] = &["cancel", "status", "submit"];
+/// What the machine API lets a client do, from the boundaries' declaration.
+pub fn machine_api_actions() -> Vec<String> {
+    super::super::declared_actions("machine")
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MachineApiClient {
@@ -91,7 +94,9 @@ pub(crate) fn parse_machine_api_clients(
                         ));
                         continue;
                     };
-                    if !MACHINE_API_ACTIONS.contains(&action) || !seen.insert(action) {
+                    if !machine_api_actions().iter().any(|known| known == action)
+                        || !seen.insert(action)
+                    {
                         problems.push(format!(
                             "machine_api.clients.{name}.actions contains unsupported or duplicate {action:?}"
                         ));

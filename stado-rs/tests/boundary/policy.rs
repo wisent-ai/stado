@@ -61,7 +61,7 @@ pub fn namespaces() -> String {
             json!({
                 "item": object_item(namespace),
                 "prefixes": prefixes,
-                "actions": stado::config::OBJECT_API_ACTIONS,
+                "actions": stado::config::object_api_actions(),
             }),
         );
     }

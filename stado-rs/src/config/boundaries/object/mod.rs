@@ -42,7 +42,10 @@ pub const OBJECT_API_VERIFIER_CONSUMER: &str = "stado-object-api-verifier";
 /// coordinator grant.
 pub const HOST_HEALTH_API_ITEM: &str = "stado-host-health-api";
 
-pub const OBJECT_API_ACTIONS: &[&str] = &["delete", "get", "list", "put", "stat"];
+/// What the object API lets a grant do, from the boundaries' declaration.
+pub fn object_api_actions() -> Vec<String> {
+    super::declared_actions("object")
+}
 
 fn valid_object_prefix(prefix: &str) -> bool {
     if prefix.is_empty() {
@@ -78,10 +81,7 @@ fn parse_object_actions(
 ) -> Vec<String> {
     let Some(value) = value else {
         if use_default {
-            return OBJECT_API_ACTIONS
-                .iter()
-                .map(|action| (*action).to_string())
-                .collect();
+            return object_api_actions();
         }
         problems.push(format!("{location} is required"));
         return Vec::new();
@@ -101,7 +101,7 @@ fn parse_object_actions(
             problems.push(format!("{location} entries must be strings"));
             continue;
         };
-        if !OBJECT_API_ACTIONS.contains(&action) {
+        if !object_api_actions().iter().any(|known| known == action) {
             problems.push(format!("{location} contains unsupported action {action:?}"));
             continue;
         }

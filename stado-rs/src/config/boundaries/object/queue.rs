@@ -14,7 +14,7 @@ pub const QUEUE_OBJECT_NAMESPACE: &str = "probierz";
 /// The actions the queue performs on its own prefixes: every action the
 /// object API has, because the queue reads, writes, lists, stats and
 /// deletes its own objects. One declaration, in the parent module.
-use super::OBJECT_API_ACTIONS as QUEUE_OBJECT_ACTIONS;
+use super::object_api_actions as queue_object_actions;
 
 /// Canonical queue prefixes the `probierz` object policy does not grant for
 /// every queue action, sorted; empty when the policy covers the queue.
@@ -43,7 +43,7 @@ pub fn queue_prefixes_missing(
             } else {
                 (*prefix).to_string()
             };
-            !QUEUE_OBJECT_ACTIONS
+            !queue_object_actions()
                 .iter()
                 .all(|action| policy.allows_object_action(&key, action))
         })
