@@ -262,6 +262,11 @@ fi
 /// written by the tool that produced the bytes. No directory-name matching and
 /// no extension list. The walk is bounded at six levels below the home
 /// directory, and the whole section shares the inventory's own budget.
+/// The trailing marker is not decoration. Without it an empty census and a
+/// census that never ran read identically, and a row that reports "this host
+/// holds no build output" when nobody looked is the failure this whole change
+/// exists to end. The section is emitted before the depth-bounded inventory
+/// for the same reason: it is the targeted read, and a run cut short keeps it.
 const BUILD_CACHE_SECTION: &str = r#"/usr/bin/find "$HOME" -maxdepth 6 -type f -name CACHEDIR.TAG 2>/dev/null |
   while IFS= read -r tag; do
     dir=${tag%/CACHEDIR.TAG}
@@ -269,6 +274,7 @@ const BUILD_CACHE_SECTION: &str = r#"/usr/bin/find "$HOME" -maxdepth 6 -type f -
     [ -n "$blocks" ] || continue
     printf 'STADO_BUILD_CACHE_ITEM\t%s\t%s\n' "$blocks" "$dir"
   done
+printf 'STADO_BUILD_CACHE_END\t%s\n' 'listed'
 "#;
 
 /// The remote program for a caller that reads every field.
@@ -306,8 +312,8 @@ pub fn remote_script_for(scope: DiskScope) -> String {
     }
     script.push_str(SNAPSHOT_SECTION);
     if scope == DiskScope::Full {
-        script.push_str(INVENTORY_SECTION);
         script.push_str(BUILD_CACHE_SECTION);
+        script.push_str(INVENTORY_SECTION);
     }
     script
         .replace(

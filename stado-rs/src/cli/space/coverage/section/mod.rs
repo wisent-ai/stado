@@ -6,6 +6,7 @@ use super::{paths, UNCOVERED_ROWS};
 use crate::deploy::host_reclaim::StageDeclaration;
 use mechanisms::DeclaredCleaner;
 
+pub(super) mod build_output;
 pub(super) mod mechanisms;
 mod verdict;
 
@@ -16,6 +17,7 @@ pub fn section(
     platform: &str,
     free_space: &Value,
     declared_cleaners: &[DeclaredCleaner],
+    target: &str,
 ) -> Value {
     let available = free_space["available_bytes"].as_i64();
     let distance = |key: &str| {
@@ -102,5 +104,6 @@ pub fn section(
         },
         "roots_from": stages.iter().filter_map(|stage| stage.roots_from.as_ref()
             .map(|source| json!({"stage": stage.name, "source": source}))).collect::<Vec<_>>(),
+        "build_output": build_output::section(report, &scopes, target),
     })
 }

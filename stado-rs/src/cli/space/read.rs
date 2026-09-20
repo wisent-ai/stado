@@ -113,6 +113,7 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         &target.release_platform,
         &free_space,
         &declared_cleaners,
+        &target.name,
     );
     let mut document = report.as_object().cloned().unwrap_or_else(Map::new);
     document.insert("coverage".to_string(), coverage.clone());

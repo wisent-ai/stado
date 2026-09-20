@@ -95,6 +95,16 @@ pub fn print_coverage(coverage: &Value, free_space: &Value) {
             }
         }
     }
+    // Before the uncovered rows, because it is the one line that says whether
+    // the cleaner an operator already declared is pointed at the bytes this
+    // host actually accumulates.
+    if let Some(detail) = coverage
+        .get("build_output")
+        .and_then(|block| block.get("detail"))
+        .and_then(Value::as_str)
+    {
+        println!("build output: {detail}");
+    }
     let empty = Vec::new();
     // The first word of each row is the mechanism, not a verdict about the
     // path: a declared cleaner's name when one sweeps it, `unarmed` when this

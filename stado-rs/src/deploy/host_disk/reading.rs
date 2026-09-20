@@ -262,6 +262,10 @@ pub struct DiskReading {
     /// until the nested ones are folded away, because two tagged trees, one
     /// inside the other, would otherwise be counted twice.
     pub tagged_build_caches: Vec<DiskItem>,
+    /// The census ran to its end. Empty rows with this false means nobody
+    /// looked, which is a different fact from a host that holds no build
+    /// output and must never be reported as the same one.
+    pub tagged_build_caches_read: bool,
     /// Who holds the run lock right now. Empty with `lock_read` true means
     /// nothing holds it, which is a different fact from never having looked.
     pub lock_holders: Vec<LockHolder>,
@@ -372,6 +376,7 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
                     });
                 }
             }
+            ["STADO_BUILD_CACHE_END", _] => reading.tagged_build_caches_read = true,
             ["STADO_CLONE_SUMMARY", path, total, hour, day] => {
                 if let (Ok(total), Ok(older_than_hour), Ok(older_than_day)) = (
                     total.parse::<i64>(),

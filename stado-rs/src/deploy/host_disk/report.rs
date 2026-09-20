@@ -196,6 +196,27 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
                 .collect(),
         ),
     );
+    // Also on its own, because "what the host holds in build output" is a
+    // question with an answer, and reading it back out of the merged
+    // inventory means guessing which rows came from the census.
+    report.insert(
+        "tagged_build_output".to_string(),
+        Value::Array(
+            outermost_build_caches(reading)
+                .iter()
+                .map(|item| {
+                    json!({
+                        "path": item.path,
+                        "bytes": item.blocks_kb.saturating_mul(1024),
+                    })
+                })
+                .collect(),
+        ),
+    );
+    report.insert(
+        "tagged_build_output_read".to_string(),
+        json!(reading.tagged_build_caches_read),
+    );
     report.insert("chromium_clone_root".to_string(), json!(reading.clone_root));
     report.insert(
         "chromium_clones".to_string(),

@@ -548,6 +548,74 @@ fn build_output_deeper_than_the_walk_is_measured_and_named_as_unswept() {
     fixture.cleanup();
 }
 
+/// A declared cleaner that reaches none of the measured build output says so,
+/// and names the root that would reach it.
+///
+/// This is the half the census alone does not answer. `lukasz-macbook`
+/// declared `build_caches` for months, the cleaner covered the root it was
+/// pointed at, and the operator's tagged trees were somewhere else entirely;
+/// nothing was broken and nothing was missing, so nothing said anything.
+#[test]
+fn a_cleaner_that_reaches_no_build_output_says_so_and_names_the_root() {
+    let fixture = Fixture::new();
+    let first = fixture.home.join("code/alpha/target");
+    let second = fixture.home.join("code/beta/target");
+    for tree in [&first, &second] {
+        fs::create_dir_all(tree).expect("create the build tree");
+        fs::write(
+            tree.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .expect("write cache tag");
+        fs::write(tree.join("artifact.bin"), vec![0_u8; 256 * 1024]).expect("write build output");
+    }
+
+    let output = fixture.report("120", &["--json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the report is one JSON document");
+    let block = &document["coverage"]["build_output"];
+
+    assert_eq!(
+        block["measured"].as_bool(),
+        Some(true),
+        "an unread census must never read as a measured one: {block}"
+    );
+    assert_eq!(
+        block["unreached_trees"].as_i64(),
+        Some(2),
+        "both trees should be outside every declared root: {block}"
+    );
+    assert_eq!(
+        block["suggested_root"].as_str(),
+        fixture.home.join("code").to_str(),
+        "the block does not name the root that would reach them: {block}"
+    );
+    let remedy = block["remedy"].as_str().unwrap_or_default();
+    assert!(
+        remedy.starts_with("stado space cleaners declare ")
+            && remedy.ends_with(&format!(
+                "--cleaner build_caches --root {}",
+                fixture.home.join("code").display()
+            )),
+        "the remedy is not a command an operator can run: {remedy}"
+    );
+
+    let text = fixture.report("120", &[]);
+    let printed = String::from_utf8_lossy(&text.stdout).into_owned();
+    assert!(
+        printed.contains("build output:")
+            && printed.contains("outside every declared cleaner root"),
+        "the text report does not carry the finding: {printed}"
+    );
+    fixture.cleanup();
+}
+
 /// The build-cache verdict is a second walk with its own budget, and until
 /// 2026-09-20 exceeding it failed the whole command: on lukasz-macbook
 /// `space report` printed the free space, the watermarks, the janitor's last

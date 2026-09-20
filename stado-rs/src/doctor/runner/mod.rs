@@ -20,6 +20,9 @@ use crate::doctor::fleet::credentials::providers::{
 use crate::doctor::fleet::credentials::vault::{
     check_owner_vault, OWNER_VAULT_ID, OWNER_VAULT_REMEDY, OWNER_VAULT_TITLE,
 };
+use crate::doctor::fleet::hosts::build_output::{
+    check_build_output, BUILD_OUTPUT_ID, BUILD_OUTPUT_REMEDY, BUILD_OUTPUT_TITLE,
+};
 use crate::doctor::fleet::hosts::placement::{
     check_placement, PLACEMENT_ID, PLACEMENT_REMEDY, PLACEMENT_TITLE,
 };
@@ -100,6 +103,7 @@ pub async fn run(scope: RunScope) -> Report {
         contract_check,
         placement_check,
         shape_check,
+        build_output_check,
     ) = tokio::join!(
         selected(scope, CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
             check_config()
@@ -222,6 +226,14 @@ pub async fn run(scope: RunScope) -> Report {
             SHAPE_REMEDY,
             check_fleet_shape(),
         ),
+        selected_within(
+            scope,
+            FLEET_SHAPE_DEADLINE,
+            BUILD_OUTPUT_ID,
+            BUILD_OUTPUT_TITLE,
+            BUILD_OUTPUT_REMEDY,
+            check_build_output(),
+        ),
     );
 
     let mut checks = vec![
@@ -243,6 +255,7 @@ pub async fn run(scope: RunScope) -> Report {
         contract_check,
         placement_check,
         shape_check,
+        build_output_check,
     ];
     checks.retain(|check| scope.includes(check.id));
 
