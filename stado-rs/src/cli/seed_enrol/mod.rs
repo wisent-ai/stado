@@ -65,8 +65,8 @@ pub async fn enrol_authenticator_seed(
     let channel = weles_capture::open_channel(&admission)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let run = weles_capture::run_action(&channel, ENROL_ACTION, json!({"login_item": login_item}))
-        .await;
+    let run =
+        weles_capture::run_action(&channel, ENROL_ACTION, json!({"login_item": login_item})).await;
     let after = seed_state_of(host, login_item).await?;
     match run {
         Ok(run_id) => report(
@@ -112,9 +112,9 @@ fn checked_login_item(login_item: &str) -> Result<&str, CmdError> {
     let trimmed = login_item.trim();
     let shaped = !trimmed.is_empty()
         && trimmed.len() <= MAX_ITEM_LENGTH
-        && trimmed
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '@'));
+        && trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '@')
+        });
     if !shaped {
         return Err(CmdError::click(format!(
             "`{login_item}` is not a Skarbiec item id; give the exact id `seed-freshness` prints"
@@ -128,7 +128,10 @@ const MAX_ITEM_LENGTH: usize = 128;
 
 fn report(json_output: bool, document: serde_json::Value) -> Result<(), CmdError> {
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&document).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&document).unwrap_or_default()
+        );
         return Ok(());
     }
     for (field, value) in document.as_object().into_iter().flatten() {
