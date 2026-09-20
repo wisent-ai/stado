@@ -13,23 +13,27 @@ use crate::deploy::service::*;
 /// default from `u8::BITS`.
 pub(super) const HEX_RADIX: u32 = u16::BITS;
 
-/// Case-insensitive "this variable holds a credential" test.
+/// Case-insensitive "this variable holds a credential" test, built from
+/// `secret-names.json` beside this file.
 ///
-/// Built the way `artifacts/validation.rs::sensitive_query_key` is — one
-/// cached regex with `(^|[-_])…($|[-_])` boundaries — so a lookalike such
-/// as `TOKENIZERS_PARALLELISM` or `WELES_KEYWORD_ROOT` is not swept up,
-/// while `HF_TOKEN` and `AWS_SECRET_ACCESS_KEY` are.
-///
-/// It deliberately over-matches in one direction: a name like
-/// `GOOGLE_APPLICATION_CREDENTIALS` holds a path, not a secret, and is
-/// redacted anyway. The alternative is an allowlist of credential-shaped
-/// names that happen to be safe, and the first entry someone adds to it
-/// wrong prints a live token.
+/// The record says which words count and why the test over-matches in one
+/// direction; the boundaries it declares are what keep a lookalike such as
+/// `TOKENIZERS_PARALLELISM` or `WELES_KEYWORD_ROOT` out while `HF_TOKEN`
+/// and `AWS_SECRET_ACCESS_KEY` are caught.
 static SECRET_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)(^|[-_])(api[-_]?key|auth|authorization|bearer|credential|credentials|key|keys|passwd|password|private[-_]?key|pwd|secret|secrets|session|signature|token|tokens)($|[-_])",
-    )
-    .expect("static regex compiles")
+    let declared: serde_json::Value = serde_json::from_str(include_str!("secret-names.json"))
+        .expect("secret-names.json beside this file is valid JSON");
+    let words: Vec<&str> = declared["words"]
+        .as_array()
+        .expect("secret-names.json declares a words array")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let source = declared["boundaries"]
+        .as_str()
+        .expect("secret-names.json declares its boundaries")
+        .replace("{words}", &words.join("|"));
+    Regex::new(&source).expect("declared secret-name regex compiles")
 });
 
 /// The value as it may be printed. Credential-shaped names collapse to

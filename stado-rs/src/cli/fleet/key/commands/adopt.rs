@@ -95,34 +95,23 @@ fn first_contact_argv(destination: &str) -> Vec<String> {
     .collect()
 }
 
-/// ssh diagnostics that mean the TCP/DNS leg never completed, so no
-/// credential was ever offered.
-const UNREACHABLE_MARKERS: [&str; 12] = [
-    "connection refused",
-    "connection timed out",
-    "operation timed out",
-    "no route to host",
-    "network is unreachable",
-    "host is down",
-    "could not resolve hostname",
-    "name or service not known",
-    "nodename nor servname",
-    "temporary failure in name resolution",
-    "no address associated with hostname",
-    "connection closed by remote host",
-];
+/// What ssh says when first contact fails, declared in
+/// `ssh-contact-markers.json` beside this file: one family for a TCP or DNS
+/// leg that never completed, where no credential was ever offered, and one
+/// for a server that answered and refused the operator.
+fn markers(family: &str) -> Vec<String> {
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("ssh-contact-markers.json"))
+            .expect("ssh-contact-markers.json beside this file is valid JSON");
+    document[family]
+        .as_array()
+        .unwrap_or_else(|| panic!("ssh-contact-markers.json declares no {family}"))
+        .iter()
+        .filter_map(|marker| marker.as_str().map(str::to_owned))
+        .collect()
+}
 
-/// ssh diagnostics that mean the server was reached and refused the operator.
-const REJECTED_MARKERS: [&str; 6] = [
-    "permission denied",
-    "too many authentication failures",
-    "no supported authentication methods",
-    "authentications that can continue",
-    "host key verification failed",
-    "remote host identification has changed",
-];
-
-fn matches_any(haystack: &str, needles: &[&str]) -> bool {
+fn matches_any(haystack: &str, needles: &[String]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
@@ -142,14 +131,14 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
         .collect::<Vec<_>>()
         .join("; ");
     let lowered = diagnostic.to_ascii_lowercase();
-    if output.code == 255 && matches_any(&lowered, &UNREACHABLE_MARKERS) {
+    if output.code == 255 && matches_any(&lowered, &markers("unreachable")) {
         return format!(
             "no SSH connection to {destination} was established, so no credential was even offered: \
              check the address and port, that the machine is awake and on this network, and that \
              sshd is listening there. ssh said: {diagnostic}"
         );
     }
-    if output.code == 255 && matches_any(&lowered, &REJECTED_MARKERS) {
+    if output.code == 255 && matches_any(&lowered, &markers("rejected")) {
         return format!(
             "{destination} answered on SSH and rejected the authentication: --install-key can only \
              use a session you can already open yourself, so unlock or forward an agent \

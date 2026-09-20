@@ -3,26 +3,23 @@
 
 use serde_json::Value;
 
+/// Google's field names, declared in `inventory-fields.json` beside this
+/// file: which fields a probe detail keeps out of a resource document, and
+/// the envelope an aggregated list answers with.
+fn declared() -> &'static serde_json::Value {
+    static DECLARED: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("inventory-fields.json"))
+            .expect("inventory-fields.json beside this file is valid JSON")
+    });
+    &DECLARED
+}
+
 pub(super) fn compact_plain(value: &Value) -> Value {
     let mut detail = serde_json::Map::new();
-    for key in [
-        "name",
-        "id",
-        "state",
-        "status",
-        "location",
-        "storageClass",
-        "timeCreated",
-        "updated",
-        "createTime",
-        "updateTime",
-        "format",
-        "kmsKeyName",
-        "numBytes",
-        "generation",
-        "metageneration",
-        "etag",
-    ] {
+    let kept = declared()["kept"]
+        .as_array()
+        .expect("inventory-fields.json declares the kept fields");
+    for key in kept.iter().filter_map(Value::as_str) {
         if let Some(entry) = value.get(key) {
             detail.insert(key.to_string(), entry.clone());
         }
@@ -31,8 +28,11 @@ pub(super) fn compact_plain(value: &Value) -> Value {
 }
 
 pub(super) fn aggregated<'a>(value: &'a Value, key: &str) -> Vec<&'a Value> {
+    let envelope = declared()["aggregated_items"]
+        .as_str()
+        .expect("inventory-fields.json declares the aggregated envelope");
     value
-        .get("items")
+        .get(envelope)
         .and_then(Value::as_object)
         .into_iter()
         .flat_map(|items| items.values())

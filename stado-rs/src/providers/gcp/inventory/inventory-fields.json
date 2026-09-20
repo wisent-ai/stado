@@ -1,0 +1,23 @@
+{
+  "why": "Google's field names, not ours. Every GCP inventory probe answers with a resource document whose shape belongs to the Cloud Storage, Compute and KMS JSON APIs, and a probe detail keeps only the fields an operator reading a report needs: what the thing is called, where it lives, what state it is in, when it changed, and the identifiers that let a later run tell one revision from another. The projection is deliberately small — an unprojected resource document is pages long and buries the answer. Kept as a record because the names are a vendor's vocabulary: they change when Google changes them, and nothing in this repository gets to rename them.",
+  "kept": [
+    "name",
+    "id",
+    "state",
+    "status",
+    "location",
+    "storageClass",
+    "timeCreated",
+    "updated",
+    "createTime",
+    "updateTime",
+    "format",
+    "kmsKeyName",
+    "numBytes",
+    "generation",
+    "metageneration",
+    "etag"
+  ],
+  "aggregated_items": "items",
+  "aggregated_items_why": "The envelope an aggregated list answers with: a map of scope to per-scope arrays, which the probe flattens."
+}
