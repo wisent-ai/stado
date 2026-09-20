@@ -1,0 +1,8 @@
+{
+  "why": "System accounts a managed host cannot lose: removing one takes the host with it, and no Stado command has a reason to. The operator logins that reach a host are not listed here — they are read from that host's own registry route, so an operator added to the fleet is protected without an edit, and one who leaves stops being a special case. Declared as data rather than in code because a list of names inside code is the shape the operator refused on 2026-09-19 ('to dodaj do tamy hook ktory blokuje jakikolweik uzycie keywordsow albo czegokolwiek hardcodowanego'), and because two of the names this list used to carry were operator identities.",
+  "system_accounts": [
+    "root",
+    "daemon",
+    "nobody"
+  ]
+}

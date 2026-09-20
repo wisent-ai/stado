@@ -35,7 +35,7 @@ pub async fn destroy_row(
         .lease
         .as_ref()
         .map_or_else(|| row.name.clone(), |held| held.username.clone());
-    user_delete::validate_deletable(&username)?;
+    user_delete::validate_deletable(&username, Some(target))?;
     let deleted = user_delete::delete_user(&username, target, false, runner).await;
     let root = registry_out::remove(row.lease.as_ref())?;
     let record_path = lease::record_path(home, &row.name);

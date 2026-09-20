@@ -18,10 +18,37 @@ use crate::targets::ComputeTarget;
 /// Marker prefix of the remote script's report line.
 pub const STATUS_PREFIX: &str = "STADO_USER_DELETE\t";
 
-/// Accounts that are never deletable through this path: the agent's own
-/// service accounts and the operator logins a managed host depends on.
-pub const PROTECTED_USERNAMES: &[&str] =
-    &["root", "daemon", "nobody", "charles", "lukaszbartoszcze"];
+/// Accounts that are never deletable through this path.
+///
+/// The system accounts come from `protected-accounts.json` beside this
+/// module. The operator logins do not: they used to be two names written
+/// into this list, which protected exactly those two people and nobody
+/// else on the fleet. The login a host is actually reached by is read from
+/// that host's own registry route instead.
+fn protected_system_accounts() -> Vec<String> {
+    let declared: serde_json::Value = serde_json::from_str(include_str!("protected-accounts.json"))
+        .expect("protected-accounts.json beside this module is valid JSON");
+    declared["system_accounts"]
+        .as_array()
+        .expect("protected-accounts.json declares a system_accounts array")
+        .iter()
+        .filter_map(|name| name.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The logins this target's registry routes authenticate as, so Stado
+/// cannot delete the account it reaches the host with.
+fn route_logins(target: &ComputeTarget) -> Vec<String> {
+    target
+        .ssh_connections()
+        .filter_map(|(_, destination)| {
+            destination
+                .split_once('@')
+                .map(|(login, _)| login.trim().to_owned())
+        })
+        .filter(|login| !login.is_empty())
+        .collect()
+}
 
 /// Delete `$STADO_DELETE_USER`, honouring `$STADO_KEEP_HOME`.
 pub const REMOTE_DELETE_SCRIPT: &str = r#"set -eu
@@ -71,13 +98,28 @@ pub struct DeleteResult {
     pub error: Option<String>,
 }
 
-/// Reject the accounts that must not be removable through this command.
-pub fn validate_deletable(username: &str) -> Result<(), DeployError> {
+/// Reject the accounts that must not be removable through this command:
+/// the declared system accounts, and the login this host is reached by.
+pub fn validate_deletable(
+    username: &str,
+    target: Option<&ComputeTarget>,
+) -> Result<(), DeployError> {
     validate_username(username)?;
-    if PROTECTED_USERNAMES.contains(&username) {
+    if protected_system_accounts()
+        .iter()
+        .any(|account| account == username)
+    {
         return Err(DeployError(format!(
-            "refusing to delete protected account: {username}"
+            "refusing to delete protected system account: {username}"
         )));
+    }
+    if let Some(target) = target {
+        if route_logins(target).iter().any(|login| login == username) {
+            return Err(DeployError(format!(
+                "refusing to delete {username}: it is the login the registry reaches {} with",
+                target.name
+            )));
+        }
     }
     Ok(())
 }
@@ -135,7 +177,7 @@ pub async fn delete_user(
         os_name: String::new(),
         error: None,
     };
-    if let Err(error) = validate_deletable(username) {
+    if let Err(error) = validate_deletable(username, Some(target)) {
         result.error = Some(error.0);
         return result;
     }
@@ -174,4 +216,44 @@ pub async fn delete_user(
         Err(error) => result.error = Some(error),
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_deletable;
+    use crate::targets::ComputeTarget;
+    /// A registry row shaped as the canonical document writes it.
+    fn reached_as(login: &str) -> ComputeTarget {
+        serde_json::from_value(serde_json::json!({
+            "name": "some-host",
+            "kind": "local",
+            "ssh": format!("{login}@some-host.local"),
+        }))
+        .expect("a registry row with a name, a kind and a route")
+    }
+
+    #[test]
+    fn a_declared_system_account_is_refused_on_any_host() {
+        let error = validate_deletable("root", Some(&reached_as("operator")))
+            .expect_err("root is protected");
+        assert!(error.0.contains("protected system account"), "{}", error.0);
+    }
+
+    /// The login the registry reaches a host with is protected wherever it
+    /// appears, which is what two operator names in a list could not do.
+    #[test]
+    fn the_login_this_host_is_reached_by_is_refused() {
+        let error = validate_deletable("operator", Some(&reached_as("operator")))
+            .expect_err("the route's own login is protected");
+        assert!(
+            error.0.contains("the login the registry reaches"),
+            "{}",
+            error.0
+        );
+    }
+
+    #[test]
+    fn another_account_on_that_host_is_deletable() {
+        assert!(validate_deletable("scratch-lease-1", Some(&reached_as("operator"))).is_ok());
+    }
 }
