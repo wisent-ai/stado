@@ -41,6 +41,17 @@ pub const READINESS_READS: &[ApprovedCommand] = &[
               to interpret",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/cat", "/sys/kernel/security/lsm"],
+        why: "prints which Linux security modules this kernel actually activated. A detached \
+              Jeden session on ubuntu-server-rtx-pro-6000 refused on 2026-09-20 with \
+              `enforced sandbox unavailable: linux-landlock-seccomp-cgroup: sandbox launcher \
+              not active (landlock=false, cgroup_v2=true)`, and the fleet could not read that \
+              fact for itself: `cat /sys/kernel/security/lsm` came back `not an approved \
+              host-exec command`, so whether the kernel carries Landlock was answerable only \
+              by running a session and watching it fail. The path is fixed, the file is a \
+              read-only kernel list of module names, and no argument reaches the command",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/sw_vers"],
         why: "prints the macOS product and build version; takes no argument and writes nothing",
     },
