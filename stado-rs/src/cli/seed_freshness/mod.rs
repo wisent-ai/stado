@@ -58,9 +58,11 @@
 mod command;
 mod remote;
 mod report;
+pub(crate) mod states;
 mod verdict;
 
 pub use crate::cli::seed_freshness::command::authenticator_seed_freshness;
+pub use crate::cli::seed_freshness::states::seed_states;
 pub use crate::cli::seed_freshness::report::join::attempts_of;
 pub use crate::cli::seed_freshness::report::join::build_report;
 pub use crate::cli::seed_freshness::verdict::classify::classify;

@@ -56,6 +56,7 @@ pub mod route;
 pub mod runner;
 pub mod scratch;
 pub mod secrets;
+pub mod seed_enrol;
 pub mod seed_freshness;
 pub mod service;
 pub mod service_converge;

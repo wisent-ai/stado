@@ -218,5 +218,10 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             super::seed_freshness::authenticator_seed_freshness(&host, login_item.as_deref(), json)
                 .await
         }
+        SecretsCommands::SeedEnrol {
+            host,
+            login_item,
+            json,
+        } => crate::cli::seed_enrol::enrol_authenticator_seed(&host, &login_item, json).await,
     }
 }

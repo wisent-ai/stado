@@ -198,4 +198,16 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Enrol an authenticator for one login row and store its seed, so later
+    /// sign-ins answer the second factor without a person's phone.
+    #[command(name = "seed-enrol")]
+    SeedEnrol {
+        #[arg(long)]
+        host: String,
+        /// The login item whose account should carry an authenticator.
+        #[arg(long)]
+        login_item: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
