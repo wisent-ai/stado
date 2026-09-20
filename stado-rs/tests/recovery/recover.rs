@@ -127,9 +127,9 @@ fn a_declared_beacon_file_the_host_does_not_have_is_a_blocker() {
     );
     assert!(
         said(&out).contains(&format!(
-            "{} did not complete host repair; inspect the reported blockers and retry the \
-             declared stado host step.",
-            fleet.target
+            "{target} did not complete host repair; inspect the reported blockers and retry \
+             the declared stado repair stado --step host --target {target} --apply.",
+            target = fleet.target
         )),
         "got: {}",
         said(&out)
