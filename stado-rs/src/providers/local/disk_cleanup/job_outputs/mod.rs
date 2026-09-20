@@ -97,8 +97,14 @@ pub fn status_roots(home: &Path, configured_root: Option<&str>) -> Vec<PathBuf> 
     roots
 }
 
-/// Whether one output file is a record the register reads, kept regardless
-/// of age, rather than a payload.
+/// Whether one entry directly inside `output/` is a record the register
+/// reads, kept regardless of age, rather than a payload.
+///
+/// Only at that level. A job that wrote a tree under `output/` wrote
+/// artifacts, whatever their extension: on charless-mac-mini a crawl job's
+/// `output/<run>/store-31/store-31_….inst.json` was 131 MB, and an
+/// extension rule that reached into the tree kept the very bytes this
+/// cleaner exists to reclaim.
 fn is_record(name: &str) -> bool {
     name.ends_with(".json") || name.ends_with(".log")
 }
@@ -148,74 +154,88 @@ pub fn scan_job_outputs(
                 break;
             }
             let output = root.join(job_id).join(OUTPUT_DIR);
-            let entries = match std::fs::read_dir(&output) {
-                Ok(entries) => entries,
-                Err(_) => {
-                    report.skip_job_outputs("output_absent", 1);
-                    continue;
-                }
-            };
-            for entry in entries.flatten() {
-                budget -= 1;
-                if budget < 0 {
-                    report.caps.scan = true;
-                    report.skip_job_outputs("scan_cap", 1);
-                    return Ok(());
-                }
-                report.job_outputs.scanned_items += 1;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let path = entry.path();
-                let Ok(info) = std::fs::symlink_metadata(&path) else {
-                    report.skip_job_outputs("stat_failed", 1);
+            if !output.is_dir() {
+                report.skip_job_outputs("output_absent", 1);
+                continue;
+            }
+            let mut pending = vec![(output, 0usize)];
+            while let Some((directory, depth)) = pending.pop() {
+                let Ok(entries) = std::fs::read_dir(&directory) else {
+                    report.skip_job_outputs("unreadable_directory", 1);
                     continue;
                 };
-                if !info.is_file()
-                    || info.file_type().is_symlink()
-                    || info.uid() != euid()
-                    || info.dev() != home_device
-                {
-                    report.skip_job_outputs("not_a_plain_owned_file", 1);
-                    continue;
-                }
-                if is_record(&name) {
-                    report.skip_job_outputs("record_kept", 1);
-                    continue;
-                }
-                if now - (info.mtime() as f64) < min_age {
-                    report.skip_job_outputs("younger_than_min_age", 1);
-                    continue;
-                }
-                report.job_outputs.eligible_items += 1;
-                let expected = i64::try_from(info.len()).unwrap_or(i64::MAX);
-                report.job_outputs.expected_bytes += expected;
-                if policy.mode != "enforce" {
-                    continue;
-                }
-                if report.job_outputs.deleted_items >= policy.max_items_per_pass {
-                    report.caps.items = true;
-                    report.skip_job_outputs("item_cap", 1);
-                    continue;
-                }
-                if deleted_bytes >= policy.max_bytes_per_pass {
-                    report.caps.bytes = true;
-                    report.skip_job_outputs("byte_cap", 1);
-                    continue;
-                }
-                if free_bytes(home)? >= policy.target_free_gb * GIB {
-                    return Ok(());
-                }
-                let attempt = (|| -> Result<i64, JanitorError> {
-                    let before = free_bytes(home)?;
-                    std::fs::remove_file(&path)?;
-                    Ok(free_bytes(home)? - before)
-                })();
-                match attempt {
-                    Ok(delta) => {
-                        report.job_outputs.actual_free_delta_bytes += delta.max(0);
-                        report.job_outputs.deleted_items += 1;
-                        deleted_bytes += expected;
+                for entry in entries.flatten() {
+                    budget -= 1;
+                    if budget < 0 {
+                        report.caps.scan = true;
+                        report.skip_job_outputs("scan_cap", 1);
+                        return Ok(());
                     }
-                    Err(exc) => report.add_error(CLEANER, &exc),
+                    report.job_outputs.scanned_items += 1;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let path = entry.path();
+                    let Ok(info) = std::fs::symlink_metadata(&path) else {
+                        report.skip_job_outputs("stat_failed", 1);
+                        continue;
+                    };
+                    if info.file_type().is_symlink()
+                        || info.uid() != euid()
+                        || info.dev() != home_device
+                    {
+                        report.skip_job_outputs("not_a_plain_owned_file", 1);
+                        continue;
+                    }
+                    // A job that wrote a tree wrote artifacts; the walk
+                    // reaches them and leaves the directories themselves,
+                    // so a later reader sees the job's own shape.
+                    if info.is_dir() {
+                        pending.push((path, depth + 1));
+                        continue;
+                    }
+                    if !info.is_file() {
+                        report.skip_job_outputs("not_a_plain_owned_file", 1);
+                        continue;
+                    }
+                    if depth == 0 && is_record(&name) {
+                        report.skip_job_outputs("record_kept", 1);
+                        continue;
+                    }
+                    if now - (info.mtime() as f64) < min_age {
+                        report.skip_job_outputs("younger_than_min_age", 1);
+                        continue;
+                    }
+                    report.job_outputs.eligible_items += 1;
+                    let expected = i64::try_from(info.len()).unwrap_or(i64::MAX);
+                    report.job_outputs.expected_bytes += expected;
+                    if policy.mode != "enforce" {
+                        continue;
+                    }
+                    if report.job_outputs.deleted_items >= policy.max_items_per_pass {
+                        report.caps.items = true;
+                        report.skip_job_outputs("item_cap", 1);
+                        continue;
+                    }
+                    if deleted_bytes >= policy.max_bytes_per_pass {
+                        report.caps.bytes = true;
+                        report.skip_job_outputs("byte_cap", 1);
+                        continue;
+                    }
+                    if free_bytes(home)? >= policy.target_free_gb * GIB {
+                        return Ok(());
+                    }
+                    let attempt = (|| -> Result<i64, JanitorError> {
+                        let before = free_bytes(home)?;
+                        std::fs::remove_file(&path)?;
+                        Ok(free_bytes(home)? - before)
+                    })();
+                    match attempt {
+                        Ok(delta) => {
+                            report.job_outputs.actual_free_delta_bytes += delta.max(0);
+                            report.job_outputs.deleted_items += 1;
+                            deleted_bytes += expected;
+                        }
+                        Err(exc) => report.add_error(CLEANER, &exc),
+                    }
                 }
             }
         }

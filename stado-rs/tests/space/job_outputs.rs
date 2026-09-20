@@ -58,6 +58,13 @@ fn a_retired_jobs_aged_payload_is_reclaimed_and_everything_else_stays() {
     // is where the 12.1 GiB sat while the cleaner read the flat path.
     let served = storage.join("ecosystem/space-fixture");
     seed_output(&served, "job-done", true);
+    // What a crawl job really left on charless-mac-mini: a tree under
+    // output/ whose biggest file is named .json and is 131 MB. A record
+    // rule that reached into the tree kept exactly these bytes.
+    let nested = storage.join("status/job-done/output/run-1/store-31");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("store-31.inst.json"), b"crawl artifact").unwrap();
+    backdate(&nested.join("store-31.inst.json"));
     let fresh = storage.join("status/job-done/output/fresh.bin");
     fs::write(&fresh, b"still being read").unwrap();
 
@@ -108,7 +115,12 @@ fn a_retired_jobs_aged_payload_is_reclaimed_and_everything_else_stays() {
     )
     .unwrap();
     let cleaner = &state["report"]["cleaners"]["job_outputs"];
-    assert_eq!(cleaner["deleted_items"], 2, "{state}");
+    assert_eq!(cleaner["deleted_items"], 3, "{state}");
     assert_eq!(cleaner["skipped"]["record_kept"], 4, "{state}");
     assert_eq!(cleaner["skipped"]["younger_than_min_age"], 1, "{state}");
+    assert!(
+        !nested.join("store-31.inst.json").exists(),
+        "the nested crawl artifact stays"
+    );
+    assert!(nested.is_dir(), "the job's own output tree was removed");
 }
