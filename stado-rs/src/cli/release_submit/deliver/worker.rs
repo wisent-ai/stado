@@ -44,25 +44,89 @@ async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdEr
         ))
     })?;
     let platform = run.platforms.get(&request.platform);
-    let exact = run.state == ReleaseRunState::Delivering
-        && run.product == request.product
-        && run.version == request.version
-        && run.source_sha256 == request.source_sha256
-        && run.source_uri == request.source_uri
-        && platform.is_some_and(|platform| {
-            platform.state == PlatformRunState::Published
-                && platform.artifact_sha256.as_deref() == Some(request.archive_sha256.as_str())
-                && platform.release_manifest_sha256.as_deref()
-                    == Some(request.manifest_sha256.as_str())
-        });
-    if !exact {
+    let disagreements = disagreements(&run, platform, request);
+    if !disagreements.is_empty() {
         return Err(CmdError::click(format!(
-            "delivery {} {} {} does not match its current published run; refusing the stale \
-             coordinate",
-            request.product, request.version, request.platform
+            "delivery {} {} {} does not match its current published run {}; refusing the stale \
+             coordinate: {}",
+            request.product,
+            request.version,
+            request.platform,
+            request.run_id,
+            disagreements.join("; ")
         )));
     }
     Ok(())
+}
+
+/// Every way this delivery's coordinate differs from the run it names, in the
+/// run's own words.
+///
+/// The fence used to refuse with the product, version and platform it was
+/// asked for and nothing about what it read, so an operator could not tell a
+/// superseded digest from a run that had already failed: on 2026-09-20 the
+/// 0.21.35 delivery to the mini refused with that sentence and the release had
+/// to be finished by hand through the host declaration.
+fn disagreements(
+    run: &crate::release_pipeline::ReleaseRun,
+    platform: Option<&crate::release_pipeline::PlatformRun>,
+    request: &DeliveryRequest,
+) -> Vec<String> {
+    let mut found = Vec::new();
+    if run.state != ReleaseRunState::Delivering {
+        found.push(format!("the run is {:?}, not delivering", run.state));
+    }
+    for (field, reads, asked) in [
+        ("product", run.product.as_str(), request.product.as_str()),
+        ("version", run.version.as_str(), request.version.as_str()),
+        (
+            "source sha256",
+            run.source_sha256.as_str(),
+            request.source_sha256.as_str(),
+        ),
+        (
+            "source uri",
+            run.source_uri.as_str(),
+            request.source_uri.as_str(),
+        ),
+    ] {
+        if reads != asked {
+            found.push(format!(
+                "the run's {field} is {reads}, the delivery names {asked}"
+            ));
+        }
+    }
+    let Some(platform) = platform else {
+        found.push(format!("the run carries no {} platform", request.platform));
+        return found;
+    };
+    if platform.state != PlatformRunState::Published {
+        found.push(format!(
+            "{} is {:?}, not published",
+            request.platform, platform.state
+        ));
+    }
+    for (field, reads, asked) in [
+        (
+            "artifact sha256",
+            platform.artifact_sha256.as_deref(),
+            request.archive_sha256.as_str(),
+        ),
+        (
+            "release manifest sha256",
+            platform.release_manifest_sha256.as_deref(),
+            request.manifest_sha256.as_str(),
+        ),
+    ] {
+        if reads != Some(asked) {
+            found.push(format!(
+                "{}'s {field} is {}, the delivery names {asked}",
+                request.platform,
+                reads.unwrap_or("absent")
+            ));
+        }
+    }
+    found
 }
 
 pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> {

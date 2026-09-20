@@ -147,6 +147,11 @@ path = "tests/documentation/main.rs"
 name = "vast"
 path = "tests/vast/main.rs"
 
+[[test]]
+name = "release_delivery"
+path = "tests/release_delivery/main.rs"
+
+
 
 [[test]]
 name = "web"
