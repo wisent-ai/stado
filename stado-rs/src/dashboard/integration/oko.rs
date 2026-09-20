@@ -180,46 +180,55 @@ async fn adopt(body: &[u8]) -> HandlerResult {
         ],
     )
     .await?;
-    let adoption = receipt
+    // The receipt's shape, as a type rather than a list of field names:
+    // serde refuses a missing or wrongly typed count, and the eight counts
+    // Oko reports cannot drift from the eight this boundary checks.
+    #[derive(Deserialize)]
+    struct AdoptionReceipt {
+        runtime: String,
+        root: String,
+        selected: bool,
+        status: String,
+        #[serde(rename = "sourceId")]
+        source_id: String,
+        #[serde(rename = "dataDir")]
+        data_dir: String,
+        #[serde(rename = "candidateFiles")]
+        _candidate_files: u64,
+        #[serde(rename = "candidateEvents")]
+        _candidate_events: u64,
+        #[serde(rename = "pendingIncompleteLines")]
+        _pending_incomplete_lines: u64,
+        _imported: u64,
+        _unchanged: u64,
+        _conflicting: u64,
+        _rejected: u64,
+        #[serde(rename = "eventsImported")]
+        _events_imported: u64,
+    }
+    #[derive(Deserialize)]
+    struct CatalogueReceipt {
+        #[serde(rename = "catalogProcessed")]
+        _processed: u64,
+        database: String,
+    }
+    let Some(adoption) = receipt
         .get("adoption")
-        .and_then(Value::as_object)
-        .ok_or(HandlerError::UpstreamFailure)?;
-    let required_counts = [
-        "candidateFiles",
-        "candidateEvents",
-        "pendingIncompleteLines",
-        "imported",
-        "unchanged",
-        "conflicting",
-        "rejected",
-        "eventsImported",
-    ];
-    if adoption.get("runtime").and_then(Value::as_str) != Some(request.runtime.as_str())
-        || adoption.get("root").and_then(Value::as_str) != Some(request.root.as_str())
-        || adoption.get("selected").and_then(Value::as_bool) != Some(true)
-        || adoption
-            .get("status")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-        || adoption
-            .get("sourceId")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-        || adoption
-            .get("dataDir")
-            .and_then(Value::as_str)
-            .is_none_or(|path| !Path::new(path).is_absolute())
-        || required_counts
-            .iter()
-            .any(|field| adoption.get(*field).and_then(Value::as_u64).is_none())
-        || receipt
-            .get("catalogProcessed")
-            .and_then(Value::as_u64)
-            .is_none()
-        || receipt
-            .get("database")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<AdoptionReceipt>(value).ok())
+    else {
+        return Err(HandlerError::UpstreamFailure);
+    };
+    let Ok(catalogue) = serde_json::from_value::<CatalogueReceipt>(receipt.clone()) else {
+        return Err(HandlerError::UpstreamFailure);
+    };
+    if adoption.runtime != request.runtime
+        || adoption.root != request.root
+        || !adoption.selected
+        || adoption.status.is_empty()
+        || adoption.source_id.is_empty()
+        || !Path::new(&adoption.data_dir).is_absolute()
+        || catalogue.database.is_empty()
     {
         return Err(HandlerError::UpstreamFailure);
     }
