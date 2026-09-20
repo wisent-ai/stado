@@ -103,6 +103,55 @@ fn parsed(value: &str) -> Value {
     serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
 }
 
+/// The consumer field only a Stado that knows it can read.
+///
+/// A host's resolver parses the service directory strictly: a consumer
+/// carrying a field its build has never heard of makes the whole document
+/// invalid for that host, and it resolves nothing at all. `grants` arrived in
+/// 0.21.35, and on 2026-09-20 `charless-mac-mini` — the host every service
+/// resolves through — still ran 0.21.32. Declaring one grant that morning
+/// would have taken the fleet's resolution down, so this refuses the write
+/// until the hosts can read it.
+const GRANTS_FIELD: &str = "grants";
+const GRANTS_SINCE: &str = "0.21.35";
+const MANAGED_VERSIONS: &str = "managed_versions";
+const STADO_BINARY: &str = "stado";
+
+/// Hosts whose declared Stado is older than `GRANTS_SINCE`, or declares none.
+fn hosts_behind(document: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for target in document
+        .get("targets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = target.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let declared = target
+            .get(MANAGED_VERSIONS)
+            .and_then(|versions| versions.get(STADO_BINARY))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !crate::providers::local::disk_cleanup::catalogue::version_at_least(
+            declared,
+            GRANTS_SINCE,
+        ) {
+            out.push(match declared.is_empty() {
+                true => format!("{name} (declares no stado version)"),
+                false => format!("{name} ({declared})"),
+            });
+        }
+    }
+    out
+}
+
+/// Whether this path writes a consumer's declared grants.
+fn declares_grants(path: &str) -> bool {
+    path.split('.').any(|segment| segment == GRANTS_FIELD) && path.contains("consumers")
+}
+
 /// `stado registry set --path P --value V [--json]`.
 pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdError> {
     if path.trim().is_empty() {
@@ -118,6 +167,24 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
         ))
     })?;
     let mut document: Value = serde_json::from_str(&blob.content)?;
+    if declares_grants(path) {
+        let behind = hosts_behind(&document);
+        if !behind.is_empty() {
+            return Err(CmdError::click(format!(
+                "declaring `{GRANTS_FIELD}` would make this registry unreadable for {} host(s) \
+                 whose Stado is older than {GRANTS_SINCE}: {}. Their resolvers parse the service \
+                 directory strictly and reject a consumer field they do not know, so they would \
+                 resolve nothing at all. Bring them forward first — \
+                 `stado release promote-version stado <version> --host <HOST>` then \
+                 `stado release host-state --host <HOST> --binary stado --apply` — and check what \
+                 each one actually runs with `stado release host-state --host <HOST> --binary \
+                 stado`, because an installed binary can lag the version its registry entry \
+                 declares.",
+                behind.len(),
+                behind.join(", ")
+            )));
+        }
+    }
     // Read the field first, so a path that does not resolve is refused
     // before anything is serialised, with the reader's own sentence.
     let previous = select(&document, path)?.clone();

@@ -193,3 +193,24 @@ fn an_unknown_service_and_an_unauthorized_consumer_are_refused_with_the_names() 
         stderr(&out)
     );
 }
+
+/// A host whose Stado predates the field parses the directory strictly and
+/// would resolve nothing at all once a consumer carries it. On 2026-09-20 the
+/// host every service resolves through ran 0.21.32 while the field arrived in
+/// 0.21.35, so the write is refused until the fleet can read it.
+#[test]
+fn declaring_a_grant_is_refused_while_a_host_cannot_read_the_field() {
+    let store = Store::new();
+    let declaration = r#"[{"consumer":"weles-model-router-client","capabilities":["read:weles-model-router#token"],"token_file":"weles-model-router-skarbiec-token"}]"#;
+    let path = "service_directory.services.brama.consumers.operator.grants";
+    let out = store.stado(&["registry", "set", "--path", path, "--value", declaration]);
+    assert!(!out.status.success());
+    let said = stderr(&out);
+    assert!(said.contains("older than 0.21.35"), "{said}");
+    assert!(said.contains("w1 (declares no stado version)"), "{said}");
+    assert!(said.contains("stado release host-state --host"), "{said}");
+    assert!(
+        said.contains("an installed binary can lag the version its registry entry declares"),
+        "the refusal does not say a declaration is not an installation: {said}"
+    );
+}
