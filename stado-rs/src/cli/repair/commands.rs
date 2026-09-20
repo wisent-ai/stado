@@ -138,7 +138,8 @@ fn proof_refusal(service: &str, step: &str, target: &str, proof: &Value) -> Opti
                 != Some(crate::deploy::host_recovery::STATUS_OK) =>
         {
             Some(format!(
-                "{target} did not complete host repair; inspect the reported blockers and retry the declared stado host step."
+                "{target} did not complete host repair; inspect the reported blockers and \
+                 retry the declared stado repair stado --step host --target {target} --apply."
             ))
         }
         ("stado-control-plane", "release-state")
