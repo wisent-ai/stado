@@ -138,6 +138,7 @@ pub async fn run_on_host(
         target: target.name.clone(),
         entries: Vec::new(),
         error: None,
+        timed_out: false,
     };
     if let Err(error) = validate_root(root).and_then(|()| validate_days(days)) {
         report.error = Some(error.0);
@@ -186,6 +187,7 @@ pub async fn run_on_host(
         // A killed walk reports the bound it hit and what to do about it: the
         // runner's own sentence names a truncated second count and no root.
         Err(_) if started.elapsed() >= budget => {
+            report.timed_out = true;
             report.error = Some(format!(
                 "the build-cache verdict for {root} did not finish within {}s; \
                  raise {VERDICT_BUDGET_ENV} or declare a narrower \
