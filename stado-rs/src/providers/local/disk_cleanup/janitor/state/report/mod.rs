@@ -21,6 +21,15 @@ pub struct CleanerReport {
     pub expected_bytes: i64,
     pub actual_free_delta_bytes: i64,
     pub skipped: BTreeMap<String, i64>,
+    /// The bytes each skip reason kept, where the cleaner knows them.
+    ///
+    /// A count answers "how many files did you leave"; an operator looking
+    /// at a host still over its watermark is asking "where are the bytes".
+    /// On charless-mac-mini on 2026-09-20 `job_outputs` reported 1986
+    /// `record_kept` and nothing eligible beside 12 GiB, and the counts
+    /// could not say whether the bytes were in the records or somewhere the
+    /// pass never reached.
+    pub skipped_bytes: BTreeMap<String, i64>,
 }
 
 /// Python `report["caps"]`.

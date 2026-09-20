@@ -193,15 +193,15 @@ pub fn scan_job_outputs(
                         continue;
                     }
                     if !info.is_file() {
-                        report.skip_job_outputs("not_a_plain_owned_file", 1);
+                        report.keep_job_outputs("not_a_plain_owned_file", info.len() as i64);
                         continue;
                     }
                     if depth == 0 && is_record(&name) {
-                        report.skip_job_outputs("record_kept", 1);
+                        report.keep_job_outputs("record_kept", info.len() as i64);
                         continue;
                     }
                     if now - (info.mtime() as f64) < min_age {
-                        report.skip_job_outputs("younger_than_min_age", 1);
+                        report.keep_job_outputs("younger_than_min_age", info.len() as i64);
                         continue;
                     }
                     report.job_outputs.eligible_items += 1;

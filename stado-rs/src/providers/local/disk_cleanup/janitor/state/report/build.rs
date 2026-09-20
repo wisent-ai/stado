@@ -96,6 +96,16 @@ impl CleanupReport {
             .or_insert(0) += count;
     }
 
+    /// The same skip, with the bytes it left behind.
+    pub fn keep_job_outputs(&mut self, reason: &str, bytes: i64) {
+        self.skip_job_outputs(reason, 1);
+        *self
+            .job_outputs
+            .skipped_bytes
+            .entry(reason.to_string())
+            .or_insert(0) += bytes;
+    }
+
     pub fn skip_backup_twins(&mut self, reason: &str, count: i64) {
         *self
             .backup_twins
@@ -123,6 +133,7 @@ impl CleanupReport {
                 "expected_bytes": c.expected_bytes,
                 "actual_free_delta_bytes": c.actual_free_delta_bytes,
                 "skipped": c.skipped,
+                "skipped_bytes": c.skipped_bytes,
             })
         };
         // A table of zeros and a table that was never filled in are the same
