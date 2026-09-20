@@ -16,7 +16,6 @@
 //! path `grant-sync` uses. Bare, it prints what apply would do: a plan is the
 //! answer to "what is declared", and minting is never the way to ask.
 
-use super::grant::{grant_sync, GrantSyncOptions};
 use super::*;
 use crate::targets::{ConsumerGrant, ServiceConsumer};
 
@@ -161,6 +160,16 @@ pub(crate) async fn declared_grant_reconcile(
         println!("mint them with `stado service grants {name} --apply`");
         return Ok(());
     }
+    // Minted on the host the directory names, not on a host that happens to
+    // declare a managed unit for this service: `brama` is placed by a release
+    // profile and declares no unit anywhere, so `grant-sync` answered "brama
+    // is not a registry-managed service on charless-mac-mini" and its
+    // consumers could not be minted at all. The directory is this command's
+    // input; the host it names is where the vault is.
+    let target = host_channel::canonical_target(&host).await.map_err(click)?;
+    let runner = production_runner();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
     for item in &declared {
         if item.grant.capabilities.is_empty() {
             return Err(CmdError::click(format!(
@@ -169,18 +178,46 @@ pub(crate) async fn declared_grant_reconcile(
                 item.grant.consumer
             )));
         }
-        grant_sync(GrantSyncOptions {
-            name,
-            host: &host,
-            consumer: &item.grant.consumer,
-            capabilities: &item.grant.capabilities,
-            token_file: &item.grant.token_file,
+        let audience = item
+            .grant
+            .audience
+            .clone()
+            .unwrap_or_else(|| item.grant.consumer.clone());
+        let minted = service::remint_consumer_grant_on_host(
+            &target,
+            &item.grant.consumer,
+            &item.grant.capabilities.join(","),
+            &item.grant.token_file,
             vault_file,
             ttl_seconds,
-            audience: item.grant.audience.as_deref(),
-            as_json,
-        })
-        .await?;
+            &audience,
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if !minted.succeeded("grant_synced") {
+            failures.push(format!("{}: {}", item.grant.consumer, minted.failure()));
+        }
+        cells.push(vec![
+            item.authorized.clone(),
+            item.grant.consumer.clone(),
+            host.clone(),
+            dash(&minted.status),
+            dash(&minted.detail),
+        ]);
     }
-    Ok(())
+    if as_json {
+        print_json(&Value::Array(
+            cells
+                .iter()
+                .map(|row| json!({"authorized": row[0], "consumer": row[1], "host": row[2], "sync": row[3], "detail": row[4], "applied": true}))
+                .collect(),
+        ))?;
+    } else {
+        table::print(
+            &["AUTHORIZED", "CONSUMER", "HOST", "SYNC", "DETAIL"],
+            &cells,
+        );
+    }
+    fail_if_any(&failures, "declared grant")
 }
