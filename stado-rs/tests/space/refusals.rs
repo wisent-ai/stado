@@ -154,14 +154,22 @@ fn a_scope_declared_wrongly_is_refused_with_its_own_sentence() {
 }
 
 /// The environment bound on the verdict walk, and the two answers it owes an
-/// operator: a walk that cannot finish is killed and named, and a malformed
-/// bound is refused before anything is walked at all.
+/// operator: a walk that cannot finish is killed and named while the rest of
+/// the report stands, and a malformed bound is refused before anything is
+/// walked at all.
 ///
 /// This is the local branch, which is the one that had no bound: on
 /// `lukasz-macbook`, whose declared root is `$HOME`,
 /// `stado space report lukasz-macbook` returned nothing at all after 420
 /// seconds on 2026-09-10 while the remote branch had been bounded to 120 the
 /// whole time. A read that cannot answer is worse than a read that says why.
+///
+/// Until 2026-09-20 the overrun also failed the command. That threw away the
+/// free space, the watermarks, the inventory, the coverage and the janitor's
+/// last pass — every one of them already read and printed — so an operator
+/// asking about a full disk got exit 1 and a complete answer in the same
+/// breath. The overrun is now reported and the command exits 0; a malformed
+/// bound, which walks nothing, is still refused.
 #[test]
 fn a_verdict_walk_is_bounded_and_a_malformed_bound_is_refused() {
     let host = Host::new();
@@ -175,7 +183,22 @@ fn a_verdict_walk_is_bounded_and_a_malformed_bound_is_refused() {
         "the build-cache verdict for {root} did not finish within 0.001s; raise \
          STADO_CACHE_VERDICT_BUDGET_SECONDS or declare a narrower cleaners.build_caches.root"
     );
-    let bounded = answered(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an overrun walk failed a report that was already complete; stderr:\n{}",
+        said(&output.stderr)
+    );
+    assert!(
+        said(&output.stderr).contains(&format!("build cache verdict incomplete: {sentence}")),
+        "the overrun was not reported: {}",
+        said(&output.stderr)
+    );
+    let bounded: serde_json::Value = serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter::<serde_json::Value>()
+        .next()
+        .expect("the read prints its document")
+        .expect("the read prints JSON");
     assert_eq!(
         bounded["build_caches"]["error"].as_str(),
         Some(sentence.as_str()),

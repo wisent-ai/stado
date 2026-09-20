@@ -139,12 +139,14 @@ pub(super) fn scan_build_caches(
                     report.skip_builds("root_absent", 1);
                     return Ok(());
                 }
-                std::fs::canonicalize(&expanded)?
+                std::fs::canonicalize(&expanded).map_err(|error| refused_root(&expanded, &error))?
             }
             None => home.to_path_buf(),
         };
         let gated = consent::gated_folders(home);
-        let root_fd = match consent::open_dir_path(&gated, &root)? {
+        let root_fd = match consent::open_dir_path(&gated, &root)
+            .map_err(|error| refused_root(&root, &error))?
+        {
             consent::Gated::Opened(root_fd) => root_fd,
             consent::Gated::Pending => {
                 report.skip_builds("consent_pending", 1);
@@ -197,4 +199,29 @@ pub(super) fn scan_build_caches(
     if let Err(exc) = body(report) {
         report.add_error("build_caches", &exc);
     }
+}
+
+/// The declared root could not be opened, said so that an operator can act.
+///
+/// A bare `PermissionError (Operation not permitted (os error 1))` is what
+/// this host recorded on 2026-09-20 with `scanned_items: 0` beside it, and it
+/// names neither the root nor the reason. On macOS that errno is the one the
+/// operating system returns for a folder behind its own privacy consent —
+/// `~/Documents` among them — which is a different repair from a mode bit:
+/// the process needs Full Disk Access, or the declaration needs a root the
+/// fleet's own agent may read.
+fn refused_root(root: &Path, error: &std::io::Error) -> JanitorError {
+    let privacy = cfg!(target_os = "macos") && error.raw_os_error() == Some(1);
+    let remedy = if privacy {
+        "the operating system's privacy protection refuses it to this process: grant Full Disk \
+         Access to the agent that runs the janitor, or declare a root outside the protected \
+         folders with `stado space cleaners declare <target> --cleaner build_caches --root <path>`"
+    } else {
+        "declare a root this process may read with `stado space cleaners declare <target> \
+         --cleaner build_caches --root <path>`"
+    };
+    JanitorError::os(&format!(
+        "the declared build cache root {} could not be opened ({error}); {remedy}",
+        root.display()
+    ))
 }

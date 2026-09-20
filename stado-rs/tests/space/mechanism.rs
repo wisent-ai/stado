@@ -111,6 +111,69 @@ fn the_human_report_retains_the_actual_pass_refusals_and_exhausted_limits() {
     assert!(text.contains("cleaner build_caches:"));
 }
 
+/// A declared root the janitor's process cannot open says which root and what
+/// to do about it.
+///
+/// On 2026-09-20 `lukasz-macbook` recorded exactly one error for a pass that
+/// scanned nothing: `build_caches:PermissionError (PermissionError: Operation
+/// not permitted (os error 1))`. The root was `~/Documents/CodingProjects/Wisent`,
+/// which macOS keeps behind its own privacy consent, and the line named
+/// neither the root nor the consent — so the reading was indistinguishable
+/// from a mode bit, a missing directory or a broken cleaner, while 843 GB of
+/// build output sat inside it.
+#[test]
+fn a_root_this_process_cannot_open_is_named_with_the_repair() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let host = Host::new();
+    let closed = host.home.join("closed-root");
+    fs::create_dir_all(closed.join("tagged")).expect("create the closed root");
+    fs::write(
+        closed.join("tagged/CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )
+    .expect("write the cache tag");
+    // The area's own policy with its root pointed at the closed directory, so
+    // every watermark and budget stays the one the rest of the cases use.
+    host.declare(&host.policy().replace(
+        &format!("{:?}", host.cache_root.to_string_lossy()),
+        &format!("{:?}", closed.to_string_lossy()),
+    ));
+    let mut permissions = fs::metadata(&closed).expect("stat the root").permissions();
+    permissions.set_mode(0o000);
+    fs::set_permissions(&closed, permissions).expect("close the root");
+
+    let result = host.run(&["disk-cleanup", "--once"]);
+
+    let mut permissions = fs::metadata(&closed).expect("stat the root").permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&closed, permissions).expect("reopen the root");
+
+    assert!(
+        result.status.success(),
+        "a root it could not open failed the pass: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let recorded: Value =
+        serde_json::from_slice(&fs::read(host.under_home(crate::fixture::JANITOR_STATE)).unwrap())
+            .expect("the pass persisted its state");
+    let errors = recorded["report"]["errors"]
+        .as_array()
+        .expect("the pass records its errors")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        errors.contains(closed.to_str().expect("the fixture path is utf-8")),
+        "the error does not name the root it could not open: {errors}"
+    );
+    assert!(
+        errors.contains("stado space cleaners declare"),
+        "the error does not say what repairs it: {errors}"
+    );
+}
+
 /// A janitor pass that frees nothing still has to say what it looked at.
 ///
 /// `registry_cleanup` is the only reclaim stage whose candidates come from the
