@@ -95,9 +95,33 @@ fn executable() -> Result<PathBuf, CmdError> {
         ))
 }
 
+/// The Skarbiec item Wisent Products resolves the signing certificate and key
+/// from. Only the item id crosses this boundary: `wisent-products` reads both
+/// fields itself and loads them into a temporary keychain it removes
+/// afterwards, so no key material passes through Stado, an environment value,
+/// or a command line.
+///
+/// It is named here because a product install signs native code, and the
+/// machine running it keeps no identity of its own. Without this, an install
+/// could only be signed where the fleet certificate happened to sit in a
+/// personal keychain: on 2026-09-20 `stado product update skrzynka --surface
+/// cli` refused with "Apple signing identity is missing or ambiguous: Apple
+/// Development: Created via API (685D4U2G83)" on a Mac whose keychain held one
+/// unrelated certificate, while that exact certificate was in the vault the
+/// whole time.
+const SIGNING_CREDENTIAL_ITEM: &str = "desktop-signing-apple-development";
+
 async fn invoke(arguments: Vec<String>) -> Result<(), CmdError> {
-    let output = Command::new(executable()?)
-        .args(&arguments)
+    let mut command = Command::new(executable()?);
+    command.args(&arguments);
+    // An operator who has already chosen a credential keeps it: this supplies
+    // the fleet's item only when nothing else was named.
+    if std::env::var_os("WISENT_CODESIGN_CREDENTIAL_ITEM").is_none()
+        && std::env::var_os("WISENT_CODESIGN_CERTIFICATE_PEM").is_none()
+    {
+        command.env("WISENT_CODESIGN_CREDENTIAL_ITEM", SIGNING_CREDENTIAL_ITEM);
+    }
+    let output = command
         .output()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
