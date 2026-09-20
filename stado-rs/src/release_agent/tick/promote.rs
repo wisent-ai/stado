@@ -12,7 +12,7 @@ use crate::release_agent::rollout::candidate::spawn::{
 use crate::release_agent::rollout::candidate::stage::{next_port, stage_release};
 use crate::release_agent::rollout::recover::rollback::rollback;
 use crate::release_agent::rollout::serving::answer::ensure_active_proxy;
-use crate::release_agent::rollout::serving::discover::terminate;
+use crate::release_agent::rollout::serving::discover::{foreign_stable_bind_holder, terminate};
 use crate::release_agent::rollout::serving::proxy::proxy_upstream_port;
 use crate::release_agent::state::document::save_state;
 use crate::release_agent::state::evidence::quarantine_with_logs;
@@ -47,6 +47,19 @@ pub(crate) async fn promote_candidate(
         terminate(&incomplete);
         state.detail = "discarded incomplete candidate from an interrupted rollout".to_string();
         save_state(target, state)?;
+    }
+
+    // A candidate cannot serve a bind another program holds, and finding that
+    // out by spawning one costs ninety seconds and the digest: the process
+    // exits on `Address already in use` and the agent quarantines it. Ask the
+    // kernel first. This is not quarantined, because nothing is wrong with
+    // the release: the next tick rolls it out by itself once whichever
+    // declaration claimed that port gives it back.
+    if let Some(holder) = foreign_stable_bind_holder(target, serving, product)? {
+        state.phase = RolloutPhase::Failed;
+        state.detail = format!("{holder}; no candidate was spawned");
+        save_state(target, state)?;
+        return Ok(());
     }
 
     state.phase = RolloutPhase::Downloaded;

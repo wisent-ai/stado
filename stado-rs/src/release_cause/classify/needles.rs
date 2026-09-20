@@ -59,3 +59,11 @@ pub(super) const CAPABILITY_REDEMPTION_NEEDLES: &[&str] = &[
 /// credential or capability sentence in the retained stderr still wins: the
 /// timeout is the outermost symptom, never the deepest cause.
 pub(super) const READINESS_UNANSWERED_NEEDLES: &[&str] = &["did not answer within"];
+
+/// Another process already holds the port the release must serve on. Both
+/// spellings are real: the operating system's own `Address already in use`,
+/// which every Rust binder prints through `std::io::Error`, and the errno
+/// name Node and Go processes print instead. Looked for before the readiness
+/// timeout, because a candidate that could not bind is the reason the probe
+/// went unanswered, never the other way round.
+pub(super) const STABLE_BIND_OCCUPIED_NEEDLES: &[&str] = &["address already in use", "eaddrinuse"];

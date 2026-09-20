@@ -53,6 +53,19 @@ pub enum QuarantineCause {
     /// `unclassified`, so the register blamed the candidate and the host's
     /// own numbers were never looked at.
     ReadinessProbeUnanswered,
+    /// The stable bind the release must serve on is held by a process that is
+    /// not this product's own proxy, so the candidate started, failed to bind
+    /// and exited.
+    ///
+    /// Its own class because the repair is in neither the release nor the
+    /// host's resources: two declarations claim one loopback port. On
+    /// `lukasz-macbook` on 2026-09-20 the Skarbiec release's stable bind
+    /// `127.0.0.1:18787` was held by the resolver's own
+    /// `weles-admission` adapter for consumer
+    /// `skarbiec-weles-credential-client`, and the only trace was
+    /// `Address already in use (os error 48)` inside a stderr tail the
+    /// register filed as `unclassified`.
+    StableBindOccupied,
     /// Nothing in the retained evidence names a cause.
     ///
     /// The default, so a record written before this field existed reads as
@@ -74,6 +87,7 @@ impl QuarantineCause {
             Self::CapabilityRoutesUnmapped => "capability_routes_unmapped",
             Self::CapabilityRedemptionRefused => "capability_redemption_refused",
             Self::ReadinessProbeUnanswered => "readiness_probe_unanswered",
+            Self::StableBindOccupied => "stable_bind_occupied",
             Self::Unclassified => "unclassified",
         }
     }
@@ -85,13 +99,16 @@ impl QuarantineCause {
     /// Does this cause say anything about the candidate itself?
     ///
     /// Every cause here but one is about what the release meets on the host —
-    /// a vault that will not open, a route that maps nothing — and a second
-    /// candidate walks into the same wall, which is why a run of them holds
-    /// the next promotion. [`Self::ReadinessProbeUnanswered`] is not that: a
-    /// host that could not answer a three-second probe said nothing about
-    /// the release, and walling the product off after three such records
-    /// keeps a recovered host on the old binary forever. The record, the
-    /// class and the remedy stay; only the hold is dropped.
+    /// a vault that will not open, a route that maps nothing, a port another
+    /// process already holds — and a second candidate walks into the same
+    /// wall, which is why a run of them holds the next promotion.
+    /// [`Self::ReadinessProbeUnanswered`] is not that: a host that could not
+    /// answer a three-second probe said nothing about the release, and
+    /// walling the product off after three such records keeps a recovered
+    /// host on the old binary forever. The record, the class and the remedy
+    /// stay; only the hold is dropped. It is also the one cause the agent
+    /// retires by itself, in
+    /// [`crate::release_agent::retire_host_caused_quarantine`].
     pub fn holds_the_candidate(self) -> bool {
         !matches!(self, Self::ReadinessProbeUnanswered)
     }
@@ -127,6 +144,12 @@ impl QuarantineCause {
                 "read what the host had left when it could not answer: stado space report \
                  <TARGET> for its memory, swap and disk, then stado release doctor <PRODUCT> \
                  --target <TARGET>; clear the digest only once the host can run it",
+            ),
+            Self::StableBindOccupied => Some(
+                "name the process on that port with: stado service serving <PRODUCT> \
+                 --host <TARGET>, and the resolver adapters that claim loopback ports with: \
+                 stado resolver status; move whichever declaration is wrong before clearing \
+                 the digest",
             ),
             // The capability was refused at the far end. Nothing in this
             // product reissues or extends one, and the sibling's own repair

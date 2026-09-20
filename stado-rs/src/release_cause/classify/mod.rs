@@ -8,6 +8,7 @@ use super::cause::QuarantineCause;
 use needles::{
     CAPABILITY_REDEMPTION_NEEDLES, CAPABILITY_ROUTES_NEEDLES, CREDENTIAL_CANNOT_SERVE_NEEDLES,
     CREDENTIAL_STORE_NEEDLES, READINESS_UNANSWERED_NEEDLES, ROLLBACK_COMPATIBILITY_NEEDLES,
+    STABLE_BIND_OCCUPIED_NEEDLES,
 };
 use segments::{evidence_for, matches_any, strip_ansi};
 
@@ -88,6 +89,10 @@ pub fn classify(text: &str) -> Classification {
         (
             CAPABILITY_REDEMPTION_NEEDLES,
             QuarantineCause::CapabilityRedemptionRefused,
+        ),
+        (
+            STABLE_BIND_OCCUPIED_NEEDLES,
+            QuarantineCause::StableBindOccupied,
         ),
         (
             READINESS_UNANSWERED_NEEDLES,
