@@ -100,6 +100,10 @@ name = "host_delivery"
 path = "tests/host_delivery/main.rs"
 
 [[test]]
+name = "host_disk_cleanup"
+path = "tests/host_disk_cleanup/main.rs"
+
+[[test]]
 name = "scratch_workdirs"
 path = "tests/scratch_workdirs/main.rs"
 

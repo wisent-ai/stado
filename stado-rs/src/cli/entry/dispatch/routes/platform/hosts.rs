@@ -21,6 +21,11 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
         HostStateCommands::BeaconUnits => host::beacon_units().await,
         HostStateCommands::CollectBeacon { publish } => host::collect_beacon(publish).await,
         HostStateCommands::Reboot { target } => host::reboot(&target).await,
+        HostStateCommands::DiskCleanup {
+            target,
+            dry_run,
+            json,
+        } => host::disk_cleanup(&target, dry_run, json).await,
         HostStateCommands::User(HostUserCommands::Create {
             username,
             target,

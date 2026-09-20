@@ -64,6 +64,27 @@ pub(crate) enum HostStateCommands {
     },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
+    /// Run TARGET's own registry-authorized cleanup pass and report what it
+    /// freed.
+    ///
+    /// `stado disk-cleanup` and `stado install-disk-cleanup` act on the
+    /// machine they are typed on, so a fleet host that drifts below its low
+    /// watermark has no way back: on 2026-09-20 charless-mac-mini published
+    /// 6.7 GiB free against an 8 GiB watermark and Stado refused every
+    /// placement on it, including the deployment that would have fixed the
+    /// host. This runs the target's own installed Stado, which reads the
+    /// same declaration it reads locally; nothing about what may be deleted
+    /// is decided here.
+    #[command(name = "disk-cleanup")]
+    DiskCleanup {
+        target: String,
+        /// Plan a pass and delete nothing.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Emit the pass report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),

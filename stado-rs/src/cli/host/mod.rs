@@ -42,6 +42,7 @@ pub use crate::cli::host::machine::config::config_set;
 pub use crate::cli::host::machine::config::config_show;
 pub use crate::cli::host::machine::config::config_unset;
 pub(crate) use crate::cli::host::machine::config::write_host_config;
+pub use crate::cli::host::machine::disk::disk_cleanup;
 pub use crate::cli::host::machine::releases::activate::activate_staged_release;
 pub use crate::cli::host::machine::releases::platform::build;
 pub use crate::cli::host::machine::releases::platform::run_attached;
