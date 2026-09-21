@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{words, HostMemory, ReliefRow, RELOCATION_COOLDOWN_SECONDS};
+use super::{words, HostMemory, ReliefRow, PRESSURE_STICKY_SECONDS, RELOCATION_COOLDOWN_SECONDS};
 use crate::placement::{self, PlacementProfile};
 use crate::targets::Registry;
 
@@ -60,19 +60,49 @@ pub struct ReliefOutcome {
 }
 
 /// Every profile's row. `relocations` is the previous report's map of last
-/// relocation instants, for the cooldown.
+/// relocation instants, for the cooldown; `pressure_seen` is its map of when
+/// each host last published memory pressure, for the sticky window.
 pub fn plan(
     document: &Value,
     registry: &Registry,
     hosts: &BTreeMap<String, HostMemory>,
     relocations: &BTreeMap<String, String>,
+    pressure_seen: &BTreeMap<String, String>,
     now: DateTime<Utc>,
 ) -> Result<Vec<ReliefOutcome>, String> {
     let profiles = placement::profiles(document)?;
     Ok(profiles
         .into_iter()
-        .map(|profile| plan_profile(profile, registry, hosts, relocations, now))
+        .map(|profile| plan_profile(profile, registry, hosts, relocations, pressure_seen, now))
         .collect())
+}
+
+/// Whether this host counts as pressured right now: its own publication says
+/// so, or it published pressure inside [`PRESSURE_STICKY_SECONDS`].
+fn pressured(
+    host: &str,
+    memory: &HostMemory,
+    pressure_seen: &BTreeMap<String, String>,
+    now: DateTime<Utc>,
+) -> bool {
+    if memory.pressure_active {
+        return true;
+    }
+    seen_within_window(host, pressure_seen, now).is_some()
+}
+
+/// When this host last published pressure, if that was inside the window.
+fn seen_within_window(
+    host: &str,
+    pressure_seen: &BTreeMap<String, String>,
+    now: DateTime<Utc>,
+) -> Option<String> {
+    let last = pressure_seen.get(host)?;
+    let seen = DateTime::parse_from_rfc3339(last).ok()?;
+    let age = now
+        .signed_duration_since(seen.with_timezone(&Utc))
+        .num_seconds();
+    (age >= i64::default() && age < PRESSURE_STICKY_SECONDS).then(|| last.clone())
 }
 
 fn plan_profile(
@@ -80,6 +110,7 @@ fn plan_profile(
     registry: &Registry,
     hosts: &BTreeMap<String, HostMemory>,
     relocations: &BTreeMap<String, String>,
+    pressure_seen: &BTreeMap<String, String>,
     now: DateTime<Utc>,
 ) -> ReliefOutcome {
     let mut row = ReliefRow {
@@ -112,7 +143,7 @@ fn plan_profile(
         };
         return settle(row, words::EVIDENCE_STALE, detail);
     };
-    if !source.pressure_active {
+    if !pressured(&placed_on, source, pressure_seen, now) {
         return settle(
             row,
             words::SETTLED,
@@ -130,6 +161,7 @@ fn plan_profile(
                 declared(&target.name),
                 hosts.get(&target.name),
                 source,
+                seen_within_window(&target.name, pressure_seen, now).is_some(),
             )
         })
         .collect();
@@ -219,11 +251,16 @@ fn candidate(
     declared: bool,
     memory: Option<&HostMemory>,
     source: &HostMemory,
+    pressured_recently: bool,
 ) -> Candidate {
     let verdict = match memory {
         None => verdicts::NO_PUBLICATION,
         Some(memory) if memory.stale => verdicts::STALE,
-        Some(memory) if memory.pressure_active => verdicts::PRESSURED,
+        // A destination is judged over the same window as a source: a host
+        // that published pressure minutes ago and reads clear this second is
+        // not headroom, it is the same oscillation that hid the source's own
+        // pressure from this stage.
+        Some(memory) if memory.pressure_active || pressured_recently => verdicts::PRESSURED,
         Some(memory) if memory.swap_pressure_only => verdicts::SWAP_OVER,
         Some(memory) => match (memory.available_gb, source.available_gb) {
             (None, _) => verdicts::UNMEASURED,

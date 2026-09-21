@@ -6,10 +6,44 @@ use chrono::{SecondsFormat, Utc};
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::queue::{JobStorage, StorageError};
 
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc as UtcTz};
+
 use super::{
-    host_memory, plan, words, DueAction, ReliefReport, ReliefSummary, LATEST_REPORT,
-    MAX_RELOCATIONS_PER_TICK, REPORT_PREFIX, SCHEMA_VERSION,
+    host_memory, plan, words, DueAction, HostMemory, ReliefReport, ReliefSummary, LATEST_REPORT,
+    MAX_RELOCATIONS_PER_TICK, PRESSURE_STICKY_SECONDS, REPORT_PREFIX, SCHEMA_VERSION,
 };
+
+/// The hosts that have published memory pressure inside the sticky window:
+/// this tick's own pressured hosts stamped now, the previous report's
+/// entries kept while they are still inside the window, and everything older
+/// dropped.
+fn pressure_window(
+    hosts: &BTreeMap<String, HostMemory>,
+    previous: &BTreeMap<String, String>,
+    created_at: &str,
+    now: DateTime<UtcTz>,
+) -> BTreeMap<String, String> {
+    let mut seen: BTreeMap<String, String> = previous
+        .iter()
+        .filter(|(_, last)| {
+            DateTime::parse_from_rfc3339(last).is_ok_and(|last| {
+                let age = now
+                    .signed_duration_since(last.with_timezone(&UtcTz))
+                    .num_seconds();
+                age >= i64::default() && age < PRESSURE_STICKY_SECONDS
+            })
+        })
+        .map(|(host, last)| (host.clone(), last.clone()))
+        .collect();
+    for (host, memory) in hosts {
+        if memory.pressure_active && !memory.stale {
+            seen.insert(host.clone(), created_at.to_string());
+        }
+    }
+    seen
+}
 
 pub async fn reconcile(
     store: &JobStorage,
@@ -21,8 +55,8 @@ pub async fn reconcile(
     let decision_id = format!("placement-relief-{}", created_at.replace(':', "-"));
     let previous =
         crate::autonomy::storage::read_json::<ReliefReport>(store, LATEST_REPORT).await?;
-    let mut relocations = previous
-        .map(|report| report.relocations)
+    let (mut relocations, previous_pressure) = previous
+        .map(|report| (report.relocations, report.pressure_seen))
         .unwrap_or_default();
 
     let (document, generation) = crate::cli::registry::fetch_versioned_document()
@@ -32,8 +66,19 @@ pub async fn reconcile(
         .map_err(|error| StorageError::Other(format!("placement relief: {error}")))?;
     let publications = crate::queue::capacity::read_publications(store).await?;
     let hosts = host_memory(&registry, &publications, now);
-    let outcomes = plan(&document, &registry, &hosts, &relocations, now)
-        .map_err(|error| StorageError::Other(format!("placement relief: {error}")))?;
+    // Every host that says it is pressured right now stamps this instant;
+    // the rest keep whatever the previous report remembered, and anything
+    // older than the window is dropped so the map cannot grow without bound.
+    let pressure_seen = pressure_window(&hosts, &previous_pressure, &created_at, now);
+    let outcomes = plan(
+        &document,
+        &registry,
+        &hosts,
+        &relocations,
+        &pressure_seen,
+        now,
+    )
+    .map_err(|error| StorageError::Other(format!("placement relief: {error}")))?;
 
     let mut summary = ReliefSummary {
         profiles: outcomes.len(),
@@ -273,6 +318,7 @@ pub async fn reconcile(
         summary,
         rows,
         relocations,
+        pressure_seen,
     };
     crate::autonomy::storage::write_json(store, LATEST_REPORT, &report, false).await?;
     crate::autonomy::storage::write_json(

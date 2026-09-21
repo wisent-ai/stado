@@ -54,6 +54,22 @@ const SCHEMA_VERSION: u16 = 1;
 /// the load to say so.
 pub const RELOCATION_COOLDOWN_SECONDS: i64 = 1800;
 
+/// How long one published pressure reading keeps a host pressured for this
+/// stage, whatever its next publication says.
+///
+/// The decision used to be one instantaneous sample. charless-mac-mini
+/// declares a 2 GiB floor and oscillates across it every few minutes: on
+/// 2026-09-21 the tick at 18:01:19Z read `2.5 GiB available, pressure clear`
+/// and settled the profile, while `stado placement relief` typed seconds
+/// later read `1.7 GiB available, pressure active` — and every hand reading
+/// that hour saw pressure. A host in that state is not healthy between the
+/// dips; it is a host with no memory left, and a stage that samples it once
+/// per tick relieves it only by luck. Pressure therefore sticks for this
+/// window, and a host has to publish clear for the whole of it before the
+/// profile on it settles. Three times the memory pass's five-minute cadence,
+/// so a genuinely recovered host is settled within a quarter of an hour.
+pub const PRESSURE_STICKY_SECONDS: i64 = 900;
+
 /// Relocations one tick may execute. One: every destination's headroom was
 /// measured before the first move, and a second profile placed onto the same
 /// host in the same tick would be placed on headroom the first move already
@@ -142,4 +158,9 @@ pub struct ReliefReport {
     /// move nothing.
     #[serde(default)]
     pub relocations: BTreeMap<String, String>,
+    /// Host name to the RFC 3339 instant it last published memory pressure.
+    /// Carried forward, so a host that dips below its watermark between two
+    /// ticks is still treated as pressured by the next one.
+    #[serde(default)]
+    pub pressure_seen: BTreeMap<String, String>,
 }
