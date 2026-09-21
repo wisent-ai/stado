@@ -78,6 +78,14 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
             .line()
             .unwrap_or_else(|| "not observed".to_string())
     );
+    // Which of the two sources answered, on its own line: a memory reading
+    // taken by this command off a silent host and one the host published
+    // itself are different facts, and an operator acting on the first has to
+    // know the agent is not talking.
+    println!(
+        "memory evidence: {}",
+        gates.memory.source.unwrap_or("not observed")
+    );
     println!(
         "pressure evidence: {}",
         gates.pressure_source.unwrap_or("not observed")

@@ -190,4 +190,42 @@ fn used_swap_alone_does_not_withhold_a_host_with_memory_headroom() {
     }
 }
 
+/// A host whose agent publishes nothing still gets a memory verdict.
+///
+/// `stado host gates` read memory out of the capacity publication alone, so
+/// the one host it matters most for — the machine whose agent has no memory
+/// left to publish with — printed `memory: not observed`. On 2026-09-21
+/// lukasz-macbook read that way while `stado space report` on the same host,
+/// in the same minute, measured 708 MiB available of 65536 MiB with 23,386,723
+/// swapouts since boot. The verdict now falls back to this command's own
+/// reading of the host, and says which of the two sources it used.
+#[test]
+fn a_host_with_no_capacity_publication_is_still_measured_for_memory() {
+    let storage = setup();
+    let gates = stado(storage.path(), &["host", "gates", TARGET, "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&gates.stdout)
+        .unwrap_or_else(|error| panic!("host gates printed no JSON document: {error}"));
+
+    assert_eq!(
+        report["memory"]["source"],
+        serde_json::json!("host_memory_measurement"),
+        "a silent host's memory was not measured by the command itself: {report}"
+    );
+    let available = report["memory"]["available_gb"].as_f64();
+    assert!(
+        available.is_some_and(|gb| gb > f64::default()),
+        "no memory availability was reported for a host this command just read: {report}"
+    );
+    let watermark = report["memory"]["low_watermark_gb"].as_f64();
+    assert!(
+        watermark.is_some_and(|gb| gb > f64::default()),
+        "a memory reading was reported with no watermark to measure it against: {report}"
+    );
+    assert_eq!(
+        report["memory"]["refuse_placement"],
+        serde_json::json!(false),
+        "the fixture declares no memory policy, so nothing may refuse placement: {report}"
+    );
+}
+
 mod refusals;

@@ -26,18 +26,41 @@ use crate::targets::{self, RegistryStore};
 const PATH_SEPARATOR: char = '.';
 const NAME_FIELD: &str = "name";
 const SET_RECEIPT_SCHEMA: &str = "stado.registry-set-receipt.v1";
+/// The directory whose readers count on its generation, and the field they
+/// count.
+const DIRECTORY_KEY: &str = "service_directory";
+const DIRECTORY_GENERATION: &str = "generation";
 
-/// The field's place: the value it holds now, so the receipt can say what was
-/// replaced, and a mutable borrow of it.
+/// The value a dotted path names, mutably, creating the last key when the
+/// object that would hold it is already there.
+///
+/// Only the last one: a typo in the middle of a path is still refused with
+/// the keys that exist, because inventing `targets.charles-mac-mini` would
+/// write a host nothing reads. But a field a new release added and no
+/// document carries yet — `…consumers.<consumer>.grants`, on 2026-09-20 —
+/// has to be writable by the command the documentation names, or the
+/// declaration it describes can never be made at all.
 fn leaf<'a>(document: &'a mut Value, path: &str) -> Result<&'a mut Value, CmdError> {
     let mut value = document;
     let mut walked = String::new();
-    for segment in path.split(PATH_SEPARATOR).filter(|part| !part.is_empty()) {
+    let segments: Vec<&str> = path
+        .split(PATH_SEPARATOR)
+        .filter(|part| !part.is_empty())
+        .collect();
+    let last = segments.len().saturating_sub(1);
+    for (at, segment) in segments.into_iter().enumerate() {
         let here = if walked.is_empty() {
             "<root>".to_string()
         } else {
             walked.clone()
         };
+        if at == last {
+            if let Value::Object(fields) = value {
+                if !fields.contains_key(segment) {
+                    fields.insert(segment.to_string(), Value::Null);
+                }
+            }
+        }
         value = step(value, segment, &here)?;
         if !walked.is_empty() {
             walked.push(PATH_SEPARATOR);
@@ -45,6 +68,20 @@ fn leaf<'a>(document: &'a mut Value, path: &str) -> Result<&'a mut Value, CmdErr
         walked.push_str(segment);
     }
     Ok(value)
+}
+
+/// The value that would hold this path's last segment, when the document
+/// carries it. Used to tell a new field from a mistyped path.
+fn holder_of<'a>(document: &'a Value, path: &str) -> Option<&'a Value> {
+    let segments: Vec<&str> = path
+        .split(PATH_SEPARATOR)
+        .filter(|part| !part.is_empty())
+        .collect();
+    let (_, parent) = segments.split_last()?;
+    if parent.is_empty() {
+        return Some(document);
+    }
+    select(document, &parent.join(&PATH_SEPARATOR.to_string())).ok()
 }
 
 /// One step of the same dotted path `pull --path` reads, mutably. The
@@ -186,8 +223,17 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
         }
     }
     // Read the field first, so a path that does not resolve is refused
-    // before anything is serialised, with the reader's own sentence.
-    let previous = select(&document, path)?.clone();
+    // before anything is serialised, with the reader's own sentence. A last
+    // segment the document does not carry yet is not such a path: its
+    // holder is there and the write creates it, so what it replaces is
+    // nothing.
+    let previous = match select(&document, path) {
+        Ok(found) => found.clone(),
+        Err(refusal) => match holder_of(&document, path) {
+            Some(Value::Object(_)) => Value::Null,
+            _ => return Err(refusal),
+        },
+    };
     let replacement = parsed(value);
     if previous == replacement {
         return report(
@@ -202,6 +248,23 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
         );
     }
     *leaf(&mut document, path)? = replacement.clone();
+    // A service directory that changed and kept its generation is a document
+    // every resolver believes it has already read: the validator refuses it,
+    // and rightly. The number belongs to the change, so it moves with it here
+    // rather than in a second command an operator has to remember.
+    if path.starts_with(DIRECTORY_KEY) {
+        let generation = document
+            .get(DIRECTORY_KEY)
+            .and_then(|directory| directory.get(DIRECTORY_GENERATION))
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        if let Some(Value::Object(fields)) = document.get_mut(DIRECTORY_KEY) {
+            fields.insert(
+                DIRECTORY_GENERATION.to_string(),
+                Value::from(generation.saturating_add(1)),
+            );
+        }
+    }
     let payload = serde_json::to_string_pretty(&document)?;
     // The same gate `push` runs: a document that would not validate never
     // reaches the registry, whatever field was changed.

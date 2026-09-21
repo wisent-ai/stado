@@ -1,0 +1,12 @@
+[
+  {
+    "consumer": "oko-model-router-client",
+    "capabilities": ["read:oko-model-router#token"],
+    "token_file": "$HOME/.stado/oko-model-router-skarbiec-token"
+  },
+  {
+    "consumer": "oko-model-agent-auth-client",
+    "capabilities": ["read:oko-model-agent-auth#agent_auth_secret"],
+    "token_file": "$HOME/.stado/oko-model-agent-auth-client-skarbiec-token"
+  }
+]

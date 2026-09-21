@@ -15,7 +15,9 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use super::payload::diag_flag;
+use crate::deploy::host_disk::DiskReading;
 use crate::deploy::host_gates::gates::HostGates;
+use crate::targets::ComputeTarget;
 
 /// The admission reason a host publishes while its memory declaration refuses
 /// placement. The same word the publisher writes, read back here.
@@ -27,6 +29,18 @@ pub const MEMORY_PRESSURE_ACTIVE: &str =
 /// exactly this condition withheld the fleet's only Linux builder for three
 /// consecutive `skarbiec` releases.
 pub const MEMORY_SWAP_OVER_WATERMARK: &str = "memory_swap_over_watermark";
+
+/// Where the memory half of the verdict was read.
+///
+/// The host's own live publication when it is talking, and this command's own
+/// measurement of the host when it is not. The disk half has had that second
+/// source since it was written; memory had only the first, so on 2026-09-21
+/// `stado host gates lukasz-macbook` printed `memory: not observed` while the
+/// same fleet's `stado space report lukasz-macbook` read 708 MiB available of
+/// 65536 MiB with 23,386,723 swapouts — a machine that had been paging for
+/// days, on the surface built to say why a host is slow to answer.
+pub const MEMORY_SOURCE_PUBLICATION: &str = "capacity_publication";
+pub const MEMORY_SOURCE_MEASUREMENT: &str = "host_memory_measurement";
 
 /// What this host published about its own memory, as the verdict carries it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -54,6 +68,9 @@ pub struct MemoryGate {
     /// never recorded one - the same distinction the disk janitor's age keeps.
     pub pass_success_age_seconds: Option<i64>,
     pub pass_outcome: Option<String>,
+    /// Which of the two sources this reading came from, or `None` when
+    /// neither answered.
+    pub source: Option<&'static str>,
 }
 
 impl MemoryGate {
@@ -71,6 +88,7 @@ impl MemoryGate {
             "policy_mode": self.policy_mode,
             "pass_success_age_seconds": self.pass_success_age_seconds,
             "pass_outcome": self.pass_outcome,
+            "source": self.source,
         })
     }
 
@@ -137,6 +155,66 @@ pub fn apply(
             .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
             .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds()),
         pass_outcome: text(report, "outcome"),
+        source: Some(MEMORY_SOURCE_PUBLICATION),
+    };
+    if gates.memory.pressure_active {
+        gates.blockers.push(MEMORY_PRESSURE_ACTIVE.to_string());
+        gates.claiming = false;
+    } else if gates.memory.swap_pressure_only {
+        gates.notes.push(MEMORY_SWAP_OVER_WATERMARK.to_string());
+    }
+}
+
+/// Read the memory half out of this command's own measurement of the host.
+///
+/// The twin of what the disk half does when the publication is absent or
+/// stale: the same predicate the host's own pass uses, applied to the numbers
+/// just read off that host, against the watermark the fleet declares for it.
+/// A host whose agent cannot publish is exactly the host an operator is
+/// looking at when it has stopped answering, and memory is the first thing
+/// that explains it.
+pub fn apply_measured(
+    gates: &mut HostGates,
+    target: &ComputeTarget,
+    reading: &DiskReading,
+    now: DateTime<Utc>,
+) {
+    let memory = &reading.memory;
+    if memory.available_bytes.is_none() && memory.swap_used_pct().is_none() {
+        return;
+    }
+    let declared = crate::providers::local::host_memory::schema::declared(target);
+    let policy = declared.clone().unwrap_or_else(
+        crate::providers::local::host_memory::MemoryReclaimPolicy::reporting_default,
+    );
+    let gib = crate::providers::local::host_memory::constants::MIB as f64 * 1024.0;
+    let withholds = memory
+        .withholds_placement(policy.low_free_bytes(), policy.high_swap_used_pct)
+        .unwrap_or(false);
+    let over_swap = memory
+        .swap_used_pct()
+        .is_some_and(|pct| pct >= policy.high_swap_used_pct);
+    let state = Some(&reading.memory_state);
+    gates.memory = MemoryGate {
+        pressure_active: policy.refuse_placement && withholds,
+        refuse_placement: Some(policy.refuse_placement),
+        available_gb: memory
+            .available_bytes
+            .map(|bytes| (bytes as f64 / gib * 10.0).round() / 10.0),
+        total_gb: memory
+            .total_bytes
+            .map(|bytes| (bytes as f64 / gib * 10.0).round() / 10.0),
+        low_watermark_gb: Some(policy.low_free_bytes() as f64 / gib),
+        swap_used_pct: memory.swap_used_pct(),
+        swap_high_watermark_pct: Some(policy.high_swap_used_pct),
+        swap_pressure_only: over_swap && !withholds,
+        policy_mode: Some(policy.mode.clone()),
+        pass_success_age_seconds: text(state, "last_success_at")
+            .as_deref()
+            .and_then(|stamp| DateTime::parse_from_rfc3339(&stamp.replace('Z', "+00:00")).ok())
+            .map(|stamp| (now - stamp.with_timezone(&Utc)).num_seconds()),
+        pass_outcome: text(state, "outcome"),
+        source: Some(MEMORY_SOURCE_MEASUREMENT),
     };
     if gates.memory.pressure_active {
         gates.blockers.push(MEMORY_PRESSURE_ACTIVE.to_string());

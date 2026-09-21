@@ -202,5 +202,43 @@ fi
 printf 'STADO_RECLAIM_STAGE\trunner_work_trees\t%s\t%s\n' "$before" "$(free_kb)"
 fi
 
+if stage_enabled tagged_build_caches; then
+before=$(free_kb)
+# The build tools' own caches, under the roots the registry declares for the
+# `build_caches` cleaner.
+#
+# The janitor already has that cleaner and on a Mac it cannot run it: the
+# declared root is inside the operator's Documents folder, the agent that
+# sweeps it holds no Full Disk Access grant, and every pass on
+# lukasz-macbook ended `build_caches:OSError (Operation not permitted)` with
+# 0.0 GiB freed while the volume sat at 99% and the host published
+# `disk_pressure_active`, refusing every queued release build. This stage is
+# the same eviction run from the command the operator invokes, which does
+# hold that access, so the space is reclaimable by a product command instead
+# of by hand.
+#
+# Only a directory carrying a `CACHEDIR.TAG` written by the build tool
+# itself is taken: cargo writes one into every `target/`, and the tag is the
+# tool's own statement that everything below it can be made again. The depth
+# cap keeps one sweep bounded on a checkout with hundreds of thousands of
+# directories; the age gate and the argv/lsof guards keep a build in flight
+# untouched, and the stage stops as soon as the declared target is met.
+for cache_root in @BUILD_CACHE_ROOTS@; do
+  [ -d "$cache_root" ] || continue
+  for tag in $(/usr/bin/find "$cache_root" -maxdepth @BUILD_CACHE_DEPTH@ -type f -name CACHEDIR.TAG 2>/dev/null); do
+    entry=$(/usr/bin/dirname "$tag")
+    [ -d "$entry" ] || continue
+    if [ -L "$entry" ]; then continue; fi
+    stale "$entry" || continue
+    process_absent "$entry" || continue
+    if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
+      break
+    fi
+    reclaim "$entry" tagged_build_caches
+  done
+done
+printf 'STADO_RECLAIM_STAGE\ttagged_build_caches\t%s\t%s\n' "$before" "$(free_kb)"
+fi
+
 printf 'STADO_RECLAIM_FREE\tafter\t%s\n' "$(free_kb)"
 "#;

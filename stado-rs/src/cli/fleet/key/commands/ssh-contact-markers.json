@@ -1,0 +1,27 @@
+{
+  "why": "What ssh says when adoption's first contact fails, split by the only distinction adoption cares about: whether a credential was ever offered. If the TCP or DNS leg never completed, nothing about the operator's key has been learned and the host is simply not there; if the server answered and refused, the key or the host identity is the problem and retrying the same way will fail the same way. Both lists are wording observed from real ssh runs against this fleet, which is why they are a record and not a guess. The fleet-wide equivalent for arbitrary command failures lives in `src/primitives/failure-needles.json`; these stay separate because that vocabulary has no code for 'reached and refused the operator' and because ssh's own spellings are far narrower than the generic network family.",
+  "unreachable_why": "The TCP/DNS leg never completed, so no credential was ever offered.",
+  "unreachable": [
+    "connection refused",
+    "connection timed out",
+    "operation timed out",
+    "no route to host",
+    "network is unreachable",
+    "host is down",
+    "could not resolve hostname",
+    "name or service not known",
+    "nodename nor servname",
+    "temporary failure in name resolution",
+    "no address associated with hostname",
+    "connection closed by remote host"
+  ],
+  "rejected_why": "The server was reached and refused the operator — the key, the password attempts, or the host identity.",
+  "rejected": [
+    "permission denied",
+    "too many authentication failures",
+    "no supported authentication methods",
+    "authentications that can continue",
+    "host key verification failed",
+    "remote host identification has changed"
+  ]
+}

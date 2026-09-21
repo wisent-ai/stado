@@ -43,6 +43,16 @@ const TARGET_FREE_KB_MARK: &str = "@TARGET_FREE_KB@";
 const LOCAL_EVIDENCE_MODE_MARK: &str = "@LOCAL_EVIDENCE_MODE@";
 const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
 const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
+const BUILD_CACHE_ROOTS_MARK: &str = "@BUILD_CACHE_ROOTS@";
+const BUILD_CACHE_DEPTH_MARK: &str = "@BUILD_CACHE_DEPTH@";
+
+/// How deep below a declared root a build tool's own `CACHEDIR.TAG` is looked
+/// for. Six levels reaches `<checkouts>/<repo>/<crate>/target` and the nested
+/// workspaces beside it, and stops one sweep from walking a whole home
+/// directory: the janitor pass that had no such bound crossed 59,588 of
+/// 879,559 directories on lukasz-macbook before its deadline and reclaimed
+/// nothing.
+const BUILD_CACHE_DEPTH: &str = "6";
 
 /// The fixed remote program.
 ///
@@ -89,9 +99,18 @@ pub fn remote_script(
     stages: &[String],
     live_jobs: Option<&[String]>,
     work_roots: &str,
+    build_cache_roots: &str,
     target_free_gb: Option<i64>,
 ) -> String {
-    remote_script_with_stado(apply, stages, live_jobs, work_roots, target_free_gb, None)
+    remote_script_with_stado(
+        apply,
+        stages,
+        live_jobs,
+        work_roots,
+        build_cache_roots,
+        target_free_gb,
+        None,
+    )
 }
 
 pub(super) fn remote_script_with_stado(
@@ -99,6 +118,7 @@ pub(super) fn remote_script_with_stado(
     stages: &[String],
     live_jobs: Option<&[String]>,
     work_roots: &str,
+    build_cache_roots: &str,
     target_free_gb: Option<i64>,
     current_stado: Option<&str>,
 ) -> String {
@@ -142,6 +162,8 @@ pub(super) fn remote_script_with_stado(
         )
         .replace(CLONE_AGE_MINUTES_MARK, CLONE_MIN_AGE_MINUTES)
         .replace(WORK_ROOTS_MARK, work_roots)
+        .replace(BUILD_CACHE_ROOTS_MARK, build_cache_roots)
+        .replace(BUILD_CACHE_DEPTH_MARK, BUILD_CACHE_DEPTH)
         .replace(CONTAINER_PREFIX_MARK, CONTAINER_PREFIX)
         .replace(CLONE_CONTAINER_MARK, chromium_clones::CLONE_CONTAINER)
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
@@ -167,6 +189,7 @@ mod tests {
             &["queue_workdirs".to_string()],
             None,
             "/fixture",
+            "\"$HOME\"",
             Some(18),
         );
 

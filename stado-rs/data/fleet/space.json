@@ -48,6 +48,12 @@
       ]
     },
     {
+      "name": "tagged_build_caches",
+      "description": "Directories carrying a build tool's own CACHEDIR.TAG beneath the roots the registry declares for the build_caches cleaner. What the janitor's cleaner cannot reach on a Mac, because its root is inside the operator's protected folders and the agent holds no Full Disk Access grant.",
+      "roots": [],
+      "roots_from": "registry targets[].disk_cleanup.cleaners.build_caches.root, or the account's home directory where none is declared"
+    },
+    {
       "name": "chromium_clones",
       "description": "Stale macOS Chromium code-signing clones.",
       "roots": [],

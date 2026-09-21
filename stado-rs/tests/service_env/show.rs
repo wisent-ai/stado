@@ -121,6 +121,7 @@ fn env_show_withholds_credentials_and_shows_endpoints_whatever_the_key_is_called
          WELES_CREDENTIAL_SKARBIEC_URL=http://127.0.0.1:8895\n\
          WELES_DATABASE_URL=postgres://weles:hunter2@db.internal:5432/weles\n\
          WELES_API_PORT=8896\n\
+         WELES_SESSION_PERSIST=True\n\
          WELES_STATE_DIR=$HOME/.local/state/weles\n",
     );
 
@@ -171,6 +172,12 @@ fn env_show_withholds_credentials_and_shows_endpoints_whatever_the_key_is_called
     assert!(
         row(&text, "WELES_STATE_DIR").contains("$HOME/.local/state/weles"),
         "a variable reference was hidden:\n{text}"
+    );
+    // A boolean is a boolean however Python spelled it. This key names a
+    // session, so only the value keeps it out of the redacted set.
+    assert!(
+        row(&text, "WELES_SESSION_PERSIST").contains("True"),
+        "a capitalised boolean was withheld as if it were a secret:\n{text}"
     );
     // Exactly the two values above are the ones that stayed on the host.
     assert!(

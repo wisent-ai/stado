@@ -8,6 +8,53 @@ use super::token::Token;
 use super::Channel;
 use crate::deploy::DeployError;
 
+/// The named stop a trajectory reported, when the envelope carries one.
+///
+/// Every Weles trajectory ends by printing one JSON report: `{ok, blocked,
+/// detail, …}`. A refused run answers HTTP 502 with that report in
+/// `stdout_tail` and `result: null`, and the reading below used to take the
+/// whole envelope's last line instead — so `stado credentials seed-enrol`
+/// told the operator `the Weles API refused /run with 502 Bad Gateway:
+/// {"ok":false,"exitCode":4,…}` while the trajectory's own sentence about
+/// which page it could not open sat inside it, unread (2026-09-20).
+fn trajectory_stop(payload: &Value) -> Option<String> {
+    named_stop(payload)
+        .or_else(|| payload.get("result").and_then(named_stop))
+        .or_else(|| nested_stop(payload))
+}
+
+/// The report inside a captured stream. A trajectory prints it on its own
+/// stdout, so it arrives as a line inside `stdout_tail` — and when the run
+/// was driven through another layer, as a line inside a report inside that
+/// string. Both are searched, newest line first: on 2026-09-21 the
+/// authenticator enrolment's `google_push_not_approved` sat one level deeper
+/// than the first reading looked, and the operator got the raw 502 envelope.
+fn nested_stop(payload: &Value) -> Option<String> {
+    match payload {
+        Value::String(text) => text
+            .lines()
+            .rev()
+            .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+            .find_map(|report| trajectory_stop(&report)),
+        Value::Object(fields) => fields
+            .values()
+            .find_map(|field| named_stop(field).or_else(|| nested_stop(field))),
+        Value::Array(items) => items
+            .iter()
+            .find_map(|item| named_stop(item).or_else(|| nested_stop(item))),
+        _ => None,
+    }
+}
+
+/// One report's stop: the code it named, and the sentence beside it.
+fn named_stop(report: &Value) -> Option<String> {
+    let blocked = report.get("blocked").and_then(Value::as_str)?;
+    match report.get("detail").and_then(Value::as_str) {
+        Some(detail) if !detail.trim().is_empty() => Some(format!("{blocked}: {detail}")),
+        _ => Some(blocked.to_owned()),
+    }
+}
+
 impl Channel {
     /// The state of the bearer token this channel is using, for the report.
     pub fn token_state(&self) -> &'static str {
@@ -70,10 +117,13 @@ impl Channel {
         if status.is_success() && payload.get("ok").and_then(Value::as_bool) == Some(true) {
             return Ok(payload);
         }
-        let detail = payload
-            .get("error")
-            .and_then(Value::as_str)
-            .map(str::to_string)
+        let detail = trajectory_stop(&payload)
+            .or_else(|| {
+                payload
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| {
                 body.lines()
                     .rfind(|line| !line.trim().is_empty())
@@ -161,5 +211,78 @@ impl Channel {
                     "the Weles API answered {route} unreadably: {error}"
                 ))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trajectory_stop;
+    use serde_json::json;
+
+    #[test]
+    fn a_stop_in_the_result_is_the_refusal() {
+        let stop = trajectory_stop(&json!({
+            "ok": false,
+            "result": {"ok": false, "blocked": "setup_action_not_found",
+                       "detail": "the authenticator page showed no \"Set up authenticator\""},
+        }));
+        assert_eq!(
+            stop.as_deref(),
+            Some(
+                "setup_action_not_found: the authenticator page showed no \"Set up authenticator\""
+            )
+        );
+    }
+
+    /// What a refused enrolment really answers: `result` is null and the
+    /// trajectory's report is the last JSON line of its captured stdout.
+    #[test]
+    fn a_stop_printed_on_stdout_is_found_there() {
+        let stop = trajectory_stop(&json!({
+            "ok": false,
+            "exitCode": 4,
+            "result": null,
+            "stdout_tail": "[wsession] start() label=google-authenticator-enrol\n\
+                {\"ok\":false,\"blocked\":\"google_sign_in_required\",\"detail\":\"the account is signed out in this profile\"}\n",
+        }));
+        assert_eq!(
+            stop.as_deref(),
+            Some("google_sign_in_required: the account is signed out in this profile")
+        );
+    }
+
+    /// The 2026-09-21 authenticator enrolment: the report the operator needed
+    /// — Google sent a push nobody approved — arrived inside a report inside
+    /// the captured stdout, one level below where the first reading looked.
+    #[test]
+    fn a_stop_nested_one_level_deeper_is_still_found() {
+        let inner = json!({
+            "ok": false,
+            "login_item": "claude-wisent-google-sso",
+            "blocked": "google_push_not_approved",
+            "detail": "Google asked the account's phone to approve the sign-in and no approval arrived",
+        })
+        .to_string();
+        let stop = trajectory_stop(&json!({
+            "ok": false,
+            "exitCode": 3,
+            "result": null,
+            "stdout_tail": format!("[wsession] start()\n{{\"report\":{inner}}}\n"),
+        }));
+        assert_eq!(
+            stop.as_deref(),
+            Some(
+                "google_push_not_approved: Google asked the account's phone to approve the sign-in and no approval arrived"
+            )
+        );
+    }
+
+    /// An envelope carrying no report must not be given one.
+    #[test]
+    fn an_envelope_without_a_report_names_no_stop() {
+        assert_eq!(
+            trajectory_stop(&json!({"ok": false, "error": "worker busy", "result": null})),
+            None
+        );
     }
 }

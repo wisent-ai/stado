@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.21.36"
+version = "0.21.39"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
@@ -86,6 +86,10 @@ path = "src/bin/stado_mcp.rs"
 [[bin]]
 name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
+
+[[test]]
+name = "failure_classification"
+path = "tests/failure_classification/main.rs"
 
 [[test]]
 name = "channel"

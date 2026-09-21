@@ -150,7 +150,10 @@ function has_userinfo(text) {
 function inert(text) {
   if (text ~ /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/) return 1
   if (text ~ /^[0-9]+$/) return 1
-  if (text ~ /^(true|false|yes|no|on|off|TRUE|FALSE|YES|NO|ON|OFF)$/) return 1
+  # A boolean however it is cased. The spellings used to be listed twice,
+  # once lower and once upper, so `True` and `Yes` — which every Python
+  # service in this fleet writes — read as values that might hold a secret.
+  if (tolower(text) ~ /^(true|false|yes|no|on|off)$/) return 1
   if (text ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[A-Za-z0-9._-]+(:[0-9]+)?(\/[A-Za-z0-9._~\/-]*)?$/) return 1
   if (text ~ /^[A-Za-z0-9._-]+:[0-9]+$/) return 1
   return 0

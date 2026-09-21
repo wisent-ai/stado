@@ -74,36 +74,143 @@ pub(super) async fn serve_adapter(
     }
 }
 
+/// One connection's last activity, in milliseconds since the proxy accepted
+/// it, shared by both directions.
+///
+/// A request/response connection is silent in one direction for as long as
+/// the service works, so a per-direction idle timer is not a measure of a
+/// dead connection at all: it is a cap on how long an answer may take, and
+/// when it fired the proxy shut the half it was copying into. On 2026-09-21
+/// that ended four `stado release submit` runs with `connection closed before
+/// message completed` against `stado://probierz/...` while the object API on
+/// the active host was answering normally and slowly, with 84 jobs running on
+/// it. A connection is idle when NEITHER direction has moved a byte inside
+/// the window; the retention bound the window exists for is unchanged,
+/// because a connection nobody is using is still closed after it.
+struct Activity {
+    started: std::time::Instant,
+    last_millis: std::sync::atomic::AtomicU64,
+    /// The client's first bytes were an HTTP request, so a refusal written
+    /// back to it is a message it can read rather than noise in a protocol
+    /// this proxy knows nothing about.
+    client_spoke_http: std::sync::atomic::AtomicBool,
+}
+
+impl Activity {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            last_millis: std::sync::atomic::AtomicU64::new(0),
+            client_spoke_http: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn touch(&self) {
+        self.last_millis.store(
+            self.started.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// How long ago either direction last moved a byte.
+    fn since(&self) -> Duration {
+        let last = self.last_millis.load(std::sync::atomic::Ordering::Relaxed);
+        self.started
+            .elapsed()
+            .saturating_sub(Duration::from_millis(last))
+    }
+
+    fn saw_request(&self, head: &[u8]) {
+        if http_request_head(head) {
+            self.client_spoke_http
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn spoke_http(&self) -> bool {
+        self.client_spoke_http
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// What one direction did, so a cut can be reported with the bytes behind it.
+struct Transfer {
+    bytes: u64,
+    cut: bool,
+}
+
 async fn copy_until_idle<R, W>(
     reader: &mut R,
     writer: &mut W,
     idle: Duration,
-) -> Result<bool, std::io::Error>
+    activity: &Activity,
+    on_cut: Option<&[u8]>,
+) -> Result<Transfer, std::io::Error>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     let mut buffer = [0_u8; 16 * 1024];
+    let mut bytes = 0_u64;
     loop {
         let read = match tokio::time::timeout(idle, reader.read(&mut buffer)).await {
             Ok(result) => result?,
             Err(_) => {
-                writer.shutdown().await?;
-                return Ok(true);
+                // Silent in this direction only: the other one is moving, so
+                // the connection is in use and this is not the socket the
+                // window exists to reclaim.
+                if activity.since() < idle {
+                    continue;
+                }
+                return cut(writer, bytes, on_cut, activity).await;
             }
         };
         if read == 0 {
             writer.shutdown().await?;
-            return Ok(false);
+            return Ok(Transfer { bytes, cut: false });
         }
+        activity.saw_request(&buffer[..read]);
+        activity.touch();
         match tokio::time::timeout(idle, writer.write_all(&buffer[..read])).await {
             Ok(result) => result?,
             Err(_) => {
-                writer.shutdown().await?;
-                return Ok(true);
+                if activity.since() < idle {
+                    continue;
+                }
+                return cut(writer, bytes, on_cut, activity).await;
             }
         }
+        bytes = bytes.saturating_add(read as u64);
+        activity.touch();
     }
+}
+
+/// End one direction on the idle window, telling the reader why when it has
+/// received nothing yet.
+///
+/// A client whose connection simply closes reports a transport error — `error
+/// sending request ...: connection closed before message completed` — and
+/// nothing in that sentence names the proxy, the window or the service that
+/// did not answer. Four `stado release submit` runs ended that way on
+/// 2026-09-21 and the cause had to be found by reading this file. Once a byte
+/// of the answer has already been forwarded the message cannot be retracted,
+/// so the close is all that is left and the served log carries the sentence.
+async fn cut<W>(
+    writer: &mut W,
+    bytes: u64,
+    on_cut: Option<&[u8]>,
+    activity: &Activity,
+) -> Result<Transfer, std::io::Error>
+where
+    W: AsyncWrite + Unpin,
+{
+    if bytes == 0 && activity.spoke_http() {
+        if let Some(message) = on_cut {
+            let _ = writer.write_all(message).await;
+        }
+    }
+    writer.shutdown().await?;
+    Ok(Transfer { bytes, cut: true })
 }
 
 /// Terse refusal for clients that speak HTTP, sent before the prompt close.
@@ -246,8 +353,44 @@ async fn proxy_connection(
         }
     };
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
-    let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle);
-    let download = copy_until_idle(&mut upstream_read, &mut client_write, idle);
-    tokio::try_join!(upload, download).map_err(|error| format!("proxy failed: {error}"))?;
+    let activity = Activity::new();
+    // What a client reads instead of a silent close: the service that did not
+    // answer, and the window it was measured against. `Connection: close` and
+    // an exact length, so a client library parses it as a complete message.
+    let body = format!(
+        "service {} did not answer within the {}s idle window this adapter declares\n",
+        adapter.service,
+        idle.as_secs()
+    );
+    let timeout_answer = format!(
+        "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle, &activity, None);
+    let download = copy_until_idle(
+        &mut upstream_read,
+        &mut client_write,
+        idle,
+        &activity,
+        Some(timeout_answer.as_bytes()),
+    );
+    let (sent, received) =
+        tokio::try_join!(upload, download).map_err(|error| format!("proxy failed: {error}"))?;
+    // A cut connection is the proxy's decision, and a client that received a
+    // truncated answer has to be able to read whose decision it was and after
+    // how long. Silence here is what made `connection closed before message
+    // completed` unattributable for four release runs.
+    if sent.cut || received.cut {
+        eprintln!(
+            "stado resolver service={} consumer={} endpoint={host}:{port} closed an idle \
+             connection after {}s with nothing moving in either direction: {} byte(s) to the \
+             service, {} byte(s) back",
+            adapter.service,
+            adapter.consumer,
+            idle.as_secs(),
+            sent.bytes,
+            received.bytes,
+        );
+    }
     Ok(())
 }
