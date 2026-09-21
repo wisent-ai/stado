@@ -61,16 +61,46 @@ fn path_names_file(path: &Path, file: &File) -> bool {
         && path_info.ino() == file_info.ino()
 }
 
+/// Who still holds a retired predecessor lock, said in one line.
+///
+/// A contended retired inode is a live process: the kernel releases an
+/// `flock` the moment its holder dies, so a lock that refuses this pass is
+/// held by something that is running now. Until 2026-09-21 the janitor said
+/// only "a retired cleanup lock inode is still held" and stopped, which on
+/// `lukasz-macbook` meant every pass persisted diagnostics and deleted
+/// nothing while the host sat 15.3 GiB below its disk target — with no way
+/// to learn which process to look at.
+fn holder_sentence(state_dir: &Path, file: &File) -> String {
+    let Some(holder) = read_lock_holder(state_dir, file) else {
+        return "a lock with no holder record".to_string();
+    };
+    let overdue = epoch_now() - holder.deadline_at;
+    let standing = if overdue > 0.0 {
+        format!("{overdue:.0}s past its own deadline")
+    } else {
+        format!("{:.0}s before its deadline", -overdue)
+    };
+    let living = if pid_alive(holder.pid) {
+        "running"
+    } else {
+        "gone, but its lock is still held by a process that inherited it"
+    };
+    format!(
+        "pid {} ({} {}), {standing}, {living}",
+        holder.pid, holder.writer, holder.writer_version
+    )
+}
+
 /// Check every retired predecessor inode while holding the current exclusive
 /// lock. An unlocked predecessor is removed; a still-locked one keeps this
 /// pass report-only so two lock generations can never authorize deletion at
-/// the same time.
+/// the same time — and names who is holding it.
 pub(crate) fn retired_locks_active(
     state_dir: &Path,
     current_lock: &File,
-) -> Result<bool, JanitorError> {
+) -> Result<Vec<String>, JanitorError> {
     let current_info = current_lock.metadata()?;
-    let mut active = false;
+    let mut holders = Vec::new();
     for entry in std::fs::read_dir(state_dir)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -99,11 +129,11 @@ pub(crate) fn retired_locks_active(
                     let _ = std::fs::remove_file(stale_holder);
                 }
             }
-            Err(error) if lock_contended(&error) => active = true,
+            Err(error) if lock_contended(&error) => holders.push(holder_sentence(state_dir, &file)),
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(active)
+    Ok(holders)
 }
 
 fn overdue_holder(state_dir: &Path, lock: &File) -> Option<(LockHolder, f64)> {

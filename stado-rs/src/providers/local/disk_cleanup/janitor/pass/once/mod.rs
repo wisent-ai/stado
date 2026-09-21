@@ -230,18 +230,21 @@ pub(crate) async fn cleanup_once(
             );
         }
     };
-    let predecessor_active = match retired_locks_active(&state_dir, &lock.file) {
-        Ok(active) => active,
+    let predecessor_holders = match retired_locks_active(&state_dir, &lock.file) {
+        Ok(holders) => holders,
         Err(error) => {
             report.add_error("lock_recovery", &error);
-            true
+            vec!["a retired lock this pass could not examine".to_string()]
         }
     };
+    let predecessor_active = !predecessor_holders.is_empty();
     if predecessor_active {
-        let detail =
-            "a retired cleanup lock inode is still held; this pass persists diagnostics without scanning or deleting";
+        let detail = format!(
+            "a retired cleanup lock inode is still held by {}; this pass persists diagnostics without scanning or deleting",
+            predecessor_holders.join("; ")
+        );
         log_fn(&format!("disk cleanup: {detail}"));
-        report.add_error("lock_predecessor_active", &JanitorError::os(detail));
+        report.add_error("lock_predecessor_active", &JanitorError::os(&detail));
     }
     if taken_over || predecessor_active {
         report.outcome = "lock_recovery_report_only".to_string();
