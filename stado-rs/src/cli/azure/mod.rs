@@ -5,7 +5,6 @@
 //! Azure refresh credential is written to the globally selected credential
 //! store; authorization codes and access tokens remain process-local.
 
-use std::time::Duration;
 
 use clap::{Args, Subcommand};
 
@@ -45,10 +44,6 @@ where
     T::Err: std::fmt::Debug,
 {
     text.parse().expect("valid built-in number")
-}
-
-fn auth_timeout() -> Duration {
-    Duration::from_secs(parsed("600"))
 }
 
 fn callback_limit() -> usize {

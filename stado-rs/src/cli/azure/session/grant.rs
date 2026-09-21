@@ -11,7 +11,7 @@ use url::Url;
 use uuid::Uuid;
 
 use super::super::{
-    auth_timeout, callback_chunk_size, callback_limit, header_end_len, one, CmdError, ARM_SCOPE,
+    callback_chunk_size, callback_limit, header_end_len, one, CmdError, ARM_SCOPE,
     AZURE_CLI_CLIENT_ID,
 };
 
@@ -65,13 +65,16 @@ pub(super) fn open_system_browser(url: &str) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Wait for the browser to come back with the authorization code.
+///
+/// A person signing in reads a consent screen, finds a second factor and
+/// sometimes a password manager; what ends this wait is the redirect arriving
+/// or the operator stopping the command, not a number this process picked.
 pub(super) async fn receive_authorization_code(
     listener: TcpListener,
     expected_state: &str,
 ) -> Result<String, CmdError> {
-    let (mut stream, _) = tokio::time::timeout(auth_timeout(), listener.accept())
-        .await
-        .map_err(|_| CmdError::click("Azure login timed out waiting for the browser callback"))??;
+    let (mut stream, _) = listener.accept().await?;
     let mut request = Vec::new();
     let mut chunk = vec![u8::default(); callback_chunk_size()];
     while request.len() < callback_limit() {

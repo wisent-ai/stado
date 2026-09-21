@@ -35,24 +35,17 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
         "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{}",
         std::env::var("PATH").unwrap_or_default()
     );
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(90),
-        tokio::process::Command::new(&skarbiec)
-            .args(["get", item, "--field", "password"])
-            .env("SKARBIEC_VAULT_FILE", &vault)
-            .env("PATH", path)
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "{} reading {item}#password exceeded 90 seconds",
-            skarbiec.display()
-        )
-    })?
-    .map_err(|error| format!("cannot run {}: {error}", skarbiec.display()))?;
+    // The vault answers or the process exits; a keychain prompt on a loaded
+    // host is not a failed read.
+    let output = tokio::process::Command::new(&skarbiec)
+        .args(["get", item, "--field", "password"])
+        .env("SKARBIEC_VAULT_FILE", &vault)
+        .env("PATH", path)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|error| format!("cannot run {}: {error}", skarbiec.display()))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }

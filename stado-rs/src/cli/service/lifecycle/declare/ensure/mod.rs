@@ -93,31 +93,26 @@ async fn persist_ensure_record(
 /// authoritative read after activation, not merely the new process's PID.
 /// Only reads are repeated; the host action and conditional write never are.
 async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
-    let mut last_error = None;
-    let ready = async {
-        loop {
-            match registry::fetch_versioned_document().await {
-                Ok(snapshot) => return Ok(snapshot),
-                Err(error) => {
-                    let code = error.failure.unwrap_or_else(|| {
-                        crate::primitives::failure::classify_message(
-                            error.message.as_deref().unwrap_or_default(),
-                        )
-                    });
-                    if !code.retryable() {
-                        return Err(error);
-                    }
-                    last_error = Some(error);
+
+    // A registry that is restarting answers when it is back, and that answer
+    // is what this wait is for. A non-retryable failure still ends it at once,
+    // and the operator interrupting the command ends it too; what no longer
+    // ends it is a number that called a slow restart an outage.
+    loop {
+        match registry::fetch_versioned_document().await {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) => {
+                let code = error.failure.unwrap_or_else(|| {
+                    crate::primitives::failure::classify_message(
+                        error.message.as_deref().unwrap_or_default(),
+                    )
+                });
+                if !code.retryable() {
+                    return Err(error);
                 }
+                let _ = error;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
-    };
-    match tokio::time::timeout(std::time::Duration::from_secs(30), ready).await {
-        Ok(result) => result,
-        Err(_) => Err(last_error.unwrap_or_else(|| {
-            CmdError::click("the registry did not answer within 30 seconds after unit activation")
-                .stating(crate::primitives::failure::FailureCode::InfraDown)
-        })),
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 }
