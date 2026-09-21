@@ -123,9 +123,11 @@ pub(crate) async fn set_inference_container_running(
     } else {
         command.args(["stop", "--time", "30", &container]);
     }
-    let output = tokio::time::timeout(Duration::from_secs(45), command.output())
+    // `docker stop` already carries the thirty seconds it gives the container;
+    // the command's own exit is what says how the transition went.
+    let output = command
+        .output()
         .await
-        .map_err(|_| "docker inference transition timed out".to_string())?
         .map_err(|error| format!("docker inference transition failed: {error}"))?;
     if output.status.success() {
         return Ok(());

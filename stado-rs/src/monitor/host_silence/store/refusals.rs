@@ -30,11 +30,6 @@ const REFUSAL_MIN_INTERVAL: Duration = Duration::from_secs(60);
 /// extra blob per live key and no bookkeeping.
 const REFUSAL_THROTTLE_CAPACITY: usize = 512;
 
-/// Wall-clock ceiling on one best-effort refusal write, storage open
-/// included. A diagnostic that blocks the error path it is annotating has
-/// made the outage worse.
-const REFUSAL_WRITE_BUDGET: Duration = Duration::from_secs(5);
-
 type RefusalKey = (String, String, String);
 type RefusalThrottle = Mutex<HashMap<RefusalKey, Instant>>;
 
@@ -95,7 +90,7 @@ pub async fn record_refusal(
         return;
     };
     let path = refusal_object_path(host, at);
-    let _ = tokio::time::timeout(REFUSAL_WRITE_BUDGET, store.upload_text(&path, &body)).await;
+    let _ = store.upload_text(&path, &body).await;
 }
 
 /// Storage opened once per process for refusal publication.
@@ -118,8 +113,9 @@ async fn shared_store() -> Option<JobStorage> {
 
 /// [`record_refusal`] for a caller that holds no [`JobStorage`].
 ///
-/// Opens the fleet store itself, inside the same bounded budget, and
-/// swallows every failure including the open.
+/// Opens the fleet store itself and swallows every failure including the
+/// open. What it no longer does is abandon the write partway: a refusal
+/// nobody recorded is an outage nobody can read afterwards.
 pub async fn report_refusal(host: &str, reader: &str, reason: &str, detail: &str) {
     if !throttle_admits(host, reader, reason) {
         return;
@@ -136,10 +132,10 @@ pub async fn report_refusal(host: &str, reader: &str, reason: &str, detail: &str
         return;
     };
     let path = refusal_object_path(host, at);
-    let _ = tokio::time::timeout(REFUSAL_WRITE_BUDGET, async move {
+    let _ = async move {
         let store = shared_store().await?;
         store.upload_text(&path, &body).await.ok()
-    })
+    }
     .await;
 }
 

@@ -92,19 +92,13 @@ pub async fn advance_slot(
                             )
                             .await
                     };
-                    match tokio::time::timeout(Duration::from_secs(10), upload).await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(exc)) => {
-                            log_fn(&format!(
-                                "heartbeat log upload failed for {job_id}: {}",
-                                head_chars(&exc.to_string(), 160)
-                            ));
-                        }
-                        Err(_) => {
-                            log_fn(&format!(
-                                "heartbeat log upload failed for {job_id}: timed out after 10s"
-                            ));
-                        }
+                    // The upload finishes or the store refuses it; a slow
+                    // object store was losing the job's output log here.
+                    if let Err(exc) = upload.await {
+                        log_fn(&format!(
+                            "heartbeat log upload failed for {job_id}: {}",
+                            head_chars(&exc.to_string(), 160)
+                        ));
                     }
                 }
             }
