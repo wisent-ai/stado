@@ -294,6 +294,14 @@ pub fn assemble(
         published_diagnostics: payload.and_then(|value| value.get("diag")).cloned(),
     };
     super::memory::apply(&mut gates, payload, publication_current, now);
+    // No live publication is where a memory diagnosis matters most, and it is
+    // where this verdict had none: the agent that would publish it is on the
+    // machine that has no memory left to run it. The numbers this command just
+    // read off the host are used instead, against the watermark the fleet
+    // declares, and the gate says which of the two it read.
+    if !publication_current {
+        super::memory::apply_measured(&mut gates, target, reading, now);
+    }
     // The agent's reason for refusing, in its own word. A live publication
     // only: a stale one is the agent no longer talking, which
     // `capacity_publication_stale` already says. The memory refusal above

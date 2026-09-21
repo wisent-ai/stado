@@ -108,7 +108,8 @@ pub enum DiskScope {
     GateInputs,
     /// A current free-space reading, independent of janitor and snapshot reads.
     UsageOnly,
-    /// Janitor state and snapshots, without repeating the filesystem measurement.
+    /// Janitor state, memory and snapshots, without repeating the filesystem
+    /// measurement.
     StateOnly,
 }
 
@@ -303,9 +304,15 @@ pub fn remote_script_for(scope: DiskScope) -> String {
     if scope != DiskScope::StateOnly {
         script.push_str(DISK_USAGE_SECTION);
         script.push_str(VOLUMES_SECTION);
-        script.push_str(MEMORY_SECTION);
-        script.push_str(MEMORY_STATE_SECTION);
     }
+    // Memory belongs to the state read, not to the filesystem measurement:
+    // `host gates` splits its host reads into `UsageOnly` for free space and
+    // `StateOnly` for the janitor, and memory was in neither, so a verdict
+    // that carries a memory gate had nothing to fill it with unless the host's
+    // agent was publishing. `vm_stat`, `sysctl` and one small state file are
+    // what this adds to a read that is already running the janitor's.
+    script.push_str(MEMORY_SECTION);
+    script.push_str(MEMORY_STATE_SECTION);
     script.push_str(CLEANUP_STATE_SECTION);
     if scope == DiskScope::Full {
         script.push_str(CLEANUP_LOCK_SECTION);
