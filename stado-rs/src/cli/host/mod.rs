@@ -61,6 +61,7 @@ pub(crate) use crate::cli::host::secrets::vault::item::put::store_vault_item;
 pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
 pub use crate::cli::host::secrets::vault::item::retag::retag_vault_item;
 pub use crate::cli::host::secrets::vault::item::show::vault_item_show;
+pub use crate::cli::host::secrets::vault::item::stamp::stamp_vault_fingerprints;
 pub(crate) use crate::cli::host::secrets::vault::item::vault_item_state;
 pub use crate::cli::host::secrets::vault::mirror::sync::sync_vault;
 pub use crate::cli::host::secrets::vault::token::vault_token_mint;

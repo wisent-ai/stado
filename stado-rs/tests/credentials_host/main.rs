@@ -20,6 +20,7 @@
 //! and in `refusals.rs`, invalid host, item, field and vault authority inputs
 //! cannot select another usable source or change persisted data.
 
+mod fingerprints;
 mod host;
 mod publication;
 mod refusals;

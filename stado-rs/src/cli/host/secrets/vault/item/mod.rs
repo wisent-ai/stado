@@ -1,8 +1,10 @@
-//! One vault item: show it, retag it, or replace it.
+//! One vault item: show it, retag it, replace it, or stamp what the vault's
+//! items hold so duplicates can be found.
 
 pub(in crate::cli::host) mod put;
 pub(in crate::cli::host) mod retag;
 pub(in crate::cli::host) mod show;
+pub(in crate::cli::host) mod stamp;
 
 use serde_json::Value;
 

@@ -84,7 +84,10 @@ async fn live_job_ids_for_candidates_within(
                 continue;
             }
             let state = store.workdir_job_state(job_id).await.map_err(|error| {
-                unreadable(&format!("read the state of job {job_id}"), &error.to_string())
+                unreadable(
+                    &format!("read the state of job {job_id}"),
+                    &error.to_string(),
+                )
             })?;
             match state {
                 crate::queue::storage::WorkdirJobState::Terminal => {
