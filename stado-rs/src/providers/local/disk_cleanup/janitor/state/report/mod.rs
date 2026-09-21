@@ -99,6 +99,7 @@ pub struct CleanupReport {
     /// Mac this is what decides whether anything the other cleaners removed
     /// became free space.
     pub local_snapshots: CleanerReport,
+    pub object_evidence: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_job_count: i64,

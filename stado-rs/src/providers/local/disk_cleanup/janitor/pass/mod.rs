@@ -250,6 +250,21 @@ pub(crate) async fn run_with_lock(
             log_fn,
         );
     }
+    // The store this host serves for the fleet's products. It belongs here
+    // rather than to whichever product wrote the bytes, because a host under
+    // disk pressure refuses jobs — including the job that would have run
+    // that product's own retention — so reclamation owned by the queue never
+    // reaches the host that needs it most.
+    crate::providers::local::disk_cleanup::object_evidence::scan_object_evidence(
+        home,
+        &policy,
+        attempted_at,
+        policy.max_scan_items,
+        std::time::Instant::now()
+            + std::time::Duration::from_secs(policy.max_pass_seconds.unwrap_or(600).max(1) as u64),
+        policy.mode == "enforce",
+        &mut report,
+    );
     // After the cleaners and before the volume is measured: on a Mac their
     // deletions are worth nothing until the snapshots pinning those blocks
     // are thinned, which is why a pass could remove 54 build trees on

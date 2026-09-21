@@ -10,7 +10,8 @@ use crate::providers::local::disk_cleanup::janitor::state::report::{
 };
 use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
 use crate::providers::local::disk_cleanup::{
-    backup_twins, build_caches, chromium_clones, job_outputs, local_snapshots, queue_workdirs,
+    backup_twins, build_caches, chromium_clones, job_outputs, local_snapshots, object_evidence,
+    queue_workdirs,
     release_store,
 };
 use crate::targets;
@@ -44,6 +45,7 @@ impl CleanupReport {
             backup_twins: CleanerReport::default(),
             release_store: CleanerReport::default(),
             local_snapshots: CleanerReport::default(),
+            object_evidence: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
             active_job_count: active_job_count.max(0),
@@ -152,6 +154,7 @@ impl CleanupReport {
                 backup_twins::CLEANER: cleaner(&self.backup_twins),
                 release_store::CLEANER: cleaner(&self.release_store),
                 local_snapshots::CLEANER: cleaner(&self.local_snapshots),
+                object_evidence::CLEANER: cleaner(&self.object_evidence),
             })
         } else {
             Value::Null

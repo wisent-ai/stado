@@ -23,6 +23,7 @@ pub mod hf;
 mod janitor;
 pub mod job_outputs;
 pub mod local_snapshots;
+pub mod object_evidence;
 pub mod queue_workdirs;
 pub mod release_store;
 pub mod safefs;

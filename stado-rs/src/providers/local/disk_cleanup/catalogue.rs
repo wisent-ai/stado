@@ -82,6 +82,14 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         root_override_since: None,
     },
     CleanerDeclaration {
+        name: super::object_evidence::CLEANER,
+        since: "0.21.43",
+        default_root: "",
+        sweeps: "product run evidence in this host's object store, under the declared root and past the declared age",
+        min_age_floor_seconds: 604_800,
+        root_override_since: Some("0.21.43"),
+    },
+    CleanerDeclaration {
         name: "release_store",
         since: "0.15.26",
         default_root: super::release_store::RELEASES_ROOT,
