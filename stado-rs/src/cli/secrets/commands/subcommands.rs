@@ -34,6 +34,17 @@ pub enum CredentialItemCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Stamp payload fingerprints onto the owner vault's items so the
+    /// duplicate report and the duplicate refusal cover every row.
+    StampFingerprints {
+        #[arg(long)]
+        host: String,
+        /// Write the fingerprints. Without it, report what the pass would do.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
