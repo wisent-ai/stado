@@ -2,6 +2,7 @@
 
 pub(in crate::cli::host) mod api;
 pub(in crate::cli::host) mod lifecycle;
+pub(in crate::cli::host) mod ports;
 pub(in crate::cli::host) mod publish;
 pub(in crate::cli::host) mod units;
 

@@ -70,6 +70,9 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             lines,
             json,
         } => host::unit_log(&target, &unit, lines, json).await,
+        HostStateCommands::PortOwner { target, port, json } => {
+            host::port_owner(&target, port, json).await
+        }
         HostStateCommands::StorageRootReconcileWorker {
             target,
             target_config,
