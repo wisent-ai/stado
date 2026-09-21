@@ -8,6 +8,7 @@
 mod artifacts;
 mod commit;
 mod declare;
+mod passes;
 mod supervision;
 
 use crate::models::isoformat_utc;

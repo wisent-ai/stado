@@ -2,7 +2,9 @@
 //! the fleet expects.
 
 mod build_skew;
+mod deliveries;
 mod recipes;
 
 pub use build_skew::*;
+pub use deliveries::*;
 pub use recipes::*;

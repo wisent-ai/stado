@@ -41,6 +41,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Quota { json, sub } => quota::dispatch(json, &sub).await,
         PlatformCommands::Registry(sub) => registries::dispatch(sub).await,
         PlatformCommands::Builds(sub) => builds::run(sub).await,
+        PlatformCommands::Delivery(sub) => crate::cli::delivery::run(sub).await,
         PlatformCommands::Fleet(sub) => fleet::run(sub).await,
         PlatformCommands::Identity(sub) => identities::dispatch(sub).await,
         PlatformCommands::Host(sub) => hosts::dispatch(sub).await,

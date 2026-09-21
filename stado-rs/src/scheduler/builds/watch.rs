@@ -16,7 +16,7 @@ const LS_REMOTE_TIMEOUT_SECONDS: u64 = 30;
 /// `git ls-remote <repo> <ref>` -> the remote sha, under a hard timeout and
 /// with credential prompts disabled (an unauthenticated private repo must
 /// fail, not hang).
-pub(super) async fn ls_remote(repo: &str, branch: &str) -> Result<String, String> {
+pub(crate) async fn ls_remote(repo: &str, branch: &str) -> Result<String, String> {
     let mut command = tokio::process::Command::new("git");
     command
         .args(["ls-remote", "--", repo, branch])

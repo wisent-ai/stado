@@ -24,8 +24,42 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
         return Err(CmdError::click("--run-id must not be empty"));
     }
     let (mut document, generation) = fetch_mutation_document().await?;
+    let (submitted, updated) =
+        submit_recipe_build(&mut document, name, retry_token, "stado builds run").await?;
+    crate::cli::registry::push_document_if(&document, &generation).await?;
+    if json {
+        let jobs: Map<String, Value> = submitted
+            .iter()
+            .map(|(platform, run)| (platform.clone(), Value::String(run.job_id.clone())))
+            .collect();
+        return print_json(&json!({
+            "name": name,
+            "platforms": submitted.iter().map(|(platform, _)| platform).collect::<Vec<_>>(),
+            "jobs": jobs,
+            "recipe": updated,
+        }));
+    }
+    for (platform, run) in &submitted {
+        println!("{name}: submitted build job {} for {platform}", run.job_id);
+    }
+    Ok(())
+}
+
+/// Submit one build job per platform for a recipe into `document`, and record
+/// them as its runs. The caller owns the fence: it read the document and it
+/// writes it, so a qualification pass records its own rows in the same
+/// generation that records these runs.
+///
+/// `asked_by` is the surface the refusal names when the fleet's daily ceiling
+/// is spent, because a refusal that names no asker is one nobody can trace.
+pub(crate) async fn submit_recipe_build(
+    document: &mut Value,
+    name: &str,
+    retry_token: &str,
+    asked_by: &str,
+) -> Result<(Vec<(String, BuildRun)>, Value), CmdError> {
     let recipe: BuildRecipe = {
-        let entry = find_entry(builds_array(&mut document)?, name)?;
+        let entry = find_entry(builds_array(document)?, name)?;
         serde_json::from_value(entry.clone()).map_err(|error| {
             CmdError::click(format!("build recipe {name:?} does not parse: {error}"))
         })?
@@ -35,17 +69,16 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
             "build recipe {name:?} declares no usable platform ({error}); re-add it with --platform"
         ))
     })?;
-    // `run` is an operator saying "build it now", which is exactly the path
-    // that walked around the fleet's daily ceiling on 2026-09-21: the same
-    // count the poller spends is read here, from the same fenced document.
+    // Every path that submits a build reads the same count from the same
+    // fenced document: that is what stopped a session from walking around the
+    // fleet's daily ceiling on 2026-09-21.
     let now = chrono::Utc::now();
-    let budget = crate::scheduler::builds::BuildBudget::read(&document, now);
-    if let Some(refusal) = budget.refusal(platforms.len(), "stado builds run") {
+    let budget = crate::scheduler::builds::BuildBudget::read(document, now);
+    if let Some(refusal) = budget.refusal(platforms.len(), asked_by) {
         return Err(CmdError::click(refusal));
     }
     let command = crate::scheduler::builds::build_job_command(&recipe);
-    let at = isoformat_utc(chrono::Utc::now());
-    let mut jobs = Map::new();
+    let at = isoformat_utc(now);
     let mut submitted: Vec<(String, BuildRun)> = Vec::with_capacity(platforms.len());
     for platform in &platforms {
         let (platform_os, architecture) = platform_job_os_arch(platform).ok_or_else(|| {
@@ -64,7 +97,6 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
         let job = platform_jobs
             .pop()
             .ok_or_else(|| CmdError::click("durable build submission returned no job"))?;
-        jobs.insert(platform.clone(), Value::String(job.job_id.clone()));
         submitted.push((
             platform.clone(),
             BuildRun {
@@ -78,7 +110,7 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
             },
         ));
     }
-    let entry = find_entry(builds_array(&mut document)?, name)?;
+    let entry = find_entry(builds_array(document)?, name)?;
     let object = entry
         .as_object_mut()
         .expect("a named recipe entry is an object");
@@ -91,22 +123,10 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
         runs.insert(platform.clone(), serde_json::to_value(run)?);
     }
     let updated = normalized_recipe_json(entry);
-    // Counted in the same write that records the runs, so a build this
-    // command submits costs the fleet's day exactly what the poller's does.
-    budget.record(&mut document, submitted.len());
-    crate::cli::registry::push_document_if(&document, &generation).await?;
-    if json {
-        return print_json(&json!({
-            "name": name,
-            "platforms": platforms,
-            "jobs": jobs,
-            "recipe": updated,
-        }));
-    }
-    for (platform, run) in &submitted {
-        println!("{name}: submitted build job {} for {platform}", run.job_id);
-    }
-    Ok(())
+    // Counted in the same write that records the runs, so every build costs
+    // the fleet's day the same amount whoever asked for it.
+    budget.record(document, submitted.len());
+    Ok((submitted, updated))
 }
 
 /// `stado builds budget`: what the fleet has spent on builds today, and the

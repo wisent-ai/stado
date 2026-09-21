@@ -25,9 +25,41 @@ pub(super) async fn commit_run_outcomes(outcomes: &[RunOutcome]) -> Result<(), S
         .ok_or_else(|| format!("no registry document at {}", store.location()))?;
     let mut document: Value = serde_json::from_str(&versioned.content)
         .map_err(|exc| format!("registry parse failed: {exc}"))?;
-    let Some(entries) = document.get_mut(BUILDS_KEY).and_then(Value::as_array_mut) else {
-        return Ok(()); // every recipe removed since the cached read
-    };
+    let mut written = 0usize;
+    if let Some(entries) = document.get_mut(BUILDS_KEY).and_then(Value::as_array_mut) {
+        written = record_runs(entries, outcomes)?;
+    }
+
+    // The deliveries this build was submitted for settle in the same
+    // generation as its runs: a verdict written in a second write could be
+    // lost while the run it came from survives, and a delivery that reads
+    // `qualifying` forever is a task nobody gets back.
+    let passes = super::passes::settle_passes(&mut document, outcomes);
+    if written == 0 && passes == 0 {
+        return Ok(());
+    }
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&document)
+            .map_err(|exc| format!("registry serialize failed: {exc}"))?
+    );
+    store
+        .compare_and_swap(&versioned.version, &payload)
+        .await
+        .map_err(|exc| {
+            format!("recording {written} run(s) lost a concurrent registry write: {exc}")
+        })?;
+    Ok(())
+}
+
+/// Write each outcome onto its recipe's run for that platform, and answer
+/// how many were written.
+///
+/// A platform's run is replaced only when the job id still matches the one
+/// that was reconciled: a concurrent `builds run` for the same platform is a
+/// NEWER job, and stamping a finished job's outcome over it would lose the
+/// submission.
+fn record_runs(entries: &mut [Value], outcomes: &[RunOutcome]) -> Result<usize, String> {
     let mut written = 0usize;
     for outcome in outcomes {
         let Some(entry) = entries.iter_mut().find(|entry| {
@@ -57,19 +89,5 @@ pub(super) async fn commit_run_outcomes(outcomes: &[RunOutcome]) -> Result<(), S
         );
         written += 1;
     }
-    if written == 0 {
-        return Ok(());
-    }
-    let payload = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&document)
-            .map_err(|exc| format!("registry serialize failed: {exc}"))?
-    );
-    store
-        .compare_and_swap(&versioned.version, &payload)
-        .await
-        .map_err(|exc| {
-            format!("recording {written} run(s) lost a concurrent registry write: {exc}")
-        })?;
-    Ok(())
+    Ok(written)
 }

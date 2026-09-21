@@ -67,6 +67,11 @@ pub(crate) enum PlatformCommands {
     #[command(subcommand)]
     Builds(builds::BuildsCommands),
 
+    /// Record what was written but not yet proven, and prove a batch of it
+    /// in one build: deliver, pending, qualify, status, failures.
+    #[command(subcommand)]
+    Delivery(delivery::DeliveryCommands),
+
     /// Add machines to the fleet, group them, hold their SSH keys, and
     /// diagnose the workers: enroll, join/approve, key, doctor.
     #[command(subcommand)]

@@ -53,7 +53,7 @@ use super::CmdError;
 
 /// The mutable `builds` array of the raw registry document, created empty
 /// when the document does not carry one yet.
-fn builds_array(document: &mut Value) -> Result<&mut Vec<Value>, CmdError> {
+pub(crate) fn builds_array(document: &mut Value) -> Result<&mut Vec<Value>, CmdError> {
     document
         .as_object_mut()
         .ok_or_else(|| CmdError::click("registry: must be an object"))?
@@ -67,7 +67,10 @@ fn entry_name(entry: &Value) -> Option<&str> {
     entry.get("name").and_then(Value::as_str)
 }
 
-fn find_entry<'a>(entries: &'a mut [Value], name: &str) -> Result<&'a mut Value, CmdError> {
+pub(crate) fn find_entry<'a>(
+    entries: &'a mut [Value],
+    name: &str,
+) -> Result<&'a mut Value, CmdError> {
     entries
         .iter_mut()
         .find(|entry| entry_name(entry) == Some(name))

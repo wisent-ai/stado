@@ -26,6 +26,7 @@ pub mod config_cmd;
 pub mod cost;
 pub mod dashboard;
 pub mod database;
+pub mod delivery;
 pub mod directory;
 pub mod dns;
 pub mod doctor;
