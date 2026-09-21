@@ -279,3 +279,65 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
         "verified recipe={RECIPE}; job={job_id}; platform={platform}; artifact=build-output.txt"
     );
 }
+
+/// The fleet's daily build ceiling, through the real CLI against an isolated
+/// canonical registry: read it, declare it, spend it, and be refused.
+///
+/// On 2026-09-21 a session that could not run `stado release submit` declared
+/// a recipe and ran it instead, and nothing counted those builds against the
+/// workshop's three-a-day rule. The journey holds the count across separate
+/// processes, which is the property that matters: a limit one command knows
+/// about and the next one does not is not a limit.
+#[test]
+fn a_days_build_ceiling_is_counted_across_commands_and_refuses_the_next_build() {
+    let platform = build_platform();
+    let journey = Journey::new();
+
+    let default_budget: Value =
+        serde_json::from_slice(&journey.invoke_ok(&["builds", "budget", "--json"]).stdout).unwrap();
+    assert_eq!(default_budget["limit"], 3, "the workshop's standing rule");
+    assert_eq!(default_budget["used"], 0);
+
+    journey.invoke_ok(&[
+        "builds",
+        "add",
+        "--name",
+        RECIPE,
+        "--repo",
+        SOURCE,
+        "--branch",
+        "main",
+        "--command",
+        "true",
+        "--artifact",
+        "build-output.txt",
+        "--platform",
+        platform,
+    ]);
+    journey.invoke_ok(&["builds", "budget", "--limit", "1"]);
+
+    journey.invoke_ok(&["builds", "run", "--run-id", "budget-one", RECIPE]);
+    let spent: Value =
+        serde_json::from_slice(&journey.invoke_ok(&["builds", "budget", "--json"]).stdout).unwrap();
+    assert_eq!(spent["used"], 1, "the run was counted: {spent}");
+    assert_eq!(spent["remaining"], 0);
+
+    let refused = journey.invoke(&["builds", "run", "--run-id", "budget-two", RECIPE]);
+    assert_ne!(refused.status.code(), Some(0), "a spent day refuses");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("daily build budget is spent"), "{stderr}");
+    assert!(stderr.contains("1 of 1"), "{stderr}");
+    assert!(stderr.contains("stado builds budget --limit"), "{stderr}");
+
+    let after: Value =
+        serde_json::from_slice(&journey.invoke_ok(&["builds", "budget", "--json"]).stdout).unwrap();
+    assert_eq!(after["used"], 1, "a refused build costs nothing: {after}");
+
+    journey.invoke_ok(&["builds", "budget", "--limit", "2"]);
+    let raised: Value =
+        serde_json::from_slice(&journey.invoke_ok(&["builds", "budget", "--json"]).stdout).unwrap();
+    assert_eq!(raised["limit"], 2);
+    assert_eq!(raised["used"], 1, "raising the ceiling keeps the count");
+    journey.invoke_ok(&["builds", "run", "--run-id", "budget-three", RECIPE]);
+    println!("verified budget journey: recipe={RECIPE}; platform={platform}");
+}

@@ -51,6 +51,7 @@
 //! manifest and its signature (`stado release promote`) and stays a
 //! deliberate, separate step.
 
+mod budget;
 mod command;
 mod enqueue;
 mod receipts;
@@ -62,6 +63,7 @@ use std::time::{Duration, Instant};
 
 use crate::targets::{fetch_registry_remote, read_build_recipes, BUILDS_DISABLED_KEY};
 
+pub use budget::{BuildBudget, BUILD_BUDGET_KEY, DEFAULT_DAILY_BUILD_LIMIT};
 pub use command::{build_job_command, BUILD_VERSION_FILE};
 pub use enqueue::claimability::Claimability;
 

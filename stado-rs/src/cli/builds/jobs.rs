@@ -35,6 +35,14 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
             "build recipe {name:?} declares no usable platform ({error}); re-add it with --platform"
         ))
     })?;
+    // `run` is an operator saying "build it now", which is exactly the path
+    // that walked around the fleet's daily ceiling on 2026-09-21: the same
+    // count the poller spends is read here, from the same fenced document.
+    let now = chrono::Utc::now();
+    let budget = crate::scheduler::builds::BuildBudget::read(&document, now);
+    if let Some(refusal) = budget.refusal(platforms.len(), "stado builds run") {
+        return Err(CmdError::click(refusal));
+    }
     let command = crate::scheduler::builds::build_job_command(&recipe);
     let at = isoformat_utc(chrono::Utc::now());
     let mut jobs = Map::new();
@@ -83,6 +91,9 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
         runs.insert(platform.clone(), serde_json::to_value(run)?);
     }
     let updated = normalized_recipe_json(entry);
+    // Counted in the same write that records the runs, so a build this
+    // command submits costs the fleet's day exactly what the poller's does.
+    budget.record(&mut document, submitted.len());
     crate::cli::registry::push_document_if(&document, &generation).await?;
     if json {
         return print_json(&json!({
@@ -94,6 +105,48 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
     }
     for (platform, run) in &submitted {
         println!("{name}: submitted build job {} for {platform}", run.job_id);
+    }
+    Ok(())
+}
+
+/// `stado builds budget`: what the fleet has spent on builds today, and the
+/// ceiling it is measured against.
+///
+/// Reading it is the answer to "can I build now"; declaring a ceiling is a
+/// deliberate, recorded act, which is the difference between a limit the
+/// product holds and one somebody remembers.
+pub(crate) async fn budget(limit: Option<u64>, json: bool) -> Result<(), CmdError> {
+    let now = chrono::Utc::now();
+    let (mut document, generation) = fetch_mutation_document().await?;
+    let current = crate::scheduler::builds::BuildBudget::read(&document, now);
+    let budget = match limit {
+        Some(limit) => {
+            current.with_limit(&mut document, limit);
+            crate::cli::registry::push_document_if(&document, &generation).await?;
+            crate::scheduler::builds::BuildBudget::read(&document, now)
+        }
+        None => current,
+    };
+    if json {
+        return print_json(&json!({
+            "day": budget.day,
+            "used": budget.used,
+            "limit": budget.limit,
+            "remaining": budget.remaining(),
+        }));
+    }
+    println!(
+        "build budget {}: {} of {} build job(s) used, {} left",
+        budget.day,
+        budget.used,
+        budget.limit,
+        budget.remaining()
+    );
+    if budget.remaining() == 0 {
+        println!(
+            "every further build is refused until the count resets at midnight UTC; \
+             raise the ceiling deliberately with `stado builds budget --limit <N>`"
+        );
     }
     Ok(())
 }

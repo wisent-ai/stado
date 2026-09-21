@@ -12,6 +12,7 @@ use crate::targets::{
     fleet_namespace_mismatch, platform_job_os_arch, BuildRecipe, BuildRun, Registry, RegistryStore,
 };
 
+use super::budget::BuildBudget;
 use super::command::build_job_command;
 use super::watch::ls_remote;
 use claimability::Claimability;
@@ -63,6 +64,11 @@ pub(super) async fn poll_one(
     if let Some(mismatch) = fleet_namespace_mismatch(&document) {
         return Err(mismatch);
     }
+    // Read from the fenced document, before the recipe entry takes a
+    // mutable borrow of it: the count this pass may spend is the one that
+    // was durable when the fence was taken.
+    let now = chrono::Utc::now();
+    let budget = BuildBudget::read(&document, now);
     let Some(entry) = document
         .get_mut("builds")
         .and_then(Value::as_array_mut)
@@ -89,11 +95,18 @@ pub(super) async fn poll_one(
         ));
     }
     let command = build_job_command(&fresh);
-    let at = crate::models::isoformat_utc(chrono::Utc::now());
+    let at = crate::models::isoformat_utc(now);
     let queue = default_store(crate::config::bucket())
         .await
         .map_err(|exc| format!("queue store open failed: {exc}"))?;
     let claimability = Claimability::read(registry, &queue).await?;
+    // The fleet's day has a ceiling, and the poller is the path that spends
+    // it while nobody is watching: a recipe that moves every ten minutes is
+    // as many builds as its cadence allows.
+    if let Some(refusal) = budget.refusal(fresh.platforms.len(), &format!("recipe {}", fresh.name))
+    {
+        return Err(refusal);
+    }
     let mut runs: BTreeMap<String, BuildRun> = fresh.runs.clone();
     let mut submitted: Vec<String> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
@@ -197,6 +210,10 @@ pub(super) async fn poll_one(
     if reasons.is_empty() {
         object.insert("last_seen_ref".to_string(), Value::String(sha.clone()));
     }
+    // The count goes out under the same fence as the runs it belongs to: a
+    // build recorded without its cost is a budget that drifts up every time
+    // two writers race.
+    budget.record(&mut document, submitted.len());
     let payload = format!(
         "{}\n",
         serde_json::to_string_pretty(&document)

@@ -37,7 +37,7 @@
 //! the module doc that says why a mutation edits the raw document.
 
 mod declaration;
-mod jobs;
+pub(crate) mod jobs;
 mod report;
 mod surface;
 

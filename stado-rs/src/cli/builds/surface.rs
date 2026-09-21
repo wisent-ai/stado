@@ -128,6 +128,15 @@ pub enum BuildsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read the fleet's daily build budget, or declare a different ceiling.
+    Budget {
+        /// Builds the fleet may submit in one UTC day. Omit to read.
+        #[arg(long)]
+        limit: Option<u64>,
+        /// Emit the budget as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn run(command: BuildsCommands) -> Result<(), CmdError> {
@@ -198,5 +207,8 @@ pub async fn run(command: BuildsCommands) -> Result<(), CmdError> {
         BuildsCommands::Disable { name, json } => set_enabled(&name, false, json).await,
         BuildsCommands::Run { name, run_id, json } => run_now(&name, &run_id, json).await,
         BuildsCommands::Status { name, json } => status(&name, json).await,
+        BuildsCommands::Budget { limit, json } => {
+            crate::cli::builds::jobs::budget(limit, json).await
+        }
     }
 }
