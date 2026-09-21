@@ -4,7 +4,6 @@
 mod command;
 mod enqueue;
 
-pub(crate) use enqueue::RELEASE_BUILD_RUN_SCOPE;
 pub(in crate::cli::release_submit) mod platforms;
 pub(in crate::cli::release_submit) mod terminal;
 

@@ -9,5 +9,7 @@
 //! carries, below, is all this module was ever asked for.
 
 mod build_skew;
+mod routing;
 
 pub use build_skew::*;
+pub use routing::{platform_accepts_job, platform_job_os_arch};
