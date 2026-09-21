@@ -15,6 +15,21 @@ use crate::providers::local::disk_cleanup::{
     euid, ifmt, safefs, CleanupReport, JanitorError, IFDIR, IFLNK,
 };
 
+/// The suffixes macOS gives a bundle: a directory the Finder, the installer
+/// and the operating system treat as one file. A build tool never tags one,
+/// and their payloads are what a walk of a home directory spends its whole
+/// deadline on.
+const BUNDLE_SUFFIXES: [&str; 4] = [".app", ".framework", ".bundle", ".xcassets"];
+
+fn is_bundle(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    BUNDLE_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+}
+
 impl<'a> Walk<'a> {
     /// Examine every child of one frontier directory: judge the ones their
     /// build tool tagged, and hand the rest to the next level.
@@ -61,6 +76,18 @@ impl<'a> Walk<'a> {
                 continue;
             }
             let absolute = root.join(&relative);
+            // A macOS bundle is one opaque item to the person who installed
+            // it, and no build tool writes a tagged cache inside one. The
+            // walk used to descend anyway: on lukasz-macbook on 2026-09-21
+            // the pass reported 27493 directories still pending with its
+            // cursor inside `Applications/IBKR Desktop/IBKR Desktop
+            // Uninstaller.app`, so every pass spent its whole deadline on
+            // application payloads and never reached the fleet's own build
+            // output.
+            if is_bundle(name) {
+                report.skip_builds("application_bundle", 1);
+                continue;
+            }
             // Before the descriptor is opened: on macOS, opening it is what
             // raises the consent dialog this cleaner has no business raising.
             if self.privacy.iter().any(|item| absolute.starts_with(item)) {
