@@ -26,9 +26,16 @@ pub(crate) enum WorkCommands {
     /// Download job results.
     Results { job_id: String, output_dir: String },
 
-    /// Cancel a queued or running job.
+    /// Cancel a queued or running job, or every job still waiting in the
+    /// queue.
     Cancel {
-        job_id: String,
+        /// The job to cancel. Omitted with `--queued`, which selects them all.
+        job_id: Option<String>,
+        /// Cancel every job still in the queue, claimed by nobody. A fleet
+        /// that has queued work it no longer wants had to be emptied one id
+        /// at a time, which is how a queue stays full.
+        #[arg(long)]
+        queued: bool,
         /// Also delete the cloud instance the job is holding. Without it a
         /// cancelled job's VM keeps running, and billing.
         #[arg(long)]

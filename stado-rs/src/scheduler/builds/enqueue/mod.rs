@@ -210,10 +210,9 @@ pub(super) async fn poll_one(
     if reasons.is_empty() {
         object.insert("last_seen_ref".to_string(), Value::String(sha.clone()));
     }
-    // The count goes out under the same fence as the runs it belongs to: a
-    // build recorded without its cost is a budget that drifts up every time
-    // two writers race.
-    budget.record(&mut document, submitted.len());
+    // The charge itself was taken when each job was submitted, by the queue,
+    // so a path that never learned about the ceiling still pays and no path
+    // pays twice.
     let payload = format!(
         "{}\n",
         serde_json::to_string_pretty(&document)

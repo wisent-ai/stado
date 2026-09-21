@@ -401,3 +401,77 @@ fn the_window_counts_builds_from_the_queues_own_manifests() {
         "a manifest could not be read: {counted}"
     );
 }
+
+/// The ceiling has to hold for a submission that never went through
+/// `stado builds run`.
+///
+/// Until 2026-09-21 the count was asked by the three paths that knew they
+/// were submitting a build — the poller, `builds run`, the release pipeline —
+/// so a raw `stado submit` carrying a build command, a `stado job rerun` of a
+/// build job, or a client older than the ceiling spent the fleet's day and
+/// left the counter saying nothing had been spent. That is how six builds
+/// went out against a ceiling of three. The charge now belongs to the
+/// submission itself, so this asks the queue directly.
+#[test]
+fn a_build_submitted_outside_the_builds_command_is_counted_and_then_refused() {
+    let journey = Journey::new();
+    let compile = format!(
+        "set -eu; cargo build --release; printf '%s' 0.0.1 > {}",
+        "build-version.txt"
+    );
+
+    journey.invoke_ok(&["builds", "budget", "--limit", "1"]);
+    journey.invoke_ok(&["submit", "--command", &compile]);
+
+    let spent: Value =
+        serde_json::from_slice(&journey.invoke_ok(&["builds", "budget", "--json"]).stdout).unwrap();
+    assert_eq!(
+        spent["used"], 1,
+        "a build submitted straight to the queue was not counted: {spent}"
+    );
+
+    let refused = journey.invoke(&["submit", "--command", &compile]);
+    assert_ne!(
+        refused.status.code(),
+        Some(0),
+        "a spent day accepted another compile"
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("daily build budget is spent"), "{stderr}");
+
+    let plain = journey.invoke(&["submit", "--command", "printf hello"]);
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "a job that compiles nothing was refused by the build ceiling: {}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+}
+
+/// A queue nobody wants is emptied by one command.
+///
+/// On 2026-09-21 this fleet held 33 queued jobs that were no longer wanted
+/// and the only route was `stado cancel <id>` thirty-three times, which is
+/// how a queue stays full.
+#[test]
+fn the_whole_queue_is_cancelled_by_one_command() {
+    let journey = Journey::new();
+    journey.invoke_ok(&["submit", "--command", "printf one"]);
+    journey.invoke_ok(&["submit", "--command", "printf two"]);
+
+    let cancelled = journey.invoke_ok(&["cancel", "--queued"]);
+    let said = String::from_utf8_lossy(&cancelled.stdout);
+    assert!(said.contains("cancelled 2 queued job(s)"), "{said}");
+
+    let status = String::from_utf8_lossy(&journey.invoke_ok(&["status"]).stdout).to_string();
+    assert!(
+        !status.contains("queued"),
+        "the queue still holds work after cancelling it: {status}"
+    );
+
+    let again = journey.invoke_ok(&["cancel", "--queued"]);
+    assert!(
+        String::from_utf8_lossy(&again.stdout).contains("cancelled 0 queued job(s)"),
+        "cancelling an empty queue is not an error"
+    );
+}

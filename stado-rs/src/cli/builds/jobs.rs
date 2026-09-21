@@ -69,9 +69,10 @@ pub(crate) async fn submit_recipe_build(
             "build recipe {name:?} declares no usable platform ({error}); re-add it with --platform"
         ))
     })?;
-    // Every path that submits a build reads the same count from the same
-    // fenced document: that is what stopped a session from walking around the
-    // fleet's daily ceiling on 2026-09-21.
+    // The refusal comes first so the sentence names the recipe rather than
+    // the generic submission, but the charge itself belongs to the queue:
+    // `submit_batch` charges every command that compiles, so a path that
+    // forgot to ask still pays.
     let now = chrono::Utc::now();
     let budget = crate::scheduler::builds::BuildBudget::read(document, now);
     if let Some(refusal) = budget.refusal(platforms.len(), asked_by) {
@@ -123,9 +124,6 @@ pub(crate) async fn submit_recipe_build(
         runs.insert(platform.clone(), serde_json::to_value(run)?);
     }
     let updated = normalized_recipe_json(entry);
-    // Counted in the same write that records the runs, so every build costs
-    // the fleet's day the same amount whoever asked for it.
-    budget.record(document, submitted.len());
     Ok((submitted, updated))
 }
 

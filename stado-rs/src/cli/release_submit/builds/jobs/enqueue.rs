@@ -45,17 +45,16 @@ pub(crate) async fn enqueue(
     // A release submits one build per platform outside every recipe cadence,
     // and on 2026-09-21 that was 47 of the 58 builds this fleet started in a
     // day: a ceiling that covered the recipes and not the release pipeline
-    // would be a ceiling over the smaller half of the spending. The count is
-    // recorded under the registry's own fence, so two releases racing cannot
-    // spend the same allowance twice.
+    // would be a ceiling over the smaller half of the spending. The refusal
+    // is asked here so it names the release; the charge is taken by
+    // `submit_batch` when the build job is submitted, so no path can spend
+    // without being counted and no path is counted twice.
     let now = chrono::Utc::now();
-    let (mut document, generation) = crate::cli::registry::fetch_versioned_document().await?;
+    let (document, _generation) = crate::cli::registry::fetch_versioned_document().await?;
     let budget = crate::scheduler::builds::BuildBudget::read(&document, now);
     if let Some(refusal) = budget.refusal(usize::from(true), "a release build") {
         return Err(CmdError::click(refusal));
     }
-    budget.record(&mut document, usize::from(true));
-    crate::cli::registry::push_document_if(&document, &generation).await?;
     let submission_run_id = match prior_terminal_job_id {
         Some(prior_job_id) => stable_run_id(
             RELEASE_BUILD_RUN_SCOPE,

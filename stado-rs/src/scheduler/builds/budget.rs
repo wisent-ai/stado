@@ -37,6 +37,12 @@ pub struct BuildBudget {
     pub used: u64,
     /// Build jobs the fleet may submit on one day.
     pub limit: u64,
+    /// The submissions already charged today, by the key the charging path
+    /// knows before the job exists: its run id. Two paths may meet the same
+    /// build — the client that submits it and the worker that claims it —
+    /// and a day must be charged for that build once, so the key decides
+    /// rather than the order they arrive in.
+    pub charged: Vec<String>,
 }
 
 impl BuildBudget {
@@ -63,11 +69,28 @@ impl BuildBudget {
         // is the truth, and the count can only ever be understated by runs
         // the registry itself no longer holds.
         let used = counted.max(runs_submitted_on(document, &today));
+        let charged = entry
+            .filter(|budget| budget.get("day").and_then(Value::as_str) == Some(today.as_str()))
+            .and_then(|budget| budget.get("charged"))
+            .and_then(Value::as_array)
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             day: today,
             used,
             limit,
+            charged,
         }
+    }
+
+    /// Whether this submission has already been charged to today.
+    pub fn already_charged(&self, key: &str) -> bool {
+        self.charged.iter().any(|charged| charged == key)
     }
 
     /// What is left today.
@@ -99,8 +122,10 @@ impl BuildBudget {
     }
 
     /// Record `submitted` more builds against today's count, in the document
-    /// that is about to be written under the registry's fence.
-    pub fn record(&self, document: &mut Value, submitted: usize) {
+    /// that is about to be written under the registry's fence. `keys` are the
+    /// submissions this charge belongs to, kept so the same build reaching a
+    /// second charging path is not charged twice.
+    pub fn record(&self, document: &mut Value, submitted: usize, keys: &[String]) {
         if submitted == 0 {
             return;
         }
@@ -108,6 +133,12 @@ impl BuildBudget {
             return;
         };
         let spent = self.used.saturating_add(submitted as u64);
+        let mut charged = self.charged.clone();
+        for key in keys {
+            if !charged.iter().any(|seen| seen == key) {
+                charged.push(key.clone());
+            }
+        }
         let entry = object
             .entry(BUILD_BUDGET_KEY.to_string())
             .or_insert_with(|| Value::Object(Map::new()));
@@ -115,6 +146,7 @@ impl BuildBudget {
             "day": self.day,
             "used": spent,
             "limit": self.limit,
+            "charged": charged,
         });
     }
 
@@ -129,6 +161,7 @@ impl BuildBudget {
                 "day": self.day,
                 "used": self.used,
                 "limit": limit,
+                "charged": self.charged,
             }),
         );
     }
@@ -222,7 +255,7 @@ mod tests {
     fn a_submission_is_counted_and_a_new_ceiling_keeps_the_count() {
         let mut document = json!({ "builds": [] });
         let budget = BuildBudget::read(&document, at("2026-09-21"));
-        budget.record(&mut document, 2);
+        budget.record(&mut document, 2, &["run-a".to_string(), "run-b".to_string()]);
         let after = BuildBudget::read(&document, at("2026-09-21"));
         assert_eq!(after.used, 2);
         assert_eq!(after.remaining(), 1);
@@ -232,9 +265,28 @@ mod tests {
         assert_eq!(raised.limit, 6, "the ceiling changed");
         assert_eq!(raised.used, 2, "what was already built still counts");
         assert!(
+            raised.already_charged("run-a") && raised.already_charged("run-b"),
+            "a new ceiling forgot which builds were already paid for: {raised:?}"
+        );
+        assert!(
             document.get("builds").is_some(),
             "the rest of the registry document is untouched: {document}"
         );
+    }
+
+    /// One build reaches two charging paths — the client that submits it and
+    /// the worker that claims it — and the day owes one charge for it. The
+    /// submission's own key is what says so; without it the ceiling would
+    /// refuse every second build the fleet legitimately started.
+    #[test]
+    fn a_submission_already_charged_is_not_charged_again() {
+        let mut document = json!({ "builds": [] });
+        let budget = BuildBudget::read(&document, at("2026-09-21"));
+        budget.record(&mut document, 1, &["build-manual-x".to_string()]);
+        let after = BuildBudget::read(&document, at("2026-09-21"));
+        assert!(after.already_charged("build-manual-x"));
+        assert!(!after.already_charged("build-manual-y"));
+        assert_eq!(after.used, 1);
     }
 
     /// A counter that begins the day it ships would forgive every build the

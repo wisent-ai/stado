@@ -1,12 +1,17 @@
 //! `stado cancel JOB_ID [--terminate]` performs one durable, idempotent
-//! cancellation transition. Every accepted cancellation writes the marker
-//! consumed by agents/coordinators and moves the job to `cancelled/`; a
-//! cancelled job is never deleted or mislabeled as failed.
+//! cancellation transition, and `stado cancel --queued` performs it for every
+//! job still waiting in the queue. Every accepted cancellation writes the
+//! marker consumed by agents/coordinators and moves the job to `cancelled/`;
+//! a cancelled job is never deleted or mislabeled as failed.
 //!
 //! A recorded cloud instance is deleted before the state transition on every
 //! path so cancellation cannot knowingly leave paid capacity behind.
 //! `--terminate` additionally reports the instance lookup and fails loudly
 //! when a running job has no recoverable instance record.
+//!
+//! `--queued` exists because emptying a queue one id at a time is work nobody
+//! finishes: on 2026-09-21 this fleet held 33 queued jobs nobody wanted and
+//! the only route was 33 commands.
 
 use crate::machine::{canonical_json, recorded_instance, utcnow};
 use crate::models::job_state;
@@ -33,16 +38,60 @@ enum Termination {
     NoRecord { expected: bool },
 }
 
-pub async fn run(job_id: &str, terminate: bool) -> Result<(), CmdError> {
+pub async fn run(job_id: Option<&str>, queued: bool, terminate: bool) -> Result<(), CmdError> {
     let store = default_store(crate::config::bucket()).await?;
+    match (job_id, queued) {
+        (Some(job_id), false) => cancel_one(&store, job_id, terminate).await,
+        (None, true) => cancel_queue(&store, terminate).await,
+        (Some(_), true) => Err(CmdError::click(
+            "cancel takes a job id or --queued, not both: --queued already names every job \
+             waiting in the queue",
+        )),
+        (None, false) => Err(CmdError::click(
+            "cancel needs a job id, or --queued for every job still waiting in the queue",
+        )),
+    }
+}
 
+/// Cancel every job the queue still holds unclaimed.
+///
+/// Read first, then cancel each: a job that is claimed between the listing
+/// and its turn is already out of `queue/`, and `cancel_in_store` is
+/// idempotent about a job that has since gone terminal, so the pass neither
+/// races nor double-reports.
+async fn cancel_queue(store: &JobStorage, terminate: bool) -> Result<(), CmdError> {
+    let mut cancelled = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+    for prefix in ["queue", "queue_priority"] {
+        for job_id in store.list_job_ids(prefix).await? {
+            match cancel_one(store, &job_id, terminate).await {
+                Ok(()) => {
+                    cancelled += 1;
+                    println!("cancelled {job_id} (was {prefix})");
+                }
+                Err(error) => failed.push(format!("{job_id}: {error}")),
+            }
+        }
+    }
+    println!("cancelled {cancelled} queued job(s)");
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{} queued job(s) could not be cancelled:\n  {}",
+        failed.len(),
+        failed.join("\n  ")
+    )))
+}
+
+async fn cancel_one(store: &JobStorage, job_id: &str, terminate: bool) -> Result<(), CmdError> {
     // Stop any recorded paid capacity before publishing the terminal state.
     // The provider deletion contract is idempotent.
-    let terminated = terminate_instance(&store, job_id).await?;
+    let terminated = terminate_instance(store, job_id).await?;
     if terminate {
         report(&terminated, job_id);
     }
-    cancel_in_store(&store, job_id).await?;
+    cancel_in_store(store, job_id).await?;
 
     if terminate && matches!(terminated, Termination::NoRecord { expected: false }) {
         return Err(CmdError::click(format!(

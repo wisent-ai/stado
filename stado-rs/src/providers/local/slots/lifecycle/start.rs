@@ -105,6 +105,29 @@ pub async fn start_slot(
         log_fn(&format!("refuse {}: {raw_refusal}", job.job_id));
         return Ok(None);
     }
+    // A compile the fleet's day cannot pay for is refused on the machine that
+    // would run it, not only in the client that submitted it. Submission-side
+    // charging covers every current client; this covers the ones it cannot —
+    // a binary installed before the ceiling existed, a script, a host with an
+    // older release — because the builder is where the cost is actually
+    // spent. The charge here is what makes the refusal honest: a build that
+    // starts is a build the day has paid for.
+    if crate::scheduler::builds::compiles(&cmd) {
+        if let Err(refusal) = crate::scheduler::builds::charge(
+            &job.run_id,
+            usize::from(true),
+            "a build job claimed by a worker",
+        )
+        .await
+        {
+            job.state = job_state::FAILED.to_string();
+            job.failed_at = Some(isoformat_utc(Utc::now()));
+            job.error = Some(refusal.clone());
+            store.move_job(&job, "queue", "failed").await?;
+            log_fn(&format!("refuse {}: {refusal}", job.job_id));
+            return Ok(None);
+        }
+    }
     let work_dir = super::disk_cleanup::queue_workdirs::create_work_dir(&job.job_id)?;
     let artifact_inputs_json = canonical_json(&Value::Object(job.resolved_input_artifacts.clone()));
     let artifact_inputs_file = work_dir.join("artifacts.json");
