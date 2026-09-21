@@ -1,7 +1,7 @@
 //! The one place a compile is charged to the fleet's daily build budget.
 //!
 //! The ceiling used to be asked by each caller that knew it was submitting a
-//! build: the recipe poller, `stado builds run`, and the release pipeline.
+//! build: a recipe poller, a run-now command, and the release pipeline.
 //! Every one of them asked, and the fleet still started six builds in an hour
 //! against a ceiling of three on 2026-09-21, because the count is only ever
 //! as good as the paths that remember to ask. A path nobody updated —
