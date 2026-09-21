@@ -57,7 +57,13 @@ pub(super) async fn run_store_cleaners(
                     .saturating_duration_since(Instant::now())
                     .min(KEEP_LIST_BUDGET);
                 let wait = Instant::now();
-                let ids = fetch_live_job_ids(&candidates, budget).await;
+                let ids = match fetch_live_job_ids(&candidates, budget).await {
+                    Ok(ids) => Some(ids),
+                    Err(error) => {
+                        report.add_error(queue_workdirs::CLEANER, &error);
+                        None
+                    }
+                };
                 report.store_wait_ms = report
                     .store_wait_ms
                     .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
@@ -108,7 +114,13 @@ pub(super) async fn run_store_cleaners(
                     .saturating_duration_since(Instant::now())
                     .min(KEEP_LIST_BUDGET);
                 let wait = Instant::now();
-                let ids = fetch_terminal_job_ids(&candidates, budget).await;
+                let ids = match fetch_terminal_job_ids(&candidates, budget).await {
+                    Ok(ids) => Some(ids),
+                    Err(error) => {
+                        report.add_error(job_outputs::CLEANER, &error);
+                        None
+                    }
+                };
                 report.store_wait_ms = report
                     .store_wait_ms
                     .saturating_add(wait.elapsed().as_millis().min(i64::MAX as u128) as i64);
