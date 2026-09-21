@@ -54,10 +54,13 @@ fn stamp_of(line: &str) -> Option<&str> {
         .strip_prefix(SNAPSHOT_PREFIX)?
         .trim_end_matches(SNAPSHOT_SUFFIX);
     let shaped = stamp.len() == STAMP_LENGTH
-        && stamp.chars().enumerate().all(|(place, letter)| match place {
-            4 | 7 | 10 => letter == '-',
-            _ => letter.is_ascii_digit(),
-        });
+        && stamp
+            .chars()
+            .enumerate()
+            .all(|(place, letter)| match place {
+                4 | 7 | 10 => letter == '-',
+                _ => letter.is_ascii_digit(),
+            });
     shaped.then_some(stamp)
 }
 

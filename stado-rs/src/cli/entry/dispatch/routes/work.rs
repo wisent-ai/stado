@@ -1,6 +1,6 @@
 //! Where the queue-work verbs and the local worker land.
 
-use crate::cli::entry::spec::root::work::WorkCommands;
+use crate::cli::entry::spec::root::work::{QualityCommands, WorkCommands};
 use crate::cli::hosts::{agent, machine};
 use crate::cli::reporting::{results, status};
 use crate::cli::work::cancel;
@@ -17,6 +17,9 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
         } => cancel::run(job_id.as_deref(), queued, terminate).await,
         WorkCommands::Job(sub) => job::dispatch(sub).await,
         WorkCommands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
+        WorkCommands::Quality(sub) => match sub {
+            QualityCommands::Format { root } => crate::cli::quality::format(root.as_deref()).await,
+        },
         WorkCommands::Machine(sub) => match sub {
             MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
             MachineCommands::Status { job_id } => machine::status(&job_id).await,

@@ -55,6 +55,12 @@ pub async fn run(job_id: Option<&str>, queued: bool, terminate: bool) -> Result<
 
 /// Cancel every job the queue still holds unclaimed.
 ///
+/// Only `queue/` is read. `queue_priority/` beside it is the ordering index —
+/// `<inv_priority>-<created_at>-<job_id>.json` markers plus a migration
+/// sentinel — and reading those names as job ids is how the first pass
+/// reported `Job .migration not found`. A marker goes when the job it points
+/// at does.
+///
 /// Read first, then cancel each: a job that is claimed between the listing
 /// and its turn is already out of `queue/`, and `cancel_in_store` is
 /// idempotent about a job that has since gone terminal, so the pass neither
@@ -62,15 +68,10 @@ pub async fn run(job_id: Option<&str>, queued: bool, terminate: bool) -> Result<
 async fn cancel_queue(store: &JobStorage, terminate: bool) -> Result<(), CmdError> {
     let mut cancelled = 0usize;
     let mut failed: Vec<String> = Vec::new();
-    for prefix in ["queue", "queue_priority"] {
-        for job_id in store.list_job_ids(prefix).await? {
-            match cancel_one(store, &job_id, terminate).await {
-                Ok(()) => {
-                    cancelled += 1;
-                    println!("cancelled {job_id} (was {prefix})");
-                }
-                Err(error) => failed.push(format!("{job_id}: {error}")),
-            }
+    for job_id in store.list_job_ids("queue").await? {
+        match cancel_one(store, &job_id, terminate).await {
+            Ok(()) => cancelled += 1,
+            Err(error) => failed.push(format!("{job_id}: {error}")),
         }
     }
     println!("cancelled {cancelled} queued job(s)");

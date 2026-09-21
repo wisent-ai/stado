@@ -21,8 +21,8 @@ use crate::release_pipeline::{
 };
 
 /// The run scope every release build job is submitted under. Named here, the
-/// one place that writes it, so a reader counting this fleet's compiles
-/// (`stado builds usage`) can tell a release build from a recipe build.
+/// one place that writes it, so a reader counting this fleet's compiles can
+/// tell a release build from any other job.
 pub const RELEASE_BUILD_RUN_SCOPE: &str = "release-platform";
 
 // The build request's identity: every argument is a distinct coordinate the
@@ -41,14 +41,12 @@ pub(crate) async fn enqueue(
     manifest_uri: &str,
     prior_terminal_job_id: Option<&str>,
 ) -> Result<PlatformRun, CmdError> {
-    // The same daily budget `stado builds run` and the recipe poller ask.
-    // A release submits one build per platform outside every recipe cadence,
+    // The fleet's daily ceiling. A release submits one build per platform,
     // and on 2026-09-21 that was 47 of the 58 builds this fleet started in a
-    // day: a ceiling that covered the recipes and not the release pipeline
-    // would be a ceiling over the smaller half of the spending. The refusal
-    // is asked here so it names the release; the charge is taken by
-    // `submit_batch` when the build job is submitted, so no path can spend
-    // without being counted and no path is counted twice.
+    // day. Recipes and their poller are gone, so this is now the path that
+    // spends the ration: the refusal is asked here so it names the release,
+    // and the charge is taken by `submit_batch` when the job is submitted,
+    // so nothing spends without being counted and nothing is counted twice.
     let now = chrono::Utc::now();
     let (document, _generation) = crate::cli::registry::fetch_versioned_document().await?;
     let budget = crate::scheduler::builds::BuildBudget::read(&document, now);

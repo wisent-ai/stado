@@ -26,6 +26,10 @@ pub(crate) enum WorkCommands {
     /// Download job results.
     Results { job_id: String, output_dir: String },
 
+    /// Apply the formatting this product's own quality gate checks.
+    #[command(subcommand)]
+    Quality(QualityCommands),
+
     /// Cancel a queued or running job, or every job still waiting in the
     /// queue.
     Cancel {
@@ -78,5 +82,16 @@ pub(crate) enum WorkCommands {
         /// this offer (default 3600s = 1h). 0 to leave open-ended.
         #[arg(long, default_value_t = 3600)]
         vast_max_duration_s: i64,
+    },
+}
+
+/// The gates a product declares, applied rather than only read.
+#[derive(Subcommand)]
+pub(crate) enum QualityCommands {
+    /// Format this checkout the way its declared `fmt` gate reads it.
+    Format {
+        /// The checkout to format; the working directory by default.
+        #[arg(long)]
+        root: Option<String>,
     },
 }
