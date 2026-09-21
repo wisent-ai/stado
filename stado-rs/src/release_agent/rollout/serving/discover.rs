@@ -269,9 +269,11 @@ pub(crate) fn foreign_stable_bind_holder(
             _ => {}
         }
         if let Some((pid, name)) = holder.as_ref().filter(|(_, name)| !name.is_empty()) {
-            return Ok(Some(format!(
-                "{} is held by pid {pid} ({name}), which is not {product}'s release proxy",
-                serving.stable_bind
+            return Ok(Some(describe_holder(
+                &serving.stable_bind,
+                *pid,
+                name,
+                product,
             )));
         }
     }
@@ -281,4 +283,26 @@ pub(crate) fn foreign_stable_bind_holder(
             serving.stable_bind
         )
     }))
+}
+
+/// What to say about whoever holds the stable bind.
+///
+/// Two very different readings share this refusal. A foreign program on the
+/// port is a collision between two declarations. The product's OWN binary on
+/// it is not: it is a host still deployed the way this fleet ran before the
+/// release proxy existed, with the service unit serving the stable bind
+/// directly, and no rollout can start there until that unit moves off it. On
+/// charless-mac-mini on 2026-09-21 the sentence read like a stray process
+/// and sent a reader looking for something to kill; what held 8895 was
+/// `com.wisent.always-on.skarbiec`, the fleet's own managed unit.
+pub(crate) fn describe_holder(stable_bind: &str, pid: i32, name: &str, product: &str) -> String {
+    if name == product {
+        return format!(
+            "{stable_bind} is served directly by {product} itself (pid {pid}), the shape this \
+             fleet ran before the release proxy: the managed unit has to move off the stable \
+             bind before a candidate can be spawned behind it — read who serves it with \
+             stado service serving {product} --host <TARGET>"
+        );
+    }
+    format!("{stable_bind} is held by pid {pid} ({name}), which is not {product}'s release proxy")
 }

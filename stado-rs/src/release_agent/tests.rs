@@ -423,3 +423,33 @@ fn one_executable_reached_by_two_names_is_one_executable() {
         "two different files are not one program"
     );
 }
+
+/// The stable bind can be held by two very different things, and the
+/// refusal has to tell them apart. On charless-mac-mini on 2026-09-21 the
+/// sentence read like a stray process to kill; what held the port was
+/// `com.wisent.always-on.skarbiec`, the fleet's own managed unit serving
+/// the bind directly, which is a host still in the pre-proxy shape.
+#[test]
+fn the_stable_bind_refusal_tells_a_foreign_holder_from_the_product_itself() {
+    use crate::release_agent::rollout::serving::discover::describe_holder;
+
+    let itself = describe_holder("127.0.0.1:8895", 44394, "skarbiec", "skarbiec");
+    assert!(
+        itself.contains("served directly by skarbiec itself"),
+        "the product on its own bind is the pre-proxy shape: {itself}"
+    );
+    assert!(
+        itself.contains("move off the stable bind"),
+        "and the sentence names what has to change: {itself}"
+    );
+
+    let foreign = describe_holder("127.0.0.1:8895", 501, "python3", "skarbiec");
+    assert!(
+        foreign.contains("is not skarbiec's release proxy"),
+        "another program on the port stays a collision: {foreign}"
+    );
+    assert!(
+        !foreign.contains("served directly"),
+        "and is never described as the product itself: {foreign}"
+    );
+}
