@@ -30,6 +30,10 @@ const EAGER_REFRESH_SECONDS: u64 = 1;
 /// machine is slow, not because anything here is a race.
 pub const BUDGET: Duration = Duration::from_secs(60);
 const POLL: Duration = Duration::from_millis(50);
+/// What the product's own `default_adapter_idle_seconds` computes: two
+/// directory-freshness windows. A case that wants the window to elapse inside
+/// its own runtime declares a shorter one with `Policy::impatient`.
+const DEFAULT_ADAPTER_IDLE_SECONDS: u64 = 120;
 
 /// The resolver policy one fixture declares: the generation the authority
 /// publishes, the three loopback ports, and the refresh window.
@@ -38,6 +42,10 @@ pub struct Policy {
     pub api: u16,
     pub adapter: u16,
     pub upstream: u16,
+    /// The adapter's declared idle window: what a proxied connection may go
+    /// without a byte moving in either direction before the resolver closes
+    /// it.
+    pub idle_seconds: u64,
     pub refresh_seconds: u64,
     pub max_stale_seconds: u64,
 }
@@ -57,12 +65,23 @@ impl Policy {
         Self::new(generation, EAGER_REFRESH_SECONDS)
     }
 
+    /// A resolver that holds its snapshot and closes a proxied connection
+    /// after `idle_seconds` without a byte in either direction. The declared
+    /// default is two minutes, which no case can wait out.
+    pub fn impatient(generation: u64, idle_seconds: u64) -> Self {
+        Self {
+            idle_seconds,
+            ..Self::new(generation, PATIENT_REFRESH_SECONDS)
+        }
+    }
+
     fn new(generation: u64, seconds: u64) -> Self {
         Self {
             generation,
             api: free_port(),
             adapter: free_port(),
             upstream: free_port(),
+            idle_seconds: DEFAULT_ADAPTER_IDLE_SECONDS,
             refresh_seconds: seconds,
             max_stale_seconds: seconds,
         }
@@ -129,6 +148,7 @@ impl Policy {
                     "service": SERVICE,
                     "consumer": CONSUMER,
                     "bind": format!("127.0.0.1:{}", self.adapter),
+                    "idle_seconds": self.idle_seconds,
                 }],
             },
         })
