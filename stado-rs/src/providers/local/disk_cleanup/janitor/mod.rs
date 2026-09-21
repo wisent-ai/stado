@@ -9,7 +9,6 @@ pub(crate) mod pass;
 pub(crate) mod policy;
 pub(crate) mod state;
 
-use std::time::Duration;
 
 pub(crate) const GIB: i64 = 1024 * 1024 * 1024;
 /// Python `_STATE_VERSION`.
@@ -69,25 +68,6 @@ pub(crate) const TAKEOVER_LOCK_NAME: &str = "disk-cleanup.lock.takeover";
 /// Inode-specific holder records survive a legacy predecessor removing the
 /// canonical holder pathname after its lock inode has been retired.
 pub(crate) const LOCK_HOLDER_INODE_PREFIX: &str = "disk-cleanup.lock.holder.inode.";
-
-/// How long one pass may wait on the queue store for its workdir keep-list.
-///
-/// NO Python original. Every other bound in this module — [`DEADLINE_SECONDS`],
-/// `max_scan_items`, `max_items_per_pass` — governs work done AFTER the lock,
-/// and the keep-list read is the only thing a pass waits on before it. It had
-/// no bound at all, and the store's own HTTP client sets no timeout either
-/// (`queue::gcs` builds a bare `reqwest::Client`), so a stalled listing
-/// stalled the pass for as long as the transport took. On 2026-09-03
-/// charless-mac-mini published `duration_ms: 818021` for a pass that reached
-/// no cleaner.
-///
-/// Half of [`DEADLINE_SECONDS`], because the whole point of the janitor's own
-/// default pass budget is that a pass is a short thing, and a keep-list read
-/// that outlasts the scan it feeds is not a slow read but a broken one. The
-/// expiry is not a failure: `None` is the keep-list's modelled unreadable
-/// answer and [`queue_workdirs`] already refuses to delete on it and records
-/// `queue_store_unreadable`.
-pub(crate) const KEEP_LIST_BUDGET: Duration = Duration::from_secs(DEADLINE_SECONDS as u64 / 2);
 
 /// The janitor's state file relative to `$HOME` — `_STATE_DIR` joined with
 /// `_STATE_NAME` in the Python original.

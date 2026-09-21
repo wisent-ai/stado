@@ -11,7 +11,6 @@ use crate::providers::local::disk_cleanup::janitor::pass::once::keep_list::{
     fetch_live_job_ids, fetch_terminal_job_ids,
 };
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
-use crate::providers::local::disk_cleanup::janitor::KEEP_LIST_BUDGET;
 use crate::providers::local::disk_cleanup::{
     backup_twins, job_outputs, queue_workdirs, release_store,
 };
@@ -53,11 +52,8 @@ pub(super) async fn run_store_cleaners(
             workdir_deadline,
         ) {
             Ok(candidates) => {
-                let budget = workdir_deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(KEEP_LIST_BUDGET);
                 let wait = Instant::now();
-                let ids = match fetch_live_job_ids(&candidates, budget).await {
+                let ids = match fetch_live_job_ids(&candidates).await {
                     Ok(ids) => Some(ids),
                     Err(error) => {
                         report.add_error(queue_workdirs::CLEANER, &error);
@@ -110,11 +106,8 @@ pub(super) async fn run_store_cleaners(
         match job_outputs::candidate_job_ids(&status_roots, outputs_budget, outputs_deadline) {
             Ok(candidates) if candidates.is_empty() => Some(BTreeSet::new()),
             Ok(candidates) => {
-                let budget = outputs_deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(KEEP_LIST_BUDGET);
                 let wait = Instant::now();
-                let ids = match fetch_terminal_job_ids(&candidates, budget).await {
+                let ids = match fetch_terminal_job_ids(&candidates).await {
                     Ok(ids) => Some(ids),
                     Err(error) => {
                         report.add_error(job_outputs::CLEANER, &error);

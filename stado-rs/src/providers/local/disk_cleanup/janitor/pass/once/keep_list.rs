@@ -11,7 +11,7 @@
 //! store gave, so the janitor's own report names the read that failed.
 
 use std::collections::BTreeSet;
-use std::time::Duration;
+
 
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 
@@ -19,12 +19,7 @@ fn unreadable(operation: &str, detail: &str) -> JanitorError {
     JanitorError::os(&format!("the queue store could not {operation}: {detail}"))
 }
 
-fn ran_out(operation: &str, budget: Duration) -> JanitorError {
-    JanitorError::timeout(&format!(
-        "the queue store did not {operation} within {}ms",
-        budget.as_millis()
-    ))
-}
+
 
 /// Every job id named by `queue` or `running`, without downloading job
 /// documents. Transition sentinels stay on this conservative set.
@@ -42,17 +37,16 @@ async fn listed_live_job_ids(
     Ok(ids)
 }
 
-/// Build the conservative listing-only keep set inside `budget`.
+/// Build the conservative listing-only keep set.
 ///
 /// Public as the existing seam that proves no queue document is downloaded.
-pub async fn live_job_ids_within(
-    store: &crate::queue::JobStorage,
-    budget: Duration,
-) -> Option<Vec<String>> {
-    tokio::time::timeout(budget, listed_live_job_ids(store))
+/// A read that fails leaves the keep-list unavailable and the cleaner
+/// deletes nothing; a read that is slow is still a read, and waiting for it
+/// deletes nothing either.
+pub async fn live_job_ids_within(store: &crate::queue::JobStorage) -> Option<Vec<String>> {
+    listed_live_job_ids(store)
         .await
         .ok()
-        .and_then(Result::ok)
         .map(BTreeSet::into_iter)
         .map(Iterator::collect)
 }
@@ -68,40 +62,34 @@ pub async fn live_job_ids_within(
 async fn live_job_ids_for_candidates_within(
     store: &crate::queue::JobStorage,
     candidates: &BTreeSet<String>,
-    budget: Duration,
 ) -> Result<Vec<String>, JanitorError> {
-    let read = async {
-        let mut live = listed_live_job_ids(store).await?;
-        let mut terminal_names = BTreeSet::new();
-        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
-            let listed = store.list_job_ids(prefix).await.map_err(|error| {
-                unreadable(&format!("list the {prefix} prefix"), &error.to_string())
-            })?;
-            terminal_names.extend(listed);
+    let mut live = listed_live_job_ids(store).await?;
+    let mut terminal_names = BTreeSet::new();
+    for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+        let listed = store.list_job_ids(prefix).await.map_err(|error| {
+            unreadable(&format!("list the {prefix} prefix"), &error.to_string())
+        })?;
+        terminal_names.extend(listed);
+    }
+    for job_id in candidates {
+        if !live.contains(job_id) || !terminal_names.contains(job_id) {
+            continue;
         }
-        for job_id in candidates {
-            if !live.contains(job_id) || !terminal_names.contains(job_id) {
-                continue;
+        let state = store.workdir_job_state(job_id).await.map_err(|error| {
+            unreadable(
+                &format!("read the state of job {job_id}"),
+                &error.to_string(),
+            )
+        })?;
+        match state {
+            crate::queue::storage::WorkdirJobState::Terminal => {
+                live.remove(job_id);
             }
-            let state = store.workdir_job_state(job_id).await.map_err(|error| {
-                unreadable(
-                    &format!("read the state of job {job_id}"),
-                    &error.to_string(),
-                )
-            })?;
-            match state {
-                crate::queue::storage::WorkdirJobState::Terminal => {
-                    live.remove(job_id);
-                }
-                crate::queue::storage::WorkdirJobState::Live
-                | crate::queue::storage::WorkdirJobState::Unknown => {}
-            }
+            crate::queue::storage::WorkdirJobState::Live
+            | crate::queue::storage::WorkdirJobState::Unknown => {}
         }
-        Ok(live.into_iter().collect())
-    };
-    tokio::time::timeout(budget, read)
-        .await
-        .unwrap_or_else(|_| Err(ran_out("answer the workdir keep-list", budget)))
+    }
+    Ok(live.into_iter().collect())
 }
 
 /// The candidates the queue POSITIVELY lists as terminal: named under a
@@ -113,50 +101,41 @@ async fn live_job_ids_for_candidates_within(
 async fn terminal_job_ids_for_candidates_within(
     store: &crate::queue::JobStorage,
     candidates: &BTreeSet<String>,
-    budget: Duration,
 ) -> Result<BTreeSet<String>, JanitorError> {
-    let read = async {
-        let live = listed_live_job_ids(store).await?;
-        let mut terminal = BTreeSet::new();
-        for prefix in crate::queue::runs::TERMINAL_PREFIXES {
-            let listed = store.list_job_ids(prefix).await.map_err(|error| {
-                unreadable(&format!("list the {prefix} prefix"), &error.to_string())
-            })?;
-            terminal.extend(listed);
-        }
-        Ok(candidates
-            .iter()
-            .filter(|job_id| terminal.contains(*job_id) && !live.contains(*job_id))
-            .cloned()
-            .collect())
-    };
-    tokio::time::timeout(budget, read)
-        .await
-        .unwrap_or_else(|_| Err(ran_out("answer which jobs are terminal", budget)))
+    let live = listed_live_job_ids(store).await?;
+    let mut terminal = BTreeSet::new();
+    for prefix in crate::queue::runs::TERMINAL_PREFIXES {
+        let listed = store.list_job_ids(prefix).await.map_err(|error| {
+            unreadable(&format!("list the {prefix} prefix"), &error.to_string())
+        })?;
+        terminal.extend(listed);
+    }
+    Ok(candidates
+        .iter()
+        .filter(|job_id| terminal.contains(*job_id) && !live.contains(*job_id))
+        .cloned()
+        .collect())
 }
 
 /// The positively terminal subset of `candidates`, against this process's
-/// configured authoritative primary, inside `budget`. An error is the reason
-/// the caller removes nothing, and it reaches the janitor's report.
+/// configured authoritative primary. An error is the reason the caller
+/// removes nothing, and it reaches the janitor's report.
 pub(crate) async fn fetch_terminal_job_ids(
     candidates: &BTreeSet<String>,
-    budget: Duration,
 ) -> Result<BTreeSet<String>, JanitorError> {
     let store = crate::queue::JobStorage::for_primary_reads()
         .await
         .map_err(|error| unreadable("be opened for primary reads", &error.to_string()))?;
-    terminal_job_ids_for_candidates_within(&store, candidates, budget).await
+    terminal_job_ids_for_candidates_within(&store, candidates).await
 }
 
-/// Build the refined keep-list against this process's configured authoritative
-/// primary. Construction and layout validation are part of the same budget as
-/// every listing and versioned read.
+/// Build the refined keep-list against this process's configured
+/// authoritative primary.
 pub(crate) async fn fetch_live_job_ids(
     candidates: &BTreeSet<String>,
-    budget: Duration,
 ) -> Result<Vec<String>, JanitorError> {
     let store = crate::queue::JobStorage::for_primary_reads()
         .await
         .map_err(|error| unreadable("be opened for primary reads", &error.to_string()))?;
-    live_job_ids_for_candidates_within(&store, candidates, budget).await
+    live_job_ids_for_candidates_within(&store, candidates).await
 }
