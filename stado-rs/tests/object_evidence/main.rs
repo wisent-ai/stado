@@ -160,6 +160,46 @@ fn a_planning_pass_counts_what_is_old_and_deletes_none_of_it() {
     );
 }
 
+/// The fleet's pinned build inputs live under the same `artifacts/` tree as
+/// run evidence, are addressed by their own digest, and never expire. A pass
+/// over that tree on 2026-09-21 deleted the Apple issuer chain and the
+/// pinned signer, and the next darwin release died in `macos-code-signing`
+/// with `cannot read native signing input ... apple-issuers-<sha>.pem`.
+#[test]
+fn a_pinned_signing_input_is_kept_however_old_it_is() {
+    let home = scratch("pinned");
+    let root = home.join("store/ecosystem/product/artifacts");
+    write_aged(
+        &root.join("native-signing/apple-issuers-deadbeef.pem"),
+        2_048,
+        400,
+    );
+    write_aged(&root.join("native-signing/6a2781e2.tar.gz"), 4_096, 400);
+    write_aged(&root.join("evidence/old-run.tar.gz"), 1_024, 30);
+
+    let report = run(
+        &policy(Some(root.to_str().expect("a path"))),
+        &home,
+        true,
+        SCAN_BUDGET,
+    );
+    assert_eq!(
+        report.object_evidence.skipped.get("pinned_input_kept"),
+        Some(&2),
+        "both pinned inputs are kept and counted: {:?}",
+        report.object_evidence
+    );
+    assert!(root
+        .join("native-signing/apple-issuers-deadbeef.pem")
+        .exists());
+    assert!(root.join("native-signing/6a2781e2.tar.gz").exists());
+    assert_eq!(
+        report.object_evidence.deleted_items, 1,
+        "the run evidence beside them still expires"
+    );
+    assert!(!root.join("evidence/old-run.tar.gz").exists());
+}
+
 #[test]
 fn an_enforcing_pass_removes_only_what_is_past_the_declared_age() {
     let home = scratch("enforcing");

@@ -24,6 +24,9 @@ use crate::targets::DiskCleanupPolicy;
 
 /// The key under `targets[].disk_cleanup.cleaners`.
 pub const CLEANER: &str = "object_evidence";
+/// The directory the fleet keeps its pinned, digest-addressed build inputs
+/// in. Nothing under it is run evidence, and nothing under it expires.
+const PINNED_INPUT_DIRECTORY: &str = "native-signing";
 
 /// Expire the evidence under this host's declared object-evidence root.
 pub fn scan_object_evidence(
@@ -90,6 +93,19 @@ pub fn scan_object_evidence(
             }
             if !info.is_file() {
                 bump(&mut record.skipped, "not_a_regular_file");
+                continue;
+            }
+            // A pinned input is addressed by its own digest and is immutable,
+            // so its age says nothing about whether anything still needs it.
+            // On 2026-09-21 a pass over `ecosystem/probierz/artifacts` took
+            // the fleet's Apple issuer chain and the pinned signer with it,
+            // and the next darwin release died in `macos-code-signing` with
+            // `cannot read native signing input ... apple-issuers-<sha>.pem`.
+            if path
+                .components()
+                .any(|part| part.as_os_str() == PINNED_INPUT_DIRECTORY)
+            {
+                bump(&mut record.skipped, "pinned_input_kept");
                 continue;
             }
             if now - modified_seconds(&info) < min_age {
