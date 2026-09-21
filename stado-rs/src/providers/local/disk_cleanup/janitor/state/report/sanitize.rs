@@ -10,7 +10,7 @@ use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::read_state;
 use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
 use crate::providers::local::disk_cleanup::{
-    backup_twins, chromium_clones, job_outputs, queue_workdirs, release_store,
+    backup_twins, chromium_clones, job_outputs, local_snapshots, queue_workdirs, release_store,
 };
 
 // ---------------------------------------------------------------------------
@@ -183,6 +183,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             release_store::CLEANER: public_cleaner(
                 cleaners.and_then(|c| c.get(release_store::CLEANER)),
             ),
+            local_snapshots::CLEANER: public_cleaner(
+                cleaners.and_then(|c| c.get(local_snapshots::CLEANER)),
+            ),
         }),
     };
     // The declared cleaners the pass never reached, kept in the public form
@@ -205,6 +208,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
                         || *name == job_outputs::CLEANER
                         || *name == backup_twins::CLEANER
                         || *name == release_store::CLEANER
+                        || *name == local_snapshots::CLEANER
                 })
                 .map(Value::from)
                 .collect()

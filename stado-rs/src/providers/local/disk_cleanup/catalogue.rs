@@ -74,6 +74,14 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
         root_override_since: Some("0.21.35"),
     },
     CleanerDeclaration {
+        name: super::local_snapshots::CLEANER,
+        since: "0.21.40",
+        default_root: "",
+        sweeps: "local Time Machine snapshots pinning blocks the other cleaners already deleted, oldest first, until the volume reaches its declared target",
+        min_age_floor_seconds: 0,
+        root_override_since: None,
+    },
+    CleanerDeclaration {
         name: "release_store",
         since: "0.15.26",
         default_root: super::release_store::RELEASES_ROOT,

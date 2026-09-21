@@ -21,6 +21,11 @@ use crate::providers::local::disk_cleanup::{
 };
 use crate::targets::DiskCleanupPolicy;
 
+/// The cleaners that walk a filesystem, in the order one pass runs them.
+///
+/// `local_snapshots` is deliberately not here: it walks nothing, spends no
+/// item or time share, and has to run AFTER these, because what it recovers
+/// is the blocks their deletions left pinned in a Time Machine snapshot.
 pub(crate) const CLEANER_ORDER: [&str; 8] = [
     "huggingface_cache",
     "weles_recordings",

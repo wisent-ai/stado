@@ -54,7 +54,10 @@ pub(crate) fn summarize_scan(policy: &DiskCleanupPolicy, report: &mut CleanupRep
     report.unknown_cleaners = policy
         .cleaners
         .keys()
-        .filter(|name| !CLEANER_ORDER.contains(&name.as_str()))
+        .filter(|name| {
+            !CLEANER_ORDER.contains(&name.as_str())
+                && name.as_str() != crate::providers::local::disk_cleanup::local_snapshots::CLEANER
+        })
         .cloned()
         .collect();
 }

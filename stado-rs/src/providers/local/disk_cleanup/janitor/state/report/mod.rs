@@ -95,6 +95,10 @@ pub struct CleanupReport {
     pub job_outputs: CleanerReport,
     pub backup_twins: CleanerReport,
     pub release_store: CleanerReport,
+    /// Local Time Machine snapshots thinned toward the declared target. On a
+    /// Mac this is what decides whether anything the other cleaners removed
+    /// became free space.
+    pub local_snapshots: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_job_count: i64,
