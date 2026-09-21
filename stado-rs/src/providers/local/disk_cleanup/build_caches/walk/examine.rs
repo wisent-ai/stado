@@ -25,9 +25,7 @@ fn is_bundle(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
-    BUNDLE_SUFFIXES
-        .iter()
-        .any(|suffix| name.ends_with(suffix))
+    BUNDLE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
 }
 
 impl<'a> Walk<'a> {
