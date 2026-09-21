@@ -20,7 +20,7 @@ mod send;
 pub use channels::{
     AlertChannels, MostChannel, PubSubChannel, ResendChannel, SendgridChannel, TelegramChannel,
 };
-pub use dispatch::{send_alert, send_alert_with};
+pub use dispatch::{send_alert, send_alert_with, AlertDelivery, AlertReport};
 pub(crate) use send::resend_verified_domains;
 
 /// GCP OAuth scope for the Pub/Sub publish call.

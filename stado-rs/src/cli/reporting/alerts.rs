@@ -89,13 +89,44 @@ async fn channels(json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Deliver one alert now. Every per-channel outcome is printed by the alert
-/// path itself as an `[alert]` line, so a failure nobody sees is impossible.
+/// Deliver one alert now, and say on stdout what each channel did with it.
+///
+/// The per-channel `[alert]` lines go to stderr for a human tailing the
+/// monitor; they are not an answer a program can read, and until 2026-09-21
+/// this command exited zero even when every channel refused. A caller that
+/// pages an operator — Weles, waiting for a phone approval it cannot give
+/// itself — then recorded "the operator was told" from an exit status that
+/// could not say otherwise. Now the outcome is the exit status: nothing
+/// delivered is a failure, and the refusals say which provider said what.
 async fn send(message: &str, subject: &str) -> Result<(), CmdError> {
     if message.trim().is_empty() {
         return Err(CmdError::click("alerts send needs a message"));
     }
     let resolved = AlertChannels::from_env(config::alerts_topic()).await;
-    send_alert_with(&resolved, message, subject).await;
+    let report = send_alert_with(&resolved, message, subject).await;
+    if report.is_empty() {
+        return Err(CmdError::click(format!(
+            "no alert channel resolves, so nobody was paged; enabled: [{}]",
+            config::alert_channels().join(",")
+        )));
+    }
+    for delivery in &report {
+        let verdict = if delivery.delivered {
+            "delivered"
+        } else {
+            "refused"
+        };
+        println!("{}\t{verdict}\t{}", delivery.channel, delivery.detail);
+    }
+    if !report.iter().any(|delivery| delivery.delivered) {
+        return Err(CmdError::click(format!(
+            "every alert channel refused this message, so nobody was paged: {}",
+            report
+                .iter()
+                .map(|delivery| format!("{} said {}", delivery.channel, delivery.detail))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )));
+    }
     Ok(())
 }

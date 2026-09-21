@@ -160,3 +160,7 @@ path = "tests/web/main.rs"
 [[test]]
 name = "quarantine_retire"
 path = "tests/quarantine_retire/main.rs"
+
+[[test]]
+name = "alerts_send"
+path = "tests/alerts_send/main.rs"
