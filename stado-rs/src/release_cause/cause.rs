@@ -53,6 +53,20 @@ pub enum QuarantineCause {
     /// `unclassified`, so the register blamed the candidate and the host's
     /// own numbers were never looked at.
     ReadinessProbeUnanswered,
+    /// The release process the agent started is simply gone: it bound its
+    /// port, printed that it was listening, and then vanished.
+    ///
+    /// Its own class, and host-caused like the unanswered probe, because the
+    /// bytes demonstrably ran. On charless-mac-mini on 2026-09-21 the
+    /// desired Skarbiec digest was quarantined with `active release lost
+    /// readiness: pid 97314 is gone; stderr … skarbiec API listening on
+    /// http://127.0.0.1:18895` while the host published
+    /// `memory_pressure_active` with 93% of its swap in use — the operating
+    /// system had reaped the process. The record read `unclassified`, so the
+    /// agent never retired it, the vault stayed dead, and with it every
+    /// credential read, the object authorization the release pipeline needs
+    /// and the retagging that would repair a subscription's identity.
+    ReleaseProcessVanished,
     /// The stable bind the release must serve on is held by a process that is
     /// not this product's own proxy, so the candidate started, failed to bind
     /// and exited.
@@ -87,6 +101,7 @@ impl QuarantineCause {
             Self::CapabilityRoutesUnmapped => "capability_routes_unmapped",
             Self::CapabilityRedemptionRefused => "capability_redemption_refused",
             Self::ReadinessProbeUnanswered => "readiness_probe_unanswered",
+            Self::ReleaseProcessVanished => "release_process_vanished",
             Self::StableBindOccupied => "stable_bind_occupied",
             Self::Unclassified => "unclassified",
         }
@@ -110,7 +125,10 @@ impl QuarantineCause {
     /// retires by itself, in
     /// [`crate::release_agent::retire_host_caused_quarantine`].
     pub fn holds_the_candidate(self) -> bool {
-        !matches!(self, Self::ReadinessProbeUnanswered)
+        !matches!(
+            self,
+            Self::ReadinessProbeUnanswered | Self::ReleaseProcessVanished
+        )
     }
 
     /// The command or declaration that repairs this cause, when this fleet has
@@ -144,6 +162,12 @@ impl QuarantineCause {
                 "read what the host had left when it could not answer: stado space report \
                  <TARGET> for its memory, swap and disk, then stado release doctor <PRODUCT> \
                  --target <TARGET>; clear the digest only once the host can run it",
+            ),
+            Self::ReleaseProcessVanished => Some(
+                "the process ran and was reaped: read the host's memory and swap with \
+                 stado space report <TARGET>, then stado release doctor <PRODUCT> --target \
+                 <TARGET>; the agent retires this record by itself once the host can hold \
+                 the process",
             ),
             Self::StableBindOccupied => Some(
                 "name the process on that port with: stado service serving <PRODUCT> \

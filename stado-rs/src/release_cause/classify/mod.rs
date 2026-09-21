@@ -7,8 +7,8 @@ mod segments;
 use super::cause::QuarantineCause;
 use needles::{
     CAPABILITY_REDEMPTION_NEEDLES, CAPABILITY_ROUTES_NEEDLES, CREDENTIAL_CANNOT_SERVE_NEEDLES,
-    CREDENTIAL_STORE_NEEDLES, READINESS_UNANSWERED_NEEDLES, ROLLBACK_COMPATIBILITY_NEEDLES,
-    STABLE_BIND_OCCUPIED_NEEDLES,
+    CREDENTIAL_STORE_NEEDLES, PROCESS_VANISHED_NEEDLES, READINESS_UNANSWERED_NEEDLES,
+    ROLLBACK_COMPATIBILITY_NEEDLES, STABLE_BIND_OCCUPIED_NEEDLES,
 };
 use segments::{evidence_for, matches_any, strip_ansi};
 
@@ -97,6 +97,10 @@ pub fn classify(text: &str) -> Classification {
         (
             READINESS_UNANSWERED_NEEDLES,
             QuarantineCause::ReadinessProbeUnanswered,
+        ),
+        (
+            PROCESS_VANISHED_NEEDLES,
+            QuarantineCause::ReleaseProcessVanished,
         ),
     ] {
         if matches_any(&haystack, needles) {
