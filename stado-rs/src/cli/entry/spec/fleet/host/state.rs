@@ -156,6 +156,21 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Which process holds one TCP port on TARGET: its pid, user and command.
+    ///
+    /// A unit that exits with `Address already in use` names no owner, and
+    /// `service reap` keeps a row a declared label holds, so the socket's
+    /// holder was the one fault on this fleet nothing in the product could
+    /// name.
+    #[command(name = "port-owner")]
+    PortOwner {
+        target: String,
+        /// The TCP port to look up.
+        #[arg(long)]
+        port: u32,
+        #[arg(long)]
+        json: bool,
+    },
     #[command(name = "storage-root-reconcile-worker", hide = true)]
     StorageRootReconcileWorker {
         target: String,

@@ -16,6 +16,7 @@ mod machine;
 mod secrets;
 
 pub use crate::cli::host::checks::health::health;
+pub use crate::cli::host::checks::health::ports::port_owner;
 pub use crate::cli::host::checks::health::publish::beacon_units;
 pub use crate::cli::host::checks::health::publish::collect_beacon;
 pub use crate::cli::host::checks::health::publish::publish_beacon;
