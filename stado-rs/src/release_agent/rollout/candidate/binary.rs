@@ -24,9 +24,22 @@ pub(crate) fn active_binary(
     target: &ReleaseTargetPolicy,
 ) -> Result<ActiveBinary, String> {
     let state = load_state(target, product, target_name)?;
+    // The refusal has to say where to look. On 2026-09-21 this sentence
+    // stopped every credential write on charless-mac-mini while
+    // `stado release host-state` reported the declared skarbiec 0.3.12
+    // running, attested and in sync: the host runs a delivered binary under
+    // its own launchd unit, and release control was waiting for a candidate
+    // it could never spawn because that unit held the port. Two mechanisms
+    // for one product on one host read as a contradiction until both reads
+    // are named.
     let active = state.active.as_ref().ok_or_else(|| {
         format!(
-            "{product} is release-controlled on {target_name} but has no observed active release (phase {:?})",
+            "{product} is release-controlled on {target_name} but has no observed active release \
+             (phase {:?}). That is this agent's own record, not the host's: \
+             `stado release host-state --host {target_name}` says which binary the host actually \
+             runs and whether its bytes are attested, and \
+             `stado release doctor {product} --target {target_name}` names whatever holds the \
+             port a candidate would need.",
             state.phase
         )
     })?;
