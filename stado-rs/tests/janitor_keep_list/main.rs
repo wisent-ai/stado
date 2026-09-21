@@ -23,8 +23,8 @@
 //! holds — it must be a superset of the live jobs rather than a subset (an id
 //! missing from a keep-list authorizes deleting the tree a live job is writing
 //! into), it must match at the prefix delimiter so `queue/` never collects
-//! `queue_priority/`, and it must give up inside its budget rather than
-//! stalling a pass forever.
+//! `queue_priority/`, and it waits for the store rather than calling a slow
+//! answer an unreadable one.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -34,10 +34,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use stado::providers::local::disk_cleanup::live_job_ids_within;
 use stado::queue::{BlobBackend, BlobInfo, JobStorage, LocalBackend, StorageError, VersionedText};
-
-/// A generous budget: these tests are about what is NOT fetched, so the budget
-/// must never be what makes them pass.
-const AMPLE: Duration = Duration::from_secs(30);
 
 /// A backend that counts document downloads and can be made to stall.
 ///
@@ -203,7 +199,7 @@ async fn the_keep_list_downloads_no_job_documents() {
     }
     fleet.downloads.store(0, Ordering::Relaxed);
 
-    let ids = live_job_ids_within(&fleet.store, AMPLE)
+    let ids = live_job_ids_within(&fleet.store)
         .await
         .expect("a readable store yields a keep-list");
 
@@ -233,7 +229,7 @@ async fn a_job_mid_transition_keeps_its_place_on_the_list() {
         .await
         .expect("seed a mid-transition job");
 
-    let ids = live_job_ids_within(&fleet.store, AMPLE)
+    let ids = live_job_ids_within(&fleet.store)
         .await
         .expect("a readable store yields a keep-list");
 
@@ -263,7 +259,7 @@ async fn the_priority_index_is_not_mistaken_for_the_queue() {
         .await
         .expect("seed priority marker");
 
-    let ids = live_job_ids_within(&fleet.store, AMPLE)
+    let ids = live_job_ids_within(&fleet.store)
         .await
         .expect("a readable store yields a keep-list");
 
@@ -271,26 +267,5 @@ async fn the_priority_index_is_not_mistaken_for_the_queue() {
         ids,
         vec!["job-real".to_string()],
         "only the queue blob's id belongs on the list"
-    );
-}
-
-/// The bound. An unreadable keep-list is already modelled — `None`, and
-/// `queue_workdirs` then deletes nothing — so a store that will not answer
-/// must expire inside the budget instead of holding the pass open.
-#[tokio::test]
-async fn a_stalled_store_expires_inside_its_budget() {
-    let fleet = fleet(Some(Duration::from_secs(600))).await;
-    let started = std::time::Instant::now();
-
-    let ids = live_job_ids_within(&fleet.store, Duration::from_millis(120)).await;
-
-    assert!(
-        ids.is_none(),
-        "a keep-list that could not be built must be None, never a partial list"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the read must give up on its budget, not on the transport: took {:?}",
-        started.elapsed()
     );
 }
