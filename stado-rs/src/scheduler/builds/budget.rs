@@ -10,12 +10,13 @@
 //! buildow dziennie". A ceiling that lives only in an agreement is not a
 //! ceiling; it is a sentence somebody remembers.
 //!
-//! Both paths that submit a build ask this module first and record through
-//! it afterwards, inside the same compare-and-swap fence that records the
-//! run: the recipe poller ([`super::enqueue`]) and `stado builds run`
-//! ([`crate::cli::builds`]). The count lives in the canonical registry
-//! beside the recipes, so every machine that can submit reads the same
-//! number, and a second coordinator cannot spend the budget twice.
+//! The charge is taken where a job is submitted ([`super::charge`]), so no
+//! path can spend without being counted: the release pipeline asks this
+//! module first so its refusal names the release, and a raw submission
+//! carrying a compile is charged anyway. The count lives in the canonical
+//! registry, so every machine that can submit reads the same number and a
+//! second coordinator cannot spend the budget twice. `stado queue budget`
+//! reads it and declares the ceiling.
 
 use serde_json::{json, Map, Value};
 
@@ -112,8 +113,8 @@ impl BuildBudget {
         Some(format!(
             "the fleet's daily build budget is spent: {} of {} build job(s) submitted on {} (UTC), \
              and {reason} asks for {wanted} more. The count resets at {}T00:00:00Z. Read it with \
-             `stado builds budget`, and declare a different ceiling — deliberately, once — with \
-             `stado builds budget --limit <N>`.",
+             `stado queue budget`, and declare a different ceiling — deliberately, once — with \
+             `stado queue budget --limit <N>`.",
             self.used,
             self.limit,
             self.day,
@@ -220,10 +221,12 @@ mod tests {
         let budget = BuildBudget::read(&json!({}), at("2026-09-21"));
         assert_eq!(budget.limit, DEFAULT_DAILY_BUILD_LIMIT);
         assert_eq!(budget.used, 0);
-        assert!(budget.refusal(3, "a recipe").is_none());
-        let refusal = budget.refusal(4, "a recipe").expect("four exceeds three");
+        assert!(budget.refusal(3, "a release build").is_none());
+        let refusal = budget
+            .refusal(4, "a release build")
+            .expect("four exceeds three");
         assert!(refusal.contains("0 of 3"), "{refusal}");
-        assert!(refusal.contains("stado builds budget --limit"), "{refusal}");
+        assert!(refusal.contains("stado queue budget --limit"), "{refusal}");
     }
 
     #[test]
@@ -241,12 +244,12 @@ mod tests {
         let budget = BuildBudget::read(&document, at("2026-09-21"));
         assert_eq!(budget.remaining(), 0);
         let refusal = budget
-            .refusal(1, "stado builds run")
+            .refusal(1, "a queue submission")
             .expect("nothing is left");
         assert!(refusal.contains("3 of 3"), "{refusal}");
         assert!(refusal.contains("2026-09-22T00:00:00Z"), "{refusal}");
         assert!(
-            refusal.contains("stado builds run asks for 1 more"),
+            refusal.contains("a queue submission asks for 1 more"),
             "{refusal}"
         );
     }

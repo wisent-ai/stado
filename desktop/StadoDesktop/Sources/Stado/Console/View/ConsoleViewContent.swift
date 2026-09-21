@@ -62,10 +62,6 @@ extension ConsoleView {
                 DatabasesView(store: databasesStore, scope: scopeName)
             case .registry:
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
-            case .builds:
-                BuildsView(store: buildsStore, scope: scopeName)
-            case .deliveries:
-                DeliveriesView(store: deliveriesStore, scope: scopeName)
             case .fleets:
                 FleetsView(groupStore: groupStore, fleetStore: fleetStore, scope: scopeName)
             case .releases:

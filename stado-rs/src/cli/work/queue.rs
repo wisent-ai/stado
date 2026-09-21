@@ -58,6 +58,15 @@ pub enum QueueCommands {
         #[arg(long, default_value_t = control::default_drain_timeout_s())]
         timeout: u64,
     },
+    /// What the fleet has spent on compiling today, and the ceiling it is
+    /// measured against. `--limit` declares a new ceiling.
+    Budget {
+        /// Declare the fleet's ceiling on build jobs per UTC day.
+        #[arg(long)]
+        limit: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(cmd: QueueCommands) -> Result<(), CmdError> {
@@ -66,6 +75,7 @@ pub async fn dispatch(cmd: QueueCommands) -> Result<(), CmdError> {
         QueueCommands::Resume => resume().await,
         QueueCommands::Status { json } => status(json).await,
         QueueCommands::Drain { wait, timeout } => drain(wait, timeout).await,
+        QueueCommands::Budget { limit, json } => budget(limit, json).await,
     }
 }
 
@@ -193,4 +203,48 @@ async fn drain(wait: bool, timeout_s: u64) -> Result<(), CmdError> {
         );
         tokio::time::sleep(poll).await;
     }
+}
+
+/// `stado queue budget`: what the fleet has spent on compiling today, and
+/// the ceiling it is measured against.
+///
+/// It used to be `stado builds budget`, beside the recipes. The recipes are
+/// gone; the ration is not, because the release pipeline still asks it and
+/// every submission is charged against it. Reading it answers "can anything
+/// be built now"; declaring a ceiling is a deliberate, recorded act.
+async fn budget(limit: Option<u64>, json: bool) -> Result<(), CmdError> {
+    let now = chrono::Utc::now();
+    let (mut document, generation) = crate::cli::registry::fetch_versioned_document().await?;
+    let current = crate::scheduler::builds::BuildBudget::read(&document, now);
+    let budget = match limit {
+        Some(limit) => {
+            current.with_limit(&mut document, limit);
+            crate::cli::registry::push_document_if(&document, &generation).await?;
+            crate::scheduler::builds::BuildBudget::read(&document, now)
+        }
+        None => current,
+    };
+    if json {
+        echo_json(&serde_json::json!({
+            "day": budget.day,
+            "used": budget.used,
+            "limit": budget.limit,
+            "remaining": budget.remaining(),
+        }));
+        return Ok(());
+    }
+    println!(
+        "build budget {}: {} of {} build job(s) used, {} left",
+        budget.day,
+        budget.used,
+        budget.limit,
+        budget.remaining()
+    );
+    if budget.remaining() == 0 {
+        println!(
+            "every further build is refused until the count resets at midnight UTC; \
+             raise the ceiling deliberately with `stado queue budget --limit <N>`"
+        );
+    }
+    Ok(())
 }

@@ -25,8 +25,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case memory
     case databases
     case registry
-    case builds
-    case deliveries
     case releases
     case deployments
     case inference
@@ -47,8 +45,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .memory: "Memory"
         case .databases: "Databases"
         case .registry: "Registry"
-        case .builds: "Builds"
-        case .deliveries: "Deliveries"
         case .releases: "Releases"
         case .deployments: "Deployments"
         case .cloudflare: "Cloudflare routes"
@@ -69,8 +65,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .memory: "memorychip"
         case .databases: "cylinder"
         case .registry: "book.closed"
-        case .builds: "hammer"
-        case .deliveries: "tray.and.arrow.down"
         case .releases: "shippingbox"
         case .deployments: "point.3.connected.trianglepath.dotted"
         case .cloudflare: "network"
@@ -91,8 +85,6 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .memory: "Host memory, swap, the declared reclaim policy, and whether this host still accepts jobs"
         case .databases: "Declared fleet databases, their placement and who may resolve them"
         case .registry: "Canonical fleet policy and the generation it was read at"
-        case .builds: "Which repositories the control plane builds on new commits, and what the last build produced"
-        case .deliveries: "What has been written and not yet proven, and the one pass that proves a batch of it"
         case .releases: "What each product should run, what its host runs, and what is holding the rollout"
         case .deployments: "Which Stado backend this console reads, and who else may read it"
         case .cloudflare: "Publish a hostname through a declared Cloudflare Tunnel connector"
@@ -105,7 +97,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         switch self {
         case .posture, .queue, .products: .work
         case .hosts, .fleets, .disk, .memory, .services, .inference, .earning: .fleet
-        case .databases, .registry, .builds, .deliveries, .releases, .cloudflare, .deployments: .system
+        case .databases, .registry, .releases, .cloudflare, .deployments: .system
         }
     }
 

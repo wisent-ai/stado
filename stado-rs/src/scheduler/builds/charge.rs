@@ -11,23 +11,27 @@
 //!
 //! So the charge moved to the submission itself. Every job reaches the queue
 //! through `submit_batch`, and a command that makes a machine compile is
-//! charged there, whoever asked and whatever they knew. The callers that
-//! asked first still do: their refusal names the recipe or the release, which
-//! is a better sentence than the generic one, and the charge below is what
-//! makes the number true.
+//! charged there, whoever asked and whatever they knew. The recipes and the
+//! poller that used to ask first are gone; the release pipeline still asks,
+//! because its refusal names the release, and the charge below is what makes
+//! the number true.
 
 use super::budget::BuildBudget;
-use super::command::BUILD_VERSION_FILE;
 
 /// What a release pipeline's build job runs on the builder.
 const RELEASE_BUILD_PROGRAM: &str = "release worker --request";
 
+/// The file a build job writes beside its artifacts to record the exact tag
+/// it built. Recipe builds wrote it; it is still the mark that says a queued
+/// command compiles, so a client of any vintage submitting one is charged.
+pub const BUILD_VERSION_FILE: &str = "stado-build-version.txt";
+
 /// Whether this command makes a machine compile something for the fleet.
 ///
-/// Two shapes reach the queue: a recipe build, which clones the repository
-/// and writes [`BUILD_VERSION_FILE`] beside the artifacts it uploads, and a
-/// release build, which runs the release worker against a saved request. Both
-/// occupy a builder for minutes and both are what the ceiling is about.
+/// Two shapes reach the queue: a build that clones a repository and writes
+/// [`BUILD_VERSION_FILE`] beside the artifacts it uploads, and a release
+/// build, which runs the release worker against a saved request. Both occupy
+/// a builder for minutes and both are what the ceiling is about.
 pub fn compiles(command: &str) -> bool {
     command.contains(BUILD_VERSION_FILE) || command.contains(RELEASE_BUILD_PROGRAM)
 }
@@ -111,6 +115,6 @@ mod tests {
             .refusal(1, "a queue submission")
             .expect("a spent day refuses");
         assert!(refusal.contains("a queue submission"), "{refusal}");
-        assert!(refusal.contains("stado builds budget"), "{refusal}");
+        assert!(refusal.contains("stado queue budget"), "{refusal}");
     }
 }

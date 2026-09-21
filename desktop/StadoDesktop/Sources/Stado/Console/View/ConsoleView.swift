@@ -32,8 +32,6 @@ struct ConsoleView: View {
     @StateObject var serviceStore = ServiceTruthStore()
     @StateObject var fleetServiceStore = FleetServicesStore()
     @StateObject var releaseStore = ReleaseEvidenceStore()
-    @StateObject var buildsStore = BuildsStore()
-    @StateObject var deliveriesStore = DeliveriesStore()
     @StateObject var groupStore = FleetGroupStore()
     @StateObject var productsStore = ProductsStore()
     @StateObject var databasesStore = DatabasesStore()

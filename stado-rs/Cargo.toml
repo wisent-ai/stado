@@ -176,7 +176,3 @@ path = "tests/object_evidence/main.rs"
 [[test]]
 name = "publication"
 path = "tests/publication/main.rs"
-
-[[test]]
-name = "delivery"
-path = "tests/delivery/main.rs"
