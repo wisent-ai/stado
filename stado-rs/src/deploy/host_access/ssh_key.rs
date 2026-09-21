@@ -52,6 +52,30 @@ fn missing_key(id: &str, error: SkarbiecError) -> DeployError {
     DeployError(error.to_string())
 }
 
+/// The refusal when the store itself could not be reached.
+///
+/// On 2026-09-21 repairing charless-mac-mini needed
+/// `stado-ssh-charless-mac-mini`, and the read went to
+/// `http://127.0.0.1:17602/v1/items/read` — a Stado forward to the Skarbiec
+/// ON THAT HOST, which was the thing being repaired. The command said only
+/// "error sending request for url …", so the circle was invisible and the
+/// recovery channel that already exists went unmentioned.
+fn unreachable_store(
+    id: &str,
+    target: &str,
+    url: &str,
+    consumer: &str,
+    error: SkarbiecError,
+) -> DeployError {
+    DeployError(format!(
+        "reading {id} as {consumer} from the credential store at {url} failed: {error}. That \
+         store may be the one {target} serves, in which case repairing {target} needs a key only \
+         {target} can hand out. The owner-only way out of that circle is \
+         {OWNER_KEY_FILE_ENV}=<path to this host's key>, which this command reads before it asks \
+         any broker; `stado fleet key add {target}` puts the same key in a vault that answers."
+    ))
+}
+
 #[cfg(unix)]
 fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -162,7 +186,13 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
     let private_key = client
         .read_field(&id, PRIVATE_KEY_FIELD)
         .await
-        .map_err(|error| missing_key(&id, error))?;
+        .map_err(|error| {
+            if error.is_missing() {
+                missing_key(&id, error)
+            } else {
+                unreachable_store(&id, target, &credentials.url, &credentials.consumer, error)
+            }
+        })?;
     let private_key = private_key
         .as_str()
         .ok_or_else(|| DeployError(format!("credential item {id} has no private_key field")))?;
@@ -189,4 +219,42 @@ pub fn add_identity(mut argv: Vec<String>, key: &KeyFile) -> Result<Vec<String>,
         ],
     );
     Ok(argv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A vault that answers "not there" is a missing key, and the repair is
+    /// to put one in.
+    #[test]
+    fn an_absent_item_names_the_command_that_creates_one() {
+        let refusal = missing_key(
+            "stado-ssh-charless-mac-mini",
+            SkarbiecError::MissingValue("stado-ssh-charless-mac-mini".to_string()),
+        );
+        assert!(refusal.0.contains("stado fleet key add"), "{}", refusal.0);
+    }
+
+    /// A vault that could not be reached is the circle this refusal exists
+    /// for: the store may be the one the target itself serves.
+    #[test]
+    fn an_unreachable_store_names_the_store_the_host_and_the_way_out() {
+        let refusal = unreachable_store(
+            "stado-ssh-charless-mac-mini",
+            "charless-mac-mini",
+            "http://127.0.0.1:17602",
+            "local-operator",
+            SkarbiecError::Deployment("error sending request".to_string()),
+        );
+        assert!(refusal.0.contains("http://127.0.0.1:17602"), "{}", refusal.0);
+        assert!(refusal.0.contains("charless-mac-mini"), "{}", refusal.0);
+        assert!(refusal.0.contains("local-operator"), "{}", refusal.0);
+        assert!(refusal.0.contains(OWNER_KEY_FILE_ENV), "{}", refusal.0);
+        assert!(
+            refusal.0.contains("only charless-mac-mini can hand out"),
+            "the circle has to be said out loud: {}",
+            refusal.0
+        );
+    }
 }
