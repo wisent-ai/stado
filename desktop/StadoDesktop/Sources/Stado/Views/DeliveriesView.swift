@@ -30,6 +30,14 @@ struct DeliveriesView: View {
 
     @State private var decision: QualificationDecision?
 
+    /// The widths this screen's two tables share.
+    enum Column {
+        static let revision: CGFloat = 96
+        static let state: CGFloat = 92
+        static let task: CGFloat = 180
+        static let action: CGFloat = 132
+    }
+
     var body: some View {
         WisentScreen(
             title: "Deliveries",
@@ -43,18 +51,17 @@ struct DeliveriesView: View {
             scrolls: false,
             constrainsWidth: false
         ) {
-            VStack(spacing: WisentDesign.Space.x0) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 if store.lastUpdated == nil, store.isRefreshing {
                     WisentLoadingPanel(
                         title: "Reading the delivery register",
                         detail: "stado delivery pending --json against the canonical registry. Nothing is written."
                     )
                     .padding(WisentDesign.Space.x6)
-                    Spacer(minLength: WisentDesign.Space.x0)
                 } else {
                     notices
                     waiting
-                    history
+                    passes
                 }
             }
         }
@@ -84,27 +91,24 @@ struct DeliveriesView: View {
             }
         }
         .padding(.horizontal, WisentDesign.Space.x4)
-        .padding(.top, store.problem == nil && store.mutation == .idle ? WisentDesign.Space.x0 : WisentDesign.Space.x4)
     }
 
     // MARK: What is waiting
 
     @ViewBuilder
     private var waiting: some View {
-        VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
-            if store.pending.isEmpty {
-                WisentAlertPanel(
-                    tone: .info,
-                    title: "Nothing is waiting for proof",
-                    detail: "Every delivered revision has been through a qualification pass."
-                )
-            } else {
-                ForEach(store.productsWaiting, id: \.self) { product in
-                    productSection(product)
-                }
+        if store.pending.isEmpty {
+            WisentAlertPanel(
+                tone: .info,
+                title: "Nothing is waiting for proof",
+                detail: "Every delivered revision has been through a qualification pass. A session records one with stado delivery deliver."
+            )
+            .padding(.horizontal, WisentDesign.Space.x4)
+        } else {
+            ForEach(store.productsWaiting, id: \.self) { product in
+                productSection(product)
             }
         }
-        .padding(WisentDesign.Space.x4)
     }
 
     @ViewBuilder
@@ -112,53 +116,78 @@ struct DeliveriesView: View {
         let rows = store.pending.filter { $0.product == product }
         VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
             HStack {
-                Text(product).font(WisentDesign.Font.headline)
+                Text("\(product) — \(rows.count) waiting")
                 Spacer()
-                WisentButton(
-                    "Qualify \(rows.count) delivery(ies)",
-                    symbol: "checkmark.seal",
-                    kind: .primary
-                ) {
-                    decision = QualificationDecision(
-                        product: product,
-                        waiting: rows.count,
-                        runID: store.retainedRunID(for: product)
-                    )
-                }
-            }
-            ForEach(rows) { delivery in
-                HStack(alignment: .firstTextBaseline, spacing: WisentDesign.Space.x3) {
-                    Text(delivery.shortRevision).font(WisentDesign.Font.mono)
-                    Text(delivery.state)
-                    Text(delivery.summary ?? "—").foregroundStyle(.secondary)
-                    Spacer()
-                    Text(delivery.task ?? "no task").foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    // MARK: What the passes answered
-
-    @ViewBuilder
-    private var history: some View {
-        VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-            ForEach(store.passes) { pass in
-                VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                    HStack {
-                        Text("\(pass.product) \(pass.revision.prefix(8))")
-                            .font(WisentDesign.Font.mono)
-                        Text(pass.status)
-                        Spacer()
-                        Text(pass.startedAt).foregroundStyle(.secondary)
+                WisentActionButton(
+                    action: WisentAction(
+                        "Qualify\u{2026}",
+                        symbol: "checkmark.seal",
+                        kind: .primary,
+                        isEnabled: !store.mutation.isWorking
+                    ) {
+                        decision = QualificationDecision(
+                            product: product,
+                            waiting: rows.count,
+                            runID: store.retainedRunID(for: product)
+                        )
                     }
-                    if let reason = pass.reason {
-                        Text(reason).foregroundStyle(.secondary)
+                )
+            }
+            ConsoleTable(head: [
+                ConsoleHeaderCell("Revision", width: Column.revision),
+                ConsoleHeaderCell("State", width: Column.state),
+                ConsoleHeaderCell("What"),
+                ConsoleHeaderCell("Task", width: Column.task),
+            ]) {
+                ForEach(rows) { delivery in
+                    ConsoleTableRow(isSelected: false) {
+                        Text(delivery.shortRevision)
+                            .frame(width: Column.revision, alignment: .leading)
+                        Text(delivery.state)
+                            .frame(width: Column.state, alignment: .leading)
+                        Text(delivery.summary ?? "\u{2014}")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(delivery.task ?? "no task")
+                            .frame(width: Column.task, alignment: .leading)
+                            .foregroundStyle(WisentDesign.muted)
                     }
                 }
             }
         }
         .padding(.horizontal, WisentDesign.Space.x4)
+    }
+
+    // MARK: What the passes answered
+
+    @ViewBuilder
+    private var passes: some View {
+        if !store.passes.isEmpty {
+            ConsoleTable(head: [
+                ConsoleHeaderCell("Pass", width: Column.task),
+                ConsoleHeaderCell("Revision", width: Column.revision),
+                ConsoleHeaderCell("Status", width: Column.state),
+                ConsoleHeaderCell("Why"),
+                ConsoleHeaderCell("Started", width: Column.action),
+            ]) {
+                ForEach(store.passes) { pass in
+                    ConsoleTableRow(isSelected: false) {
+                        Text(pass.id)
+                            .frame(width: Column.task, alignment: .leading)
+                        Text(String(pass.revision.prefix(8)))
+                            .frame(width: Column.revision, alignment: .leading)
+                        Text(pass.status)
+                            .frame(width: Column.state, alignment: .leading)
+                        Text(pass.reason ?? "\u{2014}")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundStyle(WisentDesign.muted)
+                        Text(pass.startedAt)
+                            .frame(width: Column.action, alignment: .leading)
+                            .foregroundStyle(WisentDesign.muted)
+                    }
+                }
+            }
+            .padding(.horizontal, WisentDesign.Space.x4)
+        }
     }
 
     // MARK: The one write this screen makes
