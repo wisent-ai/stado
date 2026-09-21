@@ -3,9 +3,11 @@
 
 mod list;
 mod status;
+mod usage;
 
 pub(in crate::cli::builds) use list::list;
 pub(in crate::cli::builds) use status::status;
+pub(in crate::cli::builds) use usage::{usage, DEFAULT_HOURS};
 
 use crate::targets::{BuildRecipe, BuildRun};
 

@@ -65,6 +65,12 @@ use crate::targets::{fetch_registry_remote, read_build_recipes, BUILDS_DISABLED_
 
 pub use budget::{BuildBudget, BUILD_BUDGET_KEY, DEFAULT_DAILY_BUILD_LIMIT};
 pub use command::{build_job_command, BUILD_VERSION_FILE};
+
+/// The run id every build job carries, by who asked for it. Named where the
+/// two writers below stamp it, so a reader counting this fleet's compiles
+/// (`stado builds usage`) tells them apart by nothing else.
+pub const POLLER_RUN_PREFIX: &str = "build-scheduler";
+pub const MANUAL_RUN_PREFIX: &str = "build-manual";
 pub use enqueue::claimability::Claimability;
 
 use enqueue::poll_one;

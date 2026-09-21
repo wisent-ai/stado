@@ -195,7 +195,7 @@ fn used_swap_alone_does_not_withhold_a_host_with_memory_headroom() {
 /// `stado host gates` read memory out of the capacity publication alone, so
 /// the one host it matters most for — the machine whose agent has no memory
 /// left to publish with — printed `memory: not observed`. On 2026-09-21
-/// lukasz-macbook read that way while `stado space report` on the same host,
+/// a fleet Mac read that way while `stado space report` on the same host,
 /// in the same minute, measured 708 MiB available of 65536 MiB with 23,386,723
 /// swapouts since boot. The verdict now falls back to this command's own
 /// reading of the host, and says which of the two sources it used.

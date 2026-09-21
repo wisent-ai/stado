@@ -341,3 +341,63 @@ fn a_days_build_ceiling_is_counted_across_commands_and_refuses_the_next_build() 
     journey.invoke_ok(&["builds", "run", "--run-id", "budget-three", RECIPE]);
     println!("verified budget journey: recipe={RECIPE}; platform={platform}");
 }
+
+/// The window count reads the queue's own run manifests, and says so when
+/// the day's counter disagrees with them.
+///
+/// `stado builds budget` reports the number the registry holds, written by
+/// the submitters that maintain it. On 2026-09-21 it read `2 of 3 build
+/// job(s) used` while this fleet had started 59 builds in twenty-four hours,
+/// 47 of them release-pipeline builds that recorded nothing — so the ceiling
+/// was true about its own counter and false about the machines. A second
+/// reading, taken from the manifests the submitters cannot forget to write,
+/// is what makes that visible.
+#[test]
+fn the_window_counts_builds_from_the_queues_own_manifests() {
+    let journey = Journey::new();
+    journey.invoke_ok(&[
+        "builds",
+        "add",
+        "--name",
+        RECIPE,
+        "--repo",
+        SOURCE,
+        "--branch",
+        "main",
+        "--command",
+        "true",
+        "--artifact",
+        "build-output.txt",
+        "--platform",
+        build_platform(),
+    ]);
+
+    let empty: Value =
+        serde_json::from_slice(&journey.invoke_ok(&["builds", "usage", "--json"]).stdout).unwrap();
+    assert_eq!(
+        empty["observed"]["total"], 0,
+        "a fleet that built nothing counted something: {empty}"
+    );
+
+    journey.invoke_ok(&["builds", "run", "--run-id", "usage-one", RECIPE]);
+    let counted: Value =
+        serde_json::from_slice(&journey.invoke_ok(&["builds", "usage", "--json"]).stdout).unwrap();
+    assert_eq!(
+        counted["observed"]["total"], 1,
+        "the manifest of the build that just started was not counted: {counted}"
+    );
+    assert_eq!(
+        counted["observed"]["by_origin"]["build-manual"], 1,
+        "the build was counted against the wrong asker: {counted}"
+    );
+    assert_eq!(
+        counted["budget"]["used"], 1,
+        "the day's counter and the window disagree about a recorded build: {counted}"
+    );
+    assert!(
+        counted["unread"]
+            .as_array()
+            .is_some_and(|unread| unread.is_empty()),
+        "a manifest could not be read: {counted}"
+    );
+}

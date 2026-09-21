@@ -3,7 +3,7 @@
 //! macOS keeps a local APFS snapshot of the volume every hour. A snapshot
 //! pins every block the volume held when it was taken, so deleting a file
 //! frees nothing while a snapshot still references it — and the janitor's own
-//! accounting says exactly that: on lukasz-macbook on 2026-09-21 a pass
+//! accounting says exactly that: on a fleet Mac on 2026-09-21 a pass
 //! removed 54 tagged build trees and `df` moved from 12.4 GiB free to 12.4
 //! GiB free. Thinning the eleven local snapshots on the same volume, through
 //! the declared `local_apfs_snapshots` reclamation stage, moved it to 35.8

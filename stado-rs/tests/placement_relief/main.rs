@@ -290,8 +290,8 @@ fn the_plain_listing_names_the_move_and_every_candidate() {
 /// A host that publishes clear this second and published pressure two
 /// minutes ago is still pressured here.
 ///
-/// charless-mac-mini declares a 2 GiB floor and crosses it every few minutes.
-/// On 2026-09-21 the tick at 18:01:19Z sampled it at `2.5 GiB available,
+/// A 16 GiB always-on Mac declares a 2 GiB floor and crosses it every few
+/// minutes. On 2026-09-21 the tick sampled one at `2.5 GiB available,
 /// pressure clear`, wrote `settled`, and moved nothing, while every reading
 /// taken by hand that hour — including one seconds later — saw `1.7 GiB
 /// available, pressure active`. One sample of an oscillating host is not

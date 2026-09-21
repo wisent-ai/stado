@@ -210,7 +210,7 @@ before=$(free_kb)
 # The janitor already has that cleaner and on a Mac it cannot run it: the
 # declared root is inside the operator's Documents folder, the agent that
 # sweeps it holds no Full Disk Access grant, and every pass on
-# lukasz-macbook ended `build_caches:OSError (Operation not permitted)` with
+# a fleet Mac ended `build_caches:OSError (Operation not permitted)` with
 # 0.0 GiB freed while the volume sat at 99% and the host published
 # `disk_pressure_active`, refusing every queued release build. This stage is
 # the same eviction run from the command the operator invokes, which does

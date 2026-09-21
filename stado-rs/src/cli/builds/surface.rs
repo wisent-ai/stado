@@ -5,7 +5,7 @@ use clap::Subcommand;
 
 use crate::cli::builds::declaration::{add, edit, remove, set_enabled, RecipeEdit};
 use crate::cli::builds::jobs::run_now;
-use crate::cli::builds::report::{list, status};
+use crate::cli::builds::report::{list, status, usage, DEFAULT_HOURS};
 use crate::cli::CmdError;
 
 #[derive(Subcommand)]
@@ -137,6 +137,16 @@ pub enum BuildsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Count the builds this fleet started inside a window, by who asked for
+    /// each one, beside the day's own counter.
+    Usage {
+        /// The window, in hours.
+        #[arg(long, default_value_t = DEFAULT_HOURS)]
+        hours: i64,
+        /// Emit the counts as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn run(command: BuildsCommands) -> Result<(), CmdError> {
@@ -210,5 +220,6 @@ pub async fn run(command: BuildsCommands) -> Result<(), CmdError> {
         BuildsCommands::Budget { limit, json } => {
             crate::cli::builds::jobs::budget(limit, json).await
         }
+        BuildsCommands::Usage { hours, json } => usage(hours, json).await,
     }
 }

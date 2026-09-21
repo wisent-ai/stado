@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "scan": {
+    "why": "What this repository publishes and this gate therefore reads: the crate's own source, its tests and its declarations, in the text formats a reader opens. Build output and vendored trees are not ours to police.",
+    "directories": ["src", "tests", "data"],
+    "extensions": ["rs", "json", "md", "toml"]
+  },
+  "why": "wisent-ai/stado is a public repository. Comments in this tree explain themselves with the incident that motivated them, which is right, and several of them have done it by naming the operator's own machines, home directory and words. Those belong in the fleet's registry and in the change's own record, never in source somebody outside this workshop reads. The patterns below are shapes, not names: a pattern that spelled a person or a machine would publish exactly what it exists to keep out.",
+  "patterns": [
+    {
+      "name": "home_directory_path",
+      "regex": "/Users/[A-Za-z][A-Za-z0-9._-]+/",
+      "why": "An absolute path under a macOS home directory carries the account name of the person whose machine it is. Write the path relative to the account's home."
+    },
+    {
+      "name": "personal_machine_name",
+      "regex": "[A-Za-z0-9]+-(?:mac-mini|macbook|macbook-pro|imac)",
+      "why": "A registry target's name is a fact about one person's hardware. Say what the host was — a 16 GiB always-on Mac, the fleet's Linux builder — instead of which one it is."
+    },
+    {
+      "name": "personal_email_address",
+      "regex": "[A-Za-z0-9._%+-]+@(?:gmail|icloud|outlook|columbia)\\.[A-Za-z]{2,}",
+      "why": "A personal address identifies the person, and a public repository is not where it belongs."
+    }
+  ]
+}

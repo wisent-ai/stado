@@ -172,3 +172,7 @@ path = "tests/alerts_send/main.rs"
 [[test]]
 name = "object_evidence"
 path = "tests/object_evidence/main.rs"
+
+[[test]]
+name = "publication"
+path = "tests/publication/main.rs"

@@ -53,7 +53,7 @@ pub(super) async fn run_now(name: &str, retry_token: &str, json: bool) -> Result
         })?;
         let options = SubmitOptions {
             run_id: stable_run_id(
-                "build-manual",
+                crate::scheduler::builds::MANUAL_RUN_PREFIX,
                 &format!("{name}\0{retry_token}\0{platform}"),
             ),
             platform_os: platform_os.to_string(),

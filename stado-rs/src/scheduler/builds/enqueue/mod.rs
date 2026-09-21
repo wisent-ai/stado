@@ -142,7 +142,7 @@ pub(super) async fn poll_one(
         }
         let options = SubmitOptions {
             run_id: stable_run_id(
-                "build-scheduler",
+                crate::scheduler::builds::POLLER_RUN_PREFIX,
                 &format!("{}\0{sha}\0{platform}", fresh.name),
             ),
             platform_os: platform_os.to_string(),

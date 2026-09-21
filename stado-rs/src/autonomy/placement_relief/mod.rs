@@ -57,7 +57,7 @@ pub const RELOCATION_COOLDOWN_SECONDS: i64 = 1800;
 /// How long one published pressure reading keeps a host pressured for this
 /// stage, whatever its next publication says.
 ///
-/// The decision used to be one instantaneous sample. charless-mac-mini
+/// The decision used to be one instantaneous sample. A 16 GiB always-on Mac
 /// declares a 2 GiB floor and oscillates across it every few minutes: on
 /// 2026-09-21 the tick at 18:01:19Z read `2.5 GiB available, pressure clear`
 /// and settled the profile, while `stado placement relief` typed seconds

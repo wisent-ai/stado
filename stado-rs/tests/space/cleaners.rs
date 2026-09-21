@@ -282,7 +282,7 @@ fn the_named_reaper_stops_a_program_running_from_a_scratch_directory() {
 /// and a planning pass removes none of them.
 ///
 /// The cleaner exists because a deletion on macOS frees nothing while a local
-/// Time Machine snapshot still references the blocks: on lukasz-macbook on
+/// Time Machine snapshot still references the blocks: on a fleet Mac on
 /// 2026-09-21 a pass removed 54 tagged build trees and `df` read 12.4 GiB free
 /// before and after, and only thinning eleven snapshots moved it to 35.8 GiB.
 /// So the janitor's own pass has to reach them — which is what this case
