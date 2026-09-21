@@ -51,11 +51,18 @@ impl BuildBudget {
             .and_then(|budget| budget.get("limit"))
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_DAILY_BUILD_LIMIT);
-        let used = entry
+        let counted = entry
             .filter(|budget| budget.get("day").and_then(Value::as_str) == Some(today.as_str()))
             .and_then(|budget| budget.get("used"))
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        // A counter that begins the day it ships forgives every build the
+        // fleet already made, and a lost write forgives the ones it lost.
+        // The recipes carry their own runs with the instant each was
+        // submitted, so the day's floor is observable: whichever is higher
+        // is the truth, and the count can only ever be understated by runs
+        // the registry itself no longer holds.
+        let used = counted.max(runs_submitted_on(document, &today));
         Self {
             day: today,
             used,
@@ -138,6 +145,33 @@ fn next_day(day: &str) -> String {
         .unwrap_or_else(|| day.to_string())
 }
 
+/// Build jobs the recipes themselves say were submitted on `day`: one per
+/// platform run whose recorded instant falls on it and which actually got a
+/// job. A run the registry no longer holds — a removed recipe, a platform
+/// rebuilt since — is not counted, so this is a floor, never an inflation.
+fn runs_submitted_on(document: &Value, day: &str) -> u64 {
+    document
+        .get("builds")
+        .and_then(Value::as_array)
+        .map(|recipes| {
+            recipes
+                .iter()
+                .filter_map(|recipe| recipe.get("runs").and_then(Value::as_object))
+                .flat_map(|runs| runs.values())
+                .filter(|run| {
+                    run.get("job_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|job| !job.is_empty())
+                        && run
+                            .get("at")
+                            .and_then(Value::as_str)
+                            .is_some_and(|at| at.starts_with(day))
+                })
+                .count() as u64
+        })
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +234,43 @@ mod tests {
         assert!(
             document.get("builds").is_some(),
             "the rest of the registry document is untouched: {document}"
+        );
+    }
+
+    /// A counter that begins the day it ships would forgive every build the
+    /// fleet already made that day — on 2026-09-21 three of them — and a
+    /// lost registry write would forgive the builds it lost. The recipes'
+    /// own runs say what was submitted and when, so the day has a floor
+    /// nobody has to remember.
+    #[test]
+    fn builds_the_recipes_already_record_today_count_even_with_no_counter() {
+        let document = json!({
+            "builds": [
+                { "name": "a", "runs": {
+                    "darwin-arm64": { "at": "2026-09-21T17:23:27Z", "job_id": "job-1", "status": "running" },
+                    "linux-amd64": { "at": "2026-09-20T09:00:00Z", "job_id": "job-0", "status": "succeeded" },
+                } },
+                { "name": "b", "runs": {
+                    "darwin-arm64": { "at": "2026-09-21T18:06:13Z", "job_id": "job-2", "status": "running" },
+                    "linux-amd64": { "at": "2026-09-21T18:21:31Z", "job_id": "", "status": "unclaimable" },
+                } },
+            ]
+        });
+        let budget = BuildBudget::read(&document, at("2026-09-21"));
+        assert_eq!(
+            budget.used, 2,
+            "today's two submitted runs count; yesterday's and the unclaimable one do not: {budget:?}"
+        );
+        assert_eq!(budget.remaining(), 1);
+
+        let stale = json!({
+            "build_budget": { "day": "2026-09-21", "used": 1, "limit": 3 },
+            "builds": document["builds"].clone(),
+        });
+        assert_eq!(
+            BuildBudget::read(&stale, at("2026-09-21")).used,
+            2,
+            "a counter behind the recorded runs is raised to them, never lowered"
         );
     }
 }
