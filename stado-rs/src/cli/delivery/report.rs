@@ -27,8 +27,8 @@ pub(super) async fn pending(product: Option<String>, json_output: bool) -> Resul
         return Ok(());
     }
     println!(
-        "{:<24} {:<10} {:<12} {:<22} {}",
-        "PRODUCT", "REVISION", "STATE", "DELIVERED", "WHAT"
+        "{:<24} {:<10} {:<12} {:<22} WHAT",
+        "PRODUCT", "REVISION", "STATE", "DELIVERED"
     );
     for delivery in &deliveries {
         println!(

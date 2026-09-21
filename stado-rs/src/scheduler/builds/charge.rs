@@ -16,8 +16,6 @@
 //! is a better sentence than the generic one, and the charge below is what
 //! makes the number true.
 
-use serde_json::Value;
-
 use super::budget::BuildBudget;
 use super::command::BUILD_VERSION_FILE;
 
@@ -103,7 +101,7 @@ mod tests {
     /// A document with a spent day refuses, and the sentence says who asked.
     #[test]
     fn a_spent_day_refuses_the_asker_by_name() {
-        let document: Value =
+        let document: serde_json::Value =
             serde_json::json!({ "build_budget": { "day": "2026-09-21", "used": 3, "limit": 3 } });
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-21T12:00:00Z")
             .expect("a test instant")

@@ -106,7 +106,7 @@ pub(super) async fn qualify(
     println!(
         "{product}: qualifying {} delivery(ies) at {} in pass {pass_id}",
         pass.deliveries.len(),
-        &pass.revision
+        pass.revision
     );
     for (platform, job_id) in &pass.jobs {
         println!("  {platform}: build job {job_id}");
