@@ -35,7 +35,6 @@ impl GcpRest {
                 "stado/{} resource-operations",
                 env!("CARGO_PKG_VERSION")
             ))
-
             .build()?;
         Ok(Self {
             http,

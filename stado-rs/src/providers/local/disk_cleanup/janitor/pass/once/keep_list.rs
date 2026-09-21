@@ -12,14 +12,11 @@
 
 use std::collections::BTreeSet;
 
-
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 
 fn unreadable(operation: &str, detail: &str) -> JanitorError {
     JanitorError::os(&format!("the queue store could not {operation}: {detail}"))
 }
-
-
 
 /// Every job id named by `queue` or `running`, without downloading job
 /// documents. Transition sentinels stay on this conservative set.

@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 
-
 use tokio::net::TcpStream;
 
 use crate::monitor::host_silence;

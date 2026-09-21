@@ -93,7 +93,6 @@ async fn persist_ensure_record(
 /// authoritative read after activation, not merely the new process's PID.
 /// Only reads are repeated; the host action and conditional write never are.
 async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
-
     // A registry that is restarting answers when it is back, and that answer
     // is what this wait is for. A non-retryable failure still ends it at once,
     // and the operator interrupting the command ends it too; what no longer

@@ -9,7 +9,6 @@ pub(crate) mod pass;
 pub(crate) mod policy;
 pub(crate) mod state;
 
-
 pub(crate) const GIB: i64 = 1024 * 1024 * 1024;
 /// Python `_STATE_VERSION`.
 pub const STATE_VERSION: i64 = 1;

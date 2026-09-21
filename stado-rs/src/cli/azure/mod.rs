@@ -5,7 +5,6 @@
 //! Azure refresh credential is written to the globally selected credential
 //! store; authorization codes and access tokens remain process-local.
 
-
 use clap::{Args, Subcommand};
 
 use super::CmdError;

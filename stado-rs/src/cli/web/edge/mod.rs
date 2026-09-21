@@ -56,7 +56,6 @@
 //! grants it, [`status`] reports both ports as unanswered, which is exactly
 //! what an operator needs to see.
 
-
 use super::CmdError;
 use super::{mutate_web, unit_label};
 
@@ -126,8 +125,6 @@ const PROXY_UNIT: &str = "edge";
 /// the parent and refuses anything outside `$HOME`, which is what stops a
 /// delivery from becoming an arbitrary remote write.
 const CADDYFILE_ON_EDGE: &str = "$HOME/.stado/web-edge/Caddyfile";
-
-
 
 pub(crate) async fn dispatch(command: EdgeCommands) -> Result<(), CmdError> {
     match command {

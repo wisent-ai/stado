@@ -255,7 +255,11 @@ mod tests {
     fn a_submission_is_counted_and_a_new_ceiling_keeps_the_count() {
         let mut document = json!({ "builds": [] });
         let budget = BuildBudget::read(&document, at("2026-09-21"));
-        budget.record(&mut document, 2, &["run-a".to_string(), "run-b".to_string()]);
+        budget.record(
+            &mut document,
+            2,
+            &["run-a".to_string(), "run-b".to_string()],
+        );
         let after = BuildBudget::read(&document, at("2026-09-21"));
         assert_eq!(after.used, 2);
         assert_eq!(after.remaining(), 1);

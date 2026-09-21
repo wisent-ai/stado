@@ -127,7 +127,6 @@ pub(super) async fn authorized(request: &Request) -> Result<bool, OperatorAuthEr
             "target_deployment_id": deployment_id,
             "requested_permission": "operate",
         }))
-
         .send()
         .await
         .map_err(OperatorAuthError::Request)?;
