@@ -13,7 +13,7 @@ use crate::cli::resolver::authority::ssh_command;
 use crate::cli::resolver::directory::read_local_snapshot;
 use crate::cli::resolver::directory::validate_snapshot;
 use crate::cli::resolver::directory::SnapshotPayload;
-use crate::cli::resolver::directory::AUTHORITY_FETCH_TIMEOUT;
+
 use crate::cli::resolver::directory::SNAPSHOT_LIMIT;
 
 #[derive(Clone)]
@@ -103,28 +103,17 @@ impl SnapshotSource {
         reader: &str,
     ) -> Result<(Value, String, u64), String> {
         let remote_command = format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
-        let output = match tokio::time::timeout(
-            AUTHORITY_FETCH_TIMEOUT,
-            ssh_command("ControlMaster=no")
-                .arg(ssh)
-                .arg(remote_command)
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
+        let output = match ssh_command("ControlMaster=no")
+            .arg(ssh)
+            .arg(remote_command)
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output()
+            .await
         {
-            Ok(Ok(output)) => output,
-            Ok(Err(error)) => {
+            Ok(output) => output,
+            Err(error) => {
                 let sentence = format!("registry authority SSH failed: {error}");
-                refuse_authority(target, reader, &sentence).await;
-                return Err(sentence);
-            }
-            Err(_) => {
-                let sentence = format!(
-                    "registry authority SSH timed out after {}s",
-                    AUTHORITY_FETCH_TIMEOUT.as_secs()
-                );
                 refuse_authority(target, reader, &sentence).await;
                 return Err(sentence);
             }

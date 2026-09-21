@@ -12,14 +12,6 @@ pub(in crate::cli::resolver) mod document;
 pub(in crate::cli::resolver) mod source;
 
 const SNAPSHOT_LIMIT: usize = 1024 * 1024;
-/// Maximum wall time for one authority snapshot.
-///
-/// OpenSSH's connect and keepalive settings do not bound a remote command that
-/// stays alive without producing a snapshot. Without this deadline one stuck
-/// `resolver snapshot` blocks refresh forever while the local listener keeps
-/// accepting requests it can no longer answer.
-const AUTHORITY_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotPayload {

@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::time::Duration;
+
 
 use tokio::net::TcpStream;
 
@@ -10,25 +10,12 @@ use crate::targets;
 use crate::cli::resolver::authority::paths::target_ssh_paths;
 use crate::cli::resolver::directory::source::SnapshotSource;
 
-/// How long a bind probe waits for a loopback connect. A listener on loopback
-/// answers in microseconds or is not there; this is slack for a loaded
-/// machine, not a network budget.
-const BIND_PROBE: Duration = Duration::from_millis(250);
-
-/// Budget for the whole authority probe. [`ssh_command`] already carries
-/// `ConnectTimeout=10`; this bounds everything after the connect, so a
-/// diagnostic can never hang on the thing it is diagnosing.
-const AUTHORITY_PROBE: Duration = Duration::from_secs(20);
-
 /// Whether something is accepting connections at a declared bind.
 pub(super) async fn bind_listening(bind: &str) -> bool {
     let Ok(address) = bind.trim().parse::<SocketAddr>() else {
         return false;
     };
-    matches!(
-        tokio::time::timeout(BIND_PROBE, TcpStream::connect(address)).await,
-        Ok(Ok(_))
-    )
+    TcpStream::connect(address).await.is_ok()
 }
 
 /// Seconds since an ISO 8601 stamp, `None` when it does not parse.
@@ -96,27 +83,18 @@ pub(super) async fn probe_authority(
         ssh,
         command: directory.authority.command.clone(),
     };
-    match tokio::time::timeout(AUTHORITY_PROBE, source.fetch(host_silence::READER_CLI)).await {
-        Ok(Ok((_, _, generation))) => AuthorityAnswer {
+    match source.fetch(host_silence::READER_CLI).await {
+        Ok((_, _, generation)) => AuthorityAnswer {
             source: "ssh",
             reachable: true,
             generation: Some(generation),
             detail: None,
         },
-        Ok(Err(detail)) => AuthorityAnswer {
+        Err(detail) => AuthorityAnswer {
             source: "ssh",
             reachable: false,
             generation: None,
             detail: Some(detail),
-        },
-        Err(_) => AuthorityAnswer {
-            source: "ssh",
-            reachable: false,
-            generation: None,
-            detail: Some(format!(
-                "no answer from the registry authority within {}s",
-                AUTHORITY_PROBE.as_secs()
-            )),
         },
     }
 }
