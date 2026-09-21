@@ -14,8 +14,11 @@ use super::projection::terminal_job_matches_entry;
 /// Jobs predating durable submission manifests have no submission identity
 /// and are left on their legacy lifecycle path. A linked v3 job must still
 /// have its manifest: the terminal destination is already durable when this
-/// runs, so refusing an absent manifest preserves the settled result and its
-/// source fence for recovery rather than losing the only chance to retain it.
+/// runs, so an absent manifest is refused here and the settled result keeps
+/// its source fence for recovery rather than losing the only chance to
+/// retain it. The refusal is the caller's to carry: the lifecycle leaves
+/// that one transition unfinished and goes on with the rest of the pass,
+/// because a single orphaned run once ended every coordinator tick.
 pub async fn record_terminal_outcome(
     store: &JobStorage,
     job: &crate::models::Job,

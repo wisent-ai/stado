@@ -157,9 +157,13 @@ fn coordinator_retains_an_unlinked_legacy_terminal_job_from_its_manifest_entry()
     );
 }
 
+/// A settled job whose run history is gone must keep its fence and must not
+/// stop the pass. Until 2026-09-21 the tick ended with `blob not found:
+/// runs/<id>.json` instead, and one orphan left every queued job in the
+/// fleet undispatched for hours.
 #[test]
 #[ignore = "Probierz records the real coordinator retention journey"]
-fn coordinator_preserves_settled_history_and_refuses_missing_unretired_history() {
+fn coordinator_preserves_settled_history_without_stopping_on_missing_history() {
     for source_retired in [true, false] {
         let journey = Journey::new();
         journey.invoke_ok(&[
@@ -214,10 +218,9 @@ fn coordinator_preserves_settled_history_and_refuses_missing_unretired_history()
         fs::remove_file(journey.run_path()).unwrap();
 
         let output = journey.invoke(&["coordinator", "--once"]);
-        assert_eq!(
+        assert!(
             output.status.success(),
-            source_retired,
-            "{}",
+            "one run without history must not end the pass: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(fs::read(terminal_path).unwrap(), terminal);

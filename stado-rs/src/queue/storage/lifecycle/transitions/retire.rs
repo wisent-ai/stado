@@ -141,8 +141,39 @@ impl JobStorage {
             return Ok(true);
         }
         if crate::queue::runs::TERMINAL_PREFIXES.contains(&transition.to_prefix.as_str()) {
-            crate::queue::runs::record_terminal_outcome(self, &destination, &transition.to_prefix)
-                .await?;
+            match crate::queue::runs::record_terminal_outcome(
+                self,
+                &destination,
+                &transition.to_prefix,
+            )
+            .await
+            {
+                Ok(()) => {}
+                // The run manifest this outcome belongs to is gone, so the
+                // outcome cannot be retained against it. Nothing is dropped
+                // for that: the source stays fenced and the transition
+                // record stays, exactly as refusing did. What changes is the
+                // blast radius. On 2026-09-21 one such run —
+                // `runs/run-release-platform-0a59f2e4e7c00972a78d24c2.json`,
+                // reaped after its build was cancelled — ended every
+                // coordinator tick with `blob not found`, so no queued job
+                // was dispatched at all and a build queued at 22:14 was
+                // still waiting hours later. One orphan must not stop the
+                // fleet; the same shape was already repaired for job records
+                // this build cannot interpret, a few lines below.
+                Err(StorageError::NotFound(missing)) => {
+                    tracing::warn!(
+                        event = "transition_run_manifest_missing",
+                        job = %transition.job_id,
+                        transition = %transition.transition_id,
+                        missing = %missing,
+                        "the run manifest of a settled job is gone; its transition is left for \
+                         recovery and the rest of this pass continues"
+                    );
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            }
         }
         self.retire_transition_source(transition).await?;
         tombstone::on_transition(self, &destination, &transition.to_prefix).await;
