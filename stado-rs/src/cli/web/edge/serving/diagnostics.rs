@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{declared, PROBE_TIMEOUT, PROXY_UNIT};
+use super::super::{declared, PROXY_UNIT};
 use super::{deliver, stado_routes, CmdError};
 
 /// Whether the edge answers a TCP connection on one port, from here.
@@ -13,13 +13,9 @@ use super::{deliver, stado_routes, CmdError};
 /// loopback check on the edge itself would pass with the security group shut.
 async fn answers(address: &str, port: u16) -> (bool, String) {
     let endpoint = format!("{address}:{port}");
-    match tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(&endpoint)).await {
-        Ok(Ok(_)) => (true, String::new()),
-        Ok(Err(error)) => (false, error.to_string()),
-        Err(_) => (
-            false,
-            format!("no answer within {}s", PROBE_TIMEOUT.as_secs()),
-        ),
+    match tokio::net::TcpStream::connect(&endpoint).await {
+        Ok(_) => (true, String::new()),
+        Err(error) => (false, error.to_string()),
     }
 }
 

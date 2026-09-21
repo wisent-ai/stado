@@ -2,7 +2,7 @@
 
 use crate::observations::{OBSERVED, UNREACHABLE, UNVERIFIED};
 
-use crate::cli::service_verify::probe::{root_cause, PROBE_TIMEOUT};
+use crate::cli::service_verify::probe::root_cause;
 
 /// Connect, then hang up.
 ///
@@ -19,18 +19,9 @@ pub(super) async fn probe_tcp(endpoint: &str) -> (&'static str, String) {
             format!("endpoint is not a host:port address: {endpoint}"),
         );
     };
-    match tokio::time::timeout(
-        PROBE_TIMEOUT,
-        tokio::net::TcpStream::connect(address.as_str()),
-    )
-    .await
-    {
-        Ok(Ok(_stream)) => (OBSERVED, format!("connected to {address}")),
-        Ok(Err(error)) => (UNREACHABLE, root_cause(&error)),
-        Err(_elapsed) => (
-            UNREACHABLE,
-            format!("no answer within {}s", PROBE_TIMEOUT.as_secs()),
-        ),
+    match tokio::net::TcpStream::connect(address.as_str()).await {
+        Ok(_stream) => (OBSERVED, format!("connected to {address}")),
+        Err(error) => (UNREACHABLE, root_cause(&error)),
     }
 }
 

@@ -4,7 +4,7 @@ mod http;
 pub(in crate::cli::service_verify) mod remote;
 mod tcp;
 
-use std::time::Duration;
+
 
 use crate::observations::UNVERIFIED;
 use crate::targets::{VERIFY_KIND_HTTP, VERIFY_KIND_TCP};
@@ -12,10 +12,7 @@ use crate::targets::{VERIFY_KIND_HTTP, VERIFY_KIND_TCP};
 use crate::cli::service_verify::probe::http::probe_http;
 use crate::cli::service_verify::probe::tcp::probe_tcp;
 
-/// A probe must not hang a fleet sweep behind one dead forward. Long enough for
-/// a loopback service under load, short enough that a closed laptop answers
-/// promptly with the truth.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 
 /// Ask the endpoint whether anything is there, in the language the declaration
 /// says it speaks.

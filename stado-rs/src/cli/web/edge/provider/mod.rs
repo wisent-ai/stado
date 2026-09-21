@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use super::{mutate_web, unit_label, CmdError, DISCARD_TIMEOUT};
+use super::{mutate_web, unit_label, CmdError};
 use crate::providers::azure;
 
 mod provision;
@@ -25,19 +25,13 @@ async fn discard(client: &azure::ArmClient, path: &str, description: &str) -> Re
         .delete_allow_404(path, description)
         .await
         .map_err(|error| error.to_string())?;
-    let deadline = tokio::time::Instant::now() + DISCARD_TIMEOUT;
+    // Azure removes it when it removes it; `get_allow_404` answering `None`
+    // is the only evidence the resource is actually gone, and that answer is
+    // what ends this loop.
     loop {
         match client.get_allow_404(path, description).await {
             Ok(None) => return Ok(()),
-            Ok(Some(_)) if tokio::time::Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-            Ok(Some(_)) => {
-                return Err(format!(
-                    "{description}: still present {}s after the delete was accepted",
-                    DISCARD_TIMEOUT.as_secs()
-                ))
-            }
+            Ok(Some(_)) => tokio::time::sleep(Duration::from_secs(2)).await,
             Err(error) => return Err(error.to_string()),
         }
     }

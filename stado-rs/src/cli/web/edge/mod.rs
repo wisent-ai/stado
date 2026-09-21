@@ -56,7 +56,6 @@
 //! grants it, [`status`] reports both ports as unanswered, which is exactly
 //! what an operator needs to see.
 
-use std::time::Duration;
 
 use super::CmdError;
 use super::{mutate_web, unit_label};
@@ -128,12 +127,7 @@ const PROXY_UNIT: &str = "edge";
 /// delivery from becoming an arbitrary remote write.
 const CADDYFILE_ON_EDGE: &str = "$HOME/.stado/web-edge/Caddyfile";
 
-/// How long a TCP probe of the edge's own address may take.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long a rolled-back ARM resource may take to disappear before the
-/// operator is told it is still there.
-const DISCARD_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) async fn dispatch(command: EdgeCommands) -> Result<(), CmdError> {
     match command {

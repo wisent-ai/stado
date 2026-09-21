@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value};
 
-use super::{DNS_RESOLVED, DNS_TIMEOUT, DNS_UNREADABLE, DNS_UNRESOLVED};
+use super::{DNS_RESOLVED, DNS_UNRESOLVED};
 use crate::config::WebApiProduct;
 use crate::deploy::service::ServiceStatus;
 
@@ -19,20 +19,14 @@ use crate::deploy::service::ServiceStatus;
 /// is no resolver machinery here to reuse: `cli/dns.rs` speaks Namecheap's
 /// zone API and answers "what does the zone say", which is a different
 /// question and would go on answering correctly while a record served from a
-/// stale cache pointed somewhere else. `doctor.rs` already reaches for
-/// `lookup_host` under a timeout for exactly this reason, and this follows it,
-/// so what is reported is what a browser would actually get.
+/// stale cache pointed somewhere else. The resolver's own answer ends this
+/// lookup, so what is reported is what a browser would actually get.
 ///
 /// The port in the query is `443` because `lookup_host` resolves a socket
 /// address and needs one; it is discarded, and nothing here connects.
 pub(super) async fn resolve_hostname(hostname: &str) -> (&'static str, Vec<String>) {
-    let lookup = tokio::time::timeout(
-        DNS_TIMEOUT,
-        tokio::net::lookup_host(format!("{hostname}:443")),
-    )
-    .await;
-    match lookup {
-        Ok(Ok(addresses)) => {
+    match tokio::net::lookup_host(format!("{hostname}:443")).await {
+        Ok(addresses) => {
             let mut found: Vec<String> = addresses
                 .map(|address| address.ip().to_string())
                 .collect::<std::collections::BTreeSet<_>>()
@@ -49,8 +43,7 @@ pub(super) async fn resolve_hostname(hostname: &str) -> (&'static str, Vec<Strin
         // reached both arrive here as an error from the same call, and the
         // stub resolver does not distinguish them for us. Reported as
         // unresolved with the reason in `dns_detail`, never as an address.
-        Ok(Err(_)) => (DNS_UNRESOLVED, Vec::new()),
-        Err(_) => (DNS_UNREADABLE, Vec::new()),
+        Err(_) => (DNS_UNRESOLVED, Vec::new()),
     }
 }
 
