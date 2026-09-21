@@ -207,15 +207,14 @@ before=$(free_kb)
 # The build tools' own caches, under the roots the registry declares for the
 # `build_caches` cleaner.
 #
-# The janitor already has that cleaner and on a Mac it cannot run it: the
-# declared root is inside the operator's Documents folder, the agent that
-# sweeps it holds no Full Disk Access grant, and every pass on
-# a fleet Mac ended `build_caches:OSError (Operation not permitted)` with
-# 0.0 GiB freed while the volume sat at 99% and the host published
-# `disk_pressure_active`, refusing every queued release build. This stage is
-# the same eviction run from the command the operator invokes, which does
-# hold that access, so the space is reclaimable by a product command instead
-# of by hand.
+# The janitor already has that cleaner and on a Mac it cannot always run it:
+# a declared root inside the account's protected folders is refused to the
+# agent that sweeps it unless that agent holds a Full Disk Access grant, and
+# the pass then ends `build_caches:OSError (Operation not permitted)` having
+# freed nothing while the volume stays under its watermark and the host
+# refuses every queued job. This stage is the same eviction run from the
+# command the operator invokes, which does hold that access, so the space is
+# reclaimable by a product command instead of by hand.
 #
 # Only a directory carrying a `CACHEDIR.TAG` written by the build tool
 # itself is taken: cargo writes one into every `target/`, and the tag is the

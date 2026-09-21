@@ -34,11 +34,11 @@ pub const MEMORY_SWAP_OVER_WATERMARK: &str = "memory_swap_over_watermark";
 ///
 /// The host's own live publication when it is talking, and this command's own
 /// measurement of the host when it is not. The disk half has had that second
-/// source since it was written; memory had only the first, so on 2026-09-21
-/// `stado host gates` printed `memory: not observed` for a fleet Mac while the
-/// same fleet's `stado space report` read 708 MiB available of
-/// 65536 MiB with 23,386,723 swapouts — a machine that had been paging for
-/// days, on the surface built to say why a host is slow to answer.
+/// source since it was written; memory had only the first, so the host this
+/// verdict matters most for — the one whose agent has no memory left to
+/// publish with — reported `memory: not observed` on the surface built to
+/// say why a host is slow to answer, while a direct reading of the same host
+/// showed it paging.
 pub const MEMORY_SOURCE_PUBLICATION: &str = "capacity_publication";
 pub const MEMORY_SOURCE_MEASUREMENT: &str = "host_memory_measurement";
 

@@ -2,14 +2,12 @@
 //!
 //! macOS keeps a local APFS snapshot of the volume every hour. A snapshot
 //! pins every block the volume held when it was taken, so deleting a file
-//! frees nothing while a snapshot still references it — and the janitor's own
-//! accounting says exactly that: on a fleet Mac on 2026-09-21 a pass
-//! removed 54 tagged build trees and `df` moved from 12.4 GiB free to 12.4
-//! GiB free. Thinning the eleven local snapshots on the same volume, through
-//! the declared `local_apfs_snapshots` reclamation stage, moved it to 35.8
-//! GiB. Both halves were needed and only the first one was automatic, so the
-//! host went back under its watermark within the hour, published
-//! `disk_pressure_active`, and refused every release build again.
+//! frees nothing while a snapshot still references it. A pass can therefore
+//! remove every tagged build tree it finds and leave `df` exactly where it
+//! started, which is what happens on a Mac whose janitor has no way to thin
+//! snapshots: the host is back under its watermark within the hour,
+//! publishes `disk_pressure_active` and refuses the work it was clearing
+//! space for.
 //!
 //! This is the second half, run by the pass itself. It is bounded by the same
 //! declared target the rest of the janitor is measured against: snapshots are

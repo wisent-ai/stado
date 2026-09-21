@@ -57,17 +57,14 @@ pub const RELOCATION_COOLDOWN_SECONDS: i64 = 1800;
 /// How long one published pressure reading keeps a host pressured for this
 /// stage, whatever its next publication says.
 ///
-/// The decision used to be one instantaneous sample. A 16 GiB always-on Mac
-/// declares a 2 GiB floor and oscillates across it every few minutes: on
-/// 2026-09-21 the tick at 18:01:19Z read `2.5 GiB available, pressure clear`
-/// and settled the profile, while `stado placement relief` typed seconds
-/// later read `1.7 GiB available, pressure active` — and every hand reading
-/// that hour saw pressure. A host in that state is not healthy between the
-/// dips; it is a host with no memory left, and a stage that samples it once
-/// per tick relieves it only by luck. Pressure therefore sticks for this
-/// window, and a host has to publish clear for the whole of it before the
-/// profile on it settles. Three times the memory pass's five-minute cadence,
-/// so a genuinely recovered host is settled within a quarter of an hour.
+/// A host sitting on its memory watermark crosses it every few minutes, so
+/// one instantaneous sample decides nothing: the tick that happens to read
+/// the host between two dips settles the profile on a machine that has no
+/// memory left, and the tick that reads a dip moves it. Pressure therefore
+/// sticks for this window, and a host has to publish clear for the whole of
+/// it before the profile on it settles. Three times the memory pass's
+/// five-minute cadence, so a recovered host is settled within a quarter of
+/// an hour.
 pub const PRESSURE_STICKY_SECONDS: i64 = 900;
 
 /// Relocations one tick may execute. One: every destination's headroom was

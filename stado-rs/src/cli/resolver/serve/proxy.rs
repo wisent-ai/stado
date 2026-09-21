@@ -80,13 +80,12 @@ pub(super) async fn serve_adapter(
 /// A request/response connection is silent in one direction for as long as
 /// the service works, so a per-direction idle timer is not a measure of a
 /// dead connection at all: it is a cap on how long an answer may take, and
-/// when it fired the proxy shut the half it was copying into. On 2026-09-21
-/// that ended four `stado release submit` runs with `connection closed before
-/// message completed` against `stado://probierz/...` while the object API on
-/// the active host was answering normally and slowly, with 84 jobs running on
-/// it. A connection is idle when NEITHER direction has moved a byte inside
-/// the window; the retention bound the window exists for is unchanged,
-/// because a connection nobody is using is still closed after it.
+/// when it fires the proxy shuts the half it is copying into, truncating an
+/// answer that was still arriving. A client reads that as `connection closed
+/// before message completed`, which names neither the proxy nor the service
+/// that was working. A connection is idle when NEITHER direction has moved a
+/// byte inside the window; the retention bound the window exists for is
+/// unchanged, because a connection nobody is using is still closed after it.
 struct Activity {
     started: std::time::Instant,
     last_millis: std::sync::atomic::AtomicU64,
@@ -191,10 +190,10 @@ where
 /// A client whose connection simply closes reports a transport error — `error
 /// sending request ...: connection closed before message completed` — and
 /// nothing in that sentence names the proxy, the window or the service that
-/// did not answer. Four `stado release submit` runs ended that way on
-/// 2026-09-21 and the cause had to be found by reading this file. Once a byte
-/// of the answer has already been forwarded the message cannot be retracted,
-/// so the close is all that is left and the served log carries the sentence.
+/// did not answer, which leaves the cause to be found by reading this file.
+/// Once a byte of the answer has already been forwarded the message cannot be
+/// retracted, so the close is all that is left and the served log carries the
+/// sentence.
 async fn cut<W>(
     writer: &mut W,
     bytes: u64,

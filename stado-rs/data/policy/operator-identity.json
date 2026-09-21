@@ -21,6 +21,16 @@
       "name": "personal_email_address",
       "regex": "[A-Za-z0-9._%+-]+@(?:gmail|icloud|outlook|columbia)\\.[A-Za-z]{2,}",
       "why": "A personal address identifies the person, and a public repository is not where it belongs."
+    },
+    {
+      "name": "incident_date",
+      "regex": "20[0-9]{2}-[0-9]{2}-[0-9]{2}",
+      "why": "A dated sentence is an incident report about this workshop's own machines on a public page. Say what the code does and why the rule exists; the day it happened belongs to the change's own record."
+    },
+    {
+      "name": "machine_description",
+      "regex": "[0-9]+ ?GiB (?:always-on |fleet )?(?:Mac|mini|laptop|workstation|host)",
+      "why": "Describing the machine by its size and its role identifies it as surely as its name does. State the condition — a host under its memory watermark — not the box."
     }
   ]
 }

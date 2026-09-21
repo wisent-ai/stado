@@ -267,11 +267,10 @@ pub(crate) async fn run_with_lock(
     );
     // After the cleaners and before the volume is measured: on a Mac their
     // deletions are worth nothing until the snapshots pinning those blocks
-    // are thinned, which is why a pass could remove 54 build trees on
-    // lukasz-macbook on 2026-09-21 and leave free space exactly where it
-    // found it. Bounded by the declared target, so a host with headroom
-    // keeps its backup history, and skipped entirely when the policy does
-    // not declare the cleaner.
+    // are thinned, so a pass can remove every tagged build tree it finds and
+    // leave free space exactly where it found it. Bounded by the declared
+    // target, so a host with headroom keeps its backup history, and skipped
+    // entirely when the policy does not declare the cleaner.
     crate::providers::local::disk_cleanup::local_snapshots::thin_to_target(
         home,
         &policy,
