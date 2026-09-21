@@ -7,8 +7,9 @@ use crate::release_agent::CauseRun;
 
 use super::super::constants::{
     BLOCKER_CANDIDATE_NOT_READY, BLOCKER_DESIRED_DIGEST_QUARANTINED, BLOCKER_REPEATING_CAUSE,
-    HEALTH_NO_CANDIDATE, HEALTH_OK, HEALTH_UNPROBED, REMEDY_DESIRED_DIGEST_QUARANTINED,
-    VERDICT_BLOCKED, VERDICT_ROLLING, VERDICT_SETTLED,
+    BLOCKER_STABLE_BIND_HELD, HEALTH_NO_CANDIDATE, HEALTH_OK, HEALTH_UNPROBED,
+    REMEDY_DESIRED_DIGEST_QUARANTINED, REMEDY_STABLE_BIND_HELD, VERDICT_BLOCKED, VERDICT_ROLLING,
+    VERDICT_SETTLED,
 };
 use super::super::quarantine::cause_summary;
 
@@ -43,10 +44,11 @@ pub(super) struct Facts<'a> {
 /// The verdict and the report around it.
 ///
 /// `blocked` is the only verdict that says the rollout will not move on its
-/// own, and it now has three causes: the agent refuses a quarantined desired
+/// own, and it now has four causes: the agent refuses a quarantined desired
 /// digest on every pass, a host with an unresolved disk gate fails admission
-/// closed and claims nothing at all, and the agent refuses to spend another
-/// candidate on a cause the last few all failed for. Everything short of
+/// closed and claims nothing at all, the agent refuses to spend another
+/// candidate on a cause the last few all failed for, and another declaration
+/// holds the stable bind so no candidate is ever spawned. Everything short of
 /// converged is `rolling`, because the agent's next tick is what advances it.
 pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     let mut blockers = facts.gate_blockers.clone();
@@ -78,11 +80,23 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     if held {
         blockers.push(BLOCKER_REPEATING_CAUSE.to_string());
     }
+    // The agent writes this when a foreign program holds the stable bind, and
+    // then waits for a declaration that has no reason to yield. Every pass
+    // repeats it, so it is a stop with a decision behind it, not a rollout in
+    // flight.
+    let stable_bind_held = facts.detail.contains(crate::release_agent::NO_CANDIDATE_SPAWNED);
+    if stable_bind_held {
+        blockers.push(BLOCKER_STABLE_BIND_HELD.to_string());
+    }
     blockers.sort();
     blockers.dedup();
     let converged =
         facts.observed_version.is_some() && facts.observed_version == facts.desired_version;
-    let verdict = if desired_quarantined || facts.disk_pressure_unresolved || held {
+    let verdict = if desired_quarantined
+        || facts.disk_pressure_unresolved
+        || held
+        || stable_bind_held
+    {
         VERDICT_BLOCKED
     } else if facts.in_flight || !converged {
         VERDICT_ROLLING
@@ -120,6 +134,9 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     {
         remedies.push(remedy.to_string());
     }
+    if stable_bind_held {
+        remedies.push(REMEDY_STABLE_BIND_HELD.to_string());
+    }
     remedies.dedup();
     json!({
         "product": facts.product,
@@ -155,4 +172,72 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
         "blockers": blockers,
         "remedies": remedies,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The facts `release doctor` read off charless-mac-mini on 2026-09-21,
+    /// with only the detail line differing between the two cases.
+    fn facts<'a>(detail: &'a str) -> Facts<'a> {
+        Facts {
+            product: "skarbiec",
+            target: "charless-mac-mini",
+            desired_version: Some("0.3.12"),
+            observed_version: None,
+            phase: "failed",
+            detail,
+            candidate: json!({ "health_status": HEALTH_NO_CANDIDATE }),
+            quarantined: Vec::new(),
+            gates: json!({}),
+            gate_blockers: Vec::new(),
+            disk_pressure_unresolved: false,
+            run: None,
+            in_flight: false,
+        }
+    }
+
+    #[test]
+    fn a_stable_bind_another_declaration_holds_is_blocked_and_says_how_it_ends() {
+        let report = diagnosis(&facts(
+            "127.0.0.1:8895 is held by pid 40304 (skarbiec), which is not skarbiec's release \
+             proxy; no candidate was spawned",
+        ));
+        assert_eq!(report["verdict"], VERDICT_BLOCKED);
+        assert!(
+            report["blockers"]
+                .as_array()
+                .expect("blockers is an array")
+                .contains(&Value::from(BLOCKER_STABLE_BIND_HELD)),
+            "the held bind is not named as a blocker: {report}"
+        );
+        let remedies = report["remedies"]
+            .as_array()
+            .expect("remedies is an array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            remedies.contains("stado service list") && remedies.contains("retire"),
+            "the remedy does not say how the standoff ends: {remedies}"
+        );
+    }
+
+    /// The same unconverged host with an ordinary detail is still rolling:
+    /// the agent's next tick advances it, and calling that blocked would send
+    /// an operator to retire a unit nothing is waiting on.
+    #[test]
+    fn a_rollout_that_is_merely_unfinished_is_not_blocked() {
+        let report = diagnosis(&facts("fetching skarbiec 0.3.12"));
+        assert_eq!(report["verdict"], VERDICT_ROLLING);
+        assert!(
+            report["blockers"]
+                .as_array()
+                .expect("blockers is an array")
+                .is_empty(),
+            "an unfinished rollout reported blockers: {report}"
+        );
+    }
 }

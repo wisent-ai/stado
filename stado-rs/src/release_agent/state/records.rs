@@ -16,6 +16,13 @@ use crate::release_cause::{self, QuarantineCause};
 /// building one — a test, a recovery tool — has to write the version the
 /// parser will accept rather than a copy of it that drifts.
 pub const STATE_SCHEMA: u32 = 1;
+
+/// The exact words the agent appends to `detail` when a foreign program holds
+/// the stable bind, so nothing was spawned. `release doctor` matches on this
+/// to turn the phase into a blocker with a remedy: the two are one sentence
+/// written in one place, not a string one command hopes the other still uses.
+pub const NO_CANDIDATE_SPAWNED: &str = "no candidate was spawned";
+
 pub(crate) const STATUS_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

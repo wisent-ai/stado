@@ -16,7 +16,9 @@ use crate::release_agent::rollout::serving::discover::{foreign_stable_bind_holde
 use crate::release_agent::rollout::serving::proxy::proxy_upstream_port;
 use crate::release_agent::state::document::save_state;
 use crate::release_agent::state::evidence::quarantine_with_logs;
-use crate::release_agent::state::records::{HostReleaseState, QuarantineRecord, RolloutPhase};
+use crate::release_agent::state::records::{
+    HostReleaseState, QuarantineRecord, RolloutPhase, NO_CANDIDATE_SPAWNED,
+};
 use crate::release_control::{
     BlueGreenServing, DesiredRelease, ProductReleasePolicy, ReleaseArtifactRef, ReleaseControl,
     ReleaseTargetPolicy,
@@ -57,7 +59,7 @@ pub(crate) async fn promote_candidate(
     // declaration claimed that port gives it back.
     if let Some(holder) = foreign_stable_bind_holder(target, serving, product)? {
         state.phase = RolloutPhase::Failed;
-        state.detail = format!("{holder}; no candidate was spawned");
+        state.detail = format!("{holder}; {NO_CANDIDATE_SPAWNED}");
         save_state(target, state)?;
         return Ok(());
     }

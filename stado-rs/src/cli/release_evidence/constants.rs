@@ -34,9 +34,10 @@ pub const VERDICT_SETTLED: &str = "settled";
 /// A candidate is staged or running, or observed still differs from
 /// desired with nothing blocking the agent.
 pub const VERDICT_ROLLING: &str = "rolling";
-/// The rollout cannot proceed on its own. Both causes are silent today:
-/// a quarantined desired digest is skipped forever, and an unresolved disk
-/// gate stops the host from claiming anything at all.
+/// The rollout cannot proceed on its own. Every cause is silent otherwise:
+/// a quarantined desired digest is skipped forever, an unresolved disk gate
+/// stops the host from claiming anything at all, and a stable bind another
+/// declaration holds is a port that is never given back.
 pub const VERDICT_BLOCKED: &str = "blocked";
 
 /// The desired artifact's digest is in the host's quarantine map. The agent
@@ -54,6 +55,14 @@ pub const BLOCKER_CANDIDATE_NOT_READY: &str = "candidate_not_ready";
 /// to promote a candidate and read it afterwards, which costs the candidate
 /// this rule exists to save.
 pub const BLOCKER_REPEATING_CAUSE: &str = "repeating_quarantine_cause";
+/// Another program holds the product's stable bind, so the agent spawned no
+/// candidate at all. The agent's own comment says the next tick rolls the
+/// release out "once whichever declaration claimed that port gives it back"
+/// — and nothing ever makes it give it back, so this is a stop, not a wait.
+/// On 2026-09-21 the mini sat in this state with a verdict of `rolling`
+/// while every credential write on that host refused, `weles-api` crashed on
+/// the refusal at boot, and no account could be signed in.
+pub const BLOCKER_STABLE_BIND_HELD: &str = "stable_bind_held_by_other_declaration";
 
 /// The command that retires [`BLOCKER_DESIRED_DIGEST_QUARANTINED`]. Named here
 /// rather than left to the operator, because a verdict that identifies a
@@ -61,3 +70,16 @@ pub const BLOCKER_REPEATING_CAUSE: &str = "repeating_quarantine_cause";
 /// diagnosis.
 pub const REMEDY_DESIRED_DIGEST_QUARANTINED: &str =
     "stado release quarantine clear --digest <digest> --reason <text>";
+
+/// What ends [`BLOCKER_STABLE_BIND_HELD`]. Two declarations claim one port on
+/// one host, and only one of them can have it: either the unit that holds it
+/// is retired so the agent can bind, or this product is not release-controlled
+/// on this host. The holder's own pid and name are already in `detail`; these
+/// are the reads that say which declaration it belongs to.
+pub const REMEDY_STABLE_BIND_HELD: &str =
+    "stado service list --host <target> names the unit declaring that port; \
+     `stado host unit-log <target> com.wisent.stado.release-agent` shows every \
+     tick refusing to spawn. Retire the holding unit \
+     (`stado service retire <unit> --host <target>`) so the agent can bind, or \
+     take this product off release control for this host. Restarting the \
+     holder changes nothing: the new process claims the same port.";

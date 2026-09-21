@@ -38,7 +38,8 @@ pub use state::document::{
 };
 pub use state::evidence::host_log_path;
 pub use state::records::{
-    HostReleaseState, ProcessRecord, QuarantineRecord, RolloutPhase, STATE_SCHEMA,
+    HostReleaseState, ProcessRecord, QuarantineRecord, RolloutPhase, NO_CANDIDATE_SPAWNED,
+    STATE_SCHEMA,
 };
 pub use state::status::{publish_service_release_status, release_status_uri};
 pub use tick::once::{agent, reconcile_once};

@@ -56,6 +56,11 @@ struct ReleaseDoctorReport: Decodable, Sendable {
     let verdict: ReleaseVerdict
     /// Verbatim, in the CLI's words, in the CLI's order.
     let blockers: [String]
+    /// What the command says ends each blocker, verbatim. Decoded for the same
+    /// reason the CLI prints them: a console that shows a rollout is stopped
+    /// and withholds the one command that unsticks it sends its reader to a
+    /// terminal to run the same diagnosis again.
+    let remedies: [String]
 
     var pair: ReleaseInventoryPair {
         ReleaseInventoryPair(product: product, target: target)
@@ -68,6 +73,7 @@ struct ReleaseDoctorReport: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case product, target, phase, detail, candidate, quarantined, gates, verdict, blockers
+        case remedies
         case desiredVersion = "desired_version"
         case observedVersion = "observed_version"
     }
@@ -86,6 +92,7 @@ struct ReleaseDoctorReport: Decodable, Sendable {
         gates = try values.decodeIfPresent(ReleaseGates.self, forKey: .gates) ?? ReleaseGates()
         verdict = ReleaseVerdict(try values.decodeIfPresent(String.self, forKey: .verdict) ?? "")
         blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
+        remedies = try values.decodeIfPresent([String].self, forKey: .remedies) ?? []
     }
 }
 

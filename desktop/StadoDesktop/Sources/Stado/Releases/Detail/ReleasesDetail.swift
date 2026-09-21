@@ -96,6 +96,21 @@ extension ReleasesView {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if !report.remedies.isEmpty {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+                        Text("WHAT ENDS IT")
+                            .font(WisentTypeScale.eyebrow())
+                            .tracking(0.6)
+                            .foregroundStyle(WisentDesign.muted)
+                        ForEach(report.remedies, id: \.self) { remedy in
+                            Text(remedy)
+                                .font(WisentTypeScale.identifier())
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 HStack(alignment: .top, spacing: WisentDesign.Space.x6) {
                     WisentField(
                         label: "Disk pressure",
