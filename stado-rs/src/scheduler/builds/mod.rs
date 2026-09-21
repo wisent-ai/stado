@@ -72,7 +72,7 @@ pub use command::{build_job_command, BUILD_VERSION_FILE};
 pub const POLLER_RUN_PREFIX: &str = "build-scheduler";
 pub const MANUAL_RUN_PREFIX: &str = "build-manual";
 pub use enqueue::claimability::Claimability;
-pub use watch::ls_remote;
+pub(crate) use watch::ls_remote;
 
 use enqueue::poll_one;
 use receipts::reconcile_build_runs;

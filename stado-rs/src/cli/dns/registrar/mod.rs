@@ -119,7 +119,6 @@ pub(super) fn unescape(value: &str) -> String {
 /// with the registrar's own error text.
 pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, CmdError> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|error| CmdError::click(error.to_string()))?;
     let response = client

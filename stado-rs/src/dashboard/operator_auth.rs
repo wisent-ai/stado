@@ -3,7 +3,6 @@
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use serde_json::{json, Value};
 use url::Url;
@@ -128,7 +127,7 @@ pub(super) async fn authorized(request: &Request) -> Result<bool, OperatorAuthEr
             "target_deployment_id": deployment_id,
             "requested_permission": "operate",
         }))
-        .timeout(Duration::from_secs(5))
+
         .send()
         .await
         .map_err(OperatorAuthError::Request)?;

@@ -35,12 +35,7 @@ impl GcpRest {
                 "stado/{} resource-operations",
                 env!("CARGO_PKG_VERSION")
             ))
-            .timeout(Duration::from_secs(
-                chrono::Duration::minutes(true as i64)
-                    .num_seconds()
-                    .try_into()
-                    .unwrap_or_default(),
-            ))
+
             .build()?;
         Ok(Self {
             http,

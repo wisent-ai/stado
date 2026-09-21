@@ -68,7 +68,6 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
          ?recursive=true&expand=false&limit=1000"
     );
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
         .user_agent("stado-artifacts/1")
         .build()
         .map_err(|exc| TreeFetchError {
