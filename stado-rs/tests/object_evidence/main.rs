@@ -22,8 +22,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use stado::providers::local::disk_cleanup::CleanupReport;
 use stado::providers::local::disk_cleanup::object_evidence::{scan_object_evidence, CLEANER};
+use stado::providers::local::disk_cleanup::CleanupReport;
 use stado::targets::{DiskCleanerPolicy, DiskCleanupPolicy};
 
 /// A week, the retention floor this cleaner's declaration carries.
@@ -196,8 +196,16 @@ fn a_spent_scan_budget_stops_the_pass_and_is_reported() {
         write_aged(&root.join(format!("run-{index}.tar.gz")), 512, 30);
     }
 
-    let report = run(&policy(Some(root.to_str().expect("a path"))), &home, true, 2);
-    assert!(report.caps.scan, "the pass records that its budget bound it");
+    let report = run(
+        &policy(Some(root.to_str().expect("a path"))),
+        &home,
+        true,
+        2,
+    );
+    assert!(
+        report.caps.scan,
+        "the pass records that its budget bound it"
+    );
     assert_eq!(report.object_evidence.skipped.get("scan_cap"), Some(&1));
     assert!(
         report.object_evidence.deleted_items <= 2,

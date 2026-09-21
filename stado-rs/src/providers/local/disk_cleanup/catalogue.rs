@@ -83,11 +83,11 @@ pub const CLEANERS: &[CleanerDeclaration] = &[
     },
     CleanerDeclaration {
         name: super::object_evidence::CLEANER,
-        since: "0.21.44",
+        since: "0.21.45",
         default_root: "",
         sweeps: "product run evidence in this host's object store, under the declared root and past the declared age",
         min_age_floor_seconds: 604_800,
-        root_override_since: Some("0.21.44"),
+        root_override_since: Some("0.21.45"),
     },
     CleanerDeclaration {
         name: "release_store",

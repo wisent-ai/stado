@@ -11,8 +11,7 @@ use crate::providers::local::disk_cleanup::janitor::state::report::{
 use crate::providers::local::disk_cleanup::janitor::{MAX_ERRORS, STATE_VERSION};
 use crate::providers::local::disk_cleanup::{
     backup_twins, build_caches, chromium_clones, job_outputs, local_snapshots, object_evidence,
-    queue_workdirs,
-    release_store,
+    queue_workdirs, release_store,
 };
 use crate::targets;
 

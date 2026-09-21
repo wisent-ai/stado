@@ -13,7 +13,7 @@ use serde_json::json;
 
 use super::{
     admission_refusal, candidates, checkout_path, ledger_root, live_capacity, probe_ready,
-    shell_quote, validate_component, workspace_expression, MANAGED_JEDEN,
+    service_endpoint, shell_quote, validate_component, workspace_expression, MANAGED_JEDEN,
 };
 use crate::cli::workload::catalog::WorkloadKind;
 use crate::cli::CmdError;
@@ -24,6 +24,34 @@ use crate::queue::submit::{
 /// Version of the record `stado workload start` returns. A reader that
 /// understands this number knows every field below is present.
 pub(super) const RECORD_SCHEMA_VERSION: u64 = 1;
+
+/// The fleet service a session reaches its models through.
+const MODEL_ROUTER_SERVICE: &str = "brama";
+
+/// The two credentials a Jeden session needs, as vault coordinates rather
+/// than values: the agent's own signing secret and the gateway bearer. The
+/// worker's agent resolves them through its own grant and hands them to the
+/// session's environment; nothing puts a value on a command line, and a
+/// host whose grant does not expose them leaves the session queued for one
+/// that does.
+fn session_secrets() -> std::collections::BTreeMap<String, crate::models::JobSecretRef> {
+    let mut secrets = std::collections::BTreeMap::new();
+    secrets.insert(
+        "WISENT_APP_AGENT_AUTH_SECRET".to_string(),
+        crate::models::JobSecretRef {
+            item: "agent:wisent-app".to_string(),
+            field: "value".to_string(),
+        },
+    );
+    secrets.insert(
+        "BRAMA_TOKEN".to_string(),
+        crate::models::JobSecretRef {
+            item: "jeden-model-router".to_string(),
+            field: "token".to_string(),
+        },
+    );
+    secrets
+}
 
 /// Everything one detached start is asked for. The grants are explicit
 /// because nobody is watching the session: a detached run that could write
@@ -69,11 +97,15 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
             refusals.push(refusal);
             continue;
         }
-        if let Err(refusal) = probe_ready(&target, &checkout, None).await {
-            refusals.push(refusal);
-            continue;
-        }
-        let command = session_command(&checkout, &request);
+        let readiness = match probe_ready(&target, &checkout, None).await {
+            Ok(readiness) => readiness,
+            Err(refusal) => {
+                refusals.push(refusal);
+                continue;
+            }
+        };
+        let router = service_endpoint(MODEL_ROUTER_SERVICE, &target.name).await;
+        let command = session_command(&checkout, &request, router.as_deref());
         let run_id = run_id(kind, request.workspace);
         let options = SubmitOptions {
             batch_id: batch_id(kind),
@@ -82,6 +114,16 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
             pinned_host: crate::cli::submit::resolve_pinned_host(&target.name).await?,
             cpu_cores: reservation.cpu_cores,
             memory_gb: reservation.ram_gb.ceil() as i64,
+            // A host that holds the operator grant file reads the agent's
+            // signing secret and the gateway bearer itself, exactly as an
+            // attached session does. A host without it — the Linux builder
+            // has none — is handed the same two credentials by its own
+            // agent, from the fleet's grant, as declared job secrets.
+            secret_env: if readiness.reads_own_credentials {
+                Default::default()
+            } else {
+                session_secrets()
+            },
             // A session reaches its model over HTTP through Brama, so it
             // needs no accelerator. Saying so explicitly also keeps the
             // submit-time sizing regex off the task text: a task that
@@ -188,12 +230,15 @@ pub(super) fn workspace_of(kind: &str, run_id: &str) -> Option<String> {
 /// until macOS is told to give it some, and without this check the session
 /// died printing the harness's usage text, which says nothing about why.
 /// The two sentences below are what the job's retained log carries instead.
-fn session_command(checkout: &str, request: &DetachedRequest<'_>) -> String {
+fn session_command(checkout: &str, request: &DetachedRequest<'_>, router: Option<&str>) -> String {
     let workspace = workspace_expression(checkout);
+    let router_env = router
+        .map(|url| format!("BRAMA_URL={} ", shell_quote(url)))
+        .unwrap_or_default();
     let mut command = format!(
         "if ! cd {workspace} 2>/dev/null; then printf 'the worker cannot enter %s on this host; grant the Stado agent access to that directory or start the session in a workspace it can read\\n' {workspace} >&2; exit 1; fi; \
          if [ ! -x \"$HOME\"/{MANAGED_JEDEN} ]; then printf 'the managed Jeden is missing or not executable at %s on this host; install it with `stado product install jeden`\\n' \"$HOME\"/{MANAGED_JEDEN} >&2; exit 1; fi; \
-         PATH=\"$HOME/.stado/bin:$PATH\" exec \"$HOME\"/{MANAGED_JEDEN} run {} --json --max-steps {}",
+         {router_env}PATH=\"$HOME/.stado/bin:$PATH\" exec \"$HOME\"/{MANAGED_JEDEN} run {} --json --max-steps {}",
         shell_quote(request.task),
         request.max_steps
     );

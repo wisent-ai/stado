@@ -21,6 +21,16 @@ fn consumer_id(area: &Area) -> String {
     format!("local-{}", area.hostname.to_lowercase())
 }
 
+/// A host that reads its own Skarbiec credentials holds this grant file,
+/// which is how `stado secrets get` works on the operator's machines. Its
+/// presence is what the session placement probes for; the bytes are never
+/// read by the placement.
+fn hold_operator_grant(area: &Area) {
+    let path = area.home.join(".stado/local-operator-skarbiec-token");
+    std::fs::create_dir_all(path.parent().expect("the grant file has a parent")).unwrap();
+    std::fs::write(&path, "journey-grant\n").unwrap();
+}
+
 fn start(area: &Area, arguments: &[&str]) -> std::process::Output {
     let mut args = vec!["workload", "start", "jeden-session", "--target", TARGET];
     args.extend_from_slice(arguments);
@@ -43,6 +53,7 @@ fn started_record(area: &Area, arguments: &[&str]) -> Value {
 fn a_detached_session_is_queued_as_a_real_job_sized_from_its_declaration() {
     let area = Area::new();
     install_runtime(&area);
+    hold_operator_grant(&area);
     let record = started_record(
         &area,
         &["--workspace", "__home__", "--task", TASK, "--json"],
@@ -81,6 +92,7 @@ fn a_detached_session_is_queued_as_a_real_job_sized_from_its_declaration() {
 fn the_start_record_says_where_the_session_runs_and_what_it_holds() {
     let area = Area::new();
     install_runtime(&area);
+    hold_operator_grant(&area);
     let record = started_record(
         &area,
         &[
@@ -123,6 +135,7 @@ fn the_start_record_says_where_the_session_runs_and_what_it_holds() {
 fn a_detached_session_with_no_task_is_refused_before_anything_is_queued() {
     let area = Area::new();
     install_runtime(&area);
+    hold_operator_grant(&area);
     let output = start(&area, &["--workspace", "__home__"]);
     assert!(!output.status.success(), "{}", said(&output.stdout));
     assert!(
@@ -162,6 +175,7 @@ fn a_kind_that_is_not_detachable_is_refused_with_the_file_to_change() {
 fn the_fleet_lists_the_detached_sessions_it_is_holding() {
     let area = Area::new();
     install_runtime(&area);
+    hold_operator_grant(&area);
     let record = started_record(
         &area,
         &["--workspace", "__home__", "--task", TASK, "--json"],
@@ -192,6 +206,7 @@ fn the_fleet_lists_the_detached_sessions_it_is_holding() {
 fn the_fleet_runs_a_detached_session_after_the_starting_process_has_exited() {
     let area = Area::new();
     install_runtime(&area);
+    hold_operator_grant(&area);
     let record = started_record(
         &area,
         &["--workspace", "__home__", "--task", TASK, "--json"],
@@ -226,6 +241,7 @@ fn the_fleet_runs_a_detached_session_after_the_starting_process_has_exited() {
 fn a_session_that_names_a_model_is_claimed_on_a_host_with_no_spare_vram() {
     let area = Area::new();
     install_runtime(&area);
+    hold_operator_grant(&area);
     let record = started_record(
         &area,
         &[
@@ -253,5 +269,35 @@ fn a_session_that_names_a_model_is_claimed_on_a_host_with_no_spare_vram() {
     assert!(
         job["started_at"].as_str().is_some_and(|at| !at.is_empty()),
         "the worker really started the session: {job}"
+    );
+}
+
+/// A host that cannot read the vault itself — the Linux builder holds no
+/// operator grant file, which is why a session there failed on
+/// 2026-09-20 with `cannot read Skarbiec grant file
+/// /root/.stado/local-operator-skarbiec-token` — is handed the same two
+/// credentials by its own agent, as declared job secrets. Nothing puts a
+/// value in the command.
+#[test]
+fn a_host_without_its_own_grant_receives_the_session_credentials_from_the_fleet() {
+    let area = Area::new();
+    install_runtime(&area);
+    let record = started_record(
+        &area,
+        &["--workspace", "__home__", "--task", TASK, "--json"],
+    );
+    let job = area.record("queue", record["job_id"].as_str().unwrap());
+    assert_eq!(
+        job["secret_env"]["WISENT_APP_AGENT_AUTH_SECRET"]["item"], "agent:wisent-app",
+        "the signing secret is declared by coordinate: {job}"
+    );
+    assert_eq!(
+        job["secret_env"]["BRAMA_TOKEN"]["item"], "jeden-model-router",
+        "the gateway bearer is declared by coordinate: {job}"
+    );
+    let command = job["command"].as_str().unwrap_or_default();
+    assert!(
+        !command.contains("BRAMA_TOKEN") && !command.contains("AUTH_SECRET"),
+        "no credential name or value reaches the command line: {command}"
     );
 }

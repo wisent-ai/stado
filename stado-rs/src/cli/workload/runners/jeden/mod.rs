@@ -25,6 +25,11 @@ pub(super) const MANAGED_JEDEN: &str = ".stado/bin/jeden";
 pub(super) const MANAGED_STADO: &str = ".stado/bin/stado";
 pub(super) const DEFAULT_LEDGER: &str = ".jeden/sessions";
 pub(super) const SESSION_ROOT_VARIABLE: &str = "JEDEN_SESSION_ROOT";
+/// The grant file a host reads its own Skarbiec credentials through. Jeden
+/// asks `stado secrets get` for its signing secret and gateway bearer, and
+/// that read needs this file; a host without it gets the same credentials
+/// from the fleet, as declared job secrets its agent resolves.
+pub(super) const OPERATOR_GRANT_FILE: &str = ".stado/local-operator-skarbiec-token";
 
 pub(crate) fn current_workspace() -> String {
     std::env::current_dir()
@@ -162,15 +167,23 @@ pub(super) async fn candidates(
     Ok(targets)
 }
 
+/// What a candidate host answered about carrying a session.
+pub(super) struct HostReadiness {
+    /// True when the host holds the operator grant file Jeden reads its own
+    /// credentials through. A host without it needs the fleet to hand the
+    /// session its credentials as declared job secrets instead.
+    pub reads_own_credentials: bool,
+}
+
 /// Whether `target` can carry a session in `checkout` right now: the
 /// workspace exists, the managed binaries are installed, and the named
-/// session ledger is there when one was named. `Ok(Err(sentence))` is the
+/// session ledger is there when one was named. `Err(sentence)` is the
 /// host's own reason, kept for the refusal that names every candidate.
 pub(super) async fn probe_ready(
     target: &ComputeTarget,
     checkout: &str,
     resume: Option<&str>,
-) -> Result<(), String> {
+) -> Result<HostReadiness, String> {
     let (ledger, _) = ledger_root(target);
     let workspace = workspace_expression(checkout);
     let resume_probe = resume
@@ -194,12 +207,20 @@ for binary in {MANAGED_JEDEN} {MANAGED_STADO}; do
   fi
 done
 [ "$ready" = yes ] || exit 1
-printf ready
+if [ -r "$HOME"/{OPERATOR_GRANT_FILE} ]; then
+  printf 'ready own-credentials'
+else
+  printf 'ready fleet-credentials'
+fi
 "#,
     );
     let runner = crate::deploy::production_runner();
     match host_channel::run_script(target, &probe, &runner).await {
-        Ok(output) if output.ok() && output.stdout.trim() == "ready" => Ok(()),
+        Ok(output) if output.ok() && output.stdout.trim().starts_with("ready") => {
+            Ok(HostReadiness {
+                reads_own_credentials: output.stdout.trim().ends_with("own-credentials"),
+            })
+        }
         Ok(output) => {
             let detail = output.detail();
             Err(format!(
@@ -224,6 +245,20 @@ pub(super) async fn live_capacity() -> Vec<Value> {
         .await
         .map(|entries| entries.into_values().collect())
         .unwrap_or_default()
+}
+
+/// The address `service` answers on *from* `target`, as the fleet's own
+/// service directory records it.
+///
+/// A session is placed on whichever host has room, and a loopback service
+/// has a different address on each of them, so the address has to be read
+/// for the host that will run the session rather than inherited from the
+/// machine that asked for it. Without this a session on a host that carries
+/// no `~/.jeden/.env` had no model router at all.
+pub(super) async fn service_endpoint(service: &str, target: &str) -> Option<String> {
+    let (registry, _) = crate::targets::fetch_registry_or_last_good().await.ok()?;
+    let endpoint = registry.service(service)?.address_for(target)?;
+    Some(endpoint.url.clone())
 }
 
 /// The publication this target's own agent wrote, when it wrote one.
