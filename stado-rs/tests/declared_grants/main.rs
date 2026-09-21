@@ -305,3 +305,41 @@ fn a_directory_change_moves_its_generation() {
         "the directory changed and its generation did not"
     );
 }
+
+/// The other side of that refusal: once every host declares a Stado that can
+/// read the field, the same write goes through and the document carries it.
+///
+/// `Store::ready` was written for this case on 2026-09-20 and the case was
+/// not, so the fleet gate had only its refusal proved, and the helper sat
+/// unused until the release worker's clippy gate refused to build Stado at
+/// all.
+#[test]
+fn the_same_declaration_is_written_once_every_host_can_read_the_field() {
+    let store = Store::ready();
+    let declaration = r#"[{"consumer":"weles-model-router-client","capabilities":["read:weles-model-router#token"],"token_file":"weles-model-router-skarbiec-token"}]"#;
+    let path = "service_directory.services.brama.consumers.operator.grants";
+
+    let out = store.stado(&["registry", "set", "--path", path, "--value", declaration]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let out = store.stado(&["registry", "pull", "--path", path]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let written: serde_json::Value =
+        serde_json::from_str(stdout(&out).trim()).expect("the declaration reads back as JSON");
+    assert_eq!(
+        written[0]["consumer"], "weles-model-router-client",
+        "the declaration the fleet accepted is not the one that was written: {written}"
+    );
+    assert_eq!(
+        written[0]["capabilities"][0], "read:weles-model-router#token",
+        "the grant lost its capability on the way into the document: {written}"
+    );
+
+    let out = store.grants(&["brama", "--consumer", "operator"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("weles-model-router-client"),
+        "the accepted declaration is not what `service grants` reads back: {}",
+        stdout(&out)
+    );
+}
