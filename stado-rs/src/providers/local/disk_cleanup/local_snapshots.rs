@@ -36,6 +36,30 @@ const TMUTIL: &str = "/usr/bin/tmutil";
 /// with, and the prefix the operating system's own update snapshots carry.
 const SNAPSHOT_PREFIX: &str = "com.apple.TimeMachine.";
 const OS_UPDATE_PREFIX: &str = "com.apple.os.update-";
+/// What the same listing appends to every snapshot name. `tmutil
+/// deletelocalsnapshots` takes the timestamp alone and reads anything else
+/// as a volume, so a name handed over whole is refused with
+/// `<name> is not a valid disk` — six times an hour on this fleet's macs,
+/// with nothing deleted and the host left under its watermark.
+const SNAPSHOT_SUFFIX: &str = ".local";
+/// `YYYY-MM-DD-HHMMSS`, the shape tmutil prints and accepts. A listing row
+/// that does not carry it is counted and left alone rather than handed to
+/// the remover as an argument nobody can predict.
+const STAMP_LENGTH: usize = "0000-00-00-000000".len();
+
+/// The timestamp `tmutil deletelocalsnapshots` takes, read out of one
+/// listing row. `None` for a row whose remainder is not a timestamp.
+fn stamp_of(line: &str) -> Option<&str> {
+    let stamp = line
+        .strip_prefix(SNAPSHOT_PREFIX)?
+        .trim_end_matches(SNAPSHOT_SUFFIX);
+    let shaped = stamp.len() == STAMP_LENGTH
+        && stamp.chars().enumerate().all(|(place, letter)| match place {
+            4 | 7 | 10 => letter == '-',
+            _ => letter.is_ascii_digit(),
+        });
+    shaped.then_some(stamp)
+}
 
 /// Thin this volume's local snapshots until it reaches the declared target.
 ///
@@ -94,10 +118,13 @@ pub fn thin_to_target(
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
-        let Some(stamp) = line.strip_prefix(SNAPSHOT_PREFIX) else {
+        let Some(stamp) = stamp_of(line) else {
             if line.starts_with(OS_UPDATE_PREFIX) {
                 record.scanned_items += 1;
                 bump(&mut record.skipped, "operating_system_recovery_state");
+            } else if line.starts_with(SNAPSHOT_PREFIX) {
+                record.scanned_items += 1;
+                bump(&mut record.skipped, "name_carries_no_timestamp");
             }
             continue;
         };
