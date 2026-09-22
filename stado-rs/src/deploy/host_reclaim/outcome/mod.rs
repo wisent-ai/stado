@@ -9,131 +9,18 @@ use serde_json::{json, Value};
 use crate::deploy::host_channel;
 use crate::deploy::host_state::cleanup::cleaner_plans;
 
-use super::{APPLY_MODE, DRY_RUN_MODE, UNAVAILABLE_SUFFIX};
+use super::{APPLY_MODE, DRY_RUN_MODE};
 
+mod janitor;
 mod report;
+mod shape;
 
 pub use report::to_report;
+pub use shape::{Reclamation, Stage};
+use janitor::janitor_sentence;
+use shape::{blocks, drain, drain_evidence, unavailable};
 
 const REGISTRY_CLEANUP_STAGE: &str = "registry_cleanup";
-
-/// One stage, as the host measured it.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Stage {
-    pub stage: String,
-    /// `df -Pk` available blocks either side of the stage, or `None` for a
-    /// stage that never ran.
-    pub free_kb_before: Option<i64>,
-    pub free_kb_after: Option<i64>,
-    /// How many items the stage reclaimed, or in dry-run mode would reclaim.
-    pub items: usize,
-    /// The paths behind that count, when the stage produced them. The janitor
-    /// reports per-cleaner counts and not paths, so this is empty for that
-    /// stage rather than filled with placeholders.
-    pub paths: Vec<String>,
-    /// Why the stage could not run, for the host's own words in the rendering.
-    pub detail: Option<String>,
-    /// Snapshot identifiers refused by the native ownership/type checks.
-    pub refused: Vec<String>,
-    /// Per-workdir proof used only when the queue authority was unavailable.
-    pub local_terminality_evidence: Vec<Value>,
-}
-
-/// Everything one reclamation did.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Reclamation {
-    pub mode: String,
-    pub stages: Vec<Stage>,
-    pub free_kb_before: Option<i64>,
-    pub free_kb_after: Option<i64>,
-    /// The janitor's canonical report, kept for the per-cleaner rendering.
-    pub janitor_plan: Option<Value>,
-    /// Stages that did not run, and why. A stage nobody could judge must say
-    /// so; reporting it as a stage that removed nothing is the same sentence
-    /// as a clean host.
-    pub skipped: Vec<(String, String)>,
-}
-
-/// A marker field that has to be a `df` block count.
-fn blocks(field: &str) -> Option<i64> {
-    field.trim().parse::<i64>().ok()
-}
-
-/// Take every pending item line that names `stage`, leaving the rest.
-fn drain(pending: &mut Vec<(String, String)>, stage: &str) -> Vec<String> {
-    let mut mine = Vec::new();
-    pending.retain(|(named, path)| {
-        if named == stage {
-            mine.push(path.clone());
-            return false;
-        }
-        true
-    });
-    mine
-}
-
-fn drain_evidence(pending: &mut Vec<(String, Value)>, stage: &str) -> Vec<Value> {
-    let mut mine = Vec::new();
-    pending.retain(|(named, evidence)| {
-        if named == stage {
-            mine.push(evidence.clone());
-            return false;
-        }
-        true
-    });
-    mine
-}
-
-/// The janitor's own account of one pass, in one line an operator can act on.
-///
-/// `registry_cleanup` is the only stage that reads the host's declared cleaner
-/// policy, and it used to report `items: 0` with `detail: null` — so a pass
-/// that decided there was no pressure, a pass whose declared roots hold
-/// nothing eligible, and a pass that deleted nothing under a report-only
-/// policy all looked identical. On 2026-09-10 that cost an afternoon on
-/// `ubuntu-server-rtx-pro-6000`: 29 GiB free against a 24 GiB watermark, a
-/// declared model cache of 3.2 GiB beside it, and a receipt that said nothing.
-fn janitor_sentence(
-    plan: &Value,
-    plans: &[crate::deploy::host_state::cleanup::CleanerPlan],
-    apply: bool,
-) -> String {
-    let word = |key: &str| {
-        plan.get(key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-    };
-    let outcome = word("outcome").unwrap_or("no outcome reported");
-    let mut sentence = format!("host janitor: {outcome}");
-    if let Some(mode) = word("mode") {
-        sentence.push_str(&format!(", policy mode {mode}"));
-    }
-    if plans.is_empty() {
-        sentence.push_str(", and it declares no cleaners");
-        return sentence;
-    }
-    let mut cleaners: Vec<String> = plans
-        .iter()
-        .map(|cleaner| {
-            let acted = if apply {
-                cleaner.deleted_items
-            } else {
-                cleaner.eligible_items
-            };
-            format!(
-                "{} scanned {} eligible {} {} {}",
-                cleaner.name,
-                cleaner.scanned_items,
-                cleaner.eligible_items,
-                if apply { "deleted" } else { "would delete" },
-                acted
-            )
-        })
-        .collect();
-    cleaners.sort();
-    sentence.push_str(&format!("; {}", cleaners.join("; ")));
-    sentence
-}
 
 /// Fold the marker lines of stdout into a reclamation.
 ///
@@ -267,20 +154,6 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
         }
     }
     reclamation
-}
-
-/// A stage the host could not run, named as itself.
-fn unavailable(stage: &str, detail: &str) -> Stage {
-    Stage {
-        stage: format!("{stage}{UNAVAILABLE_SUFFIX}"),
-        free_kb_before: None,
-        free_kb_after: None,
-        items: 0,
-        paths: Vec::new(),
-        detail: Some(detail.to_string()),
-        refused: Vec::new(),
-        local_terminality_evidence: Vec::new(),
-    }
 }
 
 #[cfg(test)]
