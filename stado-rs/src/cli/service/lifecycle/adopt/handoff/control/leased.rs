@@ -37,9 +37,22 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         &state_path,
     )
     .map_err(CmdError::click)?;
+    // This command swaps a settled release in for the generic unit; it does
+    // not rescue a rollout. When the generic unit's own process holds the
+    // stable bind, the agent can never spawn a candidate, so the release can
+    // never settle, so this refusal repeats for ever — charless-mac-mini,
+    // 2026-09-21, where the sentence alone sent two sessions round the same
+    // loop. It now says which loop it is and what leaves it.
     let active = state.active.as_ref().ok_or_else(|| {
         CmdError::click(format!(
-            "{host}: release-control has no active {product:?} process"
+            "{host}: release-control has no active {product:?} process (phase {:?}, detail: {}). \
+             This command hands a settled release the bind; it cannot create one. If the detail \
+             says the stable bind is held, the unit that holds it and the release agent are \
+             claiming one port: read `stado release doctor {product} --target {host}` for the \
+             holder and `stado service list --host {host}` for the unit that declares it, then \
+             either retire that unit so the agent can bind, or leave {product:?} off release \
+             control on this host.",
+            state.phase, state.detail
         ))
     })?;
     if state.phase != crate::release_agent::RolloutPhase::Committed
