@@ -4,9 +4,7 @@
 use std::path::Path;
 use std::process::Command;
 
-pub(crate) use super::process::{
-    pid_alive, process_executable_matches, same_executable, terminate,
-};
+pub(crate) use super::process::{pid_alive, terminate};
 use crate::release_agent::state::document::proxy_state_path;
 use crate::release_control::{BlueGreenServing, ReleaseTargetPolicy};
 

@@ -115,7 +115,7 @@ fn a_running_process_recognises_its_own_executable() {
     let me = i32::try_from(std::process::id()).expect("a pid fits");
     let executable = std::env::current_exe().expect("this test has an executable");
     assert!(
-        crate::release_agent::rollout::serving::discover::process_executable_matches(
+        crate::release_agent::rollout::serving::owner::process::process_executable_matches(
             me,
             &executable
         ),
@@ -128,7 +128,7 @@ fn a_running_process_recognises_its_own_executable() {
 /// same program.
 #[test]
 fn one_executable_reached_by_two_names_is_one_executable() {
-    use crate::release_agent::rollout::serving::discover::same_executable;
+    use crate::release_agent::rollout::serving::owner::process::same_executable;
     // This package's own build directory: a unit test is not handed
     // `CARGO_TARGET_TMPDIR`, and a fixture under the operator's home would
     // depend on their machine instead of on this package.

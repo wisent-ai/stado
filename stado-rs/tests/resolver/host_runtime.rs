@@ -217,7 +217,10 @@ fn another_listener_is_refused_without_stopping_the_host() {
     ]);
     assert!(!refused.status.success(), "{}", said(&refused));
     assert!(said(&refused).contains(&bind), "{}", said(&refused));
-    assert_eq!(occupied.local_addr().unwrap().port(), port);
+    let _client = std::net::TcpStream::connect(&bind).expect("original listener still accepts");
+    let _accepted = occupied
+        .accept()
+        .expect("the unrelated owner retained its listener");
     assert!(service.running(), "{}", service.said());
     let response = http_get(policy.upstream, "/healthz", &[]).expect("API after refused proxy");
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
