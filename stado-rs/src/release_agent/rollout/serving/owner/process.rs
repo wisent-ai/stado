@@ -5,6 +5,7 @@
 //! cap; recognising the release proxy among those processes stays there.
 
 use std::path::Path;
+#[cfg(not(target_os = "linux"))]
 use std::process::Command;
 
 use nix::sys::signal::{kill, Signal};

@@ -36,7 +36,6 @@ pub(crate) fn validate_registry_body(
     let mut names: HashSet<&str> = HashSet::new();
     let mut identities: HashMap<String, String> = HashMap::new();
     let mut target_heuristics: HashMap<&str, &str> = HashMap::new();
-    let mut coordinator_heuristics: HashSet<&str> = HashSet::new();
     let valid_kinds =
         crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::HostTarget)
             .collect::<Vec<_>>();

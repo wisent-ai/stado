@@ -267,4 +267,3 @@ async fn run_kind(
         ))),
     }
 }
-

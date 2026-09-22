@@ -25,7 +25,6 @@ use crate::deploy::host_precheck_runner::signing::developer_id::bootstrap_develo
 use crate::deploy::host_precheck_runner::verdict::report::{command_failure, report};
 use crate::deploy::host_precheck_runner::verdict::scope::{scope_for_profile, RunnerScope};
 use crate::deploy::{host_channel, production_runner, shlex_quote, DeployError};
-use crate::targets::ComputeTarget;
 
 use super::secret::install_kronika_agent_secret;
 

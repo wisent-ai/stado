@@ -11,7 +11,7 @@ mod capacity;
 mod detached;
 mod sessions;
 
-pub(super) use capacity::{admission_refusal, live_capacity, target_score};
+use capacity::{admission_refusal, live_capacity, target_score};
 
 pub(crate) use attach::connect_jeden;
 pub(crate) use detached::{start_detached, DetachedRequest};
@@ -252,4 +252,3 @@ fi
         Err(error) => Err(format!("{}: {error}", target.name)),
     }
 }
-
