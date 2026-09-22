@@ -178,6 +178,26 @@ fn refusal_for(
         ));
     }
     match resolution.state {
+        // The node's own table publishes the name and grants it Funnel, and the
+        // public resolvers answer NXDOMAIN for it. Those two facts together are
+        // not a Stado condition at all: a `ts.net` name is published by the
+        // tailnet, so the node has the grant locally and the tailnet is not
+        // serving it. On 2026-09-22 this state made every push to the stado
+        // repository red — the release object route answered 503 — while every
+        // Stado read here said "published". Say which side is missing, or an
+        // operator re-runs converge against a host that is already doing its
+        // half.
+        ResolutionState::Unresolved if publication.funnel_enabled => Some(format!(
+            "{host} publishes {name} with funnel enabled, and the public resolvers answer no A \
+             or AAAA record for it. Both halves cannot be true here: a ts.net name is published \
+             by the tailnet, not by this fleet, so the node holds its half and the tailnet is \
+             not serving the name. Nothing in Stado repairs that — the tailnet policy has to \
+             grant this node Funnel, or the declaration has to name the origin the tailnet does \
+             serve (`stado web origin declare`). Detail: {detail}",
+            host = origin.target,
+            name = origin.hostname,
+            detail = resolution.detail
+        )),
         ResolutionState::Unresolved => Some(format!(
             "the declared origin {} is published by {}'s {} but has no public A or AAAA record, \
              so no public edge can fetch it: {}",

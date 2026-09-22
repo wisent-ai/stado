@@ -194,6 +194,19 @@ fn origin_error(
     selection: &EdgeSelection,
 ) -> String {
     match resolution.state {
+        // A name the node publishes with Funnel granted, which no public
+        // resolver knows, is the tailnet's half that is missing — not this
+        // fleet's. Saying only "no public A or AAAA record" sent a reader to
+        // re-run `origin converge` against a host already doing everything it
+        // can, while every push to the stado repository stayed red on a 503
+        // from the release object route.
+        ResolutionState::Unresolved if publication.state() == "published" => format!(
+            "{} publishes every declared path with funnel enabled, and no public resolver knows \
+             that name: a ts.net name is served by the tailnet, so the grant this node holds is \
+             not the half that is missing. Repair it in the tailnet policy, or declare the \
+             origin the tailnet does serve. Detail: {}",
+            resolution.hostname, resolution.detail
+        ),
         ResolutionState::Unavailable | ResolutionState::Unresolved => resolution.detail.clone(),
         ResolutionState::Resolved => match publication.state() {
             "published" if edge == "differs" => format!(
