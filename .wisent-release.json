@@ -52,6 +52,14 @@
         {
           "name": "release-newest",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
+        },
+        {
+          "name": "fleet-expansion-cli",
+          "argv": ["bash", "tests/fleet-expansion/qualify.sh", "cli"]
+        },
+        {
+          "name": "fleet-expansion-desktop",
+          "argv": ["bash", "tests/fleet-expansion/qualify.sh", "desktop"]
         }
       ],
       "stage": {
@@ -102,6 +110,10 @@
         {
           "name": "release-newest",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
+        },
+        {
+          "name": "fleet-expansion-cli",
+          "argv": ["bash", "tests/fleet-expansion/qualify.sh", "cli"]
         }
       ],
       "stage": {

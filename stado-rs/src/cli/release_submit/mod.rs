@@ -35,17 +35,36 @@ pub use crate::cli::release_submit::run::submit::submit;
 pub(crate) use crate::cli::release_submit::run::reports::{
     matching_runs, published_coordinates, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
 };
-pub(crate) use crate::cli::release_submit::run::source::{committed_file, resolve_commit};
+pub(crate) use crate::cli::release_submit::builds::jobs::platforms::{
+    enqueue_platforms, refresh_build,
+};
+pub(crate) use crate::cli::release_submit::run::source::{
+    build_identity, build_path, build_uri, committed_file, immutable, queue_immutable,
+    resolve_commit, snapshot,
+};
+pub(crate) use crate::cli::release_submit::run::state::{
+    load_build, persist_build_failure, save_build,
+};
 
+/// What a release is made from: a checkout to build first, or a build that
+/// has already passed. Exactly one of the two; `--commit` and `--version`
+/// belong to the checkout, so naming them beside `--build` is refused.
 #[derive(Args)]
+#[command(group = clap::ArgGroup::new("origin").required(true).args(["source", "build"]))]
 pub struct ReleaseSubmitArgs {
-    #[arg(long)]
-    source: PathBuf,
+    /// Build this checkout's committed tree first, then release that build.
+    #[arg(long, requires = "version", conflicts_with = "build")]
+    source: Option<PathBuf>,
     /// Read this full Git commit without changing or requiring a clean checkout.
-    #[arg(long)]
+    #[arg(long, requires = "source")]
     commit: Option<String>,
+    /// The version the source declares; required with --source.
+    #[arg(long, requires = "source")]
+    version: Option<String>,
+    /// Release a build that has already passed, by the id `stado build
+    /// status` prints. A build that is still waiting or has failed is refused.
     #[arg(long)]
-    version: String,
+    build: Option<String>,
     #[arg(long, value_enum, default_value_t = SubmitChannel::Candidate)]
     channel: SubmitChannel,
     #[arg(long)]
@@ -64,9 +83,10 @@ impl ReleaseSubmitArgs {
         channel: SubmitChannel,
     ) -> Self {
         Self {
-            source: source.to_path_buf(),
+            source: Some(source.to_path_buf()),
             commit: Some(commit.to_string()),
-            version: version.to_string(),
+            version: Some(version.to_string()),
+            build: None,
             channel,
             json: false,
         }
