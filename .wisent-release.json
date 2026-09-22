@@ -61,28 +61,6 @@
           "deploy/release/build_stado.sh"
         ]
       },
-      "tests": [
-        {
-          "name": "single-process-runtime",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
-        },
-        {
-          "name": "documentation",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
-        },
-        {
-          "name": "release-newest",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
-        },
-        {
-          "name": "fleet-expansion-cli",
-          "argv": ["bash", "tests/fleet-expansion/qualify.sh", "cli"]
-        },
-        {
-          "name": "fleet-expansion-desktop",
-          "argv": ["bash", "tests/fleet-expansion/qualify.sh", "desktop"]
-        }
-      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
@@ -140,24 +118,6 @@
           "deploy/release/build_stado.sh"
         ]
       },
-      "tests": [
-        {
-          "name": "single-process-runtime",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
-        },
-        {
-          "name": "documentation",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
-        },
-        {
-          "name": "release-newest",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
-        },
-        {
-          "name": "fleet-expansion-cli",
-          "argv": ["bash", "tests/fleet-expansion/qualify.sh", "cli"]
-        }
-      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }

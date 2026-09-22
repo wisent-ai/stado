@@ -41,3 +41,16 @@ cargo build \
 staged="$output_dir/stado-rs/target/release"
 mkdir -p "$staged"
 install -m 0755 "$target_dir/release/stado" "$staged/stado"
+
+# Stado must build under the already installed worker, whose recipe parser
+# predates the `tests` key. Keep post-build qualification in this build entry
+# instead of making the bootstrap depend on the version it is building.
+# Source CLI checks run in `quality`; these flows consume the staged binary
+# and retain the same evidence required by the qualification entrypoint.
+export WISENT_TEST_EVIDENCE_DIR="$output_dir/test-evidence"
+bash "$source_dir/tests/fleet-expansion/qualify.sh" cli
+case "${WISENT_PLATFORM:?WISENT_PLATFORM is required}" in
+  darwin-arm64)
+    bash "$source_dir/tests/fleet-expansion/qualify.sh" desktop
+    ;;
+esac
