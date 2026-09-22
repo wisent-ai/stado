@@ -11,6 +11,14 @@ use super::grant::secrets_from_skarbiec;
 use super::log;
 use super::passes::{resolve_providers, run_tick};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Invocation {
+    Once,
+    Daemon,
+    /// The host worker owns image replacement and waits for its active jobs.
+    Hosted,
+}
+
 /// Pick the coordinator entry: explicit name or host-placement selector, or
 /// the active one, from the configured Stado registry with bundled backup.
 async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String> {
@@ -44,7 +52,7 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String
 
 /// Coordinator daemon entry point (Python `coordinator.run`). Returns the
 /// process exit code; `Err` is a SystemExit-style fatal message.
-pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
+pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, String> {
     let coord = resolve_coordinator(target).await?;
     if coord.runtime == "gcp_cloud_function" {
         log(&format!(
@@ -71,7 +79,8 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         .await
         .map_err(|err| err.to_string())?;
     loop {
-        if !config::stado_api_url().is_empty()
+        if invocation != Invocation::Hosted
+            && !config::stado_api_url().is_empty()
             && !config::stado_release_version().is_empty()
             && !config::stado_release_platform().is_empty()
         {
@@ -182,7 +191,7 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
                 log(&format!("fleet shape: {host} not measured — {reason}"));
             }
         }
-        if once {
+        if invocation == Invocation::Once {
             return Ok(0);
         }
         tokio::time::sleep(Duration::from_secs(interval)).await;

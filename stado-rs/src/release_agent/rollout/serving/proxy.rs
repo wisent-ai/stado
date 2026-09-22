@@ -96,6 +96,9 @@ pub(super) async fn forward(
     state_path: PathBuf,
     mut stopped: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), String> {
+    let bind = listener
+        .local_addr()
+        .map_err(|error| format!("cannot inspect release proxy listener: {error}"))?;
     let state_path = Arc::new(state_path);
     let mut connections = JoinSet::new();
     loop {
@@ -123,19 +126,19 @@ pub(super) async fn forward(
                             return Err("proxy upstream must be loopback".to_string());
                         }
                         let mut server = TcpStream::connect(upstream).await
-                            .map_err(|error| format!("proxy upstream connect failed: {error}"))?;
+                            .map_err(|error| format!("proxy upstream {upstream} connect failed: {error}"))?;
                         copy_bidirectional(&mut client, &mut server).await
                             .map_err(|error| format!("release proxy failed: {error}"))?;
                         Ok::<(), String>(())
                     }.await;
                     if let Err(error) = result {
-                        eprintln!("stado release proxy connection failed: {error}");
+                        eprintln!("stado release proxy connection failed: bind={bind} state={} detail={error}", state_path.display());
                     }
                 });
             }
             Some(result) = connections.join_next(), if !connections.is_empty() => {
                 if let Err(error) = result {
-                    eprintln!("stado release proxy connection task failed: {error}");
+                    eprintln!("stado release proxy connection task failed: bind={bind} state={} detail={error}", state_path.display());
                 }
             }
         }

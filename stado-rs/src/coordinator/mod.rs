@@ -52,7 +52,7 @@ pub(crate) use grant::{
 };
 pub(crate) use passes::run_autonomy_once;
 
-pub use daemon::run;
+pub use daemon::{run, Invocation};
 pub use passes::{resolve_providers, run_tick, CoordinatorError, ResolvedProvider};
 
 /// `[tick] ...` — the coordinator's log prefix (Python `_log`).

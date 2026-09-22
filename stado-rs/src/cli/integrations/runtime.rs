@@ -87,7 +87,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         health_beacons(Duration::from_secs(args.health_interval_seconds.get()))
     })?;
     if let Some(name) = args.coordinator {
-        supervisor.spawn("coordinator", move || coordinator::run(Some(name), false))?;
+        supervisor.spawn("coordinator", move || {
+            coordinator::run(Some(name), crate::coordinator::Invocation::Hosted)
+        })?;
         supervisor.spawn("api", move || {
             crate::cli::dashboard::run(args.bind, args.port.map(i64::from), false)
         })?;
