@@ -31,6 +31,7 @@ mod answers;
 mod consumers;
 mod declaration;
 mod fixture;
+mod idle;
 mod published;
 mod readiness;
 mod readiness_probe;
