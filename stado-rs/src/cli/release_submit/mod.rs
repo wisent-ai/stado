@@ -32,11 +32,12 @@ pub use crate::cli::release_submit::run::finish::finish_ready_runs;
 pub use crate::cli::release_submit::run::resume::resume;
 pub use crate::cli::release_submit::run::submit::submit;
 
-pub(crate) use crate::cli::release_submit::run::reports::{
-    matching_runs, published_coordinates, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
-};
 pub(crate) use crate::cli::release_submit::builds::jobs::platforms::{
     enqueue_platforms, refresh_build,
+};
+pub(crate) use crate::cli::release_submit::builds::jobs::terminal::terminal as terminal_job;
+pub(crate) use crate::cli::release_submit::run::reports::{
+    matching_runs, published_coordinates, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
 };
 pub(crate) use crate::cli::release_submit::run::source::{
     build_identity, build_path, build_uri, committed_file, immutable, queue_immutable,

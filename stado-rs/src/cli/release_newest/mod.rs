@@ -66,7 +66,7 @@ pub async fn newest(args: &ReleaseNewestArgs) -> Result<(), CmdError> {
 /// of the checkout the operator is standing in is the workspace. Outside any
 /// checkout there is nothing to infer and the refusal says which flag to pass
 /// rather than guessing a directory and releasing whatever is under it.
-fn workspace(requested: Option<PathBuf>) -> Result<PathBuf, CmdError> {
+pub(crate) fn workspace(requested: Option<PathBuf>) -> Result<PathBuf, CmdError> {
     if let Some(root) = requested {
         return root
             .canonicalize()

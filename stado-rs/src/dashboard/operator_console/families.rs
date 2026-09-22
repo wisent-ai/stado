@@ -13,6 +13,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "billing",
     "blast-radius",
     "bootstrap",
+    "build",
     "cancel",
     "capabilities",
     "cloudflare",
@@ -110,6 +111,10 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             "status" | "provenance" | "logs" | "doctor" | "active-binary"
         ) || (operation == "host-state" && !args.iter().any(|arg| arg == "--apply"))
             || (operation == "catalog" && detail == "audit");
+    }
+    if family == "build" {
+        return matches!(operation, "status" | "list")
+            || (operation == "newest" && args.iter().any(|arg| arg == "--plan"));
     }
     if family == "workdirs" {
         return !args.iter().any(|arg| arg == "--apply");

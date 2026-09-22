@@ -43,6 +43,11 @@ pub(crate) enum PlatformCommands {
     #[command(subcommand)]
     Artifact(ArtifactCommands),
 
+    /// Build one committed source on every declared platform and keep the
+    /// result; publish nothing. A release consumes a build that passed.
+    #[command(subcommand)]
+    Build(build_cmd::BuildCommands),
+
     /// Build once, sign, promote, roll out, and roll back product releases.
     #[command(subcommand)]
     Release(release_cmd::ReleaseCommands),

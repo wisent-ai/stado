@@ -9,7 +9,7 @@ use crate::cli::release_submit::deliver::redelivery::transaction::{
 };
 use crate::cli::release_submit::deliver::redelivery::{RedeliveryStage, RedeliveryTransaction};
 use crate::cli::release_submit::deliver::DeliveryRequest;
-use crate::cli::release_submit::run::source::{queue_immutable, run_path};
+use crate::cli::release_submit::run::source::{queue_immutable, run_manifest_path};
 use crate::cli::release_submit::run::state::latest_submitted_run;
 use crate::cli::release_submit::ReleaseRedeliverArgs;
 use crate::cli::CmdError;
@@ -60,7 +60,7 @@ pub(super) async fn plan_redelivery(
         ));
     }
     let manifest_bytes = store
-        .read_bytes(&run_path(&run.product, &run.run_id, "manifest.json"))
+        .read_bytes(&run_manifest_path(&run))
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .ok_or_else(|| CmdError::click("release run manifest is missing"))?;

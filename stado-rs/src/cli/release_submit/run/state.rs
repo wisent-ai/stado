@@ -1,43 +1,95 @@
-//! The durable run object: how a submission records its own progress, its
-//! failures, and which run is the newest one a delivery may belong to.
+//! The durable run objects: how a build and a submission record their own
+//! progress and failures, and which run is the newest one a delivery may
+//! belong to.
 
 use chrono::Utc;
 
-use crate::cli::release_submit::run::source::run_state_path;
+use crate::cli::release_submit::run::source::{build_state_path, run_state_path};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
-use crate::release_pipeline::{PlatformRunState, ReleaseRun, ReleaseRunState};
+use crate::release_pipeline::{
+    BuildRun, BuildRunState, PlatformRunState, ReleaseRun, ReleaseRunState,
+};
 
-pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
-    run.updated_at = Utc::now().to_rfc3339();
+/// Write one run object over its current version, or create it. The
+/// compare-and-swap is the guard against two coordinators writing one run.
+async fn write_state(path: &str, content: &str, what: &str, id: &str) -> Result<(), CmdError> {
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let path = run_state_path(&run.run_id);
-    let content = serde_json::to_string(run)?;
     if let Some(current) = store
-        .read_text_versioned(&path)
+        .read_text_versioned(path)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
     {
         store
-            .compare_and_swap_text(&path, &current.version, &content)
+            .compare_and_swap_text(path, &current.version, content)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         return Ok(());
     }
     if store
-        .create_text_if_absent(&path, &content)
+        .create_text_if_absent(path, content)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
     {
         Ok(())
     } else {
         Err(CmdError::click(format!(
-            "release run state appeared concurrently: {}",
-            run.run_id
+            "{what} state appeared concurrently: {id}"
         )))
     }
+}
+
+pub(crate) async fn save_build(build: &mut BuildRun) -> Result<(), CmdError> {
+    build.updated_at = Utc::now().to_rfc3339();
+    let content = serde_json::to_string(build)?;
+    write_state(
+        &build_state_path(&build.build_id),
+        &content,
+        "build",
+        &build.build_id,
+    )
+    .await
+}
+
+pub(crate) async fn persist_build_failure(build: &mut BuildRun, error: CmdError) -> CmdError {
+    build.state = BuildRunState::Failed;
+    build.failure = Some(error.to_string());
+    if let Err(save_error) = save_build(build).await {
+        return CmdError {
+            message: Some(format!(
+                "{error}; failed to persist build failure: {save_error}"
+            )),
+            code: error.code,
+            ..CmdError::default()
+        };
+    }
+    error
+}
+
+pub(crate) async fn load_build(id: &str) -> Result<Option<BuildRun>, CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    store
+        .download_text(&build_state_path(id))
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .map(|content| serde_json::from_str(&content).map_err(CmdError::from))
+        .transpose()
+}
+
+pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
+    run.updated_at = Utc::now().to_rfc3339();
+    let content = serde_json::to_string(run)?;
+    write_state(
+        &run_state_path(&run.run_id),
+        &content,
+        "release run",
+        &run.run_id,
+    )
+    .await
 }
 pub(crate) async fn persist_failure(run: &mut ReleaseRun, error: CmdError) -> CmdError {
     run.state = ReleaseRunState::Failed;

@@ -1,5 +1,5 @@
-//! The durable record of one release run: its state, its per-platform builds
-//! and its deliveries.
+//! The durable records of one build and one release run: what a build's
+//! platform jobs did, and how a release consumes that build.
 
 use std::collections::BTreeMap;
 
@@ -58,6 +58,55 @@ impl ReleaseRunState {
             _ => "in_flight",
         }
     }
+}
+
+/// Where one build stands. A build ends `passed` when every required
+/// platform's job wrote a passing receipt, and `failed` when a required
+/// platform's job ended without one; until then it is `waiting`. It never
+/// signs, publishes or promotes anything: that is a release's work, and a
+/// release consumes only a build that has passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildRunState {
+    Waiting,
+    Passed,
+    Failed,
+}
+
+impl BuildRunState {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// One build of one committed source: the platform jobs it queued and what
+/// each of them left behind. Its identity is the product, version, source
+/// digest and manifest digest — no channel — so the same build serves a
+/// candidate release and the stable release that follows it. The platform
+/// records are the same shape a release run mirrors; a build's platform
+/// never reaches `published`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildRun {
+    pub schema_version: u32,
+    pub build_id: String,
+    pub product: String,
+    pub version: String,
+    pub source_commit: String,
+    pub source_sha256: String,
+    pub source_uri: String,
+    pub manifest_sha256: String,
+    pub manifest_uri: String,
+    pub state: BuildRunState,
+    pub platforms: BTreeMap<String, PlatformRun>,
+    #[serde(default)]
+    pub failure: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +172,11 @@ pub struct ReleaseRun {
     pub source_uri: String,
     pub manifest_sha256: String,
     pub manifest_uri: String,
+    /// The build whose platform jobs this run publishes. A run submitted
+    /// before builds had records of their own carries none and cannot be
+    /// continued by this release; it is resubmitted, which records one.
+    #[serde(default)]
+    pub build_id: Option<String>,
     pub state: ReleaseRunState,
     pub platforms: BTreeMap<String, PlatformRun>,
     #[serde(default)]

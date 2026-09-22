@@ -139,6 +139,39 @@ pub(crate) fn run_uri(product: &str, id: &str, leaf: &str) -> String {
 pub(crate) fn run_state_path(id: &str) -> String {
     format!("runs/release-pipeline/{id}/run.json")
 }
+/// Where a build keeps what its jobs consume: the source archive, the
+/// manifest, every staged input and each platform's immutable request.
+/// A release run of the same source reads them from here; it stages nothing
+/// of its own.
+pub(crate) fn build_path(product: &str, build_id: &str, leaf: &str) -> String {
+    format!("runs/build/{product}/{build_id}/{leaf}")
+}
+pub(crate) fn build_uri(product: &str, build_id: &str, leaf: &str) -> String {
+    format!(
+        "stado://{}/{}",
+        crate::config::wc_stado_storage_namespace(),
+        build_path(product, build_id, leaf)
+    )
+}
+pub(crate) fn build_state_path(build_id: &str) -> String {
+    format!("runs/build/{build_id}/run.json")
+}
+/// Where a run's staged source archive is: under the build it consumes, or
+/// under the run itself for a run recorded before builds had records of
+/// their own, whose deliveries still read what that run staged.
+pub(crate) fn run_source_input_uri(run: &crate::release_pipeline::ReleaseRun) -> String {
+    match run.build_id.as_deref() {
+        Some(build_id) => build_uri(&run.product, build_id, "inputs/source.tar.gz"),
+        None => run_uri(&run.product, &run.run_id, "inputs/source.tar.gz"),
+    }
+}
+/// Where a run's manifest copy is, by the same rule.
+pub(crate) fn run_manifest_path(run: &crate::release_pipeline::ReleaseRun) -> String {
+    match run.build_id.as_deref() {
+        Some(build_id) => build_path(&run.product, build_id, "manifest.json"),
+        None => run_path(&run.product, &run.run_id, "manifest.json"),
+    }
+}
 pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
     let store = JobStorage::new()
         .await
@@ -185,6 +218,14 @@ pub(crate) fn identity(
 ) -> String {
     release_control::sha256_bytes(
         format!("{product}\0{version}\0{channel:?}\0{source}\0{manifest}").as_bytes(),
+    )[..32]
+        .into()
+}
+/// A build's identity has no channel in it: the channel is the release's
+/// question, and one build answers it for every channel.
+pub(crate) fn build_identity(product: &str, version: &str, source: &str, manifest: &str) -> String {
+    release_control::sha256_bytes(
+        format!("build\0{product}\0{version}\0{source}\0{manifest}").as_bytes(),
     )[..32]
         .into()
 }

@@ -18,6 +18,7 @@ pub mod artifact;
 pub mod azure;
 pub mod billing;
 pub mod blast_radius;
+pub mod build_cmd;
 pub mod capabilities;
 pub mod capacity;
 pub mod cloudflare;

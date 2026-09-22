@@ -56,7 +56,10 @@ pub(crate) async fn publish(
         .ok_or_else(|| CmdError::click("release job omitted archive"))?;
     let r: BuildReceipt = serde_json::from_slice(&rb)?;
     let digest = release_control::sha256_bytes(&archive);
-    if r.run_id != run.run_id
+    // The receipt names the build the job belonged to, which is the run's
+    // build; a run of its own never queued this job.
+    let build_id = run.build_id.as_deref().unwrap_or(&run.run_id);
+    if r.run_id != build_id
         || r.job_id != rec.job_id
         || r.product != run.product
         || r.version != run.version

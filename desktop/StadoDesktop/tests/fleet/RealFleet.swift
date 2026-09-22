@@ -51,6 +51,20 @@ final class RealFleet {
     /// The store, pointed at the operator API of a deployment holding one
     /// registered machine and no fleets, seeded by `stado registry push`.
     func store() async throws -> FleetGroupStore {
+        let store = FleetGroupStore()
+        store.configureEndpoint(try await deployment())
+        return store
+    }
+
+    /// The control store the capability operations send through, on the
+    /// same deployment.
+    func control() async throws -> FleetControlStore {
+        let store = FleetControlStore()
+        store.configureEndpoint(try await deployment())
+        return store
+    }
+
+    private func deployment() async throws -> String {
         let seed: [String: Any] = [
             "schema_version": Self.registryDocumentVersion,
             "targets": [[
@@ -66,9 +80,7 @@ final class RealFleet {
         try cli(["config", "init"], configured: true)
         try cli(["config", "set", "storage.backend", "local"], configured: true)
         try cli(["config", "set", "storage.local.path", root.path], configured: true)
-        let store = FleetGroupStore()
-        store.configureEndpoint(try await startOperatorAPI())
-        return store
+        return try await startOperatorAPI()
     }
 
     /// Run the real CLI here; a nonzero exit throws with its own complaint.

@@ -11,7 +11,9 @@ use crate::cli::release_submit::builds::jobs::terminal::{
 };
 use crate::cli::release_submit::builds::jobs::{input, secret_refs};
 use crate::cli::release_submit::deliver::{delivery_job_command, DeliveryRequest};
-use crate::cli::release_submit::run::source::{queue_immutable, run_path, run_uri};
+use crate::cli::release_submit::run::source::{
+    queue_immutable, run_path, run_source_input_uri, run_uri,
+};
 use crate::cli::release_submit::run::state::save;
 use crate::cli::CmdError;
 use crate::models::job_state;
@@ -86,7 +88,7 @@ pub(crate) async fn run_deliveries(
             resolved.insert(
                 "source".into(),
                 input(
-                    &run_uri(&run.product, &run.run_id, "inputs/source.tar.gz"),
+                    &run_source_input_uri(run),
                     "source.tar.gz",
                     &run.source_sha256,
                 ),

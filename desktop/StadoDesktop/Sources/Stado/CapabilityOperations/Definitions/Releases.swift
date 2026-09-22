@@ -62,5 +62,31 @@ enum NativeReleaseSourceOperations {
             .init(id: "product", label: "One product (blank releases every product that is due)", option: "--product"),
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
         ]),
+        // A build is not a release. These queue and read builds and publish
+        // nothing; `release-build` is the release that consumes one, and the
+        // CLI refuses it while the build is waiting or has failed.
+        .init(id: "build-newest-plan", title: "Read what every product would build (queues nothing)", path: ["build", "newest"], hostPlacement: .none, fields: [
+            .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
+            .init(id: "product", label: "One product (blank reads every product)", option: "--product"),
+        ], fixedArguments: ["--plan"], mutates: false),
+        .init(id: "build-newest", title: "Build every product from the commit it stands on (releases nothing)", path: ["build", "newest"], hostPlacement: .none, fields: [
+            .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
+            .init(id: "product", label: "One product (blank builds every product)", option: "--product"),
+        ]),
+        .init(id: "build-submit", title: "Build a source (queues the platform builds; publishes nothing)", path: ["build", "submit"], hostPlacement: .none, fields: [
+            .init(id: "source", label: "Git repository path on the selected Stado API host", option: "--source", required: true),
+            .init(id: "commit", label: "Full Git commit (blank requires a clean HEAD)", option: "--commit"),
+            .init(id: "version", label: "Version declared by that source", option: "--version", required: true),
+        ]),
+        .init(id: "build-status", title: "Read a build and what each platform's job did", path: ["build", "status"], hostPlacement: .none, fields: [
+            .init(id: "build", label: "Build ID from build submit or build list", required: true),
+        ], mutates: false),
+        .init(id: "build-list", title: "List recent builds", path: ["build", "list"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "One product (blank lists every product's builds)", option: "--product"),
+        ], mutates: false),
+        .init(id: "release-build", title: "Release a build that has passed (refused while it is waiting or failed)", path: ["release", "submit"], hostPlacement: .none, fields: [
+            .init(id: "build", label: "Build ID of a passed build", option: "--build", required: true),
+            .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
+        ]),
     ]
 }

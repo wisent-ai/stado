@@ -35,6 +35,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
             } => schedule::run(&schedule_id, &retry_token, json).await,
         },
         PlatformCommands::Artifact(sub) => artifact::dispatch(sub).await,
+        PlatformCommands::Build(sub) => build_cmd::dispatch(sub).await,
         PlatformCommands::Release(sub) => release_cmd::dispatch(sub).await,
         PlatformCommands::Cost(sub) => cost::dispatch(&sub).await,
         PlatformCommands::Vast(sub) => vast::dispatch(&sub).await,

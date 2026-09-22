@@ -9,7 +9,7 @@ use crate::cli::release_submit::builds::builder::builder;
 use crate::cli::release_submit::builds::jobs::command::release_worker_command;
 use crate::cli::release_submit::builds::jobs::{input, persist_worker_request, secret_refs};
 use crate::cli::release_submit::builds::scratch::last_scratch;
-use crate::cli::release_submit::run::source::{queue_immutable, run_path, run_uri};
+use crate::cli::release_submit::run::source::{build_path, build_uri, queue_immutable};
 use crate::cli::storage;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
@@ -27,6 +27,9 @@ pub const RELEASE_BUILD_RUN_SCOPE: &str = "release-platform";
 
 // The build request's identity: every argument is a distinct coordinate the
 // worker is required to receive, and each is already validated by the caller.
+// `id` is the build's id: the request, the staged inputs, the queue run
+// scope and the receipt all name the build, and a release run of the same
+// source reads them through it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn enqueue(
     store: &JobStorage,
@@ -72,8 +75,8 @@ pub(crate) async fn enqueue(
         Some(_) => format!("requests/{platform}/attempts/{submission_run_id}.json"),
         None => format!("requests/{platform}.json"),
     };
-    let request_path = run_path(&m.product, id, &request_leaf);
-    let uri = run_uri(&m.product, id, &request_leaf);
+    let request_path = build_path(&m.product, id, &request_leaf);
+    let uri = build_uri(&m.product, id, &request_leaf);
     let saved_bytes = store.read_bytes(&request_path).await?;
     let saved_request: Option<WorkerRequest> = saved_bytes
         .as_deref()
@@ -156,8 +159,8 @@ pub(crate) async fn enqueue(
         // for one object, and the build failed with `input input-skarbiec is
         // absent` naming an object that was on the store's disk the whole time.
         let leaf = format!("inputs/{name}.tar.gz");
-        let staged_path = run_path(&m.product, id, &leaf);
-        let staged_uri = run_uri(&m.product, id, &leaf);
+        let staged_path = build_path(&m.product, id, &leaf);
+        let staged_uri = build_uri(&m.product, id, &leaf);
         if saved_request.is_none() {
             let bytes = storage::fetch_object(&v.uri).await?;
             let staged_sha = release_control::sha256_bytes(&bytes);
@@ -222,12 +225,12 @@ pub(crate) async fn enqueue(
     let sha = release_control::sha256_bytes(&bytes);
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let output_uri = match prior_terminal_job_id {
-        Some(_) => run_uri(
+        Some(_) => build_uri(
             &m.product,
             id,
             &format!("platforms/{platform}/attempts/{submission_run_id}/output"),
         ),
-        None => run_uri(&m.product, id, &format!("platforms/{platform}/output")),
+        None => build_uri(&m.product, id, &format!("platforms/{platform}/output")),
     };
     let command = release_worker_command(&output_uri);
     let options = SubmitOptions {

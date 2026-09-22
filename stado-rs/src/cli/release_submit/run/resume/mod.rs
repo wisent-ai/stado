@@ -7,7 +7,7 @@ use crate::queue::storage::JobStorage;
 use crate::release_control;
 use crate::release_pipeline::{self, ProductManifest};
 
-use super::source::{identity, run_path, run_uri};
+use super::source::{build_path, build_uri, identity};
 use super::state::load;
 use super::submit::continue_run;
 
@@ -51,8 +51,16 @@ pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError>
     {
         return Err(CmdError::click("durable release run identity mismatch"));
     }
-    let path = run_path(&run.product, &run.run_id, "manifest.json");
-    if run.manifest_uri != run_uri(&run.product, &run.run_id, "manifest.json") {
+    // The manifest the run was made from is the build's staged copy; the run
+    // names both the build and the coordinate, and they must agree.
+    let Some(build_id) = run.build_id.as_deref() else {
+        return Err(CmdError::click(format!(
+            "release run {} predates build records and cannot be resumed; submit the same commit again with `stado release submit --source`",
+            run.run_id
+        )));
+    };
+    let path = build_path(&run.product, build_id, "manifest.json");
+    if run.manifest_uri != build_uri(&run.product, build_id, "manifest.json") {
         return Err(CmdError::click("release run manifest coordinate mismatch"));
     }
     let store = JobStorage::new()

@@ -152,14 +152,15 @@ impl Fixture {
     }
 
     /// The immutable build request the product wrote for this platform, once
-    /// it exists: the record naming which builder was allowed to claim.
+    /// it exists: the record naming which builder was allowed to claim. A
+    /// release submission builds first, so the request lives under the build.
     pub fn build_request(&self) -> Option<Value> {
-        let run = self.run_id()?;
+        let build = self.build_id()?;
         let path = self
             .store()
-            .join("runs/release-pipeline")
+            .join("runs/build")
             .join(PRODUCT)
-            .join(run)
+            .join(build)
             .join("requests")
             .join(format!("{}.json", document::platform()));
         let bytes = std::fs::read(path).ok()?;
@@ -183,11 +184,11 @@ impl Fixture {
         jobs
     }
 
-    /// The run id the product minted for this submission, read off the store
-    /// rather than derived: the identity is the product's to decide.
-    fn run_id(&self) -> Option<String> {
-        let runs = self.store().join("runs/release-pipeline").join(PRODUCT);
-        std::fs::read_dir(runs)
+    /// The build id the product minted for this submission, read off the
+    /// store rather than derived: the identity is the product's to decide.
+    fn build_id(&self) -> Option<String> {
+        let builds = self.store().join("runs/build").join(PRODUCT);
+        std::fs::read_dir(builds)
             .ok()?
             .flatten()
             .find(|entry| entry.path().is_dir())
@@ -197,12 +198,13 @@ impl Fixture {
     /// The durable release-run document, which is where a submission records
     /// its state and, when it fails, the sentence it failed with.
     pub fn run_document(&self) -> Value {
-        let run = self.run_id().expect("the submission wrote a release run");
-        let path = self
-            .store()
-            .join("runs/release-pipeline")
-            .join(run)
-            .join("run.json");
+        let runs = self.store().join("runs/release-pipeline");
+        let path = std::fs::read_dir(&runs)
+            .expect("the submission wrote a release run")
+            .flatten()
+            .map(|entry| entry.path().join("run.json"))
+            .find(|path| path.is_file())
+            .expect("the submission wrote a release run");
         let bytes = std::fs::read(&path).expect("read the release run document");
         serde_json::from_slice(&bytes).expect("the release run document is JSON")
     }

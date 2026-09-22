@@ -1,5 +1,8 @@
-//! `stado release submit` — the coordinator that walks one source tree
-//! through every stage of the release pipeline.
+//! `stado release submit` — the coordinator that walks one build through
+//! every stage of the release pipeline.
+//!
+//! A release is made from a build. The run records the build it consumes
+//! and reads that build's platform jobs; it queues no jobs of its own.
 
 use std::collections::BTreeMap;
 
@@ -7,18 +10,19 @@ mod admission;
 pub use admission::submit;
 
 use crate::cli::release_cmd;
-use crate::cli::release_submit::builds::jobs::platforms::enqueue_platforms;
+use crate::cli::release_submit::builds::jobs::platforms::{
+    adopt_build, enqueue_platforms, reconcile_published, refresh_build,
+};
 use crate::cli::release_submit::deliver::deliveries::run_deliveries;
 use crate::cli::release_submit::publish::artifact::publish;
 use crate::cli::release_submit::publish::promotion::reconcile;
 use crate::cli::release_submit::publish::signing::signing;
-use crate::cli::release_submit::run::source::run_uri;
-use crate::cli::release_submit::run::state::{persist_failure, save};
+use crate::cli::release_submit::run::state::{load_build, persist_failure, save, save_build};
 use crate::cli::release_submit::run::supersede::{newer_than, supersede_older};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{
-    PlatformRunState, ReleasePipelineManifest, ReleaseRun, ReleaseRunState,
+    BuildRunState, PlatformRunState, ReleasePipelineManifest, ReleaseRun, ReleaseRunState,
 };
 
 pub(super) async fn continue_run(
@@ -27,13 +31,6 @@ pub(super) async fn continue_run(
     json: bool,
     finish: bool,
 ) -> Result<(), CmdError> {
-    let version = run.version.clone();
-    let id = run.run_id.clone();
-    let commit = run.source_commit.clone();
-    let source_sha = run.source_sha256.clone();
-    let source_input_uri = run_uri(&run.product, &id, "inputs/source.tar.gz");
-    let manifest_sha = run.manifest_sha256.clone();
-    let manifest_uri = run.manifest_uri.clone();
     run.failure = None;
     save(&mut run).await?;
     let store = match JobStorage::new().await {
@@ -42,21 +39,60 @@ pub(super) async fn continue_run(
             return Err(persist_failure(&mut run, CmdError::click(error.to_string())).await)
         }
     };
+    // The build is where the jobs are. A run without one was submitted by a
+    // release that queued jobs of its own and cannot be continued here; the
+    // same source submitted again records a build and adopts it.
+    let Some(build_id) = run.build_id.clone() else {
+        return Err(persist_failure(
+            &mut run,
+            CmdError::click(format!(
+                "release run {} predates build records and cannot be continued; submit the same commit again with `stado release submit --source`",
+                run.run_id
+            )),
+        )
+        .await);
+    };
+    let mut build = match load_build(&build_id).await? {
+        Some(build) => build,
+        None => {
+            return Err(persist_failure(
+                &mut run,
+                CmdError::click(format!(
+                    "build {build_id} of release run {} does not exist",
+                    run.run_id
+                )),
+            )
+            .await)
+        }
+    };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
-    let mut enqueue_failure = enqueue_platforms(
-        &store,
-        &mut run,
-        &m,
-        &version,
-        &id,
-        &commit,
-        &source_sha,
-        &source_input_uri,
-        &manifest_sha,
-        &manifest_uri,
-        &platforms,
-    )
-    .await?;
+    // Retry what the build owes, then read what its jobs did: a platform
+    // whose job failed or was cancelled gets a new job through the build,
+    // and a passed one is read from its receipt. The run then takes the
+    // build's platform records as its own, except the ones it has already
+    // published.
+    let mut enqueue_failure = enqueue_platforms(&store, &mut build, &m, &platforms).await?;
+    refresh_build(&store, &mut build, &m).await?;
+    // The build's own record says what the run is about to say: nothing
+    // queued is a failed build, a platform refused is a build still waiting
+    // on the rest.
+    match &enqueue_failure {
+        Some(error) => {
+            build.failure = Some(format!("not every platform was queued: {error}"));
+            if build
+                .platforms
+                .values()
+                .all(|platform| platform.state == PlatformRunState::Failed)
+            {
+                build.state = BuildRunState::Failed;
+            }
+        }
+        None => build.failure = None,
+    }
+    save_build(&mut build).await?;
+    reconcile_published(&mut run, &platforms).await?;
+    adopt_build(&mut run, &build);
+    save(&mut run).await?;
     // A platform still recorded as failed at this point was not re-enqueued:
     // its own enqueue failed, or the loop stopped at an earlier platform.
     // Publishing it would only re-read the terminal job of the previous
@@ -110,9 +146,14 @@ pub(super) async fn continue_run(
         if json {
             println!("{}", serde_json::to_string_pretty(&run)?)
         } else {
+            let standing = match build.state {
+                BuildRunState::Passed => "build passed",
+                BuildRunState::Failed => "build failed",
+                BuildRunState::Waiting => "builds queued",
+            };
             println!(
-                "release run {} product={} version={} state={:?}: builds queued; the control host's release agent publishes and delivers when they finish, `stado release status {}` follows them",
-                run.run_id, run.product, run.version, run.state, run.product
+                "release run {} product={} version={} build={} state={:?}: {standing}; the control host's release agent publishes and delivers once the build has passed, `stado release status {}` follows it",
+                run.run_id, run.product, run.version, build.build_id, run.state, run.product
             )
         }
         if let Some(error) = enqueue_failure {

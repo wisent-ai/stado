@@ -22,7 +22,8 @@ pub use contract::recipe::{
 };
 pub use records::receipt::{ArtifactReceipt, BuildReceipt, ReceiptInput, StepReceipt, StepStatus};
 pub use records::run::{
-    DeliveryRun, DeliveryRunState, PlatformRun, PlatformRunState, ReleaseRun, ReleaseRunState,
+    BuildRun, BuildRunState, DeliveryRun, DeliveryRunState, PlatformRun, PlatformRunState,
+    ReleaseRun, ReleaseRunState,
 };
 pub use records::scratch::{tree_bytes, ScratchReceipt, SCRATCH_LEAF};
 pub use records::worker::{WorkerInput, WorkerRequest};

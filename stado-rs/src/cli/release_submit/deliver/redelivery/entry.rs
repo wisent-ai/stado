@@ -11,7 +11,7 @@ use crate::cli::release_submit::deliver::redelivery::transaction::{
 };
 use crate::cli::release_submit::deliver::redelivery::RedeliveryStage;
 use crate::cli::release_submit::deliver::{delivery_job_command, DeliveryRequest};
-use crate::cli::release_submit::run::source::{run_path, run_uri};
+use crate::cli::release_submit::run::source::{run_path, run_source_input_uri, run_uri};
 use crate::cli::release_submit::run::state::{load, save};
 use crate::cli::release_submit::ReleaseRedeliverArgs;
 use crate::cli::CmdError;
@@ -142,7 +142,7 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
     resolved.insert(
         "source".into(),
         input(
-            &run_uri(&run.product, &run.run_id, "inputs/source.tar.gz"),
+            &run_source_input_uri(&run),
             "source.tar.gz",
             &request.source_sha256,
         ),

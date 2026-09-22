@@ -188,7 +188,7 @@ fn print_runs(runs: &[Value]) {
     }
     for run in runs {
         println!(
-            "run {} {} {} {} {} {}",
+            "run {} {} {} {} {} {}{}",
             &run["run_id"].as_str().unwrap_or("-")
                 [..8.min(run["run_id"].as_str().unwrap_or("-").len())],
             run["product"].as_str().unwrap_or("-"),
@@ -196,6 +196,12 @@ fn print_runs(runs: &[Value]) {
             run["channel"].as_str().unwrap_or("-"),
             run["state"].as_str().unwrap_or("-"),
             run["updated_at"].as_str().unwrap_or("-"),
+            // The build the run consumes, so `stado build status` can be
+            // asked about the jobs without reading the run JSON.
+            run["build_id"]
+                .as_str()
+                .map(|build| format!(" build={build}"))
+                .unwrap_or_default(),
         );
         // Each platform on its own line: the run-level state alone reads
         // as a promise, while "linux-amd64 submitted job=4ffae52f
