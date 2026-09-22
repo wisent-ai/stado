@@ -17,7 +17,9 @@ use crate::release_agent::rollout::recover::wall::cause_hold;
 use crate::release_agent::rollout::serving::answer::ensure_active_proxy;
 use crate::release_agent::rollout::serving::discover::terminate;
 use crate::release_agent::state::document::{load_state, save_state};
-use crate::release_agent::state::records::{HostReleaseState, QuarantineRecord, RolloutPhase};
+use crate::release_agent::state::records::{
+    HostReleaseState, QuarantineRecord, RolloutPhase, NO_CANDIDATE_SPAWNED,
+};
 use crate::release_control::{self, ProductReleasePolicy, ReleaseControl, ReleaseTargetPolicy};
 
 pub(crate) async fn reconcile_product(
@@ -35,11 +37,14 @@ pub(crate) async fn reconcile_product(
     // Repair the stable bind before any desired/quarantine branch can return.
     // `reconcile_once` holds the per-product lock across this state load,
     // declaration/world reconciliation, and every persisted repair below.
+    // The exception this pass needs is a rule of its own, below.
+    let candidate_is_owed_the_bind = candidate_is_owed_the_bind(&state, policy, target);
     reconcile_stable_proxy(
         target,
         product,
         install_root,
         policy.strategy.readiness_timeout_seconds,
+        candidate_is_owed_the_bind,
         &mut state,
     )
     .await?;
@@ -233,4 +238,38 @@ pub(crate) async fn reconcile_product(
     )
     .await?;
     Ok(state)
+}
+
+/// Whether a candidate is owed the stable bind this tick, so the pass that
+/// repairs the bind leaves it free instead of handing it back to the declared
+/// unit.
+///
+/// True when the registry wants a release this host has not quarantined and
+/// the last pass never got to spawn one: either the bind was held — the agent
+/// says so in `detail`, in its own words — or the desired generation changed
+/// since the record was written. Everything else keeps the net that exists
+/// because charless-mac-mini once served no Skarbiec for thirteen hours: with
+/// nothing to roll out, the bind belongs to the declared unit.
+///
+/// A candidate that is given the bind and fails quarantines its digest, so the
+/// following tick reads `false` here and the net catches the bind again.
+pub(crate) fn candidate_is_owed_the_bind(
+    state: &HostReleaseState,
+    policy: &ProductReleasePolicy,
+    target: &ReleaseTargetPolicy,
+) -> bool {
+    policy
+        .desired
+        .as_ref()
+        .and_then(|desired| {
+            desired
+                .artifacts
+                .get(&target.platform)
+                .map(|artifact| (desired, artifact))
+        })
+        .is_some_and(|(desired, artifact)| {
+            !state.quarantined.contains_key(&artifact.artifact_sha256)
+                && (state.detail.contains(NO_CANDIDATE_SPAWNED)
+                    || state.rollout_generation != desired.rollout_generation)
+        })
 }

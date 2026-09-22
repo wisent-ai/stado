@@ -22,11 +22,20 @@ use crate::release_control::ReleaseTargetPolicy;
 /// window: adopt the proxy rather than interrupting traffic. With no owned
 /// release process and a dead upstream, the proxy can only pin the stable bind
 /// to nowhere; retire it and let the declared legacy service reclaim the bind.
+///
+/// `leave_bind_for_candidate` is the caller's answer to "is a candidate about
+/// to be spent on this bind, having never had it". It exists because this pass
+/// runs before every rollout branch: on charless-mac-mini the legacy unit held
+/// 8895, the agent refused to spawn a candidate for it, and when the unit was
+/// stopped this pass put the same unit straight back — `restored legacy
+/// skarbiec on 127.0.0.1:8895`, seconds later. Two correct rules, one loop
+/// nothing could leave, and behind it every credential write on that host.
 pub(crate) async fn reconcile_stable_proxy(
     target: &ReleaseTargetPolicy,
     product: &str,
     install_root: &str,
     readiness_timeout_seconds: u64,
+    leave_bind_for_candidate: bool,
     state: &mut HostReleaseState,
 ) -> Result<(), String> {
     let serving = target.blue_green_serving()?;
@@ -44,6 +53,20 @@ pub(crate) async fn reconcile_stable_proxy(
             && target.legacy_launchd_plist.is_some()
             && !stable_bind_ready(&serving).await
         {
+            // The safety net stands except for the one tick a candidate is
+            // owed: restoring the legacy unit here would take the bind back
+            // before the rollout could ask for it, and the next pass would
+            // read the same held bind that sent it here. A candidate that
+            // then fails quarantines its digest, so the following tick has
+            // nothing to roll out and this net catches the bind again.
+            if leave_bind_for_candidate {
+                eprintln!(
+                    "left {} free for this tick's {product} candidate: the declared unit is not \
+                     restored while a release that has never held the bind is owed one",
+                    serving.stable_bind
+                );
+                return Ok(());
+            }
             restore_legacy(target)?;
             let deadline =
                 tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);

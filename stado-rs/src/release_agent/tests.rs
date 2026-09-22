@@ -453,3 +453,83 @@ fn the_stable_bind_refusal_tells_a_foreign_holder_from_the_product_itself() {
         "and is never described as the product itself: {foreign}"
     );
 }
+
+/// The loop charless-mac-mini was in on 2026-09-21, as a rule.
+///
+/// The declared unit held 8895, so the agent recorded `no candidate was
+/// spawned` and never spawned one; stopping that unit made the bind-repair
+/// pass put it straight back — `restored legacy skarbiec on 127.0.0.1:8895` —
+/// and the next tick read the same held bind. Behind that loop: no credential
+/// write on the host, `weles-api` dead at boot, no account signed in.
+#[test]
+fn a_candidate_that_never_held_the_bind_is_owed_it_before_the_declared_unit() {
+    use crate::release_agent::tick::product::candidate_is_owed_the_bind;
+
+    let document: serde_json::Value = serde_json::from_str(include_str!(
+        "../../data/release-policies/skarbiec.json"
+    ))
+    .expect("the shipped skarbiec policy parses");
+    let mut policy: crate::release_control::ProductReleasePolicy =
+        serde_json::from_value(document["policy"].clone()).expect("the policy document is current");
+    policy.desired = Some(
+        serde_json::from_value(serde_json::json!({
+            "version": "0.3.12",
+            "channel": "stable",
+            "rollout_generation": 13,
+            "promoted_at": "2026-09-21T06:24:31Z",
+            "artifacts": {
+                "darwin-arm64": {
+                    "manifest_uri": "https://example.invalid/manifest.json",
+                    "signature_uri": "https://example.invalid/manifest.sig",
+                    "archive_uri": "https://example.invalid/skarbiec.tar.zst",
+                    "artifact_sha256": DESIRED_DIGEST,
+                    "manifest_sha256": "b".repeat(64),
+                    "source_revision": "bba611a37572818a0e1db7c31ea95e506efd176b",
+                    "key_id": "wisent-release-2026"
+                }
+            }
+        }))
+        .expect("the desired release document is current"),
+    );
+    let target = policy.targets["charless-mac-mini"].clone();
+
+    let mut held = HostReleaseState::new("skarbiec", "charless-mac-mini");
+    held.rollout_generation = 13;
+    held.phase = RolloutPhase::Failed;
+    held.detail = format!(
+        "127.0.0.1:8895 is held by pid 40304 (skarbiec), which is not skarbiec's release proxy; {}",
+        crate::release_agent::NO_CANDIDATE_SPAWNED
+    );
+    assert!(
+        candidate_is_owed_the_bind(&held, &policy, &target),
+        "a release that never got the bind has to be given this tick, or the unit takes it back"
+    );
+
+    // The net this exception is carved out of: with the digest quarantined
+    // there is nothing to roll out, and the bind belongs to the declared unit
+    // — the state that once left this host serving no Skarbiec for thirteen
+    // hours.
+    let mut quarantined = held.clone();
+    quarantined.quarantined.insert(
+        DESIRED_DIGEST.to_string(),
+        QuarantineRecord::new("candidate did not become ready within 90s".to_string()),
+    );
+    assert!(
+        !candidate_is_owed_the_bind(&quarantined, &policy, &target),
+        "with nothing to roll out the declared unit keeps the bind"
+    );
+
+    // A settled rollout is not owed anything either: its own proxy holds the
+    // bind and this pass must not take it away.
+    let mut settled = HostReleaseState::new("skarbiec", "charless-mac-mini");
+    settled.rollout_generation = 13;
+    settled.phase = RolloutPhase::Committed;
+    settled.detail = "release committed after rollback window".to_string();
+    assert!(
+        !candidate_is_owed_the_bind(&settled, &policy, &target),
+        "a committed release is not a candidate waiting for the bind"
+    );
+}
+
+/// The digest the fixture above calls desired, in the shape a manifest uses.
+const DESIRED_DIGEST: &str = "a3f61691a3f61691a3f61691a3f61691a3f61691a3f61691a3f61691a3f61691";
