@@ -215,7 +215,22 @@ pub fn run_recovery(
     log_fn(&format!("memory: running declared recovery {name}"));
     let output = run_program(program);
     match output {
-        Ok(output) if output.status.success() => report.repaired += 1,
+        // The program's own last word decides. Every recovery program this
+        // build ships says `recovered` when it replaced something and says
+        // `no recovery needed` when its precondition did not hold, and the
+        // two exit 0 alike. Counting the second as a repair is how the
+        // charless-mac-mini pass reported `repaired: 1` on every tick for
+        // twelve days while keyboxd grew to 15 GiB: nothing had been reaped,
+        // and the report said something had.
+        Ok(output) if output.status.success() => {
+            let said = String::from_utf8_lossy(&output.stdout);
+            if said.contains("recovered") {
+                report.repaired += 1;
+            } else {
+                note(&mut report, "recovery_not_needed");
+                log_fn(&format!("memory: {name}: {}", said.trim()));
+            }
+        }
         Ok(output) => {
             note(&mut report, "recovery_refused");
             errors.push(format!(
