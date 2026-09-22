@@ -133,12 +133,12 @@ fn the_repair_names_the_exact_command_and_the_account() {
         .as_str()
         .expect("a row that needs re-enrolment carries its repair")
         .to_string();
-    assert!(repair.contains("store-login-totp-seed.sh"), "{repair}");
+    assert!(repair.contains("stado credentials seed-enrol"), "{repair}");
     assert!(
-        repair.contains(&format!("ACCOUNT={LOCKED_ITEM}")),
+        repair.contains(&format!("--login-item {LOCKED_ITEM}")),
         "{repair}"
     );
-    assert!(repair.contains("re-enrol"), "{repair}");
+    assert!(repair.contains("enrol again"), "{repair}");
     assert!(
         repair.contains("locked the authenticator method"),
         "{repair}"
@@ -146,7 +146,7 @@ fn the_repair_names_the_exact_command_and_the_account() {
     // The operator reads this on a terminal, not as JSON.
     let lines = stdout(&host.freshness_lines());
     assert!(
-        lines.contains("seed_rejected_since") && lines.contains("store-login-totp-seed.sh"),
+        lines.contains("seed_rejected_since") && lines.contains("stado credentials seed-enrol"),
         "the console hands over the verdict and the repair: {lines}"
     );
     assert!(output.status.success());
@@ -205,7 +205,7 @@ fn a_declared_field_carrying_nothing_is_not_a_stale_seed() {
     assert!(
         row["repair"]
             .as_str()
-            .is_some_and(|repair| repair.contains("store-login-totp-seed.sh")),
+            .is_some_and(|repair| repair.contains("stado credentials seed-enrol")),
         "the repair is to store a seed: {row:#}"
     );
 }

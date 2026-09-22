@@ -42,7 +42,7 @@ fn failures_before_the_authenticator_step_are_not_a_stale_seed() {
         "{repair}"
     );
     assert!(
-        !repair.contains("store-login-totp-seed.sh"),
+        !repair.contains("seed-enrol"),
         "storing a new seed repairs nothing here: {repair}"
     );
     assert!(output.status.success());

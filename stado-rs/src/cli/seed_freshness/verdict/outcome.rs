@@ -1,12 +1,18 @@
 //! The verdict itself: its code on the wire, whether it asks an operator for
 //! anything, and the repair it names.
 
-/// The exact operator path that stores a new seed, as
-/// `skarbiec/scripts/store-login-totp-seed.sh` documents itself: the seed
-/// arrives on standard input, never in an argument, because an authenticator
-/// secret on a command line is a secret in every process table on the host.
-const SEED_REPAIR_COMMAND: &str = "printf '%s' '<seed from the authenticator app>' \
-     | ACCOUNT=<login-item> skarbiec/scripts/store-login-totp-seed.sh";
+/// The product route that puts a seed on a login row: the command enrols the
+/// authenticator against the account and stores what it enrolled, on the host
+/// that owns the vault.
+///
+/// It used to print `printf '%s' '<seed>' | ACCOUNT=<row>
+/// skarbiec/scripts/store-login-totp-seed.sh`: a shell line from a checkout,
+/// which only ever reached the vault on the machine it was typed on, and
+/// which this fleet's own rule on one-off repairs refuses. The secret still
+/// never travels in an argument — `seed-enrol` carries it to the vault
+/// itself.
+const SEED_REPAIR_COMMAND: &str =
+    "stado credentials seed-enrol --host <vault host> --login-item <login-item>";
 
 /// The verdict for one login row. Six outcomes, because collapsing any two of
 /// them would name the wrong repair.
@@ -69,14 +75,15 @@ impl Verdict {
                     ""
                 };
                 format!(
-                    "re-enrol Google Authenticator on this account, then store the new seed: {}.{}",
+                    "the stored seed no longer matches this account's enrolment; enrol again and \
+                     store what was enrolled: {}.{}",
                     SEED_REPAIR_COMMAND.replace("<login-item>", login_item),
                     lockout
                 )
             }
             Self::FieldEmpty => format!(
-                "this row declares totp_secret and carries nothing; enrol Google Authenticator \
-                 and store the seed: {}",
+                "this row declares totp_secret and carries nothing, so every sign-in of it stops \
+                 at the second factor; enrol an authenticator and store its seed: {}",
                 SEED_REPAIR_COMMAND.replace("<login-item>", login_item)
             ),
             Self::FieldAbsent => String::from(
