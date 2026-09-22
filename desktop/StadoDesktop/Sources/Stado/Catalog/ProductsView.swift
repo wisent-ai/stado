@@ -9,6 +9,8 @@ struct ProductsView: View {
     @State private var selection: String?
     @State private var selectedHost = ""
     @State private var decision: ProductDecision?
+    @State private var releaseVersions: [String: String] = [:]
+    @State private var sourceCommits: [String: String] = [:]
 
     var body: some View {
         WisentScreen(
@@ -112,6 +114,26 @@ struct ProductsView: View {
             trailing: state?.status
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                if installation.surface == "cli" && installation.kind == "stado-release" {
+                    TextField("Signed release version (optional)", text: Binding(
+                        get: { releaseVersions[product.id, default: ""] },
+                        set: { releaseVersions[product.id] = $0 }
+                    ))
+                    TextField("Accepted full source commit", text: Binding(
+                        get: { sourceCommits[product.id, default: ""] },
+                        set: { sourceCommits[product.id] = $0 }
+                    ))
+                    Text("Provide both fields to install verified published bytes without building. Both empty use the canonical recipe.")
+                        .font(WisentTypeScale.identifierSmall())
+                }
+                if let release = state?.release {
+                    Text("Release \(release.coordinate.version) · \(release.coordinate.sourceRevision)")
+                        .font(WisentTypeScale.identifierSmall())
+                        .textSelection(.enabled)
+                }
+                if let readiness = state?.readiness {
+                    Text(readiness.detail).textSelection(.enabled)
+                }
                 if let state, !state.installedPaths.isEmpty {
                     Text(state.installedPaths.joined(separator: "\n"))
                         .font(WisentTypeScale.identifierSmall())
@@ -142,10 +164,16 @@ struct ProductsView: View {
                 kind: destructive ? .plain : .secondary,
                 isEnabled: !store.mutation.isWorking && (installation.surface != "service" || !(host ?? "").isEmpty)
             ) {
+                let exact = installation.surface == "cli" && installation.kind == "stado-release"
+                    && (verb == "Install" || verb == "Update")
+                let version = releaseVersions[product.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                let commit = sourceCommits[product.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                 decision = ProductDecision(
                     verb: verb.lowercased(), product: product.id,
                     productName: product.name, surface: installation.surface,
-                    host: host, destructive: destructive
+                    host: host, destructive: destructive,
+                    releaseVersion: exact && !version.isEmpty ? version : nil,
+                    sourceCommit: exact && !commit.isEmpty ? commit : nil
                 )
             }
         )
@@ -156,16 +184,25 @@ struct ProductsView: View {
             tone: value.destructive ? .danger : .warning,
             title: "\(value.verb.capitalized) \(value.productName) \(value.surface)?",
             lines: [
-                "Stado executes the canonical recipe from Wisent Products. No repository, binary path or service unit is selected in this window.",
+                value.releaseVersion == nil && value.sourceCommit == nil
+                    ? "Stado executes the canonical recipe from Wisent Products."
+                    : "Stado verifies the signed published release and its accepted source. It does not compile or re-sign its bytes. Both coordinates are required.",
                 value.surface == "service" ? "The service lifecycle is delegated back to Stado on \(value.host ?? "the selected host")." : "The installation is local to this Mac and its previous state is retained for rollback.",
             ],
-            listing: [StadoCLI.commandLine(ProductsStore.lifecycleArguments(value.verb, product: value.product, surface: value.surface, host: value.host))],
+            listing: [StadoCLI.commandLine(ProductsStore.lifecycleArguments(
+                value.verb, product: value.product, surface: value.surface, host: value.host,
+                releaseVersion: value.releaseVersion, sourceCommit: value.sourceCommit
+            ))],
             actions: [
                 WisentAction("Cancel", kind: .primary) { decision = nil },
                 WisentAction(value.verb.capitalized, symbol: value.destructive ? "trash" : "checkmark", kind: value.destructive ? .destructive : .secondary) {
                     let selected = value
                     decision = nil
-                    Task { await store.mutate(selected.verb, product: selected.product, surface: selected.surface, host: selected.host) }
+                    Task {
+                        await store.mutate(selected.verb, product: selected.product,
+                                           surface: selected.surface, host: selected.host,
+                                           releaseVersion: selected.releaseVersion, sourceCommit: selected.sourceCommit)
+                    }
                 },
             ]
         )
@@ -179,5 +216,7 @@ private struct ProductDecision: Identifiable {
     let surface: String
     let host: String?
     let destructive: Bool
+    let releaseVersion: String?
+    let sourceCommit: String?
     var id: String { "\(verb)/\(product)/\(surface)/\(host ?? "local")" }
 }

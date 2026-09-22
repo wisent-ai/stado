@@ -32,12 +32,34 @@ struct ProductLifecycleState: Decodable, Sendable {
     let installedAt: String?
     let installedPaths: [String]
     let host: String?
+    let sourceRevision: String?
+    let release: ProductReleaseReceipt?
+    let readiness: ProductReadiness?
 
     enum CodingKeys: String, CodingKey {
-        case product, surface, status, host
+        case product, surface, status, host, release, readiness
+        case sourceRevision = "source_revision"
         case installedAt = "installed_at"
         case installedPaths = "installed_paths"
     }
+}
+
+struct ProductReleaseReceipt: Decodable, Sendable {
+    let coordinate: ProductReleaseCoordinate
+}
+
+struct ProductReleaseCoordinate: Decodable, Sendable {
+    let version: String
+    let sourceRevision: String
+    enum CodingKeys: String, CodingKey {
+        case version
+        case sourceRevision = "source_revision"
+    }
+}
+
+struct ProductReadiness: Decodable, Sendable {
+    let ready: Bool
+    let detail: String
 }
 
 @MainActor
@@ -53,9 +75,12 @@ final class ProductsStore: ObservableObject {
     init(cli: StadoCLI = StadoCLI()) { self.cli = cli }
 
     static func catalogArguments() -> [String] { ["product", "catalog", "--json"] }
-    static func lifecycleArguments(_ verb: String, product: String, surface: String, host: String?) -> [String] {
+    static func lifecycleArguments(_ verb: String, product: String, surface: String, host: String?,
+                                   releaseVersion: String? = nil, sourceCommit: String? = nil) -> [String] {
         var values = ["product", verb, product, "--surface", surface]
         if let host, !host.isEmpty { values += ["--host", host] }
+        if let releaseVersion { values += ["--release-version", releaseVersion] }
+        if let sourceCommit { values += ["--source-commit", sourceCommit] }
         values.append("--json")
         return values
     }
@@ -85,13 +110,15 @@ final class ProductsStore: ObservableObject {
         }
     }
 
-    func mutate(_ verb: String, product: String, surface: String, host: String?) async {
+    func mutate(_ verb: String, product: String, surface: String, host: String?,
+                releaseVersion: String? = nil, sourceCommit: String? = nil) async {
         guard !mutation.isWorking else { return }
         mutation = .working("\(verb.capitalized) \(product) \(surface)")
         do {
             let state = try await cli.json(
                 ProductLifecycleState.self,
-                arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host),
+                arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host,
+                                                   releaseVersion: releaseVersion, sourceCommit: sourceCommit),
                 timeoutSeconds: 900
             )
             states[key(product, surface)] = state
