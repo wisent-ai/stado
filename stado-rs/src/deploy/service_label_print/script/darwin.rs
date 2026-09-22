@@ -114,7 +114,7 @@ if [ \"$os\" = Darwin ]; then
         fi
         exec 9<&-
       fi
-      current=$($launch print \"$domain/$label\" 2>/dev/null || true)
+      current=$(/bin/launchctl print \"$domain/$label\" 2>/dev/null || true)
       current_pid=$(printf '%s\\n' \"$current\" |
         /usr/bin/awk -F' = ' '$1 ~ /^[ \\t]*pid$/ { print $2; exit }')
       current_start=$(/bin/ps -p \"$current_pid\" -o lstart= 2>/dev/null |

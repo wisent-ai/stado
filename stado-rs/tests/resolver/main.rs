@@ -33,6 +33,8 @@ mod declaration;
 mod fixture;
 mod host_runtime;
 mod idle;
+#[cfg(target_os = "macos")]
+mod native_identity;
 mod published;
 mod readiness;
 mod readiness_probe;
