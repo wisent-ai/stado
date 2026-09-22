@@ -168,6 +168,7 @@ fn native_attachment_creates_a_real_ledger_and_refuses_a_missing_resume_ledger()
         ],
     );
     let created = reply(&opened, "create");
+    super::park::assert_declared_park_time_was_handed_over(&area, &opened);
     let ledger = Path::new(
         created["sessionPath"]
             .as_str()

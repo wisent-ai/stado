@@ -15,6 +15,7 @@
 mod attach;
 mod detached;
 mod harness;
+mod park;
 
 use std::fs;
 use std::path::Path;

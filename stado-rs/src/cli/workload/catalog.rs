@@ -57,6 +57,19 @@ pub struct WorkloadKind {
     /// does not declare the kind still refuses it.
     #[serde(default)]
     pub maintenance: bool,
+    /// How long an attached interactive session may do nothing before its
+    /// runtime parks and gives its reservation back.
+    ///
+    /// An attach holds the kind's reservation for exactly as long as the
+    /// runtime lives, and only the runtime knows whether it is working. On
+    /// 2026-09-22 eight Jeden Desktop tabs held 16 cores and 32 GiB of a
+    /// 12-core laptop for 26 hours at 0.0% CPU, and the laptop refused every
+    /// fleet build with `reservations_exhausted`. The attach hands this to
+    /// the runtime (`JEDEN_PARK_AFTER_SECONDS` for `jeden-session`); the
+    /// runtime parks only when nothing of its own is running, and the attach
+    /// then ends and releases the hold. Absent means the runtime never parks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub park_after_seconds: Option<u64>,
     pub report: Vec<String>,
 }
 
@@ -142,6 +155,21 @@ static CATALOG: LazyLock<Result<WorkloadCatalog, String>> = LazyLock::new(|| {
             }
             Some(_) => {}
         }
+        match workload.park_after_seconds {
+            Some(0) => {
+                return Err(format!(
+                    "workload kind '{}' declares park_after_seconds 0; declare a whole number of seconds above zero in {DECLARATION_PATH}",
+                    workload.kind
+                ))
+            }
+            Some(_) if !workload.interactive => {
+                return Err(format!(
+                    "workload kind '{}' declares park_after_seconds but is not interactive; only an attached session parks, so remove it from {DECLARATION_PATH}",
+                    workload.kind
+                ))
+            }
+            _ => {}
+        }
     }
     Ok(parsed)
 });
@@ -172,10 +200,14 @@ fn mode(workload: &WorkloadKind) -> String {
     } else {
         "batch"
     };
-    if workload.detachable {
+    let mode = if workload.detachable {
         format!("{attachment}+detached")
     } else {
         attachment.to_string()
+    };
+    match workload.park_after_seconds {
+        Some(seconds) => format!("{mode}, parks after {seconds}s"),
+        None => mode,
     }
 }
 

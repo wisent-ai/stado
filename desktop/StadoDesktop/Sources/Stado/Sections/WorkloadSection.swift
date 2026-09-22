@@ -17,6 +17,9 @@ struct WorkloadDeclaration: Decodable, Identifiable, Sendable {
     let product: String
     let interactive: Bool
     let detachable: Bool
+    /// How long an attached session may do nothing before its runtime parks
+    /// and the host reservation is released; absent for kinds that never park.
+    let parkAfterSeconds: Int?
     let registryAllowance: String?
     let planSchema: String?
     let report: [String]
@@ -28,6 +31,7 @@ struct WorkloadDeclaration: Decodable, Identifiable, Sendable {
         case product
         case interactive
         case detachable
+        case parkAfterSeconds = "park_after_seconds"
         case registryAllowance = "registry_allowance"
         case planSchema = "plan_schema"
         case report
@@ -39,6 +43,7 @@ struct WorkloadDeclaration: Decodable, Identifiable, Sendable {
         product = try values.decode(String.self, forKey: .product)
         interactive = try values.decode(Bool.self, forKey: .interactive)
         detachable = try values.decodeIfPresent(Bool.self, forKey: .detachable) ?? false
+        parkAfterSeconds = try values.decodeIfPresent(Int.self, forKey: .parkAfterSeconds)
         registryAllowance = try values.decodeIfPresent(String.self, forKey: .registryAllowance)
         planSchema = try values.decodeIfPresent(String.self, forKey: .planSchema)
         report = try values.decode([String].self, forKey: .report)
@@ -79,7 +84,7 @@ struct WorkloadSection: View {
                                 Text(workload.kind)
                                     .font(WisentTypeScale.identifier())
                                     .foregroundStyle(WisentDesign.ink)
-                                Text("\(workload.product) · \(workload.interactive ? "stream" : "receipt")\(workload.detachable ? " · detachable" : "")")
+                                Text("\(workload.product) · \(workload.interactive ? "stream" : "receipt")\(workload.detachable ? " · detachable" : "")\(workload.parkAfterSeconds.map { " · parks after \($0 / 60) min idle" } ?? "")")
                                     .font(WisentTypeScale.caption())
                                     .foregroundStyle(WisentDesign.muted)
                             }

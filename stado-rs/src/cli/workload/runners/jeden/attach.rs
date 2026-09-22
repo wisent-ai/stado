@@ -57,7 +57,14 @@ pub(crate) async fn connect_jeden(
                     continue;
                 }
             };
-        let outcome = attach_jeden(target, workspace, &checkout, resume).await;
+        let outcome = attach_jeden(
+            target,
+            workspace,
+            &checkout,
+            resume,
+            declaration.park_after_seconds,
+        )
+        .await;
         if let Err(error) = held.release().await {
             eprintln!("the session's reservation could not be released: {error}");
         }
@@ -69,11 +76,15 @@ pub(crate) async fn connect_jeden(
     )))
 }
 
+/// The setting `jeden rpc` reads its park time from.
+const PARK_AFTER_SETTING: &str = "JEDEN_PARK_AFTER_SECONDS";
+
 async fn attach_jeden(
     target: ComputeTarget,
     workspace: &str,
     checkout: &str,
     resume: Option<&str>,
+    park_after_seconds: Option<u64>,
 ) -> Result<(), CmdError> {
     let (_, ledger) = ledger_root(&target);
     eprintln!(
@@ -85,6 +96,7 @@ async fn attach_jeden(
             "cwd": format!("~/{checkout}"),
             "ledger": ledger,
             "resume": resume,
+            "park_after_seconds": park_after_seconds,
         }))?
     );
     let status = if host_channel::target_is_this_host(&target) {
@@ -97,9 +109,12 @@ async fn attach_jeden(
                 "cannot construct the managed runtime PATH: {error}"
             ))
         })?;
-        tokio::process::Command::new(expand_home(MANAGED_JEDEN)?)
-            .arg("rpc")
-            .env("PATH", path)
+        let mut command = tokio::process::Command::new(expand_home(MANAGED_JEDEN)?);
+        command.arg("rpc").env("PATH", path);
+        if let Some(seconds) = park_after_seconds {
+            command.env(PARK_AFTER_SETTING, seconds.to_string());
+        }
+        command
             .current_dir(expand_home(checkout)?)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -117,8 +132,11 @@ async fn attach_jeden(
             .map_err(|error| CmdError::click(error.to_string()))?;
         let mut argv = host_channel::ssh_options(connection.destination);
         argv.insert(1, "-T".to_string());
+        let park = park_after_seconds
+            .map(|seconds| format!("{PARK_AFTER_SETTING}={seconds} "))
+            .unwrap_or_default();
         argv.push(format!(
-            "cd \"$HOME\"/{checkout} && PATH=\"$HOME/.stado/bin:$PATH\" exec \"$HOME\"/{MANAGED_JEDEN} rpc"
+            "cd \"$HOME\"/{checkout} && PATH=\"$HOME/.stado/bin:$PATH\" {park}exec \"$HOME\"/{MANAGED_JEDEN} rpc"
         ));
         let argv = ssh_key::add_identity(argv, &key)
             .map_err(|error| CmdError::click(error.to_string()))?;
