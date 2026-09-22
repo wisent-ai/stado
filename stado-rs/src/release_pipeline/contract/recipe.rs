@@ -22,6 +22,10 @@ pub struct PlatformRecipe {
     pub runner_platform: String,
     pub quality: Vec<QualityGate>,
     pub build: BuildCommand,
+    /// Product journeys executed against this build before publication.
+    /// Old manifests remain buildable, but cannot qualify submitted tasks.
+    #[serde(default)]
+    pub tests: Vec<QualityGate>,
     pub stage: BTreeMap<String, String>,
     #[serde(default)]
     pub secret_env: BTreeMap<String, String>,

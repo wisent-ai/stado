@@ -18,6 +18,7 @@ pub(super) fn build_environment(
     source: &Path,
     output: &Path,
     inputs_root: &Path,
+    evidence_root: &Path,
 ) -> BTreeMap<String, String> {
     // `WISENT_SOURCE_COMMIT` and `WISENT_SOURCE_SHA256` are the snapshot's own
     // identity, and a build that needs them has nowhere else to get them: the
@@ -29,6 +30,10 @@ pub(super) fn build_environment(
     let mut environment = BTreeMap::from([
         ("WISENT_SOURCE_DIR".into(), source.display().to_string()),
         ("WISENT_OUTPUT_DIR".into(), output.display().to_string()),
+        (
+            "WISENT_TEST_EVIDENCE_DIR".into(),
+            evidence_root.display().to_string(),
+        ),
         (
             "WISENT_INPUTS_DIR".into(),
             inputs_root.display().to_string(),

@@ -31,6 +31,15 @@ enum NativeHostReleaseOperations {
 
 enum NativeReleaseSourceOperations {
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "change-submit", title: "Hand pushed work to a later build (starts no build)", path: ["release", "changes", "submit"], hostPlacement: .none, fields: [
+            .init(id: "source", label: "Canonical repository on the Stado API host", option: "--source", required: true),
+            .init(id: "commit", label: "Full pushed commit", option: "--commit", required: true),
+            .init(id: "task", label: "Oko task identity", option: "--task", required: true),
+            .init(id: "session", label: "Author session", option: "--session", required: true),
+        ]),
+        .init(id: "change-list", title: "Read waiting changes and batch test verdicts", path: ["release", "changes", "list"], hostPlacement: .none, fields: [
+            .init(id: "task", label: "Task identity (blank reads all)", option: "--task"),
+        ], mutates: false),
         // Submitting queues the platform builds and returns the run id; the
         // control host's release agent signs, publishes and delivers once the
         // builds end, and the Releases screen follows the run.

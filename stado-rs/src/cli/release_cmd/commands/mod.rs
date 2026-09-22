@@ -35,6 +35,8 @@ pub enum ReleaseCommands {
     /// already published at that version is skipped, and the rest go through
     /// the same pipeline `submit` drives. `--plan` reads without submitting.
     Newest(crate::cli::release_newest::ReleaseNewestArgs),
+    /// Hand pushed work to a later batch release, without starting a build.
+    Changes(crate::cli::release_submit::changes::ChangesArgs),
     /// Resume a recorded release without replacing its source or running jobs.
     Resume(crate::cli::release_submit::ReleaseResumeArgs),
     /// Re-run one delivery from an exact completed release without promotion.

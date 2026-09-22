@@ -36,30 +36,6 @@
             "-D",
             "warnings"
           ]
-        },
-        {
-          "name": "documentation",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "stado-rs/Cargo.toml",
-            "--locked",
-            "--test",
-            "documentation"
-          ]
-        },
-        {
-          "name": "release-newest",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "stado-rs/Cargo.toml",
-            "--locked",
-            "--test",
-            "release_newest"
-          ]
         }
       ],
       "build": {
@@ -68,6 +44,16 @@
           "deploy/release/build_stado.sh"
         ]
       },
+      "tests": [
+        {
+          "name": "documentation",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
+        },
+        {
+          "name": "release-newest",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
+        }
+      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
@@ -100,30 +86,6 @@
             "-D",
             "warnings"
           ]
-        },
-        {
-          "name": "documentation",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "stado-rs/Cargo.toml",
-            "--locked",
-            "--test",
-            "documentation"
-          ]
-        },
-        {
-          "name": "release-newest",
-          "argv": [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "stado-rs/Cargo.toml",
-            "--locked",
-            "--test",
-            "release_newest"
-          ]
         }
       ],
       "build": {
@@ -132,6 +94,16 @@
           "deploy/release/build_stado.sh"
         ]
       },
+      "tests": [
+        {
+          "name": "documentation",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
+        },
+        {
+          "name": "release-newest",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
+        }
+      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }

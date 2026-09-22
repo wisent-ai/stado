@@ -18,6 +18,7 @@ use crate::release_pipeline::PipelineChannel;
 // `builds`, not `build`: the repository's .gitignore excludes every directory
 // named `build/`, so a component folder with that name is silently untracked.
 mod builds;
+pub mod changes;
 mod deliver;
 mod publish;
 mod run;

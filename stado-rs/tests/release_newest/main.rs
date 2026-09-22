@@ -12,6 +12,7 @@
 //! area beside this file. Nothing is simulated.
 
 mod area;
+mod changes;
 
 use area::{releasing_manifest, silent_manifest, Area};
 use serde_json::Value;

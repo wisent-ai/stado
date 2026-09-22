@@ -90,7 +90,9 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     }
     let output = source.join(".wisent-output");
     std::fs::create_dir_all(&output)?;
-    let environment = build_environment(&request, &source, &output, &inputs_root);
+    let evidence_root = queue_work_dir.join("output/qualification");
+    std::fs::create_dir_all(&evidence_root)?;
+    let environment = build_environment(&request, &source, &output, &inputs_root, &evidence_root);
 
     // Give the pinned toolchain the components its own gates are about to
     // demand. rustup installs a pinned toolchain on first use WITHOUT optional
@@ -231,6 +233,33 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         )));
     }
     write_scratch(&scratch)?;
+    for test in &recipe.tests {
+        let step = execute(
+            &format!("test:{}", test.name),
+            &test.argv,
+            &source,
+            &environment,
+        )?;
+        let passed = step.status == StepStatus::Passed;
+        quality.push(step);
+        if !passed {
+            let receipt = receipt(
+                &request,
+                &job_id,
+                receipt_inputs,
+                quality,
+                build,
+                StepStatus::Failed,
+                None,
+                Some(format!("post-build test {} failed", test.name)),
+            );
+            write_receipt(&receipt)?;
+            return Err(CmdError::click(format!(
+                "post-build test {} failed",
+                test.name
+            )));
+        }
+    }
     // The stage map is relative to `WISENT_OUTPUT_DIR`, which is what every
     // recipe's build script writes into -- brama and skarbiec both install to
     // `$WISENT_OUTPUT_DIR/stage/...`. Packaging resolved it against the source
