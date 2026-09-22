@@ -230,6 +230,7 @@ async fn budget(limit: Option<u64>, json: bool) -> Result<(), CmdError> {
             "used": budget.used,
             "limit": budget.limit,
             "remaining": budget.remaining(),
+            "approvals": document.get(crate::scheduler::builds::approval::REGISTRY_KEY),
         }));
         return Ok(());
     }
@@ -242,8 +243,9 @@ async fn budget(limit: Option<u64>, json: bool) -> Result<(), CmdError> {
     );
     if budget.remaining() == 0 {
         println!(
-            "every further build is refused until the count resets at midnight UTC; \
-             raise the ceiling deliberately with `stado queue budget --limit <N>`"
+            "further builds require recorded user consent in `tama-cli build record \
+             --approval-session <id> --approval-quote <verbatim message>`; \
+             the default ceiling remains unchanged. The count resets at midnight UTC."
         );
     }
     Ok(())

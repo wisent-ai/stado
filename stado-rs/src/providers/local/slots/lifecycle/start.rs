@@ -117,6 +117,7 @@ pub async fn start_slot(
             &job.run_id,
             usize::from(true),
             "a build job claimed by a worker",
+            None,
         )
         .await
         {

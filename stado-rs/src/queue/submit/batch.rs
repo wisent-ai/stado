@@ -52,7 +52,7 @@ pub async fn submit_batch(
     // nobody remembered — a rerun, a raw submit, a client older than the
     // ceiling itself.
     let compiling = crate::scheduler::builds::compiling(commands);
-    crate::scheduler::builds::charge(&options.run_id, compiling, "a queue submission")
+    crate::scheduler::builds::charge(&options.run_id, compiling, "a queue submission", None)
         .await
         .map_err(SubmitError::Validation)?;
     let run_id = options.run_id.clone();

@@ -16,6 +16,7 @@
 //! because its refusal names the release, and the charge below is what makes
 //! the number true.
 
+use super::approval::{self, BuildIntent};
 use super::budget::BuildBudget;
 
 /// What a release pipeline's build job runs on the builder.
@@ -50,7 +51,12 @@ pub fn compiling(commands: &[String]) -> usize {
 /// costs nothing again — the client that submits a build and the worker that
 /// claims it both come through here, and the day owes one charge for one
 /// build.
-pub async fn charge(key: &str, wanted: usize, asked_by: &str) -> Result<(), String> {
+pub async fn charge(
+    key: &str,
+    wanted: usize,
+    asked_by: &str,
+    intent: Option<&BuildIntent<'_>>,
+) -> Result<(), String> {
     if wanted == 0 {
         return Ok(());
     }
@@ -59,13 +65,25 @@ pub async fn charge(key: &str, wanted: usize, asked_by: &str) -> Result<(), Stri
         .await
         .map_err(|error| format!("reading the fleet's build budget: {error}"))?;
     let budget = BuildBudget::read(&document, now);
-    if budget.already_charged(key) {
+    if budget.already_charged(key) || approval::charged(&document, key) {
         return Ok(());
     }
-    if let Some(refusal) = budget.refusal(wanted, asked_by) {
-        return Err(refusal);
-    }
+    let approved = if let Some(refusal) = budget.refusal(wanted, asked_by) {
+        let Some(intent) = intent.filter(|_| wanted == usize::from(true)) else {
+            return Err(refusal);
+        };
+        Some(
+            approval::verify(intent)
+                .await
+                .map_err(|error| format!("{refusal}\n{error}"))?,
+        )
+    } else {
+        None
+    };
     budget.record(&mut document, wanted, &[key.to_string()]);
+    if let (Some(entry), Some(intent)) = (approved, intent) {
+        approval::record(&mut document, entry, intent.platform, key)?;
+    }
     crate::cli::registry::push_document_if(&document, &generation)
         .await
         .map_err(|error| format!("recording {wanted} build(s) against today's budget: {error}"))?;

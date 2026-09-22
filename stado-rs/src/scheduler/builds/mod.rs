@@ -15,6 +15,7 @@
 //! ceiling read from the registry, and [`charge`] takes from it when a
 //! compiling job is submitted or claimed.
 
+pub mod approval;
 mod budget;
 mod charge;
 

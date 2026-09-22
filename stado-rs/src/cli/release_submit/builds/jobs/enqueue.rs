@@ -50,12 +50,11 @@ pub(crate) async fn enqueue(
     // spends the ration: the refusal is asked here so it names the release,
     // and the charge is taken by `submit_batch` when the job is submitted,
     // so nothing spends without being counted and nothing is counted twice.
-    let now = chrono::Utc::now();
-    let (document, _generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let budget = crate::scheduler::builds::BuildBudget::read(&document, now);
-    if let Some(refusal) = budget.refusal(usize::from(true), "a release build") {
-        return Err(CmdError::click(refusal));
-    }
+    let intent = crate::scheduler::builds::approval::BuildIntent {
+        product: &m.product,
+        revision: commit,
+        platform,
+    };
     let submission_run_id = match prior_terminal_job_id {
         Some(prior_job_id) => stable_run_id(
             RELEASE_BUILD_RUN_SCOPE,
@@ -63,6 +62,18 @@ pub(crate) async fn enqueue(
         ),
         None => stable_run_id(RELEASE_BUILD_RUN_SCOPE, &format!("{id}\0{platform}")),
     };
+    let now = chrono::Utc::now();
+    let (document, _generation) = crate::cli::registry::fetch_versioned_document().await?;
+    let budget = crate::scheduler::builds::BuildBudget::read(&document, now);
+    if !budget.already_charged(&submission_run_id)
+        && !crate::scheduler::builds::approval::charged(&document, &submission_run_id)
+    {
+        if let Some(refusal) = budget.refusal(usize::from(true), "a release build") {
+            crate::scheduler::builds::approval::verify(&intent)
+                .await
+                .map_err(|error| CmdError::click(format!("{refusal}\n{error}")))?;
+        }
+    }
     // The worker request is immutable per attempt. The first build of a
     // platform keeps `requests/<platform>.json`, and a rebuild after a
     // terminal failure writes its own under the attempt's id: the saved
@@ -243,6 +254,14 @@ pub(crate) async fn enqueue(
         secret_env: secret_refs(&recipe.secret_env),
         ..Default::default()
     };
+    crate::scheduler::builds::charge(
+        &options.run_id,
+        usize::from(true),
+        "a release build",
+        Some(&intent),
+    )
+    .await
+    .map_err(CmdError::click)?;
     let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
     let job = jobs
         .pop()
