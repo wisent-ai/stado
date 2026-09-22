@@ -18,6 +18,7 @@ mod converge;
 mod declare;
 mod report;
 mod verdict;
+mod withdraw;
 
 use clap::Subcommand;
 
@@ -88,6 +89,14 @@ pub(crate) enum OriginCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Withdraw every public HTTPS Funnel handler on TARGET, including
+    /// undeclared paths, and remove its public-origin declarations.
+    /// Private backend processes are not stopped.
+    Withdraw {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Make the declared target publish every declared path, then read the
     /// node's own table and the public name back.
     ///
@@ -129,6 +138,7 @@ pub(crate) async fn dispatch(command: OriginCommands) -> Result<(), CmdError> {
             .await
         }
         OriginCommands::Remove { name, json } => declare::remove(&name, json).await,
+        OriginCommands::Withdraw { target, json } => withdraw::withdraw(&target, json).await,
         OriginCommands::Converge { name, apply, json } => {
             converge::converge(&name, apply, json).await
         }

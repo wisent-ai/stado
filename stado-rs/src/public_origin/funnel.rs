@@ -27,6 +27,9 @@
 
 use serde_json::Value;
 
+mod withdraw;
+pub use withdraw::withdraw;
+
 use super::PublicOrigin;
 use crate::deploy::{
     host_channel, mobile_runtime, shlex_quote, CommandOutput, DeployError, Runner,
