@@ -33,25 +33,16 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 machine::artifacts(&job_id, &output_dir).await
             }
         },
-        WorkCommands::Agent {
-            gpu_type,
-            target,
-            auto,
-            idle_shutdown,
-            kind,
-            vast_auto_list,
-            vast_price_gpu,
-            vast_max_duration_s,
-        } => {
+        WorkCommands::Agent(options) => {
             agent::run(
-                gpu_type,
-                target,
-                auto,
-                idle_shutdown,
-                kind,
-                vast_auto_list,
-                vast_price_gpu,
-                vast_max_duration_s,
+                options.gpu_type,
+                options.target,
+                options.auto,
+                options.idle_shutdown,
+                options.kind,
+                options.vast_auto_list,
+                options.vast_price_gpu,
+                options.vast_max_duration_s,
             )
             .await
         }

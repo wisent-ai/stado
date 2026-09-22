@@ -31,6 +31,7 @@ mod answers;
 mod consumers;
 mod declaration;
 mod fixture;
+mod host_runtime;
 mod idle;
 mod published;
 mod readiness;
@@ -163,6 +164,7 @@ impl Host {
             .env("HOME", &self.home)
             .env("PATH", SYSTEM_PATH)
             .env("WC_STORAGE_BACKEND", "local")
+            .env("WC_PROVIDERS", "local")
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
             .env("STADO_CONFIG", self.root.path().join("no-such-config.json"));
         command

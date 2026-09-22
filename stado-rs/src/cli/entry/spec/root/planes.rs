@@ -9,6 +9,9 @@ use clap::Subcommand;
 /// changes no command line.
 #[derive(Subcommand)]
 pub(crate) enum PlaneCommands {
+    /// Run this host's Stado components in one supervised process.
+    Serve(crate::cli::integrations::runtime::ServeArgs),
+
     /// Run the provider-neutral scheduling tick locally.
     ///
     /// Reads cadence and identity from the named coordinator entry. Queue,

@@ -5,4 +5,5 @@
 pub mod control_plane;
 pub mod egress;
 pub mod mail;
+pub(crate) mod runtime;
 pub mod vast;

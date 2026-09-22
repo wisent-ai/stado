@@ -1,7 +1,7 @@
 //! Queue work and the worker that claims it: the second block of
 //! `stado --help`.
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 
 use crate::cli::*;
 
@@ -51,38 +51,36 @@ pub(crate) enum WorkCommands {
     Job(job::JobCommands),
 
     /// Run local worker agent using live CPU, RAM, disk, and accelerator state.
-    Agent {
-        /// GPU type (auto-detected if --target/--auto absent)
-        #[arg(long, default_value = "")]
-        gpu_type: String,
-        /// Pull the target's accelerator and policy from the registry by name.
-        #[arg(long)]
-        target: Option<String>,
-        /// Look up self in registry by hostname; no manual config.
-        #[arg(long)]
-        auto: bool,
-        /// Exit (and self-delete the GCE VM) when no jobs are active and no
-        /// queued job is eligible. Use on ephemeral cloud VMs.
-        #[arg(long)]
-        idle_shutdown: bool,
-        /// Consumer label in capacity broadcasts: "local" (physical box,
-        /// default), "gcp" / "azure" / "aws" / "vast" (ephemeral cloud-agent VM).
-        #[arg(long, default_value = "local")]
-        kind: String,
-        /// When the wisent-compute queue is empty, list this box on Vast.ai.
-        /// Requires stado-vast/api_key in Skarbiec and WC_VAST_MACHINE_ID
-        /// unless the machine can be discovered automatically.
-        #[arg(long)]
-        vast_auto_list: bool,
-        /// Per-GPU-hour rental price USD when --vast-auto-list lists
-        /// the box (default 0.50).
-        #[arg(long, default_value_t = 0.50)]
-        vast_price_gpu: f64,
-        /// Cap the max rental length any Vast renter can buy from
-        /// this offer (default 3600s = 1h). 0 to leave open-ended.
-        #[arg(long, default_value_t = 3600)]
-        vast_max_duration_s: i64,
-    },
+    Agent(AgentOptions),
+}
+
+/// Worker options shared by the standalone worker and the host service.
+#[derive(Args)]
+pub(crate) struct AgentOptions {
+    /// GPU type (auto-detected if --target/--auto absent).
+    #[arg(long, default_value = "")]
+    pub gpu_type: String,
+    /// Pull the target's accelerator and policy from the registry by name.
+    #[arg(long)]
+    pub target: Option<String>,
+    /// Look up self in registry by hostname; no manual config.
+    #[arg(long)]
+    pub auto: bool,
+    /// Exit and retire an ephemeral cloud VM when no eligible work remains.
+    #[arg(long)]
+    pub idle_shutdown: bool,
+    /// Consumer label: local, gcp, azure, aws, or vast.
+    #[arg(long, default_value = "local")]
+    pub kind: String,
+    /// List idle capacity on Vast.ai using its existing Skarbiec grant.
+    #[arg(long)]
+    pub vast_auto_list: bool,
+    /// Per-GPU-hour rental price in USD.
+    #[arg(long, default_value_t = 0.50)]
+    pub vast_price_gpu: f64,
+    /// Maximum rental length in seconds; zero leaves it open-ended.
+    #[arg(long, default_value_t = 3600)]
+    pub vast_max_duration_s: i64,
 }
 
 /// The gates a product declares, applied rather than only read.

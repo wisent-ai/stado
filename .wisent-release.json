@@ -39,6 +39,10 @@
           ]
         },
         {
+          "name": "source-single-process-runtime",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
+        },
+        {
           "name": "source-documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
         },
@@ -58,6 +62,10 @@
         ]
       },
       "tests": [
+        {
+          "name": "single-process-runtime",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
+        },
         {
           "name": "documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
@@ -110,6 +118,10 @@
           ]
         },
         {
+          "name": "source-single-process-runtime",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
+        },
+        {
           "name": "source-documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
         },
@@ -129,6 +141,10 @@
         ]
       },
       "tests": [
+        {
+          "name": "single-process-runtime",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
+        },
         {
           "name": "documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]

@@ -17,12 +17,13 @@ fn env_value_str(v: &serde_json::Value) -> String {
 }
 
 /// The shared --auto/--target registry-application half of the Python
-/// command. Returns the (possibly registry-supplied) gpu_type.
-async fn apply_registry_target(
+/// command. Returns the GPU type and the target already resolved.
+pub(crate) async fn apply_registry_target(
     mut gpu_type: String,
     target: Option<&str>,
     auto: bool,
-) -> Result<String, CmdError> {
+) -> Result<(String, Option<crate::targets::ComputeTarget>), CmdError> {
+    let mut resolved = None;
     if auto {
         let hostname = vast::system_hostname();
         let t = local_agent::lookup_self_auto(&hostname)
@@ -39,6 +40,7 @@ async fn apply_registry_target(
             "agent --auto: target={} gpu_type={gpu_type} capacity=live-resources",
             t.name
         );
+        resolved = Some(t);
     } else if let Some(target) = target {
         let t = local_agent::lookup_auto(target)
             .await
@@ -57,8 +59,9 @@ async fn apply_registry_target(
             "agent: target={} gpu_type={gpu_type} capacity=live-resources",
             t.name
         );
+        resolved = Some(t);
     }
-    Ok(gpu_type)
+    Ok((gpu_type, resolved))
 }
 
 /// Python the `agent` click command body.
@@ -87,7 +90,7 @@ pub async fn run(
         ))
     })?;
     let kind = execution.id.to_string();
-    let gpu_type = apply_registry_target(gpu_type, target.as_deref(), auto).await?;
+    let (gpu_type, _) = apply_registry_target(gpu_type, target.as_deref(), auto).await?;
 
     // Auto-enable the Vast bridge when stado-vast/api_key exists in
     // Skarbiec and this is a local consumer. The defensive helper performs
