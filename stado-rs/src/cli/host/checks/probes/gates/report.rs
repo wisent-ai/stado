@@ -1,31 +1,12 @@
-use serde_json::Value;
+//! The same answer written for a person: every read, the verdict, the
+//! blockers in the agent own words, and the capacity behind them.
 
-use crate::cli::CmdError;
+use crate::deploy::host_gates::HostGates;
 
-use crate::cli::host::checks::probes::print_json;
+use super::outcome::{gigabytes, store_clause};
 
-/// `stado host gates HOST [--json]` — why this host is claiming nothing, in
-/// one payload.
-///
-/// The exit status follows `claiming`, the way `host ping`'s follows its
-/// combined verdict, so `stado space reclaim mini --apply --reason … && stado
-/// host gates mini` is a usable sentence and a blocked host cannot be
-/// mistaken for a healthy one by a script that only reads status codes.
-///
-/// The Mac mini sat at roughly 2 GiB free against a 55 GiB policy, its agent
-/// published `disk_pressure_unresolved` every tick, it claimed nothing for
-/// hours, every release build queued behind it — and no command in this CLI
-/// said any of it. This is that sentence.
-pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let gates = crate::deploy::host_gates::read_host_gates(host, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()).machine_readable(json))?;
-    let report = Value::Object(crate::deploy::host_gates::to_report(&gates));
-    if json {
-        print_json(&report);
-        return claiming_outcome(&gates);
-    }
+/// Print what this host answered, line by line.
+pub(super) fn print_report(gates: &HostGates) {
     println!("host:     {}", gates.host);
     println!(
         "diagnostic: {}",
@@ -248,76 +229,4 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         }
         println!("note:     {note}");
     }
-    claiming_outcome(&gates)
-}
-
-/// GiB with one decimal, or a dash for a number this host did not answer with.
-fn gigabytes(value: Option<f64>) -> String {
-    value.map_or_else(|| "not observed".to_string(), |gb| format!("{gb} GiB"))
-}
-
-/// What the two backend names mean when they do not agree, read off the
-/// blocker [`crate::deploy::host_gates`] already decided.
-///
-/// Keyed off the blocker and never re-classified here: a second classifier of
-/// storage backends in the CLI would eventually disagree with the one in the
-/// reader about one host, and the operator would believe whichever line they
-/// read first.
-fn store_clause(blockers: &[String]) -> &'static str {
-    if blockers
-        .iter()
-        .any(|blocker| blocker == crate::deploy::host_gates::AGENT_STORE_DEVICE_ONLY)
-    {
-        return " — a store only that host can address, so nothing its agent publishes ever \
-                reaches this fleet";
-    }
-    if blockers
-        .iter()
-        .any(|blocker| blocker == crate::deploy::host_gates::AGENT_STORE_UNKNOWN)
-    {
-        return " — a backend this build has no adapter for, so how far that agent's writes \
-                carry cannot be decided here";
-    }
-    ""
-}
-
-/// A host that is not claiming is a failed verdict, not a failed command: the
-/// read succeeded either way, and the message names the blockers rather than
-/// repeating that something is wrong.
-fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
-    if !gates.complete {
-        let details = gates
-            .observations
-            .iter()
-            .filter(|read| !read.complete())
-            .map(|read| {
-                format!(
-                    "{}: {}",
-                    read.operation,
-                    read.detail.as_deref().unwrap_or("no result")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        let failure = CmdError::click(format!(
-            "{} diagnostic is incomplete: {details}",
-            gates.host
-        ));
-        if gates
-            .observations
-            .iter()
-            .any(|read| read.state == crate::deploy::host_gates::ReadState::TimedOut)
-        {
-            return Err(failure.stating(crate::primitives::failure::FailureCode::Timeout));
-        }
-        return Err(failure);
-    }
-    if gates.claiming {
-        return Ok(());
-    }
-    Err(CmdError::click(format!(
-        "{} is claiming nothing: {}",
-        gates.host,
-        gates.blockers.join(", ")
-    )))
 }

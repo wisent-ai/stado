@@ -1,5 +1,4 @@
-//! Reports read back from the run objects a submission maintains: what `stado
-//! release status` prints and what the operator console serves.
+//! One listing: which runs it is about, and each platform joined to its job.
 
 use futures::StreamExt;
 use serde_json::{Map, Value};
@@ -8,73 +7,8 @@ use crate::cli::CmdError;
 use crate::queue::runs;
 use crate::queue::storage::JobStorage;
 
-/// One run object as raw JSON, or nothing when it is absent or unreadable.
-async fn load_run_value(store: &JobStorage, path: &str) -> Result<Option<Value>, CmdError> {
-    let Some(text) = store
-        .download_text(path)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-    else {
-        return Ok(None);
-    };
-    Ok(serde_json::from_str::<Value>(&text).ok())
-}
-
-/// Where `run_state_path` puts every run object, and its leaf.
-const RUN_STATE_PREFIX: &str = "runs/release-pipeline/";
-const RUN_STATE_LEAF: &str = "/run.json";
-/// How many run objects a listing reads before it stops looking: a product
-/// or version filter is answered from the body of each run, one request per
-/// run, and the whole history is not a bounded question. A run named by id
-/// is picked from the listing before any read, so this never cuts it off.
-pub(crate) const VERSION_SCAN_WINDOW: usize = 120;
-
-/// Every `(product, version)` a run was recorded for, read in one walk of the
-/// newest `limit` run objects.
-///
-/// `matching_runs` answers one product at a time and joins every platform to
-/// its queue job, which is what `release status` needs and what a whole
-/// workspace cannot afford: `release newest` asks the same question of forty
-/// checkouts at once, and asking it product by product cost one listing plus
-/// up to a hundred and twenty body reads each — twenty-four minutes for a
-/// plan that submits nothing. This reads each run body once and answers
-/// membership for every product from that one pass.
-pub(crate) async fn published_coordinates(
-    limit: usize,
-) -> Result<std::collections::BTreeMap<(String, String), String>, CmdError> {
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut blobs = store
-        .list_blobs_with_meta(RUN_STATE_PREFIX)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .into_iter()
-        .filter(|blob| blob.name.ends_with(RUN_STATE_LEAF))
-        .collect::<Vec<_>>();
-    blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
-    blobs.truncate(limit);
-    let bodies = futures::stream::iter(blobs.into_iter().map(|blob| {
-        let store = &store;
-        async move { load_run_value(store, &blob.name).await }
-    }))
-    .buffered(8)
-    .collect::<Vec<_>>()
-    .await;
-    let mut published = std::collections::BTreeMap::new();
-    for body in bodies {
-        let Some(run) = body? else { continue };
-        let field = |key: &str| run[key].as_str().unwrap_or_default().to_string();
-        let (product, version) = (field("product"), field("version"));
-        if product.is_empty() || version.is_empty() {
-            continue;
-        }
-        published
-            .entry((product, version))
-            .or_insert_with(|| field("run_id"));
-    }
-    Ok(published)
-}
+use super::jobs::{build_seconds, candidate_prefixes, compiling_count, job_state_and_cost, previous_compile_total};
+use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
 
 /// One platform leg joined to its queue job: which run it belongs to, which
 /// platform it is, and — when the queue still holds the job — the lifecycle
@@ -279,105 +213,4 @@ pub(crate) async fn matching_runs(
         }
     }
     Ok(runs)
-}
-
-/// How long one platform's build actually took, in seconds.
-///
-/// The run object records `created_at` and `updated_at` and nothing else, so
-/// until this existed no surface in the fleet could say what a release cost.
-/// The duration is not copied into the run: the job record owns it, and a
-/// second copy is a second answer. A job still running reports the time it
-/// has been running so far.
-fn build_seconds(job: &crate::models::Job) -> Option<i64> {
-    let moment = |value: Option<&str>| {
-        value
-            .filter(|text| !text.is_empty())
-            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-            .map(|stamp| stamp.with_timezone(&chrono::Utc))
-    };
-    let started = moment(job.started_at.as_deref())?;
-    let ended = moment(job.completed_at.as_deref())
-        .or_else(|| moment(job.failed_at.as_deref()))
-        .unwrap_or_else(chrono::Utc::now);
-    Some((ended - started).num_seconds().max(0))
-}
-
-/// The lifecycle prefixes a platform in this state can be found under, so a
-/// terminal run costs two reads per platform instead of six.
-fn candidate_prefixes(platform_state: Option<&str>) -> &'static [&'static str] {
-    match platform_state {
-        Some("published" | "qualified") => &[runs::COMPLETED, runs::UPLOADED],
-        Some("failed") => &[runs::FAILED, runs::CANCELLED],
-        _ => &[
-            runs::RUNNING,
-            runs::QUEUE,
-            runs::COMPLETED,
-            runs::UPLOADED,
-            runs::FAILED,
-            runs::CANCELLED,
-        ],
-    }
-}
-
-/// The queue state one job sits in and what it has cost so far.
-async fn job_state_and_cost(
-    store: &JobStorage,
-    job_id: &str,
-    prefixes: &[&str],
-) -> Option<(String, Option<i64>)> {
-    for state in prefixes {
-        match store.read_job(state, job_id).await {
-            Ok(Some(job)) => return Some(((*state).to_string(), build_seconds(&job))),
-            Ok(None) => continue,
-            Err(_) => return None,
-        }
-    }
-    None
-}
-
-/// Distinct crates the job's streamed log says were compiled so far.
-async fn compiling_count(store: &JobStorage, job_id: &str) -> Option<u64> {
-    let bytes = store
-        .read_bytes(&format!("status/{job_id}/output/command_output.log"))
-        .await
-        .ok()
-        .flatten()?;
-    let text = String::from_utf8_lossy(&bytes);
-    Some(
-        text.lines()
-            .filter(|line| line.trim_start().starts_with("Compiling "))
-            .count() as u64,
-    )
-}
-
-/// The compile count of the newest older run of the same product and
-/// platform whose job finished — the denominator for the estimate.
-///
-/// `older` is the run objects newest-first that [`recent_runs`] did not need,
-/// as paths: the answer is nearly always the first or second of them, so they
-/// are downloaded one at a time and the walk stops at the first usable count.
-async fn previous_compile_total(
-    store: &JobStorage,
-    older: &[String],
-    product: &str,
-    platform: &str,
-) -> Option<u64> {
-    for path in older {
-        let Ok(Some(run)) = load_run_value(store, path).await else {
-            continue;
-        };
-        if run["product"].as_str() != Some(product) {
-            continue;
-        }
-        let record = &run["platforms"][platform];
-        let Some(job_id) = record["job_id"].as_str() else {
-            continue;
-        };
-        if let Some(count) = compiling_count(store, job_id).await {
-            if count > u64::default() {
-                return Some(count);
-            }
-        }
-    }
-    None
 }
