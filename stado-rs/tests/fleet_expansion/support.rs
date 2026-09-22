@@ -10,10 +10,15 @@ use std::{
 pub struct Journey {
     pub root: PathBuf,
     pub store: PathBuf,
+    binary: PathBuf,
 }
 impl Journey {
     pub fn new() -> Self {
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fleet-expansion-runs");
+        let base = std::env::var_os("STADO_EXPANSION_EVIDENCE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fleet-expansion-runs")
+            });
         fs::create_dir_all(&base).unwrap();
         let root = tempfile::Builder::new()
             .prefix("expansion-")
@@ -22,19 +27,37 @@ impl Journey {
             .keep();
         let store = root.join("store");
         fs::create_dir_all(&store).unwrap();
-        for (name, args) in [
-            ("revision.txt", vec!["rev-parse", "HEAD"]),
-            ("source.patch", vec!["diff", "--binary", "HEAD"]),
-        ] {
-            let out = Command::new("git")
-                .args(args)
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .output()
-                .unwrap();
-            assert!(out.status.success());
-            fs::write(root.join(name), out.stdout).unwrap();
+        if let Ok(revision) = std::env::var("WISENT_SOURCE_COMMIT") {
+            assert_eq!(revision.len(), 40, "release source revision must be exact");
+            assert!(revision.bytes().all(|b| b.is_ascii_hexdigit()));
+            fs::write(root.join("revision.txt"), revision).unwrap();
+            fs::write(
+                root.join("source.sha256"),
+                std::env::var("WISENT_SOURCE_SHA256").unwrap(),
+            )
+            .unwrap();
+        } else {
+            for (name, args) in [
+                ("revision.txt", vec!["rev-parse", "HEAD"]),
+                ("source.patch", vec!["diff", "--binary", "HEAD"]),
+            ] {
+                let out = Command::new("git")
+                    .args(args)
+                    .current_dir(env!("CARGO_MANIFEST_DIR"))
+                    .output()
+                    .unwrap();
+                assert!(out.status.success());
+                fs::write(root.join(name), out.stdout).unwrap();
+            }
         }
-        let j = Self { root, store };
+        let binary = std::env::var_os("STADO_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_stado")));
+        let j = Self {
+            root,
+            store,
+            binary,
+        };
         let out = j.invoke(
             &["registry", "push", "-"],
             Some(&json!({"schema_version":2,"targets":[],"coordinators":[]}).to_string()),
@@ -48,7 +71,7 @@ impl Journey {
         j
     }
     pub fn invoke(&self, args: &[&str], input: Option<&str>) -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_stado"))
+        let mut child = Command::new(&self.binary)
             .args(args)
             .env_clear()
             .env("HOME", &self.root)
@@ -75,7 +98,7 @@ impl Journey {
             drop(child.stdin.take());
         }
         let out = child.wait_with_output().unwrap();
-        let record = json!({"binary":env!("CARGO_BIN_EXE_stado"),"args":args,"stdin":input,"exit":out.status.code(),"stdout":String::from_utf8_lossy(&out.stdout),"stderr":String::from_utf8_lossy(&out.stderr)});
+        let record = json!({"binary":self.binary,"args":args,"stdin":input,"exit":out.status.code(),"stdout":String::from_utf8_lossy(&out.stdout),"stderr":String::from_utf8_lossy(&out.stderr)});
         fs::write(
             self.root
                 .join(format!("command-{}.json", uuid::Uuid::new_v4())),

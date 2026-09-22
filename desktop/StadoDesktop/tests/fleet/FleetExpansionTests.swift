@@ -79,7 +79,9 @@ final class FleetExpansionTests: XCTestCase {
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
         let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let directory = package.appendingPathComponent(".wisent-output/expansion-screens")
+        let directory = ProcessInfo.processInfo.environment["STADO_EXPANSION_EVIDENCE_DIR"]
+            .map { URL(fileURLWithPath: $0).appendingPathComponent("screens") }
+            ?? package.appendingPathComponent(".wisent-output/expansion-screens")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: directory.appendingPathComponent("\(name).png"))
     }

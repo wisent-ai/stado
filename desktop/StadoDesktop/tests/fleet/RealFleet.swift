@@ -17,12 +17,24 @@ final class RealFleet {
 
     init() throws {
         binary = try Self.resolveBinary()
-        root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: ".build/fleet-runs/\(UUID().uuidString)")
+        let evidence = ProcessInfo.processInfo.environment["STADO_EXPANSION_EVIDENCE_DIR"]
+            .map { URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: ".build/fleet-runs")
+        root = evidence.appending(path: "desktop-\(UUID().uuidString)")
         home = root.appending(path: "home")
         log = root.appending(path: "operator-api.stderr")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        if let source = ProcessInfo.processInfo.environment["WISENT_SOURCE_COMMIT"] {
+            guard source.count == 40, source.allSatisfy(\.isHexDigit),
+                  let digest = ProcessInfo.processInfo.environment["WISENT_SOURCE_SHA256"] else {
+                throw RealFleetFailure("release source revision or archive digest is missing")
+            }
+            try source.write(to: root.appending(path: "source-revision.txt"), atomically: true, encoding: .utf8)
+            try digest.write(to: root.appending(path: "source.sha256"), atomically: true, encoding: .utf8)
+            return
+        }
         let revision = Process()
         revision.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         revision.arguments = ["-C", root.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path, "rev-parse", "HEAD"]
