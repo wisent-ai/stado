@@ -37,21 +37,19 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         &state_path,
     )
     .map_err(CmdError::click)?;
-    // This command swaps a settled release in for the generic unit; it does
-    // not rescue a rollout. When the generic unit's own process holds the
-    // stable bind, the agent can never spawn a candidate, so the release can
-    // never settle, so this refusal repeats for ever — charless-mac-mini,
-    // 2026-09-21, where the sentence alone sent two sessions round the same
-    // loop. It now says which loop it is and what leaves it.
+    // This command finalizes registry ownership after a settled rollout. The
+    // release agent, not this metadata handoff, owns candidate admission and
+    // readiness-first replacement of the declared legacy service.
     let active = state.active.as_ref().ok_or_else(|| {
         CmdError::click(format!(
             "{host}: release-control has no active {product:?} process (phase {:?}, detail: {}). \
-             This command hands a settled release the bind; it cannot create one. If the detail \
-             says the stable bind is held, the unit that holds it and the release agent are \
-             claiming one port: read `stado release doctor {product} --target {host}` for the \
-             holder and `stado service list --host {host}` for the unit that declares it, then \
-             either retire that unit so the agent can bind, or leave {product:?} off release \
-             control on this host.",
+             This command hands a settled release the bind; it cannot create one. \
+             Read `stado release doctor {product} --target {host}` for the failed operation \
+             and `stado service list` for declared units. \
+             `stado service serving <unit> --host {host} --port <stable-port> --json` \
+             verifies the actual owner. The release agent must prove the declared legacy \
+             owner and candidate readiness before cutover; do not retire a credential \
+             service merely to make this metadata handoff succeed.",
             state.phase, state.detail
         ))
     })?;

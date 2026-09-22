@@ -57,16 +57,72 @@ pub(crate) fn owns_stable_bind(target: &ReleaseTargetPolicy, port: u16) -> Resul
     }
     let report = service_serving::parse_serving(&String::from_utf8_lossy(&output.stdout))
         .map_err(|error| format!("cannot read legacy ownership for {label}: {error}"))?;
-    Ok(report.unit == label
-        && report.unit_path == plist
-        && report.loaded == "yes"
-        && report.listeners_state == service_serving::LISTENERS_READ
-        && report.ports.len() == 1
-        && report.ports[0].port == port
-        && !report.ports[0].holders.is_empty()
-        && report.ports[0].holders.iter().all(|holder| {
-            holder.owner_state == service_serving::OWNER_RESOLVED && holder.owner == label
-        }))
+    let Some(job_pid) = report
+        .launchd_pid
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid > 0)
+    else {
+        return Ok(false);
+    };
+    if report.unit != label
+        || report.unit_path != plist
+        || report.loaded != "yes"
+        || report.listeners_state != service_serving::LISTENERS_READ
+        || report.ports.len() != 1
+        || report.ports[0].port != port
+        || report.ports[0].holders.is_empty()
+        || report.ports[0].holders.iter().any(|holder| {
+            holder.owner_state != service_serving::OWNER_RESOLVED || holder.owner != label
+        })
+    {
+        return Ok(false);
+    }
+    // Labels may exist in both system and user domains. Bind listeners to the
+    // PID read from this exact system job, not merely to its label spelling.
+    if report.ports[0]
+        .holders
+        .iter()
+        .all(|holder| holder.pid.parse() == Ok(job_pid))
+    {
+        return Ok(true);
+    }
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+        .map_err(|error| format!("cannot read legacy listener ancestry for {label}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "legacy listener ancestry read for {label} exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let parents: std::collections::BTreeMap<u32, u32> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+        .collect();
+    Ok(report.ports[0].holders.iter().all(|holder| {
+        let Ok(mut pid) = holder.pid.parse::<u32>() else {
+            return false;
+        };
+        for _ in 0..=parents.len() {
+            if pid == job_pid {
+                return true;
+            }
+            let Some(parent) = parents.get(&pid) else {
+                return false;
+            };
+            if *parent == pid {
+                return false;
+            }
+            pid = *parent;
+        }
+        false
+    }))
 }
 
 pub(crate) fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
