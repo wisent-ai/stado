@@ -1,7 +1,7 @@
 //! Exact bounded subset selection; ties spend less, then use stable id order.
+use super::economics::portfolio_payback;
 use crate::fleet_expansion::constants::{CENTS_PER_USD, COMPARISON_TOLERANCE};
 use crate::fleet_expansion::model::{Candidate, Portfolio};
-use super::economics::portfolio_payback;
 
 #[derive(Default)]
 struct Best {

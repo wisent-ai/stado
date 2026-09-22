@@ -1,7 +1,7 @@
 //! Expenditure starts now; benefit starts when the option becomes usable.
+use super::validate::timestamp;
 use crate::fleet_expansion::constants::{CENTS_PER_USD, COMPARISON_TOLERANCE, DAYS_PER_MONTH};
 use crate::fleet_expansion::model::{Candidate, ExpansionOption};
-use super::validate::timestamp;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 

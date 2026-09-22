@@ -260,4 +260,3 @@ pub async fn publish_capacity(
         .upload_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"), &body)
         .await
 }
-

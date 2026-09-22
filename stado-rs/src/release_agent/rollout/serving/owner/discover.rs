@@ -10,7 +10,6 @@ pub(crate) use super::process::{
 use crate::release_agent::state::document::proxy_state_path;
 use crate::release_control::{BlueGreenServing, ReleaseTargetPolicy};
 
-
 /// The argument vector one Stado release proxy is recognised by, without its
 /// program name: the program is compared as an executable, not as text.
 fn proxy_arguments(

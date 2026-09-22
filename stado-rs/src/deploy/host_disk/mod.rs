@@ -114,4 +114,3 @@ pub enum DiskScope {
     /// measurement.
     StateOnly,
 }
-

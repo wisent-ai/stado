@@ -8,11 +8,11 @@ use std::path::{Component, Path};
 use serde_json::Value;
 
 use super::super::{directory, DIRECTORY_KEY};
+use super::ports::refuse_release_port_collisions;
 use super::routes::{
     active_profile_host, release_controlled_product, validate_endpoint,
     validate_release_controlled_route, validate_resolver_config,
 };
-use super::ports::refuse_release_port_collisions;
 use super::{target_declares_service, targets, validate_identifier};
 
 /// Validate the optional logical service directory and per-host resolver

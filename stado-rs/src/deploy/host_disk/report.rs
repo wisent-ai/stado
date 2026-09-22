@@ -66,7 +66,6 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
     }
 }
 
-
 /// The inventory traverses whole filesystems; it has an independent bound.
 const INVENTORY_BUDGET: std::time::Duration = std::time::Duration::from_secs(900);
 const INVENTORY_BUDGET_ENV: &str = "STADO_INVENTORY_BUDGET_SECONDS";

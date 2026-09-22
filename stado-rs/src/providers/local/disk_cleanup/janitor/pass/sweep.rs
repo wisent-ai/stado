@@ -24,8 +24,14 @@ pub(super) async fn sweep(
     attempted_at: f64,
     report: &mut CleanupReport,
 ) -> Option<i64> {
-    if let Err(exc) = run_cleaners(home, policy, declared_release_versions, attempted_at, report)
-        .await
+    if let Err(exc) = run_cleaners(
+        home,
+        policy,
+        declared_release_versions,
+        attempted_at,
+        report,
+    )
+    .await
     {
         report.add_error("runtime", &exc);
         report.outcome = "invalid_or_unavailable_policy".to_string();
