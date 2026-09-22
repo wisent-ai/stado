@@ -1,18 +1,18 @@
-//! The stable loopback proxy: the target document it forwards by, the process
-//! that owns the bind, and the forwarding loop itself.
+//! Stable loopback forwarding owned by the host service. Finite release commands
+//! change targets and request listeners; they never leave a proxy process behind.
 
 use std::net::SocketAddr;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinSet;
 
 use crate::release_agent::state::document::{atomic_json, proxy_state_path};
-use crate::release_agent::state::evidence::release_log;
 use crate::release_control::{BlueGreenServing, ReleaseTargetPolicy};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub(crate) fn write_proxy_target(
     )
 }
 
-pub(crate) fn start_proxy(
+pub(crate) async fn start_proxy(
     target: &ReleaseTargetPolicy,
     serving: &BlueGreenServing,
     product: &str,
@@ -47,25 +47,12 @@ pub(crate) fn start_proxy(
     port: u16,
 ) -> Result<i32, String> {
     write_proxy_target(target, product, generation, port)?;
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
-    let stdout = release_log(target, product, "proxy", "out")?;
-    let stderr = release_log(target, product, "proxy", "err")?;
-    let child = Command::new(executable)
-        .args([
-            "release",
-            "proxy",
-            "--state",
-            &proxy_state_path(target, product).display().to_string(),
-            "--bind",
-            &serving.stable_bind,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .map_err(|error| format!("cannot start stable release proxy: {error}"))?;
-    Ok(child.id() as i32)
+    super::control::ensure(
+        Some(&target.home),
+        &proxy_state_path(target, product),
+        &serving.stable_bind,
+    )
+    .await
 }
 
 /// The port the proxy currently forwards to, read from its own target file.
@@ -96,48 +83,61 @@ pub(crate) async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {
 }
 
 pub async fn proxy(state_path: &Path, bind: &str) -> Result<(), String> {
-    let bind: SocketAddr = bind
-        .parse()
-        .map_err(|_| "release proxy bind is not a socket address".to_string())?;
-    if !bind.ip().is_loopback() {
-        return Err("release proxy bind must be loopback".to_string());
-    }
-    let listener = TcpListener::bind(bind)
-        .await
-        .map_err(|error| format!("cannot bind release proxy {bind}: {error}"))?;
+    let pid = super::control::ensure(None, state_path, bind).await?;
+    eprintln!(
+        "stado release proxy owned by pid={pid} bind={bind} state={}",
+        state_path.display()
+    );
+    Ok(())
+}
+
+pub(super) async fn forward(
+    listener: TcpListener,
+    state_path: PathBuf,
+    mut stopped: tokio::sync::oneshot::Receiver<()>,
+) -> Result<(), String> {
+    let state_path = Arc::new(state_path);
+    let mut connections = JoinSet::new();
     loop {
-        let (mut client, _) = listener
-            .accept()
-            .await
-            .map_err(|error| format!("release proxy accept failed: {error}"))?;
-        let state_path = state_path.to_path_buf();
-        tokio::spawn(async move {
-            let result = async {
-                let state: ProxyState = serde_json::from_slice(
-                    &tokio::fs::read(&state_path)
-                        .await
-                        .map_err(|error| format!("cannot read proxy state: {error}"))?,
-                )
-                .map_err(|error| format!("invalid proxy state: {error}"))?;
-                let upstream: SocketAddr = state
-                    .upstream
-                    .parse()
-                    .map_err(|_| "proxy upstream is not a socket address".to_string())?;
-                if !upstream.ip().is_loopback() {
-                    return Err("proxy upstream must be loopback".to_string());
+        tokio::select! {
+            requested = &mut stopped => {
+                requested.map_err(|_| "release proxy owner dropped its shutdown channel".to_string())?;
+                drop(listener);
+                connections.shutdown().await;
+                return Ok(());
+            }
+            accepted = listener.accept() => {
+                let (mut client, _) = accepted
+                    .map_err(|error| format!("release proxy accept failed: {error}"))?;
+                let state_path = Arc::clone(&state_path);
+                connections.spawn(async move {
+                    let result = async {
+                        let state: ProxyState = serde_json::from_slice(
+                            &tokio::fs::read(state_path.as_path()).await
+                                .map_err(|error| format!("cannot read proxy state: {error}"))?,
+                        )
+                        .map_err(|error| format!("invalid proxy state: {error}"))?;
+                        let upstream: SocketAddr = state.upstream.parse()
+                            .map_err(|_| "proxy upstream is not a socket address".to_string())?;
+                        if !upstream.ip().is_loopback() {
+                            return Err("proxy upstream must be loopback".to_string());
+                        }
+                        let mut server = TcpStream::connect(upstream).await
+                            .map_err(|error| format!("proxy upstream connect failed: {error}"))?;
+                        copy_bidirectional(&mut client, &mut server).await
+                            .map_err(|error| format!("release proxy failed: {error}"))?;
+                        Ok::<(), String>(())
+                    }.await;
+                    if let Err(error) = result {
+                        eprintln!("stado release proxy connection failed: {error}");
+                    }
+                });
+            }
+            Some(result) = connections.join_next(), if !connections.is_empty() => {
+                if let Err(error) = result {
+                    eprintln!("stado release proxy connection task failed: {error}");
                 }
-                let mut server = TcpStream::connect(upstream)
-                    .await
-                    .map_err(|error| format!("proxy upstream connect failed: {error}"))?;
-                copy_bidirectional(&mut client, &mut server)
-                    .await
-                    .map_err(|error| format!("release proxy failed: {error}"))?;
-                Ok::<(), String>(())
             }
-            .await;
-            if let Err(error) = result {
-                eprintln!("stado release proxy connection failed: {error}");
-            }
-        });
+        }
     }
 }

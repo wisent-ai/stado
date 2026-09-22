@@ -129,24 +129,25 @@ pub(crate) async fn ensure_active_proxy(
     write_proxy_target(target, product, generation, active.port)?;
 
     let recorded_proxy = match state.proxy_pid {
-        Some(proxy_pid) if proxy_process_matches(proxy_pid, target, serving, product)? => {
+        Some(proxy_pid) if proxy_process_matches(proxy_pid, target, serving, product).await? => {
             Some(proxy_pid)
         }
         _ => None,
     };
     let proxy_pid = if let Some(proxy_pid) = recorded_proxy {
         proxy_pid
-    } else if let Some(proxy_pid) = exact_proxy_pid(target, serving, product)? {
+    } else if let Some(proxy_pid) = exact_proxy_pid(target, serving, product).await? {
         proxy_pid
     } else {
         stop_legacy(target)?;
-        let spawned_pid = start_proxy(target, serving, product, generation, active.port)?;
+        let owner_pid = start_proxy(target, serving, product, generation, active.port).await?;
         let proxy_pid = exact_proxy_pid(target, serving, product)
+            .await
             .map_err(|why| format!("stable release proxy failed to start: {why}"))?
-            .ok_or_else(|| "spawned stable release proxy is not live".to_string())?;
-        if proxy_pid != spawned_pid {
+            .ok_or_else(|| "host did not retain the requested stable proxy listener".to_string())?;
+        if proxy_pid != owner_pid {
             return Err(format!(
-                "spawned stable release proxy pid {spawned_pid}, but exact owner is pid {proxy_pid}"
+                "stable release proxy acknowledged owner pid {owner_pid}, but exact owner is pid {proxy_pid}"
             ));
         }
         proxy_pid

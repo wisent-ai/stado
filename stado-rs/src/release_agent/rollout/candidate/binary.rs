@@ -17,7 +17,7 @@ use crate::release_control::{
 /// records and routes as active. Desired state is deliberately irrelevant:
 /// a rejected newer candidate may be quarantined while its healthy predecessor
 /// remains the release actually serving the stable bind.
-pub(crate) fn active_binary(
+pub(crate) async fn active_binary(
     product: &str,
     target_name: &str,
     policy: &ProductReleasePolicy,
@@ -80,9 +80,9 @@ pub(crate) fn active_binary(
     let proxy_pid = state
         .proxy_pid
         .ok_or_else(|| format!("{product} observed active release has no recorded stable proxy"))?;
-    if !proxy_process_matches(proxy_pid, target, &serving, product)? {
+    if !proxy_process_matches(proxy_pid, target, &serving, product).await? {
         return Err(format!(
-            "{product} recorded stable proxy pid {proxy_pid} does not match the exact executable and arguments"
+            "{product} recorded proxy owner pid {proxy_pid} does not match the live host process and exact proxy binding"
         ));
     }
     let proxy_path = proxy_state_path(target, product);

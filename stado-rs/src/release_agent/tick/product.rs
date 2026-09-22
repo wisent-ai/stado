@@ -29,6 +29,13 @@ pub(crate) async fn reconcile_product(
     target_name: &str,
     target: &ReleaseTargetPolicy,
 ) -> Result<HostReleaseState, String> {
+    let serving = target.blue_green_serving()?;
+    crate::release_agent::rollout::serving::control::require_owner(
+        Some(&target.home),
+        &crate::release_agent::state::document::proxy_state_path(target, product),
+        &serving.stable_bind,
+    )
+    .await?;
     let mut state = load_state(target, product, target_name)?;
     let install_root = release_control::install_root_path(policy, target);
     let install_root = install_root
@@ -48,11 +55,6 @@ pub(crate) async fn reconcile_product(
         &mut state,
     )
     .await?;
-    // `reconcile_once` hands only blue-green policies to this function; ask
-    // for the serving coordinates by name rather than re-checking the
-    // validator's invariant, so a replace policy reaching here fails loudly
-    // instead of halfway through a rollout.
-    let serving = target.blue_green_serving()?;
     // Reconcile the process world before reasoning from the record: anything
     // running out of this product's releases directory that the record does not
     // name is a leak from a run that died between spawning and saving.

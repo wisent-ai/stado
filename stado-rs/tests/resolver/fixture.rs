@@ -243,7 +243,7 @@ pub fn wait_published(host: &Host, state: &str) -> Value {
     last
 }
 
-fn wait_until(mut ready: impl FnMut() -> bool) -> bool {
+pub fn wait_until(mut ready: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + BUDGET;
     while Instant::now() < deadline {
         if ready() {

@@ -63,7 +63,12 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     args.worker.target = None;
     args.worker.auto = false;
 
+    let proxy_control =
+        crate::release_agent::rollout::serving::control::prepare().map_err(CmdError::click)?;
     let mut supervisor = supervisor::Supervisor::new();
+    supervisor.spawn("release-proxy", move || {
+        crate::release_agent::rollout::serving::control::serve(proxy_control)
+    })?;
     let resolver_target = target.name.clone();
     supervisor.spawn("resolver", move || async move {
         crate::cli::resolver::serve(&resolver_target).await

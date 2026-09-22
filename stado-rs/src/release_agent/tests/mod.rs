@@ -71,6 +71,7 @@ pub(super) const PRESENT: Option<(release_cause::WallVerdict, Option<String>)> =
 pub(super) const GONE: Option<(release_cause::WallVerdict, Option<String>)> =
     Some((release_cause::WallVerdict::Gone, None));
 
+#[path = "../../../tests/release-ownership/binds.rs"]
 mod binds;
 mod holds;
 #[path = "../../../../tests/release-ownership/legacy.rs"]

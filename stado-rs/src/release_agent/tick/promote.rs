@@ -55,7 +55,7 @@ pub(crate) async fn promote_candidate(
     // ownership read may establish the explicitly declared predecessor, which
     // keeps serving while the candidate starts on a separate port. It is not
     // stopped until ensure_active_proxy has confirmed candidate readiness.
-    if let Some(holder) = foreign_stable_bind_holder(target, serving, product)? {
+    if let Some(holder) = foreign_stable_bind_holder(target, serving, product).await? {
         state.phase = RolloutPhase::Failed;
         state.detail = format!("{holder}; {NO_CANDIDATE_SPAWNED}");
         save_state(target, state)?;

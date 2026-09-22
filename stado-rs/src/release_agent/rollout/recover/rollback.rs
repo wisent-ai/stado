@@ -1,11 +1,6 @@
 //! Hand the stable bind back to the previous release, or to the legacy unit
 //! when there is no previous release to hand it to.
 
-use std::time::Duration;
-
-use nix::sys::signal::{kill, Signal};
-use nix::unistd::Pid;
-
 use crate::release_agent::rollout::serving::answer::ensure_active_proxy;
 use crate::release_agent::rollout::serving::discover::terminate;
 use crate::release_agent::rollout::serving::legacy::restore_legacy;
@@ -50,9 +45,14 @@ pub(crate) async fn rollback(
         }
         state.active = Some(previous);
     } else {
-        if let Some(proxy_pid) = state.proxy_pid.take() {
-            let _ = kill(Pid::from_raw(proxy_pid), Signal::SIGTERM);
-            tokio::time::sleep(Duration::from_millis(200)).await;
+        if state.proxy_pid.take().is_some() {
+            let serving = target.blue_green_serving()?;
+            crate::release_agent::rollout::serving::control::stop(
+                Some(&target.home),
+                &crate::release_agent::state::document::proxy_state_path(target, &state.product),
+                &serving.stable_bind,
+            )
+            .await?;
         }
         restore_legacy(target)?;
         if let Some(record) = &failed {

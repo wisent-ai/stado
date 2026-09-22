@@ -83,6 +83,7 @@ pub(in crate::cli::release_cmd) async fn active_binary(
         ))
     })?;
     let active = crate::release_agent::active_binary(&args.product, target_name, policy, target)
+        .await
         .map_err(CmdError::click)?;
     if args.json {
         println!(

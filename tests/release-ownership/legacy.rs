@@ -17,9 +17,9 @@ fn actual_target() -> ReleaseTargetPolicy {
     target
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires a real system legacy service on the dedicated host"]
-fn declared_predecessor_stays_serving_during_candidate_admission() {
+async fn declared_predecessor_stays_serving_during_candidate_admission() {
     let target = actual_target();
     let serving = target.blue_green_serving().expect("real blue-green target");
     let address: std::net::SocketAddr = serving.stable_bind.parse().expect("stable address");
@@ -27,6 +27,7 @@ fn declared_predecessor_stays_serving_during_candidate_admission() {
     assert!(legacy::owns_stable_bind(&target, address.port()).expect("native owner read"));
     assert!(
         discover::foreign_stable_bind_holder(&target, &serving, "ownership-qualification")
+            .await
             .expect("actual admission guard")
             .is_none(),
         "the declared owner must not block an independent candidate port"
@@ -45,6 +46,7 @@ fn declared_predecessor_stays_serving_during_candidate_admission() {
         .expect("same target, unrelated port");
     let refusal =
         discover::foreign_stable_bind_holder(&foreign, &foreign_serving, "ownership-qualification")
+            .await
             .expect("actual admission guard")
             .expect("a declared label cannot authorize an unrelated process");
     assert!(
@@ -53,8 +55,8 @@ fn declared_predecessor_stays_serving_during_candidate_admission() {
     );
 }
 
-#[test]
-fn absent_legacy_declaration_cannot_authorize_a_real_listener() {
+#[tokio::test]
+async fn absent_legacy_declaration_cannot_authorize_a_real_listener() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a real unrelated listener");
     let candidates = [
         std::net::TcpListener::bind("127.0.0.1:0").expect("first independent port"),
@@ -80,6 +82,7 @@ fn absent_legacy_declaration_cannot_authorize_a_real_listener() {
     let serving = target.blue_green_serving().expect("blue-green coordinates");
     let refusal =
         discover::foreign_stable_bind_holder(&target, &serving, "ownership-qualification")
+            .await
             .expect("actual native admission guard")
             .expect("a real listener without a declared predecessor is refused");
     assert!(

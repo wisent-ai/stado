@@ -2,6 +2,7 @@
 //! the probe that proves the release behind it answers.
 
 pub(crate) mod answer;
+pub(crate) mod control;
 pub(crate) mod legacy;
 pub(crate) mod owner;
 pub(crate) mod proxy;

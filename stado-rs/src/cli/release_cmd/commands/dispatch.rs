@@ -31,9 +31,17 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Prepare(args) => prepare(&args).await,
         ReleaseCommands::Promote(args) => promote(&args, false).await,
         ReleaseCommands::Agent(args) => agent(&args).await,
-        ReleaseCommands::Proxy(args) => crate::release_agent::proxy(&args.state, &args.bind)
-            .await
-            .map_err(CmdError::click),
+        ReleaseCommands::Proxy(args) => {
+            if args.stop {
+                crate::release_agent::rollout::serving::control::stop(None, &args.state, &args.bind)
+                    .await
+                    .map_err(CmdError::click)
+            } else {
+                crate::release_agent::proxy(&args.state, &args.bind)
+                    .await
+                    .map_err(CmdError::click)
+            }
+        }
         ReleaseCommands::Status(args) => status(&args).await,
         ReleaseCommands::ActiveBinary(args) => active_binary(&args).await,
         ReleaseCommands::Logs(args) => crate::cli::release_evidence::dispatch_logs(&args).await,

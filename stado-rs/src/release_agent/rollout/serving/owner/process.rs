@@ -4,8 +4,8 @@
 //! Split out of `serving/discover.rs`, which had grown past the module line
 //! cap; recognising the release proxy among those processes stays there.
 
+use std::io::Read;
 use std::path::Path;
-#[cfg(not(target_os = "linux"))]
 use std::process::Command;
 
 use nix::sys::signal::{kill, Signal};
@@ -96,4 +96,73 @@ pub(crate) fn process_executable_matches(pid: i32, expected: &Path) -> bool {
         }
         actual.file_name() == expected.file_name()
     }
+}
+
+/// The control peer is the actual host executable, not merely a process that
+/// supplied its PID in JSON. Managed and global installations can be separate
+/// byte-identical files; the ordinary same-file predicate remains unchanged.
+pub(crate) fn controller_process_matches(pid: i32) -> Result<bool, String> {
+    if !pid_alive(pid) {
+        return Ok(false);
+    }
+    let expected = std::env::current_exe()
+        .map_err(|error| format!("cannot resolve Stado executable: {error}"))?;
+    let output = Command::new("/bin/ps")
+        .args(["-ww", "-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map_err(|error| format!("cannot inspect proxy owner pid {pid}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot inspect proxy owner pid {pid}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let observed = String::from_utf8_lossy(&output.stdout);
+    let command = observed.trim();
+    for (index, _) in command.match_indices(" serve") {
+        let remaining = &command[index + " serve".len()..];
+        if !remaining.is_empty() && !remaining.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let program = Path::new(&command[..index]);
+        if process_executable_matches(pid, program)
+            && (same_executable(program, &expected)
+                || same_native_image(program, &expected).map_err(|error| {
+                    format!(
+                        "cannot compare proxy owner image {} with {}: {error}",
+                        program.display(),
+                        expected.display()
+                    )
+                })?)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn same_native_image(left: &Path, right: &Path) -> std::io::Result<bool> {
+    let mut left = std::fs::File::open(left)?;
+    let mut right = std::fs::File::open(right)?;
+    let left_metadata = left.metadata()?;
+    let right_metadata = right.metadata()?;
+    if !left_metadata.is_file()
+        || !right_metadata.is_file()
+        || left_metadata.len() != right_metadata.len()
+    {
+        return Ok(false);
+    }
+    let mut remaining = left_metadata.len();
+    let mut left_bytes = [0_u8; 8192];
+    let mut right_bytes = [0_u8; 8192];
+    while remaining != 0 {
+        let count = remaining.min(left_bytes.len() as u64) as usize;
+        left.read_exact(&mut left_bytes[..count])?;
+        right.read_exact(&mut right_bytes[..count])?;
+        if left_bytes[..count] != right_bytes[..count] {
+            return Ok(false);
+        }
+        remaining -= count as u64;
+    }
+    Ok(true)
 }

@@ -25,8 +25,8 @@ fn a_candidate_that_could_not_bind_names_the_occupied_port() {
 /// The guard that makes the record above unnecessary: ask the kernel who
 /// holds the bind before spending ninety seconds on a candidate that cannot
 /// take it.
-#[test]
-fn a_stable_bind_another_process_holds_is_named_before_a_candidate_is_spawned() {
+#[tokio::test]
+async fn a_stable_bind_another_process_holds_is_named_before_a_candidate_is_spawned() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
     let bind = listener
         .local_addr()
@@ -49,6 +49,7 @@ fn a_stable_bind_another_process_holds_is_named_before_a_candidate_is_spawned() 
     let holder = crate::release_agent::rollout::serving::discover::foreign_stable_bind_holder(
         &target, &serving, "skarbiec",
     )
+    .await
     .expect("the reader answers");
     if crate::release_agent::rollout::serving::discover::lsof_binary().is_none() {
         // Documented: a host that cannot tell answers unknown, and an unknown
@@ -65,8 +66,8 @@ fn a_stable_bind_another_process_holds_is_named_before_a_candidate_is_spawned() 
 
 /// The same reader must not invent a holder for a port nobody took, or every
 /// rollout would refuse itself.
-#[test]
-fn a_free_stable_bind_reports_no_holder() {
+#[tokio::test]
+async fn a_free_stable_bind_reports_no_holder() {
     let port = {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         listener.local_addr().expect("the bound address").port()
@@ -89,6 +90,7 @@ fn a_free_stable_bind_reports_no_holder() {
         crate::release_agent::rollout::serving::discover::foreign_stable_bind_holder(
             &target, &serving, "skarbiec",
         )
+        .await
         .expect("the reader answers")
         .is_none(),
         "a released port has no holder to name"
@@ -161,7 +163,7 @@ fn a_candidate_that_never_held_the_bind_is_owed_it_before_the_declared_unit() {
     use crate::release_agent::tick::product::candidate_is_owed_the_bind;
 
     let document: serde_json::Value =
-        serde_json::from_str(include_str!("../../../data/release-policies/skarbiec.json"))
+        serde_json::from_str(include_str!("../../data/release-policies/skarbiec.json"))
             .expect("the shipped skarbiec policy parses");
     let mut policy: crate::release_control::ProductReleasePolicy =
         serde_json::from_value(document["policy"].clone()).expect("the policy document is current");

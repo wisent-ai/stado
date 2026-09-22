@@ -1,11 +1,12 @@
 //! Actual host-service sockets and failure propagation, using the existing
 //! isolated local registry. No credentials or state from the operator are used.
 
+use std::io::Read;
 use std::process::Command;
 
 use serde_json::json;
 
-use crate::fixture::{http_get, listening, wait_listening, Policy, Serving};
+use crate::fixture::{http_get, listening, wait_listening, wait_until, Policy, Serving};
 use crate::{held_port, said, Host, TARGET};
 
 const COORDINATOR: &str = "runtime-coordinator";
@@ -107,4 +108,117 @@ fn a_failed_resolver_ends_the_host_service_without_leaving_its_api() {
         !listening(policy.adapter),
         "the failed service left its adapter listening"
     );
+}
+
+#[test]
+fn finite_proxy_commands_share_the_host_pid_and_stop_only_their_listener() {
+    let policy = Policy::patient(FIRST_GENERATION);
+    let host = host(&policy);
+    let arguments = arguments(&policy);
+    let args: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let mut service = Serving::start(&host, &args);
+    assert!(wait_listening(policy.upstream), "{}", service.said());
+    let (reservation, port) = held_port();
+    let bind = format!("127.0.0.1:{port}");
+    let state = host.root.path().join("proxy.json");
+    std::fs::write(
+        &state,
+        serde_json::to_vec(&json!({
+            "generation": 1,
+            "upstream": format!("127.0.0.1:{}", policy.upstream),
+            "updated_at": "2026-09-22T00:00:00Z"
+        }))
+        .unwrap(),
+    )
+    .expect("real forwarding configuration");
+    let state = state.to_str().expect("state path");
+    let client = host.root.path().join("copied-stado");
+    std::fs::copy(env!("CARGO_BIN_EXE_stado"), &client)
+        .expect("separately installed native client");
+    drop(reservation);
+    let ensure = host
+        .command_at(
+            &client,
+            &["release", "proxy", "--state", state, "--bind", &bind],
+        )
+        .output()
+        .expect("finite proxy command");
+    assert!(ensure.status.success(), "{}", said(&ensure));
+    let response = http_get(port, "/healthz", &[]).expect("forwarded actual API");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let owned = Command::new("lsof")
+        .args([
+            "-nP",
+            "-a",
+            "-p",
+            &service.pid().to_string(),
+            &format!("-iTCP:{port}"),
+            "-sTCP:LISTEN",
+            "-t",
+        ])
+        .output()
+        .expect("native proxy ownership");
+    assert!(owned.status.success(), "{}", said(&owned));
+    assert_eq!(
+        String::from_utf8_lossy(&owned.stdout).trim(),
+        service.pid().to_string()
+    );
+    let mut connection = std::net::TcpStream::connect(&bind).expect("open forwarding connection");
+    connection
+        .set_nonblocking(true)
+        .expect("nonblocking observation");
+    let stopped = host.stado(&[
+        "release", "proxy", "--state", state, "--bind", &bind, "--stop",
+    ]);
+    assert!(stopped.status.success(), "{}", said(&stopped));
+    assert!(!listening(port), "removed proxy still listens");
+    assert!(
+        wait_until(|| match connection.read(&mut [0; 1]) {
+            Ok(0) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+            other => panic!("unexpected stopped connection result: {other:?}"),
+        }),
+        "removed proxy retained a connection"
+    );
+    let response =
+        http_get(policy.upstream, "/healthz", &[]).expect("host API after proxy removal");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(service.running(), "{}", service.said());
+}
+
+#[test]
+fn another_listener_is_refused_without_stopping_the_host() {
+    let policy = Policy::patient(FIRST_GENERATION);
+    let host = host(&policy);
+    let arguments = arguments(&policy);
+    let args: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let mut service = Serving::start(&host, &args);
+    assert!(wait_listening(policy.upstream), "{}", service.said());
+    let (occupied, port) = held_port();
+    let bind = format!("127.0.0.1:{port}");
+    let state = host.root.path().join("occupied-proxy.json");
+    std::fs::write(
+        &state,
+        serde_json::to_vec(&json!({
+            "generation": 1,
+            "upstream": format!("127.0.0.1:{}", policy.upstream),
+            "updated_at": "2026-09-22T00:00:00Z"
+        }))
+        .unwrap(),
+    )
+    .expect("real forwarding configuration");
+    let refused = host.stado(&[
+        "release",
+        "proxy",
+        "--state",
+        state.to_str().unwrap(),
+        "--bind",
+        &bind,
+    ]);
+    assert!(!refused.status.success(), "{}", said(&refused));
+    assert!(said(&refused).contains(&bind), "{}", said(&refused));
+    assert_eq!(occupied.local_addr().unwrap().port(), port);
+    assert!(service.running(), "{}", service.said());
+    let response = http_get(policy.upstream, "/healthz", &[]).expect("API after refused proxy");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
 }

@@ -118,6 +118,7 @@ pub struct Host {
     pub root: tempfile::TempDir,
     pub home: PathBuf,
     pub storage: PathBuf,
+    native: tempfile::TempDir,
 }
 
 impl Host {
@@ -133,10 +134,18 @@ impl Host {
         for directory in [&home, &storage] {
             fs::create_dir_all(directory).expect("an isolated resolver directory");
         }
+        let native_root = PathBuf::from(std::env::var_os("HOME").expect("test runner HOME"))
+            .join(".stado/test-runs");
+        fs::create_dir_all(&native_root).expect("native socket test root");
+        let native = tempfile::Builder::new()
+            .prefix("resolver-")
+            .tempdir_in(native_root)
+            .expect("isolated short native socket directory");
         let host = Self {
             root,
             home,
             storage,
+            native,
         };
         host.write_registry(document);
         host
@@ -157,11 +166,19 @@ impl Host {
     /// The built binary, with nothing of the operator's environment
     /// reachable: not their storage, not their config, not their credentials.
     pub fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
+        self.command_at(std::path::Path::new(env!("CARGO_BIN_EXE_stado")), args)
+    }
+
+    pub fn command_at(&self, program: &std::path::Path, args: &[&str]) -> Command {
+        let mut command = Command::new(program);
         command
             .args(args)
             .env_clear()
             .env("HOME", &self.home)
+            .env(
+                "STADO_RELEASE_PROXY_SOCKET",
+                self.native.path().join("proxy.sock"),
+            )
             .env("PATH", SYSTEM_PATH)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_PROVIDERS", "local")

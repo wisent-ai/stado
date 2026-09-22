@@ -202,4 +202,7 @@ pub struct ReleaseProxyArgs {
     state: PathBuf,
     #[arg(long)]
     bind: String,
+    /// Remove this listener from the host process without stopping that process.
+    #[arg(long)]
+    stop: bool,
 }
