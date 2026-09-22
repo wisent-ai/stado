@@ -31,6 +31,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
     match command {
         FleetCommands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
         FleetCommands::Needs { json, days } => needs::run(json, days).await,
+        FleetCommands::Expansion(command) => crate::cli::fleet::expansion::run(command).await,
         FleetCommands::List { json } => fleets::list(json).await,
         FleetCommands::Status { name } => fleets::status(&name).await,
         FleetCommands::Create { name, notes } => ops::create(&name, &notes).await,

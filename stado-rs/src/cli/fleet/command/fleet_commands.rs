@@ -27,6 +27,9 @@ pub enum FleetCommands {
         #[arg(long, default_value_t = crate::primitives::constants::NEEDS_DEFAULT_WINDOW_DAYS)]
         days: i64,
     },
+    /// Compare evidenced expansion options within a total expenditure budget.
+    #[command(subcommand)]
+    Expansion(crate::cli::fleet::expansion::ExpansionCommands),
     /// List the fleets declared in the registry with their members.
     List {
         /// Emit the machine-readable document instead of the table.

@@ -176,3 +176,7 @@ path = "tests/object_evidence/main.rs"
 [[test]]
 name = "publication"
 path = "tests/publication/main.rs"
+
+[[test]]
+name = "fleet_expansion"
+path = "tests/fleet_expansion/main.rs"

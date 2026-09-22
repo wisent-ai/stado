@@ -22,6 +22,7 @@ pub mod declaration;
 pub mod deploy;
 pub mod doctor;
 pub mod failure_fixer;
+pub mod fleet_expansion;
 pub mod fleet_needs;
 pub mod fleet_shape;
 pub mod github_identity;

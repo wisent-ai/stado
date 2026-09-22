@@ -20,6 +20,7 @@ struct FleetsView: View {
     @State var facet: FleetFacet = .all
     @State var selection: String?
     @State var showsCreate = false
+    @State var showsExpansion = false
     @State var assignTarget: SheetID?
     @State var deleteCandidate: FleetGroup?
     /// The CLI's own default window for `stado fleet needs`.
@@ -33,6 +34,9 @@ struct FleetsView: View {
             actions: [
                 WisentAction("New fleet…", symbol: "plus", kind: .primary) {
                     showsCreate = true
+                },
+                WisentAction("Plan expansion…", symbol: "chart.bar") {
+                    showsExpansion = true
                 },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !groupStore.isReading) {
                     Task {
@@ -78,6 +82,9 @@ struct FleetsView: View {
         }
         .sheet(isPresented: $showsCreate) {
             FleetCreateSheet(groupStore: groupStore, isPresented: $showsCreate)
+        }
+        .sheet(isPresented: $showsExpansion) {
+            FleetExpansionView(groupStore: groupStore)
         }
         .sheet(item: $assignTarget) { sheet in
             FleetAssignSheet(

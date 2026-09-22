@@ -18,6 +18,7 @@ mod command;
 
 pub mod doctor;
 pub mod enroll;
+pub mod expansion;
 pub mod fleets;
 pub mod ingress;
 pub mod invite;
