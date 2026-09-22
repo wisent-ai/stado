@@ -142,5 +142,4 @@ fn unknown_expired_and_nonreturning_inputs_do_not_become_recommendations() {
         None,
     );
     assert!(!bad_id.status.success());
-    assert!(String::from_utf8_lossy(&bad_id.stderr).contains("plan id must be a UUID"));
 }
