@@ -44,3 +44,40 @@ pub async fn deliver_host(
         "status": DELIVERED_STATUS,
     }))
 }
+
+/// Carry the verified SDK into a unique, already guarded cache staging path.
+/// This is not a public destination-policy extension: native SDK bootstrap
+/// owns both the destination and its byte-checked commit.
+pub(crate) async fn transfer_native_sdk(
+    target: &crate::targets::ComputeTarget,
+    source: &std::path::Path,
+    stage: &str,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    use super::plan::{DeliveryPlan, SourceKind};
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
+        DeployError(format!(
+            "cannot inspect native SDK transfer source {}: {error}",
+            source.display()
+        ))
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(DeployError(format!(
+            "native SDK transfer source is not a regular file: {}",
+            source.display()
+        )));
+    }
+    let plan = DeliveryPlan {
+        source: source
+            .to_str()
+            .ok_or_else(|| DeployError("native SDK transfer source is not UTF-8".into()))?
+            .into(),
+        destination: stage.into(),
+        kind: SourceKind::File,
+        root_mode: metadata.permissions().mode() & 0o7777,
+        file_list: None,
+    };
+    transfer(target, stage, &plan, runner).await
+}

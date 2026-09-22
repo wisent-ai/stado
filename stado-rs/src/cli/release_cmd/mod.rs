@@ -2,6 +2,7 @@
 //! promotion, host reconciliation, status, and rollback.
 
 mod commands;
+mod fetch;
 mod local;
 mod publication;
 mod rollout;
@@ -11,6 +12,7 @@ pub use commands::{
     ReleaseActivateStagedArgs, ReleaseCommands, ReleaseDeclareVersionArgs, ReleaseHostStateArgs,
     ReleasePromoteVersionArgs, ReleaseProvenanceArgs, ReleaseProxyArgs, ReleaseVerifyPlatformArgs,
 };
+pub use fetch::ReleaseFetchArgs;
 pub use local::{ReleaseConvergeLocalReadersArgs, ReleaseInstallLocalArgs};
 pub use publication::{ReleaseClaimCoordinateArgs, ReleaseKeygenArgs, ReleasePrepareArgs};
 pub use rollout::{

@@ -1,67 +1,47 @@
-//! The pinned native-signing inputs a darwin build signs with, read from the
-//! fleet's object namespace and placed in the isolated one.
-//!
-//! The worker resolves two immutable inputs from `artifacts/native-signing/`
-//! in its own namespace: the signer `<sha>.tar.gz`, installed into the
-//! isolated home's Stado cache through the real runtime payload, and the
-//! Apple issuer chain `apple-issuers-<sha>.pem` the signing step verifies
-//! the identity against. Nothing on PATH is consulted. Each input is
-//! addressed by its digest, so the copy is the same bytes the fleet builds
-//! sign with, and it is written through the isolated profile's own
-//! `storage put` so the layout is the product's, not a guess.
-//!
-//! Until 2026-09-18 only the signer was seeded; every darwin journey then
-//! died in `macos-code-signing` with `cannot read native signing input
-//! .../apple-issuers-<sha>.pem: absent`, and the journey never reached
-//! publication. A real release needs both, so the fixture stages both.
+//! Real native SDK preparation and the pinned Apple issuer for Darwin journeys.
 
 use super::*;
 
-/// Place the fleet's pinned signing inputs where the isolated worker reads
-/// them, or say which fleet read stood in the way.
 pub(crate) fn seed_native_signing_input(home: &Path, storage: &Path) {
-    let signer = stado::deploy::native_signing::SIGNER_SOURCE_SHA256;
+    let selected = Command::new(env!("CARGO_BIN_EXE_stado"))
+        .args(["config", "show"]).output().expect("the real Stado configuration reader runs");
+    assert!(selected.status.success(), "cannot read the selected release-store configuration: {}", String::from_utf8_lossy(&selected.stderr));
+    fs::write(home.join("native-sdk-config.stdout.json"), &selected.stdout).unwrap();
+    fs::write(home.join("native-sdk-config.stderr.log"), &selected.stderr).unwrap();
+    let selected: serde_json::Value = serde_json::from_slice(&selected.stdout).unwrap();
+    let config = PathBuf::from(selected["file"].as_str().expect("selected Stado configuration path is absent"));
+    let prepared = Command::new(env!("CARGO_BIN_EXE_stado"))
+        .env("HOME", home)
+        .env("STADO_CONFIG", &config)
+        .env("WISENT_WORKSPACE", home.join("workspace"))
+        .args(["product", "catalog", "--json"]).output().expect("the native SDK consumer runs");
+    fs::write(home.join("native-sdk.stdout.json"), &prepared.stdout).unwrap();
+    fs::write(home.join("native-sdk.stderr.log"), &prepared.stderr).unwrap();
+    fs::write(home.join("native-sdk.exit.txt"), prepared.status.to_string()).unwrap();
+    assert!(prepared.status.success(), "blocked: the qualified native SDK could not be prepared through Stado: {}", String::from_utf8_lossy(&prepared.stderr));
+
+    let namespace = std::env::var("WC_STADO_STORAGE_NAMESPACE").ok().filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            let declared: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+            declared["storage"]["stado"]["namespace"].as_str().filter(|value| !value.is_empty())
+                .expect("the selected Stado configuration declares no signing-input namespace").to_owned()
+        });
     let issuers = stado::deploy::native_signing::APPLE_ISSUER_CHAIN_SHA256;
-    for (leaf, sha, content_type) in [
-        (format!("{signer}.tar.gz"), signer, "application/gzip"),
-        (
-            format!("apple-issuers-{issuers}.pem"),
-            issuers,
-            "application/x-pem-file",
-        ),
-    ] {
-        seed_pinned_input(home, storage, &leaf, sha, content_type);
-    }
+    seed_pinned_input(home, storage, &namespace, &format!("apple-issuers-{issuers}.pem"), issuers);
 }
 
-fn seed_pinned_input(home: &Path, storage: &Path, leaf: &str, sha: &str, content_type: &str) {
+fn seed_pinned_input(home: &Path, storage: &Path, namespace: &str, leaf: &str, sha: &str) {
     let fetched_copy = home.join(format!("native-signing-input-{leaf}"));
-    let fleet_namespace = std::env::var("WC_STADO_STORAGE_NAMESPACE").unwrap_or_default();
-    let fleet_namespace = if fleet_namespace.is_empty() {
-        "probierz".to_owned()
-    } else {
-        fleet_namespace
-    };
-    let uri = format!("stado://{fleet_namespace}/artifacts/native-signing/{leaf}");
+    let uri = format!("stado://{namespace}/artifacts/native-signing/{leaf}");
     let fetched = Command::new(env!("CARGO_BIN_EXE_stado"))
-        .args(["storage", "get", &uri])
-        .arg(&fetched_copy)
-        .output()
-        .expect("the Stado CLI runs");
-    assert!(
-        fetched.status.success(),
-        "blocked: the pinned native signing input {uri} could not be read from the fleet store: {}",
-        String::from_utf8_lossy(&fetched.stderr)
-    );
-    let bytes = fs::read(&fetched_copy).unwrap();
-    let digest = {
-        use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(&bytes))
-    };
-    assert_eq!(
-        digest, sha,
-        "the fleet store served a signing input that is not the pinned one"
-    );
+        .args(["storage", "get", &uri]).arg(&fetched_copy)
+        .output().expect("the Stado object reader runs");
+    fs::write(home.join("native-issuer-fetch.stdout.log"), &fetched.stdout).unwrap();
+    fs::write(home.join("native-issuer-fetch.stderr.log"), &fetched.stderr).unwrap();
+    fs::write(home.join("native-issuer-fetch.exit.txt"), fetched.status.to_string()).unwrap();
+    assert!(fetched.status.success(), "blocked: the pinned Apple issuer {uri} could not be read from the real store: {}", String::from_utf8_lossy(&fetched.stderr));
+    let (_, digest) = stado::release_control::sha256_file(&fetched_copy).unwrap();
+    assert_eq!(digest, sha, "the real store served another Apple issuer chain");
     run(Command::new(env!("CARGO_BIN_EXE_stado"))
         .env_clear()
         .env("HOME", home)
@@ -71,11 +51,7 @@ fn seed_pinned_input(home: &Path, storage: &Path, leaf: &str, sha: &str, content
         .env("WC_LOCAL_STORAGE_PATH", storage)
         .env("WC_STADO_STORAGE_NAMESPACE", "ci-release")
         .args([
-            "storage",
-            "put",
-            "--content-type",
-            content_type,
+            "storage", "put", "--content-type", "application/x-pem-file",
             &format!("stado://ci-release/artifacts/native-signing/{leaf}"),
-        ])
-        .arg(&fetched_copy));
+        ]).arg(&fetched_copy));
 }

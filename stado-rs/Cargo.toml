@@ -135,9 +135,6 @@ path = "tests/host_run/main.rs"
 name = "apple_challenge"
 path = "tests/apple_challenge/main.rs"
 
-[[test]]
-name = "native_signing"
-path = "tests/native_signing/main.rs"
 
 [[test]]
 name = "service_convergence"

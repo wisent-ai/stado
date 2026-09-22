@@ -185,5 +185,5 @@ async fn signing_program(
     home: &str,
     runner: &Runner,
 ) -> Result<String, DeployError> {
-    crate::deploy::native_signing::bootstrap_remote_signer(target, home, runner).await
+    crate::deploy::native_signing::runtime::on_host(target, home, runner).await
 }

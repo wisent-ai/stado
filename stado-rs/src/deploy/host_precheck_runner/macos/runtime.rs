@@ -31,9 +31,12 @@ restore_runner_apphosts() {
   for executable in Runner.Listener Runner.Worker; do
     /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
   done
-  signer=${WISENT_PRODUCTS_BIN:-$HOME/.local/bin/wisent-products}
-  signer_python="$(dirname "$(dirname "$signer")")/tools/wisent-products/bin/python"
-  "$signer_python" -c "$STADO_RUNNER_APPHOST_SIGNER" \
+  "${WISENT_PRODUCTS_BIN:?qualified native SDK is required}" signing sign \
+    --product stado --hardened-runtime --json \
+    --boolean-entitlement com.apple.security.cs.allow-jit=true \
+    --boolean-entitlement com.apple.security.cs.allow-unsigned-executable-memory=true \
+    --boolean-entitlement com.apple.security.cs.allow-dyld-environment-variables=true \
+    --boolean-entitlement com.apple.security.cs.disable-library-validation=true \
     "$signed_runtime/bin/Runner.Listener" "$signed_runtime/bin/Runner.Worker"
   for executable in Runner.Worker Runner.Listener; do
     owner=$(stat -f '%u:%g' "$runner_root/bin/$executable")

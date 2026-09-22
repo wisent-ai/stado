@@ -497,7 +497,6 @@
     "tests/native_readers/fixture/idle.rs": 2,
     "tests/native_readers/fixture/mod.rs": 1,
     "tests/native_readers/main.rs": 2,
-    "tests/native_signing/main.rs": 2,
     "tests/object_evidence/main.rs": 2,
     "tests/placement_relief/main.rs": 3,
     "tests/placement_relief/support.rs": 4,

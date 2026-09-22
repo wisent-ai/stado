@@ -151,7 +151,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         // charless-mac-mini - the host with the most free disk that day -
         // died at `no Apple signing identity is available`, spending the
         // brama 0.4.21 coordinate on a placement decision.
-        let signing = match crate::deploy::native_signing::bootstrap_local_signer(
+        let signing = match crate::deploy::native_signing::runtime::local(
             &crate::deploy::production_runner(),
         )
         .await
@@ -163,7 +163,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
                     execute(
                         "macos-code-signing",
                         &[
-                            signer,
+                            signer.display().to_string(),
                             "signing".into(),
                             "stage".into(),
                             "--manifest".into(),
@@ -182,7 +182,10 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
                     println!("[release-worker] step macos-code-signing: {error}");
                     StepReceipt {
                         name: "macos-code-signing".into(),
-                        argv: vec![crate::deploy::native_signing::SIGNER_SOURCE_SHA256.into()],
+                        argv: vec![
+                            "wisent-products".into(),
+                            crate::deploy::native_signing::runtime::VERSION.into(),
+                        ],
                         status: StepStatus::Failed,
                         exit_code: None,
                     }
@@ -192,7 +195,10 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
                 println!("[release-worker] step macos-code-signing: {error}");
                 StepReceipt {
                     name: "macos-code-signing".into(),
-                    argv: vec![crate::deploy::native_signing::SIGNER_SOURCE_SHA256.into()],
+                    argv: vec![
+                        "wisent-products".into(),
+                        crate::deploy::native_signing::runtime::VERSION.into(),
+                    ],
                     status: StepStatus::Failed,
                     exit_code: None,
                 }

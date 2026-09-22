@@ -51,6 +51,8 @@ pub enum ReleaseCommands {
     DeliveryWorker(crate::cli::release_submit::DeliveryWorkerArgs),
     /// Build, sign, and publish one immutable candidate coordinate.
     Prepare(ReleasePrepareArgs),
+    /// Fetch signed, qualified archive bytes for one exact accepted source revision.
+    Fetch(super::ReleaseFetchArgs),
     /// Promote exact qualified candidate bytes into registry desired state.
     Promote(ReleasePromoteArgs),
     /// Reconcile desired releases on this exact registry target.

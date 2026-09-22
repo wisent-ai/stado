@@ -3,8 +3,6 @@
 //! Stado owns hosts and services, so it delegates the product lifecycle to that
 //! executable rather than copying its catalogue or installer logic.
 
-use std::path::PathBuf;
-
 use clap::Subcommand;
 use tokio::process::Command;
 
@@ -63,6 +61,12 @@ pub struct ProductMutation {
     /// Required only for a service surface.
     #[arg(long)]
     host: Option<String>,
+    /// Existing signed release to install without compiling; install/update only.
+    #[arg(long, requires = "source_commit")]
+    release_version: Option<String>,
+    /// Full accepted source commit of the requested release.
+    #[arg(long, requires = "release_version")]
+    source_commit: Option<String>,
     #[arg(long)]
     json: bool,
 }
@@ -70,8 +74,6 @@ pub struct ProductMutation {
 #[derive(Debug, clap::Args)]
 pub struct ProductSignatures {
     product: String,
-    // Signatures exist for a binary and for a service, never for the
-    // desktop bundle, so this one is narrower than the surface type.
     #[arg(long, value_enum, default_value_t = Surface::Cli)]
     surface: Surface,
     #[arg(long)]
@@ -97,29 +99,6 @@ pub struct ProductSweep {
     json: bool,
 }
 
-fn candidates() -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .map(|dir| dir.join("wisent-products"))
-        .collect();
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        paths.push(home.join(".local/bin/wisent-products"));
-        paths.push(home.join(".local/pipx/venvs/wisent-products/bin/wisent-products"));
-    }
-    paths
-}
-
-fn executable() -> Result<PathBuf, CmdError> {
-    candidates()
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| CmdError::click(
-            "Wisent Products is not installed; install `wisent-ai/wisent-products` with pipx before using `stado product`"
-        ))
-}
-
 /// The Skarbiec item Wisent Products resolves the signing certificate and key
 /// from. Only the item id crosses this boundary: `wisent-products` reads both
 /// fields itself and loads them into a temporary keychain it removes
@@ -137,7 +116,10 @@ fn executable() -> Result<PathBuf, CmdError> {
 const SIGNING_CREDENTIAL_ITEM: &str = "desktop-signing-apple-development";
 
 async fn invoke(arguments: Vec<String>) -> Result<(), CmdError> {
-    let mut command = Command::new(executable()?);
+    let sdk = crate::deploy::native_signing::runtime::local(&crate::deploy::production_runner())
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut command = Command::new(sdk);
     command.args(&arguments);
     // An operator who has already chosen a credential keeps it: this supplies
     // the fleet's item only when nothing else was named.
@@ -152,6 +134,7 @@ async fn invoke(arguments: Vec<String>) -> Result<(), CmdError> {
         .map_err(|error| CmdError::click(error.to_string()))?;
     print!("{}", String::from_utf8_lossy(&output.stdout));
     if output.status.success() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
         return Ok(());
     }
     let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -174,6 +157,12 @@ fn mutation_args(verb: &str, value: ProductMutation) -> Vec<String> {
     ];
     if let Some(host) = value.host {
         args.extend(["--host".to_string(), host]);
+    }
+    if let Some(version) = value.release_version {
+        args.extend(["--release-version".to_string(), version]);
+    }
+    if let Some(commit) = value.source_commit {
+        args.extend(["--source-commit".to_string(), commit]);
     }
     if value.json {
         args.push("--json".to_string());
