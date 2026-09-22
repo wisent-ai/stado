@@ -7,7 +7,7 @@ use serde_json::Value;
 use stado::queue::runs::TERMINAL_PREFIXES;
 
 use super::super::attach::install_runtime;
-use super::super::harness::{said, Area, TARGET};
+use super::super::harness::{said, Area};
 
 use super::{consumer_id, hold_operator_grant, started_record, TASK};
 

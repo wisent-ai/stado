@@ -3,8 +3,6 @@
 
 use std::fs;
 
-use serde_json::Value;
-
 use crate::fixture::{Host, TARGET};
 
 use super::registry;
@@ -136,4 +134,3 @@ fn an_unobserved_installed_version_cannot_authorize_a_cleaner_write() {
         before
     );
 }
-

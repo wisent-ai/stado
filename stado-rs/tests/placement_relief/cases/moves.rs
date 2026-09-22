@@ -1,11 +1,11 @@
 //! When a move is planned, and when the host is left where it is.
 
 use crate::hosts::{pressured_mini, roomy_laptop};
-use crate::support::{
-    fleet, publish, relief, row, verdict, FRESH_SECONDS, LAPTOP, MINI, MINI_SWAP_PCT,
-    MINI_TOTAL_GB, PROFILE, RELIEF_SCHEMA_VERSION, STALE_SECONDS,
-};
 use crate::support::memory;
+use crate::support::{
+    fleet, publish, relief, row, verdict, FRESH_SECONDS, LAPTOP, LAPTOP_AVAILABLE_GB, MINI,
+    MINI_TOTAL_GB, STALE_SECONDS,
+};
 
 #[test]
 fn a_pressured_host_with_a_roomier_declared_host_plans_the_move() {
@@ -80,4 +80,3 @@ fn a_placed_host_that_never_published_moves_nothing() {
         "{row}"
     );
 }
-

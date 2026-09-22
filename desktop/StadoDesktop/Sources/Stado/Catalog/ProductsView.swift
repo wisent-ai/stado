@@ -30,7 +30,12 @@ struct ProductsView: View {
                 }
                 if store.products.isEmpty {
                     if store.isRefreshing {
-                        WisentLoadingPanel(title: "Reading products", detail: "The canonical Wisent Products catalog is read through stado product catalog.")
+                        Group {
+                            let loadingTitle = "Reading products"
+                            WisentSectionBox(title: loadingTitle, detail: "The canonical Wisent Products catalog is read through stado product catalog.") {
+                                WisentSkeletonList(label: loadingTitle)
+                            }
+                        }
                             .padding(WisentDesign.Space.x6)
                     } else {
                         WisentEmptyPanel(title: "No product catalog", detail: "Install wisent-ai/wisent-products, then refresh.", symbol: "shippingbox")

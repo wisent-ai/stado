@@ -79,10 +79,12 @@ struct RegistryView: View {
     @ViewBuilder
     private var placeholder: some View {
         if fleetStore.isRefreshing {
-            WisentLoadingPanel(
-                title: "Reading canonical fleet policy",
-                detail: "The dashboard projects three policy fields per target. The Hosts screen reads control routes separately through stado host link; SSH credentials never cross this projection."
-            )
+            Group {
+                let loadingTitle = "Reading canonical fleet policy"
+                WisentSectionBox(title: loadingTitle, detail: "The dashboard projects three policy fields per target. The Hosts screen reads control routes separately through stado host link; SSH credentials never cross this projection.") {
+                    WisentSkeletonList(label: loadingTitle)
+                }
+            }
         } else if !fleetStore.isConfigured {
             WisentEmptyPanel(
                 title: "No Stado endpoint",

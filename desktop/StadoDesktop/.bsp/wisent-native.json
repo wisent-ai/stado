@@ -1,0 +1,18 @@
+{
+  "name": "wisent-native",
+  "version": "1",
+  "bspVersion": "2.2.0",
+  "argv": [
+    "/usr/bin/env",
+    "wisent-products",
+    "swift",
+    "sourcekit"
+  ],
+  "languages": [
+    "c",
+    "cpp",
+    "objective-c",
+    "objective-cpp",
+    "swift"
+  ]
+}

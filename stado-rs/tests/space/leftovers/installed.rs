@@ -1,11 +1,12 @@
 //! What the stage keeps when the host says which version is installed: that
 //! version, the newest one, and the newest backup.
 
-use std::fs;
+use std::fs::{self, File, FileTimes};
+use std::time::{Duration, SystemTime};
 
 use crate::fixture::{only_stage, reported_paths, Host, AUDIT_LOG, TARGET};
 
-use super::{assert_inside, backup, deliver};
+use super::{age, assert_inside, backup, deliver};
 
 #[test]
 fn the_installed_and_newest_versions_and_the_newest_backup_survive_the_rest_is_taken() {

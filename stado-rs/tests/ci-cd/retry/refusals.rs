@@ -7,8 +7,13 @@
 //! error inside a thirty kilobyte log.
 
 use super::super::*;
-use super::world::{declare, said_by, signed_fleet, submit, workspace};
+use super::world::{claiming_agent, declare, said_by, signed_fleet, submit, workspace};
 
+/// A build the host has no room for is refused before its first gate.
+///
+/// On 2026-09-10 the stado 0.20.3 darwin build compiled 616 crates on
+/// charless-mac-mini and died with `No space left on device (os error 28)`
+/// while rustc wrote metadata: twenty minutes spent, and the requirement
 /// readable only as a linker error inside a 30 KB log.
 #[test]
 #[ignore = "runs the real Skarbiec-backed release journey"]

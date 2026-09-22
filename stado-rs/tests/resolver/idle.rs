@@ -14,9 +14,9 @@ use std::net::{TcpListener, TcpStream};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::fixture::{wait_listening, Policy, Serving};
+use crate::fixture::{http_get, wait_listening, Policy, Serving};
 use crate::resolution::GENERATION;
-use crate::Host;
+use crate::{Host, SERVICE, TARGET};
 
 /// The idle window a proxied connection is measured against, short enough to
 /// elapse inside a case.

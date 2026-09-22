@@ -105,5 +105,4 @@ impl Journey {
             fs::read_to_string(self.home.join("agent.err")).unwrap_or_default(),
         );
     }
-
 }

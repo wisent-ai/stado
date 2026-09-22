@@ -135,10 +135,12 @@ extension ReleasesView {
                     .foregroundStyle(WisentDesign.muted)
                     .textSelection(.enabled)
             } else {
-                WisentLoadingPanel(
-                    title: "Reading \(row.target)",
-                    detail: "The diagnosis reads the host's rollout state file, probes the staged candidate, and asks the host for its claiming gates."
-                )
+                Group {
+                    let loadingTitle = "Reading \(row.target)"
+                    WisentSectionBox(title: loadingTitle, detail: "The diagnosis reads the host's rollout state file, probes the staged candidate, and asks the host for its claiming gates.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
             }
         }
     }

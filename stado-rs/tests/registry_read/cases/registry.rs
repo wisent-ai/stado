@@ -1,5 +1,7 @@
 //! Reading one part of the registry, and being refused with what is there.
 
+use serde_json::Value;
+
 use crate::fixture::{stderr, stdout, untouched, Store};
 
 #[test]
@@ -87,4 +89,3 @@ fn one_host_is_read_by_name_and_an_unknown_one_is_refused_with_the_names() {
     );
     untouched(store.home.path());
 }
-

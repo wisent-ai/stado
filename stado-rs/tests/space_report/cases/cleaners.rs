@@ -5,6 +5,12 @@ use std::fs;
 
 use crate::fixture::Fixture;
 
+/// A declared cleaner that reaches none of the measured build output says so,
+/// and names the root that would reach it.
+///
+/// This is the half the census alone does not answer. `lukasz-macbook`
+/// declared `build_caches` for months, the cleaner covered the root it was
+/// pointed at, and the operator's tagged trees were somewhere else entirely;
 /// nothing was broken and nothing was missing, so nothing said anything.
 #[test]
 fn a_cleaner_that_reaches_no_build_output_says_so_and_names_the_root() {
@@ -115,9 +121,3 @@ fn a_verdict_that_runs_out_of_seconds_is_reported_and_the_report_still_stands() 
     );
     fixture.cleanup();
 }
-
-/// The compressor and the lifetime swapouts are read on every pass, and
-/// until 2026-09-19 they were printed nowhere: charless-mac-mini reported
-/// 4487 MiB available and swap 71%, both inside their watermarks, while its
-/// compressor held 3.5 GiB and the released Brama was quarantined twice in
-/// one hour for a readiness probe it could not answer. The text now carries

@@ -7,11 +7,6 @@
 //! loopback port. The active host is this machine, so the adapter takes its
 //! local-upstream path and no connection to any other host is opened.
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
-
 use serde_json::json;
 
 use crate::fixture::{http_get, wait_listening, wait_published, Policy, Serving};

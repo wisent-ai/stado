@@ -5,11 +5,14 @@ use std::fs;
 
 use serde_json::Value;
 
-use crate::fixture::{only_stage, reported_paths, Host, JANITOR_STATE, TARGET};
+use crate::fixture::{
+    only_stage, reported_paths, Host, AUDIT_LOG, BUILD_WORK_ROOT, JANITOR_STATE, TARGET,
+};
 use crate::system::{allocated_bytes, du_bytes, said};
 
-use super::{assert_inside, CACHE_MIB};
+use super::{assert_inside, CACHE_MIB, SCRATCH_MIB};
 
+/// The janitor stage removes the declared cache and charges exactly the bytes
 /// the operating system says that tree occupied.
 #[test]
 fn the_janitor_stage_removes_the_declared_cache_and_charges_its_bytes() {

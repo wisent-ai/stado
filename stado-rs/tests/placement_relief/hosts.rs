@@ -2,8 +2,7 @@
 //! watermark, the same host once the dip has passed, and a host with room.
 
 use crate::support::{
-    memory, LAPTOP_AVAILABLE_GB, LAPTOP_TOTAL_GB, MINI_AVAILABLE_GB, MINI_SWAP_PCT,
-    MINI_TOTAL_GB,
+    memory, LAPTOP_AVAILABLE_GB, LAPTOP_TOTAL_GB, MINI_AVAILABLE_GB, MINI_SWAP_PCT, MINI_TOTAL_GB,
 };
 
 /// The mini's own publication when a dip has passed: memory back above its

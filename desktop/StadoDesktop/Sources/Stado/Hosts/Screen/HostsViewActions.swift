@@ -67,10 +67,12 @@ extension HostsView {
     @ViewBuilder
     var placeholder: some View {
         if store.isRefreshing {
-            WisentLoadingPanel(
-                title: "Reading host capacity reports",
-                detail: "Registered compute targets reconciled with the capacity reports each host publishes."
-            )
+            Group {
+                let loadingTitle = "Reading host capacity reports"
+                WisentSectionBox(title: loadingTitle, detail: "Registered compute targets reconciled with the capacity reports each host publishes.") {
+                    WisentSkeletonList(label: loadingTitle)
+                }
+            }
         } else {
             WisentEmptyPanel(
                 title: "No host inventory",

@@ -13,7 +13,7 @@ pub(crate) const TARGET: &str = "space-report-fixture";
 
 /// Directories a Mac always has, so the fixture's `PATH` finds `df`, `tr` and
 /// the shell the remote program runs under.
-const SYSTEM_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+pub(crate) const SYSTEM_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 /// Schema versions the product's own writers use: `config_file` for the
 /// configuration document and `targets::REGISTRY_SCHEMA_VERSION` for the
@@ -26,7 +26,7 @@ pub(crate) struct Fixture {
     pub(crate) root: PathBuf,
     pub(crate) home: PathBuf,
     pub(crate) storage: PathBuf,
-    config: PathBuf,
+    pub(crate) config: PathBuf,
 }
 
 fn write_private(path: &Path, bytes: &[u8]) {
@@ -132,7 +132,7 @@ impl Fixture {
 
     /// Every run keeps its own bytes beside the fixture, named by the shape
     /// of the answer it asked for.
-    fn retain(&self, extra: &[&str], output: &Output) {
+    pub(crate) fn retain(&self, extra: &[&str], output: &Output) {
         let name = if extra.contains(&"--json") {
             "json"
         } else {

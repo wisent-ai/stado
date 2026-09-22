@@ -1,9 +1,9 @@
 //! Reading one release run by identifier prefix or version, and what a
 //! finished build reports it cost.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
-use crate::fixture::{stderr, stdout, Store};
+use crate::fixture::{stderr, stdout, untouched, Store};
 
 #[test]
 fn one_release_run_is_read_by_id_prefix_or_version() {
@@ -129,4 +129,3 @@ fn a_build_whose_job_the_queue_no_longer_holds_reports_no_cost() {
     );
     untouched(store.home.path());
 }
-

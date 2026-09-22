@@ -6,15 +6,14 @@
 //! a successful change into a reported failure on purpose: the change happened,
 //! but this pass can no longer say it owned it.
 
-use std::collections::BTreeMap;
-
 use chrono::Utc;
 use serde_json::Value;
 
 use crate::autonomy::policy::AutonomyPolicy;
 use crate::queue::{JobStorage, StorageError};
 
-use super::super::{words, Due, DueAction, ReliefRow, ReliefSummary};
+use super::super::plan::Due;
+use super::super::{words, DueAction, ReliefReport, ReliefRow};
 
 /// Carry out one due action. Answers whether the tick's relocation was spent:
 /// a profile held by another reconciler spends nothing.
@@ -25,16 +24,13 @@ pub(super) async fn execute(
     generation: &str,
     due: Due,
     row: &mut ReliefRow,
-    summary: &mut ReliefSummary,
-    relocations: &mut BTreeMap<String, String>,
-    created_at: &str,
-    decision_id: &str,
+    pass: &mut ReliefReport,
 ) -> Result<bool, StorageError> {
     let lease_subject = format!("placement:{}", due.profile.name);
     let Some(lease) = crate::autonomy::storage::acquire_placement_lease(
         store,
         &lease_subject,
-        decision_id,
+        &pass.decision_id,
         "placement-relief",
         policy.limits.decision_ttl_seconds,
         Utc::now(),
@@ -43,7 +39,7 @@ pub(super) async fn execute(
     else {
         row.classification = words::LEASE_BLOCKED.to_string();
         row.detail = format!("{}; another reconciler owns this profile", row.detail);
-        summary.blocked += 1;
+        pass.summary.blocked += 1;
         return Ok(false);
     };
 
@@ -67,7 +63,7 @@ pub(super) async fn execute(
                     words::STANDBY_PENDING.to_string()
                 };
                 row.detail = format!("{}; {}: {}", row.detail, report.outcome, report.detail);
-                summary.relocated += 1;
+                pass.summary.relocated += 1;
                 crate::autonomy::storage::record_mutation_outcome(
                     store,
                     true,
@@ -83,7 +79,7 @@ pub(super) async fn execute(
                     "{}; standby finished, but mutation lease ownership changed before release",
                     row.detail
                 );
-                summary.failures += 1;
+                pass.summary.failures += 1;
             }
             (Ok(_), Err(error)) => {
                 row.classification = words::STANDBY_REFUSED.to_string();
@@ -91,12 +87,12 @@ pub(super) async fn execute(
                     "{}; standby finished, but mutation lease release failed: {error}",
                     row.detail
                 );
-                summary.failures += 1;
+                pass.summary.failures += 1;
             }
             (Err(error), _) => {
                 row.classification = words::STANDBY_REFUSED.to_string();
                 row.detail = format!("{}; {error}", row.detail);
-                summary.failures += 1;
+                pass.summary.failures += 1;
                 crate::autonomy::storage::record_mutation_outcome(
                     store,
                     false,
@@ -148,8 +144,9 @@ pub(super) async fn execute(
                     |generation| { format!("registry generation {generation}") }
                 )
             );
-            relocations.insert(row.profile.clone(), created_at.to_string());
-            summary.relocated += 1;
+            pass.relocations
+                .insert(row.profile.clone(), pass.created_at.clone());
+            pass.summary.relocated += 1;
             crate::autonomy::storage::record_mutation_outcome(
                 store,
                 true,
@@ -162,7 +159,7 @@ pub(super) async fn execute(
         Err(error) => {
             row.classification = words::RELOCATION_FAILED.to_string();
             row.detail = format!("{}; {error}", row.detail);
-            summary.failures += 1;
+            pass.summary.failures += 1;
             crate::autonomy::storage::record_mutation_outcome(
                 store,
                 false,

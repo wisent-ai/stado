@@ -30,12 +30,12 @@ pub(crate) const REGISTRY: &str = r#"{
 }"#;
 
 pub(crate) struct Store {
-    home: tempfile::TempDir,
-    storage: tempfile::TempDir,
+    pub(crate) home: tempfile::TempDir,
+    pub(crate) storage: tempfile::TempDir,
 }
 
 impl Store {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let store = Self {
             home: tempfile::tempdir().unwrap(),
             storage: tempfile::tempdir().unwrap(),
@@ -45,7 +45,7 @@ impl Store {
     }
 
     /// One run object where `stado release submit` keeps them.
-    fn seed_run(&self, run_id: &str, product: &str, version: &str, state: &str) {
+    pub(crate) fn seed_run(&self, run_id: &str, product: &str, version: &str, state: &str) {
         let dir = self
             .storage
             .path()
@@ -81,7 +81,7 @@ impl Store {
     /// One finished build job where the queue keeps them. The run object
     /// records no duration of its own, so this is the only clock a release
     /// has, and `release status` joins the two.
-    fn seed_completed_job(&self, job_id: &str, started_at: &str, completed_at: &str) {
+    pub(crate) fn seed_completed_job(&self, job_id: &str, started_at: &str, completed_at: &str) {
         let dir = self.storage.path().join("completed");
         std::fs::create_dir_all(&dir).unwrap();
         let job = json!({
@@ -99,7 +99,7 @@ impl Store {
         .unwrap();
     }
 
-    fn stado(&self, args: &[&str]) -> Output {
+    pub(crate) fn stado(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(args)
             .env("HOME", self.home.path())

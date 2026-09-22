@@ -27,6 +27,10 @@
 //! `STADO_SOURCE_REVISION` to that exact value. If both are present they must
 //! be the same full lowercase Git commit; inherited parent environment cannot
 //! relabel pipeline bytes.
+//! An owner-local recipe supplies the same full base commit while retaining
+//! Git metadata. That commit must match the checkout; the embedded revision
+//! also reports its measured dirty state. An archive cannot inherit an
+//! enclosing checkout's identity.
 //!
 //! Outside the release pipeline, a caller may state the same full commit with
 //! `STADO_SOURCE_REVISION`. Otherwise `git rev-parse` names the local checkout,
@@ -75,6 +79,18 @@ fn git(arguments: &[&str]) -> Option<String> {
     Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
 }
 
+fn checkout_revision() -> Option<String> {
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    if let Some(reference) = git(&["rev-parse", "--symbolic-full-name", "HEAD"]) {
+        println!("cargo:rerun-if-changed=../.git/{reference}");
+    }
+    let mut revision = git(&["rev-parse", "HEAD"]).filter(|value| full_git_revision(value))?;
+    if !git(&["status", "--porcelain"])?.is_empty() {
+        revision.push_str("-dirty");
+    }
+    Some(revision)
+}
+
 /// The revision this build should claim, by the order documented above.
 fn source_revision() -> String {
     println!("cargo:rerun-if-env-changed={REVISION_OVERRIDE}");
@@ -99,6 +115,15 @@ fn source_revision() -> String {
                 "{REVISION_OVERRIDE} must match authoritative {PIPELINE_REVISION}"
             );
         }
+        if Path::new("../.git").is_dir() {
+            let observed = checkout_revision().expect("read owner-local Git source identity");
+            assert_eq!(
+                observed.strip_suffix("-dirty").unwrap_or(&observed),
+                pipeline,
+                "{PIPELINE_REVISION} must match the owner-local checkout"
+            );
+            return observed;
+        }
         return pipeline;
     }
     if let Some(explicit) = explicit {
@@ -109,25 +134,7 @@ fn source_revision() -> String {
         return explicit;
     }
 
-    // Re-stamp when HEAD moves. `.git/HEAD` covers a checkout and a branch
-    // switch; the file behind the symbolic ref covers a commit on the branch
-    // already checked out. A detached HEAD has no second file and needs none.
-    println!("cargo:rerun-if-changed=../.git/HEAD");
-    if let Some(reference) = git(&["rev-parse", "--symbolic-full-name", "HEAD"]) {
-        println!("cargo:rerun-if-changed=../.git/{reference}");
-    }
-
-    let Some(revision) = git(&["rev-parse", "HEAD"]).filter(|value| full_git_revision(value))
-    else {
-        return UNKNOWN_REVISION.to_string();
-    };
-    // A tree with uncommitted changes did not come from `revision` alone, and
-    // saying so is the whole reason this exists.
-    match git(&["status", "--porcelain"]) {
-        Some(status) if !status.is_empty() => format!("{revision}-dirty"),
-        Some(_) => revision,
-        None => UNKNOWN_REVISION.to_string(),
-    }
+    checkout_revision().unwrap_or_else(|| UNKNOWN_REVISION.to_string())
 }
 
 fn compile_python(source: &Path, out_dir: &Path) {

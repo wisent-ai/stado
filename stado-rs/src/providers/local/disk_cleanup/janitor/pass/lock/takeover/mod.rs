@@ -16,8 +16,8 @@ use crate::providers::local::disk_cleanup::janitor::{
 mod holder;
 mod overdue;
 
-pub(crate) use holder::pid_alive;
 use holder::path_names_file;
+pub(crate) use holder::{pid_alive, retired_locks_active};
 use overdue::overdue_predecessor;
 
 /// Exclusive flock, with a bounded and mutually exclusive recovery path.

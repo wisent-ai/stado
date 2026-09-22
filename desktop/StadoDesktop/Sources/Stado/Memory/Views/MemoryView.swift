@@ -82,10 +82,12 @@ struct MemoryView: View {
                     }
                 )
             } else if cleanupStore.isRefreshing || fleetStore.isRefreshing {
-                WisentLoadingPanel(
-                    title: "Reading the memory report",
-                    detail: "Available memory, swap, the declared watermarks, and what the last pass repaired."
-                )
+                Group {
+                    let loadingTitle = "Reading the memory report"
+                    WisentSectionBox(title: loadingTitle, detail: "Available memory, swap, the declared watermarks, and what the last pass repaired.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
             } else {
                 WisentEmptyPanel(
                     title: "No memory reading",

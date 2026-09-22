@@ -1,17 +1,16 @@
 //! Putting the fleet into the state a story needs: a host with no core left
 //! to give, and a reservation whose holder stopped answering long ago.
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::PathBuf;
 use std::process::Command;
 
 use serde_json::json;
 
 use super::{
-    Journey, DEAD_RESERVATION_CPU_CORES, DEAD_RESERVATION_RAM_GB,
-    DEAD_RESERVATION_SCHEMA_VERSION, DEAD_RESERVATION_TTL_SECONDS,
-    FULL_HOST_AVAILABLE_CPU_CORES, FULL_HOST_FREE_RAM_GB, FULL_HOST_TOTAL_CPU_CORES,
-    FULL_HOST_TOTAL_RAM_GB, LONG_EXPIRED, TARGET,
+    Journey, DEAD_RESERVATION_CPU_CORES, DEAD_RESERVATION_RAM_GB, DEAD_RESERVATION_SCHEMA_VERSION,
+    DEAD_RESERVATION_TTL_SECONDS, FULL_HOST_AVAILABLE_CPU_CORES, FULL_HOST_FREE_RAM_GB,
+    FULL_HOST_TOTAL_CPU_CORES, FULL_HOST_TOTAL_RAM_GB, LONG_EXPIRED, TARGET,
 };
 
 impl Journey {
@@ -92,5 +91,4 @@ impl Journey {
             .unwrap();
         path
     }
-
 }

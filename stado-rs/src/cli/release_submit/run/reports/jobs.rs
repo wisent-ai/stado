@@ -5,10 +5,10 @@
 //! has been running so far, so a release in flight is readable rather than
 //! blank.
 
-use serde_json::Value;
-
 use crate::queue::runs;
 use crate::queue::storage::JobStorage;
+
+use super::load_run_value;
 
 /// How long one platform's build actually took, in seconds.
 ///

@@ -28,7 +28,12 @@ pub(super) fn workspace(prefix: &str, platform: &str) -> (tempfile::TempDir, Pat
 /// The signing key, the vault that holds it and the registry that trusts it.
 /// `with_worker` also stages the built binary where a claimed job runs it,
 /// which a journey that never reaches a build does not need.
-pub(super) fn signed_fleet(home: &Path, storage: &Path, platform: &str, with_worker: bool) -> SkarbiecFixture {
+pub(super) fn signed_fleet(
+    home: &Path,
+    storage: &Path,
+    platform: &str,
+    with_worker: bool,
+) -> SkarbiecFixture {
     let private = home.join("release-private");
     let public = home.join("release-public");
     if with_worker {

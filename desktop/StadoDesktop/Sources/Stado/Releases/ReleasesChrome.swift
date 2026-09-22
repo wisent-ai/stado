@@ -193,10 +193,12 @@ extension ReleasesView {
     @ViewBuilder
     var placeholder: some View {
         if store.isRefreshing {
-            WisentLoadingPanel(
-                title: "Diagnosing every declared rollout",
-                detail: "`stado release status` lists the product targets, then one `stado release doctor` per target reads the host itself: its state file, the staged candidate, and the gates that decide whether it claims work."
-            )
+            Group {
+                let loadingTitle = "Diagnosing every declared rollout"
+                WisentSectionBox(title: loadingTitle, detail: "`stado release status` lists the product targets, then one `stado release doctor` per target reads the host itself: its state file, the staged candidate, and the gates that decide whether it claims work.") {
+                    WisentSkeletonList(label: loadingTitle)
+                }
+            }
         } else if store.inventoryProblem == nil {
             WisentEmptyPanel(
                 title: "No rollout is declared",

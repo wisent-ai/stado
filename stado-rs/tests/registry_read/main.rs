@@ -8,7 +8,6 @@
 //! `registry_cache` isolates them, so the operator's registry, cache and
 //! credentials are never read or written.
 
-
 mod fixture;
 
 #[path = "cases/registry.rs"]

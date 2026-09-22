@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use stado::release_agent::{
-    parse_state_document, quarantine_audit_path, HostReleaseState, STATE_SCHEMA,
+    parse_state_document, quarantine_audit_path, HostReleaseState, AGENT_ACTOR, STATE_SCHEMA,
 };
 
 pub(crate) const PRODUCT: &str = "skarbiec";
@@ -14,7 +14,8 @@ pub(crate) const TARGET: &str = "lukasz-macbook";
 /// The live digest the incident left quarantined on this machine.
 pub(crate) const DIGEST: &str = "55f2cf470e293d03c920ee1b4184e5144c98acbc7fe6315771be892b1b9791b4";
 /// The agent's own sentence for that record, copied from the host.
-pub(crate) const PROBE_REASON: &str = "active release lost readiness: http://127.0.0.1:18788/readyz did not \
+pub(crate) const PROBE_REASON: &str =
+    "active release lost readiness: http://127.0.0.1:18788/readyz did not \
                             answer within 3s; stderr \
                             /Users/lukaszbartoszcze/.stado/logs/skarbiec-0.3.10.err: skarbiec API \
                             listening on http://127.0.0.1:18788 (loopback only)";
@@ -83,7 +84,7 @@ impl StateDir {
         .expect("the fixture must be a document the agent accepts")
     }
 
-    fn audit_entries(&self) -> Vec<Value> {
+    pub(crate) fn audit_entries(&self) -> Vec<Value> {
         let path = quarantine_audit_path(self.as_str(), PRODUCT);
         match std::fs::read_to_string(path) {
             Ok(payload) => payload

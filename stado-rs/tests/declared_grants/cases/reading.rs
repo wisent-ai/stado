@@ -1,6 +1,6 @@
 //! What `service grants` reads back, and what it refuses to read.
 
-use crate::fixture::{stderr, stdout, untouched, Store};
+use crate::fixture::{stderr, stdout, untouched, Store, REGISTRY};
 
 #[test]
 fn a_declared_grant_is_printed_with_what_minting_would_use() {
@@ -79,7 +79,3 @@ fn an_unknown_service_and_an_unauthorized_consumer_are_refused_with_the_names() 
         stderr(&out)
     );
 }
-
-/// A host whose Stado predates the field parses the directory strictly and
-/// would resolve nothing at all once a consumer carries it. On 2026-09-20 the
-/// host every service resolves through ran 0.21.32 while the field arrived in

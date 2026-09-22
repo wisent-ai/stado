@@ -32,7 +32,6 @@
 //! candidate per tick, a retirement older than the cooldown is allowed again,
 //! and a candidate-naming cause is left exactly as it was found.
 
-
 mod fixture;
 
 #[path = "cases/left_alone.rs"]

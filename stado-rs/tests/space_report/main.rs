@@ -15,7 +15,6 @@
 //! host whose walk costs minutes is one environment value away, and the
 //! branch is provable on a warm machine instead of only on a slow one.
 
-
 mod fixture;
 
 // The cases live beside this file rather than in it: a test binary root may

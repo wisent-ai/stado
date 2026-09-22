@@ -4,6 +4,8 @@ use stado::release_agent::{retire_host_caused_quarantine, RetireVerdict};
 
 use crate::fixture::{StateDir, DIGEST, PRODUCT, TARGET, VAULT_REASON};
 
+/// The other half of the contract. A refusal that names the candidate is the
+/// operator's to clear, and the agent must not touch it — not the document,
 /// not the trail.
 #[test]
 fn a_refusal_that_names_the_candidate_is_left_for_the_operator() {

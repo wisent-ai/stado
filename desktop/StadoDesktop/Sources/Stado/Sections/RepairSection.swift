@@ -23,10 +23,12 @@ struct RepairSection: View {
             detail: "Every step, order, mutation boundary, and proof comes from \(store.declaration). A dry run reads the host without applying a step."
         ) {
             if store.loadingCatalog && store.services.isEmpty {
-                WisentLoadingPanel(
-                    title: "Reading repair declarations",
-                    detail: "Loading the service catalog compiled into this Stado release."
-                )
+                Group {
+                    let loadingTitle = "Reading repair declarations"
+                    WisentSectionBox(title: loadingTitle, detail: "Loading the service catalog compiled into this Stado release.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
             } else if store.services.isEmpty, let problem = store.problem {
                 WisentAlertPanel(
                     tone: .warning,

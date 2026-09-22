@@ -31,10 +31,12 @@ struct DeploymentSetupView: View {
             ScrollView {
                 Group {
                     if deploymentStore.isLoading {
-                        WisentLoadingPanel(
-                            title: "Reading the deployment registry",
-                            detail: "The Stado deployments this account may create or read for the selected organization."
-                        )
+                        Group {
+                            let loadingTitle = "Reading the deployment registry"
+                            WisentSectionBox(title: loadingTitle, detail: "The Stado deployments this account may create or read for the selected organization.") {
+                                WisentSkeletonList(label: loadingTitle)
+                            }
+                        }
                     } else if let registryError = deploymentStore.errorMessage,
                               deploymentStore.deployments.isEmpty {
                         WisentErrorBanner(

@@ -124,9 +124,11 @@ struct ServicesView: View {
     }
 
     private var placeholder: some View {
-        WisentLoadingPanel(
-            title: "Reading declared units on \(hosts.count.formatted(.number)) hosts",
-            detail: "stado service converge per host in report mode, stado service list --unowned once, and the fleet-wide stado service list from the health beacons. None of them writes anything."
-        )
+        Group {
+            let loadingTitle = "Reading declared units on \(hosts.count.formatted(.number)) hosts"
+            WisentSectionBox(title: loadingTitle, detail: "stado service converge per host in report mode, stado service list --unowned once, and the fleet-wide stado service list from the health beacons. None of them writes anything.") {
+                WisentSkeletonList(label: loadingTitle)
+            }
+        }
     }
 }

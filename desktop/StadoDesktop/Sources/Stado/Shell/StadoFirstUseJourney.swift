@@ -165,10 +165,12 @@ struct StadoFirstUseRoot: View {
     var body: some View {
         Group {
             if journey.isLoading {
-                WisentLoadingPanel(
-                    title: "Loading Stado",
-                    detail: "Reading the published first-use journey before any fleet state is shown."
-                )
+                Group {
+                    let loadingTitle = "Loading Stado"
+                    WisentSectionBox(title: loadingTitle, detail: "Reading the published first-use journey before any fleet state is shown.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
                 .padding(WisentDesign.Space.x10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(WisentCanvasBackground())

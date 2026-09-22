@@ -1,9 +1,16 @@
 //! What the walk finds, and what it says about what it could not open.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use crate::fixture::Fixture;
 
+/// The build-cache verdict walks the whole undeclared root, and on 2026-09-17
+/// that walk opened `~/Library/CloudStorage`, met one unreadable Google Drive
+/// `.tmp`, and reported lukasz-macbook as `scan-failed`, exit 1, classified
+/// as rejected credentials. The walk now prunes the janitor's own refused
+/// roots before opening them, and a directory it cannot open elsewhere is one
 /// `permission-denied` row while the tagged cache beside it is still found.
 #[test]
 fn an_unreadable_directory_is_one_row_and_a_refused_root_is_never_opened() {
@@ -150,10 +157,3 @@ fn build_output_deeper_than_the_walk_is_measured_and_named_as_unswept() {
     );
     fixture.cleanup();
 }
-
-/// A declared cleaner that reaches none of the measured build output says so,
-/// and names the root that would reach it.
-///
-/// This is the half the census alone does not answer. `lukasz-macbook`
-/// declared `build_caches` for months, the cleaner covered the root it was
-/// pointed at, and the operator's tagged trees were somewhere else entirely;

@@ -32,10 +32,12 @@ struct DiskView: View {
             if let report = cleanupStore.report {
                 reportBody(report)
             } else if cleanupStore.isRefreshing {
-                WisentLoadingPanel(
-                    title: "Reading the cleanup report",
-                    detail: "Disk pressure, thresholds, and what the last registry-controlled pass reclaimed."
-                )
+                Group {
+                    let loadingTitle = "Reading the cleanup report"
+                    WisentSectionBox(title: loadingTitle, detail: "Disk pressure, thresholds, and what the last registry-controlled pass reclaimed.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
             } else {
                 WisentEmptyPanel(
                     title: "No cleanup report",

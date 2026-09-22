@@ -104,10 +104,12 @@ struct PublicOriginsSection: View {
                 symbol: "globe.badge.chevron.backward"
             )
         } else if store.isReading, store.rows.isEmpty {
-            WisentLoadingPanel(
-                title: "Reading the public-origin report",
-                detail: "The declared hostname's public addresses, the paths its host publishes, and the origin the public edge selects."
-            )
+            Group {
+                let loadingTitle = "Reading the public-origin report"
+                WisentSectionBox(title: loadingTitle, detail: "The declared hostname's public addresses, the paths its host publishes, and the origin the public edge selects.") {
+                    WisentSkeletonList(label: loadingTitle)
+                }
+            }
         } else if store.result == nil, store.readFailure == nil {
             WisentEmptyPanel(
                 title: "No public-origin report has been requested",

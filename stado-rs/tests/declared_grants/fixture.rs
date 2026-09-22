@@ -56,7 +56,7 @@ pub(crate) const REGISTRY: &str = r#"{
 }"#;
 
 pub(crate) struct Store {
-    home: tempfile::TempDir,
+    pub(crate) home: tempfile::TempDir,
     storage: tempfile::TempDir,
 }
 

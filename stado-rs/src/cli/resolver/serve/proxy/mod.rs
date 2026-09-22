@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use tokio::net::TcpListener;
 
-use crate::service_resolution::ResolverAdapter;
 use crate::cli::resolver::serve::state::ResolverState;
+use crate::service_resolution::ResolverAdapter;
 
 /// How many consecutive seconds a listener may refuse before it is reported
 /// broken rather than pinched.
@@ -72,7 +72,6 @@ pub(super) async fn serve_adapter(
         });
     }
 }
-
 
 mod connection;
 mod idle;

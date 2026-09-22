@@ -7,7 +7,6 @@
 //! record and the persisted job document, never stdout alone.
 
 use serde_json::Value;
-use stado::queue::runs::TERMINAL_PREFIXES;
 
 use super::attach::install_runtime;
 use super::harness::{said, Area, TARGET};
@@ -170,6 +169,5 @@ fn a_kind_that_is_not_detachable_is_refused_with_the_file_to_change() {
         said(&output.stderr)
     );
 }
-
 
 mod holding;

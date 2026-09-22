@@ -36,7 +36,9 @@ pub(super) fn store_clause(blockers: &[String]) -> &'static str {
 /// A host that is not claiming is a failed verdict, not a failed command: the
 /// read succeeded either way, and the message names the blockers rather than
 /// repeating that something is wrong.
-pub(super) fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
+pub(super) fn claiming_outcome(
+    gates: &crate::deploy::host_gates::HostGates,
+) -> Result<(), CmdError> {
     if !gates.complete {
         let details = gates
             .observations

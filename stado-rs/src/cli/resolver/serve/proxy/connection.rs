@@ -2,15 +2,14 @@
 
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::service_resolution::ResolverAdapter;
 use crate::cli::resolver::authority::paths::resolved_ssh_paths;
 use crate::cli::resolver::serve::state::ResolverState;
+use crate::service_resolution::ResolverAdapter;
 
 use super::idle::{copy_until_idle, Activity};
-use super::refusal::{refuse_connection, http_request_head, UPSTREAM_REFUSAL};
+use super::refusal::refuse_connection;
 
 pub(super) async fn proxy_connection(
     client: TcpStream,

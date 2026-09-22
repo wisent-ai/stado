@@ -4,11 +4,12 @@ use futures::StreamExt;
 use serde_json::{Map, Value};
 
 use crate::cli::CmdError;
-use crate::queue::runs;
 use crate::queue::storage::JobStorage;
 
-use super::jobs::{build_seconds, candidate_prefixes, compiling_count, job_state_and_cost, previous_compile_total};
-use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
+use super::jobs::{
+    candidate_prefixes, compiling_count, job_state_and_cost, previous_compile_total,
+};
+use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX, VERSION_SCAN_WINDOW};
 
 /// One platform leg joined to its queue job: which run it belongs to, which
 /// platform it is, and — when the queue still holds the job — the lifecycle

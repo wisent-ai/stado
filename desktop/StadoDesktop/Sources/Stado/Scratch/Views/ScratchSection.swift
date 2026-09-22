@@ -90,10 +90,12 @@ struct ScratchSection: View {
                 }
             }
         } else if store.isReading {
-            WisentLoadingPanel(
-                title: "Reading scratch leases",
-                detail: "Each lease record on \(host), and whether its account still exists there."
-            )
+            Group {
+                let loadingTitle = "Reading scratch leases"
+                WisentSectionBox(title: loadingTitle, detail: "Each lease record on \(host), and whether its account still exists there.") {
+                    WisentSkeletonList(label: loadingTitle)
+                }
+            }
         }
         WisentField(
             label: "Read-only command",

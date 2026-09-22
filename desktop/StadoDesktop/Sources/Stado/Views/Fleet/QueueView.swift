@@ -66,10 +66,12 @@ struct QueueView: View {
     @ViewBuilder
     private var placeholder: some View {
         if store.isRefreshing {
-            WisentLoadingPanel(
-                title: "Reading queue state",
-                detail: "Queued and running work by model, plus the recent completed and failed records the dashboard publishes."
-            )
+            Group {
+                let loadingTitle = "Reading queue state"
+                WisentSectionBox(title: loadingTitle, detail: "Queued and running work by model, plus the recent completed and failed records the dashboard publishes.") {
+                    WisentSkeletonList(label: loadingTitle)
+                }
+            }
         } else {
             WisentEmptyPanel(
                 title: "No queue state",

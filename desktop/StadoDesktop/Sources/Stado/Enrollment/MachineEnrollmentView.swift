@@ -90,10 +90,12 @@ struct EnrollmentMethodListView: View {
 
             if store.methods.isEmpty {
                 if store.isReadingMethods {
-                    WisentLoadingPanel(
-                        title: "Asking this Stado which ways in it offers",
-                        detail: "stado fleet methods reports each method with what it requires and whether the registry catalog for this fleet permits it."
-                    )
+                    Group {
+                        let loadingTitle = "Asking this Stado which ways in it offers"
+                        WisentSectionBox(title: loadingTitle, detail: "stado fleet methods reports each method with what it requires and whether the registry catalog for this fleet permits it.") {
+                            WisentSkeletonList(label: loadingTitle)
+                        }
+                    }
                 } else {
                     WisentEmptyPanel(
                         title: "No methods reported",

@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::refusal::http_request_head;
+
 /// One connection's last activity, in milliseconds since the proxy accepted
 /// it, shared by both directions.
 ///
@@ -32,7 +34,7 @@ pub(super) struct Activity {
 }
 
 impl Activity {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             started: std::time::Instant::now(),
             last_millis: std::sync::atomic::AtomicU64::new(0),
@@ -70,8 +72,8 @@ impl Activity {
 
 /// What one direction did, so a cut can be reported with the bytes behind it.
 pub(super) struct Transfer {
-    bytes: u64,
-    cut: bool,
+    pub(super) bytes: u64,
+    pub(super) cut: bool,
 }
 
 pub(super) async fn copy_until_idle<R, W>(

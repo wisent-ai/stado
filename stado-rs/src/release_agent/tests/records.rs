@@ -1,10 +1,12 @@
 //! What a refusal record carries, and what it still parses from.
 
 use super::super::*;
-use super::{decide, state_with, PRESENT, RUN};
+use super::{decide, state_with, RUN};
+use crate::release_agent::rollout::recover::run::REPEAT_CAUSE_LIMIT;
 use crate::release_agent::state::evidence::clip_middle;
 use crate::release_cause::QuarantineCause;
 
+/// Retention: the clip used to keep the head and drop the end, and both
 /// ends carry decisive lines in the live records.
 #[test]
 fn a_clipped_tail_keeps_both_of_its_ends() {
@@ -68,7 +70,3 @@ fn a_run_of_probes_the_host_never_answered_does_not_hold_the_next_candidate() {
         "a repeated credential wall must still hold"
     );
 }
-
-/// A candidate that could not bind used to be filed as `unclassified`: the
-/// only trace of the collision was the operating system's own sentence
-/// inside a stderr tail. The agent's reason for lukasz-macbook's Skarbiec

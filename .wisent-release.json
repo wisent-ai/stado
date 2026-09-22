@@ -32,6 +32,7 @@
             "stado-rs/Cargo.toml",
             "--locked",
             "--all-targets",
+            "--keep-going",
             "--",
             "-D",
             "warnings"
@@ -102,6 +103,7 @@
             "stado-rs/Cargo.toml",
             "--locked",
             "--all-targets",
+            "--keep-going",
             "--",
             "-D",
             "warnings"

@@ -1,8 +1,6 @@
 //! One pass: the plan, then each due move through the one shared mutation
 //! gate, then the report the pass leaves behind.
 
-use std::collections::BTreeMap;
-
 use chrono::{SecondsFormat, Utc};
 
 use crate::autonomy::policy::AutonomyPolicy;
@@ -31,7 +29,7 @@ pub async fn reconcile(
     let decision_id = format!("placement-relief-{}", created_at.replace(':', "-"));
     let previous =
         crate::autonomy::storage::read_json::<ReliefReport>(store, LATEST_REPORT).await?;
-    let (mut relocations, previous_pressure) = previous
+    let (relocations, previous_pressure) = previous
         .map(|report| (report.relocations, report.pressure_seen))
         .unwrap_or_default();
 
@@ -56,33 +54,41 @@ pub async fn reconcile(
     )
     .map_err(|error| StorageError::Other(format!("placement relief: {error}")))?;
 
-    let mut summary = ReliefSummary {
-        profiles: outcomes.len(),
-        ..ReliefSummary::default()
+    let mut report = ReliefReport {
+        schema_version: SCHEMA_VERSION,
+        decision_id,
+        created_at: created_at.clone(),
+        mode: policy.mode,
+        summary: ReliefSummary {
+            profiles: outcomes.len(),
+            ..ReliefSummary::default()
+        },
+        rows: Vec::with_capacity(outcomes.len()),
+        relocations,
+        pressure_seen,
     };
-    let mut rows = Vec::with_capacity(outcomes.len());
     let mut relocated = usize::default();
     let authority = crate::cli::placement::local_is_authority(&document, &registry);
     for outcome in outcomes {
         let mut row = outcome.row;
         if row.candidates.len() > usize::default() {
-            summary.pressured += 1;
+            report.summary.pressured += 1;
         }
         let Some(due) = outcome.due else {
             if row.classification != words::SETTLED {
-                summary.blocked += 1;
+                report.summary.blocked += 1;
             }
-            rows.push(row);
+            report.rows.push(row);
             continue;
         };
-        summary.planned += 1;
+        report.summary.planned += 1;
         if let Some(refusal) = refusal(store, policy, &authority, relocated, &due.action).await? {
             row.classification = refusal.classification;
             row.detail = format!("{}; {}", row.detail, refusal.detail);
             if refusal.blocked {
-                summary.blocked += 1;
+                report.summary.blocked += 1;
             }
-            rows.push(row);
+            report.rows.push(row);
             continue;
         }
         if execute(
@@ -92,28 +98,15 @@ pub async fn reconcile(
             &generation,
             due,
             &mut row,
-            &mut summary,
-            &mut relocations,
-            &created_at,
-            &decision_id,
+            &mut report,
         )
         .await?
         {
             relocated += 1;
         }
-        rows.push(row);
+        report.rows.push(row);
     }
 
-    let report = ReliefReport {
-        schema_version: SCHEMA_VERSION,
-        decision_id,
-        created_at: created_at.clone(),
-        mode: policy.mode,
-        summary,
-        rows,
-        relocations,
-        pressure_seen,
-    };
     crate::autonomy::storage::write_json(store, LATEST_REPORT, &report, false).await?;
     crate::autonomy::storage::write_json(
         store,

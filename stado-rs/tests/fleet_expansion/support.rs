@@ -27,13 +27,20 @@ impl Journey {
             .keep();
         let store = root.join("store");
         fs::create_dir_all(&store).unwrap();
-        if let Ok(revision) = std::env::var("WISENT_SOURCE_COMMIT") {
+        // Owner-local recipes also supply a commit; only an archive has a source digest.
+        if !Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.git")
+            .is_dir()
+        {
+            let revision = std::env::var("WISENT_SOURCE_COMMIT")
+                .expect("a source archive requires WISENT_SOURCE_COMMIT");
             assert_eq!(revision.len(), 40, "release source revision must be exact");
             assert!(revision.bytes().all(|b| b.is_ascii_hexdigit()));
             fs::write(root.join("revision.txt"), revision).unwrap();
             fs::write(
                 root.join("source.sha256"),
-                std::env::var("WISENT_SOURCE_SHA256").unwrap(),
+                std::env::var("WISENT_SOURCE_SHA256")
+                    .expect("a source archive requires WISENT_SOURCE_SHA256"),
             )
             .unwrap();
         } else {

@@ -197,19 +197,6 @@ extension ConsoleView {
             // answer for. Both are rollouts that never finish unattended.
             let stalled = releaseStore.attentionCount
             return stalled > 0 ? (stalled, .danger) : nil
-        case .builds:
-            // A failed build shows on the screen itself; the sidebar only
-            // counts it once this window has read the recipes at all. One
-            // recipe counts once however many of its platforms failed: the
-            // count answers "how many recipes need me", and the screen's
-            // platform rows answer which half broke.
-            let failed = buildsStore.recipes.count(where: \.hasFailedRun)
-            return failed > 0 ? (failed, .danger) : nil
-        case .deliveries:
-            // A delivery the fleet proved wrong is somebody's task waiting to
-            // be reopened, so it earns a digit until it has been handed back.
-            let failed = deliveriesStore.settled.count { $0.state == "failed" }
-            return failed > 0 ? (failed, .danger) : nil
         case .memory:
             // A host that has stopped accepting work, then a host over its
             // memory watermark. Both are a machine an operator has to decide

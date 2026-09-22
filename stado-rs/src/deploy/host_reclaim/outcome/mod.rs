@@ -9,16 +9,16 @@ use serde_json::{json, Value};
 use crate::deploy::host_channel;
 use crate::deploy::host_state::cleanup::cleaner_plans;
 
-use super::{APPLY_MODE, DRY_RUN_MODE};
+use super::{APPLY_MODE, DRY_RUN_MODE, UNAVAILABLE_SUFFIX};
 
 mod janitor;
 mod report;
 mod shape;
 
-pub use report::to_report;
-pub use shape::{Reclamation, Stage};
 use janitor::janitor_sentence;
+pub use report::to_report;
 use shape::{blocks, drain, drain_evidence, unavailable};
+pub use shape::{Reclamation, Stage};
 
 const REGISTRY_CLEANUP_STAGE: &str = "registry_cleanup";
 

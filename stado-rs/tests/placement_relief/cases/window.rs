@@ -3,7 +3,8 @@
 use crate::hosts::{clear_mini, pressured_mini, roomy_laptop};
 use crate::hosts::{INSIDE_PRESSURE_WINDOW_SECONDS, PAST_PRESSURE_WINDOW_SECONDS};
 use crate::support::{
-    fleet, publish, relief, row, stdout, stado, verdict, FRESH_SECONDS, LAPTOP, MINI, PROFILE,
+    self, fleet, publish, relief, row, stado, stderr, stdout, verdict, FRESH_SECONDS, LAPTOP, MINI,
+    PROFILE, RELIEF_SCHEMA_VERSION,
 };
 
 #[test]

@@ -33,6 +33,5 @@ pub(super) fn assert_inside(root: &Path, paths: &[String]) {
     }
 }
 
-
 mod janitor;
 mod scratch;

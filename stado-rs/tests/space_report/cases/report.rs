@@ -1,6 +1,8 @@
 //! What the report says when the walk did not run: the cheap fields that cost
 //! under a second, the walk it names as not attempted, and every volume.
 
+use std::path::Path;
+
 use crate::fixture::Fixture;
 
 #[test]
@@ -97,6 +99,3 @@ fn the_report_lists_every_volume_and_says_whether_disks_were_listed() {
     );
     fixture.cleanup();
 }
-
-/// `space volume mount` refuses a device word that is not one `/dev` leaf
-/// and a mount point under a system tree before it reaches any host: the

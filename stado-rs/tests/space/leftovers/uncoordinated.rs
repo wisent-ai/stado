@@ -6,7 +6,7 @@ use std::fs;
 
 use crate::fixture::{only_stage, reported_paths, Host, TARGET};
 
-use super::{assert_inside, deliver};
+use super::{age, assert_inside, deliver};
 
 #[test]
 fn a_host_with_no_installed_coordinate_keeps_only_its_newest_version() {

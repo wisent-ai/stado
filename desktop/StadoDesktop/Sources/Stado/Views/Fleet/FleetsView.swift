@@ -113,10 +113,12 @@ struct FleetsView: View {
     @ViewBuilder
     private var placeholder: some View {
         if groupStore.isReading {
-            WisentLoadingPanel(
-                title: "Reading the fleets",
-                detail: "stado fleet list through the control plane's command bridge."
-            )
+            Group {
+                let loadingTitle = "Reading the fleets"
+                WisentSectionBox(title: loadingTitle, detail: "stado fleet list through the control plane's command bridge.") {
+                    WisentSkeletonList(label: loadingTitle)
+                }
+            }
         } else if !groupStore.isConfigured {
             WisentEmptyPanel(
                 title: "No Stado endpoint",

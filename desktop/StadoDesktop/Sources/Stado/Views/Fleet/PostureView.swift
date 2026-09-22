@@ -58,10 +58,12 @@ struct PostureView: View {
                     )
                 }
             } else if store.isRefreshing {
-                WisentLoadingPanel(
-                    title: "Reading fleet state",
-                    detail: "Queue depth, host capacity reports, and recent job outcomes from /api/state.json."
-                )
+                Group {
+                    let loadingTitle = "Reading fleet state"
+                    WisentSectionBox(title: loadingTitle, detail: "Queue depth, host capacity reports, and recent job outcomes from /api/state.json.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
             } else {
                 WisentEmptyPanel(
                     title: "No fleet state",

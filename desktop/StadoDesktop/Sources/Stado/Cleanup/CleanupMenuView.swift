@@ -35,10 +35,12 @@ struct CleanupMenuView: View {
                     )
                 }
             } else if store.isRefreshing {
-                WisentLoadingPanel(
-                    title: "Reading the cleanup report",
-                    detail: "Disk pressure and the outcome of the last registry-controlled pass."
-                )
+                Group {
+                    let loadingTitle = "Reading the cleanup report"
+                    WisentSectionBox(title: loadingTitle, detail: "Disk pressure and the outcome of the last registry-controlled pass.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
             } else {
                 WisentEmptyPanel(
                     title: "No cleanup report",

@@ -3,6 +3,9 @@
 
 use crate::fixture::{stderr, stdout, Store};
 
+/// A host whose Stado predates the field parses the directory strictly and
+/// would resolve nothing at all once a consumer carries it. On 2026-09-20 the
+/// host every service resolves through ran 0.21.32 while the field arrived in
 /// 0.21.35, so the write is refused until the fleet can read it.
 #[test]
 fn declaring_a_grant_is_refused_while_a_host_cannot_read_the_field() {

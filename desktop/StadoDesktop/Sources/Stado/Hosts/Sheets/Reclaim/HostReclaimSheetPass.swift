@@ -26,10 +26,12 @@ extension HostReclaimSheet {
                         .foregroundStyle(WisentDesign.ink)
                         .textSelection(.enabled)
                 } else if store.isPreviewing {
-                    WisentLoadingPanel(
-                        title: "Running the dry run on \(host)",
-                        detail: previewCommand
-                    )
+                    Group {
+                        let loadingTitle = "Running the dry run on \(host)"
+                        WisentSectionBox(title: loadingTitle, detail: previewCommand) {
+                            WisentSkeletonList(label: loadingTitle)
+                        }
+                    }
                 } else {
                     WisentEmptyPanel(
                         title: "Nothing has been previewed",

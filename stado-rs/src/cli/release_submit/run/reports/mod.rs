@@ -2,14 +2,16 @@
 //! release status` prints and what the operator console serves.
 
 use futures::StreamExt;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::cli::CmdError;
-use crate::queue::runs;
 use crate::queue::storage::JobStorage;
 
 /// One run object as raw JSON, or nothing when it is absent or unreadable.
-pub(super) async fn load_run_value(store: &JobStorage, path: &str) -> Result<Option<Value>, CmdError> {
+pub(super) async fn load_run_value(
+    store: &JobStorage,
+    path: &str,
+) -> Result<Option<Value>, CmdError> {
     let Some(text) = store
         .download_text(path)
         .await
@@ -76,8 +78,7 @@ pub(crate) async fn published_coordinates(
     Ok(published)
 }
 
-
 mod jobs;
 mod listing;
 
-pub(crate) use listing::{matching_runs, RunFilter};
+pub(crate) use listing::{matching_runs, recent_runs, RunFilter};

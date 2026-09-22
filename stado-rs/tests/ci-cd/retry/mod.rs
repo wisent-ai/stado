@@ -12,7 +12,6 @@ mod world;
 
 use world::{claiming_agent, said_by, signed_fleet, submit, workspace};
 
-
 #[test]
 #[ignore = "runs the real Skarbiec-backed release journey"]
 fn a_cancelled_release_build_is_retried_under_a_new_job() {
@@ -106,9 +105,3 @@ fn a_cancelled_release_build_is_retried_under_a_new_job() {
         "verified cancelled release retry platform={platform}; first_job={first_job_id}; retry_job={retry_job_id}"
     );
 }
-
-/// A build the host has no room for is refused before its first gate.
-///
-/// On 2026-09-10 the stado 0.20.3 darwin build compiled 616 crates on
-/// charless-mac-mini and died with `No space left on device (os error 28)`
-/// while rustc wrote metadata: twenty minutes spent, and the requirement

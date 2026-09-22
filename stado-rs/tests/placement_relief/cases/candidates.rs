@@ -2,8 +2,8 @@
 
 use crate::hosts::{pressured_mini, roomy_laptop};
 use crate::support::{
-    fleet, memory, publish, relief, row, stderr, stdout, stado, verdict, FRESH_SECONDS, LAPTOP,
-    LAPTOP_TOTAL_GB, MINI, PROFILE, RTX, STALE_SECONDS,
+    fleet, memory, publish, relief, row, verdict, FRESH_SECONDS, LAPTOP, LAPTOP_TOTAL_GB, MINI,
+    MINI_AVAILABLE_GB, MINI_SWAP_PCT, RTX, STALE_SECONDS,
 };
 
 #[test]
@@ -132,4 +132,3 @@ fn no_host_anywhere_with_headroom_is_refused_by_name() {
     );
     assert_eq!(verdict(&row, RTX), "no_more_headroom_than_source");
 }
-

@@ -1,7 +1,12 @@
 //! What the command refuses before it reaches the host at all.
 
-use crate::fixture::{Fixture, TARGET};
+use std::fs;
+use std::process::Command;
 
+use crate::fixture::{Fixture, SYSTEM_PATH, TARGET};
+
+/// `space volume mount` refuses a device word that is not one `/dev` leaf
+/// and a mount point under a system tree before it reaches any host: the
 /// refusal is the command's own sentence, and the exit is nonzero.
 #[test]
 fn volume_mount_refuses_a_device_path_and_a_system_mount_point_before_the_host() {
@@ -133,9 +138,3 @@ fn a_malformed_walk_bound_is_refused_with_its_own_sentence() {
     );
     fixture.cleanup();
 }
-
-/// The build-cache verdict walks the whole undeclared root, and on 2026-09-17
-/// that walk opened `~/Library/CloudStorage`, met one unreadable Google Drive
-/// `.tmp`, and reported lukasz-macbook as `scan-failed`, exit 1, classified
-/// as rejected credentials. The walk now prunes the janitor's own refused
-/// roots before opening them, and a directory it cannot open elsewhere is one

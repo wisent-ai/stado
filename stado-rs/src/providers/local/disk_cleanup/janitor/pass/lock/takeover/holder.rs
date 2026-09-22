@@ -6,16 +6,16 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use crate::providers::local::disk_cleanup::janitor::pass::lock::euid;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::{
     holder_inode_record_path, lock_contended, read_lock_holder,
-
 };
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::build::epoch_now;
+use crate::providers::local::disk_cleanup::janitor::RETIRED_LOCK_PREFIX;
 
 /// Is a pid still a process on this host?
 ///

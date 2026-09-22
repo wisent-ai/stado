@@ -87,10 +87,12 @@ struct HostConnectionPathsSheet: View {
                         }
                     }
                 } else if linkStore.isRefreshing {
-                    WisentLoadingPanel(
-                        title: "Probing \(host)'s routes",
-                        detail: HostLinkStore.commandLine(host: host)
-                    )
+                    Group {
+                        let loadingTitle = "Probing \(host)'s routes"
+                        WisentSectionBox(title: loadingTitle, detail: HostLinkStore.commandLine(host: host)) {
+                            WisentSkeletonList(label: loadingTitle)
+                        }
+                    }
                 } else {
                     WisentEmptyPanel(
                         title: "No host-control route was reported",

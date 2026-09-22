@@ -137,5 +137,3 @@ fn every_refusal_names_a_way_out() {
         );
     }
 }
-
-/// Retention: the clip used to keep the head and drop the end, and both

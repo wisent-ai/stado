@@ -12,7 +12,7 @@ use std::fs::{self, File, FileTimes};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::fixture::{only_stage, reported_paths, Host, AUDIT_LOG, TARGET};
+use crate::fixture::Host;
 
 /// Old enough for the stage's age gate, which refuses anything younger than
 /// a day.
@@ -58,7 +58,6 @@ pub(super) fn assert_inside(root: &Path, paths: &[String]) {
         );
     }
 }
-
 
 mod installed;
 mod uncoordinated;

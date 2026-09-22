@@ -1,13 +1,12 @@
 //! What the agent retires by itself, and what it writes down when it does.
 
 use chrono::Duration;
-use serde_json::Value;
 use stado::release_agent::{
-    last_auto_retirement, quarantine_audit_path, retire_host_caused_quarantine, RetireVerdict,
-    AGENT_ACTOR, AUTO_RETIRE_COOLDOWN_SECONDS,
+    last_auto_retirement, retire_host_caused_quarantine, RetireVerdict, AGENT_ACTOR,
+    AUTO_RETIRE_COOLDOWN_SECONDS,
 };
 
-use crate::fixture::{StateDir, DIGEST, PRODUCT, PROBE_REASON, TARGET};
+use crate::fixture::{StateDir, DIGEST, PROBE_REASON, PRODUCT, TARGET};
 
 /// The defect: a probe the host never answered kept the desired digest refused
 /// on every pass. Retiring it must change the document, not just the report.
@@ -113,6 +112,3 @@ fn a_retirement_older_than_the_cooldown_lets_the_agent_try_again() {
         "the second retirement is its own line"
     );
 }
-
-/// The other half of the contract. A refusal that names the candidate is the
-/// operator's to clear, and the agent must not touch it — not the document,

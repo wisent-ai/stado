@@ -39,10 +39,12 @@ struct DeploymentsView: View {
             WisentSignalStrip(signals: signals)
 
             if deploymentStore.isLoading {
-                WisentLoadingPanel(
-                    title: "Reading the deployment registry",
-                    detail: "Which Stado backends this account may read, and the endpoint each one publishes."
-                )
+                Group {
+                    let loadingTitle = "Reading the deployment registry"
+                    WisentSectionBox(title: loadingTitle, detail: "Which Stado backends this account may read, and the endpoint each one publishes.") {
+                        WisentSkeletonList(label: loadingTitle)
+                    }
+                }
             }
 
             WisentSectionBox(

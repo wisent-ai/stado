@@ -10,8 +10,8 @@ let package = Package(
     dependencies: [
         // The design system by version, not by commit: 0.8.1 declares no
         // dependencies of its own, so an exact version requirement is legal,
-        // and it ships `WisentSkeleton` and the skeleton rows
-        // `WisentLoadingPanel` stands content in place with. SwiftPM admits
+        // and it supplies the shared loading skeletons. Screens compose them
+        // with named sections instead of a private loading panel. SwiftPM admits
         // exactly one requirement per package per resolution, and
         // `wisent-desktop-auth` 0.3.1 names this same `exact: "0.8.1"`,
         // so the pair agrees. Auth is on a version too now that

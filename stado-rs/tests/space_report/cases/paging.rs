@@ -2,6 +2,11 @@
 
 use crate::fixture::Fixture;
 
+/// The compressor and the lifetime swapouts are read on every pass, and
+/// until 2026-09-19 they were printed nowhere: charless-mac-mini reported
+/// 4487 MiB available and swap 71%, both inside their watermarks, while its
+/// compressor held 3.5 GiB and the released Brama was quarantined twice in
+/// one hour for a readiness probe it could not answer. The text now carries
 /// what the reading carries, converted with the host's own page size.
 #[test]
 fn the_paging_line_says_exactly_what_the_reading_measured() {

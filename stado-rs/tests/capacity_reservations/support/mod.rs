@@ -2,13 +2,12 @@
 //! one local target, the real agent publishing into a local store, and a
 //! real `stado capacity hold` taking a reservation on it.
 
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::{Child, Command};
+use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 pub(crate) const TARGET: &str = "reservation-runner";
 

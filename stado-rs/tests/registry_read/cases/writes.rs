@@ -1,7 +1,9 @@
 //! Writing one field by the path that reads it, and refusing a write to a
 //! path that does not exist without touching the document.
 
-use crate::fixture::{stderr, stdout, Store};
+use serde_json::Value;
+
+use crate::fixture::{stderr, stdout, untouched, Store};
 
 #[test]
 fn one_field_is_written_by_the_path_that_reads_it() {

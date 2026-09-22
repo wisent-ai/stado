@@ -13,7 +13,6 @@
 //! reaches a managed host, and what is checked here is the declaration the
 //! minting reads and the refusals that keep it honest.
 
-
 mod fixture;
 
 #[path = "cases/reading.rs"]

@@ -1,7 +1,11 @@
 //! Who holds the stable bind, and whether a candidate is owed it.
 
 use super::super::*;
+use crate::release_cause::{self, QuarantineCause};
 
+/// A candidate that could not bind used to be filed as `unclassified`: the
+/// only trace of the collision was the operating system's own sentence
+/// inside a stderr tail. The agent's reason for lukasz-macbook's Skarbiec
 /// 0.3.10, verbatim.
 #[test]
 fn a_candidate_that_could_not_bind_names_the_occupied_port() {
@@ -194,7 +198,7 @@ fn a_candidate_that_never_held_the_bind_is_owed_it_before_the_declared_unit() {
     use crate::release_agent::tick::product::candidate_is_owed_the_bind;
 
     let document: serde_json::Value =
-        serde_json::from_str(include_str!("../../data/release-policies/skarbiec.json"))
+        serde_json::from_str(include_str!("../../../data/release-policies/skarbiec.json"))
             .expect("the shipped skarbiec policy parses");
     let mut policy: crate::release_control::ProductReleasePolicy =
         serde_json::from_value(document["policy"].clone()).expect("the policy document is current");

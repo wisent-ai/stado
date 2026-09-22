@@ -26,8 +26,17 @@ final class RealFleet {
         home = root.appending(path: "home")
         log = root.appending(path: "operator-api.stderr")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        if let source = ProcessInfo.processInfo.environment["WISENT_SOURCE_COMMIT"] {
-            guard source.count == 40, source.allSatisfy(\.isHexDigit),
+        let sourceDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        var gitIsDirectory: ObjCBool = false
+        let hasGit = FileManager.default.fileExists(
+            atPath: sourceDirectory.appending(path: ".git").path, isDirectory: &gitIsDirectory
+        )
+        // A local recipe also supplies a commit, but it is not an immutable archive.
+        if !hasGit || !gitIsDirectory.boolValue {
+            guard let source = ProcessInfo.processInfo.environment["WISENT_SOURCE_COMMIT"],
+                  source.count == 40, source.allSatisfy(\.isHexDigit),
                   let digest = ProcessInfo.processInfo.environment["WISENT_SOURCE_SHA256"] else {
                 throw RealFleetFailure("release source revision or archive digest is missing")
             }
@@ -35,17 +44,33 @@ final class RealFleet {
             try digest.write(to: root.appending(path: "source.sha256"), atomically: true, encoding: .utf8)
             return
         }
-        let revision = Process()
-        revision.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        revision.arguments = ["-C", root.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path, "rev-parse", "HEAD"]
-        let revisionFile = root.appending(path: "source-revision.txt")
-        FileManager.default.createFile(atPath: revisionFile.path, contents: nil)
-        let revisionOutput = try FileHandle(forWritingTo: revisionFile)
-        defer { try? revisionOutput.close() }
-        revision.standardOutput = revisionOutput
-        try revision.run()
-        revision.waitUntilExit()
-        guard revision.terminationStatus == 0 else { throw RealFleetFailure("could not retain source revision") }
+        for (name, arguments) in [
+            ("source-revision.txt", ["rev-parse", "HEAD"]),
+            ("source.patch", ["diff", "--binary", "HEAD"]),
+        ] {
+            let command = Process()
+            command.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            command.arguments = ["-C", sourceDirectory.path] + arguments
+            let outputFile = root.appending(path: name)
+            let errorFile = root.appending(path: "\(name).stderr")
+            FileManager.default.createFile(atPath: outputFile.path, contents: nil)
+            FileManager.default.createFile(atPath: errorFile.path, contents: nil)
+            let output = try FileHandle(forWritingTo: outputFile)
+            let errors = try FileHandle(forWritingTo: errorFile)
+            defer { try? output.close(); try? errors.close() }
+            command.standardOutput = output
+            command.standardError = errors
+            try command.run()
+            command.waitUntilExit()
+            try String(command.terminationStatus).write(
+                to: root.appending(path: "\(name).exit"), atomically: true, encoding: .utf8
+            )
+            guard command.terminationStatus == 0 else {
+                throw RealFleetFailure(
+                    "git \(arguments.joined(separator: " ")) failed in \(sourceDirectory.path); stderr: \(errorFile.path)"
+                )
+            }
+        }
     }
 
     /// The store, pointed at the operator API of a deployment holding one

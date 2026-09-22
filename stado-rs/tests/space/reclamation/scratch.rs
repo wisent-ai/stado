@@ -5,7 +5,7 @@ use std::fs;
 use serde_json::Value;
 
 use crate::fixture::{only_stage, reported_paths, Host, AUDIT_LOG, BUILD_WORK_ROOT, TARGET};
-use crate::system::{allocated_bytes, du_bytes, said};
+use crate::system::allocated_bytes;
 
 use super::{assert_inside, SCRATCH_MIB};
 
@@ -122,5 +122,3 @@ fn applying_removes_the_scratch_tree_and_records_the_reason_here() {
         serde_json::json!([tree.to_string_lossy()])
     );
 }
-
-/// The janitor stage removes the declared cache and charges exactly the bytes

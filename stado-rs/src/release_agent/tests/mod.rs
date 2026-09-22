@@ -4,8 +4,6 @@
 use chrono::{DateTime, Utc};
 
 use super::*;
-use crate::release_agent::rollout::recover::run::REPEAT_CAUSE_LIMIT;
-use crate::release_agent::state::evidence::clip_middle;
 use crate::release_cause::{self, QuarantineCause};
 
 pub(super) fn state_with(quarantines: &[(&str, QuarantineCause, &str)]) -> HostReleaseState {
@@ -72,7 +70,6 @@ pub(super) const PRESENT: Option<(release_cause::WallVerdict, Option<String>)> =
     Some((release_cause::WallVerdict::Present, None));
 pub(super) const GONE: Option<(release_cause::WallVerdict, Option<String>)> =
     Some((release_cause::WallVerdict::Gone, None));
-
 
 mod binds;
 mod holds;
