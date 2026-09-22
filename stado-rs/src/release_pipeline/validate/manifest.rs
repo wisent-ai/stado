@@ -105,11 +105,21 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
         // binary the operator submits with names it here. A typo is refused
         // before a job is queued; a field from a newer Stado is refused with
         // the same sentence, which is the true answer for this binary.
+        //
+        // The sentence now also says what the refusal costs and what ends it.
+        // On 2026-09-22 a `tests` key entered this repository's own recipe
+        // hours after the newest published release was cut, so every builder
+        // in the fleet refused it, two of the day's three build jobs were
+        // spent discovering that, and no stado release could be built at all
+        // — including the one carrying the reader for the key.
         if !recipe.extra.is_empty() {
             let mut unknown: Vec<&str> = recipe.extra.keys().map(String::as_str).collect();
             unknown.sort_unstable();
             return Err(format!(
-                "{platform}: unknown recipe keys for this Stado: {}",
+                "{platform}: unknown recipe keys for this Stado: {}. This binary is the one that \
+                 builds: a key a release adds cannot gate the release that adds it. Express the \
+                 gate with keys every builder already reads, or deliver a Stado that reads this \
+                 one to the builders first (`stado release host-state --host <builder> --apply`).",
                 unknown.join(", ")
             ));
         }

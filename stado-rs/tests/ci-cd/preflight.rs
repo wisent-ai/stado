@@ -217,6 +217,13 @@ fn an_unknown_recipe_key_is_refused_by_name_before_a_job_is_queued() {
         said.contains("unknown recipe keys for this Stado: min_fee_gb"),
         "the refusal did not name the key: {said}"
     );
+    // A refusal that names the key and withholds the way out cost two of the
+    // fleet's three build jobs on 2026-09-22 before anybody read the release
+    // history to see why no builder could read the key.
+    assert!(
+        said.contains("deliver a Stado that reads this one to the builders first"),
+        "the refusal did not say what ends it: {said}"
+    );
     // Nothing was queued: the refusal happened while reading the source.
     assert!(
         !storage.join("queue").exists(),
