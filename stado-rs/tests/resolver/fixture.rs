@@ -163,11 +163,14 @@ pub struct Serving {
 impl Serving {
     /// Start `stado <args>` in the isolated host and keep it running.
     pub fn start(host: &Host, args: &[&str]) -> Self {
-        let output = host
-            .root
-            .path()
-            .join(format!("serving-{}.log", args.join("-")));
-        let log = std::fs::File::create(&output).expect("an output file for a served command");
+        let (mut log, output) = tempfile::Builder::new()
+            .prefix("serving-")
+            .suffix(".log")
+            .tempfile_in(host.root.path())
+            .expect("a distinct log for each service invocation")
+            .keep()
+            .expect("retain the invocation log until the isolated host is removed");
+        writeln!(log, "stado {args:?}").expect("record the actual invocation");
         let errors = log.try_clone().expect("one file for both streams");
         let child = host
             .command(args)

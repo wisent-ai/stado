@@ -184,6 +184,10 @@ fn finite_proxy_commands_share_the_host_pid_and_stop_only_their_listener() {
         http_get(policy.upstream, "/healthz", &[]).expect("host API after proxy removal");
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert!(service.running(), "{}", service.said());
+    eprintln!(
+        "host_pid={} proxy_bind={bind}\nensure:\n{}\nlistener owner:\n{}\nstop:\n{}\nremaining API:\n{response}",
+        service.pid(), said(&ensure), said(&owned), said(&stopped),
+    );
 }
 
 #[test]
@@ -224,4 +228,38 @@ fn another_listener_is_refused_without_stopping_the_host() {
     assert!(service.running(), "{}", service.said());
     let response = http_get(policy.upstream, "/healthz", &[]).expect("API after refused proxy");
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    eprintln!(
+        "host_pid={} refused_bind={bind}\n{}",
+        service.pid(),
+        said(&refused)
+    );
+}
+
+#[test]
+fn duplicate_owner_is_refused_and_a_crashed_owner_is_recoverable() {
+    let policy = Policy::patient(FIRST_GENERATION);
+    let host = host(&policy);
+    let arguments = arguments(&policy);
+    let args: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let mut first = Serving::start(&host, &args);
+    assert!(wait_listening(policy.upstream), "{}", first.said());
+    let duplicate = host.stado(&args);
+    assert!(!duplicate.status.success(), "{}", said(&duplicate));
+    let response = http_get(policy.upstream, "/healthz", &[]).expect("original owner still serves");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(first.running(), "{}", first.said());
+    first.end();
+    assert!(
+        !listening(policy.upstream),
+        "crashed owner's API remained open"
+    );
+    let mut replacement = Serving::start(&host, &args);
+    assert!(wait_listening(policy.upstream), "{}", replacement.said());
+    let response = http_get(policy.upstream, "/healthz", &[]).expect("replacement owner serves");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(replacement.running(), "{}", replacement.said());
+    eprintln!(
+        "first_pid={} replacement_pid={}\nduplicate:\n{}\nfirst:\n{}\nreplacement:\n{}\nHTTP:\n{response}",
+        first.pid(), replacement.pid(), said(&duplicate), first.said(), replacement.said(),
+    );
 }
