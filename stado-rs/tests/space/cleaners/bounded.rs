@@ -5,7 +5,7 @@ use std::fs;
 
 use serde_json::{json, Value};
 
-use crate::fixture::{Host, TARGET};
+use crate::fixture::Host;
 
 #[test]
 fn bounded_replica_passes_reach_duplicates_beyond_a_retained_prefix() {
@@ -70,6 +70,7 @@ fn bounded_replica_passes_reach_duplicates_beyond_a_retained_prefix() {
 #[cfg(target_os = "macos")]
 #[test]
 fn the_named_reaper_stops_a_program_running_from_a_scratch_directory() {
+    use crate::fixture::TARGET;
     use std::process::{Child, Command};
     struct Program(Child);
     impl Drop for Program {
