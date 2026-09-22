@@ -247,7 +247,11 @@ mod tests {
             "local-operator",
             SkarbiecError::Deployment("error sending request".to_string()),
         );
-        assert!(refusal.0.contains("http://127.0.0.1:17602"), "{}", refusal.0);
+        assert!(
+            refusal.0.contains("http://127.0.0.1:17602"),
+            "{}",
+            refusal.0
+        );
         assert!(refusal.0.contains("charless-mac-mini"), "{}", refusal.0);
         assert!(refusal.0.contains("local-operator"), "{}", refusal.0);
         assert!(refusal.0.contains(OWNER_KEY_FILE_ENV), "{}", refusal.0);

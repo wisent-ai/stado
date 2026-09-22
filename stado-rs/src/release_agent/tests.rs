@@ -465,10 +465,9 @@ fn the_stable_bind_refusal_tells_a_foreign_holder_from_the_product_itself() {
 fn a_candidate_that_never_held_the_bind_is_owed_it_before_the_declared_unit() {
     use crate::release_agent::tick::product::candidate_is_owed_the_bind;
 
-    let document: serde_json::Value = serde_json::from_str(include_str!(
-        "../../data/release-policies/skarbiec.json"
-    ))
-    .expect("the shipped skarbiec policy parses");
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("../../data/release-policies/skarbiec.json"))
+            .expect("the shipped skarbiec policy parses");
     let mut policy: crate::release_control::ProductReleasePolicy =
         serde_json::from_value(document["policy"].clone()).expect("the policy document is current");
     policy.desired = Some(

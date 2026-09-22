@@ -84,7 +84,9 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     // then waits for a declaration that has no reason to yield. Every pass
     // repeats it, so it is a stop with a decision behind it, not a rollout in
     // flight.
-    let stable_bind_held = facts.detail.contains(crate::release_agent::NO_CANDIDATE_SPAWNED);
+    let stable_bind_held = facts
+        .detail
+        .contains(crate::release_agent::NO_CANDIDATE_SPAWNED);
     if stable_bind_held {
         blockers.push(BLOCKER_STABLE_BIND_HELD.to_string());
     }
@@ -92,17 +94,14 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
     blockers.dedup();
     let converged =
         facts.observed_version.is_some() && facts.observed_version == facts.desired_version;
-    let verdict = if desired_quarantined
-        || facts.disk_pressure_unresolved
-        || held
-        || stable_bind_held
-    {
-        VERDICT_BLOCKED
-    } else if facts.in_flight || !converged {
-        VERDICT_ROLLING
-    } else {
-        VERDICT_SETTLED
-    };
+    let verdict =
+        if desired_quarantined || facts.disk_pressure_unresolved || held || stable_bind_held {
+            VERDICT_BLOCKED
+        } else if facts.in_flight || !converged {
+            VERDICT_ROLLING
+        } else {
+            VERDICT_SETTLED
+        };
     let summary = cause_summary(&facts.quarantined);
     // Remedies are for what is blocking *now*, not for every cause in the
     // host's history. A settled product with an old quarantine was printing
