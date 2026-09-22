@@ -60,7 +60,7 @@ pub(super) async fn plan_redelivery(
         ));
     }
     let manifest_bytes = store
-        .read_bytes(&run_manifest_path(&run))
+        .read_bytes(&run_manifest_path(run))
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .ok_or_else(|| CmdError::click("release run manifest is missing"))?;
