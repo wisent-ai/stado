@@ -48,6 +48,16 @@ install -m 0755 "$target_dir/release/stado" "$staged/stado"
 # Source CLI checks run in `quality`; these flows consume the staged binary
 # and retain the same evidence required by the qualification entrypoint.
 export WISENT_TEST_EVIDENCE_DIR="$output_dir/test-evidence"
+printf '[qualification] native-product-sdk\n'
+cargo test \
+  --manifest-path "$source_dir/stado-rs/Cargo.toml" \
+  --locked --release --test product -- --nocapture
+printf '[qualification] native-sdk-release-pipeline\n'
+cargo test \
+  --manifest-path "$source_dir/stado-rs/Cargo.toml" \
+  --locked --release --test ci-cd \
+  a_real_release_builds_publishes_and_installs_its_binary \
+  -- --ignored --exact --nocapture
 bash "$source_dir/tests/fleet-expansion/qualify.sh" cli
 case "${WISENT_PLATFORM:?WISENT_PLATFORM is required}" in
   darwin-arm64)

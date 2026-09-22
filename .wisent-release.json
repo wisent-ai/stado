@@ -65,16 +65,6 @@
           "deploy/release/build_stado.sh"
         ]
       },
-      "tests": [
-        {
-          "name": "native-product-sdk",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product", "--", "--nocapture"]
-        },
-        {
-          "name": "native-sdk-release-pipeline",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "ci-cd", "a_real_release_builds_publishes_and_installs_its_binary", "--", "--ignored", "--exact", "--nocapture"]
-        }
-      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
@@ -132,16 +122,6 @@
           "deploy/release/build_stado.sh"
         ]
       },
-      "tests": [
-        {
-          "name": "native-product-sdk",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product", "--", "--nocapture"]
-        },
-        {
-          "name": "native-sdk-release-pipeline",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "ci-cd", "a_real_release_builds_publishes_and_installs_its_binary", "--", "--ignored", "--exact", "--nocapture"]
-        }
-      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
