@@ -43,26 +43,20 @@ pub(super) async fn continue_run(
     // release that queued jobs of its own and cannot be continued here; the
     // same source submitted again records a build and adopts it.
     let Some(build_id) = run.build_id.clone() else {
-        return Err(persist_failure(
-            &mut run,
-            CmdError::click(format!(
-                "release run {} predates build records and cannot be continued; submit the same commit again with `stado release submit --source`",
-                run.run_id
-            )),
-        )
-        .await);
+        let error = CmdError::click(format!(
+            "release run {} predates build records and cannot be continued; submit the same commit again with `stado release submit --source`",
+            run.run_id
+        ));
+        return Err(persist_failure(&mut run, error).await);
     };
     let mut build = match load_build(&build_id).await? {
         Some(build) => build,
         None => {
-            return Err(persist_failure(
-                &mut run,
-                CmdError::click(format!(
-                    "build {build_id} of release run {} does not exist",
-                    run.run_id
-                )),
-            )
-            .await)
+            let error = CmdError::click(format!(
+                "build {build_id} of release run {} does not exist",
+                run.run_id
+            ));
+            return Err(persist_failure(&mut run, error).await);
         }
     };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
