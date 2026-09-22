@@ -1,6 +1,7 @@
 //! The whole-document checks: a registry read on its own, and a candidate
 //! read against the document it would replace.
 
+mod coordinators;
 mod registry;
 mod write;
 

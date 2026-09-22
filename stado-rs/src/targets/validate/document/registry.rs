@@ -1,5 +1,7 @@
 use crate::targets::*;
 
+use super::coordinators::{validate_coordinators, validate_product_contracts};
+
 /// Validate a registry-v2 document without modifying it. Python returns the
 /// input dict; here the borrowed input simply remains valid on `Ok(())`.
 pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
@@ -255,59 +257,6 @@ pub(crate) fn validate_registry_body(
             identities.insert(identity, identity_location);
         }
     }
-    if let Some(coordinators) = root.get("coordinators") {
-        let coordinators = coordinators
-            .as_array()
-            .ok_or_else(|| verr("registry.coordinators", "must be an array"))?;
-        for (index, coordinator) in coordinators.iter().enumerate() {
-            let location = format!("registry.coordinators[{index}]");
-            let coordinator = coordinator
-                .as_object()
-                .ok_or_else(|| verr(&location, "must be an object"))?;
-            let Some(heuristic) = coordinator.get("host_heuristic") else {
-                continue;
-            };
-            let heuristic = heuristic
-                .as_str()
-                .ok_or_else(|| verr(&format!("{location}.host_heuristic"), "must be a string"))?;
-            if coordinator.get("host").is_some_and(|host| !host.is_null()) {
-                return Err(verr(
-                    &location,
-                    "must not declare both host and host_heuristic",
-                ));
-            }
-            if !target_heuristics.contains_key(heuristic) {
-                return Err(verr(
-                    &format!("{location}.host_heuristic"),
-                    &format!("matches no local target: '{heuristic}'"),
-                ));
-            }
-            if !coordinator_heuristics.insert(heuristic) {
-                return Err(verr(
-                    &format!("{location}.host_heuristic"),
-                    &format!("selector '{heuristic}' is already used by another coordinator"),
-                ));
-            }
-        }
-    }
-
-    crate::placement::validate_registry_contract(data).map_err(RegistryValidationError)?;
-    crate::service_resolution::validate_registry_contract(data).map_err(RegistryValidationError)?;
-    crate::release_control::validate_registry_contract(data).map_err(RegistryValidationError)?;
-    // The unit-image revisit policy is a top-level, unmodelled key, so it
-    // round-trips through `Registry::extra` and older builds preserve it
-    // without reading it. Validating it here is what makes an operator learn
-    // at the write, and what makes a build that disagrees with the document
-    // report it through the existing `build-refuses-registry` finding rather
-    // than act on the part it understood.
-    crate::release_unit_image::validate_registry_contract(data).map_err(RegistryValidationError)?;
-    // The public-origin block is judged here for the same reason: an origin
-    // nothing outside the tailnet can resolve reached the public release
-    // route through an untyped deployment variable, and no reader refused it.
-    crate::public_origin::validate_registry_contract(data).map_err(RegistryValidationError)?;
-
-    if include_inference {
-        crate::inference::schema::validate(data).map_err(RegistryValidationError)?;
-    }
-    Ok(())
+    validate_coordinators(root, &target_heuristics)?;
+    validate_product_contracts(data, include_inference)
 }

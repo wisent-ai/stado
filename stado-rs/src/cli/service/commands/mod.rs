@@ -21,7 +21,9 @@ pub enum ServiceCommands {
     #[command(flatten)]
     Runtime(spec::runtime::RuntimeCommands),
     #[command(flatten)]
-    Environment(spec::environment::EnvironmentCommands),
+    Environment(spec::unit_inputs::environment::EnvironmentCommands),
+    #[command(flatten)]
+    Credentials(spec::unit_inputs::credentials::CredentialCommands),
     #[command(flatten)]
     Lifecycle(spec::lifecycle::LifecycleCommands),
 }
@@ -30,7 +32,12 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Read(command) => route::read::dispatch(command).await,
         ServiceCommands::Runtime(command) => route::runtime::dispatch(command).await,
-        ServiceCommands::Environment(command) => route::environment::dispatch(command).await,
+        ServiceCommands::Environment(command) => {
+            route::unit_inputs::environment::dispatch(command).await
+        }
+        ServiceCommands::Credentials(command) => {
+            route::unit_inputs::credentials::dispatch(command).await
+        }
         ServiceCommands::Lifecycle(command) => route::lifecycle::dispatch(command).await,
     }
 }

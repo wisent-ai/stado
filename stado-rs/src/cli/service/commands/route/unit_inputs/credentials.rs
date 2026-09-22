@@ -1,10 +1,7 @@
-//! Where the environment, endpoint and grant verbs land.
+//! Where the credential verbs land.
 
-use super::*;
+use super::super::*;
 
-use crate::cli::service::runtime::env::set::{env_set, EnvSetOptions};
-use crate::cli::service::runtime::env::show::{env_show, EnvShowOptions};
-use crate::cli::service::runtime::env::unset::{env_unset, EnvUnsetOptions};
 use crate::cli::service::runtime::secrets::auth_check::{auth_check, AuthCheckOptions};
 use crate::cli::service::runtime::secrets::declared_grants::{
     declared_grant_reconcile, DeclaredGrantsOptions,
@@ -12,93 +9,12 @@ use crate::cli::service::runtime::secrets::declared_grants::{
 use crate::cli::service::runtime::secrets::grant::{
     grant_sync, token_file_sync, GrantSyncOptions, TokenFileSyncOptions,
 };
-use crate::cli::service::runtime::serving::endpoint_check::{endpoint_check, EndpointCheckOptions};
-use crate::cli::service::runtime::serving::report::serving;
-use crate::cli::service::runtime::serving::ServingOptions;
 
-use super::super::spec::environment::EnvironmentCommands;
+use crate::cli::service::commands::spec::unit_inputs::credentials::CredentialCommands;
 
-pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdError> {
+pub(crate) async fn dispatch(command: CredentialCommands) -> Result<(), CmdError> {
     match command {
-        EnvironmentCommands::EnvSet {
-            name,
-            host,
-            key,
-            env_file,
-            value_file,
-            json,
-        } => {
-            env_set(EnvSetOptions {
-                name: &name,
-                host: &host,
-                key: &key,
-                env_file: &env_file,
-                value_file: &value_file,
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::EnvUnset {
-            name,
-            host,
-            key,
-            env_file,
-            json,
-        } => {
-            env_unset(EnvUnsetOptions {
-                name: &name,
-                host: &host,
-                key: &key,
-                env_file: &env_file,
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::EnvShow {
-            name,
-            host,
-            env_file,
-            reveal,
-            json,
-        } => {
-            env_show(EnvShowOptions {
-                name: &name,
-                host: &host,
-                env_file: &env_file,
-                reveal: reveal.as_deref(),
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::EndpointCheck {
-            name,
-            host,
-            env_file,
-            json,
-        } => {
-            endpoint_check(EndpointCheckOptions {
-                name: &name,
-                host: &host,
-                env_file: &env_file,
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::Serving {
-            name,
-            host,
-            ports,
-            json,
-        } => {
-            serving(ServingOptions {
-                name: &name,
-                host: &host,
-                ports: &ports,
-                as_json: json,
-            })
-            .await
-        }
-        EnvironmentCommands::Grants {
+        CredentialCommands::Grants {
             name,
             consumer,
             vault_file,
@@ -116,7 +32,7 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
             })
             .await
         }
-        EnvironmentCommands::GrantSync {
+        CredentialCommands::GrantSync {
             name,
             host,
             consumer,
@@ -140,7 +56,7 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
             })
             .await
         }
-        EnvironmentCommands::TokenFileSync {
+        CredentialCommands::TokenFileSync {
             name,
             host,
             item,
@@ -158,7 +74,7 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
             })
             .await
         }
-        EnvironmentCommands::AuthCheck {
+        CredentialCommands::AuthCheck {
             name,
             host,
             item,
