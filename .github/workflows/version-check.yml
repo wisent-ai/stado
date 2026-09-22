@@ -640,11 +640,29 @@ jobs:
           # is an answer nobody gave, and refusing is the direction that cannot certify a lie.
           # Its stderr is deliberately not swallowed: when the channel fails to answer, the
           # reason belongs in the log next to the refusal it caused.
+          # A `stado storage stat` that answers `infra_down` is not testimony about the
+          # object: it is the channel saying it cannot answer right now. On 2026-09-22
+          # that read 503 for every push to this repository — the declared public origin
+          # `charless-mac-mini.tail6443b3.ts.net` had no public A or AAAA record, so
+          # `stado web origin status` called it `not serving: release-object:
+          # origin-not-public` — and each run reported "the generated baseline cannot be
+          # trusted", which reads as a defect in the revision under judgement. The
+          # baseline generator already retries this exact class; this read did not.
           channel_state() {
             "$stado_bin" storage stat "$1" --json | jq -r '.state // ""' || true
           }
-          
-          state="$(channel_state "$marker")"
+
+          state=""
+          attempt=1
+          while [ "$attempt" -le 6 ]; do
+            state="$(channel_state "$marker")"
+            case "$state" in
+              present|absent) break ;;
+            esac
+            echo "the release channel did not answer about $marker (attempt $attempt); asking again in 10s"
+            sleep 10
+            attempt=$((attempt + 1))
+          done
           case "$state" in
             present) ;;
             absent)
@@ -652,8 +670,11 @@ jobs:
               false
               ;;
             *)
-              echo "::error::the release channel did not testify about $marker (state" \
-                "'${state:-none}'), so the generated baseline cannot be trusted."
+              echo "::error::the release channel could not be asked about $marker after" \
+                "$((attempt - 1)) attempts (state '${state:-none}'). This gate judges nothing" \
+                "until it can: read the origin with \`stado web origin status\` — an origin" \
+                "with no public record answers 503 here — and run this workflow again. The" \
+                "revision under judgement has not been refused."
               false
               ;;
           esac
