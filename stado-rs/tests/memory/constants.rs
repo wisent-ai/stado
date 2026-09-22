@@ -30,3 +30,12 @@ pub const INCOHERENT_TARGET_MB: i64 = 128;
 
 /// The registry schema version the fixtures declare.
 pub const REGISTRY_SCHEMA_VERSION: i64 = 2;
+
+/// A GnuPG daemon memory ceiling, in MiB, that no daemon on any machine this
+/// suite runs on reaches: the declared recovery program must then refuse for
+/// the ceiling's reason and repair nothing, which is how the suite reaches
+/// that program on a host whose daemons it must not touch.
+pub const UNREACHABLE_DAEMON_CEILING_MB: &str = "1048576";
+
+/// The declared recovery program this fleet ships.
+pub const SKARBIEC_CRYPTO_RECOVERY: &str = "recover-skarbiec-crypto";

@@ -24,9 +24,9 @@
         },
         {
           "name": "crypto",
-          "summary": "Stale per-user GnuPG daemons wedge keybox access, and this step replaces those daemons to restore Skarbiec decryption.",
+          "summary": "Per-user GnuPG daemons wedge keybox access or outgrow their memory ceiling, and this step replaces those daemons to restore Skarbiec decryption and free the memory a long-lived keyboxd holds.",
           "mutating": true,
-          "proof": "Skarbiec readiness reports ok after keyboxd and gpg-agent relaunch"
+          "proof": "Skarbiec readiness reports ok after keyboxd and gpg-agent relaunch; the program refuses when readiness reports no GPG failure and no daemon of the account stands over SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB"
         },
         {
           "name": "acquisition-state",

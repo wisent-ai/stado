@@ -54,9 +54,12 @@ pub struct MemoryRepairPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processes: Vec<String>,
     /// `reap_recovery`: the declared host-recovery program to run, by name —
-    /// `recover-skarbiec-crypto` is the one this fleet already has, and it is
-    /// what reaps the stale GnuPG daemons (`keyboxd` was holding 211 MB on
-    /// charless-mac-mini).
+    /// `recover-skarbiec-crypto` is the one this fleet already has. It
+    /// replaces the account's GnuPG daemons when Skarbiec reports them wedged
+    /// or when one of them stands over `SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB`
+    /// (1024 MiB unset): `keyboxd` held 15 GiB on charless-mac-mini after
+    /// twelve days while readiness answered ok, and this pass asked the
+    /// program and was refused, because memory was not yet a precondition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
     /// How long a process must have been running before this repair may

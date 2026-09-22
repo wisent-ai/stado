@@ -33,6 +33,14 @@ pub const LINUX_ROLE: &str = "burst";
 pub const ABSENT_UNIT: &str = "com.wisent.memory-fixture-absent";
 
 pub fn stado(storage: &Path, args: &[&str]) -> Output {
+    stado_with_env(storage, &[], args)
+}
+
+/// Same, with extra environment for that one run. This is how a test states
+/// the host a declared recovery program runs on — the readiness endpoint it
+/// probes, the daemon memory ceiling it applies — so the program's own
+/// precondition is what the test reaches, on a machine it must not repair.
+pub fn stado_with_env(storage: &Path, env: &[(&str, &str)], args: &[&str]) -> Output {
     let home = storage.join("home");
     fs::create_dir_all(&home).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
@@ -45,6 +53,9 @@ pub fn stado(storage: &Path, args: &[&str]) -> Output {
         .env_remove("COMPUTE_API_KEY")
         .env_remove("COMPUTE_API_URL")
         .env_remove("WC_PROFILES_DIR");
+    for (key, value) in env {
+        command.env(key, value);
+    }
     command.output().expect("stado binary runs")
 }
 
@@ -170,7 +181,11 @@ pub const LINUX_POLICY: &str = "linux-queue-host";
 /// own stdout: the disk report is printed first and the memory report second,
 /// each one canonical JSON on a line of its own.
 pub fn run_pass(storage: &Path) -> serde_json::Value {
-    let output = stado(storage, &["disk-cleanup", "--once"]);
+    run_pass_with_env(storage, &[])
+}
+
+pub fn run_pass_with_env(storage: &Path, env: &[(&str, &str)]) -> serde_json::Value {
+    let output = stado_with_env(storage, env, &["disk-cleanup", "--once"]);
     assert!(
         output.status.success(),
         "disk-cleanup --once failed: {}",

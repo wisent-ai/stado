@@ -178,10 +178,11 @@ pub fn restart_units(
 /// Run the declared host-recovery program.
 ///
 /// The program decides for itself whether its own precondition holds —
-/// `recover-skarbiec-crypto` refuses unless Skarbiec reported a GPG timeout
-/// or a keybox lock — and this repair records that refusal as a skip rather
-/// than overruling it. Memory pressure is a reason to ASK the declared
-/// recovery to run, never a reason to reap somebody else's daemons.
+/// `recover-skarbiec-crypto` refuses unless Skarbiec reported a GPG failure
+/// or a keybox lock, or a GnuPG daemon of the account stands over its memory
+/// ceiling — and this repair records that refusal as a skip rather than
+/// overruling it. Memory pressure is a reason to ASK the declared recovery
+/// to run, never a reason to reap somebody else's daemons.
 pub fn run_recovery(
     policy: &MemoryRepairPolicy,
     enforce: bool,
