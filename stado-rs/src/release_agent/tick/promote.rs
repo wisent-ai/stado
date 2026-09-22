@@ -51,12 +51,10 @@ pub(crate) async fn promote_candidate(
         save_state(target, state)?;
     }
 
-    // A candidate cannot serve a bind another program holds, and finding that
-    // out by spawning one costs ninety seconds and the digest: the process
-    // exits on `Address already in use` and the agent quarantines it. Ask the
-    // kernel first. This is not quarantined, because nothing is wrong with
-    // the release: the next tick rolls it out by itself once whichever
-    // declaration claimed that port gives it back.
+    // Refuse unrelated stable listeners before spending a candidate. A native
+    // ownership read may establish the explicitly declared predecessor, which
+    // keeps serving while the candidate starts on a separate port. It is not
+    // stopped until ensure_active_proxy has confirmed candidate readiness.
     if let Some(holder) = foreign_stable_bind_holder(target, serving, product)? {
         state.phase = RolloutPhase::Failed;
         state.detail = format!("{holder}; {NO_CANDIDATE_SPAWNED}");

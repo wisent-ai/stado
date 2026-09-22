@@ -5,6 +5,70 @@ use std::process::Command;
 
 use crate::release_control::ReleaseTargetPolicy;
 
+/// Only the declared predecessor may keep serving while a candidate starts
+/// on its separate port. Reuse the service command's native owner reader,
+/// including its parent-chain and launchd-domain checks.
+pub(crate) fn owns_stable_bind(target: &ReleaseTargetPolicy, port: u16) -> Result<bool, String> {
+    use crate::deploy::{service, service_serving};
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let (Some(label), Some(plist)) = (
+        target.legacy_launchd_label.as_deref(),
+        target.legacy_launchd_plist.as_deref(),
+    ) else {
+        return Ok(false);
+    };
+    // stop_legacy addresses the system domain; never admit a user job that
+    // the existing cutover cannot stop and restore.
+    if !cfg!(target_os = "macos")
+        || service::UnitDomain::from_path(plist) != service::UnitDomain::System
+    {
+        return Ok(false);
+    }
+    let script = service::serving_script(
+        label,
+        plist,
+        &service_serving::remote_serving_script(&[port]),
+    )
+    .map_err(|error| format!("cannot prepare legacy ownership read: {error}"))?;
+    let mut child = Command::new("/bin/bash")
+        .arg("-s")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot start legacy ownership read for {label}: {error}"))?;
+    let input = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("legacy ownership reader for {label} has no stdin"))?
+        .write_all(script.as_bytes());
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("cannot finish legacy ownership read for {label}: {error}"))?;
+    input.map_err(|error| format!("cannot send legacy ownership read for {label}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "legacy ownership read for {label} exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let report = service_serving::parse_serving(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|error| format!("cannot read legacy ownership for {label}: {error}"))?;
+    Ok(report.unit == label
+        && report.unit_path == plist
+        && report.loaded == "yes"
+        && report.listeners_state == service_serving::LISTENERS_READ
+        && report.ports.len() == 1
+        && report.ports[0].port == port
+        && !report.ports[0].holders.is_empty()
+        && report.ports[0].holders.iter().all(|holder| {
+            holder.owner_state == service_serving::OWNER_RESOLVED && holder.owner == label
+        }))
+}
+
 pub(crate) fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let Some(label) = target.legacy_launchd_label.as_deref() else {
         return Ok(());

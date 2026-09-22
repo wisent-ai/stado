@@ -126,22 +126,12 @@ pub(crate) fn lsof_binary() -> Option<&'static Path> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Who holds the stable bind right now, when that holder is not this
-/// product's own release proxy.
+/// Report a stable listener unless native evidence identifies our proxy or
+/// the explicitly declared system predecessor with separate candidate ports.
 ///
-/// `Ok(None)` is both "nothing is listening" and "this host cannot tell":
-/// a missing or failing `lsof` is an unknown, and an unknown never refuses a
-/// rollout. Only a listener that is positively not the proxy answers `Some`,
-/// and the sentence names the pid and the command, because the fact an
-/// operator needs is which program to move.
-///
-/// It exists because a candidate that cannot bind dies with
-/// `Address already in use (os error 48)` inside a stderr tail, ninety
-/// seconds after it was spawned, and the register filed that as
-/// `unclassified`. On `lukasz-macbook` on 2026-09-20 the holder of Skarbiec's
-/// `127.0.0.1:18787` was this same product: the resolver's `weles-admission`
-/// adapter for consumer `skarbiec-weles-credential-client`, declared on the
-/// port the release policy declares as the stable bind.
+/// A missing or failing lsof retains the existing unknown result. Recognizing
+/// a legacy predecessor requires the shared service ownership reader to prove
+/// every listener's label; a matching executable name grants nothing.
 pub(crate) fn foreign_stable_bind_holder(
     target: &ReleaseTargetPolicy,
     serving: &BlueGreenServing,
@@ -158,6 +148,16 @@ pub(crate) fn foreign_stable_bind_holder(
                 serving.stable_bind
             )
         })?;
+    let port_number = port
+        .parse::<u16>()
+        .map_err(|error| format!("invalid stable bind {}: {error}", serving.stable_bind))?;
+    if !serving.candidate_ports.contains(&port_number)
+        && crate::release_agent::rollout::serving::legacy::owns_stable_bind(target, port_number)?
+    {
+        // The declared predecessor stays live until candidate readiness passes.
+        // ensure_active_proxy owns the later stop, cutover and rollback path.
+        return Ok(None);
+    }
     let Some(lsof) = lsof_binary() else {
         return Ok(None);
     };
@@ -199,24 +199,11 @@ pub(crate) fn foreign_stable_bind_holder(
     }))
 }
 
-/// What to say about whoever holds the stable bind.
-///
-/// Two very different readings share this refusal. A foreign program on the
-/// port is a collision between two declarations. The product's OWN binary on
-/// it is not: it is a host still deployed the way this fleet ran before the
-/// release proxy existed, with the service unit serving the stable bind
-/// directly, and no rollout can start there until that unit moves off it. On
-/// charless-mac-mini on 2026-09-21 the sentence read like a stray process
-/// and sent a reader looking for something to kill; what held 8895 was
-/// `com.wisent.always-on.skarbiec`, the fleet's own managed unit.
+/// Describe a refused listener. A process name is diagnostic context, not
+/// evidence that the declared lifecycle can replace it.
 pub(crate) fn describe_holder(stable_bind: &str, pid: i32, name: &str, product: &str) -> String {
-    if name == product {
-        return format!(
-            "{stable_bind} is served directly by {product} itself (pid {pid}), the shape this \
-             fleet ran before the release proxy: the managed unit has to move off the stable \
-             bind before a candidate can be spawned behind it — read who serves it with \
-             stado service serving {product} --host <TARGET>"
-        );
-    }
-    format!("{stable_bind} is held by pid {pid} ({name}), which is not {product}'s release proxy")
+    format!(
+        "{stable_bind} is held by pid {pid} ({name}), which is not {product}'s release proxy \
+         or a proven declared legacy owner with independent candidate ports"
+    )
 }

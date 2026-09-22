@@ -73,4 +73,6 @@ pub(super) const GONE: Option<(release_cause::WallVerdict, Option<String>)> =
 
 mod binds;
 mod holds;
+#[path = "../../../../tests/release-ownership/legacy.rs"]
+mod legacy_ownership;
 mod records;
