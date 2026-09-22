@@ -36,15 +36,7 @@
             "-D",
             "warnings"
           ]
-        }
-      ],
-      "build": {
-        "argv": [
-          "bash",
-          "deploy/release/build_stado.sh"
-        ]
-      },
-      "tests": [
+        },
         {
           "name": "documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
@@ -62,6 +54,12 @@
           "argv": ["bash", "tests/fleet-expansion/qualify.sh", "desktop"]
         }
       ],
+      "build": {
+        "argv": [
+          "bash",
+          "deploy/release/build_stado.sh"
+        ]
+      },
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
@@ -94,15 +92,7 @@
             "-D",
             "warnings"
           ]
-        }
-      ],
-      "build": {
-        "argv": [
-          "bash",
-          "deploy/release/build_stado.sh"
-        ]
-      },
-      "tests": [
+        },
         {
           "name": "documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
@@ -116,6 +106,12 @@
           "argv": ["bash", "tests/fleet-expansion/qualify.sh", "cli"]
         }
       ],
+      "build": {
+        "argv": [
+          "bash",
+          "deploy/release/build_stado.sh"
+        ]
+      },
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
