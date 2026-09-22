@@ -182,6 +182,8 @@ pub(crate) async fn record_build(
     {
         return Err(CmdError::click("durable build identity mismatch"));
     }
+    crate::cli::release_submit::changes::bind(&reading.root, &reading.commit, &id, &m.product)
+        .await?;
     build.failure = None;
     save_build(&mut build).await?;
     Ok(build)

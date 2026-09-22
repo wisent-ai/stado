@@ -29,7 +29,7 @@ use super::continue_run;
 
 pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     let channel = args.channel.into();
-    let (build, m, bound_checkout) = match (&args.source, &args.build) {
+    let (build, m) = match (&args.source, &args.build) {
         (Some(source), None) => {
             let version = args
                 .version
@@ -46,7 +46,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             // the build owes, so a refused builder is written on the run the
             // CLI and Desktop read, exactly once.
             let build = record_build(&reading, &staged, version).await?;
-            (build, m, Some((reading.root, reading.commit)))
+            (build, m)
         }
         (None, Some(build_id)) => {
             let build = current_build(build_id, false).await?;
@@ -61,7 +61,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             require_rollback_compatibility(&m, &build.version).await?;
             ensure_object_store().await?;
             claim_platforms(&m, &build.version, &build.source_commit).await?;
-            (build, m, None)
+            (build, m)
         }
         _ => return Err(CmdError::usage("release submit needs --source or --build")),
     };
@@ -104,11 +104,6 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     if run.build_id.is_none() {
         run.build_id = Some(build.build_id.clone());
         run.manifest_uri = build.manifest_uri.clone();
-    }
-    if run.state == ReleaseRunState::Submitting {
-        if let Some((root, commit)) = &bound_checkout {
-            crate::cli::release_submit::changes::bind(root, commit, &id, &m.product).await?;
-        }
     }
     // Submitting is queueing. The builds run in the fleet, and the control
     // host's release agent signs, publishes and delivers when they are done;

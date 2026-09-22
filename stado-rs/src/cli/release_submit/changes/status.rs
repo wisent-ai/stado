@@ -1,9 +1,7 @@
 use super::{failure, Change, ChangeStatus};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
-use crate::release_pipeline::{
-    BuildReceipt, ProductManifest, ReleaseRun, ReleaseRunState, StepStatus,
-};
+use crate::release_pipeline::{BuildReceipt, BuildRun, BuildRunState, ProductManifest, StepStatus};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -15,16 +13,12 @@ pub(super) struct Observation {
     evidence: Vec<BuildReceipt>,
 }
 
-/// Read each release and receipt once, even when it covers many changes.
+/// Read each build and receipt once, even when it covers many changes.
 pub(super) async fn observations(
     store: &JobStorage,
 ) -> Result<HashMap<String, Observation>, CmdError> {
     let mut observations: HashMap<String, Observation> = HashMap::new();
-    for path in store
-        .list_paths("runs/release-pipeline/", 0)
-        .await
-        .map_err(failure)?
-    {
+    for path in store.list_paths("runs/build/", 0).await.map_err(failure)? {
         if !path.ends_with("/changes.json") {
             continue;
         }
@@ -32,7 +26,7 @@ pub(super) async fn observations(
             .download_text(&path)
             .await
             .map_err(failure)?
-            .ok_or_else(|| CmdError::click(format!("release batch missing: {path}")))?;
+            .ok_or_else(|| CmdError::click(format!("build batch missing: {path}")))?;
         let batch: Vec<Change> = serde_json::from_str(&text)?;
         if batch.is_empty() {
             continue;
@@ -41,14 +35,11 @@ pub(super) async fn observations(
         let Some(text) = store.download_text(&run_path).await.map_err(failure)? else {
             continue;
         };
-        let run: ReleaseRun = serde_json::from_str(&text)?;
-        if run.state == ReleaseRunState::Superseded {
-            continue;
-        }
-        let observation = observe(store, &run).await?;
+        let mut run: BuildRun = serde_json::from_str(&text)?;
+        let observation = observe(store, &mut run).await?;
         for change in batch {
             if run.product != change.product {
-                return Err(CmdError::click("release batch product mismatch"));
+                return Err(CmdError::click("build batch product mismatch"));
             }
             if observations.get(&change.id).is_none_or(|old| {
                 (&observation.created_at, &observation.run_id) > (&old.created_at, &old.run_id)
@@ -82,11 +73,9 @@ pub(super) fn for_change(
     }
 }
 
-async fn observe(store: &JobStorage, run: &ReleaseRun) -> Result<Observation, CmdError> {
-    let manifest_path = format!(
-        "runs/release-pipeline/{}/{}/manifest.json",
-        run.product, run.run_id
-    );
+async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, CmdError> {
+    let manifest_path =
+        crate::cli::release_submit::build_path(&run.product, &run.build_id, "manifest.json");
     let manifest_bytes = store.read_bytes(&manifest_path).await?.ok_or_else(|| {
         CmdError::click(format!("qualification manifest missing: {manifest_path}"))
     })?;
@@ -100,10 +89,12 @@ async fn observe(store: &JobStorage, run: &ReleaseRun) -> Result<Observation, Cm
             "qualification manifest declares no releases",
         ));
     };
+    // Read terminal jobs without queueing a retry or requiring a release.
+    crate::cli::release_submit::refresh_build(store, run, &manifest).await?;
     let mut result = Observation {
         created_at: run.created_at.clone(),
         state: "building".into(),
-        run_id: run.run_id.clone(),
+        run_id: run.build_id.clone(),
         failure: None,
         evidence: Vec::new(),
     };
@@ -121,11 +112,13 @@ async fn observe(store: &JobStorage, run: &ReleaseRun) -> Result<Observation, Cm
         })?;
         let path = format!("status/{}/output/receipt.json", entry.job_id);
         let Some(bytes) = store.read_bytes(&path).await? else {
-            qualified = false;
+            if recipe.required {
+                qualified = false;
+            }
             continue;
         };
         let receipt: BuildReceipt = serde_json::from_slice(&bytes)?;
-        if receipt.run_id != run.run_id
+        if receipt.run_id != run.build_id
             || receipt.job_id != entry.job_id
             || receipt.platform != *platform
             || receipt.product != run.product
@@ -138,6 +131,10 @@ async fn observe(store: &JobStorage, run: &ReleaseRun) -> Result<Observation, Cm
             return Err(CmdError::click(format!(
                 "qualification identity mismatch at {path}"
             )));
+        }
+        if !recipe.required {
+            result.evidence.push(receipt);
+            continue;
         }
         let complete = !recipe.tests.is_empty()
             && recipe.tests.iter().all(|test| {
@@ -172,14 +169,28 @@ async fn observe(store: &JobStorage, run: &ReleaseRun) -> Result<Observation, Cm
         }
         result.evidence.push(receipt);
     }
-    if run.state == ReleaseRunState::Failed {
+    if run.state == BuildRunState::Failed {
         result.state = "failed".into();
-        result.failure = Some(
-            run.failure
-                .clone()
-                .unwrap_or_else(|| "release failed without a recorded cause".into()),
-        );
-    } else if qualified && result.state != "failed" {
+        if result.failure.is_none() {
+            result.failure = run.failure.clone().or_else(|| {
+                let reasons: Vec<_> = run
+                    .platforms
+                    .iter()
+                    .filter_map(|(name, platform)| {
+                        platform
+                            .failure
+                            .as_ref()
+                            .map(|reason| format!("{name}: {reason}"))
+                    })
+                    .collect();
+                Some(if reasons.is_empty() {
+                    "build failed without a recorded cause".into()
+                } else {
+                    reasons.join("; ")
+                })
+            });
+        }
+    } else if qualified && run.state == BuildRunState::Passed && result.state != "failed" {
         result.state = "passed".into();
     }
     Ok(result)

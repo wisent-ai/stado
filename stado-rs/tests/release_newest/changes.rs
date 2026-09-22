@@ -109,4 +109,37 @@ fn pushed_commits_wait_together_without_starting_a_build() {
         2,
         "refused source was not queued"
     );
+
+    // A later standalone build, not a release, covers both ancestor commits.
+    // This isolated store has no builders: the real placement refusal must
+    // fail its covered changes rather than leave them queued forever.
+    let refused_build = area.stado(&[
+        "build",
+        "submit",
+        "--source",
+        root.to_str().unwrap(),
+        "--commit",
+        &second,
+        "--version",
+        "1.0.0",
+        "--json",
+    ]);
+    assert!(!refused_build.status.success());
+    let verdicts = document(area.stado(&["release", "changes", "list", "--task", &task, "--json"]));
+    let verdicts = verdicts.as_array().unwrap();
+    assert_eq!(verdicts.len(), 2);
+    for verdict in verdicts {
+        assert_eq!(verdict["state"], "failed");
+        assert_eq!(verdict["task_id"], task);
+        assert!(verdict["failure"].as_str().unwrap().contains("builder"));
+        let build = document(area.stado(&[
+            "build",
+            "status",
+            verdict["run_id"].as_str().unwrap(),
+            "--json",
+        ]));
+        assert_eq!(build["state"], "failed");
+        assert_eq!(build["source_commit"], second);
+    }
+    assert_eq!(verdicts[0]["run_id"], verdicts[1]["run_id"]);
 }

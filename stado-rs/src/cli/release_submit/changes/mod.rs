@@ -162,8 +162,8 @@ pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError>
     Ok(entries)
 }
 
-/// Freeze only tickets whose commits the selected release actually contains.
-/// Called before queueing the release; later submissions cannot join its batch.
+/// Freeze only tickets whose commits the selected build actually contains.
+/// Called before queueing the build; later submissions cannot join its batch.
 pub(crate) async fn bind(
     root: &std::path::Path,
     commit: &str,
@@ -171,7 +171,7 @@ pub(crate) async fn bind(
     product: &str,
 ) -> Result<(), CmdError> {
     let store = JobStorage::new().await.map_err(failure)?;
-    let path = format!("runs/release-pipeline/{run_id}/changes.json");
+    let path = format!("runs/build/{run_id}/changes.json");
     if store.download_text(&path).await.map_err(failure)?.is_some() {
         return Ok(());
     }
