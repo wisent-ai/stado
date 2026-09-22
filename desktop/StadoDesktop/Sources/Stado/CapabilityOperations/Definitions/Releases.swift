@@ -65,6 +65,7 @@ enum NativeReleaseSourceOperations {
         // A build is not a release. These queue and read builds and publish
         // nothing; `release-build` is the release that consumes one, and the
         // CLI refuses it while the build is waiting or has failed.
+        .init(id: "build-budget", title: "Read daily build allowance and retained user approvals", path: ["queue", "budget"], hostPlacement: .none, mutates: false),
         .init(id: "build-newest-plan", title: "Read what every product would build (queues nothing)", path: ["build", "newest"], hostPlacement: .none, fields: [
             .init(id: "root", label: "Workspace holding the product checkouts (blank reads the checkout's own workspace)", option: "--root"),
             .init(id: "product", label: "One product (blank reads every product)", option: "--product"),
@@ -87,6 +88,13 @@ enum NativeReleaseSourceOperations {
         .init(id: "release-build", title: "Release a build that has passed (refused while it is waiting or failed)", path: ["release", "submit"], hostPlacement: .none, fields: [
             .init(id: "build", label: "Build ID of a passed build", option: "--build", required: true),
             .init(id: "channel", label: "Release channel", option: "--channel", choices: ["candidate", "stable"], initial: "candidate"),
+        ]),
+        .init(id: "fetch-release", title: "Fetch a verified archive for an accepted source revision (does not install)", path: ["release", "fetch"], hostPlacement: .none, fields: [
+            .init(id: "product", label: "Release product", required: true),
+            .init(id: "version", label: "Exact published version", required: true),
+            .init(id: "platform", label: "Published platform", option: "--platform", required: true),
+            .init(id: "source", label: "Accepted full source commit", option: "--source-commit", required: true),
+            .init(id: "destination", label: "Absolute archive filename on the selected Stado API host", option: "--destination", required: true),
         ]),
     ]
 }
