@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 mod contract;
+mod ports;
 mod routes;
 
 pub use contract::validate_registry_contract;
