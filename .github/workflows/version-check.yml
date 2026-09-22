@@ -1531,12 +1531,14 @@ jobs:
           git fetch --no-tags --depth 1 origin "$BASE_REF" >/dev/null 2>&1 || true
           bash "$RUNNER_TEMP/stado-quality-gate.sh" --manifest "$MANIFEST" --base "$BASE_REF"
 
-      - name: Retain real source handoff evidence
+      - name: Retain real product qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: source-handoff-${{ github.sha }}
-          path: stado-rs/.wisent-output/release-newest/
+          path: |
+            stado-rs/.wisent-output/release-newest/
+            stado-rs/target/fleet-expansion-runs/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14

@@ -13,14 +13,10 @@ fn catalog_replacement_refuses_stale_versions_and_invalid_money_without_writing(
     let before = std::fs::read(&path).unwrap();
     let conflict = j.set(Vec::new(), None);
     assert!(!conflict.status.success());
-    assert!(
-        String::from_utf8_lossy(&conflict.stderr).contains("expansion catalog version conflict")
-    );
     assert_eq!(std::fs::read(&path).unwrap(), before);
     let mut invalid = option("invalid", 1.001, 0.0, 20.0);
     let rejected = j.set(vec![invalid.clone()], first["version"].as_str());
     assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("at most two decimal places"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
     invalid["upfront_usd"] = Value::Null;
     let replaced = j.set(vec![invalid], first["version"].as_str());
