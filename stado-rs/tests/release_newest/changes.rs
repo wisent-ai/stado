@@ -37,9 +37,13 @@ fn pushed_commits_wait_together_without_starting_a_build() {
         )
     });
     std::fs::write(area.root.join("source-revision"), revision).unwrap();
+    let mut manifest: Value = serde_json::from_str(&releasing_manifest("pending-product")).unwrap();
+    let product: Value =
+        serde_json::from_str(include_str!("../../../.wisent-release.json")).unwrap();
+    manifest["platforms"] = product["platforms"].clone();
     let root = area.checkout(
         "pending-product",
-        &releasing_manifest("pending-product"),
+        &manifest.to_string(),
         Some(("package.json", "{\"version\":\"1.0.0\"}")),
     );
     let remote = area.root.join("origin.git");
@@ -138,4 +142,21 @@ fn pushed_commits_wait_together_without_starting_a_build() {
         assert_eq!(build["source_commit"], second);
     }
     assert_eq!(verdicts[0]["run_id"], verdicts[1]["run_id"]);
+
+    // Names must remain unique across source quality and post-build tests.
+    let recipe = &mut manifest["platforms"]["darwin-arm64"];
+    recipe["tests"][0]["name"] = recipe["quality"][0]["name"].clone();
+    std::fs::write(root.join(".wisent-release.json"), manifest.to_string()).unwrap();
+    git(&root, &["add", ".wisent-release.json"]);
+    git(&root, &["commit", "-m", "duplicate pipeline step name"]);
+    git(&root, &["push", "origin", "main"]);
+    let duplicate = git(&root, &["rev-parse", "HEAD"]);
+    assert!(!submit(&duplicate).status.success());
+    let unchanged =
+        document(area.stado(&["release", "changes", "list", "--task", &task, "--json"]));
+    assert_eq!(
+        unchanged.as_array().unwrap().len(),
+        verdicts.len(),
+        "a refused manifest must not record a handoff"
+    );
 }

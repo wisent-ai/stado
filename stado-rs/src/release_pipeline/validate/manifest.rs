@@ -125,9 +125,12 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
         }
         let mut gates = BTreeSet::new();
         for gate in recipe.quality.iter().chain(recipe.tests.iter()) {
-            if !identifier(&gate.name) || !gates.insert(gate.name.as_str()) || !argv(&gate.argv) {
+            if !gates.insert(gate.name.as_str()) {
+                return Err(format!("{platform}: duplicate step name {:?}", gate.name));
+            }
+            if !identifier(&gate.name) || !argv(&gate.argv) {
                 return Err(format!(
-                    "{platform}: quality gates require unique names and non-empty argv"
+                    "{platform}: quality and test steps require valid names and non-empty argv"
                 ));
             }
         }

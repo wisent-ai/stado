@@ -39,15 +39,15 @@
           ]
         },
         {
-          "name": "documentation",
+          "name": "source-documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
         },
         {
-          "name": "release-newest",
+          "name": "source-release-newest",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
         },
         {
-          "name": "fleet-expansion-cli",
+          "name": "source-fleet-expansion-cli",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
         }
       ],
@@ -110,15 +110,15 @@
           ]
         },
         {
-          "name": "documentation",
+          "name": "source-documentation",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
         },
         {
-          "name": "release-newest",
+          "name": "source-release-newest",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
         },
         {
-          "name": "fleet-expansion-cli",
+          "name": "source-fleet-expansion-cli",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
         }
       ],
