@@ -3,17 +3,16 @@ use serde_json::{json, Map, Value};
 
 use super::{host, CmdError};
 
-mod accelerators;
 mod cleaners;
 mod coverage;
 mod ops;
 mod policies;
-mod read;
+mod report;
 pub mod watermark;
 mod work_root;
 
 use ops::{reclaim, relocate, remove_file, retire_file};
-use read::{print_json, report};
+use report::{print_json, report};
 
 #[derive(Subcommand)]
 pub enum SpaceCommands {

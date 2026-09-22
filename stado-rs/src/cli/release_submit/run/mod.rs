@@ -2,10 +2,12 @@
 //! durable run object it maintains, the orchestrator that walks it, and the
 //! reports read back from it.
 
-pub(in crate::cli::release_submit) mod finish;
+pub(in crate::cli::release_submit) mod close;
 pub(in crate::cli::release_submit) mod reports;
 pub(in crate::cli::release_submit) mod resume;
 pub(in crate::cli::release_submit) mod source;
 pub(in crate::cli::release_submit) mod state;
 pub(in crate::cli::release_submit) mod submit;
-pub(in crate::cli::release_submit) mod supersede;
+
+/// The two endings, under the names every caller already uses.
+pub(in crate::cli::release_submit) use close::{finish, supersede};

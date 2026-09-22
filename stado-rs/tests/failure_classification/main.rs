@@ -1,6 +1,6 @@
 //! `classify_message` over the wording this fleet actually gets back.
 //!
-//! The families live in `src/primitives/failure-needles.json`, and the order
+//! The families live in `src/primitives/failure/needles.json`, and the order
 //! they are tested in is the load-bearing part: `find: /x: Permission denied`
 //! is an unreadable file, not a rejected credential, while `Permission denied
 //! (publickey)` is a rejected credential however it is spelled around a path.

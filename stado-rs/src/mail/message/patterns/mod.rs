@@ -8,15 +8,15 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-/// Every scanner is declared in `mail-patterns.json` beside this file, with
+/// Every scanner is declared in `patterns.json` beside this file, with
 /// the reason it is shaped the way it is: which currencies this fleet is
 /// billed in, and why a date is only recognised for this century.
 fn declared(name: &str) -> Regex {
-    let document: serde_json::Value = serde_json::from_str(include_str!("mail-patterns.json"))
-        .expect("mail-patterns.json beside this file is valid JSON");
+    let document: serde_json::Value = serde_json::from_str(include_str!("patterns.json"))
+        .expect("patterns.json beside this file is valid JSON");
     let source = document[name]
         .as_str()
-        .unwrap_or_else(|| panic!("mail-patterns.json declares no {name}"));
+        .unwrap_or_else(|| panic!("patterns.json declares no {name}"));
     Regex::new(source).unwrap_or_else(|error| panic!("declared {name} pattern: {error}"))
 }
 

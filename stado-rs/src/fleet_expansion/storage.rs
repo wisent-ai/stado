@@ -1,7 +1,7 @@
 //! The canonical store owns catalogs and immutable, self-contained plan receipts.
 use super::constants::{CATALOG_PATH, PLAN_PREFIX, SCHEMA_VERSION};
 use super::model::{Catalog, CatalogRecord, ExpansionReport};
-use super::validate;
+use super::plan::validate;
 use crate::queue::JobStorage;
 
 pub async fn read_catalog(store: &JobStorage) -> Result<CatalogRecord, String> {

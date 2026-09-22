@@ -65,7 +65,7 @@ pub fn retry_exit_code() -> i32 {
 }
 
 /// How this fleet's failures are actually worded, declared in
-/// `failure-needles.json` beside this file: one family per failure code,
+/// `needles.json` beside this file: one family per failure code,
 /// each with the reason it exists and the reason it sits where it sits in
 /// the order, plus the HTTP status that beats all of them.
 ///
@@ -73,15 +73,15 @@ pub fn retry_exit_code() -> i32 {
 /// rsync, gcloud, curl and a dozen HTTP clients have actually said, and a
 /// record belongs where it can be read and added to.
 static FAILURE_NEEDLES: LazyLock<serde_json::Value> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("failure-needles.json"))
-        .expect("failure-needles.json beside this file is valid JSON")
+    serde_json::from_str(include_str!("needles.json"))
+        .expect("needles.json beside this file is valid JSON")
 });
 
 /// The declared families, in the order they must be tested.
 fn families() -> Vec<(FailureCode, Vec<String>)> {
     FAILURE_NEEDLES["families"]
         .as_array()
-        .expect("failure-needles.json declares a families array")
+        .expect("needles.json declares a families array")
         .iter()
         .map(|family| {
             let code = FailureCode::or_fallback(
@@ -104,7 +104,7 @@ static UPSTREAM_STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         FAILURE_NEEDLES["upstream_status"]
             .as_str()
-            .expect("failure-needles.json declares upstream_status"),
+            .expect("needles.json declares upstream_status"),
     )
     .expect("declared upstream status regex compiles")
 });

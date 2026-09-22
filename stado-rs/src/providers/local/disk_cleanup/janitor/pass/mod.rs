@@ -5,16 +5,14 @@ pub(crate) mod cleaners;
 pub(crate) mod lock;
 pub(crate) mod once;
 pub(crate) mod service_logs;
+mod sweep;
 
 use std::path::Path;
 use std::time::Instant;
 
 use serde_json::Value;
 
-use crate::providers::local::disk_cleanup::janitor::pass::cleaners::run_cleaners;
-use crate::providers::local::disk_cleanup::janitor::pass::cleaners::summary::{
-    select_outcome, summarize_scan,
-};
+use crate::providers::local::disk_cleanup::janitor::pass::cleaners::summary::select_outcome;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::ExclusiveLock;
 use crate::providers::local::disk_cleanup::janitor::pass::once::finish::finish;
 use crate::providers::local::disk_cleanup::janitor::pass::service_logs::rotate_service_logs;
@@ -229,7 +227,7 @@ pub(crate) async fn run_with_lock(
             log_fn,
         );
     }
-    if let Err(exc) = run_cleaners(
+    let Some(after) = sweep::sweep(
         home,
         &policy,
         &declared_release_versions,
@@ -237,9 +235,7 @@ pub(crate) async fn run_with_lock(
         &mut report,
     )
     .await
-    {
-        report.add_error("runtime", &exc);
-        report.outcome = "invalid_or_unavailable_policy".to_string();
+    else {
         return finish(
             report,
             started,
@@ -249,50 +245,6 @@ pub(crate) async fn run_with_lock(
             ControlUpdateAuthority::Owner,
             log_fn,
         );
-    }
-    // The store this host serves for the fleet's products. It belongs here
-    // rather than to whichever product wrote the bytes, because a host under
-    // disk pressure refuses jobs — including the job that would have run
-    // that product's own retention — so reclamation owned by the queue never
-    // reaches the host that needs it most.
-    crate::providers::local::disk_cleanup::object_evidence::scan_object_evidence(
-        home,
-        &policy,
-        attempted_at,
-        policy.max_scan_items,
-        std::time::Instant::now()
-            + std::time::Duration::from_secs(policy.max_pass_seconds.unwrap_or(600).max(1) as u64),
-        policy.mode == "enforce",
-        &mut report,
-    );
-    // After the cleaners and before the volume is measured: on a Mac their
-    // deletions are worth nothing until the snapshots pinning those blocks
-    // are thinned, so a pass can remove every tagged build tree it finds and
-    // leave free space exactly where it found it. Bounded by the declared
-    // target, so a host with headroom keeps its backup history, and skipped
-    // entirely when the policy does not declare the cleaner.
-    crate::providers::local::disk_cleanup::local_snapshots::thin_to_target(
-        home,
-        &policy,
-        policy.mode == "enforce",
-        &mut report,
-    );
-    summarize_scan(&policy, &mut report);
-    let after = match free_bytes(home) {
-        Ok(free) => free,
-        Err(exc) => {
-            report.add_error("runtime", &exc);
-            report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(
-                report,
-                started,
-                Some(home),
-                persist,
-                attempted_at,
-                ControlUpdateAuthority::Owner,
-                log_fn,
-            );
-        }
     };
     select_outcome(&policy, &mut report, after);
     finish(

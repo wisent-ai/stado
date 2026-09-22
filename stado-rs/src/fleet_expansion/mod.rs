@@ -1,11 +1,11 @@
 //! Budgeted fleet expansion from live unmet needs and explicitly sourced estimates.
 pub mod constants;
-mod economics;
 mod model;
+mod plan;
 mod render;
-mod select;
 mod storage;
-mod validate;
+
+use plan::{economics, select, validate};
 
 pub use model::{need_key, Catalog, CatalogRecord, ExpansionReport};
 pub use render::render_report;

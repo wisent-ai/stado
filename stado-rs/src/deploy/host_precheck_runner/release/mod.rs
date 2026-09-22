@@ -5,6 +5,7 @@
 pub(super) mod install;
 pub(super) mod installer;
 pub(super) mod publisher;
+mod secret;
 
 pub use install::*;
 pub use installer::*;

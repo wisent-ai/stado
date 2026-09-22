@@ -1,6 +1,8 @@
 //! `stado space report TARGET`: disk, memory, inventory, build caches and
 //! both janitor states as one document.
 
+mod accelerators;
+
 use super::*;
 
 pub(super) fn print_json(value: &Value) -> Result<(), CmdError> {
@@ -119,7 +121,7 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
     document.insert("coverage".to_string(), coverage.clone());
     document.insert(
         "accelerators".to_string(),
-        super::accelerators::accelerators_json(&target).await,
+        accelerators::accelerators_json(&target).await,
     );
     let report = Value::Object(document);
     if json_output {
