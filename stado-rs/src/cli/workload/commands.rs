@@ -5,18 +5,22 @@ use serde_json::Value;
 
 use crate::cli::CmdError;
 
-use super::catalog::{catalog, list, workload, DECLARATION_PATH};
+use super::catalog::{list, workload, DECLARATION_PATH};
 use super::plan::{
     boolean, dynamic_allowance, place, read_plan, required_plan, required_plan_path, required_text,
     string_array,
 };
 use super::runners::{
-    connect_jeden, current_workspace, gui_automation_status, list_sessions, mobile_runtime,
-    recordings_status, refresh_weles_api_runtime, run_gui_automation, run_weles_browser_task,
-    run_weles_capture, run_weles_diagnostics, run_weles_image_inspect, set_weles_recordings_dir,
-    start_detached, weles_activity, weles_browser_runtime, weles_capture_status,
-    weles_run_diagnostics, DetachedRequest,
+    list_sessions, mobile_runtime, refresh_weles_api_runtime, run_gui_automation,
+    run_weles_browser_task, run_weles_capture, run_weles_diagnostics, run_weles_image_inspect,
+    set_weles_recordings_dir, weles_activity, weles_browser_runtime,
 };
+
+mod interactive;
+mod status;
+
+use interactive::{attach, default_max_steps, start, StartArguments};
+use status::status;
 
 #[derive(Subcommand)]
 pub enum WorkloadCommands {
@@ -264,129 +268,3 @@ async fn run_kind(
     }
 }
 
-async fn status(
-    selector: &str,
-    requested_target: Option<&str>,
-    json_output: bool,
-) -> Result<(), CmdError> {
-    let (kind, receipt) = if let Some((kind, id)) = selector.split_once(':') {
-        (kind, Some(id))
-    } else if catalog()?
-        .workloads
-        .iter()
-        .any(|entry| entry.kind == selector)
-    {
-        (selector, None)
-    } else {
-        ("weles-capture", Some(selector))
-    };
-    let declaration = workload(kind)?;
-    if declaration.interactive {
-        return Err(CmdError::usage(format!(
-            "{kind} is interactive and has no receipt report; use `stado workload attach {kind}`"
-        )));
-    }
-    let resolved = place(
-        declaration,
-        requested_target,
-        dynamic_allowance(declaration, None),
-    )
-    .await?;
-    let target = resolved.name.as_str();
-    match (kind, receipt) {
-        ("weles-capture", Some(batch)) => weles_capture_status(target, batch, json_output).await,
-        ("weles-capture", None) => Err(CmdError::usage(
-            "weles-capture status needs its receipt id: `stado workload status weles-capture:<batch>`",
-        )),
-        ("weles-diagnostics", Some(run_id)) => weles_run_diagnostics(target, run_id, None, json_output).await,
-        ("weles-diagnostics", None) => Err(CmdError::usage(
-            "weles-diagnostics status needs its receipt id: `stado workload status weles-diagnostics:<run-id>`",
-        )),
-        ("weles-browser-runtime", _) => weles_browser_runtime(target, &[], false, json_output).await,
-        ("mobile-runtime", _) => mobile_runtime(target, false, json_output).await,
-        ("gui-automation", _) => gui_automation_status(target, json_output).await,
-        ("weles-recordings", _) => recordings_status(&resolved, json_output),
-        ("weles-activity" | "weles-browser-task" | "weles-image-inspect" | "weles-api-runtime", _) => {
-            weles_activity(target, json_output).await
-        }
-        _ => Err(CmdError::click(format!(
-            "{kind} declares no status report; add it to {DECLARATION_PATH}"
-        ))),
-    }
-}
-
-async fn attach(
-    kind: &str,
-    requested_target: Option<&str>,
-    workspace: Option<&str>,
-    resume: Option<&str>,
-) -> Result<(), CmdError> {
-    let declaration = workload(kind)?;
-    if !declaration.interactive {
-        return Err(CmdError::usage(format!(
-            "{kind} is not interactive; use `stado workload run {kind}`"
-        )));
-    }
-    match kind {
-        "jeden-session" => {
-            let target = match requested_target {
-                Some(name) => Some(place(declaration, Some(name), None).await?.name),
-                None => None,
-            };
-            let workspace = workspace
-                .map(str::to_string)
-                .unwrap_or_else(current_workspace);
-            connect_jeden(declaration, &workspace, target.as_deref(), resume).await
-        }
-        _ => Err(CmdError::click(format!(
-            "{kind} declares no stream attachment; add it to {DECLARATION_PATH}"
-        ))),
-    }
-}
-
-/// How far a detached session may run before the harness stops it. High
-/// enough for real work, bounded because nobody is watching it.
-fn default_max_steps() -> u32 {
-    64
-}
-
-struct StartArguments<'a> {
-    kind: &'a str,
-    target: Option<&'a str>,
-    workspace: Option<&'a str>,
-    task: Option<&'a str>,
-    model: Option<&'a str>,
-    max_steps: u32,
-    priority: i64,
-    allow_write: bool,
-    allow_command: bool,
-    json: bool,
-}
-
-async fn start(arguments: StartArguments<'_>) -> Result<(), CmdError> {
-    let kind = arguments.kind;
-    let declaration = workload(kind)?;
-    declaration.require_detachable()?;
-    let target = match arguments.target {
-        Some(name) => Some(place(declaration, Some(name), None).await?.name),
-        None => None,
-    };
-    let workspace = arguments
-        .workspace
-        .map(str::to_string)
-        .unwrap_or_else(current_workspace);
-    let task = arguments.task.unwrap_or_default();
-    start_detached(DetachedRequest {
-        kind: declaration,
-        workspace: &workspace,
-        target: target.as_deref(),
-        task,
-        model: arguments.model,
-        max_steps: arguments.max_steps,
-        priority: arguments.priority,
-        allow_write: arguments.allow_write,
-        allow_command: arguments.allow_command,
-        json: arguments.json,
-    })
-    .await
-}
