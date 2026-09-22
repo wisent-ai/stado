@@ -1,4 +1,4 @@
-//! Pushed work waiting for a later release. Recording work never starts a build.
+//! Pushed work waiting for a later shared build. Handoff starts no build.
 mod source;
 mod status;
 
@@ -31,7 +31,7 @@ enum ChangesCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Read queued work and the actual release qualification covering it.
+    /// Read queued work and the actual build qualification covering it.
     List {
         #[arg(long)]
         task: Option<String>,

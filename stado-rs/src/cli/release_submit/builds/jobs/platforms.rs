@@ -284,9 +284,10 @@ fn build_state(build: &BuildRun, m: &ReleasePipelineManifest) -> BuildRunState {
         match build.platforms.get(name).map(|platform| &platform.state) {
             Some(PlatformRunState::Failed) if recipe.required => return BuildRunState::Failed,
             Some(PlatformRunState::Qualified | PlatformRunState::Failed) => {}
-            Some(PlatformRunState::Published) | Some(PlatformRunState::Submitted) | None => {
-                waiting = true
+            None if recipe.required && build.state == BuildRunState::Failed => {
+                return BuildRunState::Failed;
             }
+            _ => waiting = true,
         }
     }
     if waiting {
