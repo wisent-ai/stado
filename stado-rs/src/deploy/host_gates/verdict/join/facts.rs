@@ -15,7 +15,6 @@ use crate::queue::capacity::{self, Publication};
 use crate::targets::ComputeTarget;
 
 pub(super) struct Facts {
-    pub free_kb: Option<u64>,
     pub free_bytes: Option<u64>,
     pub free_gb: Option<f64>,
     pub low_watermark_gb: Option<i64>,
@@ -127,7 +126,6 @@ impl Facts {
         );
 
         Self {
-            free_kb,
             free_bytes,
             free_gb,
             low_watermark_gb,

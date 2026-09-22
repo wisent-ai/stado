@@ -12,6 +12,7 @@ pub(in crate::release_cause) use segments::bound;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::release_cause::QuarantineCause;
 
     /// Verbatim reasons read read-only off `charless-mac-mini` with
     /// `stado release quarantine list --json`, one per class the live data

@@ -37,7 +37,6 @@ pub fn assemble(
     let policy = target.disk_cleanup.as_ref();
     let payload = publication.map(|row| &row.payload);
     let facts::Facts {
-        free_kb: _,
         free_bytes,
         free_gb,
         low_watermark_gb,
