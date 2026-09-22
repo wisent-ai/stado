@@ -29,6 +29,53 @@ const RUN_STATE_LEAF: &str = "/run.json";
 /// is picked from the listing before any read, so this never cuts it off.
 pub(crate) const VERSION_SCAN_WINDOW: usize = 120;
 
+/// Every `(product, version)` a run was recorded for, read in one walk of the
+/// newest `limit` run objects.
+///
+/// `matching_runs` answers one product at a time and joins every platform to
+/// its queue job, which is what `release status` needs and what a whole
+/// workspace cannot afford: `release newest` asks the same question of forty
+/// checkouts at once, and asking it product by product cost one listing plus
+/// up to a hundred and twenty body reads each — twenty-four minutes for a
+/// plan that submits nothing. This reads each run body once and answers
+/// membership for every product from that one pass.
+pub(crate) async fn published_coordinates(
+    limit: usize,
+) -> Result<std::collections::BTreeMap<(String, String), String>, CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut blobs = store
+        .list_blobs_with_meta(RUN_STATE_PREFIX)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .into_iter()
+        .filter(|blob| blob.name.ends_with(RUN_STATE_LEAF))
+        .collect::<Vec<_>>();
+    blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
+    blobs.truncate(limit);
+    let bodies = futures::stream::iter(blobs.into_iter().map(|blob| {
+        let store = &store;
+        async move { load_run_value(store, &blob.name).await }
+    }))
+    .buffered(8)
+    .collect::<Vec<_>>()
+    .await;
+    let mut published = std::collections::BTreeMap::new();
+    for body in bodies {
+        let Some(run) = body? else { continue };
+        let field = |key: &str| run[key].as_str().unwrap_or_default().to_string();
+        let (product, version) = (field("product"), field("version"));
+        if product.is_empty() || version.is_empty() {
+            continue;
+        }
+        published
+            .entry((product, version))
+            .or_insert_with(|| field("run_id"));
+    }
+    Ok(published)
+}
+
 /// One platform leg joined to its queue job: which run it belongs to, which
 /// platform it is, and — when the queue still holds the job — the lifecycle
 /// prefix it sits under with the seconds it has cost.

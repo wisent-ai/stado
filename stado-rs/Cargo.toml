@@ -155,6 +155,10 @@ path = "tests/vast/main.rs"
 name = "release_delivery"
 path = "tests/release_delivery/main.rs"
 
+[[test]]
+name = "release_newest"
+path = "tests/release_newest/main.rs"
+
 
 
 [[test]]

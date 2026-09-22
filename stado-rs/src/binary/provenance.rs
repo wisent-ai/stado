@@ -206,7 +206,10 @@ pub fn source_repo(path: &Path) -> Option<PathBuf> {
 
 /// The root of the checkout `directory` belongs to, or `None` when it belongs
 /// to none.
-fn checkout_root(directory: &Path) -> Option<PathBuf> {
+///
+/// `release newest` reads it to find the workspace: one checkout per
+/// repository side by side means the workspace is that root's parent.
+pub fn checkout_root(directory: &Path) -> Option<PathBuf> {
     git(directory, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
 }
 

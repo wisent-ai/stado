@@ -32,8 +32,9 @@ pub use crate::cli::release_submit::run::resume::resume;
 pub use crate::cli::release_submit::run::submit::submit;
 
 pub(crate) use crate::cli::release_submit::run::reports::{
-    matching_runs, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
+    matching_runs, published_coordinates, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
 };
+pub(crate) use crate::cli::release_submit::run::source::{committed_file, resolve_commit};
 
 #[derive(Args)]
 pub struct ReleaseSubmitArgs {
@@ -48,6 +49,27 @@ pub struct ReleaseSubmitArgs {
     channel: SubmitChannel,
     #[arg(long)]
     json: bool,
+}
+
+impl ReleaseSubmitArgs {
+    /// The same submission `stado release submit` performs, for a checkout
+    /// `release newest` has already read: it knows the commit and the version
+    /// that commit declares, and `submit` reads both again and refuses if
+    /// they disagree with what is passed here.
+    pub(crate) fn for_checkout(
+        source: &std::path::Path,
+        commit: &str,
+        version: &str,
+        channel: SubmitChannel,
+    ) -> Self {
+        Self {
+            source: source.to_path_buf(),
+            commit: Some(commit.to_string()),
+            version: version.to_string(),
+            channel,
+            json: false,
+        }
+    }
 }
 
 /// Resume recorded source and jobs without reading the current checkout.

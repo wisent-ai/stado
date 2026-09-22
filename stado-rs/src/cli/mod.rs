@@ -46,6 +46,7 @@ pub mod registry;
 pub mod release_catalog;
 pub mod release_cmd;
 pub mod release_evidence;
+pub mod release_newest;
 pub mod release_quarantine;
 pub mod release_submit;
 pub mod repair;

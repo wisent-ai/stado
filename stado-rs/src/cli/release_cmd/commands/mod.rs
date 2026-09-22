@@ -27,6 +27,14 @@ pub enum ReleaseCommands {
     PolicyApply(ReleasePolicyApplyArgs),
     /// Snapshot, qualify, build, sign, publish, deliver, and promote a product.
     Submit(crate::cli::release_submit::ReleaseSubmitArgs),
+    /// Release every product in this workspace from the commit and version it
+    /// already declares.
+    ///
+    /// One command for the whole workspace: each product checkout is read for
+    /// the commit it stands on and the version that commit declares, anything
+    /// already published at that version is skipped, and the rest go through
+    /// the same pipeline `submit` drives. `--plan` reads without submitting.
+    Newest(crate::cli::release_newest::ReleaseNewestArgs),
     /// Resume a recorded release without replacing its source or running jobs.
     Resume(crate::cli::release_submit::ReleaseResumeArgs),
     /// Re-run one delivery from an exact completed release without promotion.
