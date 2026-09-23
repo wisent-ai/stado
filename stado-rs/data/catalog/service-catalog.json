@@ -35,7 +35,8 @@
       "unit": "com.wisent.always-on.skarbiec",
       "env": {
         "SKARBIEC_VAULT_FILE": "$HOME/.stado/skarbiec.vault.json",
-        "SKARBIEC_CAP_SOCKET": "$HOME/.stado/skarbiec.vault.sock"
+        "SKARBIEC_CAP_SOCKET": "$HOME/.stado/skarbiec.vault.sock",
+        "SKARBIEC_AUDIT_FILE": "$HOME/.stado/skarbiec.audit.jsonl"
       },
       "retired_units": [
         "com.wisent.compute.service.skarbiec-replica-sync",
