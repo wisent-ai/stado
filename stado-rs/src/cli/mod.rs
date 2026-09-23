@@ -43,6 +43,7 @@ pub mod placement;
 pub mod quality;
 pub mod quota;
 pub mod recovery;
+pub mod identity;
 pub mod registry;
 pub mod release_catalog;
 pub mod release_cmd;
