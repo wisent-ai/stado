@@ -40,8 +40,8 @@ pub(crate) use crate::cli::release_submit::run::reports::{
     matching_runs, published_coordinates, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
 };
 pub(crate) use crate::cli::release_submit::run::source::{
-    build_identity, build_path, build_uri, committed_file, head_commit, immutable,
-    queue_immutable, resolve_commit, snapshot, uncommitted_paths,
+    build_identity, build_path, build_uri, committed_file, head_commit, immutable, queue_immutable,
+    resolve_commit, snapshot, uncommitted_paths,
 };
 pub(crate) use crate::cli::release_submit::run::state::{
     load_build, persist_build_failure, save_build,
