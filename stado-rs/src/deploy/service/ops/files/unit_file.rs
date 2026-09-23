@@ -17,72 +17,16 @@ pub struct UnitFile {
 pub fn parse_unit_program(unit: &UnitFile) -> Result<Option<String>, DeployError> {
     if unit.kind == KIND_LAUNCHD {
         let document = parse_plist(&unit.content)?;
-        // Program overrides argv[0] when launchd declares both.
-        let program = document.get("Program").or_else(|| {
-            document
-                .get("ProgramArguments")
-                .and_then(Value::as_array)
-                .and_then(|arguments| arguments.first())
-        });
-        return program
-            .map(|program| {
-                program
-                    .as_str()
-                    .filter(|program| !program.is_empty())
-                    .map(str::to_string)
-                    .ok_or_else(|| {
-                        DeployError(format!(
-                            "{}: {} declares an empty or non-string program",
-                            unit.host, unit.unit
-                        ))
-                    })
-            })
-            .transpose();
+        return plist_program(&document)
+            .map(|program| program.map(str::to_string))
+            .map_err(|error| DeployError(format!("{}: {}: {error}", unit.host, unit.unit)));
     }
 
-    let mut in_service = false;
-    let mut command = None;
-    for line in logical_lines(&unit.content) {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        if let Some(name) = line
-            .strip_prefix('[')
-            .and_then(|rest| rest.strip_suffix(']'))
-        {
-            in_service = name.trim() == "Service";
-            continue;
-        }
-        if !in_service {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "ExecStart" {
-            continue;
-        }
-        if value.trim().is_empty() {
-            command = None;
-            continue;
-        }
-        if command.is_some() {
-            continue;
-        }
-        let Some(mut program) = split_words(value).into_iter().next() else {
-            continue;
-        };
-        let prefix = program.len()
-            - program
-                .trim_start_matches(['@', '-', ':', '+', '!', '|'])
-                .len();
-        program.drain(..prefix);
-        if !program.is_empty() {
-            command = Some(program);
-        }
-    }
-    Ok(command)
+    let parsed = parse_systemd_unit(&unit.content)?;
+    Ok(parsed.exec_start.first().and_then(|arguments| arguments.first()).and_then(|program| {
+        let program = program.trim_start_matches(['@', '-', ':', '+', '!', '|']);
+        (!program.is_empty()).then(|| program.to_string())
+    }))
 }
 
 /// `service env`'s fetch: the unit and its overriding definitions on the host.

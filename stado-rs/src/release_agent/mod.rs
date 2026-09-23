@@ -23,6 +23,9 @@ pub(crate) mod state;
 mod tests;
 pub(crate) mod tick;
 
+/// The existing standalone release agent's reconciliation cadence.
+pub(crate) const DEFAULT_INTERVAL_SECONDS: u64 = 15;
+
 pub(crate) use rollout::candidate::binary::active_binary;
 pub(crate) use rollout::candidate::fetch::fetch_candidate;
 pub use rollout::recover::retire::{

@@ -8,7 +8,8 @@ use crate::queue::{construct_backend, BackendLocator, BlobBackend, StorageError}
 
 /// One end of the copy: which backend to build and the locators it needs.
 /// Unused fields for the selected `kind` are ignored.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Endpoint {
     /// Backend selector: "gcs", "azure", "s3" or "local".
     pub kind: String,
@@ -52,7 +53,7 @@ impl Endpoint {
         };
         if adapter == StorageAdapter::Gcs && self.bucket.is_empty() {
             return Err(StorageError::Other(
-                "the gcs endpoint needs a bucket (--from-bucket / --to-bucket)".into(),
+                "the gcs endpoint requires a nonempty bucket".into(),
             ));
         }
         construct_backend(

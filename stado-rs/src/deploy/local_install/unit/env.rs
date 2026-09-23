@@ -67,18 +67,23 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
         "WC_SKARBIEC_TOKEN_FILE".to_string(),
         skarbiec_token_file.to_string(),
     ));
-    if kind == "agent" {
+    if matches!(kind, "agent" | "host") {
         env.push((
             "WC_AGENT_SKARBIEC_URL".to_string(),
-            skarbiec_url.to_string(),
+            if agent_url.is_empty() {
+                crate::config::skarbiec_url()
+            } else {
+                agent_url
+            }
+            .to_string(),
         ));
         env.push((
             "WC_AGENT_SKARBIEC_CONSUMER".to_string(),
-            skarbiec_consumer.to_string(),
+            crate::config::agent_skarbiec_consumer().to_string(),
         ));
         env.push((
             "WC_AGENT_SKARBIEC_TOKEN_FILE".to_string(),
-            skarbiec_token_file.to_string(),
+            crate::config::agent_skarbiec_token_file().to_string(),
         ));
         env.push((
             "WC_AGENT_SKARBIEC_ITEMS".to_string(),
@@ -89,11 +94,10 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
             crate::config::agent_skarbiec_secret_fields().join(","),
         ));
     }
-    // The standalone agent and the outage-safe local control plane both
-    // execute Python probes and job payloads. Preserve the operator PATH so
-    // child jobs see the same toolchain as an interactive Stado invocation.
-    let runs_local_agent =
-        kind == "agent" || (kind == "coordinator" && local_control_plane_configured());
+    // The host carries the workload grant separately from its control-plane
+    // grant. Job payloads still inherit the declared interpreter and PATH.
+    let runs_local_agent = matches!(kind, "agent" | "host")
+        || (kind == "coordinator" && local_control_plane_configured());
     if runs_local_agent {
         if !inputs.wc_python.is_empty() {
             env.push(("WC_PYTHON".to_string(), inputs.wc_python.to_string()));
@@ -111,6 +115,9 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
             .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
         env.push(("PATH".to_string(), path.to_string()));
     }
+    // Unspecified installer defaults are omitted here. Renderers retain explicit
+    // empty values read from existing native declarations during consolidation.
+    env.retain(|(_, value)| !value.is_empty());
     env
 }
 

@@ -93,6 +93,40 @@ pub async fn cli_main() -> i32 {
     }
 }
 
+
+/// The host owns the scan loop; each pass still resolves its storage and reports
+/// the same per-job result as `scan-dispatch --execute`.
+pub(crate) async fn run_resident(
+    interval: std::num::NonZeroU64,
+    command_pattern: Option<String>,
+) -> Result<(), FixError> {
+    let period = std::time::Duration::from_secs(interval.get());
+    let mut schedule = tokio::time::interval(period);
+    loop {
+        schedule.tick().await;
+        let result = async {
+            let store = JobStorage::with_bucket(config::bucket()).await?;
+            scan_and_report(&store, None, command_pattern.as_deref(), true).await
+        }.await;
+        if let Err(error) = result {
+            eprintln!("[stado serve failure-fixer] scan-and-dispatch failed: {error}");
+        }
+        // Preserve the old loop's declared pause after a completed pass, rather
+        // than overlapping scans or catching up missed ticks.
+        schedule.reset();
+    }
+}
+
+async fn scan_and_report(
+    store: &JobStorage,
+    since: Option<&str>,
+    command_pattern: Option<&str>,
+    execute: bool,
+) -> Result<i32, FixError> {
+    let results = scan_and_dispatch(since, command_pattern, execute, store, true).await?;
+    print_pretty(&json!({"results": results, "count": results.len()}));
+    Ok(0)
+}
 async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
     let store = JobStorage::with_bucket(config::bucket()).await?;
     match command {
@@ -152,16 +186,7 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
             command_pattern,
             execute,
         } => {
-            let results = scan_and_dispatch(
-                since.as_deref(),
-                command_pattern.as_deref(),
-                execute,
-                &store,
-                true,
-            )
-            .await?;
-            print_pretty(&json!({"results": results, "count": results.len()}));
-            Ok(0)
+            scan_and_report(&store, since.as_deref(), command_pattern.as_deref(), execute).await
         }
     }
 }

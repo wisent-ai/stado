@@ -130,6 +130,7 @@ if [ \"$os\" = \"Darwin\" ]; then
   pid=\"$pc_pid\"
   stado_loaded_identity
 else
+  argv=@LINUX_ARGV@
   if [ -f \"$unit_path\" ]; then
     had_unit=yes
     declared_argv=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/head -n 1)
@@ -137,7 +138,9 @@ else
   pid=$(stado_systemctl show --property=MainPID --value \"$unit\" 2>/dev/null)
   if [ \"$pid\" = 0 ]; then pid=''; fi
 fi
-declared_argv=$(printf '%s' \"$declared_argv\" | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //;s/ $//')
+if [ \"$os\" = Darwin ]; then
+  declared_argv=$(printf '%s' \"$declared_argv\" | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //;s/ $//')
+fi
 # The program the live process is executing, not the one the unit names: a
 # unit pointing at a `current` link and a process that outlived the relink
 # have the same declaration and different code.

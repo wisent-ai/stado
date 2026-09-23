@@ -58,15 +58,15 @@ impl From<ChannelArg> for ReleaseChannel {
 #[derive(Args)]
 pub struct ReleaseAgentArgs {
     #[arg(long)]
-    target: String,
+    pub(crate) target: String,
     #[arg(long)]
-    product: Option<String>,
+    pub(crate) product: Option<String>,
     #[arg(long)]
-    once: bool,
-    #[arg(long, default_value_t = 15)]
-    interval_seconds: u64,
+    pub(crate) once: bool,
+    #[arg(long, default_value_t = crate::release_agent::DEFAULT_INTERVAL_SECONDS)]
+    pub(crate) interval_seconds: u64,
     #[arg(long)]
-    json: bool,
+    pub(crate) json: bool,
 }
 
 #[derive(Args)]

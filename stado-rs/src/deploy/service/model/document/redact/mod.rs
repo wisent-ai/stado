@@ -7,12 +7,6 @@ use crate::deploy::service::*;
 // Unit-file parsing and secret redaction
 // ---------------------------------------------------------------------------
 
-/// Base of a hexadecimal character reference, spelled as a type constant
-/// because this crate's edit policy forbids bare numeric literals — the
-/// same technique `cli/mod.rs::default_mail_results` uses to derive its
-/// default from `u8::BITS`.
-pub(super) const HEX_RADIX: u32 = u16::BITS;
-
 /// Case-insensitive "this variable holds a credential" test, built from
 /// `secret-names.json` beside this file.
 ///
@@ -82,9 +76,9 @@ impl ServiceEnv {
 /// Parse a fetched unit file into its redacted effective environment.
 pub fn unit_environment(unit: &UnitFile) -> Result<ServiceEnv, DeployError> {
     let (env, environment_files) = if unit.kind == KIND_LAUNCHD {
-        (plist_env(&parse_plist(&unit.content)?), Vec::new())
+        (plist_env(&parse_plist(&unit.content)?)?, Vec::new())
     } else {
-        let parsed = parse_systemd_unit(&unit.content);
+        let parsed = parse_systemd_unit(&unit.content)?;
         (parsed.env, parsed.environment_files)
     };
     let env = env
@@ -105,24 +99,18 @@ pub fn unit_environment(unit: &UnitFile) -> Result<ServiceEnv, DeployError> {
 }
 
 /// `EnvironmentVariables` out of a parsed property list, in file order.
-pub fn plist_env(document: &Value) -> Vec<(String, String)> {
-    document
-        .get("EnvironmentVariables")
-        .and_then(Value::as_object)
-        .map(|env| {
-            env.iter()
-                .map(|(key, value)| (key.clone(), scalar_text(value)))
-                .collect()
-        })
-        .unwrap_or_default()
+pub fn plist_env(document: &::plist::Dictionary) -> Result<Vec<(String, String)>, DeployError> {
+    let Some(value) = document.get("EnvironmentVariables") else {
+        return Ok(Vec::new());
+    };
+    let env = value.as_dictionary().ok_or_else(|| {
+        DeployError("launchd EnvironmentVariables is not a dictionary".to_string())
+    })?;
+    env.iter().map(|(name, value)| {
+        let value = value.as_string().ok_or_else(|| {
+            DeployError(format!("launchd environment variable {name} is not a string"))
+        })?;
+        Ok((name.clone(), value.to_string()))
+    }).collect()
 }
 
-/// A plist scalar as an operator sees it: strings raw, everything else in
-/// its JSON spelling.
-fn scalar_text(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Null => String::new(),
-        other => other.to_string(),
-    }
-}

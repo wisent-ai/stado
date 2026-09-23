@@ -70,6 +70,6 @@ pub use gcs::GcsBackend;
 pub use local_file::LocalBackend;
 pub use s3::S3Backend;
 pub use stado_object::StadoObjectBackend;
-pub use storage::JobStorage;
+pub use storage::{JobStorage, ServerStorage};
 
 pub(crate) use contract::{construct_backend, json_str, python_json_dumps, BackendLocator};

@@ -24,7 +24,7 @@ mod records;
 // `super::copy::Endpoint` verbatim in `facade`.
 use crate::queue::copy;
 
-pub use facade::JobStorage;
+pub use facade::{JobStorage, ServerStorage};
 pub use lifecycle::{SettledSentinelSweep, SETTLED_SENTINEL_MIN_AGE};
 pub(crate) use records::{
     is_transition_sentinel_state, transition_is_retired, transition_path,

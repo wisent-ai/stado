@@ -3,7 +3,7 @@
   "products": [
     {
       "name": "stado",
-      "why": "the fleet's control binary shared by its object API, resolver, coordinator, queue agent and release agent",
+      "why": "one host process owns the object API, resolver, coordinator, queue agent and release agent; legacy unit identities remain discoverable until the installer retires them",
       "source": {
         "product": "stado",
         "member": "stado"
@@ -22,6 +22,27 @@
         "shape": "plain"
       },
       "units": [
+        {
+          "label": "com.wisent.always-on.stado-object-api.service"
+        },
+        {
+          "label": "com.wisent.host-health-beacon"
+        },
+        {
+          "label": "com.wisent.stado-host-health-api"
+        },
+        {
+          "label": "com.wisent.stado-host-health-forward"
+        },
+        {
+          "label": "com.wisent.compute.service.stado-release-agent"
+        },
+        {
+          "label": "wisent-compute-agent.service"
+        },
+        {
+          "label": "com.wisent.stado-resolver.service"
+        },
         {
           "label": "com.wisent.stado.release-agent"
         },

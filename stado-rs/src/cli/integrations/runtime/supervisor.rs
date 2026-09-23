@@ -78,6 +78,21 @@ impl Supervisor {
         &self.components
     }
 
+    /// Startup may read the registry through an API this supervisor already
+    /// owns. Do not keep waiting on that dependency after its component failed.
+    pub(super) async fn during_startup<T>(
+        &mut self,
+        operation: impl Future<Output = Result<T, CmdError>>,
+    ) -> Result<T, CmdError> {
+        tokio::select! {
+            biased;
+            failure = self.failures.recv() => Err(CmdError::click(
+                failure.unwrap_or_else(|| "stado serve lost its startup components".to_string())
+            )),
+            result = operation => result,
+        }
+    }
+
     pub(super) async fn wait(mut self) -> Result<(), CmdError> {
         drop(self.sender);
         let failure = self

@@ -59,7 +59,7 @@ pub(super) async fn restart_units(
                     "restart",
                     "deferred_to_release_handshake",
                     Some(format!(
-                        "{unit_id} is the queue agent and will recycle itself after its current slot"
+                        "{unit_id} owns a queue worker and will recycle itself after its active jobs"
                     )),
                 ));
                 continue;

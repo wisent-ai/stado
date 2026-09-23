@@ -17,7 +17,7 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::dashboard::DashboardError;
 
 use super::boundary::Boundary;
-use super::{enrollment_route_allowed, Dashboard, ENROLLMENT_REFUSAL, ENROLLMENT_ROUTES};
+use super::{enrollment_route_allowed, Dashboard, PreparedListener, ENROLLMENT_REFUSAL, ENROLLMENT_ROUTES};
 
 pub(crate) use host_guard::{trusted_request_host, valid_beacon_host};
 pub(crate) use query::{parse_qs, query_value, strict_url_decode};
@@ -27,19 +27,35 @@ pub(crate) use response::{
     storage_error_response, Response,
 };
 
-impl Dashboard {
-    /// Start the boundary checks and serve HTTP on loopback. This server does
-    /// not terminate TLS, so binding it to a non-loopback interface would
-    /// expose bearer-authenticated routes over plaintext. Production ingress
-    /// must terminate TLS in a reverse proxy and forward to this listener.
-    pub async fn serve_with(&self, host: &str, port: u16) -> Result<(), DashboardError> {
-        let listener = TcpListener::bind((host, port)).await?;
+impl PreparedListener {
+    pub(crate) async fn bind(host: &str, port: u16) -> Result<Self, DashboardError> {
+        let listener = TcpListener::bind((host, port)).await.map_err(|error| {
+            DashboardError::Other(format!("could not bind API listener {host}:{port}: {error}"))
+        })?;
         let local_addr = listener.local_addr()?;
         if !local_addr.ip().is_loopback() {
             return Err(DashboardError::Other(format!(
                 "refusing plaintext dashboard bind on non-loopback address {local_addr}; terminate TLS in a loopback reverse proxy"
             )));
         }
+        Ok(Self { listener, local_addr })
+    }
+}
+
+impl Dashboard {
+    /// Start the boundary checks and serve HTTP on loopback. This server does
+    /// not terminate TLS, so binding it to a non-loopback interface would
+    /// expose bearer-authenticated routes over plaintext. Production ingress
+    /// must terminate TLS in a reverse proxy and forward to this listener.
+    pub async fn serve_with(&self, host: &str, port: u16) -> Result<(), DashboardError> {
+        self.serve_prepared(PreparedListener::bind(host, port).await?).await
+    }
+
+    pub(crate) async fn serve_prepared(
+        &self,
+        listener: PreparedListener,
+    ) -> Result<(), DashboardError> {
+        let PreparedListener { listener, local_addr } = listener;
         if self.enrollment_only {
             // Nothing below this branch is started, because nothing below it
             // is reachable in this mode:

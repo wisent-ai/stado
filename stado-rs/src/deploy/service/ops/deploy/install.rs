@@ -17,87 +17,75 @@ pub fn retain_systemd_unit(
     environment: &[(String, String)],
     replace_program: bool,
 ) -> Result<String, DeployError> {
-    let mut starts = definition.lines().filter_map(|line| {
-        let (name, value) = line.split_once('=')?;
-        (name.trim() == "ExecStart").then_some(value.trim())
-    });
-    let Some(exec_start) = starts.next() else {
+    let parsed = parse_systemd_unit(definition)?;
+    let [exec_start] = parsed.exec_start.as_slice() else {
         return Err(DeployError(
-            "authored systemd unit carries no ExecStart".to_string(),
+            "authored systemd unit must carry exactly one effective ExecStart".to_string(),
         ));
     };
-    if starts.next().is_some() {
-        return Err(DeployError(
-            "authored systemd unit carries more than one ExecStart".to_string(),
-        ));
+    if !replace_program {
+        let (expected, unresolved) = systemd_arguments(&plan.linux_argv)?;
+        if !unresolved.is_empty() || exec_start != &expected {
+            return Err(DeployError(format!(
+                "authored systemd unit starts {:?}, but the declaration says {}",
+                exec_start,
+                py_str_repr(&plan.argv),
+            )));
+        }
     }
-    if exec_start != plan.argv && !replace_program {
-        return Err(DeployError(format!(
-            "authored systemd unit starts {}, but the declaration says {}",
-            py_str_repr(exec_start),
-            py_str_repr(&plan.argv),
-        )));
-    }
+    let rendered = rewrite_systemd_startup(definition, &plan.linux_argv, environment)?;
+    plan.linux_unit = rendered.clone();
+    Ok(rendered)
+}
 
-    let mut remaining: BTreeMap<&str, &str> = environment
-        .iter()
-        .filter(|(_, value)| !value.is_empty())
+/// Replace startup argv and environment while retaining the native unit's
+/// owner, working directory, limits and dependencies. `arguments` uses the
+/// native quoting produced by `systemd_command`, never shell quoting.
+pub(crate) fn rewrite_systemd_startup(
+    definition: &str,
+    arguments: &str,
+    environment: &[(String, String)],
+) -> Result<String, DeployError> {
+    let environment: BTreeMap<&str, &str> = environment.iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
     let mut rendered = String::with_capacity(definition.len());
+    let mut in_service = false;
     let mut inserted = false;
-    for line in definition.lines() {
-        if let Some((_, assignment)) = line
-            .split_once('=')
-            .filter(|(name, _)| name.trim() == "Environment")
-        {
-            let Some((name, _)) = assignment.split_once('=') else {
-                return Err(DeployError(format!(
-                    "authored systemd unit has malformed environment line {}",
-                    py_str_repr(line),
-                )));
-            };
-            if let Some(value) = remaining.remove(name) {
-                rendered.push_str("Environment=");
-                rendered.push_str(name);
-                rendered.push('=');
-                rendered.push_str(value);
-                rendered.push('\n');
+    for line in logical_lines(definition) {
+        let trimmed = line.trim();
+        if let Some(section) = trimmed.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+            in_service = section.trim() == "Service";
+        }
+        if in_service {
+            if let Some((key, _)) = trimmed.split_once('=') {
+                match key.trim() {
+                    "Environment" => continue,
+                    "ExecStart" => {
+                        if !inserted {
+                            for (name, value) in &environment {
+                                rendered.push_str("Environment=");
+                                rendered.push_str(&local_install::unit::render::systemd_environment(name, value));
+                                rendered.push('\n');
+                            }
+                            rendered.push_str("ExecStart=");
+                            rendered.push_str(arguments);
+                            rendered.push('\n');
+                            inserted = true;
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
             }
-            continue;
         }
-        if !inserted && line.trim_start().starts_with("ExecStart") {
-            for (name, value) in &remaining {
-                rendered.push_str("Environment=");
-                rendered.push_str(name);
-                rendered.push('=');
-                rendered.push_str(value);
-                rendered.push('\n');
-            }
-            remaining.clear();
-            inserted = true;
-        }
-        if replace_program
-            && line
-                .split_once('=')
-                .is_some_and(|(name, _)| name.trim() == "ExecStart")
-        {
-            rendered.push_str("ExecStart=");
-            rendered.push_str(&plan.argv);
-            rendered.push('\n');
-            continue;
-        }
-        rendered.push_str(line);
+        rendered.push_str(&line);
         rendered.push('\n');
     }
-    if !remaining.is_empty() {
-        return Err(DeployError(
-            "authored systemd unit carries no ExecStart position for its declared environment"
-                .to_string(),
-        ));
+    if !inserted {
+        return Err(DeployError("authored systemd unit has no Service ExecStart position".to_string()));
     }
     guard_heredoc(&rendered)?;
-    plan.linux_unit = rendered.clone();
     Ok(rendered)
 }
 

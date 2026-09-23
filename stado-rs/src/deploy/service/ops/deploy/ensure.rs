@@ -125,6 +125,7 @@ pub async fn ensure_service(
         .replace("@HEREDOC@", UNIT_HEREDOC)
         .replace("@PROGRAM@", &shlex_quote(&plan.program))
         .replace("@ARGV@", &shlex_quote(&plan.argv))
+        .replace("@LINUX_ARGV@", &shlex_quote(&plan.linux_argv))
         .replace(
             "@DARWIN_DAEMON_UNIT@",
             plan.darwin_daemon_unit.trim_end_matches('\n'),

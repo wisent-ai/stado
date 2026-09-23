@@ -28,6 +28,16 @@ pub struct AgentPlan {
 /// what produced the wrong `missing_plist` in the first place.
 pub fn plan_agents(target: &ComputeTarget) -> Vec<AgentPlan> {
     let declared = crate::deploy::service::declared_services(target);
+    if let Some(resident) = crate::deploy::service::resident_host_service(&declared) {
+        // A failed host process must be recovered as that process. Recreating
+        // its former beacon daemon would restore the split deployment.
+        return vec![AgentPlan {
+            label: resident.unit_id().to_string(),
+            plist: resident.path.clone(),
+            privileged: crate::deploy::service::UnitDomain::from_path(&resident.path)
+                .requires_privileged_bootstrap(),
+        }];
+    }
     MANAGED_AGENTS
         .iter()
         .map(|(label, declared_elsewhere)| {

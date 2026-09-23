@@ -2,14 +2,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 
 use crate::monitor::host_silence;
 use crate::service_resolution::{self, ResolvedService, ResolverAdapter, ResolverConfig};
 use crate::targets::{self, RegistryStore};
 
-use crate::cli::resolver::authority::paths::select_resolver_ssh_path;
 use crate::cli::resolver::authority::tunnel::Tunnel;
 use crate::cli::resolver::directory::source::snapshot_source;
 use crate::cli::resolver::directory::source::SnapshotSource;
@@ -35,8 +33,8 @@ pub(super) struct ResolverState {
     pub(super) local_target: String,
     pub(super) adapters: Vec<ResolverAdapter>,
     pub(super) config: ResolverConfig,
-    /// One forward per `destination|host:port`, opened on first use.
-    pub(super) tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Tunnel>>,
+    /// Native SSH sessions, shared without helper processes or intermediary listeners.
+    pub(super) tunnels: tokio::sync::Mutex<std::collections::HashMap<String, Arc<Tunnel>>>,
     /// Why this host last refused to refresh its last-known-good registry
     /// copy, as [`targets::LastGoodRefusal::kind`].
     ///
@@ -49,66 +47,37 @@ pub(super) struct ResolverState {
 }
 
 impl ResolverState {
-    /// A connection to `host:port` behind the first of `paths` that answers,
-    /// over the forward this resolver keeps for that pair, opening it if this
-    /// is its first use.
-    ///
-    /// Opening holds the pool lock, so two requests for a cold destination
-    /// cannot race into two forwards. Openings are rare; a warm destination
-    /// only reads the port.
-    ///
-    /// Path selection is part of opening, not part of connecting. It used to
-    /// run in `proxy_connection` ahead of this call, so every accepted
-    /// connection to a host that declares an `ssh_fallbacks` entry -- as
-    /// `charless-mac-mini` declares `lan` -- paid one `ssh <destination> true`
-    /// process, bounded at twenty seconds, before any traffic moved. That is
-    /// the process per request this transport exists to remove, and it also
-    /// left a control master up for the forward to be handed to. Selecting
-    /// under the pool lock costs one probe per forward instead of one per
-    /// request, and a warm destination costs none.
+    /// Open a channel and retain its session until the caller finishes copying.
     pub(super) async fn tunnel_connect(
         &self,
         active_host: &str,
         paths: &[targets::SshConnectionPath],
         host: &str,
         port: u16,
-    ) -> Result<TcpStream, String> {
-        // Keyed by the host, not by a destination: which of its paths answers
-        // is chosen while the forward is opened, and one forward per host is
-        // the point.
+    ) -> Result<(russh::ChannelStream<russh::client::Msg>, Arc<Tunnel>), String> {
         let key = format!("{active_host}|{host}:{port}");
-        // Two attempts: a forward that died between the liveness check and the
-        // dial, or a local port some other process took, is retried once
-        // against a freshly opened one. A second failure is the answer.
+        // Preserve the existing single reconnect before any client bytes are sent.
         for attempt in 0..2 {
-            let (local, destination) = {
+            let tunnel = {
                 let mut tunnels = self.tunnels.lock().await;
-                let live = tunnels
-                    .get_mut(&key)
-                    .and_then(|tunnel| tunnel.usable().then_some(tunnel.local));
-                match live {
-                    Some(local) => (local, None),
-                    None => {
-                        // Dropping the entry kills the dead child.
-                        tunnels.remove(&key);
-                        let path = select_resolver_ssh_path(paths).await?;
-                        let tunnel = Tunnel::open(&path.destination, host, port).await?;
-                        let local = tunnel.local;
-                        tunnels.insert(key.clone(), tunnel);
-                        (local, Some(path.destination.clone()))
-                    }
+                if let Some(tunnel) = tunnels.get(&key).filter(|tunnel| tunnel.usable()) {
+                    Arc::clone(tunnel)
+                } else {
+                    tunnels.remove(&key);
+                    let tunnel = Arc::new(Tunnel::open(paths).await?);
+                    tunnels.insert(key.clone(), Arc::clone(&tunnel));
+                    tunnel
                 }
             };
-            match TcpStream::connect(("127.0.0.1", local)).await {
-                Ok(stream) => return Ok(stream),
+            match tunnel.connect(host, port).await {
+                Ok(stream) => return Ok((stream, tunnel)),
                 Err(error) => {
-                    self.tunnels.lock().await.remove(&key);
+                    let mut tunnels = self.tunnels.lock().await;
+                    if tunnels.get(&key).is_some_and(|current| Arc::ptr_eq(current, &tunnel)) {
+                        tunnels.remove(&key);
+                    }
                     if attempt == 1 {
-                        let named = destination.as_deref().unwrap_or(active_host);
-                        return Err(format!(
-                            "the SSH forward to {named} for {host}:{port} refused a \
-                             connection on 127.0.0.1:{local}: {error}"
-                        ));
+                        return Err(error);
                     }
                 }
             }

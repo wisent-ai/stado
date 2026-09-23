@@ -1,15 +1,15 @@
 //! Stage two, unit bodies: the exact systemd unit text for the remote queue
 //! agent and for the remote diagnostics watchdog.
 
-/// One `Environment=` line per assignment. systemd takes the value verbatim
-/// inside double quotes; a value carrying a double quote or a backslash is
-/// escaped the way `systemd.syntax` reads it.
+/// Use the same literal-value encoding as local and consolidated host units.
 fn environment_lines(environment: &[(&'static str, String)]) -> String {
     environment
         .iter()
         .map(|(name, value)| {
-            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("Environment=\"{name}={escaped}\"\n")
+            format!(
+                "Environment={}\n",
+                crate::deploy::local_install::unit::render::systemd_environment(name, value)
+            )
         })
         .collect()
 }

@@ -16,8 +16,14 @@ pub(super) fn local_control_plane_configured() -> bool {
 }
 
 /// Python `_exec_args_for(entry, kind)`.
-pub fn exec_args_for(bins: &Bins, kind: &str, _name: &str) -> Result<Vec<String>, DeployError> {
+pub fn exec_args_for(bins: &Bins, kind: &str, name: &str) -> Result<Vec<String>, DeployError> {
     match kind {
+        "host" => Ok(vec![
+            bins.stado.clone(),
+            "serve".to_string(),
+            "--target".to_string(),
+            name.to_string(),
+        ]),
         "agent" => Ok(vec![
             bins.stado.clone(),
             "agent".to_string(),

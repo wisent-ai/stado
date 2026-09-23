@@ -71,8 +71,8 @@ pub(crate) async fn recycle_replaced_units(
     Ok(())
 }
 
-/// Whether an argv belongs to the queue agent, which recycles itself through
-/// the installed-release handshake and must not be kicked mid-slot.
+/// Whether this process owns a queue worker, whose installed-release handshake
+/// waits for active jobs before replacing the whole resident process.
 ///
 /// Crate-visible because it is the one place this exclusion is written down.
 /// `release_unit_image::revisit_plan` applies the same rule on a
@@ -88,4 +88,6 @@ pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
         first
     };
     subcommand == Some("agent")
+        || (subcommand == Some("serve")
+            && arguments.take_while(|argument| *argument != "--").any(|argument| argument == "--worker"))
 }

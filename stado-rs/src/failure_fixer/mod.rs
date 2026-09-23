@@ -154,6 +154,7 @@ mod cli;
 mod dispatch;
 
 pub use cli::cli_main;
+pub(crate) use cli::run_resident;
 pub use dispatch::{
     claude_bin, dispatch_fix, format_fix_prompt, format_fix_prompt_default, scan_and_dispatch,
 };

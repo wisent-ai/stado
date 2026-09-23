@@ -21,6 +21,7 @@ mod collect;
 mod runner;
 mod upload;
 
+pub(crate) use cli::{configured_bucket, parse_args_with_bucket, run};
 pub use cli::{cli_main, help_text, parse_args, usage_text, ParseOutcome, ParsedArgs};
 pub use collect::collect;
 pub use runner::{CommandRunner, RunOutcome, SystemRunner};
@@ -32,6 +33,8 @@ pub(crate) use collect::hostname;
 pub const DEFAULT_BUCKET: &str = "wisent-compute";
 /// Python `DEFAULT_INTERVAL_S`.
 pub const DEFAULT_INTERVAL_S: i64 = 60;
+/// Existing lower bound of the diagnostics collection schedule.
+pub const MIN_INTERVAL_S: i64 = 10;
 /// Python `OUT_PREFIX`.
 pub const OUT_PREFIX: &str = "box_diagnostics";
 /// Local standby path when the upload fails (Python `_write_local`).

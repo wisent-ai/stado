@@ -5,6 +5,7 @@
 
 pub mod env;
 pub mod exec;
+pub(crate) mod host;
 pub mod render;
 
 use std::path::{Path, PathBuf};
@@ -122,7 +123,7 @@ pub fn plan(
         name: name.to_string(),
         kind: kind.to_string(),
         os,
-        label: label(kind, name),
+        label: if kind == "host" { host::canonical_label()? } else { label(kind, name) },
         exec_args: exec_args_for(bins, kind, name)?,
         env: install_env(home, kind, hf_token, wc_python),
         daemon,

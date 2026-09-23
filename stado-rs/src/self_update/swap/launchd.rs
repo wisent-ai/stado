@@ -54,8 +54,10 @@ pub(super) async fn recycle_launchd(
             continue;
         }
         let running = running_images.get(&pid);
-        let declared_command = unit.declared_program();
-        let declared_program = declared_command.split_whitespace().next();
+        let declaration = crate::deploy::service::local_unit_file(
+            &unit.path, crate::deploy::service::KIND_LAUNCHD,
+        );
+        let declared_program = declaration.as_ref().map(|unit| unit.program.as_str());
         let directly_declared = paths
             .iter()
             .any(|path| declared_program == Some(path.as_str()));
@@ -75,11 +77,12 @@ pub(super) async fn recycle_launchd(
         let Some((program, installed)) = selected else {
             continue;
         };
-        let argv: Vec<&str> = unit.running_program.split_whitespace().collect();
+        let argv = crate::deploy::service::process_arguments(pid)
+            .map_err(|error| format!("{context}: {}: {error}", unit.label))?;
         if defers_to_release_handshake(&argv) {
             log_fn(&format!(
                 "{context}: {} is running the replaced {program} and recycles itself through \
-                 the installed-release handshake, so it was left to finish its slot",
+                 the installed-release handshake, so it was left to finish its active jobs",
                 unit.label
             ));
             continue;

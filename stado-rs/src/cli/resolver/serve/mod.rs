@@ -16,7 +16,6 @@ mod proxy;
 mod startup;
 mod state;
 
-use crate::cli::resolver::authority::drop_stale_ssh_sockets;
 use crate::cli::resolver::report::published::backoff_delay;
 use crate::cli::resolver::report::published::now_iso;
 use crate::cli::resolver::report::published::publish;
@@ -29,7 +28,6 @@ use crate::cli::resolver::serve::state::ResolverState;
 use crate::cli::resolver::serve::state::Snapshot;
 
 pub async fn serve(target: &str) -> Result<(), CmdError> {
-    drop_stale_ssh_sockets();
     let local_store = match RegistryStore::open().await {
         Ok(store) => Some(Arc::new(store)),
         Err(error) => {

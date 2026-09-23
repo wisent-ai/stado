@@ -55,7 +55,7 @@ pub(crate) enum WorkCommands {
 }
 
 /// Worker options shared by the standalone worker and the host service.
-#[derive(Args)]
+#[derive(Args, PartialEq)]
 pub(crate) struct AgentOptions {
     /// GPU type (auto-detected if --target/--auto absent).
     #[arg(long, default_value = "")]

@@ -32,6 +32,52 @@ pub enum ControlPlaneError {
     Other(String),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum CoordinatorMode {
+    Local,
+    Cloud,
+}
+
+/// Startup state crosses the supervisor thread boundary, not a non-Send future.
+pub(crate) struct ResidentCoordinator {
+    store: JobStorage,
+    secrets: BTreeMap<String, String>,
+    sleep_seconds: u64,
+    with_billing: bool,
+    log: fn(&str),
+}
+
+impl ResidentCoordinator {
+    pub(crate) async fn prepare(
+        mode: CoordinatorMode,
+        store: JobStorage,
+        interval: i64,
+    ) -> Result<Self, ControlPlaneError> {
+        let (secrets, sleep_seconds, with_billing, log): (_, _, _, fn(&str)) = match mode {
+            CoordinatorMode::Local => {
+                if crate::capabilities::storage_adapter(store.backend_name())
+                    != Some(crate::capabilities::StorageAdapter::Local)
+                {
+                    return Err(ControlPlaneError::Other(
+                        "local-control-plane requires WC_STORAGE_BACKEND=local".to_string(),
+                    ));
+                }
+                (BTreeMap::new(), interval.max(5) as u64, false, local_log)
+            }
+            CoordinatorMode::Cloud => {
+                let secrets = crate::coordinator::secrets_from_skarbiec().await
+                    .map_err(|error| ControlPlaneError::Other(error.to_string()))?;
+                (secrets, interval.max(15) as u64, true, cloud_log)
+            }
+        };
+        Ok(Self { store, secrets, sleep_seconds, with_billing, log })
+    }
+
+    pub(crate) async fn run(self) {
+        coordinator_loop(self.store, self.secrets, self.sleep_seconds, self.with_billing, self.log).await;
+    }
+}
+
 /// Python `local_control_plane._log`.
 fn local_log(msg: &str) {
     eprintln!("[local-control-plane] {msg}");
@@ -108,25 +154,8 @@ async fn coordinator_loop(
 /// this device.
 pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
     let store = JobStorage::new().await?;
-    // The local storage backend is intentionally loopback-only. Selecting a
-    // cloud target is required before workers on other devices can join.
-    let local_storage = crate::capabilities::storage_adapter(store.backend_name())
-        == Some(crate::capabilities::StorageAdapter::Local);
-    if !local_storage {
-        return Err(ControlPlaneError::Other(
-            "local-control-plane requires WC_STORAGE_BACKEND=local".to_string(),
-        ));
-    }
-    let tick_store = store.clone();
-    spawn_daemon("stado-local-coordinator", move || {
-        coordinator_loop(
-            tick_store,
-            BTreeMap::new(),
-            interval.max(5) as u64,
-            false,
-            local_log,
-        )
-    })?;
+    let coordinator = ResidentCoordinator::prepare(CoordinatorMode::Local, store.clone(), interval).await?;
+    spawn_daemon("stado-local-coordinator", move || coordinator.run())?;
     spawn_daemon("stado-local-agent", || async {
         // Python: threading.Thread(target=run_agent, kwargs={"kind": "local"}).
         if let Err(exc) = run_agent("", false, "local").await {
@@ -144,19 +173,8 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
 /// `deploy.cloud_control_plane.run`).
 pub async fn run_cloud(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
     let store = JobStorage::new().await?;
-    let secrets = crate::coordinator::secrets_from_skarbiec()
-        .await
-        .map_err(|err| ControlPlaneError::Other(err.to_string()))?;
-    let tick_store = store.clone();
-    spawn_daemon("stado-cloud-coordinator", move || {
-        coordinator_loop(
-            tick_store,
-            secrets,
-            interval.max(15) as u64,
-            true,
-            cloud_log,
-        )
-    })?;
+    let coordinator = ResidentCoordinator::prepare(CoordinatorMode::Cloud, store.clone(), interval).await?;
+    spawn_daemon("stado-cloud-coordinator", move || coordinator.run())?;
     cloud_log(&format!(
         "dashboard={host}:{port} storage={}",
         store.backend_name()

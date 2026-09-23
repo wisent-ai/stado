@@ -17,11 +17,9 @@ pub struct LocalUnitFile {
     pub carries: Vec<String>,
     /// Values retained only for comparison; diagnostic sentences print names.
     pub env: BTreeMap<String, String>,
-    /// The first [`LocalUnitFile::arguments`] entry: the file the unit
-    /// declares it starts. Empty for a systemd unit, whose `ExecStart` this
-    /// reader does not parse.
+    /// Executable selected by `Program` or `ExecStart`.
     pub program: String,
-    /// The whole `ProgramArguments` vector, empty for a systemd unit.
+    /// Complete launchd argument vector or the first systemd `ExecStart`.
     ///
     /// The whole vector and not just the program, because that is what
     /// launchd execs and therefore what a process table shows: every stado
@@ -30,6 +28,14 @@ pub struct LocalUnitFile {
     /// [`units_running_replaced_images`] joins on the vector for exactly
     /// that reason.
     pub arguments: Vec<String>,
+    /// Native start-command count; a resident migration requires exactly one.
+    pub start_commands: usize,
+    /// References remain explicit until a caller resolves their effective values.
+    pub environment_files: Vec<String>,
+    /// Native substitutions whose effective values have not been captured.
+    pub unresolved_expansions: Vec<String>,
+    /// A launchd StartInterval becomes an in-process component schedule.
+    pub start_interval_seconds: Option<std::num::NonZeroU64>,
 }
 
 /// Read one unit file off the local filesystem, when it is there to read.
@@ -39,41 +45,58 @@ pub struct LocalUnitFile {
 /// not read, which is true of all of them.
 pub fn local_unit_file(path: &str, kind: &str) -> Option<LocalUnitFile> {
     let text = std::fs::read_to_string(path).ok()?;
+    parse_local_unit_file(&text, kind).ok()
+}
+
+/// Parse a captured native definition without discarding the failure cause.
+pub fn parse_local_unit_file(text: &str, kind: &str) -> Result<LocalUnitFile, DeployError> {
     if kind == KIND_LAUNCHD {
-        let document = parse_plist(&text).ok()?;
-        // `Program` as well as `ProgramArguments`: a plist may carry either,
-        // and `self_update::launchd_argv` already falls back the same way.
-        let arguments: Vec<String> = document
-            .get("ProgramArguments")
-            .and_then(Value::as_array)
-            .map(|argv| {
-                argv.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .filter(|argv: &Vec<String>| !argv.is_empty())
-            .or_else(|| {
-                document
-                    .get("Program")
-                    .and_then(Value::as_str)
-                    .map(|program| vec![program.to_string()])
-            })
-            .unwrap_or_default();
-        let env: BTreeMap<String, String> = plist_env(&document).into_iter().collect();
-        Some(LocalUnitFile {
+        let document = parse_plist(text)?;
+        let program = plist_program(&document)?.unwrap_or_default().to_string();
+        let start_interval_seconds = document.get("StartInterval").map(|value| {
+            value.as_unsigned_integer().and_then(std::num::NonZeroU64::new)
+                .ok_or_else(|| DeployError("StartInterval must be a positive integer".to_string()))
+        }).transpose()?;
+        let mut arguments = match document.get("ProgramArguments") {
+            Some(value) => value.as_array()
+                .ok_or_else(|| DeployError("ProgramArguments is not an array".to_string()))?
+                .iter().map(|value| value.as_string().map(str::to_string)
+                    .ok_or_else(|| DeployError("ProgramArguments contains a non-string argument".to_string())))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+        };
+        if arguments.is_empty() && !program.is_empty() {
+            arguments.push(program.clone());
+        }
+        let env: BTreeMap<String, String> = plist_env(&document)?.into_iter().collect();
+        Ok(LocalUnitFile {
             carries: env.keys().cloned().collect(),
             env,
-            program: arguments.first().cloned().unwrap_or_default(),
+            start_commands: usize::from(!program.is_empty()),
+            program,
             arguments,
+            environment_files: Vec::new(),
+            unresolved_expansions: Vec::new(),
+            start_interval_seconds,
         })
-    } else {
-        let parsed = parse_systemd_unit(&text);
-        Some(LocalUnitFile {
+    } else if kind == KIND_SYSTEMD {
+        let parsed = parse_systemd_unit(text)?;
+        let start_commands = parsed.exec_start.len();
+        let arguments = parsed.exec_start.into_iter().next().unwrap_or_default();
+        let program = arguments.first().map(|argument| {
+            argument.trim_start_matches(['@', '-', ':', '+', '!', '|']).to_string()
+        }).unwrap_or_default();
+        Ok(LocalUnitFile {
             carries: parsed.env.iter().map(|(name, _)| name.clone()).collect(),
             env: parsed.env.into_iter().collect(),
-            program: String::new(),
-            arguments: Vec::new(),
+            program,
+            arguments,
+            start_commands,
+            environment_files: parsed.environment_files,
+            unresolved_expansions: parsed.unresolved_expansions,
+            start_interval_seconds: None,
         })
+    } else {
+        Err(DeployError(format!("unsupported native unit kind: {kind}")))
     }
 }

@@ -133,22 +133,25 @@ pub(crate) async fn observe_unit_image_scan(
         let Ok(pid) = native.pid.parse::<u32>() else {
             continue;
         };
-        if native.loaded_domains.is_empty() || native.running_program.is_empty() {
+        if native.loaded_domains.is_empty() {
             rows.push(unread(
                 format!("{label}'s native owner"),
-                "a live PID has no readable owner domain or argument vector".to_string(),
+                "a live PID has no readable owner domain".to_string(),
             ));
             continue;
         }
+        let arguments = match process_arguments(pid) {
+            Ok(arguments) => arguments,
+            Err(reason) => {
+                rows.push(unread(format!("{label}'s running argument vector"), reason));
+                continue;
+            }
+        };
         pending.push(Matched {
             label,
             unit_path,
             program: unit.program,
-            arguments: native
-                .running_program
-                .split_whitespace()
-                .map(str::to_string)
-                .collect(),
+            arguments,
             pid,
             age: native.started_epoch.map(|started| now_epoch - started),
         });

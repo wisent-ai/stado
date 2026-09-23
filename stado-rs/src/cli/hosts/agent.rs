@@ -16,12 +16,51 @@ fn env_value_str(v: &serde_json::Value) -> String {
         .unwrap_or_else(|| v.to_string())
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RegistryEnvironment {
+    StandaloneWorker,
+    ResidentHost,
+    /// Read host identity without applying a queue worker's environment.
+    HostIdentity,
+}
+
+fn apply_environment(
+    target: &crate::targets::ComputeTarget,
+    environment: RegistryEnvironment,
+) -> Result<(), CmdError> {
+    if matches!(environment, RegistryEnvironment::HostIdentity) {
+        return Ok(());
+    }
+    // Resolve every alias conflict before changing the shared environment.
+    let overrides = target.env_overrides.iter().map(|(key, value)| {
+        let name = match environment {
+            RegistryEnvironment::ResidentHost => crate::config::resident_worker_environment_key(key),
+            RegistryEnvironment::StandaloneWorker | RegistryEnvironment::HostIdentity => key.as_str(),
+        };
+        let value = env_value_str(value);
+        if name != key.as_str() && target.env_overrides.get(name)
+            .is_some_and(|other| env_value_str(other) != value)
+        {
+            return Err(CmdError::click(format!(
+                "target {} declares conflicting worker grant variables {key} and {name}",
+                target.name
+            )));
+        }
+        Ok((name, value))
+    }).collect::<Result<Vec<_>, CmdError>>()?;
+    for (name, value) in overrides {
+        std::env::set_var(name, value);
+    }
+    Ok(())
+}
+
 /// The shared --auto/--target registry-application half of the Python
 /// command. Returns the GPU type and the target already resolved.
 pub(crate) async fn apply_registry_target(
     mut gpu_type: String,
     target: Option<&str>,
     auto: bool,
+    environment: RegistryEnvironment,
 ) -> Result<(String, Option<crate::targets::ComputeTarget>), CmdError> {
     let mut resolved = None;
     if auto {
@@ -33,13 +72,15 @@ pub(crate) async fn apply_registry_target(
         if gpu_type.is_empty() {
             gpu_type = t.gpu_type.clone().unwrap_or_default();
         }
-        for (k, v) in &t.env_overrides {
-            std::env::set_var(k, env_value_str(v));
+        apply_environment(&t, environment)?;
+        if matches!(environment, RegistryEnvironment::HostIdentity) {
+            println!("serve --auto: target={}", t.name);
+        } else {
+            println!(
+                "agent --auto: target={} gpu_type={gpu_type} capacity=live-resources",
+                t.name
+            );
         }
-        println!(
-            "agent --auto: target={} gpu_type={gpu_type} capacity=live-resources",
-            t.name
-        );
         resolved = Some(t);
     } else if let Some(target) = target {
         let t = local_agent::lookup_auto(target)
@@ -55,10 +96,14 @@ pub(crate) async fn apply_registry_target(
         if gpu_type.is_empty() {
             gpu_type = t.gpu_type.clone().unwrap_or_default();
         }
-        println!(
-            "agent: target={} gpu_type={gpu_type} capacity=live-resources",
-            t.name
-        );
+        if matches!(environment, RegistryEnvironment::HostIdentity) {
+            println!("serve: target={}", t.name);
+        } else {
+            println!(
+                "agent: target={} gpu_type={gpu_type} capacity=live-resources",
+                t.name
+            );
+        }
         resolved = Some(t);
     }
     Ok((gpu_type, resolved))
@@ -90,7 +135,9 @@ pub async fn run(
         ))
     })?;
     let kind = execution.id.to_string();
-    let (gpu_type, _) = apply_registry_target(gpu_type, target.as_deref(), auto).await?;
+    let (gpu_type, _) = apply_registry_target(
+        gpu_type, target.as_deref(), auto, RegistryEnvironment::StandaloneWorker,
+    ).await?;
 
     // Auto-enable the Vast bridge when stado-vast/api_key exists in
     // Skarbiec and this is a local consumer. The defensive helper performs

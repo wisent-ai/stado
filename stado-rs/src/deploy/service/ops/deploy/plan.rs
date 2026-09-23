@@ -15,6 +15,8 @@ pub struct DeployPlan {
     /// the two, and comparing two renderings of the same list is the only way
     /// "the unit already runs this" can be a fact rather than a hope.
     pub argv: String,
+    /// Native systemd spelling; unlike launchd's readback, quoting is significant.
+    pub linux_argv: String,
     /// The launchd agent, for a host whose per-login domain exists.
     pub darwin_unit: String,
     /// The same job as a launchd daemon, for the system domain — the only one
@@ -179,6 +181,7 @@ pub fn plan_deploy_labelled(
         unit,
         program: program.to_string(),
         argv: exec_args.join(" "),
+        linux_argv: local_install::unit::render::systemd_command(&exec_args),
         darwin_unit: darwin.content(remote_home),
         darwin_daemon_unit: local_install::daemon_plist_text(
             &label,

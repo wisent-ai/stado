@@ -74,6 +74,12 @@ pub(crate) fn enrollment_route_allowed(method: &str, path: &str) -> bool {
         .any(|(allowed_method, allowed_path)| *allowed_method == method && *allowed_path == path)
 }
 
+/// A held, loopback-only socket, prepared before a resident worker can claim work.
+pub(crate) struct PreparedListener {
+    listener: tokio::net::TcpListener,
+    local_addr: std::net::SocketAddr,
+}
+
 #[derive(Clone)]
 pub struct Dashboard {
     pub(crate) store: JobStorage,

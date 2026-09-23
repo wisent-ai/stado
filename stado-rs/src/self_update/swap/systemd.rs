@@ -97,19 +97,11 @@ pub(super) async fn recycle_systemd(
             if running.is_same_file(&installed) {
                 continue;
             }
-            let argv = crate::deploy::service::process_table()
-                .ok()
-                .and_then(|rows| {
-                    rows.into_iter()
-                        .find(|(pid, _, _)| *pid == main_pid)
-                        .map(|(_, _, argv)| argv)
-                })
-                .ok_or_else(|| format!("{context}: cannot read argv for {unit} pid {main_pid}"));
-            let argv = argv?;
-            let tokens: Vec<&str> = argv.split_whitespace().collect();
-            if defers_to_release_handshake(&tokens) {
+            let argv = crate::deploy::service::process_arguments(main_pid)
+                .map_err(|error| format!("{context}: {unit}: {error}"))?;
+            if defers_to_release_handshake(&argv) {
                 log_fn(&format!(
-                    "{context}: {unit} is the queue agent and defers to its installed-release handshake"
+                    "{context}: {unit} owns a queue worker and defers to its installed-release handshake"
                 ));
                 continue;
             }

@@ -53,6 +53,17 @@ pub fn systemd_service(
     }
 }
 
+/// The installed host unit owns Stado components that previously had separate units.
+/// Keep explicitly declared legacy units visible until migration removes their records.
+pub fn resident_host_service<'a>(
+    services: &'a [ManagedService],
+) -> Option<&'a ManagedService> {
+    services.iter().find(|service| {
+        crate::deploy::service_catalog::executable_name(&service.program) == Some("stado")
+            && service.args.first().map(String::as_str) == Some("serve")
+    })
+}
+
 /// Every unit Stado manages on one target: the registry-declared array
 /// first, then macOS recovery agents on hosts declared to run macOS. A
 /// declaration wins over the fixed list, because an operator who adopted a
@@ -75,7 +86,9 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
                 .collect()
         })
         .unwrap_or_default();
-    if !crate::targets::platform_accepts_job(&target.release_platform, "Darwin", "") {
+    if resident_host_service(&services).is_some()
+        || !crate::targets::platform_accepts_job(&target.release_platform, "Darwin", "")
+    {
         return services;
     }
     for (label, plist) in host_recovery::MANAGED_AGENTS {

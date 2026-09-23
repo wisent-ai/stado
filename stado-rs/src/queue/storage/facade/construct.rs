@@ -150,13 +150,26 @@ impl JobStorage {
     /// which is honest, because a replica written at addresses nothing resolves
     /// could never have answered a read either.
     async fn with_configured_read_failover(
-        mut self,
+        self,
         read_mode: super::failover::ReadMode,
     ) -> Result<Self, StorageError> {
-        let Some(mut endpoint) = super::copy::Endpoint::configured_backup() else {
+        self.with_read_failover(
+            super::copy::Endpoint::configured_primary(),
+            super::copy::Endpoint::configured_backup(),
+            read_mode,
+        )
+        .await
+    }
+
+    pub(super) async fn with_read_failover(
+        mut self,
+        primary: super::copy::Endpoint,
+        backup: Option<super::copy::Endpoint>,
+        read_mode: super::failover::ReadMode,
+    ) -> Result<Self, StorageError> {
+        let Some(mut endpoint) = backup else {
             return Ok(self);
         };
-        let primary = super::copy::Endpoint::configured_primary();
         if let Some(refusal) = primary.cannot_replicate(&endpoint) {
             eprintln!(
                 "[storage-replica] no disaster-recovery mirror for this store: {refusal} \

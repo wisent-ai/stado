@@ -1,4 +1,3 @@
-use std::process::Stdio;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -6,10 +5,9 @@ use serde_json::Value;
 use crate::service_resolution;
 use crate::targets::{self, RegistryStore};
 
-use crate::cli::resolver::authority::drop_stale_ssh_sockets;
+use crate::cli::resolver::authority::execute::execute;
 use crate::cli::resolver::authority::paths::target_ssh_paths;
 use crate::cli::resolver::authority::refusal::refuse_authority;
-use crate::cli::resolver::authority::ssh_command;
 use crate::cli::resolver::directory::read_local_snapshot;
 use crate::cli::resolver::directory::validate_snapshot;
 use crate::cli::resolver::directory::SnapshotPayload;
@@ -44,13 +42,7 @@ impl SnapshotSource {
     pub(crate) async fn fetch(&self, reader: &str) -> Result<(Value, String, u64), String> {
         match self {
             Self::Local(store) => read_local_snapshot(store).await,
-            // A control master outlives the process that opened it by
-            // `ControlPersist`, and one whose connection has already died
-            // answers nothing while looking perfectly alive. Drop its socket
-            // after the first failed authority read and retry once in this
-            // invocation. The old implementation left recovery to a future
-            // call, so one-shot commands failed while printing that they had
-            // already repaired the cause.
+            // Each authority read owns a native connection independent of adapter traffic.
             Self::Authority {
                 target,
                 ssh,
@@ -61,12 +53,11 @@ impl SnapshotSource {
                     Ok(snapshot) => return Ok(snapshot),
                     Err(error) => error,
                 };
-                drop_stale_ssh_sockets();
                 Self::fetch_authority_paths(target, ssh, command, reader)
                     .await
                     .map_err(|retry_error| {
                         format!(
-                            "{first_error}; second authority read with stale SSH control sockets removed failed: \
+                            "{first_error}; second authority read on a fresh SSH session failed: \
                              {retry_error}"
                         )
                     })
@@ -103,30 +94,28 @@ impl SnapshotSource {
         reader: &str,
     ) -> Result<(Value, String, u64), String> {
         let remote_command = format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
-        let output = match ssh_command("ControlMaster=no")
-            .arg(ssh)
-            .arg(remote_command)
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .output()
-            .await
-        {
+        let output = match execute(ssh, &remote_command, SNAPSHOT_LIMIT).await {
             Ok(output) => output,
             Err(error) => {
-                let sentence = format!("registry authority SSH failed: {error}");
+                let sentence = format!("registry authority SSH failed: {error:#}");
                 refuse_authority(target, reader, &sentence).await;
                 return Err(sentence);
             }
         };
-        if !output.status.success() {
+        if output.stdout_exceeded {
+            return Err("registry authority snapshot exceeds 1 MiB".to_string());
+        }
+        if output.exit_status != Some(0) {
+            let status = output.exit_status.map(|code| code.to_string())
+                .unwrap_or_else(|| "no exit status".to_string());
             let detail = String::from_utf8_lossy(&output.stderr);
             let detail = detail.trim();
             let sentence = if detail.is_empty() {
-                format!("registry authority exited with {}", output.status)
+                format!("registry authority exited with {status}")
             } else {
                 format!(
                     "registry authority exited with {}: {}",
-                    output.status,
+                    status,
                     detail.chars().take(4096).collect::<String>()
                 )
             };
@@ -136,9 +125,6 @@ impl SnapshotSource {
             // must not be counted as one.
             refuse_authority(target, reader, &sentence).await;
             return Err(sentence);
-        }
-        if output.stdout.len() > SNAPSHOT_LIMIT {
-            return Err("registry authority snapshot exceeds 1 MiB".to_string());
         }
         let payload: SnapshotPayload = serde_json::from_slice(&output.stdout)
             .map_err(|error| format!("invalid registry authority response: {error}"))?;

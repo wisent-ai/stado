@@ -87,13 +87,23 @@ fn resolve_long(name: &str) -> Option<&'static str> {
 /// argparse's error strings; exit behavior is described by
 /// [`ParseOutcome`].
 pub fn parse_args(_prog: &str, args: &[String]) -> Result<ParsedArgs, ParseOutcome> {
+    parse_args_with_bucket(args, configured_bucket())
+}
+
+pub(crate) fn configured_bucket() -> String {
     let bucket_env = crate::capabilities::config_env(
         crate::capabilities::RuntimeFacet::Storage,
         crate::capabilities::StorageAdapter::Gcs.id(),
         "bucket",
     )
     .expect("GCS bucket binding is missing from the capability catalog");
-    let default_bucket = std::env::var(bucket_env).unwrap_or_else(|_| DEFAULT_BUCKET.to_string());
+    std::env::var(bucket_env).unwrap_or_else(|_| DEFAULT_BUCKET.to_string())
+}
+
+pub(crate) fn parse_args_with_bucket(
+    args: &[String],
+    default_bucket: String,
+) -> Result<ParsedArgs, ParseOutcome> {
     let mut parsed = ParsedArgs {
         bucket: default_bucket,
         interval_s: DEFAULT_INTERVAL_S,
@@ -195,12 +205,17 @@ pub async fn cli_main() -> i32 {
             return USAGE_ERROR_EXIT;
         }
     };
+    run(&parsed).await
+}
+
+/// Run the declared diagnostics schedule in the caller's process.
+pub(crate) async fn run(parsed: &ParsedArgs) -> i32 {
     if parsed.once {
         return once(&parsed.bucket).await;
     }
     loop {
         once(&parsed.bucket).await;
-        let interval = parsed.interval_s.max(10) as u64;
+        let interval = parsed.interval_s.max(super::MIN_INTERVAL_S) as u64;
         tokio::time::sleep(Duration::from_secs(interval)).await;
     }
 }

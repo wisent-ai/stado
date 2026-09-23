@@ -16,6 +16,9 @@ mod construct;
 mod handle;
 mod layout;
 
+mod server;
+
+pub use server::ServerStorage;
 /// Job-level storage facade over a [`BlobBackend`]. Cheap to clone.
 #[derive(Clone)]
 pub struct JobStorage {

@@ -3,6 +3,8 @@
 //! domains share theirs so an agent and its daemon spelling cannot drift.
 
 use std::path::Path;
+use std::borrow::Cow;
+use std::fmt::Write;
 
 /// Render a launchd agent plist with an explicit owner-controlled log path.
 pub fn plist_text(
@@ -48,7 +50,7 @@ fn plist_document(
     session_type: Option<&str>,
 ) -> String {
     let user_xml = match user {
-        Some(user) => format!("    <key>UserName</key>\n    <string>{user}</string>\n"),
+        Some(user) => format!("    <key>UserName</key>\n    <string>{}</string>\n", xml_text(user)),
         None => String::new(),
     };
     let session_xml = session_type
@@ -58,14 +60,15 @@ fn plist_document(
         .unwrap_or_default();
     let args_xml: String = exec_args
         .iter()
-        .map(|a| format!("        <string>{a}</string>\n"))
+        .map(|a| format!("        <string>{}</string>\n", xml_text(a)))
         .collect();
     let env_xml: String = env
         .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| format!("        <key>{k}</key>\n        <string>{v}</string>\n"))
+        .map(|(k, v)| format!("        <key>{}</key>\n        <string>{}</string>\n", xml_text(k), xml_text(v)))
         .collect();
     let log = log.to_string_lossy();
+    let log = xml_text(&log);
+    let label = xml_text(label);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -82,8 +85,8 @@ fn plist_document(
     <key>KeepAlive</key>
     <true/>
     <!-- launchd hands a job the system's soft `maxfiles`, which is 256 on
-         macOS. `com.wisent.stado-resolver` multiplexes one SSH master per
-         registry connection path and holds a socket per in-flight adapter
+         macOS. The resolver holds transport connections for registry paths
+         and a stream per in-flight adapter
          request; on 2026-09-02 it crossed that ceiling and every registry
          read for the next hours failed with `no registry SSH connection
          path answered (primary: Too many open files (os error 24))`, the
@@ -118,14 +121,82 @@ pub fn systemd_user_unit(
 ) -> String {
     let env_lines: String = env
         .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| format!("Environment={k}={v}\n"))
+        .map(|(k, v)| format!("Environment={}\n", systemd_environment(k, v)))
         .collect();
-    let cmd = exec_args.join(" ");
+    let cmd = systemd_command(exec_args);
     format!(
         // `LimitNOFILE` mirrors the plist's `SoftResourceLimits` above, for
         // the same reason and with the same number: a Linux member of this
         // fleet runs the same resolver against the same registry.
         "[Unit]\nDescription={description}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nLimitNOFILE=4096\n{env_lines}ExecStart={cmd}\nRestart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n"
     )
+}
+
+fn xml_text(value: &str) -> Cow<'_, str> {
+    if !value.contains(['&', '<', '>', '"', '\'']) {
+        return Cow::Borrowed(value);
+    }
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    Cow::Owned(escaped)
+}
+
+/// Literal ExecStart argv, retaining empty arguments and argument boundaries.
+pub(crate) fn systemd_command(arguments: &[String]) -> String {
+    let mut command = String::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        if index != 0 {
+            command.push(' ');
+        }
+        append_systemd_word(&mut command, &[argument], true);
+    }
+    command
+}
+
+/// Environment values do not undergo ExecStart's dollar expansion.
+pub(crate) fn systemd_environment(name: &str, value: &str) -> String {
+    let mut result = String::new();
+    append_systemd_word(&mut result, &[name, "=", value], false);
+    result
+}
+
+fn append_systemd_word(result: &mut String, parts: &[&str], command: bool) {
+    if command && parts.iter().any(|part| !part.is_empty())
+        && parts.iter().all(|part| part.chars().all(|ch| {
+            ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '=' | '@' | ',' | '+')
+        }))
+    {
+        for part in parts {
+            result.push_str(part);
+        }
+        return;
+    }
+    result.push('"');
+    for part in parts {
+        for ch in part.chars() {
+            match ch {
+                '\\' => result.push_str("\\\\"),
+                '"' => result.push_str("\\\""),
+                '%' => result.push_str("%%"),
+                '$' if command => result.push_str("$$"),
+                '\n' => result.push_str("\\n"),
+                '\r' => result.push_str("\\r"),
+                '\t' => result.push_str("\\t"),
+                ch if ch.is_ascii_control() => {
+                    write!(result, "\\x{:02x}", u32::from(ch)).expect("writing to a String");
+                }
+                _ => result.push(ch),
+            }
+        }
+    }
+    result.push('"');
 }

@@ -67,6 +67,22 @@ static BACKEND_MESSAGING_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|
     )
 });
 
+/// Move a standalone worker's legacy grant into the resident host's workload
+/// boundary. The host's default control-plane grant must remain independent.
+pub(crate) fn resident_worker_environment_key(name: &str) -> &str {
+    use crate::capabilities::{AGENT_SKARBIEC, SECRETS_SKARBIEC};
+    for (legacy, workload) in [
+        (SECRETS_SKARBIEC.url, AGENT_SKARBIEC.url),
+        (SECRETS_SKARBIEC.consumer, AGENT_SKARBIEC.consumer),
+        (SECRETS_SKARBIEC.token_file, AGENT_SKARBIEC.token_file),
+    ] {
+        if name == legacy.env {
+            return workload.env;
+        }
+    }
+    name
+}
+
 /// Skarbiec endpoint reachable by workload agents. Cloud agents require HTTPS;
 /// a device-local agent may leave this empty and use [`skarbiec_url`].
 pub fn agent_skarbiec_url() -> &'static str {

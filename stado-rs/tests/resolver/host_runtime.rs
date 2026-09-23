@@ -27,6 +27,9 @@ fn host(policy: &Policy) -> Host {
 fn arguments(policy: &Policy) -> Vec<String> {
     vec![
         "serve".into(),
+        "--worker".into(),
+        "--resolver".into(),
+        "--api".into(),
         "--target".into(),
         TARGET.into(),
         "--coordinator".into(),

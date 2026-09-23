@@ -66,6 +66,7 @@ pub(super) async fn verify_unit_env_write(
         .await
         .map_err(click)?;
     let observed = service::parse_systemd_unit(&unit.content)
+        .map_err(click)?
         .env
         .into_iter()
         .rev()

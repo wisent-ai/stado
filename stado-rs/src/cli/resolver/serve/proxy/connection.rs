@@ -1,8 +1,13 @@
 //! One connection: resolve where it should go, open it, and copy both ways.
 
 use std::time::Duration;
+use std::sync::Arc;
 
 use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+
+use crate::cli::resolver::authority::tunnel::Tunnel;
 
 use crate::cli::resolver::authority::paths::resolved_ssh_paths;
 use crate::cli::resolver::serve::state::ResolverState;
@@ -10,6 +15,11 @@ use crate::service_resolution::ResolverAdapter;
 
 use super::idle::{copy_until_idle, Activity};
 use super::refusal::refuse_connection;
+
+enum Upstream {
+    Local(TcpStream),
+    Remote(russh::ChannelStream<russh::client::Msg>, Arc<Tunnel>),
+}
 
 pub(super) async fn proxy_connection(
     client: TcpStream,
@@ -29,7 +39,6 @@ pub(super) async fn proxy_connection(
     let port = endpoint
         .port_or_known_default()
         .ok_or_else(|| "resolved endpoint has no port".to_string())?;
-    let idle = Duration::from_secs(adapter.idle_seconds);
     // The directory is supposed to name where a service listens. When it names
     // this adapter's own bind instead, the proxy dials itself: the connection is
     // accepted, forwarded to the same socket, accepted again, and the reader
@@ -43,36 +52,20 @@ pub(super) async fn proxy_connection(
             adapter.service, adapter.bind
         ));
     }
-    // Both halves of the fleet reach the upstream over a plain socket: the host
-    // that holds the store dials it directly, every other host dials the
-    // forward this resolver keeps to it. One code path, and neither branch
-    // below starts a process.
-    //
-    // That last sentence was false for as long as it stood here, and it is
-    // worth saying why rather than trusting it again. It read "no process per
-    // request on either" while the `else` branch called
-    // `select_resolver_ssh_path` right here, ahead of the pool: every host
-    // that declares an `ssh_fallbacks` entry -- every host in this fleet --
-    // paid one `ssh <destination> true`, bounded at twenty seconds, in front
-    // of every accepted connection. The claim was about the forward and was
-    // written as though it covered the whole function.
-    //
-    // So it is now checkable against what is visible below: this branch dials
-    // and nothing else. Every process the transport needs -- the path probe
-    // and the forward itself -- is started by
-    // [`ResolverState::tunnel_connect`], under the pool lock, once per
-    // forward. A request that finds a warm forward costs the two sockets it
-    // would cost anyway.
+    // Remote traffic opens channels on the resolver's native SSH session.
+    // There is no child process or intermediary TCP listener.
     let (mut client_read, mut client_write) = client.into_split();
     let upstream = if resolved.active_host == state.local_target {
         TcpStream::connect((host, port))
             .await
             .map_err(|error| format!("local upstream connect failed: {error}"))
+            .map(Upstream::Local)
     } else {
         let paths = resolved_ssh_paths(&resolved);
         state
             .tunnel_connect(&resolved.active_host, &paths, host, port)
             .await
+            .map(|(stream, session)| Upstream::Remote(stream, session))
             .map_err(|error| format!("active host {:?}: {error}", resolved.active_host))
     };
     // A refusal is written to the client before anything is read from it, so
@@ -92,7 +85,26 @@ pub(super) async fn proxy_connection(
             return Ok(());
         }
     };
-    let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    match upstream {
+        Upstream::Local(stream) => relay(client_read, client_write, stream, adapter, host, port).await,
+        Upstream::Remote(stream, session) => {
+            let result = relay(client_read, client_write, stream, adapter, host, port).await;
+            drop(session);
+            result
+        }
+    }
+}
+
+async fn relay<S: AsyncRead + AsyncWrite + Unpin>(
+    mut client_read: OwnedReadHalf,
+    mut client_write: OwnedWriteHalf,
+    upstream: S,
+    adapter: &ResolverAdapter,
+    host: &str,
+    port: u16,
+) -> Result<(), String> {
+    let idle = Duration::from_secs(adapter.idle_seconds);
+    let (mut upstream_read, mut upstream_write) = tokio::io::split(upstream);
     let activity = Activity::new();
     // What a client reads instead of a silent close: the service that did not
     // answer, and the window it was measured against. `Connection: close` and

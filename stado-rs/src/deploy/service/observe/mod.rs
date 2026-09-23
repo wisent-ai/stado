@@ -2,11 +2,13 @@
 //! behind a pid, the image behind a unit, the processes and units nothing
 //! declares, and the labels addressed without one.
 
+mod arguments;
 mod images;
 mod labels;
 mod process;
 mod unowned;
 
+pub(crate) use arguments::process_arguments;
 pub use images::*;
 pub use labels::*;
 pub use process::*;
