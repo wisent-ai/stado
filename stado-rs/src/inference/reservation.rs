@@ -10,8 +10,6 @@ pub struct Reservation {
     pub engine: String,
     pub model: String,
     pub revision: String,
-    #[serde(default)]
-    pub adapters: Vec<super::schema::Adapter>,
     pub endpoint_host: String,
     pub port: u16,
 }
