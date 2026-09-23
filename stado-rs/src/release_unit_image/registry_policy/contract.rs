@@ -149,6 +149,19 @@ pub(crate) fn validate_registry_contract(document: &Value) -> Result<(), String>
                 if !crate::release_control::identifier(unit) || !unit.contains('.') {
                     return Err(format!("{at}: {unit} is not a launchd label"));
                 }
+                // A unit a product retired is never restarted: its work runs
+                // inside that product's one unit, and a revisit would start
+                // the predecessor again beside it. Until 2026-09-23
+                // lukasz-macbook authorised com.wisent.transcript-lake-stream
+                // here, so a new Transcript Lake build would have been put
+                // back into the retired streamer and never into the declared
+                // unit that retires it.
+                if let Some(replacement) = crate::deploy::service_catalog::retired_by(unit)? {
+                    return Err(format!(
+                        "{at}: {}",
+                        crate::deploy::service_catalog::retired_sentence(unit, &replacement)
+                    ));
+                }
                 if let Some(owner) = owners.insert(unit.as_str(), product.as_str()) {
                     return Err(format!(
                         "{at}: {unit} on {target_name} is already authorised by {owner}; a unit \
