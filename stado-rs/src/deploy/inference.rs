@@ -78,6 +78,18 @@ pub async fn install(
     let endpoint_host = shlex_quote(&deployment.endpoint.host);
     let port = deployment.endpoint.port;
     let max_model_len = deployment.resources.max_model_len;
+    let cache_dir = deployment
+        .resources
+        .cache_dir
+        .as_deref()
+        .map(shlex_quote)
+        .unwrap_or_else(|| "\"$root/cache\"".to_string());
+    let cache_mount = deployment
+        .resources
+        .cache_dir
+        .as_deref()
+        .map(|path| format!("{path}:/data/huggingface"))
+        .unwrap_or_else(|| "\"$root/cache:/data/huggingface\"".to_string());
     let secret = shlex_quote(&STANDARD.encode(api_key));
     let unit = shlex_quote(&unit_name(&deployment.name));
     let reservation = Reservation {
@@ -100,9 +112,10 @@ name={name}
 endpoint_host={endpoint_host}
 unit={unit}
 root="$HOME/.stado/inference/$name"
+cache_dir={cache_dir}
 reservation="$HOME/.stado/inference/reservation.json"
-mkdir -p "$root/cache" "$HOME/.config/systemd/user"
-chmod 700 "$HOME/.stado/inference" "$root" "$root/cache"
+mkdir -p "$root" "$cache_dir" "$HOME/.config/systemd/user"
+chmod u=rwx,go= "$HOME/.stado/inference" "$root" "$cache_dir"
 if [ -f "$reservation" ] && ! grep -F '"deployment":"'"$name"'"' "$reservation" >/dev/null; then
   printf 'ERROR\tanother inference reservation exists\n'; exit 1
 fi
@@ -126,26 +139,12 @@ chmod 600 "$root/runtime.env"
 printf '%s' {reservation} | base64 --decode > "$reservation"
 chmod 600 "$reservation"
 docker pull {image}
-cat > "$HOME/.config/systemd/user/$unit" <<'STADO_INFERENCE_UNIT'
-[Unit]
-Description=Stado managed inference
-After=docker.service network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=5
-ExecStart=/usr/bin/docker run --rm --name stado-inference-{raw_name} --gpus all --network host --ipc host --env-file %h/.stado/inference/{raw_name}/runtime.env -v %h/.stado/inference/{raw_name}/cache:/data/huggingface {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len} --enable-auto-tool-choice --tool-call-parser hermes
-ExecStop=/usr/bin/docker stop stado-inference-{raw_name}
-
-[Install]
-WantedBy=default.target
-STADO_INFERENCE_UNIT
-systemctl --user daemon-reload
-systemctl --user enable "$unit"
-systemctl --user restart "$unit"
-printf 'UNIT\t%s\n' "$unit"
+systemctl --user disable --now "$unit" || true
+rm -f "$HOME/.config/systemd/user/$unit"
+systemctl --user daemon-reload || true
+docker rm -f "stado-inference-$name" || true
+container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len} --enable-auto-tool-choice --tool-call-parser hermes)
+printf 'CONTAINER\t%s\n' "$container"
 printf 'STATUS\tstarted\n'
 "#,
         raw_name = deployment.name,
@@ -165,14 +164,11 @@ pub async fn status(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     safe_runtime(deployment)?;
-    let unit = shlex_quote(&unit_name(&deployment.name));
     let name = shlex_quote(&deployment.name);
     let script = format!(
         r#"set -u
-unit={unit}
 name={name}
-printf 'UNIT\t'; systemctl --user is-active "$unit" || true
-printf 'CONTAINER\t'; docker inspect --format '{{{{.State.Status}}}}' "stado-inference-$name" 2>/dev/null || printf 'missing\n'
+printf 'CONTAINER\t'; docker inspect --format '{{{{.State.Status}}}}' "stado-inference-$name" || printf 'missing\n'
 printf 'GPU\t'; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true
 "#
     );
@@ -188,15 +184,16 @@ pub async fn probe(
 ) -> Result<Value, DeployError> {
     safe_runtime(deployment)?;
     let secret = shlex_quote(&STANDARD.encode(api_key));
-    let unit = shlex_quote(&unit_name(&deployment.name));
+    let name = shlex_quote(&deployment.name);
     let port = deployment.endpoint.port;
     let endpoint_host = shlex_quote(&deployment.endpoint.host);
     let script = format!(
         r#"set -euo pipefail
 token=$(printf '%s' {secret} | base64 --decode)
-unit={unit}
-if systemctl --user is-failed --quiet "$unit"; then
-  printf 'ERROR\tinference unit failed\n'; false
+name={name}
+state=$(docker inspect --format '{{{{.State.Status}}}}' "stado-inference-$name") || {{ printf 'ERROR\tinference container missing\n'; false; }}
+if [ "$state" != running ]; then
+  printf 'ERROR\tinference container is %s\n' "$state"; false
 fi
 endpoint_host={endpoint_host}
 curl --fail --silent --show-error --max-time $(printf '%s' '15') -H "Authorization: Bearer $token" "http://$endpoint_host:{port}/v1/models" >/dev/null
@@ -244,10 +241,9 @@ pub async fn logs(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     safe_runtime(deployment)?;
-    let unit = shlex_quote(&unit_name(&deployment.name));
-    let script = format!(
-        "set -euo pipefail\nsystemctl --user status {unit} >/dev/null\njournalctl --user -u {unit} -n {lines} --no-pager\n"
-    );
+    let name = shlex_quote(&deployment.name);
+    let script =
+        format!("set -euo pipefail\ndocker logs --tail {lines} \"stado-inference-{name}\" 2>&1\n");
     let output = host_channel::run_script(target, &script, runner).await?;
     Ok(report(target, &output, "read"))
 }
@@ -261,16 +257,26 @@ pub async fn retire(
     safe_runtime(deployment)?;
     let unit = shlex_quote(&unit_name(&deployment.name));
     let name = shlex_quote(&deployment.name);
+    let image = shlex_quote(&deployment.engine.image);
+    let cache_dir = deployment
+        .resources
+        .cache_dir
+        .as_deref()
+        .map(shlex_quote)
+        .unwrap_or_else(|| "\"$root/cache\"".to_string());
     let purge = if purge_cache {
-        "rm -rf \"$root/cache\""
+        format!(
+            "docker run --rm --entrypoint /bin/sh -v \"$cache_dir:/stado-cache\" {image} -c 'rm -rf /stado-cache/* /stado-cache/.[!.]* /stado-cache/..?*'; rmdir \"$cache_dir\" 2>/dev/null || true"
+        )
     } else {
-        ":"
+        ":".to_string()
     };
     let script = format!(
         r#"set -euo pipefail
 unit={unit}
 name={name}
 root="$HOME/.stado/inference/$name"
+cache_dir={cache_dir}
 systemctl --user disable --now "$unit" || true
 docker rm -f "stado-inference-$name" >/dev/null 2>&1 || true
 rm -f "$HOME/.config/systemd/user/$unit"

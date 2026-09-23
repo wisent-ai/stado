@@ -30,6 +30,8 @@ pub struct Resources {
     pub gpu_mode: String,
     pub gpus: u16,
     pub max_model_len: u64,
+    #[serde(default)]
+    pub cache_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,6 +286,20 @@ pub fn validate(document: &Value) -> Result<(), String> {
         if deployment.resources.max_model_len == u64::MIN {
             return Err(format!(
                 "{location}.resources.max_model_len: must be positive"
+            ));
+        }
+        if deployment
+            .resources
+            .cache_dir
+            .as_deref()
+            .is_some_and(|path| {
+                !path
+                    .strip_prefix('/')
+                    .is_some_and(|relative| safe_reference(relative, "/"))
+            })
+        {
+            return Err(format!(
+                "{location}.resources.cache_dir: must be a safe absolute path"
             ));
         }
         if deployment.endpoint.visibility != VISIBILITY_TAILSCALE
