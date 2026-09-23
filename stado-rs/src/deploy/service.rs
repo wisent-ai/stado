@@ -50,6 +50,7 @@ use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::local_install::{self, InstallPlan, LocalOs};
@@ -116,6 +117,17 @@ const UNIT_HEREDOC: &str = "STADO_UNIT_BODY";
 // The managed set
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingProduct {
+    pub product_id: String,
+    pub display_name: String,
+    pub repository: String,
+    pub surface_kinds: Vec<String>,
+    pub first_success_fact: String,
+    pub onboarding_kind: String,
+    pub status: String,
+}
+
 /// One unit Stado claims to manage on one host.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ManagedService {
@@ -137,6 +149,8 @@ pub struct ManagedService {
     /// When the unit entered management; empty for a recovery-sourced one,
     /// which has been managed for as long as the program has existed.
     pub managed_since: String,
+    /// Product-level onboarding metadata synchronized into Echo.
+    pub onboarding: Option<OnboardingProduct>,
 }
 
 impl ManagedService {
@@ -158,22 +172,26 @@ impl ManagedService {
         self.name == query || self.unit_id() == query
     }
 
-    /// The `services[]` element written into the registry document.
     pub fn to_record(&self) -> Value {
-        json!({
+        let mut record = json!({
             "name": self.name,
             "unit": self.unit,
             "label": self.label,
             "path": self.path,
             "kind": self.kind,
             "managed_since": self.managed_since,
-        })
+        });
+        if let Some(onboarding) = &self.onboarding {
+            record["onboarding"] = serde_json::to_value(onboarding)
+                .expect("OnboardingProduct is JSON serializable");
+        }
+        record
     }
 
     /// The `--json` rendering: the record plus the resolved host and the
     /// source that declared it.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut record = json!({
             "host": self.host,
             "name": self.name,
             "unit": self.unit,
@@ -183,7 +201,12 @@ impl ManagedService {
             "kind": self.kind,
             "source": self.source,
             "managed_since": self.managed_since,
-        })
+        });
+        if let Some(onboarding) = &self.onboarding {
+            record["onboarding"] = serde_json::to_value(onboarding)
+                .expect("OnboardingProduct is JSON serializable");
+        }
+        record
     }
 
     /// Read one `services[]` element back. Missing fields read as empty:
@@ -222,6 +245,9 @@ impl ManagedService {
             kind,
             source: SOURCE_REGISTRY.to_string(),
             managed_since: text("managed_since"),
+            onboarding: record
+                .get("onboarding")
+                .and_then(|value| serde_json::from_value(value.clone()).ok()),
         }
     }
 }
@@ -244,6 +270,7 @@ pub fn launchd_service(
         kind: KIND_LAUNCHD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        onboarding: None,
     }
 }
 
@@ -264,6 +291,7 @@ pub fn systemd_service(
         kind: KIND_SYSTEMD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        onboarding: None,
     }
 }
 
@@ -767,6 +795,30 @@ if [ \"$os\" = \"Darwin\" ]; then
 elif [ \"$os\" = \"Linux\" ]; then
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
   if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/.config/systemd/user/$unit\"; fi
+  case \"$unit_path\" in
+    */.config/systemd/user/*) owner_path=\"${unit_path%%/.config/systemd/user/*}\" ;;
+    *) owner_path=\"$unit_path\" ;;
+  esac
+  while [ ! -e \"$owner_path\" ] && [ \"$owner_path\" != \"/\" ]; do
+    owner_path=$(/usr/bin/dirname \"$owner_path\")
+  done
+  service_user=$(/usr/bin/stat -c %U \"$owner_path\")
+  service_uid=$(/usr/bin/id -u \"$service_user\")
+  systemctl_user() {
+    runtime=\"/run/user/$service_uid\"
+    if [ \"$service_uid\" = \"$uid\" ]; then
+      /usr/bin/env \
+        XDG_RUNTIME_DIR=\"$runtime\" \
+        DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+        /usr/bin/systemctl --user \"$@\"
+      return
+    fi
+    if [ -x /usr/bin/sudo ]; then sudo_bin=/usr/bin/sudo; else sudo_bin=/bin/sudo; fi
+    \"$sudo_bin\" -u \"$service_user\" /usr/bin/env \
+      XDG_RUNTIME_DIR=\"$runtime\" \
+      DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+      /usr/bin/systemctl --user \"$@\"
+  }
 else
   say 'unsupported_os' \"$os\"
   exit 65
@@ -821,8 +873,8 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$domain\"; else say 'restart_failed' \"$rc $detail\"; fi
 else
-  /usr/bin/systemctl --user daemon-reload >/dev/null 2>&1 || true
-  detail=$(/usr/bin/systemctl --user restart \"$unit\" 2>&1)
+  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  detail=$(systemctl_user restart \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'restarted' 'systemd --user'; else say 'restart_failed' \"$rc $detail\"; fi
 fi
@@ -837,7 +889,7 @@ const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
 else
-  /usr/bin/systemctl --user stop \"$unit\" >/dev/null 2>&1 || true
+  systemctl_user stop \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'stopped' \"$unit_path\"
 ";
@@ -852,7 +904,7 @@ unit_state='unloaded'
 if [ \"$os\" = \"Darwin\" ]; then
   if /bin/launchctl print \"$domain/$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 else
-  if /usr/bin/systemctl --user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
+  if systemctl_user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 fi
 printf 'STADO_ADOPT\\t%s\\t%s\\n' \"$file_state\" \"$unit_state\"
 say 'probed' \"$unit_path\"
@@ -874,7 +926,7 @@ const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl disable \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
 else
-  /usr/bin/systemctl --user disable --now \"$unit\" >/dev/null 2>&1 || true
+  systemctl_user disable --now \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'retired' \"$unit_path\"
 ";
@@ -948,8 +1000,8 @@ else
   /bin/cat > \"$unit_path\" <<'@HEREDOC@'
 @LINUX_UNIT@
 @HEREDOC@
-  /usr/bin/systemctl --user daemon-reload >/dev/null 2>&1 || true
-  detail=$(/usr/bin/systemctl --user enable --now \"$unit\" 2>&1)
+  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  detail=$(systemctl_user enable --now \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'deployed' \"$unit_path\"; else say 'enable_failed' \"$rc $detail\"; fi
 fi
@@ -1487,6 +1539,41 @@ pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(),
     }
     declared.push(service.to_record());
     Ok(())
+}
+
+/// Attach product onboarding metadata to one already managed service.
+pub fn set_service_onboarding(
+    document: &mut Value,
+    host: &str,
+    service: &str,
+    onboarding: OnboardingProduct,
+) -> Result<ManagedService, DeployError> {
+    let entry = target_entry(document, host)?;
+    let declared = entry
+        .get_mut(SERVICES_KEY)
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| DeployError(format!("{} declares no managed services", py_str_repr(host))))?;
+    let record = declared
+        .iter_mut()
+        .find(|record| {
+            record
+                .as_object()
+                .is_some_and(|record| ManagedService::from_record(host, record).matches(service))
+        })
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{} is not a registry-managed service on {}",
+                py_str_repr(service),
+                py_str_repr(host)
+            ))
+        })?;
+    record.insert(
+        "onboarding".to_string(),
+        serde_json::to_value(&onboarding)
+            .map_err(|error| DeployError(format!("invalid onboarding product: {error}")))?,
+    );
+    Ok(ManagedService::from_record(host, record))
 }
 
 /// Undeclare a service. Removing the last one drops the key entirely, so a

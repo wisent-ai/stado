@@ -117,8 +117,12 @@ pub async fn run(
         .to_lowercase();
     let explicit_off = matches!(auto_list_env.as_str(), "0" | "false" | "no" | "off");
     let explicit_on = matches!(auto_list_env.as_str(), "1" | "true" | "yes" | "on");
-    let env_has_api_key = vast::vast_api_key_available().await;
     let inference_reservation = crate::inference::reservation::active();
+    let env_has_api_key = if inference_reservation.is_none() {
+        vast::vast_api_key_available().await
+    } else {
+        false
+    };
     let effective_vast = inference_reservation.is_none()
         && (vast_auto_list
             || explicit_on
