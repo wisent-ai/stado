@@ -3,11 +3,12 @@
 //! Reading comes before spending. Every product checkout under the workspace
 //! is read for three facts — the commit it stands on, the version that commit
 //! declares, and what the runs already recorded for that version did — and
-//! only what no run published and no run is still releasing from that very
-//! commit is submitted. A product that declares `releases: false`, a version
-//! a run published, a commit a run is still releasing, and a checkout that
-//! cannot be read at all are each reported with the reason, in the same
-//! listing, instead of disappearing from it.
+//! only a version no run published and no other commit holds, on a commit no
+//! run is still releasing, is submitted. A product that declares
+//! `releases: false`, a version a run published or another commit holds, a
+//! commit a run is still releasing, and a checkout that cannot be read at all
+//! are each reported with the reason, in the same listing, instead of
+//! disappearing from it.
 
 use std::path::{Path, PathBuf};
 
@@ -26,10 +27,10 @@ type Recorded = std::collections::BTreeMap<(String, String), Vec<RecordedRun>>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "standing", rename_all = "snake_case")]
 pub enum Standing {
-    /// No run published its declared version and none is releasing this
-    /// commit: this is what `newest` submits. A run that failed, was
-    /// superseded, or is still releasing an older commit of the same version
-    /// does not hold it back; submitting supersedes that older run.
+    /// No run published its declared version, no other commit holds it, and
+    /// no run is releasing this commit: this is what `newest` submits. A run
+    /// of this very commit that failed or was superseded does not hold it
+    /// back; the commit is submitted again.
     /// `uncommitted` counts the checkout's paths that the commit does not
     /// hold; they are not part of the release and are named so nobody
     /// reads the plan as releasing them.
@@ -50,6 +51,15 @@ pub enum Standing {
         commit: String,
         version: String,
         run: String,
+    },
+    /// A run of another commit holds the version: a submission attests its
+    /// source revision for good, whether the run published or not, so this
+    /// commit needs a version of its own before it can be released.
+    VersionTaken {
+        commit: String,
+        version: String,
+        run: String,
+        taken_by: String,
     },
     /// The product declares that it does not release, and says why.
     DeclaresNoReleases { reason: String },
@@ -197,12 +207,15 @@ fn standing(checkout: &Path, published: &Recorded) -> Result<Standing, String> {
     Ok(standing_from_runs(commit, version, uncommitted.len(), runs))
 }
 
-/// A published run settles the version for good; a run still moving on this
-/// commit is waited for; anything else — no run, a failed or superseded one,
-/// or one still moving on an older commit — leaves the commit to release. On
-/// 2026-09-23 stado 0.21.54's run failed its darwin quality gate, the fix was
-/// committed at the same version, and `newest` called the version "already
-/// published" because a run existed at all, so the fix could not be released.
+/// A published run settles the version for good. A run of another commit
+/// holds it too: its submission attested that commit as the version's source,
+/// and the store refuses a second revision under one version (`stado/0.21.54
+/// already attests source revision …`). A run still moving on this commit is
+/// waited for; no run, or a failed or superseded run of this commit, leaves the
+/// commit to release. On 2026-09-23 stado 0.21.54's run failed its darwin
+/// quality gate, the fix was committed at the same version, and `newest` called
+/// the version "already published", which sent the operator to wait for a
+/// publication that could never come instead of to the version bump it needed.
 fn standing_from_runs(
     commit: String,
     version: String,
@@ -217,9 +230,15 @@ fn standing_from_runs(
             run: run.run_id.clone(),
         };
     }
-    let moving = |run: &&RecordedRun| {
-        run.source_commit == commit && run.state.as_ref().is_some_and(|state| !state.finished())
-    };
+    if let Some(run) = runs.iter().find(|run| run.source_commit != commit) {
+        return Standing::VersionTaken {
+            commit,
+            version,
+            run: run.run_id.clone(),
+            taken_by: run.source_commit.clone(),
+        };
+    }
+    let moving = |run: &&RecordedRun| run.state.as_ref().is_some_and(|state| !state.finished());
     if let Some(run) = runs.iter().find(moving) {
         return Standing::InFlight {
             commit,

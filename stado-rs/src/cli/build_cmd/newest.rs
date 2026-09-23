@@ -74,6 +74,9 @@ fn buildable(entry: &Planned) -> Option<(&str, &str)> {
         }
         | Standing::InFlight {
             commit, version, ..
+        }
+        | Standing::VersionTaken {
+            commit, version, ..
         } => Some((commit.as_str(), version.as_str())),
         Standing::DeclaresNoReleases { .. } | Standing::Unreadable { .. } => None,
     }
@@ -88,6 +91,9 @@ fn describe(entry: &Planned) -> String {
             commit, version, ..
         }
         | Standing::InFlight {
+            commit, version, ..
+        }
+        | Standing::VersionTaken {
             commit, version, ..
         } => {
             format!("{version} from {commit} would be built")

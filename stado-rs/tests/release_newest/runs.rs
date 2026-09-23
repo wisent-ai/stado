@@ -2,12 +2,15 @@
 //!
 //! On 2026-09-23 stado 0.21.54's run failed its darwin quality gate, the fix
 //! was committed at the same version, and `newest` answered "already
-//! published" because a run existed at all: the fix could not be released.
-//! Only a run that published settles a version, and only a run still moving
-//! on the very commit the checkout stands on is waited for.
+//! published" because a run existed at all. It had published nothing; the
+//! version was spent because that run attested another commit as its source,
+//! and the store refuses a second one. Only a published run settles a
+//! version, a run of another commit takes it, a run still moving on this very
+//! commit is waited for, and a failed or superseded run of this commit is
+//! submitted again.
 
 use crate::area::{releasing_manifest, Area};
-use crate::{document, entry};
+use crate::{document, entry, COMMIT_LENGTH};
 
 /// One checkout, the run on record for its version, and what the plan must
 /// say about it.
@@ -18,7 +21,7 @@ struct Case {
     standing: &'static str,
 }
 
-const CASES: [Case; 5] = [
+const CASES: [Case; 6] = [
     Case {
         product: "failed-run",
         run_state: "failed",
@@ -32,16 +35,22 @@ const CASES: [Case; 5] = [
         standing: "releasable",
     },
     Case {
-        product: "older-commit-run",
-        run_state: "waiting",
-        run_is_of_this_commit: false,
-        standing: "releasable",
-    },
-    Case {
         product: "moving-run",
         run_state: "waiting",
         run_is_of_this_commit: true,
         standing: "in_flight",
+    },
+    Case {
+        product: "failed-older-commit-run",
+        run_state: "failed",
+        run_is_of_this_commit: false,
+        standing: "version_taken",
+    },
+    Case {
+        product: "moving-older-commit-run",
+        run_state: "waiting",
+        run_is_of_this_commit: false,
+        standing: "version_taken",
     },
     Case {
         product: "published-run",
@@ -54,7 +63,7 @@ const CASES: [Case; 5] = [
 /// Every run state that leaves the commit to release, and every one that
 /// does not, read by the real binary from the area's own store.
 #[test]
-fn only_a_published_run_or_one_still_moving_on_this_commit_holds_a_version_back() {
+fn only_this_commits_unfinished_or_failed_runs_leave_its_version_to_release() {
     let area = Area::new("runs");
     for case in &CASES {
         let checkout = area.checkout(
@@ -99,6 +108,13 @@ fn only_a_published_run_or_one_still_moving_on_this_commit_holds_a_version_back(
                 "the run that holds the version back is named: {found}"
             );
         }
+        if case.standing == "version_taken" {
+            assert_eq!(
+                found["taken_by"],
+                "0".repeat(COMMIT_LENGTH),
+                "the commit that holds the version is named: {found}"
+            );
+        }
     }
 
     let listing = area.stado(&[
@@ -114,7 +130,11 @@ fn only_a_published_run_or_one_still_moving_on_this_commit_holds_a_version_back(
         "the listing names the run still moving: {text}"
     );
     assert!(
-        text.contains("3 of 5 product(s) would be released"),
+        text.contains("commit a new version before releasing"),
+        "a version another commit holds says what to do: {text}"
+    );
+    assert!(
+        text.contains("2 of 6 product(s) would be released"),
         "the listing counts what would be released: {text}"
     );
 }

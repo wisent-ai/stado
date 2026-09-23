@@ -151,6 +151,15 @@ fn describe(standing: &Standing) -> String {
             "{version} from {commit} is being released by run {run}; \
              follow it with `stado release status`"
         ),
+        Standing::VersionTaken {
+            commit,
+            version,
+            run,
+            taken_by,
+        } => format!(
+            "{version} belongs to commit {taken_by} (run {run}), and a version's \
+             source never changes; commit a new version before releasing {commit}"
+        ),
         Standing::DeclaresNoReleases { reason } => format!("declares no releases: {reason}"),
         Standing::Unreadable { refusal } => format!("cannot be read: {refusal}"),
     }

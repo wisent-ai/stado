@@ -10,8 +10,9 @@
 //!
 //! This walks the workspace, and for every product checkout it finds it reads
 //! the commit that checkout is on, reads the version that commit declares,
-//! skips a version a run published and a commit a run is still releasing, and
-//! submits the rest through the same pipeline `submit` drives. Nothing here decides a version:
+//! skips a version a run published or a run of another commit holds, and a
+//! commit a run is still releasing, and submits the rest through the same
+//! pipeline `submit` drives. Nothing here decides a version:
 //! the rule that says which slot advances lives once for the whole fleet in
 //! AutoVersion, and the number it produced is already committed in the
 //! product's own source by the time a release is cut.
