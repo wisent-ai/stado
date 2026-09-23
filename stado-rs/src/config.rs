@@ -984,7 +984,6 @@ static BACKEND_MESSAGING_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|
 pub const ACTIVE_OBJECT_NAMESPACES: &[&str] = &[
     "entitlements-rotator",
     "echo",
-    "content-platform",
     "growth-tactics",
     "needher",
     "oko",
