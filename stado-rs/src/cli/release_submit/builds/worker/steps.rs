@@ -36,10 +36,22 @@ fn resolve_step_program(program: &str) -> PathBuf {
     }
     candidates.push(Path::new("/opt/homebrew/bin").join(program));
     candidates.push(Path::new("/usr/local/bin").join(program));
+    // A candidate must be an executable file, as `execvp` requires. uv's
+    // installer writes `~/.local/bin/env`, a shell snippet meant to be
+    // sourced; on charless-mac-mini that file shadowed `/usr/bin/env`, and
+    // the release gate stopped with `cannot run /Users/charles/.local/bin/env:
+    // Permission denied`.
     candidates
         .into_iter()
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable_file(candidate))
         .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn is_executable_file(candidate: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    candidate
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 pub(crate) fn execute(
