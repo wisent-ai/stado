@@ -95,8 +95,18 @@
     {
       "name": "oko",
       "summary": "The one Oko process per host (oko-cli serve) running the autonomy cadence, the transcript index refresher, the task handover loop and the PTY broker.",
-      "program": "$HOME/.stado/bin/run-autonomy-service",
-      "args": [],
+      "program": "$HOME/.stado/bin/oko-cli",
+      "args": [
+        "serve",
+        "--autonomy-interval",
+        "300",
+        "--control-hours",
+        "168",
+        "--control-interval",
+        "300",
+        "--control-max",
+        "2"
+      ],
       "unit": "com.wisent.compute.service.oko-autonomy",
       "retired_units": [
         "ai.wisent.oko.pty-broker",
