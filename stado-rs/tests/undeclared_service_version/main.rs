@@ -10,12 +10,17 @@
 //! delivered program it talks about as a real file under a temporary home, so
 //! the verdicts below are about a host that exists and a tree that is on this
 //! disk. Each finding is produced by writing the contradicting declaration
-//! and then withdrawn by writing the declaration that resolves it.
+//! and then withdrawn by writing the declaration that resolves it. The last
+//! case holds the doctor to the retirement contract beside the release one: a
+//! unit a product's one process retired is a declaration to forget.
 
 mod fixture;
 
 use fixture::{platform, release_control, unit, Fixture};
 use fixture::{ARBITRARY, CATALOG_PRODUCT, LABEL_STAGED, LEGACY, MANAGED, VERSION_FINDING};
+
+/// A unit the shipped catalog lists among skarbiec's `retired_units`.
+const RETIRED: &str = "com.wisent.compute.service.skarbiec-control-plane";
 
 /// A product release control owns carries its own desired version, so the
 /// host must not be told to declare a second one — and its legacy launchd
@@ -212,5 +217,62 @@ fn an_arbitrary_service_update_tree_gets_no_invented_semver_contract() {
         fixture.findings(VERSION_FINDING).len(),
         1,
         "the same unit staged under a catalog product does carry the contract"
+    );
+}
+
+/// A unit a product retired is supposed to be absent, so a registry that still
+/// declares it is told to forget the declaration - never that the unit is
+/// missing or inactive, which points at a repair Stado refuses to make.
+///
+/// The same program declared under a label no product retired brings the
+/// liveness row back: the finding is about retirement and nothing else.
+#[test]
+fn a_declared_retired_unit_is_a_declaration_to_forget_not_a_missing_unit() {
+    let fixture = Fixture::new();
+    let launcher = fixture
+        .home()
+        .join(".stado/bin/skarbiec-control-plane-launcher");
+    std::fs::create_dir_all(launcher.parent().expect("a parent directory"))
+        .expect("create the launcher directory");
+    std::fs::write(&launcher, "#!/bin/sh\nexit 0\n").expect("create the retired launcher");
+    let program = launcher.display().to_string();
+    fixture.declare(
+        &[unit(&fixture.home(), RETIRED, &program)],
+        serde_json::json!({}),
+        None,
+    );
+    fixture.beacon(&[]);
+
+    let row = fixture.only("retired-unit-declared");
+    let detail = row["detail"].as_str().unwrap_or_default();
+    let forget = format!("stado service retire {RETIRED} --host {}", fixture.host());
+    assert!(
+        detail.contains("the one skarbiec process") && detail.contains(&forget),
+        "the row names the process that replaced the unit and the command that forgets it: \
+         {detail}"
+    );
+    for liveness in ["missing-plist", "unit-not-active"] {
+        assert!(
+            fixture.findings(liveness).is_empty(),
+            "a retired unit is not a liveness subject: {:?}",
+            fixture.details(liveness)
+        );
+    }
+
+    fixture.declare(
+        &[unit(&fixture.home(), ARBITRARY, &program)],
+        serde_json::json!({}),
+        None,
+    );
+    assert!(
+        fixture.findings("retired-unit-declared").is_empty(),
+        "a unit no product retired is not reported as retired: {:?}",
+        fixture.details("retired-unit-declared")
+    );
+    assert_eq!(
+        fixture.findings("missing-plist").len(),
+        1,
+        "the same absent unit under a label no product retired is a liveness subject again: {:?}",
+        fixture.details("missing-plist")
     );
 }

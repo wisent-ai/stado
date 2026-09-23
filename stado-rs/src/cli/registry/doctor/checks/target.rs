@@ -11,7 +11,7 @@ use crate::cli::registry::beacons::load::beacon_for_slugs;
 use crate::cli::registry::beacons::{stale_after_seconds, ACTIVE_STATE};
 use crate::cli::registry::doctor::findings::Finding;
 use crate::cli::registry::human_age;
-use crate::deploy::service;
+use crate::deploy::{service, service_catalog};
 use crate::monitor::host_health;
 use crate::targets::{self, ComputeTarget, Registry};
 
@@ -59,6 +59,15 @@ fn declared_units(
             })
         })
         .collect()
+}
+
+/// The catalog product whose one process replaced `declared`, looked up by
+/// its unit identity first and its service name second, the way the service
+/// reconciler looks it up before it declines to repair it.
+fn retired_replacement(declared: &DeclaredUnit) -> Option<service_catalog::CatalogService> {
+    [declared.id.as_str(), declared.name.as_str()]
+        .into_iter()
+        .find_map(|unit| service_catalog::retired_by(unit).ok().flatten())
 }
 
 /// Every divergence one registry target earns, and the beacon slugs it
@@ -217,6 +226,30 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
             )),
         }
         for declared in declared_units(target, release_control) {
+            // A retired unit is supposed to be absent: its product's one
+            // process booted it out and removed its launch agent. Reporting
+            // it as `unit-not-active` or `missing-plist` called the intended
+            // state a failure and pointed at a repair Stado refuses. What is
+            // left to fix is the declaration itself.
+            if let Some(replacement) = retired_replacement(&declared) {
+                findings.push(
+                    Finding::new(
+                        "retired-unit-declared",
+                        &target.name,
+                        format!(
+                            "registry still declares service {} ({}): {}; nothing may run it, so \
+                             forget the declaration with `stado service retire {} --host {}`",
+                            declared.name,
+                            declared.id,
+                            service_catalog::retired_sentence(&declared.id, &replacement),
+                            declared.id,
+                            target.name
+                        ),
+                    )
+                    .about(declared.id.as_str()),
+                );
+                continue;
+            }
             match beacon.unit_state(&declared.id) {
                 None => findings.push(
                     Finding::new(
