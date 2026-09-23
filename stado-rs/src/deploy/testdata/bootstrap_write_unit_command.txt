@@ -1,0 +1,18 @@
+echo '[Unit]
+Description=Wisent Compute local GPU agent (box-a)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=WC_LOCAL_SLOTS=2
+Environment=PYTHONUNBUFFERED=1
+Environment=WC_PYTHON=/usr/bin/python3
+ExecStart=/home/u/.stado/bin/stado agent --target box-a
+Restart=on-failure
+RestartSec=30
+User=u
+
+[Install]
+WantedBy=multi-user.target
+' | sudo tee /etc/systemd/system/wisent-compute-agent.service >/dev/null && sudo systemctl daemon-reload && sudo systemctl enable --now wisent-compute-agent.service

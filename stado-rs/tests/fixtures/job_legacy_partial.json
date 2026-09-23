@@ -1,0 +1,13 @@
+{
+  "job_id": "legacy",
+  "command": "python train.py",
+  "state": "completed",
+  "gpu_mem_gb": 16,
+  "created_at": "2025-05-01T00:00:00+00:00",
+  "unknown_future_field": {
+    "nested": [
+      1,
+      2
+    ]
+  }
+}
