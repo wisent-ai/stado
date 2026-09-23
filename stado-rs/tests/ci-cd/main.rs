@@ -53,9 +53,16 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     let public = home.path().join("release-public");
     let worker_bin = home.path().join(".stado/bin/stado");
     fs::create_dir_all(worker_bin.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_stado"), &worker_bin).unwrap();
+    fs::copy(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+        &worker_bin,
+    )
+    .unwrap();
     fs::set_permissions(&worker_bin, fs::Permissions::from_mode(0o700)).unwrap();
-    run(Command::new(env!("CARGO_BIN_EXE_stado")).args([
+    run(Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    )
+    .args([
         "release",
         "keygen",
         "--private-key",
@@ -78,7 +85,9 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
-    let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut agent_command = Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    );
     release_env(&mut agent_command, home.path(), &storage, &vault);
     let mut agent = agent_command
         .args(["agent", "--target", "ci-runner"])
@@ -89,7 +98,9 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     wait_for_claimable_capacity(&storage, home.path(), &mut agent);
     let submit_out = File::create(home.path().join("submit.out")).unwrap();
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
-    let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut submit = Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    );
     release_env(&mut submit, home.path(), &storage, &vault);
     let mut submit = submit
         .args([
@@ -190,9 +201,16 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
     let public = home.path().join("release-public");
     let worker_bin = home.path().join(".stado/bin/stado");
     fs::create_dir_all(worker_bin.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_stado"), &worker_bin).unwrap();
+    fs::copy(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+        &worker_bin,
+    )
+    .unwrap();
     fs::set_permissions(&worker_bin, fs::Permissions::from_mode(0o700)).unwrap();
-    run(Command::new(env!("CARGO_BIN_EXE_stado")).args([
+    run(Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    )
+    .args([
         "release",
         "keygen",
         "--private-key",
@@ -215,7 +233,9 @@ fn stale_target_capacity_still_enqueues_its_exact_release_delivery() {
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
-    let mut agent_command = Command::new(env!("CARGO_BIN_EXE_stado"));
+    let mut agent_command = Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    );
     release_env(&mut agent_command, home.path(), &storage, &vault);
     let mut agent = agent_command
         .args(["agent", "--target", "ci-runner"])

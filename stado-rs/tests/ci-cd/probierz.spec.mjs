@@ -1,8 +1,4 @@
-import { execFile } from 'node:child_process';
-import { strict as assert } from 'node:assert';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
+import { runRecordedRustJourney } from '../probierz-rust-journey.mjs';
 
 const exec = promisify(execFile);
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');

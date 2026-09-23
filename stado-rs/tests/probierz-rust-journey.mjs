@@ -33,9 +33,11 @@ export async function runRecordedRustJourney({
   tests,
   productionMutations,
   contracts,
+  executionBudgetMs = defaultExecutionBudgetMs,
   release = false,
   testFilter = null,
 }) {
+  const testArgs = ['--ignored', '--nocapture', '--test-threads=1', '--exact'];
   const artifacts = process.env.PROBIERZ_ARTIFACTS;
   const mediaManifest = process.env.PROBIERZ_MEDIA_MANIFEST;
   if (!artifacts) throw new Error('PROBIERZ_ARTIFACTS is required');
@@ -134,7 +136,7 @@ export async function runRecordedRustJourney({
         failures.push(`${target} was not executed`);
         continue;
       }
-      const selectedTestArgs = testFilter ? [...testArgs, '--exact', testFilter] : testArgs;
+      const selectedTestArgs = [...testArgs, ...(testFilter ? [testFilter] : tests)];
       const result = await runProcess(testExecutable.snapshot.file, selectedTestArgs, {
         cwd: crate,
         env: {
