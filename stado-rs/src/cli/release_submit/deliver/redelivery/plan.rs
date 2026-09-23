@@ -130,6 +130,7 @@ pub(super) async fn plan_redelivery(
             &manifest.platforms[&delivery.platform].runner_platform,
             None,
             None,
+            &delivery.secret_env,
         )
         .await?
         .1

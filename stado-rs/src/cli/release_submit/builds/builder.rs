@@ -20,10 +20,15 @@ use crate::release_pipeline::ScratchReceipt;
 /// disk goes first. Name order used to decide, and it sent every darwin build
 /// to charless-mac-mini for as long as that host stayed one byte above its
 /// low watermark.
+///
+/// `secret_env` is what the job projects into its environment, as
+/// `item#field` references. A host whose publication lists
+/// `secret_fields` without one of them cannot resolve it and is unfit.
 pub(crate) async fn builder(
     platform: &str,
     pinned: Option<&str>,
     scratch: Option<&ScratchReceipt>,
+    secret_env: &BTreeMap<String, String>,
 ) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -83,6 +88,9 @@ pub(crate) async fn builder(
                     }
                     _ => Claimability::Unfit { reason: short },
                 };
+            }
+            if let Some(reason) = missing_secret_field(publication, secret_env) {
+                verdict = Claimability::Unfit { reason };
             }
             considered.push((target.name.clone(), verdict.clone()));
             // Busy workers can receive queued builds; their normal claim gate
@@ -165,6 +173,31 @@ pub(crate) async fn builder(
                 declared_for_platform,
             ))
         })
+}
+
+/// The first `item#field` the job declares that this host's published
+/// `secret_fields` does not allow.
+///
+/// On 2026-09-23 jeden 0.1.23's darwin build was pinned to
+/// charless-mac-mini, whose agent does not allow the Apple signing fields,
+/// and failed with `secret WISENT_CODESIGN_CERTIFICATE_PEM is outside
+/// agent.skarbiec.secret_fields`; lukasz-macbook allows them. A publication
+/// without the list comes from an agent older than it and is not judged
+/// here; that agent's own claim-time probe still declines what it cannot
+/// resolve.
+fn missing_secret_field(
+    publication: &serde_json::Value,
+    secret_env: &BTreeMap<String, String>,
+) -> Option<String> {
+    let allowed = publication.get("secret_fields")?.as_array()?;
+    secret_env
+        .values()
+        .find(|reference| {
+            !allowed
+                .iter()
+                .any(|field| field.as_str() == Some(reference.as_str()))
+        })
+        .map(|reference| format!("{reference} is not in its agent.skarbiec.secret_fields"))
 }
 
 /// Resolve the consumer id last published by one exact registry target.

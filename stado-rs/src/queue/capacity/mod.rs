@@ -249,6 +249,12 @@ pub async fn publish_capacity(
         "reservations".into(),
         Value::Array(held.live.iter().map(Reservation::published).collect()),
     );
+    // Names only, never values: the `item#field` references a job may project
+    // here, so a coordinator does not pin a job this agent cannot resolve.
+    payload.insert(
+        "secret_fields".into(),
+        Value::from(crate::config::agent_skarbiec_secret_fields().to_vec()),
+    );
     diag.append(&mut memory.diagnostics());
     payload.insert("diag".into(), Value::Object(diag));
     payload.insert(

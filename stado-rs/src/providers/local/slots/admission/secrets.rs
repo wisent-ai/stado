@@ -71,6 +71,22 @@ pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
     if job.secret_env.is_empty() {
         return Ok(());
     }
+    // The local field allowlist refuses at resolution just as surely as a
+    // missing grant does, so it is asked here too. On 2026-09-23
+    // charless-mac-mini, whose agent.skarbiec.secret_fields omits the Apple
+    // signing fields, claimed jeden 0.1.23's darwin build and failed it with
+    // `secret WISENT_CODESIGN_CERTIFICATE_PEM is outside
+    // agent.skarbiec.secret_fields`, while lukasz-macbook, whose agent
+    // declares them, could have run it.
+    for (env_name, reference) in &job.secret_env {
+        if !crate::config::agent_secret_reference_allowed(&reference.item, &reference.field) {
+            return Err(format!(
+                "secret {env_name} needs {}#{} and this host's agent.skarbiec.secret_fields \
+                 does not allow it",
+                reference.item, reference.field
+            ));
+        }
+    }
     let client = agent_secret_client().map_err(|error| error.to_string())?;
     let visible = client.list_items().await.map_err(|error| {
         let text = error.to_string();

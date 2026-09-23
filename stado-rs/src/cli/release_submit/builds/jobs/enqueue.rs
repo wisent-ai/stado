@@ -124,28 +124,33 @@ pub(crate) async fn enqueue(
     }
     let recipe = &m.platforms[platform];
     let scratch = last_scratch(store, &m.product, &recipe.runner_platform).await?;
-    let (builder_name, consumer) = if let (Some(request), Some(submission)) =
-        (&saved_request, &saved_submission)
-    {
-        let consumer = submission
-            .get("request")
-            .and_then(|request| request.get("options"))
-            .and_then(|options| options.get("pinned_host"))
-            .and_then(Value::as_str)
-            .filter(|consumer| !consumer.is_empty())
-            .ok_or_else(|| {
-                CmdError::click(format!(
-                    "saved release submission {submission_run_id} has no pinned consumer"
-                ))
-            })?;
-        (request.builder.clone(), consumer.to_owned())
-    } else {
-        let pinned = saved_request
-            .as_ref()
-            .map(|request| request.builder.as_str());
-        let (host, consumer) = builder(&recipe.runner_platform, pinned, scratch.as_ref()).await?;
-        (host.name, consumer)
-    };
+    let (builder_name, consumer) =
+        if let (Some(request), Some(submission)) = (&saved_request, &saved_submission) {
+            let consumer = submission
+                .get("request")
+                .and_then(|request| request.get("options"))
+                .and_then(|options| options.get("pinned_host"))
+                .and_then(Value::as_str)
+                .filter(|consumer| !consumer.is_empty())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "saved release submission {submission_run_id} has no pinned consumer"
+                    ))
+                })?;
+            (request.builder.clone(), consumer.to_owned())
+        } else {
+            let pinned = saved_request
+                .as_ref()
+                .map(|request| request.builder.as_str());
+            let (host, consumer) = builder(
+                &recipe.runner_platform,
+                pinned,
+                scratch.as_ref(),
+                &recipe.secret_env,
+            )
+            .await?;
+            (host.name, consumer)
+        };
     let mut resolved = Map::new();
     resolved.insert(
         "source".into(),
@@ -229,6 +234,7 @@ pub(crate) async fn enqueue(
             &recipe.runner_platform,
             Some(&request.builder),
             scratch.as_ref(),
+            &recipe.secret_env,
         )
         .await?
         .1
