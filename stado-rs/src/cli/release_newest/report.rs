@@ -143,6 +143,14 @@ fn describe(standing: &Standing) -> String {
         Standing::Published { version, run, .. } => {
             format!("{version} is already published by run {run}")
         }
+        Standing::InFlight {
+            commit,
+            version,
+            run,
+        } => format!(
+            "{version} from {commit} is being released by run {run}; \
+             follow it with `stado release status`"
+        ),
         Standing::DeclaresNoReleases { reason } => format!("declares no releases: {reason}"),
         Standing::Unreadable { refusal } => format!("cannot be read: {refusal}"),
     }

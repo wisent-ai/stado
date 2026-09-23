@@ -37,7 +37,7 @@ pub(crate) use crate::cli::release_submit::builds::jobs::platforms::{
 };
 pub(crate) use crate::cli::release_submit::builds::jobs::terminal::terminal as terminal_job;
 pub(crate) use crate::cli::release_submit::run::reports::{
-    matching_runs, published_coordinates, recent_runs, RunFilter, VERSION_SCAN_WINDOW,
+    matching_runs, recent_runs, recorded_runs, RecordedRun, RunFilter, VERSION_SCAN_WINDOW,
 };
 pub(crate) use crate::cli::release_submit::run::source::{
     build_identity, build_path, build_uri, committed_file, head_commit, immutable, queue_immutable,

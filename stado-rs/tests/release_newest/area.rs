@@ -112,6 +112,38 @@ impl Area {
         git(&checkout, &["commit", "-m", "the product as it stands"]);
         checkout
     }
+
+    /// A release run on record in this area's store, the way the pipeline
+    /// writes it, for `newest` to read.
+    pub fn record_run(
+        &self,
+        run_id: &str,
+        product: &str,
+        version: &str,
+        state: &str,
+        commit: &str,
+    ) {
+        let directory = self.storage.join("runs/release-pipeline").join(run_id);
+        std::fs::create_dir_all(&directory).expect("create the run directory");
+        let run = serde_json::json!({
+            "run_id": run_id,
+            "product": product,
+            "version": version,
+            "state": state,
+            "source_commit": commit,
+        });
+        std::fs::write(directory.join("run.json"), run.to_string()).expect("record the run");
+    }
+
+    /// The full commit a checkout stands on.
+    pub fn head(&self, checkout: &Path) -> String {
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(checkout)
+            .output()
+            .expect("git runs");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
 }
 
 fn git(checkout: &Path, args: &[&str]) {

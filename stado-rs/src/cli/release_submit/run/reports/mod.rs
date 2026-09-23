@@ -31,8 +31,17 @@ pub(super) const RUN_STATE_LEAF: &str = "/run.json";
 /// is picked from the listing before any read, so this never cuts it off.
 pub(crate) const VERSION_SCAN_WINDOW: usize = 120;
 
-/// Every `(product, version)` a run was recorded for, read in one walk of the
-/// newest `limit` run objects.
+/// One run recorded for a `(product, version)`: its id, its state word and
+/// the commit it was cut from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordedRun {
+    pub run_id: String,
+    pub state: Option<crate::release_pipeline::ReleaseRunState>,
+    pub source_commit: String,
+}
+
+/// Every run recorded for each `(product, version)`, newest first, read in one
+/// walk of the newest `limit` run objects.
 ///
 /// `matching_runs` answers one product at a time and joins every platform to
 /// its queue job, which is what `release status` needs and what a whole
@@ -40,10 +49,10 @@ pub(crate) const VERSION_SCAN_WINDOW: usize = 120;
 /// checkouts at once, and asking it product by product cost one listing plus
 /// up to a hundred and twenty body reads each — twenty-four minutes for a
 /// plan that submits nothing. This reads each run body once and answers
-/// membership for every product from that one pass.
-pub(crate) async fn published_coordinates(
+/// for every product from that one pass.
+pub(crate) async fn recorded_runs(
     limit: usize,
-) -> Result<std::collections::BTreeMap<(String, String), String>, CmdError> {
+) -> Result<std::collections::BTreeMap<(String, String), Vec<RecordedRun>>, CmdError> {
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -63,7 +72,7 @@ pub(crate) async fn published_coordinates(
     .buffered(8)
     .collect::<Vec<_>>()
     .await;
-    let mut published = std::collections::BTreeMap::new();
+    let mut recorded = std::collections::BTreeMap::<_, Vec<RecordedRun>>::new();
     for body in bodies {
         let Some(run) = body? else { continue };
         let field = |key: &str| run[key].as_str().unwrap_or_default().to_string();
@@ -71,11 +80,16 @@ pub(crate) async fn published_coordinates(
         if product.is_empty() || version.is_empty() {
             continue;
         }
-        published
+        recorded
             .entry((product, version))
-            .or_insert_with(|| field("run_id"));
+            .or_default()
+            .push(RecordedRun {
+                run_id: field("run_id"),
+                state: crate::release_pipeline::ReleaseRunState::named(&field("state")),
+                source_commit: field("source_commit"),
+            });
     }
-    Ok(published)
+    Ok(recorded)
 }
 
 mod jobs;

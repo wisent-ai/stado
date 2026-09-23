@@ -2,30 +2,34 @@
 //!
 //! Reading comes before spending. Every product checkout under the workspace
 //! is read for three facts — the commit it stands on, the version that commit
-//! declares, and whether that version was already published — and only what
-//! passes all three is submitted. A product that declares `releases: false`,
-//! a checkout whose manifest names a version the store already carries, and a
-//! checkout that cannot be read at all are each reported with the reason, in
-//! the same listing, instead of disappearing from it.
+//! declares, and what the runs already recorded for that version did — and
+//! only what no run published and no run is still releasing from that very
+//! commit is submitted. A product that declares `releases: false`, a version
+//! a run published, a commit a run is still releasing, and a checkout that
+//! cannot be read at all are each reported with the reason, in the same
+//! listing, instead of disappearing from it.
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::cli::release_submit::{
-    committed_file, head_commit, published_coordinates, uncommitted_paths, VERSION_SCAN_WINDOW,
+    committed_file, head_commit, recorded_runs, uncommitted_paths, RecordedRun, VERSION_SCAN_WINDOW,
 };
 use crate::cli::CmdError;
 use crate::release_pipeline::{self, ProductManifest, PRODUCT_MANIFEST};
 
-/// One name for what a published run is keyed by.
-type Published = std::collections::BTreeMap<(String, String), String>;
+/// Every run recorded for a `(product, version)`, newest first.
+type Recorded = std::collections::BTreeMap<(String, String), Vec<RecordedRun>>;
 
 /// What one product checkout is, as far as releasing is concerned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "standing", rename_all = "snake_case")]
 pub enum Standing {
-    /// Its declared version has no run yet: this is what `newest` submits.
+    /// No run published its declared version and none is releasing this
+    /// commit: this is what `newest` submits. A run that failed, was
+    /// superseded, or is still releasing an older commit of the same version
+    /// does not hold it back; submitting supersedes that older run.
     /// `uncommitted` counts the checkout's paths that the commit does not
     /// hold; they are not part of the release and are named so nobody
     /// reads the plan as releasing them.
@@ -34,8 +38,15 @@ pub enum Standing {
         version: String,
         uncommitted: usize,
     },
-    /// Its declared version already has a run, so there is nothing to cut.
+    /// A run published its declared version, so there is nothing to cut.
     Published {
+        commit: String,
+        version: String,
+        run: String,
+    },
+    /// A run is releasing this very commit and has not ended: submitting
+    /// again would only supersede it.
+    InFlight {
         commit: String,
         version: String,
         run: String,
@@ -77,7 +88,7 @@ pub async fn plan(root: &Path, products: &[String]) -> Result<Vec<Planned>, CmdE
             root.display()
         )));
     }
-    let published = published_coordinates(VERSION_SCAN_WINDOW).await?;
+    let published = recorded_runs(VERSION_SCAN_WINDOW).await?;
     let mut planned = Vec::new();
     for checkout in checkouts {
         let entry = read(&checkout, &published);
@@ -99,8 +110,8 @@ pub async fn plan(root: &Path, products: &[String]) -> Result<Vec<Planned>, CmdE
 }
 
 /// Read one checkout: its product, its commit, its declared version, and
-/// whether that version has a run already.
-fn read(checkout: &Path, published: &Published) -> Planned {
+/// what the runs recorded for that version did.
+fn read(checkout: &Path, published: &Recorded) -> Planned {
     let product = match product_name(checkout) {
         Ok(name) => name,
         Err(refusal) => {
@@ -146,7 +157,7 @@ fn product_name(checkout: &Path) -> Result<String, String> {
 /// than the commit does, means the operator is about to release something
 /// else, so either refuses. An uncommitted edit elsewhere in the version
 /// file - stado's Cargo.toml gaining a dependency - declares nothing.
-fn standing(checkout: &Path, published: &Published) -> Result<Standing, String> {
+fn standing(checkout: &Path, published: &Recorded) -> Result<Standing, String> {
     let commit = head_commit(checkout).map_err(|error| error.to_string())?;
     let uncommitted = uncommitted_paths(checkout).map_err(|error| error.to_string())?;
     if uncommitted.contains(PRODUCT_MANIFEST) {
@@ -179,17 +190,47 @@ fn standing(checkout: &Path, published: &Published) -> Result<Standing, String> 
              reads a clean committed Git tree for it"
         ));
     }
-    match published.get(&(manifest.product.clone(), version.clone())) {
-        Some(run) => Ok(Standing::Published {
+    let runs = published
+        .get(&(manifest.product.clone(), version.clone()))
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    Ok(standing_from_runs(commit, version, uncommitted.len(), runs))
+}
+
+/// A published run settles the version for good; a run still moving on this
+/// commit is waited for; anything else — no run, a failed or superseded one,
+/// or one still moving on an older commit — leaves the commit to release. On
+/// 2026-09-23 stado 0.21.54's run failed its darwin quality gate, the fix was
+/// committed at the same version, and `newest` called the version "already
+/// published" because a run existed at all, so the fix could not be released.
+fn standing_from_runs(
+    commit: String,
+    version: String,
+    uncommitted: usize,
+    runs: &[RecordedRun],
+) -> Standing {
+    let published = |run: &&RecordedRun| run.state.as_ref().is_some_and(|state| state.published());
+    if let Some(run) = runs.iter().find(published) {
+        return Standing::Published {
             commit,
             version,
-            run: run.clone(),
-        }),
-        None => Ok(Standing::Releasable {
+            run: run.run_id.clone(),
+        };
+    }
+    let moving = |run: &&RecordedRun| {
+        run.source_commit == commit && run.state.as_ref().is_some_and(|state| !state.finished())
+    };
+    if let Some(run) = runs.iter().find(moving) {
+        return Standing::InFlight {
             commit,
             version,
-            uncommitted: uncommitted.len(),
-        }),
+            run: run.run_id.clone(),
+        };
+    }
+    Standing::Releasable {
+        commit,
+        version,
+        uncommitted,
     }
 }
 

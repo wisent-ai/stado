@@ -5,14 +5,15 @@
 //! pipeline reads `version_source` out of the committed manifest and refuses
 //! a `--version` that disagrees with it. `stado release newest` reads the
 //! workspace instead: every product checkout, the commit it stands on, the
-//! version that commit declares, and whether that version is already
-//! published.
+//! version that commit declares, and whether a run already published that
+//! version or is still releasing that commit.
 //!
 //! Every case runs `CARGO_BIN_EXE_stado` against real Git checkouts in the
 //! area beside this file. Nothing is simulated.
 
 mod area;
 mod changes;
+mod runs;
 
 use area::{releasing_manifest, silent_manifest, Area};
 use serde_json::Value;

@@ -31,9 +31,11 @@ pub enum ReleaseCommands {
     /// already declares.
     ///
     /// One command for the whole workspace: each product checkout is read for
-    /// the commit it stands on and the version that commit declares, anything
-    /// already published at that version is skipped, and the rest go through
-    /// the same pipeline `submit` drives. `--plan` reads without submitting.
+    /// the commit it stands on and the version that commit declares. A version
+    /// a run published is skipped, and so is a commit a run is still
+    /// releasing; a version whose runs failed, were superseded or were cut
+    /// from an older commit is released again. The rest go through the same
+    /// pipeline `submit` drives. `--plan` reads without submitting.
     Newest(crate::cli::release_newest::ReleaseNewestArgs),
     /// Hand pushed work to a later batch release, without starting a build.
     Changes(crate::cli::release_submit::changes::ChangesArgs),
