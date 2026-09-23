@@ -210,8 +210,8 @@ fn a_new_unit_running_a_products_executable_is_refused_as_a_second_process() {
 }
 
 #[test]
-fn a_declared_unit_may_not_switch_to_a_products_executable_but_one_that_already_ran_it_is_repaired(
-) {
+fn a_declared_unit_may_not_switch_to_a_products_executable_but_one_that_already_ran_it_is_repaired()
+{
     let fleet = Fleet::lifecycle();
     let name = unit::service_name("switch");
     let unit = Unit::claim(&fleet, &name);
@@ -233,7 +233,11 @@ fn a_declared_unit_may_not_switch_to_a_products_executable_but_one_that_already_
         "got: {}",
         said(&switched)
     );
-    assert_eq!(unit.live_pid(), Some(pid), "the refused pass touched the unit");
+    assert_eq!(
+        unit.live_pid(),
+        Some(pid),
+        "the refused pass touched the unit"
+    );
     assert_eq!(crate::only_record(&fleet)["program"], PROGRAM);
 
     // A declaration that already ran the executable before the rule existed
