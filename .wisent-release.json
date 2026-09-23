@@ -44,7 +44,7 @@
         },
         {
           "name": "source-native-resident-identity",
-          "argv": ["env", "STADO_TEST_NATIVE_LABEL=com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent", "cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "native_identity", "--", "--ignored", "--nocapture"]
+          "argv": ["env", "STADO_TEST_NATIVE_LABEL=com.wisent.compute.host.charless-mac-mini,com.wisent.compute.host.lukasz-macbook,com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent", "cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "native_identity", "--", "--ignored", "--nocapture"]
         },
         {
           "name": "source-documentation",
