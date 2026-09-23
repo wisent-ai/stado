@@ -59,7 +59,12 @@ pub(super) fn prepare(
             "a pending change requires task-<16 hex digits> and a session",
         ));
     }
-    let root = root.canonicalize()?;
+    let root = root.canonicalize().map_err(|error| {
+        CmdError::usage(format!(
+            "--source {} is not a readable checkout: {error}; pass the product repository's checkout path",
+            root.display()
+        ))
+    })?;
     if git(&root, &["branch", "--show-current"])? != "main" {
         return Err(CmdError::click(
             "submit pushed changes from the canonical main checkout",
