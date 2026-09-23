@@ -208,7 +208,16 @@ pub async fn install_local(
         // The host unit replaces this machine's separate Stado units; the
         // merge reads them all before anything is written.
         let component_plan = |component: &str, _label: &str| {
-            plan(name, component, os, &home, &bins, "", &wc_python, daemon.clone())
+            plan(
+                name,
+                component,
+                os,
+                &home,
+                &bins,
+                "",
+                &wc_python,
+                daemon.clone(),
+            )
         };
         return unit::host::install(install_plan, &home, &component_plan, runner, echo).await;
     }

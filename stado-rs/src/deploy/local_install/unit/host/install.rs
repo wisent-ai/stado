@@ -23,7 +23,11 @@ fn component_kind(program: &str, arguments: &[String]) -> Option<&'static str> {
     match Path::new(program).file_name()?.to_str()? {
         "stado" => Some("agent"),
         "stado-watchdog" => Some("watchdog"),
-        "bash" if arguments.iter().any(|argument| argument.contains("scan-dispatch")) => {
+        "bash"
+            if arguments
+                .iter()
+                .any(|argument| argument.contains("scan-dispatch")) =>
+        {
             Some("failure-fixer")
         }
         _ => None,
@@ -108,10 +112,7 @@ fn discover(
 
 fn retired_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
-    name.push(format!(
-        ".retired-{}",
-        chrono::Utc::now().format("%Y%m%d")
-    ));
+    name.push(format!(".retired-{}", chrono::Utc::now().format("%Y%m%d")));
     PathBuf::from(name)
 }
 
@@ -173,7 +174,10 @@ async fn retire(
             }
         }
         None => std::fs::rename(&path, &target).map_err(|error| {
-            DeployError(format!("retiring {label}: moving {}: {error}", path.display()))
+            DeployError(format!(
+                "retiring {label}: moving {}: {error}",
+                path.display()
+            ))
         })?,
     }
     Ok(())
