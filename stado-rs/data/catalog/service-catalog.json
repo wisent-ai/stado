@@ -9,13 +9,18 @@
     },
     {
       "name": "weles",
-      "summary": "The browser-automation worker for authorized web workflows.",
-      "program": "$HOME/.stado/bin/weles-worker",
-      "args": []
+      "summary": "One Weles process per host serving the API and admission, the resident task dispatcher that executes authorized browser workflows, and the keyword-planner routes.",
+      "program": "$HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/weles-api-launcher",
+      "args": [],
+      "unit": "com.wisent.weles-admission",
+      "retired_units": [
+        "com.wisent.weles-worker",
+        "com.wisent.compute.service.weles-keyword-planner-api"
+      ]
     },
     {
       "name": "skarbiec",
-      "summary": "The credential and authentication vault.",
+      "summary": "The credential and authentication vault; one process serves the HTTP API, the capability socket every workload redeems through, and replication of every bond the vault pulls.",
       "program": "$HOME/.stado/bin/skarbiec",
       "args": [
         "serve",
@@ -24,8 +29,15 @@
       ],
       "unit": "com.wisent.always-on.skarbiec",
       "env": {
-        "SKARBIEC_VAULT_FILE": "$HOME/.stado/skarbiec.vault.json"
-      }
+        "SKARBIEC_VAULT_FILE": "$HOME/.stado/skarbiec.vault.json",
+        "SKARBIEC_CAP_SOCKET": "$HOME/.stado/skarbiec.vault.sock"
+      },
+      "retired_units": [
+        "com.wisent.compute.service.skarbiec-replica-sync",
+        "com.wisent.compute.service.skarbiec-control-plane",
+        "com.wisent.skarbiec",
+        "com.wisent.compute.service.com.wisent.skarbiec-weles"
+      ]
     },
     {
       "name": "stado",
@@ -45,6 +57,21 @@
       }
     },
     {
+      "name": "probierz",
+      "summary": "The one Probierz process per host, the failure intake that desktop applications post wisent-errors envelopes to; it needs no harness directory.",
+      "program": "$HOME/.stado/bin/probierz",
+      "args": [
+        "intake",
+        "serve",
+        "--bind",
+        "127.0.0.1:9790"
+      ],
+      "unit": "com.wisent.compute.service.probierz",
+      "retired_units": [
+        "com.wisent.probierz-intake"
+      ]
+    },
+    {
       "name": "skrzynka",
       "summary": "Skrzynka loopback mail API and scheduled IMAP synchronization; credentials remain in the account's Skarbiec vault.",
       "program": "$HOME/.local/bin/skrzynka",
@@ -62,17 +89,28 @@
     },
     {
       "name": "oko",
-      "summary": "The local Oko autonomy service.",
+      "summary": "The one Oko process per host (oko-cli serve) running the autonomy cadence, the transcript index refresher, the task handover loop and the PTY broker.",
       "program": "$HOME/.oko/bin/run-autonomy-service",
-      "args": []
+      "args": [],
+      "unit": "com.wisent.compute.service.oko-autonomy",
+      "retired_units": [
+        "ai.wisent.oko.pty-broker",
+        "ai.wisent.oko.transcript-index",
+        "ai.wisent.oko.tasks-control",
+        "com.wisent.compute.service.oko-goal-lifecycle"
+      ]
     },
     {
       "name": "transcript-lake",
-      "summary": "Continuously stream local agent transcripts into Transcript Lake.",
+      "summary": "The one Transcript Lake process per host, continuously streaming local agent transcripts into the lake.",
       "program": "$HOME/.local/bin/transcript-lake",
       "args": [
         "stream",
         "--json"
+      ],
+      "unit": "com.wisent.compute.service.transcript-lake",
+      "retired_units": [
+        "com.wisent.transcript-lake-stream"
       ]
     }
   ]
