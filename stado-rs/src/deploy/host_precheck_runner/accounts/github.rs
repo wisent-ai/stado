@@ -10,6 +10,16 @@ use crate::deploy::DeployError;
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
 
+/// The identity this lifecycle acts as, resolved through the route declared in
+/// `stado-rs/data/github-identity.json` rather than named here.
+///
+/// It was named here: `GITHUB_CREDENTIAL_ITEM` was the literal `"GITHUB_TOKEN"`,
+/// so replacing the identity meant editing this file and shipping a release.
+/// On 2026-09-07 that cost a day — the item held an OAuth token carrying
+/// `read:org` where `GET /orgs/wisent-ai/actions/runner-groups` answers only
+/// `admin:org` — and there was nowhere to point Stado at another credential.
+/// `stado runner credential` reports which coordinate the route reaches and
+/// whether GitHub accepts it.
 pub(crate) async fn github_credential() -> Result<String, DeployError> {
     crate::github_identity::credential()
         .await
