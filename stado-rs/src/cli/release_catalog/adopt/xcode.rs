@@ -49,7 +49,10 @@ pub(super) fn read(checkout: &Path) -> Result<Project, CmdError> {
     let mut projects = Vec::new();
     for entry in std::fs::read_dir(checkout)? {
         let path = entry?.path();
-        if path.extension().is_some_and(|extension| extension == "xcodeproj") {
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "xcodeproj")
+        {
             projects.push(path);
         }
     }

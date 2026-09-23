@@ -70,9 +70,11 @@ struct Planned {
 }
 
 fn fill(template: &str, values: &[(&str, &str)]) -> String {
-    values.iter().fold(template.to_string(), |text, (key, value)| {
-        text.replace(&format!("{{{{{key}}}}}"), value)
-    })
+    values
+        .iter()
+        .fold(template.to_string(), |text, (key, value)| {
+            text.replace(&format!("{{{{{key}}}}}"), value)
+        })
 }
 
 fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
@@ -109,10 +111,26 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         ("TEAM", project.team.as_str()),
     ];
     let files = vec![
-        Planned { path: checkout.join(PRODUCT_MANIFEST), text: fill(MANIFEST, &values), executable: false },
-        Planned { path: checkout.join("release/build.sh"), text: fill(BUILD, &values), executable: true },
-        Planned { path: checkout.join("release/quality.sh"), text: fill(QUALITY, &values), executable: true },
-        Planned { path: checkout.join("release/archive-tree.py"), text: ARCHIVE_TREE.to_string(), executable: true },
+        Planned {
+            path: checkout.join(PRODUCT_MANIFEST),
+            text: fill(MANIFEST, &values),
+            executable: false,
+        },
+        Planned {
+            path: checkout.join("release/build.sh"),
+            text: fill(BUILD, &values),
+            executable: true,
+        },
+        Planned {
+            path: checkout.join("release/quality.sh"),
+            text: fill(QUALITY, &values),
+            executable: true,
+        },
+        Planned {
+            path: checkout.join("release/archive-tree.py"),
+            text: ARCHIVE_TREE.to_string(),
+            executable: true,
+        },
     ];
     if let Some(taken) = files.iter().find(|file| file.path.exists()) {
         return Err(CmdError::click(format!(
@@ -120,9 +138,12 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
             taken.path.display()
         )));
     }
-    let manifest = release_pipeline::parse_product_manifest(files[0].text.as_bytes()).map_err(CmdError::click)?;
+    let manifest = release_pipeline::parse_product_manifest(files[0].text.as_bytes())
+        .map_err(CmdError::click)?;
     if super::product(&manifest) != product {
-        return Err(CmdError::click(format!("product name {product:?} is not a valid release identifier")));
+        return Err(CmdError::click(format!(
+            "product name {product:?} is not a valid release identifier"
+        )));
     }
     eprintln!(
         "{product}: {}.xcodeproj, scheme {scheme}, bundle {}, team {}, version {}",
@@ -146,7 +167,9 @@ fn write(files: &[Planned]) -> Result<(), CmdError> {
 }
 
 fn relative<'a>(checkout: &Path, path: &'a Path) -> std::borrow::Cow<'a, str> {
-    path.strip_prefix(checkout).unwrap_or(path).to_string_lossy()
+    path.strip_prefix(checkout)
+        .unwrap_or(path)
+        .to_string_lossy()
 }
 
 pub(super) async fn run(args: AdoptArgs) -> Result<(), CmdError> {
@@ -162,14 +185,13 @@ pub(super) async fn run(args: AdoptArgs) -> Result<(), CmdError> {
     for file in &files {
         println!("wrote {}", relative(&checkout, &file.path));
     }
-    match (&args.owner, &args.client) {
-        (Some(owner), Some(client)) => {
-            super::publisher::declare_publisher(&product, owner, client, &args.targets, &args.reloads, args.json)
-                .await?;
-        }
-        _ => println!(
-            "publisher not declared: pass --owner and --client, or run `stado release catalog declare-publisher {product}`"
-        ),
+    if let (Some(owner), Some(client)) = (&args.owner, &args.client) {
+        let (targets, reloads) = (&args.targets, &args.reloads);
+        super::publisher::declare_publisher(&product, owner, client, targets, reloads, args.json)
+            .await?;
+    } else {
+        println!("publisher not declared: pass --owner and --client, or run");
+        println!("  stado release catalog declare-publisher {product} --owner HOST --client HOST");
     }
     super::checkout::sync(&checkout, args.json).await?;
     println!(
