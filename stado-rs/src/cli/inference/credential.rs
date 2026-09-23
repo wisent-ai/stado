@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::cli::CmdError;
 use crate::inference::schema::LOCAL_PROVIDER_CREDENTIAL;
+const HUGGINGFACE_CREDENTIAL: &str = "stado-huggingface";
 
 pub async fn init(json_output: bool) -> Result<(), CmdError> {
     let vault = crate::skarbiec::Client::configured()
@@ -57,6 +58,33 @@ pub async fn read() -> Result<String, CmdError> {
         .ok_or_else(|| {
             CmdError::click(format!(
                 "Skarbiec item {LOCAL_PROVIDER_CREDENTIAL:?} has no non-empty string field \"token\""
+            ))
+        })
+}
+
+pub async fn read_huggingface() -> Result<Option<String>, CmdError> {
+    let vault = crate::skarbiec::Client::configured()
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let present = vault
+        .list_items()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .into_iter()
+        .any(|item| item.id == HUGGINGFACE_CREDENTIAL);
+    if !present {
+        return Ok(None);
+    }
+    let stored = vault
+        .read_field(HUGGINGFACE_CREDENTIAL, "token")
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    stored
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .map(|token| Some(token.to_string()))
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Skarbiec item {HUGGINGFACE_CREDENTIAL:?} has no non-empty string field \"token\""
             ))
         })
 }
