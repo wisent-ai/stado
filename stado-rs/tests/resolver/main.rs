@@ -84,17 +84,12 @@ pub fn hostname() -> String {
 
 /// The release platform this machine actually is, in the product's spelling.
 pub fn platform() -> String {
-    format!(
-        "{}-{}",
-        match std::env::consts::OS {
-            "macos" => "darwin",
-            other => other,
-        },
-        match std::env::consts::ARCH {
-            "aarch64" => "arm64",
-            other => other,
-        }
-    )
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("linux", "x86_64") => "linux-amd64",
+        (os, arch) => panic!("resolver journey has no platform mapping for {os}-{arch}"),
+    }
+    .to_string()
 }
 
 /// A loopback port nothing holds: bound to learn the number, then released.
