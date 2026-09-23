@@ -5,6 +5,7 @@ mod status;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use clap::{Args, Subcommand};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -99,7 +100,15 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 }
                 saved
             };
-            let receipt = status::for_change(saved, &status::observations(&store).await?);
+            // A ticket written just now is in no frozen batch: a build freezes
+            // the tickets that exist when it is queued, and the next `list`
+            // reads the batch that covers this one. Reading every build ever
+            // made to answer that is what made a handoff take minutes.
+            let receipt = if created {
+                status::for_change(saved, &Default::default())
+            } else {
+                status::for_change(saved, &status::observations(&store).await?)
+            };
             if *json {
                 println!("{}", serde_json::to_string(&receipt)?);
             } else {
@@ -147,14 +156,22 @@ pub(super) fn failure(error: impl std::fmt::Display) -> CmdError {
 }
 
 pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError> {
-    let mut entries = Vec::new();
-    for path in store.list_paths(PREFIX, 0).await.map_err(failure)? {
-        if !path.ends_with(".json") {
-            continue;
-        }
-        let text = store
-            .download_text(&path)
-            .await
+    let paths: Vec<String> = store
+        .list_paths(PREFIX, 0)
+        .await
+        .map_err(failure)?
+        .into_iter()
+        .filter(|path| path.ends_with(".json"))
+        .collect();
+    // Independent reads, fanned out like every other bulk object read.
+    let texts = futures::stream::iter(&paths)
+        .map(|path| async move { (path, store.download_text(path).await) })
+        .buffered(crate::queue::copy::DEFAULT_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    let mut entries = Vec::with_capacity(texts.len());
+    for (path, text) in texts {
+        let text = text
             .map_err(failure)?
             .ok_or_else(|| CmdError::click(format!("pending change missing: {path}")))?;
         entries.push(serde_json::from_str(&text)?);

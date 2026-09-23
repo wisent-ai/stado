@@ -2,6 +2,7 @@ use super::{failure, Change, ChangeStatus};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{BuildReceipt, BuildRun, BuildRunState, ProductManifest, StepStatus};
+use futures::StreamExt;
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -14,33 +15,33 @@ pub(super) struct Observation {
 }
 
 /// Read each build and receipt once, even when it covers many changes.
+///
+/// Every frozen batch is an independent read, so they go out together through
+/// the fan-out budget Stado's other bulk object reads use. Read one after
+/// another, the whole build history cost a `changes list` 74 seconds on
+/// 2026-09-23, past the 60 seconds Oko waits for it, so no handoff or
+/// qualification reached Oko's ledger at all.
 pub(super) async fn observations(
     store: &JobStorage,
 ) -> Result<HashMap<String, Observation>, CmdError> {
+    let batches: Vec<String> = store
+        .list_paths("runs/build/", 0)
+        .await
+        .map_err(failure)?
+        .into_iter()
+        .filter(|path| path.ends_with("/changes.json"))
+        .collect();
+    let answers = futures::stream::iter(&batches)
+        .map(|path| batch_observation(store, path))
+        .buffered(crate::queue::copy::DEFAULT_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
     let mut observations: HashMap<String, Observation> = HashMap::new();
-    for path in store.list_paths("runs/build/", 0).await.map_err(failure)? {
-        if !path.ends_with("/changes.json") {
-            continue;
-        }
-        let text = store
-            .download_text(&path)
-            .await
-            .map_err(failure)?
-            .ok_or_else(|| CmdError::click(format!("build batch missing: {path}")))?;
-        let batch: Vec<Change> = serde_json::from_str(&text)?;
-        if batch.is_empty() {
-            continue;
-        }
-        let run_path = format!("{}run.json", path.trim_end_matches("changes.json"));
-        let Some(text) = store.download_text(&run_path).await.map_err(failure)? else {
+    for answer in answers {
+        let Some((batch, observation)) = answer? else {
             continue;
         };
-        let mut run: BuildRun = serde_json::from_str(&text)?;
-        let observation = observe(store, &mut run).await?;
         for change in batch {
-            if run.product != change.product {
-                return Err(CmdError::click("build batch product mismatch"));
-            }
             if observations.get(&change.id).is_none_or(|old| {
                 (&observation.created_at, &observation.run_id) > (&old.created_at, &old.run_id)
             }) {
@@ -49,6 +50,33 @@ pub(super) async fn observations(
         }
     }
     Ok(observations)
+}
+
+/// One frozen batch and what its build observed; nothing for an empty batch
+/// or a build whose run record is gone.
+async fn batch_observation(
+    store: &JobStorage,
+    path: &str,
+) -> Result<Option<(Vec<Change>, Observation)>, CmdError> {
+    let text = store
+        .download_text(path)
+        .await
+        .map_err(failure)?
+        .ok_or_else(|| CmdError::click(format!("build batch missing: {path}")))?;
+    let batch: Vec<Change> = serde_json::from_str(&text)?;
+    if batch.is_empty() {
+        return Ok(None);
+    }
+    let run_path = format!("{}run.json", path.trim_end_matches("changes.json"));
+    let Some(text) = store.download_text(&run_path).await.map_err(failure)? else {
+        return Ok(None);
+    };
+    let mut run: BuildRun = serde_json::from_str(&text)?;
+    let observation = observe(store, &mut run).await?;
+    if batch.iter().any(|change| change.product != run.product) {
+        return Err(CmdError::click("build batch product mismatch"));
+    }
+    Ok(Some((batch, observation)))
 }
 
 pub(super) fn for_change(
