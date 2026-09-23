@@ -2,9 +2,15 @@
 # Recover the credential path when Skarbiec stalls or Stado retains a closed
 # object boundary after Skarbiec has recovered. Invoked by the declared
 # `skarbiec/audit-lock` repair step.
+#
+# A host runs one Skarbiec process, com.wisent.always-on.skarbiec on the
+# catalog's port 8895: a login agent on a laptop, a system daemon on the
+# always-on mini. The units it replaced (com.wisent.skarbiec, the
+# skarbiec-control-plane and replica-sync services) are retired, so this
+# repair restarts the one process and never a retired unit.
 set -eu
 
-health_url="${SKARBIEC_HEALTH_URL:-http://127.0.0.1:8787/health}"
+health_url="${SKARBIEC_HEALTH_URL:-http://127.0.0.1:8895/health}"
 object_health_url="${STADO_OBJECT_HEALTH_URL:-http://127.0.0.1:18765/healthz}"
 health=$(/usr/bin/curl --silent --show-error --max-time 10 "$health_url" || true)
 object_health=$(/usr/bin/curl --silent --show-error --max-time 10 "$object_health_url" || true)
@@ -13,13 +19,15 @@ kick_loaded() {
   label=$1
   if /bin/launchctl print "gui/$(/usr/bin/id -u)/$label" >/dev/null 2>&1; then
     /bin/launchctl kickstart -k "gui/$(/usr/bin/id -u)/$label"
+  elif /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+    /usr/bin/sudo -n /bin/launchctl kickstart -k "system/$label"
   fi
 }
 
 case "$health" in
   *'"ok":true'*) audit_recovered=false ;;
   *'audit journal lock'*|*'audit.append.lock'*)
-    kick_loaded com.wisent.skarbiec
+    kick_loaded com.wisent.always-on.skarbiec
     attempt=0
     while [ "$attempt" -lt 30 ]; do
       health=$(/usr/bin/curl --silent --show-error --max-time 5 "$health_url" || true)
@@ -36,8 +44,6 @@ case "$health" in
         exit 1
         ;;
     esac
-    kick_loaded com.wisent.compute.service.skarbiec
-    kick_loaded com.wisent.compute.service.skarbiec-control-plane
     ;;
   *)
     printf '%s\n' "refusing recovery: $health_url did not report an audit-lock failure" >&2

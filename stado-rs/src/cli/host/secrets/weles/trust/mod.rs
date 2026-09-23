@@ -54,8 +54,12 @@ async fn live_skarbiec_environment(
         .iter()
         .map(|path| (*path).to_string())
         .collect();
+    // A laptop runs the one Skarbiec process as the user's login agent. The
+    // keychain launcher's com.wisent.skarbiec, read here before, is one of the
+    // units that process retires and removes, so a host that converged would
+    // have answered that no managed unit names its vault.
     units.push(format!(
-        "{home}/Library/LaunchAgents/com.wisent.skarbiec.plist"
+        "{home}/Library/LaunchAgents/com.wisent.always-on.skarbiec.plist"
     ));
 
     let extract = |unit: &str, key: &'static str| {
