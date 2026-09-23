@@ -39,9 +39,6 @@ pub enum InferenceCommands {
         /// Immutable Hugging Face commit SHA.
         #[arg(long)]
         revision: String,
-        /// LoRA adapter as `name=repository@immutable-revision`; repeat for more than one.
-        #[arg(long = "lora")]
-        loras: Vec<String>,
         /// `exclusive` keeps the GPU reserved; `yieldable` pauses inference
         /// whenever an eligible GPU job is queued and resumes it afterward.
         #[arg(long, default_value = "exclusive", value_parser = ["exclusive", "yieldable"])]
@@ -218,7 +215,6 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             image,
             model,
             revision,
-            loras,
             gpu_mode,
             port,
             max_model_len,
@@ -232,7 +228,6 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 image,
                 model,
                 revision,
-                loras,
                 gpu_mode,
                 port,
                 max_model_len,

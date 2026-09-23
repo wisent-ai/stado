@@ -224,14 +224,7 @@ pub async fn run(
         println!("[vast] auto-list thread started (price-gpu=${vast_price_gpu}/h)");
     }
     loop {
-        match local_agent::run_agent(
-            &gpu_type,
-            idle_shutdown,
-            &kind,
-            target_consumer_identity.as_deref(),
-        )
-        .await
-        {
+        match local_agent::run_agent(&gpu_type, idle_shutdown, &kind).await {
             Ok(()) => return Ok(()),
             Err(error) => {
                 // A release handoff must reach launchd/systemd. Retrying
