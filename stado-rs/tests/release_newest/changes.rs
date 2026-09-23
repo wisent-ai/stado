@@ -143,9 +143,12 @@ fn pushed_commits_wait_together_without_starting_a_build() {
     }
     assert_eq!(verdicts[0]["run_id"], verdicts[1]["run_id"]);
 
-    // Names must remain unique across source quality and post-build tests.
+    // Names must remain unique across source quality and post-build tests. The
+    // product manifest this copies no longer declares post-build tests, so the
+    // test step is written here with the first quality step's name.
     let recipe = &mut manifest["platforms"]["darwin-arm64"];
-    recipe["tests"][0]["name"] = recipe["quality"][0]["name"].clone();
+    let name = recipe["quality"][0]["name"].clone();
+    recipe["tests"] = serde_json::json!([{ "name": name, "argv": ["true"] }]);
     std::fs::write(root.join(".wisent-release.json"), manifest.to_string()).unwrap();
     git(&root, &["add", ".wisent-release.json"]);
     git(&root, &["commit", "-m", "duplicate pipeline step name"]);
