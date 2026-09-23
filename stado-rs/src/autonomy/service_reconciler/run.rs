@@ -83,6 +83,26 @@ pub async fn reconcile(
         } else if status.state != service::STATE_MISSING && status.state != service::STATE_FAILED {
             continue;
         } else {
+            // A retired unit's absence is the intended state: the product's
+            // one process unloaded it and removed its launch agent. Repairing
+            // it would start it again beside that process.
+            let retired = crate::deploy::service_catalog::retired_by(status.service.unit_id())
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    crate::deploy::service_catalog::retired_by(&status.service.name)
+                        .ok()
+                        .flatten()
+                });
+            if let Some(replacement) = retired {
+                outcome.classification = "retired".to_string();
+                outcome.detail = crate::deploy::service_catalog::retired_sentence(
+                    status.service.unit_id(),
+                    &replacement,
+                );
+                outcomes.push(outcome);
+                continue;
+            }
             // A `failed` unit is the same repair as a missing one: the unit
             // exists, nothing runs under it, and `ensure` restarts in place.
             summary.missing += 1;

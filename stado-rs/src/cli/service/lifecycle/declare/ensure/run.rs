@@ -95,6 +95,17 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         (Some(unit), _) | (_, Some(unit)) => Some(unit),
         (None, None) => None,
     };
+    // A unit a product retired runs beside the process that replaced it the
+    // moment it is loaded again, so no declaration may bring one back.
+    for label in std::iter::once(options.name).chain(canonical_unit.as_deref()) {
+        if let Some(replacement) = crate::deploy::service_catalog::retired_by(label)
+            .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            return Err(CmdError::click(
+                crate::deploy::service_catalog::retired_sentence(label, &replacement),
+            ));
+        }
+    }
     let existing = declared.iter().find(|candidate| {
         candidate.matches(options.name)
             || canonical_unit
@@ -127,6 +138,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             program: unit.program.clone(),
             args: unit.args.clone(),
             env: unit.env.clone(),
+            retired_units: Vec::new(),
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,

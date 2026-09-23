@@ -40,6 +40,12 @@ pub struct CatalogService {
     /// vault sits untouched beside it.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Units whose work runs inside this product's one process. Started by
+    /// launchd as `unit`, that process boots each of them out and removes its
+    /// launch agent, so Stado must never deploy or repair one of them again:
+    /// a retired unit brought back runs beside the process that replaced it.
+    #[serde(default)]
+    pub retired_units: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +67,25 @@ pub fn lookup(name: &str) -> Result<Option<CatalogService>, String> {
     Ok(all()?
         .into_iter()
         .find(|entry| entry.name == name || entry.unit.as_deref() == Some(name)))
+}
+
+/// The entry whose one process replaced `unit`, when `unit` is a label some
+/// product retired.
+pub fn retired_by(unit: &str) -> Result<Option<CatalogService>, String> {
+    Ok(all()?
+        .into_iter()
+        .find(|entry| entry.retired_units.iter().any(|retired| retired == unit)))
+}
+
+/// The sentence every refusal to deploy or repair a retired unit prints.
+pub fn retired_sentence(unit: &str, replacement: &CatalogService) -> String {
+    format!(
+        "{unit} is retired: its work runs inside the one {} process ({}), which unloads it \
+         and removes its launch agent when it starts; deploy {} instead",
+        replacement.name,
+        replacement.unit.as_deref().unwrap_or(&replacement.name),
+        replacement.name
+    )
 }
 
 /// One placeholder expansion, applied to the program and every argument:
