@@ -63,11 +63,27 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// List nonsecret item metadata from one owner-controlled local vault file.
+    /// List nonsecret item metadata from one owner-controlled vault file.
+    ///
+    /// With `--host` the vault is the one THAT host holds, read through the
+    /// registry's own channel with the same read-only `skarbiec list` the
+    /// fleet's vault inventory already uses. A remote host's vault is a
+    /// separate store from this machine's — its capability routes, its
+    /// capability state and its items are all its own — and nothing else in
+    /// the product could answer "does that host hold this item" without
+    /// copying an encrypted vault around.
+    ///
+    /// Names, kinds and states only, never a field value.
     #[command(name = "inspect-vault")]
     InspectVault {
-        /// Encrypted Skarbiec vault file.
-        vault: String,
+        /// Encrypted Skarbiec vault file. Omit with `--host`.
+        vault: Option<String>,
+        /// Registry host whose own vault to read instead of a local file.
+        #[arg(long)]
+        host: Option<String>,
+        /// Only report items whose name contains this text.
+        #[arg(long = "match")]
+        matching: Option<String>,
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -105,7 +121,23 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // a grant, a token and a live service, which is exactly the set of
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
-        SecretsCommands::InspectVault { vault, json } => inspect_vault(&vault, json),
+        SecretsCommands::InspectVault {
+            vault,
+            host,
+            matching,
+            json,
+        } => match (host, vault) {
+            (Some(host), None) => {
+                inspect_host_vault(&host, matching.as_deref(), json).await
+            }
+            (None, Some(vault)) => inspect_vault(&vault, json),
+            (Some(_), Some(_)) => Err(CmdError::usage(
+                "inspect-vault reads either a local VAULT file or --host, not both",
+            )),
+            (None, None) => Err(CmdError::usage(
+                "inspect-vault needs a local VAULT file or --host",
+            )),
+        },
         SecretsCommands::BootstrapWeles { json } => bootstrap_weles(json),
         // Same reasoning as `doctor`: the transcripts are readable when the
         // vault is not, which is the only reason this verb is worth having.
