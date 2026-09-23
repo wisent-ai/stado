@@ -141,25 +141,24 @@ fn product_name(checkout: &Path) -> Result<String, String> {
 /// another session's unfinished edits minutes after being committed clean,
 /// and refusing any uncommitted path meant a pushed commit could not be
 /// released at all. Those edits never reach a build: the release is the
-/// commit's objects. The files that say what the commit releases - the
-/// manifest and the file its version is read from - are different: an
-/// uncommitted change to one of them means the operator is about to say
-/// something else, so reading either through an uncommitted path refuses.
+/// commit's objects. What the commit says it releases is different: an
+/// uncommitted manifest, or a working copy that declares another version
+/// than the commit does, means the operator is about to release something
+/// else, so either refuses. An uncommitted edit elsewhere in the version
+/// file - stado's Cargo.toml gaining a dependency - declares nothing.
 fn standing(checkout: &Path, published: &Published) -> Result<Standing, String> {
     let commit = head_commit(checkout).map_err(|error| error.to_string())?;
     let uncommitted = uncommitted_paths(checkout).map_err(|error| error.to_string())?;
-    let declaring = |path: &str| {
-        if uncommitted.contains(path) {
-            return Err(format!(
-                "{path} has uncommitted changes and declares what this checkout \
-                 releases; commit it or restore it before releasing {commit}, \
-                 because a release reads a clean committed Git tree for it"
-            ));
-        }
-        committed_file(checkout, &commit, path).map_err(|error| error.to_string())
-    };
-    let manifest = release_pipeline::parse_product_manifest(&declaring(PRODUCT_MANIFEST)?)?;
-    let manifest = match manifest {
+    if uncommitted.contains(PRODUCT_MANIFEST) {
+        return Err(format!(
+            "{PRODUCT_MANIFEST} has uncommitted changes and declares what this \
+             checkout releases; commit it or restore it before releasing {commit}, \
+             because a release reads a clean committed Git tree for it"
+        ));
+    }
+    let bytes =
+        committed_file(checkout, &commit, PRODUCT_MANIFEST).map_err(|error| error.to_string())?;
+    let manifest = match release_pipeline::parse_product_manifest(&bytes)? {
         ProductManifest::Release(value) => value,
         ProductManifest::NonRelease(value) => {
             return Ok(Standing::DeclaresNoReleases {
@@ -167,7 +166,19 @@ fn standing(checkout: &Path, published: &Published) -> Result<Standing, String> 
             })
         }
     };
-    let version = release_pipeline::declared_version(&manifest.version_source, declaring)?;
+    let version = release_pipeline::declared_version(&manifest.version_source, |path| {
+        committed_file(checkout, &commit, path).map_err(|error| error.to_string())
+    })?;
+    let working = release_pipeline::declared_version(&manifest.version_source, |path| {
+        std::fs::read(checkout.join(path)).map_err(|error| format!("{path}: {error}"))
+    })?;
+    if working != version {
+        return Err(format!(
+            "the checkout declares {working} but its commit {commit} declares \
+             {version}; commit the version before releasing, because a release \
+             reads a clean committed Git tree for it"
+        ));
+    }
     match published.get(&(manifest.product.clone(), version.clone())) {
         Some(run) => Ok(Standing::Published {
             commit,

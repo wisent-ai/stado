@@ -63,14 +63,20 @@ fn one_reading_names_every_product_and_what_would_be_released() {
     );
     std::fs::write(dirty.join("package.json"), "{\"version\": \"0.9.1\"}")
         .expect("leave an uncommitted change behind");
-    // Another session's unfinished work in the one shared checkout: it is not
-    // what the commit declares, so the commit is still released without it.
+    // Another session's unfinished work in the one shared checkout, including
+    // an edit to the version file that keeps the version: it is not what the
+    // commit declares, so the commit is still released without it.
     let busy = area.checkout(
         "busy-product",
         &releasing_manifest("busy-product"),
         Some(("package.json", "{\"version\": \"2.0.1\"}")),
     );
     std::fs::write(busy.join("notes.txt"), "unfinished").expect("leave untracked work behind");
+    std::fs::write(
+        busy.join("package.json"),
+        "{\"version\": \"2.0.1\", \"private\": true}",
+    )
+    .expect("leave a version-preserving edit behind");
 
     let planned = area.plan(&[]);
     assert!(
@@ -116,7 +122,7 @@ fn one_reading_names_every_product_and_what_would_be_released() {
     );
     assert_eq!(busy["version"], "2.0.1", "the committed version: {busy}");
     assert_eq!(
-        busy["uncommitted"], 1,
+        busy["uncommitted"], 2,
         "the plan says what it leaves out: {busy}"
     );
     assert_eq!(
