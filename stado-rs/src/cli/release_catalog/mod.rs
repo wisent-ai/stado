@@ -10,6 +10,7 @@ use crate::release_pipeline::{
 
 use super::CmdError;
 
+mod adopt;
 mod central;
 mod checkout;
 mod publisher;
@@ -64,6 +65,10 @@ enum CatalogCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Add an application checkout to the release pipeline: write its
+    /// release manifest and scripts from what its project states, declare its
+    /// publisher, register it. Without --apply only the plan is printed.
+    Adopt(adopt::AdoptArgs),
 }
 
 fn product(manifest: &ProductManifest) -> &str {
@@ -209,5 +214,6 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
         } => {
             publisher::declare_publisher(&product, &owner, &client, &targets, &reloads, json).await
         }
+        CatalogCommands::Adopt(args) => adopt::run(args).await,
     }
 }

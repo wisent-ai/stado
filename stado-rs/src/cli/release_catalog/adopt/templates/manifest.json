@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "product": "{{PRODUCT}}",
+  "releases": true,
+  "version_source": {
+    "kind": "regex",
+    "path": "{{PROJECT}}.xcodeproj/project.pbxproj",
+    "pattern": "MARKETING_VERSION = (?<version>[0-9]+(?:\\.[0-9]+){1,2});"
+  },
+  "platforms": {
+    "ios-arm64": {
+      "runner_platform": "darwin-arm64",
+      "quality": [
+        {
+          "name": "xcode-compile",
+          "argv": [
+            "bash",
+            "release/quality.sh"
+          ]
+        }
+      ],
+      "build": {
+        "argv": [
+          "bash",
+          "release/build.sh"
+        ]
+      },
+      "stage": {
+        "dist/{{APP}}.ipa": "{{APP}}.ipa",
+        "dist/{{APP}}.xcarchive.tar.gz": "evidence/{{APP}}.xcarchive.tar.gz",
+        "dist/build-evidence.json": "evidence/build-evidence.json",
+        "dist/SOURCE_REVISION": "SOURCE_REVISION"
+      },
+      "secret_env": {
+        "IOS_DIST_P12_B64": "wisent-ios-distribution#certificate_p12_base64",
+        "IOS_DIST_P12_PASSWORD": "wisent-ios-distribution#certificate_password",
+        "IOS_SIGN_IDENTITY": "wisent-ios-distribution#sign_identity",
+        "IOS_PROFILE_B64": "{{PRODUCT}}-signing#provisioning_profile_base64"
+      }
+    }
+  },
+  "promotion": {
+    "channels": [
+      "candidate",
+      "stable"
+    ],
+    "reconcile": false
+  }
+}
