@@ -15,7 +15,12 @@
       "unit": "com.wisent.weles-admission",
       "retired_units": [
         "com.wisent.weles-worker",
-        "com.wisent.compute.service.weles-keyword-planner-api"
+        "com.wisent.compute.service.weles-keyword-planner-api",
+        "com.wisent.compute.service.com.wisent.always-on.weles",
+        "com.wisent.always-on.weles-api",
+        "com.wisent.compute.service.weles-api",
+        "com.wisent.weles-auto-deploy",
+        "com.wisent.compute.service.weles-release-cutover"
       ]
     },
     {
