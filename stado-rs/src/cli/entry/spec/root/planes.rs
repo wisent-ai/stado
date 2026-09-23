@@ -10,7 +10,7 @@ use clap::Subcommand;
 #[derive(Subcommand)]
 pub(crate) enum PlaneCommands {
     /// Run this host's Stado components in one supervised process.
-    Serve(crate::cli::integrations::runtime::ServeArgs),
+    Serve(Box<crate::cli::integrations::runtime::ServeArgs>),
 
     /// Run the provider-neutral scheduling tick locally.
     ///

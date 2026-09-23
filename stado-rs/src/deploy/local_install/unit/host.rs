@@ -4,6 +4,9 @@
 mod definition;
 mod failure_fixer;
 mod inputs;
+mod install;
+
+pub(crate) use install::install;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
@@ -202,7 +205,7 @@ pub(crate) fn merge(
     registry: &Registry,
 ) -> Result<InstallPlan, DeployError> {
     let runtime: ServeArgs = match command(&host)? {
-        Commands::Planes(PlaneCommands::Serve(runtime)) => runtime,
+        Commands::Planes(PlaneCommands::Serve(runtime)) => *runtime,
         _ => {
             return Err(DeployError(
                 "host installation must execute stado serve".to_string(),

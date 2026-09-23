@@ -55,7 +55,7 @@ pub fn systemd_service(
 
 /// The installed host unit owns Stado components that previously had separate units.
 /// Keep explicitly declared legacy units visible until migration removes their records.
-pub fn resident_host_service<'a>(services: &'a [ManagedService]) -> Option<&'a ManagedService> {
+pub fn resident_host_service(services: &[ManagedService]) -> Option<&ManagedService> {
     services.iter().find(|service| {
         crate::deploy::service_catalog::executable_name(&service.program) == Some("stado")
             && service.args.first().map(String::as_str) == Some("serve")

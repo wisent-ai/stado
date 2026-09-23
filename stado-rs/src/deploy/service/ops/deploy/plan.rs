@@ -163,6 +163,7 @@ pub fn plan_deploy_labelled(
             label: label.clone(),
             exec_args,
             env: base_unit_environment(path, extra_env),
+            startup: None,
         }
     };
     let darwin = render(LocalOs::Darwin);

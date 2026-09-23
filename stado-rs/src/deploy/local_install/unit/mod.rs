@@ -42,6 +42,10 @@ pub struct InstallPlan {
     /// [`crate::deploy::service::requires_daemon_domain`] answers it from the
     /// registry declaration.
     pub daemon: Option<String>,
+    /// The native definition to install instead of the rendered default: the
+    /// host unit keeps the account, limits and working directory of the
+    /// continuous unit it replaces. `None` renders from the fields above.
+    pub startup: Option<String>,
 }
 
 impl InstallPlan {
@@ -74,6 +78,9 @@ impl InstallPlan {
 
     /// The plist (Darwin) or unit (Linux) content for an account home.
     pub fn content(&self, home: &Path) -> String {
+        if let Some(startup) = &self.startup {
+            return startup.clone();
+        }
         let log = home
             .join(".stado")
             .join("logs")
@@ -131,5 +138,6 @@ pub fn plan(
         exec_args: exec_args_for(bins, kind, name)?,
         env: install_env(home, kind, hf_token, wc_python),
         daemon,
+        startup: None,
     })
 }

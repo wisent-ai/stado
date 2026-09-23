@@ -42,7 +42,7 @@ pub(super) fn prepare<'a>(
                         check_target(&host.name, target, &component.label)?;
                     }
                     root_label = Some(&component.label);
-                    runtime = existing;
+                    runtime = *existing;
                     None
                 }
                 command => Some(command),

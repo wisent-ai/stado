@@ -196,7 +196,7 @@ pub async fn install_local(
     };
     let bins = Bins::resolve(&home);
     let wc_python = default_wc_python();
-    let install_plan = plan(name, kind, os, &home, &bins, "", &wc_python, daemon)?;
+    let install_plan = plan(name, kind, os, &home, &bins, "", &wc_python, daemon.clone())?;
     if dry_run {
         for line in install_plan.dry_run_lines() {
             echo(&line);
@@ -204,5 +204,13 @@ pub async fn install_local(
         return Ok(());
     }
     ensure_bins(&home, echo).await?;
+    if kind == "host" {
+        // The host unit replaces this machine's separate Stado units; the
+        // merge reads them all before anything is written.
+        let component_plan = |component: &str, _label: &str| {
+            plan(name, component, os, &home, &bins, "", &wc_python, daemon.clone())
+        };
+        return unit::host::install(install_plan, &home, &component_plan, runner, echo).await;
+    }
     execute_plan(&install_plan, &home, current_uid(), runner, echo).await
 }
