@@ -106,11 +106,14 @@ pub fn plist_env(document: &::plist::Dictionary) -> Result<Vec<(String, String)>
     let env = value.as_dictionary().ok_or_else(|| {
         DeployError("launchd EnvironmentVariables is not a dictionary".to_string())
     })?;
-    env.iter().map(|(name, value)| {
-        let value = value.as_string().ok_or_else(|| {
-            DeployError(format!("launchd environment variable {name} is not a string"))
-        })?;
-        Ok((name.clone(), value.to_string()))
-    }).collect()
+    env.iter()
+        .map(|(name, value)| {
+            let value = value.as_string().ok_or_else(|| {
+                DeployError(format!(
+                    "launchd environment variable {name} is not a string"
+                ))
+            })?;
+            Ok((name.clone(), value.to_string()))
+        })
+        .collect()
 }
-

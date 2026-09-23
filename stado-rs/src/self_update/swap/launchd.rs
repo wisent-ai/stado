@@ -55,7 +55,8 @@ pub(super) async fn recycle_launchd(
         }
         let running = running_images.get(&pid);
         let declaration = crate::deploy::service::local_unit_file(
-            &unit.path, crate::deploy::service::KIND_LAUNCHD,
+            &unit.path,
+            crate::deploy::service::KIND_LAUNCHD,
         );
         let declared_program = declaration.as_ref().map(|unit| unit.program.as_str());
         let directly_declared = paths

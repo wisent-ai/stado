@@ -66,16 +66,20 @@ pub fn parse_systemd_unit(text: &str) -> Result<SystemdUnit, DeployError> {
             "ExecStart" => {
                 let (arguments, unresolved) = systemd_arguments(value)?;
                 let command_index = parsed.exec_start.len();
-                parsed.unresolved_expansions.extend(unresolved.into_iter().map(|index| {
-                    format!("ExecStart[{command_index}] argument[{index}]")
-                }));
+                parsed.unresolved_expansions.extend(
+                    unresolved
+                        .into_iter()
+                        .map(|index| format!("ExecStart[{command_index}] argument[{index}]")),
+                );
                 parsed.exec_start.push(arguments);
             }
             _ => {}
         }
     }
     parsed.unresolved_expansions.extend(
-        unresolved_environment.into_iter().map(|name| format!("Environment:{name}")),
+        unresolved_environment
+            .into_iter()
+            .map(|name| format!("Environment:{name}")),
     );
     Ok(parsed)
 }
@@ -175,7 +179,9 @@ pub(crate) fn split_words(value: &str) -> Result<Vec<String>, DeployError> {
         }
     }
     if quote.is_some() {
-        return Err(DeployError("systemd directive has an unterminated quote".to_string()));
+        return Err(DeployError(
+            "systemd directive has an unterminated quote".to_string(),
+        ));
     }
     if started {
         words.push(word(current)?);
@@ -185,7 +191,9 @@ pub(crate) fn split_words(value: &str) -> Result<Vec<String>, DeployError> {
 
 fn word(bytes: Vec<u8>) -> Result<String, DeployError> {
     if bytes.contains(&0) {
-        return Err(DeployError("systemd directive contains a NUL byte".to_string()));
+        return Err(DeployError(
+            "systemd directive contains a NUL byte".to_string(),
+        ));
     }
     String::from_utf8(bytes)
         .map_err(|_| DeployError("systemd directive decodes to non-UTF-8 bytes".to_string()))
@@ -211,8 +219,14 @@ fn unescape(chars: &mut std::str::Chars<'_>, output: &mut Vec<u8>) -> Result<(),
         _ => return Err(invalid()),
     };
     for _ in 0..digits {
-        let digit = chars.next().and_then(|ch| ch.to_digit(radix)).ok_or_else(invalid)?;
-        code = code.checked_mul(radix).and_then(|code| code.checked_add(digit)).ok_or_else(invalid)?;
+        let digit = chars
+            .next()
+            .and_then(|ch| ch.to_digit(radix))
+            .ok_or_else(invalid)?;
+        code = code
+            .checked_mul(radix)
+            .and_then(|code| code.checked_add(digit))
+            .ok_or_else(invalid)?;
     }
     if code == 0 {
         return Err(invalid());

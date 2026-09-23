@@ -89,5 +89,7 @@ pub(crate) fn defers_to_release_handshake<S: AsRef<str>>(argv: &[S]) -> bool {
     };
     subcommand == Some("agent")
         || (subcommand == Some("serve")
-            && arguments.take_while(|argument| *argument != "--").any(|argument| argument == "--worker"))
+            && arguments
+                .take_while(|argument| *argument != "--")
+                .any(|argument| argument == "--worker"))
 }

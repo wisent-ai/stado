@@ -1,11 +1,11 @@
 //! One connection: resolve where it should go, open it, and copy both ways.
 
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
-use tokio::net::TcpStream;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
 
 use crate::cli::resolver::authority::tunnel::Tunnel;
 
@@ -86,7 +86,9 @@ pub(super) async fn proxy_connection(
         }
     };
     match upstream {
-        Upstream::Local(stream) => relay(client_read, client_write, stream, adapter, host, port).await,
+        Upstream::Local(stream) => {
+            relay(client_read, client_write, stream, adapter, host, port).await
+        }
         Upstream::Remote(stream, session) => {
             let result = relay(client_read, client_write, stream, adapter, host, port).await;
             drop(session);

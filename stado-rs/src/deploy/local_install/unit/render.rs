@@ -2,9 +2,9 @@
 //! `systemd --user` unit. One renderer per init system, and the plist's two
 //! domains share theirs so an agent and its daemon spelling cannot drift.
 
-use std::path::Path;
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::path::Path;
 
 /// Render a launchd agent plist with an explicit owner-controlled log path.
 pub fn plist_text(
@@ -50,7 +50,10 @@ fn plist_document(
     session_type: Option<&str>,
 ) -> String {
     let user_xml = match user {
-        Some(user) => format!("    <key>UserName</key>\n    <string>{}</string>\n", xml_text(user)),
+        Some(user) => format!(
+            "    <key>UserName</key>\n    <string>{}</string>\n",
+            xml_text(user)
+        ),
         None => String::new(),
     };
     let session_xml = session_type
@@ -64,7 +67,13 @@ fn plist_document(
         .collect();
     let env_xml: String = env
         .iter()
-        .map(|(k, v)| format!("        <key>{}</key>\n        <string>{}</string>\n", xml_text(k), xml_text(v)))
+        .map(|(k, v)| {
+            format!(
+                "        <key>{}</key>\n        <string>{}</string>\n",
+                xml_text(k),
+                xml_text(v)
+            )
+        })
         .collect();
     let log = log.to_string_lossy();
     let log = xml_text(&log);
@@ -170,10 +179,14 @@ pub(crate) fn systemd_environment(name: &str, value: &str) -> String {
 }
 
 fn append_systemd_word(result: &mut String, parts: &[&str], command: bool) {
-    if command && parts.iter().any(|part| !part.is_empty())
-        && parts.iter().all(|part| part.chars().all(|ch| {
-            ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '=' | '@' | ',' | '+')
-        }))
+    if command
+        && parts.iter().any(|part| !part.is_empty())
+        && parts.iter().all(|part| {
+            part.chars().all(|ch| {
+                ch.is_ascii_alphanumeric()
+                    || matches!(ch, '/' | '.' | '_' | '-' | ':' | '=' | '@' | ',' | '+')
+            })
+        })
     {
         for part in parts {
             result.push_str(part);

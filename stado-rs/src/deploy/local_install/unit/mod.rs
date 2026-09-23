@@ -123,7 +123,11 @@ pub fn plan(
         name: name.to_string(),
         kind: kind.to_string(),
         os,
-        label: if kind == "host" { host::canonical_label()? } else { label(kind, name) },
+        label: if kind == "host" {
+            host::canonical_label()?
+        } else {
+            label(kind, name)
+        },
         exec_args: exec_args_for(bins, kind, name)?,
         env: install_env(home, kind, hf_token, wc_python),
         daemon,

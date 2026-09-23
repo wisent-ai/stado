@@ -11,7 +11,10 @@ use super::Component;
 impl Component {
     /// `plan.name` identifies the host; its label and execution domain identify
     /// the native unit. The captured file supplies argv, environment and cadence.
-    pub(crate) fn from_definition(mut plan: InstallPlan, definition: UnitFile) -> Result<Self, DeployError> {
+    pub(crate) fn from_definition(
+        mut plan: InstallPlan,
+        definition: UnitFile,
+    ) -> Result<Self, DeployError> {
         if definition.host != plan.name {
             return Err(DeployError(format!(
                 "{} was captured on {}, not planned host {}",
@@ -38,8 +41,13 @@ impl Component {
                 definition.unit
             )));
         }
-        let parsed = parse_local_unit_file(&definition.content, definition.kind)
-            .map_err(|error| DeployError(format!("{} at {}: {error}", definition.unit, definition.path)))?;
+        let parsed =
+            parse_local_unit_file(&definition.content, definition.kind).map_err(|error| {
+                DeployError(format!(
+                    "{} at {}: {error}",
+                    definition.unit, definition.path
+                ))
+            })?;
         if parsed.start_commands != 1 || parsed.program.is_empty() {
             return Err(DeployError(format!(
                 "{} requires exactly one native executable; observed {} start commands",
@@ -55,10 +63,13 @@ impl Component {
         if !parsed.environment_files.is_empty() {
             return Err(DeployError(format!(
                 "{} still has unresolved EnvironmentFile declarations: {}",
-                definition.unit, parsed.environment_files.join(", ")
+                definition.unit,
+                parsed.environment_files.join(", ")
             )));
         }
-        let expected_program = plan.exec_args.first()
+        let expected_program = plan
+            .exec_args
+            .first()
             .ok_or_else(|| DeployError(format!("{} has no declared executable", plan.label)))?;
         if Path::new(&parsed.program).file_name() != Path::new(expected_program).file_name() {
             return Err(DeployError(format!(
@@ -77,7 +88,11 @@ impl Component {
         // executable followed by its options, not the custom process title.
         plan.exec_args[0] = parsed.program;
         plan.env = parsed.env.into_iter().collect();
-        Ok(Self { plan, definition, periodic: parsed.start_interval_seconds })
+        Ok(Self {
+            plan,
+            definition,
+            periodic: parsed.start_interval_seconds,
+        })
     }
 
     pub(crate) fn native_definition(&self) -> &UnitFile {
@@ -87,10 +102,11 @@ impl Component {
     /// A continuous native owner supplies account, working directory and limits.
     /// Periodic-only definitions cannot supply the lifetime of the resident host.
     pub(crate) fn render_startup(&self, host: &InstallPlan) -> Result<String, DeployError> {
-        if self.plan.os != host.os
-            || self.plan.daemon != host.daemon || self.plan.name != host.name
+        if self.plan.os != host.os || self.plan.daemon != host.daemon || self.plan.name != host.name
         {
-            return Err(DeployError("resident owner differs from the captured host or execution domain".to_string()));
+            return Err(DeployError(
+                "resident owner differs from the captured host or execution domain".to_string(),
+            ));
         }
         if host.os == LocalOs::Linux {
             return crate::deploy::service::rewrite_systemd_startup(
@@ -107,7 +123,10 @@ impl Component {
             )));
         }
         crate::deploy::service::rewrite_plist_startup(
-            document, &host.label, &host.exec_args, &host.env,
+            document,
+            &host.label,
+            &host.exec_args,
+            &host.env,
         )
     }
 }

@@ -29,11 +29,17 @@ async fn file_identity(
         Ok(key) => Arc::new(key),
         Err(keys::Error::KeyIsEncrypted) => {
             let public_path = PathBuf::from(format!("{}.pub", path.display()));
-            let public = keys::load_public_key(&public_path)
-                .with_context(|| format!("read public identity {} for SSH agent signing", public_path.display()))?;
+            let public = keys::load_public_key(&public_path).with_context(|| {
+                format!(
+                    "read public identity {} for SSH agent signing",
+                    public_path.display()
+                )
+            })?;
             return agent_identities(session, user, Some(&public)).await;
         }
-        Err(error) => return Err(error).with_context(|| format!("read SSH identity {}", path.display())),
+        Err(error) => {
+            return Err(error).with_context(|| format!("read SSH identity {}", path.display()))
+        }
     };
     let certificate = PathBuf::from(format!("{}-cert.pub", path.display()));
     if certificate.is_file() {
@@ -91,7 +97,11 @@ pub(super) async fn authenticate(
     }
     bail!(
         "SSH authentication failed for {user}: {}; provision an authorized SSH identity",
-        if failures.is_empty() { "no identity is available".to_string() } else { failures.join("; ") }
+        if failures.is_empty() {
+            "no identity is available".to_string()
+        } else {
+            failures.join("; ")
+        }
     )
 }
 
@@ -109,10 +119,14 @@ async fn agent_identities(
         }
         let result = match identity {
             AgentIdentity::PublicKey { key, .. } => {
-                session.authenticate_publickey_with(user, key, hash, &mut agent).await?
+                session
+                    .authenticate_publickey_with(user, key, hash, &mut agent)
+                    .await?
             }
             AgentIdentity::Certificate { certificate, .. } => {
-                session.authenticate_certificate_with(user, certificate, hash, &mut agent).await?
+                session
+                    .authenticate_certificate_with(user, certificate, hash, &mut agent)
+                    .await?
             }
         };
         if result.success() {

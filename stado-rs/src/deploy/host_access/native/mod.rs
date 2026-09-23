@@ -11,8 +11,8 @@ mod reverse;
 mod session;
 mod trust;
 
-pub(crate) use session::Session;
 pub(crate) use reverse::ReverseForward;
+pub(crate) use session::Session;
 
 pub(crate) struct Peer {
     host: String,
@@ -59,19 +59,41 @@ async fn connect_with(destination: &str, reverse: Option<reverse::Ports>) -> Res
             (user.name, destination)
         }
     };
-    let host = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')).unwrap_or(host);
-    ensure!(!user.is_empty() && !host.is_empty() && !host.contains('@'), "invalid SSH destination {destination}");
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    ensure!(
+        !user.is_empty() && !host.is_empty() && !host.contains('@'),
+        "invalid SSH destination {destination}"
+    );
     if host.contains(':') {
-        host.parse::<std::net::Ipv6Addr>().with_context(|| format!("invalid SSH IPv6 destination {destination}"))?;
+        host.parse::<std::net::Ipv6Addr>()
+            .with_context(|| format!("invalid SSH IPv6 destination {destination}"))?;
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from)
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
         .context("HOME is required for SSH trust and credentials")?;
-    let peer = Peer { host: host.to_ascii_lowercase(), home: home.clone(), reverse };
-    let handle = client::connect(config::client(reverse.is_some()), (host, config::SSH_PORT), peer).await
-        .with_context(|| format!("connect and verify SSH host {destination}"))?;
+    let peer = Peer {
+        host: host.to_ascii_lowercase(),
+        home: home.clone(),
+        reverse,
+    };
+    let handle = client::connect(
+        config::client(reverse.is_some()),
+        (host, config::SSH_PORT),
+        peer,
+    )
+    .await
+    .with_context(|| format!("connect and verify SSH host {destination}"))?;
     let mut session = Session::new(handle);
-    let identity = if reverse.is_none() { auth::configured_identity(&home) } else { None };
-    auth::authenticate(&mut session, &user, &home, identity.as_deref()).await
+    let identity = if reverse.is_none() {
+        auth::configured_identity(&home)
+    } else {
+        None
+    };
+    auth::authenticate(&mut session, &user, &home, identity.as_deref())
+        .await
         .with_context(|| format!("authenticate SSH destination {destination}"))?;
     Ok(session)
 }

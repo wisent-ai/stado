@@ -46,7 +46,8 @@ pub(crate) fn rewrite_systemd_startup(
     arguments: &str,
     environment: &[(String, String)],
 ) -> Result<String, DeployError> {
-    let environment: BTreeMap<&str, &str> = environment.iter()
+    let environment: BTreeMap<&str, &str> = environment
+        .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
     let mut rendered = String::with_capacity(definition.len());
@@ -54,7 +55,10 @@ pub(crate) fn rewrite_systemd_startup(
     let mut inserted = false;
     for line in logical_lines(definition) {
         let trimmed = line.trim();
-        if let Some(section) = trimmed.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+        if let Some(section) = trimmed
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
             in_service = section.trim() == "Service";
         }
         if in_service {
@@ -65,7 +69,9 @@ pub(crate) fn rewrite_systemd_startup(
                         if !inserted {
                             for (name, value) in &environment {
                                 rendered.push_str("Environment=");
-                                rendered.push_str(&local_install::unit::render::systemd_environment(name, value));
+                                rendered.push_str(
+                                    &local_install::unit::render::systemd_environment(name, value),
+                                );
                                 rendered.push('\n');
                             }
                             rendered.push_str("ExecStart=");
@@ -83,7 +89,9 @@ pub(crate) fn rewrite_systemd_startup(
         rendered.push('\n');
     }
     if !inserted {
-        return Err(DeployError("authored systemd unit has no Service ExecStart position".to_string()));
+        return Err(DeployError(
+            "authored systemd unit has no Service ExecStart position".to_string(),
+        ));
     }
     guard_heredoc(&rendered)?;
     Ok(rendered)

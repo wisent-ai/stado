@@ -10,8 +10,8 @@ use crate::cli::hosts::{agent, coordinator};
 use crate::cli::CmdError;
 use crate::deploy::host_access::native::ReverseForward;
 
-mod arguments;
 mod api;
+mod arguments;
 mod identity;
 mod supervisor;
 
@@ -97,16 +97,19 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         ));
     }
     identity::validate(&args)?;
-    let mutates_worker_environment = args.run_worker
-        && (args.worker.auto || args.worker.target.is_none());
+    let mutates_worker_environment =
+        args.run_worker && (args.worker.auto || args.worker.target.is_none());
     let mut supervisor = supervisor::Supervisor::new();
     // Start an API before resolving host identity unless a worker first needs
     // to apply its environment. An API-only host needs no registry bootstrap.
     if serve_api && !mutates_worker_environment {
-        let api = api::PreparedApi::prepare(args.bind.take(), args.port, args.api_storage.take()).await?;
+        let api =
+            api::PreparedApi::prepare(args.bind.take(), args.port, args.api_storage.take()).await?;
         supervisor.spawn("api", move || api.run())?;
     }
-    let target = supervisor.during_startup(identity::resolve(&mut args)).await?;
+    let target = supervisor
+        .during_startup(identity::resolve(&mut args))
+        .await?;
 
     let bundled_coordinator = supervisor.during_startup(async {
         match (args.control_plane, args.control_plane_interval_seconds) {
@@ -210,7 +213,8 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     if let Some(interval) = args.failure_fixer_interval_seconds {
         supervisor.spawn("failure-fixer", move || async move {
             crate::failure_fixer::run_resident(interval, args.failure_fixer_command_pattern)
-                .await.map_err(|error| CmdError::click(error.to_string()))
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))
         })?;
     }
     if args.run_worker {
@@ -229,7 +233,10 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     }
     eprintln!(
         "stado serve: target={} pid={} components={}",
-        target.as_ref().map(|target| target.name.as_str()).unwrap_or("not-required"),
+        target
+            .as_ref()
+            .map(|target| target.name.as_str())
+            .unwrap_or("not-required"),
         std::process::id(),
         supervisor.components().join(",")
     );

@@ -93,7 +93,6 @@ pub async fn cli_main() -> i32 {
     }
 }
 
-
 /// The host owns the scan loop; each pass still resolves its storage and reports
 /// the same per-job result as `scan-dispatch --execute`.
 pub(crate) async fn run_resident(
@@ -107,7 +106,8 @@ pub(crate) async fn run_resident(
         let result = async {
             let store = JobStorage::with_bucket(config::bucket()).await?;
             scan_and_report(&store, None, command_pattern.as_deref(), true).await
-        }.await;
+        }
+        .await;
         if let Err(error) = result {
             eprintln!("[stado serve failure-fixer] scan-and-dispatch failed: {error}");
         }
@@ -186,7 +186,13 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
             command_pattern,
             execute,
         } => {
-            scan_and_report(&store, since.as_deref(), command_pattern.as_deref(), execute).await
+            scan_and_report(
+                &store,
+                since.as_deref(),
+                command_pattern.as_deref(),
+                execute,
+            )
+            .await
         }
     }
 }

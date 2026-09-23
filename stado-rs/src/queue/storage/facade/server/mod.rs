@@ -39,7 +39,10 @@ impl JobStorage {
     /// Bind only the API to these endpoints. Reads never fail over from its
     /// authoritative primary; the worker keeps its own configured storage.
     pub async fn for_server_storage(profile: ServerStorage) -> Result<Self, StorageError> {
-        let ServerStorage { mut primary, backup } = profile;
+        let ServerStorage {
+            mut primary,
+            backup,
+        } = profile;
         if primary.adapter() == Some(StorageAdapter::StadoObject) {
             return Err(StorageError::Other(
                 "the Stado API server requires a direct authoritative primary; a stado endpoint names an API, not its backing store".into(),
@@ -55,14 +58,16 @@ impl JobStorage {
         };
         let backend = primary.build().await.map_err(|error| {
             StorageError::Other(format!(
-                "constructing API primary {}: {error}", primary.describe()
+                "constructing API primary {}: {error}",
+                primary.describe()
             ))
         })?;
         let mut storage = Self::with_backend_and_bucket(backend, &primary.kind, &primary.bucket);
         storage.local_path = local_path;
         storage.ensure_layout().await.map_err(|error| {
             StorageError::Other(format!(
-                "checking API primary layout {}: {error}", primary.describe()
+                "checking API primary layout {}: {error}",
+                primary.describe()
             ))
         })?;
         storage

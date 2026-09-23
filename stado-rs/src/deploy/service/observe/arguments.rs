@@ -22,9 +22,9 @@ fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
 
 #[cfg(target_os = "macos")]
 fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
+    use nix::libc;
     use std::mem::size_of;
     use std::ptr;
-    use nix::libc;
 
     let pid = libc::c_int::try_from(pid).map_err(|error| format!("invalid PID: {error}"))?;
     let mut maximum: libc::c_int = 0;
@@ -34,12 +34,19 @@ fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
     // query. The output length describes precisely the writable integer.
     let result = unsafe {
         libc::sysctl(
-            limit_query.as_mut_ptr(), limit_query.len() as libc::c_uint,
-            (&mut maximum as *mut libc::c_int).cast(), &mut size, ptr::null_mut(), 0,
+            limit_query.as_mut_ptr(),
+            limit_query.len() as libc::c_uint,
+            (&mut maximum as *mut libc::c_int).cast(),
+            &mut size,
+            ptr::null_mut(),
+            0,
         )
     };
     if result != 0 {
-        return Err(format!("sysctl(KERN_ARGMAX): {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "sysctl(KERN_ARGMAX): {}",
+            std::io::Error::last_os_error()
+        ));
     }
     if size != size_of::<libc::c_int>() || maximum <= 0 {
         return Err("sysctl(KERN_ARGMAX) returned an invalid argument-buffer size".to_string());
@@ -51,18 +58,26 @@ fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
     // buffer. This read-only query supplies no new-value pointer or length.
     let result = unsafe {
         libc::sysctl(
-            query.as_mut_ptr(), query.len() as libc::c_uint,
-            bytes.as_mut_ptr().cast(), &mut size, ptr::null_mut(), 0,
+            query.as_mut_ptr(),
+            query.len() as libc::c_uint,
+            bytes.as_mut_ptr().cast(),
+            &mut size,
+            ptr::null_mut(),
+            0,
         )
     };
     if result != 0 {
-        return Err(format!("sysctl(KERN_PROCARGS2): {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "sysctl(KERN_PROCARGS2): {}",
+            std::io::Error::last_os_error()
+        ));
     }
     if size > bytes.len() {
         return Err("sysctl(KERN_PROCARGS2) exceeded its supplied argument buffer".to_string());
     }
     bytes.truncate(size);
-    let header = bytes.get(..size_of::<libc::c_int>())
+    let header = bytes
+        .get(..size_of::<libc::c_int>())
         .ok_or("sysctl(KERN_PROCARGS2) omitted argc")?;
     let count = libc::c_int::from_ne_bytes(header.try_into().map_err(|_| "invalid argc header")?);
     if count <= 0 {
@@ -84,7 +99,9 @@ fn read_arguments(pid: u32) -> Result<Vec<String>, String> {
 
 #[cfg(target_os = "macos")]
 fn take_string<'a>(remaining: &mut &'a [u8]) -> Result<&'a [u8], String> {
-    let end = remaining.iter().position(|byte| *byte == 0)
+    let end = remaining
+        .iter()
+        .position(|byte| *byte == 0)
         .ok_or("sysctl(KERN_PROCARGS2) returned a truncated string")?;
     let value = &remaining[..end];
     *remaining = &remaining[end + 1..];

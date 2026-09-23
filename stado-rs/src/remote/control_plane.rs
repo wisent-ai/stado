@@ -65,16 +65,30 @@ impl ResidentCoordinator {
                 (BTreeMap::new(), interval.max(5) as u64, false, local_log)
             }
             CoordinatorMode::Cloud => {
-                let secrets = crate::coordinator::secrets_from_skarbiec().await
+                let secrets = crate::coordinator::secrets_from_skarbiec()
+                    .await
                     .map_err(|error| ControlPlaneError::Other(error.to_string()))?;
                 (secrets, interval.max(15) as u64, true, cloud_log)
             }
         };
-        Ok(Self { store, secrets, sleep_seconds, with_billing, log })
+        Ok(Self {
+            store,
+            secrets,
+            sleep_seconds,
+            with_billing,
+            log,
+        })
     }
 
     pub(crate) async fn run(self) {
-        coordinator_loop(self.store, self.secrets, self.sleep_seconds, self.with_billing, self.log).await;
+        coordinator_loop(
+            self.store,
+            self.secrets,
+            self.sleep_seconds,
+            self.with_billing,
+            self.log,
+        )
+        .await;
     }
 }
 
@@ -154,7 +168,8 @@ async fn coordinator_loop(
 /// this device.
 pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
     let store = JobStorage::new().await?;
-    let coordinator = ResidentCoordinator::prepare(CoordinatorMode::Local, store.clone(), interval).await?;
+    let coordinator =
+        ResidentCoordinator::prepare(CoordinatorMode::Local, store.clone(), interval).await?;
     spawn_daemon("stado-local-coordinator", move || coordinator.run())?;
     spawn_daemon("stado-local-agent", || async {
         // Python: threading.Thread(target=run_agent, kwargs={"kind": "local"}).
@@ -173,7 +188,8 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
 /// `deploy.cloud_control_plane.run`).
 pub async fn run_cloud(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
     let store = JobStorage::new().await?;
-    let coordinator = ResidentCoordinator::prepare(CoordinatorMode::Cloud, store.clone(), interval).await?;
+    let coordinator =
+        ResidentCoordinator::prepare(CoordinatorMode::Cloud, store.clone(), interval).await?;
     spawn_daemon("stado-cloud-coordinator", move || coordinator.run())?;
     cloud_log(&format!(
         "dashboard={host}:{port} storage={}",

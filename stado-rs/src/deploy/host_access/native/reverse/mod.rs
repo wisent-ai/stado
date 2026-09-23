@@ -24,13 +24,13 @@ pub(crate) struct ReverseForward {
 }
 
 impl ReverseForward {
-    pub(crate) fn new(
-        destination: String,
-        remote: NonZeroU16,
-        local: NonZeroU16,
-    ) -> Result<Self> {
+    pub(crate) fn new(destination: String, remote: NonZeroU16, local: NonZeroU16) -> Result<Self> {
         crate::deploy::host_users::validate_ssh_target(&destination)?;
-        Ok(Self { destination, ports: Ports { remote, local }, task: None })
+        Ok(Self {
+            destination,
+            ports: Ports { remote, local },
+            task: None,
+        })
     }
 
     pub(crate) async fn run(mut self, interval: NonZeroU64) -> Result<()> {
@@ -61,7 +61,9 @@ impl ReverseForward {
         }
         let destination = self.destination.clone();
         let ports = self.ports;
-        self.task = Some(tokio::spawn(async move { serve(&destination, ports).await }));
+        self.task = Some(tokio::spawn(
+            async move { serve(&destination, ports).await },
+        ));
     }
 }
 
@@ -75,13 +77,27 @@ impl Drop for ReverseForward {
 
 async fn serve(destination: &str, ports: Ports) -> Result<()> {
     let mut session = super::connect_with(destination, Some(ports)).await?;
-    session.tcpip_forward(LOOPBACK, u32::from(ports.remote.get())).await
-        .with_context(|| format!("register reverse listener {LOOPBACK}:{} on {destination}", ports.remote))?;
+    session
+        .tcpip_forward(LOOPBACK, u32::from(ports.remote.get()))
+        .await
+        .with_context(|| {
+            format!(
+                "register reverse listener {LOOPBACK}:{} on {destination}",
+                ports.remote
+            )
+        })?;
     eprintln!(
         "stado reverse forward destination={destination} registered {LOOPBACK}:{} -> {LOOPBACK}:{} in pid={}",
         ports.remote, ports.local, std::process::id()
     );
-    (&mut *session).await
-        .with_context(|| format!("serve reverse listener {LOOPBACK}:{} on {destination}", ports.remote))?;
-    bail!("SSH session ended while reverse listener {LOOPBACK}:{} was registered", ports.remote)
+    (&mut *session).await.with_context(|| {
+        format!(
+            "serve reverse listener {LOOPBACK}:{} on {destination}",
+            ports.remote
+        )
+    })?;
+    bail!(
+        "SSH session ended while reverse listener {LOOPBACK}:{} was registered",
+        ports.remote
+    )
 }

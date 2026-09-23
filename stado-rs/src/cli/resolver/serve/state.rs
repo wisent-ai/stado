@@ -73,7 +73,10 @@ impl ResolverState {
                 Ok(stream) => return Ok((stream, tunnel)),
                 Err(error) => {
                     let mut tunnels = self.tunnels.lock().await;
-                    if tunnels.get(&key).is_some_and(|current| Arc::ptr_eq(current, &tunnel)) {
+                    if tunnels
+                        .get(&key)
+                        .is_some_and(|current| Arc::ptr_eq(current, &tunnel))
+                    {
                         tunnels.remove(&key);
                     }
                     if attempt == 1 {

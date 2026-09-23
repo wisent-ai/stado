@@ -30,9 +30,17 @@ impl DerefMut for Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let (Some(handle), Ok(runtime)) = (self.0.take(), tokio::runtime::Handle::try_current()) {
+        if let (Some(handle), Ok(runtime)) = (self.0.take(), tokio::runtime::Handle::try_current())
+        {
             runtime.spawn(async move {
-                if let Err(error) = handle.disconnect(russh::Disconnect::ByApplication, "host released session", "en").await {
+                if let Err(error) = handle
+                    .disconnect(
+                        russh::Disconnect::ByApplication,
+                        "host released session",
+                        "en",
+                    )
+                    .await
+                {
                     eprintln!("stado SSH disconnect failed: {error}");
                 }
             });

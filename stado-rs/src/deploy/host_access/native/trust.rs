@@ -5,7 +5,10 @@ use std::path::Path;
 use anyhow::{bail, ensure, Context, Result};
 use ring::hmac;
 use russh::keys::{
-    ssh_key::{certificate::CertType, known_hosts::{HostPatterns, KnownHosts, Marker}},
+    ssh_key::{
+        certificate::CertType,
+        known_hosts::{HostPatterns, KnownHosts, Marker},
+    },
     HashAlg, PublicKeyOrCertificate,
 };
 
@@ -22,7 +25,9 @@ fn matches(patterns: &HostPatterns, host: &str) -> Result<bool> {
                     Some(pattern) => (true, pattern),
                     None => (false, pattern.as_str()),
                 };
-                let expression = regex::escape(pattern).replace("\\*", ".*").replace("\\?", ".");
+                let expression = regex::escape(pattern)
+                    .replace("\\*", ".*")
+                    .replace("\\?", ".");
                 if regex::RegexBuilder::new(&format!("^{expression}$"))
                     .case_insensitive(true)
                     .build()?
@@ -59,18 +64,37 @@ pub(super) fn verify(home: &Path, host: &str, presented: &PublicKeyOrCertificate
                 continue;
             }
             let same_key = entry.public_key().key_data() == public_key.key_data();
-            let signing_key = presented.certificate()
-                .is_some_and(|certificate| certificate.signature_key() == entry.public_key().key_data());
+            let signing_key = presented.certificate().is_some_and(|certificate| {
+                certificate.signature_key() == entry.public_key().key_data()
+            });
             match entry.marker() {
                 Some(Marker::Revoked) if same_key || signing_key => {
-                    bail!("SSH host {host} presents a key revoked in {}", path.display());
+                    bail!(
+                        "SSH host {host} presents a key revoked in {}",
+                        path.display()
+                    );
                 }
                 Some(Marker::CertAuthority) if signing_key => {
-                    let certificate = presented.certificate().context("host certificate is absent")?;
-                    ensure!(certificate.cert_type() == CertType::Host, "SSH certificate for {host} is not a host certificate");
-                    ensure!(certificate.valid_principals().iter().any(|principal| principal.eq_ignore_ascii_case(host)), "SSH certificate does not authorize host {host}");
-                    ensure!(certificate.critical_options().is_empty(), "SSH certificate for {host} has unsupported critical options");
-                    certificate.validate(&[entry.public_key().fingerprint(HashAlg::Sha256)])
+                    let certificate = presented
+                        .certificate()
+                        .context("host certificate is absent")?;
+                    ensure!(
+                        certificate.cert_type() == CertType::Host,
+                        "SSH certificate for {host} is not a host certificate"
+                    );
+                    ensure!(
+                        certificate
+                            .valid_principals()
+                            .iter()
+                            .any(|principal| principal.eq_ignore_ascii_case(host)),
+                        "SSH certificate does not authorize host {host}"
+                    );
+                    ensure!(
+                        certificate.critical_options().is_empty(),
+                        "SSH certificate for {host} has unsupported critical options"
+                    );
+                    certificate
+                        .validate(&[entry.public_key().fingerprint(HashAlg::Sha256)])
                         .with_context(|| format!("validate SSH host certificate for {host}"))?;
                     accepted = true;
                 }

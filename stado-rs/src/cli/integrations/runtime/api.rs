@@ -27,7 +27,9 @@ impl PreparedApi {
         .map_err(|error| CmdError::click(format!("API storage preparation failed: {error}")))?;
         let listener = crate::dashboard::PreparedListener::bind(&bind, port)
             .await
-            .map_err(|error| CmdError::click(format!("API listener preparation failed: {error}")))?;
+            .map_err(|error| {
+                CmdError::click(format!("API listener preparation failed: {error}"))
+            })?;
         Ok(Self { listener, store })
     }
 

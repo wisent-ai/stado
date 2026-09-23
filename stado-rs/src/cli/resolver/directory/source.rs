@@ -106,7 +106,9 @@ impl SnapshotSource {
             return Err("registry authority snapshot exceeds 1 MiB".to_string());
         }
         if output.exit_status != Some(0) {
-            let status = output.exit_status.map(|code| code.to_string())
+            let status = output
+                .exit_status
+                .map(|code| code.to_string())
                 .unwrap_or_else(|| "no exit status".to_string());
             let detail = String::from_utf8_lossy(&output.stderr);
             let detail = detail.trim();

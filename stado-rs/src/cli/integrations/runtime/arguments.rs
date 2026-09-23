@@ -1,7 +1,7 @@
 //! The installer renders the same host options that the CLI executes.
 
-use clap::ValueEnum;
 use super::ServeArgs;
+use clap::ValueEnum;
 
 impl ServeArgs {
     pub(crate) fn arguments(&self) -> Vec<String> {
@@ -51,7 +51,9 @@ impl ServeArgs {
             args.push(format!("--coordinator={coordinator}"));
         }
         if let Some(mode) = self.control_plane {
-            let value = mode.to_possible_value().expect("coordinator modes are CLI values");
+            let value = mode
+                .to_possible_value()
+                .expect("coordinator modes are CLI values");
             args.push(format!("--control-plane={}", value.get_name()));
         }
         if let Some(interval) = self.control_plane_interval_seconds {
@@ -84,7 +86,10 @@ impl ServeArgs {
         if self.watchdog {
             args.extend([
                 "--watchdog".to_string(),
-                format!("--watchdog-interval-seconds={}", self.watchdog_interval_seconds),
+                format!(
+                    "--watchdog-interval-seconds={}",
+                    self.watchdog_interval_seconds
+                ),
             ]);
             if let Some(bucket) = &self.watchdog_bucket {
                 args.push(format!("--watchdog-bucket={bucket}"));

@@ -21,8 +21,8 @@ mod collect;
 mod runner;
 mod upload;
 
-pub(crate) use cli::{configured_bucket, parse_args_with_bucket, run};
 pub use cli::{cli_main, help_text, parse_args, usage_text, ParseOutcome, ParsedArgs};
+pub(crate) use cli::{configured_bucket, parse_args_with_bucket, run};
 pub use collect::collect;
 pub use runner::{CommandRunner, RunOutcome, SystemRunner};
 pub use upload::{once, once_with, upload_with};

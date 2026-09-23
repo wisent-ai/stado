@@ -53,15 +53,27 @@ pub fn parse_local_unit_file(text: &str, kind: &str) -> Result<LocalUnitFile, De
     if kind == KIND_LAUNCHD {
         let document = parse_plist(text)?;
         let program = plist_program(&document)?.unwrap_or_default().to_string();
-        let start_interval_seconds = document.get("StartInterval").map(|value| {
-            value.as_unsigned_integer().and_then(std::num::NonZeroU64::new)
-                .ok_or_else(|| DeployError("StartInterval must be a positive integer".to_string()))
-        }).transpose()?;
+        let start_interval_seconds = document
+            .get("StartInterval")
+            .map(|value| {
+                value
+                    .as_unsigned_integer()
+                    .and_then(std::num::NonZeroU64::new)
+                    .ok_or_else(|| {
+                        DeployError("StartInterval must be a positive integer".to_string())
+                    })
+            })
+            .transpose()?;
         let mut arguments = match document.get("ProgramArguments") {
-            Some(value) => value.as_array()
+            Some(value) => value
+                .as_array()
                 .ok_or_else(|| DeployError("ProgramArguments is not an array".to_string()))?
-                .iter().map(|value| value.as_string().map(str::to_string)
-                    .ok_or_else(|| DeployError("ProgramArguments contains a non-string argument".to_string())))
+                .iter()
+                .map(|value| {
+                    value.as_string().map(str::to_string).ok_or_else(|| {
+                        DeployError("ProgramArguments contains a non-string argument".to_string())
+                    })
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             None => Vec::new(),
         };
@@ -83,9 +95,14 @@ pub fn parse_local_unit_file(text: &str, kind: &str) -> Result<LocalUnitFile, De
         let parsed = parse_systemd_unit(text)?;
         let start_commands = parsed.exec_start.len();
         let arguments = parsed.exec_start.into_iter().next().unwrap_or_default();
-        let program = arguments.first().map(|argument| {
-            argument.trim_start_matches(['@', '-', ':', '+', '!', '|']).to_string()
-        }).unwrap_or_default();
+        let program = arguments
+            .first()
+            .map(|argument| {
+                argument
+                    .trim_start_matches(['@', '-', ':', '+', '!', '|'])
+                    .to_string()
+            })
+            .unwrap_or_default();
         Ok(LocalUnitFile {
             carries: parsed.env.iter().map(|(name, _)| name.clone()).collect(),
             env: parsed.env.into_iter().collect(),

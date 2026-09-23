@@ -14,8 +14,14 @@ pub(crate) struct Output {
 
 pub(crate) async fn execute(destination: &str, command: &str, limit: usize) -> Result<Output> {
     let session = native::connect(destination).await?;
-    let mut channel = session.channel_open_session().await.context("open authority command channel")?;
-    channel.exec(true, command).await.context("request authority command execution")?;
+    let mut channel = session
+        .channel_open_session()
+        .await
+        .context("open authority command channel")?;
+    channel
+        .exec(true, command)
+        .await
+        .context("request authority command execution")?;
     let mut output = Output {
         stdout: Vec::new(),
         stderr: Vec::new(),
@@ -27,7 +33,10 @@ pub(crate) async fn execute(destination: &str, command: &str, limit: usize) -> R
             ChannelMsg::Data { data } => {
                 if data.len() > limit.saturating_sub(output.stdout.len()) {
                     output.stdout_exceeded = true;
-                    channel.close().await.context("close oversized authority response")?;
+                    channel
+                        .close()
+                        .await
+                        .context("close oversized authority response")?;
                     return Ok(output);
                 }
                 output.stdout.extend_from_slice(&data);

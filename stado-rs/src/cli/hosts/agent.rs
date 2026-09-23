@@ -32,22 +32,33 @@ fn apply_environment(
         return Ok(());
     }
     // Resolve every alias conflict before changing the shared environment.
-    let overrides = target.env_overrides.iter().map(|(key, value)| {
-        let name = match environment {
-            RegistryEnvironment::ResidentHost => crate::config::resident_worker_environment_key(key),
-            RegistryEnvironment::StandaloneWorker | RegistryEnvironment::HostIdentity => key.as_str(),
-        };
-        let value = env_value_str(value);
-        if name != key.as_str() && target.env_overrides.get(name)
-            .is_some_and(|other| env_value_str(other) != value)
-        {
-            return Err(CmdError::click(format!(
-                "target {} declares conflicting worker grant variables {key} and {name}",
-                target.name
-            )));
-        }
-        Ok((name, value))
-    }).collect::<Result<Vec<_>, CmdError>>()?;
+    let overrides = target
+        .env_overrides
+        .iter()
+        .map(|(key, value)| {
+            let name = match environment {
+                RegistryEnvironment::ResidentHost => {
+                    crate::config::resident_worker_environment_key(key)
+                }
+                RegistryEnvironment::StandaloneWorker | RegistryEnvironment::HostIdentity => {
+                    key.as_str()
+                }
+            };
+            let value = env_value_str(value);
+            if name != key.as_str()
+                && target
+                    .env_overrides
+                    .get(name)
+                    .is_some_and(|other| env_value_str(other) != value)
+            {
+                return Err(CmdError::click(format!(
+                    "target {} declares conflicting worker grant variables {key} and {name}",
+                    target.name
+                )));
+            }
+            Ok((name, value))
+        })
+        .collect::<Result<Vec<_>, CmdError>>()?;
     for (name, value) in overrides {
         std::env::set_var(name, value);
     }
@@ -136,8 +147,12 @@ pub async fn run(
     })?;
     let kind = execution.id.to_string();
     let (gpu_type, _) = apply_registry_target(
-        gpu_type, target.as_deref(), auto, RegistryEnvironment::StandaloneWorker,
-    ).await?;
+        gpu_type,
+        target.as_deref(),
+        auto,
+        RegistryEnvironment::StandaloneWorker,
+    )
+    .await?;
 
     // Auto-enable the Vast bridge when stado-vast/api_key exists in
     // Skarbiec and this is a local consumer. The defensive helper performs

@@ -22,8 +22,11 @@ pub(super) fn validate(args: &ServeArgs) -> Result<(), CmdError> {
 }
 
 pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget>, CmdError> {
-    let needs_target = args.run_worker || args.resolver || args.release_interval_seconds.is_some()
-        || args.worker.target.is_some() || args.worker.auto;
+    let needs_target = args.run_worker
+        || args.resolver
+        || args.release_interval_seconds.is_some()
+        || args.worker.target.is_some()
+        || args.worker.auto;
     if !needs_target {
         return Ok(None);
     }
@@ -35,9 +38,13 @@ pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget
     };
     let (gpu_type, target) = agent::apply_registry_target(
         std::mem::take(&mut args.worker.gpu_type),
-        args.worker.target.as_deref(), auto, environment,
-    ).await?;
-    let target = target.ok_or_else(|| CmdError::click("serve resolved no required registry target"))?;
+        args.worker.target.as_deref(),
+        auto,
+        environment,
+    )
+    .await?;
+    let target =
+        target.ok_or_else(|| CmdError::click("serve resolved no required registry target"))?;
     if auto {
         if let Some(expected) = args.worker.target.as_deref() {
             if target.name != expected {
@@ -50,7 +57,8 @@ pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget
     }
     if !crate::capabilities::ProviderId::Local.matches(&target.kind) {
         return Err(CmdError::usage(format!(
-            "serve target {} has kind {}; expected local", target.name, target.kind
+            "serve target {} has kind {}; expected local",
+            target.name, target.kind
         )));
     }
     args.worker.gpu_type = gpu_type;
@@ -60,6 +68,8 @@ pub(super) async fn resolve(args: &mut ServeArgs) -> Result<Option<ComputeTarget
 }
 
 pub(super) fn required_name(target: &Option<ComputeTarget>) -> Result<String, CmdError> {
-    target.as_ref().map(|target| target.name.clone())
+    target
+        .as_ref()
+        .map(|target| target.name.clone())
         .ok_or_else(|| CmdError::click("resident role requires a resolved registry target"))
 }
