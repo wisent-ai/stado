@@ -8,7 +8,7 @@ use crate::cli::release_submit::{build_path, load_build, refresh_build, save_bui
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_control;
-use crate::release_pipeline::{self, BuildRun, PlatformRunState, ProductManifest};
+use crate::release_pipeline::{self, BuildRun, BuildRunState, PlatformRunState, ProductManifest};
 
 /// Where every build object lives, and its leaf.
 const BUILD_STATE_PREFIX: &str = "runs/build/";
@@ -64,6 +64,7 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
         return Err(CmdError::click("build manifest disables releases"));
     };
     if wait {
+        build = queued_build(build, manifest.platforms.len()).await?;
         for platform in build.platforms.values() {
             if platform.state == PlatformRunState::Submitted {
                 terminal_job(&store, &platform.job_id).await?;
@@ -74,6 +75,41 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
     refresh_build(&store, &mut build, &manifest).await?;
     if build != before {
         save_build(&mut build).await?;
+    }
+    Ok(build)
+}
+
+/// How long `--wait` lets a submission take to queue every platform's job.
+/// Staging and queueing took six and a half minutes on 2026-09-23; a
+/// submitter that died between recording the build and queueing its jobs
+/// leaves a record that would otherwise be waited on forever.
+const QUEUEING_LIMIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+const QUEUEING_POLL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The build once its submission has queued a job for every platform the
+/// manifest declares, or recorded why it could not. A build is recorded
+/// before its jobs are queued, so `--wait` read in that gap used to answer
+/// `waiting` at once, which is the one answer it promises never to give.
+async fn queued_build(mut build: BuildRun, declared: usize) -> Result<BuildRun, CmdError> {
+    let started = std::time::Instant::now();
+    while build.platforms.len() < declared
+        && build.state == BuildRunState::Waiting
+        && build.failure.is_none()
+    {
+        if started.elapsed() >= QUEUEING_LIMIT {
+            return Err(CmdError::click(format!(
+                "build {} queued {} of {declared} platform job(s) in {} minutes; its submitter \
+                 stopped before queueing the rest. `stado build submit` with the same commit and \
+                 version queues them",
+                build.build_id,
+                build.platforms.len(),
+                QUEUEING_LIMIT.as_secs() / 60,
+            )));
+        }
+        tokio::time::sleep(QUEUEING_POLL).await;
+        build = load_build(&build.build_id)
+            .await?
+            .ok_or_else(|| CmdError::click(format!("build {} disappeared", build.build_id)))?;
     }
     Ok(build)
 }
