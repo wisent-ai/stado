@@ -7,26 +7,49 @@ use serde_json::Value;
 
 use crate::{fixture::Policy, Host, TARGET};
 
+/// The first declared label launchd holds on this builder, the label-print
+/// domain it holds it in, and launchd's own description of the job.
+///
+/// The fleet's builders run the release agent under different identities - a
+/// system daemon on the always-on mini, a login agent on a laptop - and a
+/// build is placed on whichever builder publishes the most free disk. Build
+/// ca95a8a3 of 04eb8af2 failed on lukasz-macbook because this gate looked for
+/// the mini's label in the system domain only.
+fn resident(labels: &str) -> Option<(String, &'static str, String)> {
+    let uid = Command::new("/usr/bin/id").arg("-u").output().ok()?;
+    let uid = String::from_utf8(uid.stdout).ok()?;
+    let domains = [
+        ("system", "system".to_string()),
+        ("user", format!("gui/{}", uid.trim())),
+    ];
+    labels
+        .split(',')
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .find_map(|label| {
+            domains.iter().find_map(|(domain, prefix)| {
+                let qualified = format!("{prefix}/{label}");
+                let native = Command::new("/bin/launchctl")
+                    .args(["print", &qualified])
+                    .output()
+                    .ok()?;
+                native.status.success().then(|| {
+                    let text = String::from_utf8_lossy(&native.stdout).into_owned();
+                    (label.to_string(), *domain, text)
+                })
+            })
+        })
+}
+
 #[test]
-#[ignore = "requires STADO_TEST_NATIVE_LABEL naming a stable, directly launched system service"]
+#[ignore = "requires STADO_TEST_NATIVE_LABEL naming stable, directly launched services, one resident on this host"]
 fn native_identity_matches_the_resident_process_and_its_actual_image() {
-    let label = std::env::var("STADO_TEST_NATIVE_LABEL").expect("declare the native service label");
-    let qualified = format!("system/{label}");
-    let native = Command::new("/bin/launchctl")
-        .args(["print", &qualified])
-        .output()
-        .expect("read the actual system launchd job");
-    eprintln!(
-        "launchctl print {qualified}: exit={:?}\n{}\n{}",
-        native.status.code(),
-        String::from_utf8_lossy(&native.stdout),
-        String::from_utf8_lossy(&native.stderr),
-    );
-    assert!(
-        native.status.success(),
-        "native service prerequisite failed"
-    );
-    let text = String::from_utf8(native.stdout).expect("native job description");
+    let labels =
+        std::env::var("STADO_TEST_NATIVE_LABEL").expect("declare the native service labels");
+    let (label, domain, text) = resident(&labels).unwrap_or_else(|| {
+        panic!("native service prerequisite failed: launchd holds none of {labels} in the system or login domain")
+    });
+    eprintln!("launchctl print {domain} {label}:\n{text}");
     let field = |name: &str| {
         let prefix = format!("\t{name} = ");
         text.lines()
@@ -56,7 +79,7 @@ fn native_identity_matches_the_resident_process_and_its_actual_image() {
         "--host",
         TARGET,
         "--domain",
-        "system",
+        domain,
         &label,
         "--json",
     ]);
