@@ -1,7 +1,7 @@
 //! Source identity and upload: the committed tree a submission is made of,
 //! and the immutable objects it writes before anything is built.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -32,20 +32,12 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
     let commit = match requested {
         Some(commit) => commit.to_owned(),
         None => {
-            if !git(
-                root,
-                &["status", "--porcelain=v1", "--untracked-files=normal"],
-            )?
-            .is_empty()
-            {
+            if !uncommitted_paths(root)?.is_empty() {
                 return Err(CmdError::click(
                     "release source must be a clean committed Git tree",
                 ));
             }
-            String::from_utf8(git(root, &["rev-parse", "HEAD"])?)
-                .map_err(|_| CmdError::click("Git commit is not UTF-8"))?
-                .trim()
-                .to_string()
+            head_commit(root)?
         }
     };
     if commit.len() != 40
@@ -61,6 +53,54 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
         return Err(CmdError::usage("--commit must name a Git commit object"));
     }
     Ok(commit)
+}
+
+/// The commit the checkout stands on, checked to be a full commit object.
+pub(crate) fn head_commit(root: &Path) -> Result<String, CmdError> {
+    let head = String::from_utf8(git(root, &["rev-parse", "HEAD"])?)
+        .map_err(|_| CmdError::click("Git commit is not UTF-8"))?;
+    resolve_commit(root, Some(head.trim()))
+}
+
+/// Every path the checkout holds that its HEAD commit does not - modified,
+/// added, deleted, renamed from, renamed to and untracked - relative to the
+/// repository root, which is what porcelain status always reports.
+///
+/// A release is made of commit objects alone (`snapshot`, `committed_file`),
+/// so none of these paths reaches a build. What one of them can do is make
+/// the commit say something the operator no longer means, such as an
+/// uncommitted version bump; the caller decides which paths carry that.
+pub(crate) fn uncommitted_paths(root: &Path) -> Result<BTreeSet<String>, CmdError> {
+    let status = git(
+        root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+    )?;
+    let mut paths = BTreeSet::new();
+    let mut entries = status
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
+    while let Some(entry) = entries.next() {
+        let (code, path) = match (entry.get(..2), entry.get(3..)) {
+            (Some(code), Some(path)) if !path.is_empty() => (code, path),
+            _ => {
+                return Err(CmdError::click(format!(
+                    "git status printed an entry this reader does not know: {:?}",
+                    String::from_utf8_lossy(entry)
+                )))
+            }
+        };
+        paths.insert(String::from_utf8_lossy(path).into_owned());
+        if code.iter().any(|status| matches!(status, b'R' | b'C')) {
+            let origin = entries.next().ok_or_else(|| {
+                CmdError::click(format!(
+                    "git status named a rename of {} without the path it came from",
+                    String::from_utf8_lossy(path)
+                ))
+            })?;
+            paths.insert(String::from_utf8_lossy(origin).into_owned());
+        }
+    }
+    Ok(paths)
 }
 
 pub(crate) fn committed_file(root: &Path, commit: &str, path: &str) -> Result<Vec<u8>, CmdError> {

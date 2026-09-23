@@ -66,7 +66,9 @@ impl Outcome {
 /// standing: published or not, its newest commit is what compiles or not.
 fn buildable(entry: &Planned) -> Option<(&str, &str)> {
     match &entry.standing {
-        Standing::Releasable { commit, version }
+        Standing::Releasable {
+            commit, version, ..
+        }
         | Standing::Published {
             commit, version, ..
         } => Some((commit.as_str(), version.as_str())),
@@ -76,7 +78,9 @@ fn buildable(entry: &Planned) -> Option<(&str, &str)> {
 
 fn describe(entry: &Planned) -> String {
     match &entry.standing {
-        Standing::Releasable { commit, version }
+        Standing::Releasable {
+            commit, version, ..
+        }
         | Standing::Published {
             commit, version, ..
         } => {

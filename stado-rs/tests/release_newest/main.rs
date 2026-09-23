@@ -63,6 +63,14 @@ fn one_reading_names_every_product_and_what_would_be_released() {
     );
     std::fs::write(dirty.join("package.json"), "{\"version\": \"0.9.1\"}")
         .expect("leave an uncommitted change behind");
+    // Another session's unfinished work in the one shared checkout: it is not
+    // what the commit declares, so the commit is still released without it.
+    let busy = area.checkout(
+        "busy-product",
+        &releasing_manifest("busy-product"),
+        Some(("package.json", "{\"version\": \"2.0.1\"}")),
+    );
+    std::fs::write(busy.join("notes.txt"), "unfinished").expect("leave untracked work behind");
 
     let planned = area.plan(&[]);
     assert!(
@@ -99,6 +107,21 @@ fn one_reading_names_every_product_and_what_would_be_released() {
             .unwrap_or_default()
             .contains("clean committed Git tree"),
         "the refusal says what is wrong with it: {dirty}"
+    );
+
+    let busy = entry(&report, "busy-product");
+    assert_eq!(
+        busy["standing"], "releasable",
+        "work that declares nothing does not hold the commit back: {busy}"
+    );
+    assert_eq!(busy["version"], "2.0.1", "the committed version: {busy}");
+    assert_eq!(
+        busy["uncommitted"], 1,
+        "the plan says what it leaves out: {busy}"
+    );
+    assert_eq!(
+        releasing["uncommitted"], 0,
+        "a clean checkout leaves nothing out"
     );
 }
 

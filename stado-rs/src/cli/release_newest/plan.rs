@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::cli::release_submit::{
-    committed_file, published_coordinates, resolve_commit, VERSION_SCAN_WINDOW,
+    committed_file, head_commit, published_coordinates, uncommitted_paths, VERSION_SCAN_WINDOW,
 };
 use crate::cli::CmdError;
 use crate::release_pipeline::{self, ProductManifest, PRODUCT_MANIFEST};
@@ -26,7 +26,14 @@ type Published = std::collections::BTreeMap<(String, String), String>;
 #[serde(tag = "standing", rename_all = "snake_case")]
 pub enum Standing {
     /// Its declared version has no run yet: this is what `newest` submits.
-    Releasable { commit: String, version: String },
+    /// `uncommitted` counts the checkout's paths that the commit does not
+    /// hold; they are not part of the release and are named so nobody
+    /// reads the plan as releasing them.
+    Releasable {
+        commit: String,
+        version: String,
+        uncommitted: usize,
+    },
     /// Its declared version already has a run, so there is nothing to cut.
     Published {
         commit: String,
@@ -128,11 +135,30 @@ fn product_name(checkout: &Path) -> Result<String, String> {
     })
 }
 
+/// The commit a checkout stands on is what it releases, whatever else the
+/// checkout holds. A workspace keeps one checkout per repository and several
+/// sessions work in it at once, so on 2026-09-23 jeden and stado both held
+/// another session's unfinished edits minutes after being committed clean,
+/// and refusing any uncommitted path meant a pushed commit could not be
+/// released at all. Those edits never reach a build: the release is the
+/// commit's objects. The files that say what the commit releases - the
+/// manifest and the file its version is read from - are different: an
+/// uncommitted change to one of them means the operator is about to say
+/// something else, so reading either through an uncommitted path refuses.
 fn standing(checkout: &Path, published: &Published) -> Result<Standing, String> {
-    let commit = resolve_commit(checkout, None).map_err(|error| error.to_string())?;
-    let bytes =
-        committed_file(checkout, &commit, PRODUCT_MANIFEST).map_err(|error| error.to_string())?;
-    let manifest = release_pipeline::parse_product_manifest(&bytes)?;
+    let commit = head_commit(checkout).map_err(|error| error.to_string())?;
+    let uncommitted = uncommitted_paths(checkout).map_err(|error| error.to_string())?;
+    let declaring = |path: &str| {
+        if uncommitted.contains(path) {
+            return Err(format!(
+                "{path} has uncommitted changes and declares what this checkout \
+                 releases; commit it or restore it before releasing {commit}, \
+                 because a release reads a clean committed Git tree for it"
+            ));
+        }
+        committed_file(checkout, &commit, path).map_err(|error| error.to_string())
+    };
+    let manifest = release_pipeline::parse_product_manifest(&declaring(PRODUCT_MANIFEST)?)?;
     let manifest = match manifest {
         ProductManifest::Release(value) => value,
         ProductManifest::NonRelease(value) => {
@@ -141,16 +167,18 @@ fn standing(checkout: &Path, published: &Published) -> Result<Standing, String> 
             })
         }
     };
-    let version = release_pipeline::declared_version(&manifest.version_source, |path| {
-        committed_file(checkout, &commit, path).map_err(|error| error.to_string())
-    })?;
+    let version = release_pipeline::declared_version(&manifest.version_source, declaring)?;
     match published.get(&(manifest.product.clone(), version.clone())) {
         Some(run) => Ok(Standing::Published {
             commit,
             version,
             run: run.clone(),
         }),
-        None => Ok(Standing::Releasable { commit, version }),
+        None => Ok(Standing::Releasable {
+            commit,
+            version,
+            uncommitted: uncommitted.len(),
+        }),
     }
 }
 

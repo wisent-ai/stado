@@ -65,7 +65,10 @@ pub async fn submit_planned(
     }
     let mut outcomes = Vec::new();
     for entry in &planned {
-        let Standing::Releasable { commit, version } = &entry.standing else {
+        let Standing::Releasable {
+            commit, version, ..
+        } = &entry.standing
+        else {
             continue;
         };
         if !json {
@@ -124,9 +127,19 @@ pub async fn submit_planned(
 
 fn describe(standing: &Standing) -> String {
     match standing {
-        Standing::Releasable { commit, version } => {
-            format!("{version} from {commit} is not published yet")
-        }
+        Standing::Releasable {
+            commit,
+            version,
+            uncommitted: 0,
+        } => format!("{version} from {commit} is not published yet"),
+        Standing::Releasable {
+            commit,
+            version,
+            uncommitted,
+        } => format!(
+            "{version} from {commit} is not published yet; the checkout's \
+             {uncommitted} uncommitted path(s) are not part of it"
+        ),
         Standing::Published { version, run, .. } => {
             format!("{version} is already published by run {run}")
         }
