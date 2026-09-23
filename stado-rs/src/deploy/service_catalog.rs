@@ -88,6 +88,38 @@ pub fn retired_sentence(unit: &str, replacement: &CatalogService) -> String {
     )
 }
 
+/// The product a unit labelled `label` that runs `program` would be a second
+/// process of: `program` is that product's catalog executable and `label` is
+/// not its one unit. A product runs as one process per host, so such a unit
+/// is refused rather than started beside the product's own.
+pub fn second_process_of(label: &str, program: &str) -> Result<Option<CatalogService>, String> {
+    let Some(executable) = executable_name(program) else {
+        return Ok(None);
+    };
+    Ok(all()?.into_iter().find(|entry| {
+        executable_name(&entry.program) == Some(executable)
+            && entry.name != label
+            && entry.unit.as_deref() != Some(label)
+    }))
+}
+
+/// The file name a program path starts, which is what identifies the product
+/// whatever tree the file was installed into.
+pub fn executable_name(program: &str) -> Option<&str> {
+    program.rsplit('/').next().filter(|name| !name.is_empty())
+}
+
+/// The sentence every refusal of a second product process prints.
+pub fn second_process_sentence(label: &str, program: &str, product: &CatalogService) -> String {
+    let unit = product.unit.as_deref().unwrap_or(&product.name);
+    format!(
+        "{label} would run {program}, a second {name} process beside its one unit {unit}; a \
+         product runs as one process per host, so move this work into {name} and deploy {name} \
+         instead",
+        name = product.name
+    )
+}
+
 /// One placeholder expansion, applied to the program and every argument:
 /// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
 /// registry `release_platform`, `$STADO_HOST` for the target's registry

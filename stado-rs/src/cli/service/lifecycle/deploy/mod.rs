@@ -115,6 +115,21 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
             )));
         }
     }
+    // A product runs as one process per host: a new unit that starts a
+    // catalog product's executable under any label but the product's own is a
+    // second process of it.
+    if let Some(product) =
+        crate::deploy::service_catalog::second_process_of(&plan.label, &plan.program)
+            .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Err(CmdError::click(
+            crate::deploy::service_catalog::second_process_sentence(
+                &plan.label,
+                &plan.program,
+                &product,
+            ),
+        ));
+    }
 
     let runner = production_runner();
     let report = service::deploy_service(&target, &plan, &runner)

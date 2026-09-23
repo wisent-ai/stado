@@ -240,6 +240,29 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         // and --as-daemon can still turn the system domain on explicitly.
         plan.force_daemon = plan.force_daemon || options.as_daemon;
     }
+    // A product runs as one process per host. A unit that would start a
+    // catalog product's executable under any label but that product's own is
+    // a second process of it, and is refused before the host is touched. A
+    // declaration that already ran that executable may still be repaired
+    // while its product absorbs it; no declaration may start doing so.
+    if let Some(product) =
+        crate::deploy::service_catalog::second_process_of(&plan.label, &unit.program)
+            .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        let executable = crate::deploy::service_catalog::executable_name(&unit.program);
+        let already_ran = existing.is_some_and(|declared| {
+            crate::deploy::service_catalog::executable_name(&declared.program) == executable
+        });
+        if !already_ran {
+            return Err(CmdError::click(
+                crate::deploy::service_catalog::second_process_sentence(
+                    &plan.label,
+                    &unit.program,
+                    &product,
+                ),
+            ));
+        }
+    }
 
     // An existing declaration is not a refusal here, and that is the whole
     // difference from `deploy`: asserting a unit that is already declared and
