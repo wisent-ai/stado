@@ -26,8 +26,11 @@ const RETIRED_KEYS: &[&str] = &[
     "agent.skarbiec.token",
 ];
 
-const RETIRED_AGENT_CONSUMERS: &[&str] =
-    &["stado-local-agent", "stado-azure-agent", "stado-control-plane"];
+const RETIRED_AGENT_CONSUMERS: &[&str] = &[
+    "stado-local-agent",
+    "stado-azure-agent",
+    "stado-control-plane",
+];
 
 pub(in crate::config_file::validation) fn retired_identities(
     root: &Map<String, Value>,

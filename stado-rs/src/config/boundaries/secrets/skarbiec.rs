@@ -15,13 +15,8 @@ static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
         "http://127.0.0.1:17602",
     )
 });
-static SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_SKARBIEC_CONSUMER",
-        "secrets.skarbiec.consumer",
-        "stado",
-    )
-});
+static SKARBIEC_CONSUMER: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_SKARBIEC_CONSUMER", "secrets.skarbiec.consumer", "stado"));
 static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     let default = std::env::var("HOME")
         .map(|home| {
