@@ -11,6 +11,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::oko_automation::OKO;
 use super::{HandlerError, HandlerResult};
 
 /// Oko owns which transcript runtimes exist; Stado only carries the call.
@@ -119,7 +120,7 @@ fn validate_sources(value: &Value) -> Result<(), HandlerError> {
 
 async fn discover(host_id: &str) -> Result<(crate::targets::ComputeTarget, Value), HandlerError> {
     let target = target(host_id).await?;
-    let sources = run_owner(&target, &["oko-cli", "transcripts", "sources", "--json"]).await?;
+    let sources = run_owner(&target, &[OKO, "transcripts", "sources", "--json"]).await?;
     validate_sources(&sources)?;
     Ok((target, sources))
 }
@@ -169,7 +170,7 @@ async fn adopt(body: &[u8]) -> HandlerResult {
     let receipt = run_owner(
         &target,
         &[
-            "oko-cli",
+            OKO,
             "transcripts",
             "adopt",
             "--source",
@@ -251,7 +252,7 @@ mod tests {
     use super::{is_runtime_token, validate_sources};
     use serde_json::json;
 
-    /// One entry shaped as `oko-cli transcripts sources --json` returns it.
+    /// One entry shaped as `oko transcripts sources --json` returns it.
     fn entry(runtime: &str) -> serde_json::Value {
         json!({
             "runtime": runtime,

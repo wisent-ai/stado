@@ -18,13 +18,13 @@ struct Host {
 struct Context {
     host_id: String,
     query: Option<String>,
-    database: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum RoutineAction {
     Context,
     Autonomy,
+    Control,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +36,6 @@ struct Create {
     cron: String,
     time_zone: String,
     query: Option<String>,
-    database: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,8 +73,14 @@ struct Policy {
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, HandlerError> {
     serde_json::from_slice(body).map_err(|_| HandlerError::BadRequest)
 }
+/// The program Oko is installed as on every host.
+pub(super) const OKO: &str = "oko";
+
 fn words(parts: &[&str]) -> Vec<String> {
-    parts.iter().map(|part| (*part).to_owned()).collect()
+    std::iter::once(OKO)
+        .chain(parts.iter().copied())
+        .map(str::to_owned)
+        .collect()
 }
 fn identity(value: &str, prefix: &str) -> Result<(), HandlerError> {
     if value.strip_prefix(prefix).is_none_or(|suffix| {
@@ -116,28 +121,25 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
     match action {
         "context-snapshot" => {
             let value: Context = decode(body)?;
-            let mut argv = words(&["oko-cli", "context", "snapshot"]);
+            let mut argv = words(&["context", "snapshot"]);
             optional(&mut argv, "--query", value.query);
-            optional(&mut argv, "--db", value.database);
             Ok((value.host_id, argv))
         }
         "slack-status" | "autonomy-status" | "routines-list" => {
             let value: Host = decode(body)?;
             let argv = match action {
-                "slack-status" => words(&["oko-cli", "slack", "status", "--json"]),
-                "autonomy-status" => words(&["oko-cli", "autonomy", "status"]),
-                _ => words(&["oko-cli", "routines", "list", "--json"]),
+                "slack-status" => words(&["slack", "status", "--json"]),
+                "autonomy-status" => words(&["autonomy", "status"]),
+                _ => words(&["routines", "list", "--json"]),
             };
             Ok((value.host_id, argv))
         }
         "autonomy-set" => {
             let value: Policy = decode(body)?;
             let argv = match value.mode {
-                Mode::Disabled => words(&["oko-cli", "autonomy", "disable"]),
-                Mode::Experimental => {
-                    words(&["oko-cli", "autonomy", "enable", "--mode", "experimental"])
-                }
-                Mode::Full => words(&["oko-cli", "autonomy", "enable", "--mode", "full"]),
+                Mode::Disabled => words(&["autonomy", "disable"]),
+                Mode::Experimental => words(&["autonomy", "enable", "--mode", "experimental"]),
+                Mode::Full => words(&["autonomy", "enable", "--mode", "full"]),
             };
             Ok((value.host_id, argv))
         }
@@ -145,7 +147,6 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
             let value: Create = decode(body)?;
             uuid::Uuid::parse_str(&value.id).map_err(|_| HandlerError::BadRequest)?;
             let mut argv = words(&[
-                "oko-cli",
                 "routines",
                 "create",
                 "--id",
@@ -156,6 +157,7 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
                 match value.action {
                     RoutineAction::Context => "context",
                     RoutineAction::Autonomy => "autonomy",
+                    RoutineAction::Control => "control",
                 },
                 "--cron",
                 &value.cron,
@@ -165,7 +167,6 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
                 &value.host_id,
             ]);
             optional(&mut argv, "--query", value.query);
-            optional(&mut argv, "--db", value.database);
             Ok((value.host_id, argv))
         }
         "routines-show" | "routines-pause" | "routines-resume" | "routines-remove" => {
@@ -176,7 +177,7 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
                 .ok_or(HandlerError::BadRequest)?;
             Ok((
                 value.host_id,
-                words(&["oko-cli", "routines", verb, &value.schedule_id, "--json"]),
+                words(&["routines", verb, &value.schedule_id, "--json"]),
             ))
         }
         "routines-run" => {
@@ -188,7 +189,6 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
             Ok((
                 value.host_id,
                 words(&[
-                    "oko-cli",
                     "routines",
                     "run",
                     &value.schedule_id,
@@ -203,7 +203,7 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
             identity(&value.job_id, "job-")?;
             Ok((
                 value.host_id,
-                words(&["oko-cli", "routines", "inspect", &value.job_id, "--json"]),
+                words(&["routines", "inspect", &value.job_id, "--json"]),
             ))
         }
         _ => Err(HandlerError::BadRequest),
