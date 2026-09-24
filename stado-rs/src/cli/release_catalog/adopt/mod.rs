@@ -108,9 +108,12 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
             .args(["remote", "get-url", "origin"])
             .output()?;
         if output.status.success() {
-            let origin = String::from_utf8(output.stdout).map_err(CmdError::click)?;
-            let repository = origin.trim().trim_end_matches('/').rsplit(['/', ':'])
-                .next().unwrap_or_default();
+            let origin = String::from_utf8(output.stdout)
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            let repository = origin.trim().trim_end_matches('/')
+                .rsplit(['/', ':'])
+                .next()
+                .unwrap_or_default();
             let repository = repository.strip_suffix(".git").unwrap_or(repository);
             if repository != product {
                 return Err(CmdError::click(format!(
