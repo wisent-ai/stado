@@ -19,6 +19,9 @@ pub async fn consolidate(
             "name at least one retired consumer with --from",
         ));
     }
+    if sources.iter().any(|source| source == "stado") {
+        return Err(CmdError::usage("--from names retired consumers, not stado"));
+    }
     if !token_file.starts_with('/') {
         return Err(CmdError::usage(
             "--token-file must be an absolute path on the vault host",
@@ -32,6 +35,12 @@ pub async fn consolidate(
         ))
     })?;
     let mut capabilities = BTreeSet::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .as_secs();
+    let mut earliest_expiry = u64::MAX;
+    let mut audience = None;
     for consumer in std::iter::once("stado").chain(sources.iter().map(String::as_str)) {
         let grant = grants
             .iter()
@@ -42,6 +51,28 @@ pub async fn consolidate(
                     target.name
                 ))
             })?;
+        let expires_at = grant
+            .get("expires_at")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{}: {consumer} has no numeric expiry; no grant was changed",
+                    target.name
+                ))
+            })?;
+        if expires_at <= now {
+            return Err(CmdError::click(format!(
+                "{}: {consumer} has expired; no grant was changed",
+                target.name
+            )));
+        }
+        earliest_expiry = earliest_expiry.min(expires_at);
+        if consumer == "stado" {
+            audience = grant
+                .get("audience")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
         let entries = grant
             .get("capabilities")
             .and_then(Value::as_array)
@@ -111,6 +142,19 @@ pub async fn consolidate(
             target.name
         )));
     }
+    // `grant issue` renews for thirty days unless the remaining lifetime is
+    // explicit. Keep the shortest source lifetime so consolidation cannot
+    // revive or extend a retired consumer's authority.
+    let remaining = earliest_expiry.saturating_sub(now);
+    if remaining <= 1 {
+        return Err(CmdError::click(format!(
+            "{}: a source grant expires before consolidation can finish; no grant was changed",
+            target.name
+        )));
+    }
+    let ttl = (remaining - 1).to_string();
+    let audience = audience
+        .ok_or_else(|| CmdError::click(format!("{}: stado grant has no audience", target.name)))?;
     let merged = capabilities.iter().cloned().collect::<Vec<_>>().join(",");
     remote_skarbiec_json(
         host,
@@ -122,6 +166,10 @@ pub async fn consolidate(
             merged,
             "--token-file".into(),
             token_file.into(),
+            "--ttl-seconds".into(),
+            ttl,
+            "--audience".into(),
+            audience,
             "--replace-capabilities".into(),
         ],
     )
