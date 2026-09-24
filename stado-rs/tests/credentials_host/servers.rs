@@ -17,16 +17,6 @@ impl Server {
         Self::start(host, "broker", host.broker_command().arg("serve"))
     }
 
-    pub fn object_api(host: &IsolatedHost) -> Self {
-        Self::start(
-            host,
-            "object-api",
-            host.command()
-                .env("STADO_CONFIG", host.home.join(".config/stado/config.json"))
-                .args(["dashboard", "--bind", "127.0.0.1"]),
-        )
-    }
-
     fn start(host: &IsolatedHost, name: &str, command: &mut Command) -> Self {
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
