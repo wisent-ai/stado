@@ -37,7 +37,7 @@ pub(super) struct AdoptArgs {
     /// What the checkout builds; it decides the scripts written.
     #[arg(long, value_enum)]
     kind: Kind,
-    /// The product name; defaults to the checkout's folder name.
+    /// The product name; defaults to the checkout folder, refusing when its origin names another repository.
     #[arg(long)]
     product: Option<String>,
     /// The Xcode scheme to archive; defaults to the project's name.
@@ -99,6 +99,28 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
+    // A renamed local directory must not silently register the wrong product.
+    // The release source is the pushed origin, not the checkout's folder name.
+    if args.product.is_none() {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&checkout)
+            .args(["remote", "get-url", "origin"])
+            .output()?;
+        if output.status.success() {
+            let origin = String::from_utf8(output.stdout).map_err(CmdError::click)?;
+            let repository = origin.trim().trim_end_matches('/').rsplit(['/', ':'])
+                .next().unwrap_or_default();
+            let repository = repository.strip_suffix(".git").unwrap_or(repository);
+            if repository != product {
+                return Err(CmdError::click(format!(
+                    "{} is named {product}, but origin {} names {repository}; pass --product {repository} \
+                     for that source or use its canonical checkout",
+                    checkout.display(), origin.trim()
+                )));
+            }
+        }
+    }
     let Kind::IosXcode = args.kind;
     let project = xcode::read(&checkout)?;
     let scheme = args.scheme.clone().unwrap_or_else(|| project.name.clone());

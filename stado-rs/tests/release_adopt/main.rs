@@ -74,6 +74,26 @@ fn the_preview_names_every_file_and_writes_none() {
 }
 
 #[test]
+fn a_misnamed_checkout_refuses_to_register_the_wrong_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = checkout(dir.path(), PBXPROJ);
+    let remote = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["remote", "add", "origin", "https://github.com/wisent-ai/other-ios.git"])
+        .status()
+        .unwrap();
+    assert!(remote.success());
+
+    let out = adopt(dir.path(), &repo, &["--apply"]);
+    assert!(!out.status.success());
+    let said = text(&out.stderr);
+    assert!(said.contains("origin https://github.com/wisent-ai/other-ios.git names other-ios"), "{said}");
+    assert!(!repo.join(".wisent-release.json").exists());
+    assert!(!repo.join("release").exists());
+}
+
+#[test]
 fn apply_writes_scripts_filled_from_the_project_and_registers_it() {
     let dir = tempfile::tempdir().unwrap();
     let repo = checkout(dir.path(), PBXPROJ);
