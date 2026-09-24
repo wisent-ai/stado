@@ -31,6 +31,20 @@ enum NativeHostReleaseOperations {
 
 enum NativeReleaseSourceOperations {
     static let all: [NativeCapabilityOperation] = [
+        .init(id: "catalog-adopt-plan", title: "Inspect an iOS checkout before adding it to releases", path: ["release", "catalog", "adopt"], hostPlacement: .none, fields: [
+            .init(id: "checkout", label: "Git checkout path on the selected Stado API host", required: true),
+            .init(id: "product", label: "Product (blank uses checkout folder)", option: "--product"),
+            .init(id: "scheme", label: "Xcode scheme (blank uses project name)", option: "--scheme"),
+        ], fixedArguments: ["--kind", "ios-xcode"], mutates: false),
+        .init(id: "catalog-adopt", title: "Add an iOS checkout to the release catalog", path: ["release", "catalog", "adopt"], hostPlacement: .none, fields: [
+            .init(id: "checkout", label: "Git checkout path on the selected Stado API host", required: true),
+            .init(id: "product", label: "Product (blank uses checkout folder)", option: "--product"),
+            .init(id: "scheme", label: "Xcode scheme (blank uses project name)", option: "--scheme"),
+            .init(id: "owner", label: "Authoritative publisher host", option: "--owner", required: true),
+            .init(id: "client", label: "Release submit host", option: "--client", required: true),
+            .init(id: "targets", label: "Additional release API hosts (one per line)", option: "--target", multiple: true),
+            .init(id: "reloads", label: "Publisher cache HOST=SERVICE pairs (one per line)", option: "--reload", multiple: true),
+        ], fixedArguments: ["--kind", "ios-xcode", "--apply"]),
         .init(id: "change-submit", title: "Hand pushed work to a later build (starts no build)", path: ["release", "changes", "submit"], hostPlacement: .none, fields: [
             .init(id: "source", label: "Canonical repository on the Stado API host", option: "--source", required: true),
             .init(id: "commit", label: "Full pushed commit", option: "--commit", required: true),
