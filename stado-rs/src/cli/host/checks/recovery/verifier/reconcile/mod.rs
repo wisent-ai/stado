@@ -111,10 +111,9 @@ pub(super) async fn reconcile_verifier(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| CmdError::click(error.to_string()))?
         .as_secs();
-    let ttl = expires_at
-        .checked_sub(now)
-        .filter(|ttl| *ttl > 0)
-        .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
+    if expires_at <= now {
+        return Err(CmdError::click(format!("{kind} verifier grant is already expired")));
+    }
     // Release publisher items and the route-scoped host-health bearer remain
     // authoritative in the control-plane vault. Their consumers read
     // target-local shadows with the same ids. Atomically replace only those
