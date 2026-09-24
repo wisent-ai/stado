@@ -54,24 +54,58 @@ fn is_executable_file(candidate: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
+/// A step written `env NAME=VALUE… program args…` sets variables for one
+/// program. Run through `env` itself, the program is looked up on the
+/// LaunchAgent's minimal PATH, which `resolve_step_program` exists to avoid:
+/// on 2026-09-23 `source-native-resident-identity` stopped on
+/// charless-mac-mini with `env: cargo: No such file or directory` (build
+/// aee7ac68) while every step naming `cargo` directly found it. So the
+/// assignments become the step's environment and the program after them is
+/// resolved like any other.
+fn split_env_prefix(argv: &[String]) -> (&[String], BTreeMap<String, String>) {
+    let mut assignments = BTreeMap::new();
+    if Path::new(&argv[0])
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("env")
+    {
+        return (argv, assignments);
+    }
+    let mut rest = &argv[1..];
+    while let Some((name, value)) = rest.first().and_then(|word| word.split_once('=')) {
+        if name.is_empty() || name.starts_with('-') {
+            break;
+        }
+        assignments.insert(name.to_string(), value.to_string());
+        rest = &rest[1..];
+    }
+    if rest.is_empty() || rest[0].starts_with('-') {
+        // `env` with no program, or with its own options: run it as written.
+        return (argv, BTreeMap::new());
+    }
+    (rest, assignments)
+}
+
 pub(crate) fn execute(
     name: &str,
     argv: &[String],
     source: &Path,
     environment: &BTreeMap<String, String>,
 ) -> Result<StepReceipt, CmdError> {
-    let program = resolve_step_program(&argv[0]);
+    let (command, assignments) = split_env_prefix(argv);
+    let program = resolve_step_program(&command[0]);
     // The step's start is logged before the spawn, so a step that hangs or
     // dies leaves its name and argv in the job output instead of silence.
     println!(
         "[release-worker] step {name}: {} {}",
         program.display(),
-        argv[1..].join(" ")
+        command[1..].join(" ")
     );
     let status = Command::new(&program)
-        .args(&argv[1..])
+        .args(&command[1..])
         .current_dir(source)
         .envs(environment)
+        .envs(&assignments)
         .status()
         .map_err(|error| {
             CmdError::click(format!(

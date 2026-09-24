@@ -44,7 +44,7 @@
         },
         {
           "name": "source-native-resident-identity",
-          "argv": ["/usr/bin/env", "STADO_TEST_NATIVE_LABEL=com.wisent.always-on.stado-object-api,com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent", "cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "native_identity", "--", "--ignored", "--nocapture"]
+          "argv": ["/bin/sh", "-c", "STADO_TEST_NATIVE_LABEL=com.wisent.always-on.stado-object-api,com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent exec \"$HOME/.cargo/bin/cargo\" test --manifest-path stado-rs/Cargo.toml --locked --release --test resolver native_identity -- --ignored --nocapture"]
         },
         {
           "name": "source-documentation",
