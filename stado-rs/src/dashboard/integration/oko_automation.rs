@@ -25,6 +25,7 @@ enum RoutineAction {
     Context,
     Autonomy,
     Control,
+    Telemetry,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,6 +159,7 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
                     RoutineAction::Context => "context",
                     RoutineAction::Autonomy => "autonomy",
                     RoutineAction::Control => "control",
+                    RoutineAction::Telemetry => "telemetry",
                 },
                 "--cron",
                 &value.cron,
