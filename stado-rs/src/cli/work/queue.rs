@@ -243,7 +243,7 @@ async fn budget(limit: Option<u64>, json: bool) -> Result<(), CmdError> {
     );
     if budget.remaining() == 0 {
         println!(
-            "further builds require recorded user consent in `tama-cli build record \
+            "further builds require recorded user consent in `tama build record \
              --approval-session <id> --approval-quote <verbatim message>`; \
              the default ceiling remains unchanged. The count resets at midnight UTC."
         );

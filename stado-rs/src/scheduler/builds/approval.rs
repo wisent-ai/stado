@@ -12,7 +12,7 @@ pub struct BuildIntent<'a> {
 }
 
 pub async fn verify(intent: &BuildIntent<'_>) -> Result<Value, String> {
-    let output = tokio::process::Command::new("tama-cli")
+    let output = tokio::process::Command::new("tama")
         .args([
             "build",
             "approval",
