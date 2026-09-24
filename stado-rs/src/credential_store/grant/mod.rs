@@ -74,8 +74,9 @@ pub fn settle_field_reads(
     grant_field_reads(consumer, Path::new(token_file), item, fields).map(Some)
 }
 
-/// Grant `consumer` a read on each of `fields` of `item`, keeping its bearer,
-/// its remaining TTL, and every capability it already holds.
+/// Grant `consumer` a read on each of `fields` of `item` — or on the whole
+/// item when `fields` is empty — keeping its bearer, its remaining TTL, and
+/// every capability it already holds.
 ///
 /// `token_file` is the consumer's own owner-only bearer file. It is required
 /// rather than derived: the bearer is what makes this a widening instead of a
@@ -113,10 +114,14 @@ pub fn grant_field_reads(
     let remaining = expires_at - now_seconds();
 
     let held: Vec<String> = existing.iter().map(encode).collect();
-    let wanted: Vec<String> = fields
-        .iter()
-        .map(|field| format!("{ACTION}:{item}#{field}"))
-        .collect();
+    let wanted: Vec<String> = if fields.is_empty() {
+        vec![format!("{ACTION}:{item}")]
+    } else {
+        fields
+            .iter()
+            .map(|field| format!("{ACTION}:{item}#{field}"))
+            .collect()
+    };
     let added: Vec<String> = wanted
         .iter()
         .filter(|capability| !held.contains(capability))

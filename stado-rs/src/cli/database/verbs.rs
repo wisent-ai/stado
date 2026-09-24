@@ -97,10 +97,14 @@ pub(super) fn change_consumers(
         }
     }
     let mut changed = Vec::new();
+    let mut item = format!("{name}-database");
     mutate_databases(|map| {
         let declaration = map
             .get_mut(name)
             .ok_or_else(|| format!("database {name:?} is not declared"))?;
+        if let Some(declared) = declaration.get("item").and_then(Value::as_str) {
+            item = declared.to_string();
+        }
         let list = declaration
             .as_object_mut()
             .ok_or_else(|| format!("database {name:?} is malformed"))?
@@ -131,12 +135,54 @@ pub(super) fn change_consumers(
         }
         Ok(())
     })?;
+    // Declaring a consumer grants nothing in Skarbiec: a grant there is per
+    // item, so `oko` stood on `oko`'s consumer list for weeks while every
+    // read of `oko-database` answered 403 (defect 133b75aa). A grant now
+    // widens each named consumer's own Skarbiec grant to read the item, the
+    // union path that keeps its bearer and every capability it holds.
+    let settled = if grant {
+        settle_reads(&item, consumers)
+    } else {
+        Vec::new()
+    };
+    let failed: Vec<String> = settled
+        .iter()
+        .filter_map(|row| row.get("error").and_then(Value::as_str).map(String::from))
+        .collect();
     report_mutation(
         json_output,
         json!({
             "database": name,
             "granted": if grant { changed.clone() } else { Vec::<String>::new() },
             "revoked": if grant { Vec::<String>::new() } else { changed },
+            "skarbiec": settled,
         }),
-    )
+    )?;
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(CmdError::click(format!(
+            "the declaration changed, but Skarbiec still refuses: {}",
+            failed.join("; ")
+        )))
+    }
+}
+
+/// Widen each consumer's Skarbiec grant to read `item`, with the consumer's
+/// own bearer file `~/.stado/<consumer>-skarbiec-token`.
+fn settle_reads(item: &str, consumers: &[String]) -> Vec<Value> {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
+    consumers
+        .iter()
+        .map(|consumer| {
+            let consumer = consumer.trim();
+            let token_file = home.join(".stado").join(format!("{consumer}-skarbiec-token"));
+            match crate::credential_store::grant::grant_field_reads(consumer, &token_file, item, &[]) {
+                Ok(outcome) => json!({ "consumer": consumer, "item": item, "added": outcome.added }),
+                Err(error) => json!({ "consumer": consumer, "item": item, "error": format!("{consumer}: {error}") }),
+            }
+        })
+        .collect()
 }

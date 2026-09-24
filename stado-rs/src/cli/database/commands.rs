@@ -57,6 +57,13 @@ pub(crate) enum DatabaseCommands {
         json: bool,
     },
     /// Grant one or more consumers access to a declared database.
+    ///
+    /// Adds each consumer to the declaration and widens that consumer's own
+    /// Skarbiec grant (`~/.stado/<consumer>-skarbiec-token`) to read the
+    /// database's credential item, keeping its bearer and every capability it
+    /// already holds. Granting a consumer already on the list settles its
+    /// Skarbiec read again; a consumer Skarbiec still refuses is named and the
+    /// command exits non-zero.
     Grant {
         name: String,
         #[arg(long = "consumer", value_delimiter = ',', required = true)]
