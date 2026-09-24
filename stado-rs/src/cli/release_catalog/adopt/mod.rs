@@ -99,29 +99,36 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
-    // A renamed local directory must not silently register the wrong product.
-    // The release source is the pushed origin, not the checkout's folder name.
-    if args.product.is_none() {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&checkout)
-            .args(["remote", "get-url", "origin"])
-            .output()?;
-        if output.status.success() {
-            let origin = String::from_utf8(output.stdout)
-                .map_err(|error| CmdError::click(error.to_string()))?;
-            let repository = origin.trim().trim_end_matches('/')
-                .rsplit(['/', ':'])
-                .next()
-                .unwrap_or_default();
-            let repository = repository.strip_suffix(".git").unwrap_or(repository);
-            if repository != product {
-                return Err(CmdError::click(format!(
-                    "{} is named {product}, but origin {} names {repository}; pass --product {repository} \
-                     for that source or use its canonical checkout",
-                    checkout.display(), origin.trim()
-                )));
-            }
+    // Preview can prepare a local checkout; apply must not register one that
+    // cannot be pushed. An implicit product must agree with its origin's name.
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&checkout)
+        .args(["remote", "get-url", "origin"])
+        .output()?;
+    if !output.status.success() && args.apply {
+        return Err(CmdError::click(format!(
+            "{} has no readable origin; add its release repository before --apply: {}",
+            checkout.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    if output.status.success() && args.product.is_none() {
+        let origin = String::from_utf8(output.stdout)
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let repository = origin
+            .trim()
+            .trim_end_matches('/')
+            .rsplit(['/', ':'])
+            .next()
+            .unwrap_or_default();
+        let repository = repository.strip_suffix(".git").unwrap_or(repository);
+        if repository != product {
+            return Err(CmdError::click(format!(
+                "{} is named {product}, but origin {} names {repository}; pass --product {repository} \
+                 for that source or use its canonical checkout",
+                checkout.display(), origin.trim()
+            )));
         }
     }
     let Kind::IosXcode = args.kind;
