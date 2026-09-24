@@ -124,29 +124,30 @@ pub(super) async fn declare_publisher(
         report.push(json!({ "step": "declare", "host": host, "key": key, "value": declared }));
     }
 
-    // 4. The verifier's grant, reconciled to the declaration by the product's
-    //    own repair step - in a fresh process, because this one read the
-    //    configuration before the declaration above was written to it, and
-    //    before any unit is reconciled: the repair reaches the owner through
-    //    the local data plane, which a reload takes down for a moment.
-    let repair = std::process::Command::new(std::env::current_exe()?)
-        .args([
-            "repair",
-            "stado",
-            "--step",
-            "release-verifier",
-            "--target",
-            owner,
-            "--apply",
-        ])
-        .output()?;
-    if !repair.status.success() {
-        return Err(CmdError::click(format!(
-            "release-verifier repair on {owner} failed after the declaration was written: {}",
-            String::from_utf8_lossy(&repair.stderr).trim()
-        )));
+    // 4. Reconcile every host that accepted the declaration. Each verifier
+    //    compares its grant with its own publisher table; repairing only the
+    //    owner leaves the client and API targets failing closed. Use a fresh
+    //    process because this one read configuration before the writes above.
+    for host in &declared_on {
+        let repair = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "repair",
+                "stado",
+                "--step",
+                "release-verifier",
+                "--target",
+                host,
+                "--apply",
+            ])
+            .output()?;
+        if !repair.status.success() {
+            return Err(CmdError::click(format!(
+                "release-verifier repair on {host} failed after the declaration was written: {}",
+                String::from_utf8_lossy(&repair.stderr).trim()
+            )));
+        }
+        report.push(json!({ "step": "verifier", "host": host, "repair": "release-verifier" }));
     }
-    report.push(json!({ "step": "verifier", "host": owner, "repair": "release-verifier" }));
 
     // 5. The units whose processes cache the publisher table, last.
     for (host, service) in &reloads {

@@ -112,7 +112,9 @@ pub(super) async fn reconcile_verifier(
         .map_err(|error| CmdError::click(error.to_string()))?
         .as_secs();
     if expires_at <= now {
-        return Err(CmdError::click(format!("{kind} verifier grant is already expired")));
+        return Err(CmdError::click(format!(
+            "{kind} verifier grant is already expired"
+        )));
     }
     // Release publisher items and the route-scoped host-health bearer remain
     // authoritative in the control-plane vault. Their consumers read

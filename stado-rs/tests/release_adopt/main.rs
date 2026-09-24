@@ -49,7 +49,12 @@ fn checkout(root: &Path, pbxproj: &str) -> PathBuf {
     let remote = Command::new("git")
         .arg("-C")
         .arg(&repo)
-        .args(["remote", "add", "origin", "https://github.com/wisent-ai/demo-ios.git"])
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/wisent-ai/demo-ios.git",
+        ])
         .status()
         .unwrap();
     assert!(remote.success(), "git remote add failed");
@@ -87,7 +92,12 @@ fn a_misnamed_checkout_refuses_to_register_the_wrong_origin() {
     let remote = Command::new("git")
         .arg("-C")
         .arg(&repo)
-        .args(["remote", "set-url", "origin", "https://github.com/wisent-ai/other-ios.git"])
+        .args([
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/wisent-ai/other-ios.git",
+        ])
         .status()
         .unwrap();
     assert!(remote.success());
@@ -95,7 +105,10 @@ fn a_misnamed_checkout_refuses_to_register_the_wrong_origin() {
     let out = adopt(dir.path(), &repo, &["--apply"]);
     assert!(!out.status.success());
     let said = text(&out.stderr);
-    assert!(said.contains("origin https://github.com/wisent-ai/other-ios.git names other-ios"), "{said}");
+    assert!(
+        said.contains("origin https://github.com/wisent-ai/other-ios.git names other-ios"),
+        "{said}"
+    );
     assert!(!repo.join(".wisent-release.json").exists());
     assert!(!repo.join("release").exists());
 }
@@ -114,7 +127,11 @@ fn a_checkout_without_an_origin_refuses_apply_without_writing() {
 
     let out = adopt(dir.path(), &repo, &["--apply"]);
     assert!(!out.status.success());
-    assert!(text(&out.stderr).contains("has no readable origin"), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("has no readable origin"),
+        "{}",
+        text(&out.stderr)
+    );
     assert!(!repo.join(".wisent-release.json").exists());
     assert!(!repo.join("release").exists());
 }

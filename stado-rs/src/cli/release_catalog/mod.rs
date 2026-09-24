@@ -43,8 +43,8 @@ enum CatalogCommands {
         json: bool,
     },
     /// Declare one product's release publisher across the fleet: mint its
-    /// item on the vault owner, let the release client read it, declare it on
-    /// every host that serves or submits releases, reconcile the verifier.
+    /// item on the vault owner, grant the release client access, declare it on
+    /// every participating host, then reconcile each host's verifier grant.
     DeclarePublisher {
         /// The product, as its release manifest names it.
         product: String,

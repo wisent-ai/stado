@@ -114,8 +114,8 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         )));
     }
     if output.status.success() && args.product.is_none() {
-        let origin = String::from_utf8(output.stdout)
-            .map_err(|error| CmdError::click(error.to_string()))?;
+        let origin =
+            String::from_utf8(output.stdout).map_err(|error| CmdError::click(error.to_string()))?;
         let repository = origin
             .trim()
             .trim_end_matches('/')
