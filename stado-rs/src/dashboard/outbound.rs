@@ -11,7 +11,6 @@ use serde_json::{json, Map, Value};
 use url::Url;
 use uuid::Uuid;
 
-const MESSAGING_CONSUMER: &str = "wisent-backend-business-messaging";
 const EMAIL_ITEM: &str = "wisent-backend-email-provider";
 const APNS_ITEM: &str = "wisent-backend-apns";
 const FCM_ITEM: &str = "wisent-backend-fcm";
@@ -146,6 +145,7 @@ fn outbound_http() -> Result<Client, OutboundError> {
         .map_err(|_| OutboundError::Configuration)
 }
 
+/// Backend messaging items are read through Stado's Skarbiec identity.
 fn messaging_vault() -> Result<crate::skarbiec::Client, OutboundError> {
     let configured = crate::config::backend_messaging_skarbiec_items();
     let required = REQUIRED_ITEMS.iter().copied().collect::<BTreeSet<_>>();
@@ -158,25 +158,10 @@ fn messaging_vault() -> Result<crate::skarbiec::Client, OutboundError> {
         && actual
             .iter()
             .all(|item| required.contains(item) || *item == EMAIL_ITEM);
-    let token_file = crate::config::backend_messaging_skarbiec_token_file();
-    let distinct_grant = !token_file.is_empty()
-        && token_file != crate::config::skarbiec_token_file()
-        && token_file != crate::config::agent_skarbiec_token_file()
-        && token_file != crate::config::object_skarbiec_token_file()
-        && token_file != crate::config::release_skarbiec_token_file()
-        && token_file != crate::config::service_skarbiec_token_file();
-    if crate::config::backend_messaging_skarbiec_consumer() != MESSAGING_CONSUMER
-        || !items_valid
-        || !distinct_grant
-    {
+    if !items_valid {
         return Err(OutboundError::Configuration);
     }
-    let url = crate::config::backend_messaging_skarbiec_url();
-    if !url.starts_with("https://") && !url.starts_with("http://127.0.0.1:") {
-        return Err(OutboundError::Configuration);
-    }
-    crate::skarbiec::Client::new(url, MESSAGING_CONSUMER, token_file)
-        .map_err(|_| OutboundError::Configuration)
+    crate::skarbiec::Client::stado().map_err(|_| OutboundError::Configuration)
 }
 
 fn required<'a>(item: &'a Value, field: &str) -> Result<&'a str, OutboundError> {

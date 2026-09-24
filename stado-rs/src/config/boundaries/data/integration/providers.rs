@@ -1,28 +1,17 @@
-//! Integration providers: the provider grants Stado itself resolves.
+//! Integration provider items are read through Stado's Skarbiec identity.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use super::{canonical_integration_component, INTEGRATION_PROVIDER_DOMAINS};
-use crate::config_file::expand_tilde;
 use serde_json::Value;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegrationProvider {
-    consumer: String,
-    token_file: String,
     items: Vec<String>,
 }
 
 impl IntegrationProvider {
-    pub fn consumer(&self) -> &str {
-        &self.consumer
-    }
-
-    pub fn token_file(&self) -> &str {
-        &self.token_file
-    }
-
     pub fn items(&self) -> &[String] {
         &self.items
     }
@@ -45,8 +34,6 @@ pub(crate) fn parse_integration_providers(
     }
     let mut problems = Vec::new();
     let mut providers = BTreeMap::new();
-    let mut consumers = BTreeSet::new();
-    let mut token_files = BTreeSet::new();
     let mut all_items = BTreeSet::new();
     for (domain, raw) in entries {
         let start = problems.len();
@@ -65,41 +52,16 @@ pub(crate) fn parse_integration_providers(
             continue;
         };
         for key in entry.keys() {
-            if !matches!(key.as_str(), "consumer" | "token_file" | "items") {
-                problems.push(format!(
+            match key.as_str() {
+                "items" => {}
+                "consumer" | "token_file" => problems.push(format!(
+                    "integration.providers.{domain}.{key} is retired; configure Stado's \
+                     secrets.skarbiec identity instead"
+                )),
+                _ => problems.push(format!(
                     "integration.providers.{domain} contains unsupported key {key:?}"
-                ));
+                )),
             }
-        }
-        let consumer = entry
-            .get("consumer")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let expected_consumer = format!("stado-{domain}-integration-provider");
-        if consumer != expected_consumer {
-            problems.push(format!(
-                "integration.providers.{domain}.consumer must be {expected_consumer:?}"
-            ));
-        }
-        if !consumers.insert(consumer.to_string()) {
-            problems.push(format!(
-                "integration.providers reuses consumer {consumer:?}"
-            ));
-        }
-        let token_file = entry
-            .get("token_file")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if token_file.trim().is_empty() {
-            problems.push(format!(
-                "integration.providers.{domain}.token_file is required"
-            ));
-        }
-        let token_file = expand_tilde(token_file).to_string_lossy().into_owned();
-        if !token_files.insert(token_file.clone()) {
-            problems.push(format!(
-                "integration.providers reuses token_file for domain {domain:?}"
-            ));
         }
         let mut items = Vec::new();
         match entry.get("items") {
@@ -130,14 +92,7 @@ pub(crate) fn parse_integration_providers(
             )),
         }
         if problems.len() == start {
-            providers.insert(
-                domain.to_string(),
-                IntegrationProvider {
-                    consumer: consumer.to_string(),
-                    token_file,
-                    items,
-                },
-            );
+            providers.insert(domain.to_string(), IntegrationProvider { items });
         }
     }
     if problems.is_empty() {

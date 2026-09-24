@@ -4,10 +4,12 @@
 
 mod delivery;
 mod grants;
+mod identities;
 mod products;
 mod verifiers;
 
 pub(super) use delivery::{machine_api, service_api};
 pub(super) use grants::{messaging, workload_secret_fields};
+pub(super) use identities::retired_identities;
 pub(super) use products::{database_api, object_api, release_api, web_api};
 pub(super) use verifiers::{integration, rate_limit};

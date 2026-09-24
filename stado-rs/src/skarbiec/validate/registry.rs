@@ -33,7 +33,7 @@ pub async fn validate_registry_verifier() -> Result<usize, SkarbiecError> {
     if clients.is_empty() {
         return Ok(0);
     }
-    let client = Client::registry_verifier()?;
+    let client = Client::stado()?;
     let expected = clients
         .values()
         .map(|policy| policy.item().to_string())
@@ -45,19 +45,14 @@ pub async fn validate_registry_verifier() -> Result<usize, SkarbiecError> {
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    if visible != expected {
+    if !expected.is_subset(&visible) {
         let missing = expected
             .difference(&visible)
             .cloned()
             .collect::<Vec<_>>()
             .join(",");
-        let unexpected = visible
-            .difference(&expected)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(",");
         return Err(SkarbiecError::Deployment(format!(
-            "registry verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+            "registry verifier grant is missing items [{missing}]"
         )));
     }
     Ok(expected.len())

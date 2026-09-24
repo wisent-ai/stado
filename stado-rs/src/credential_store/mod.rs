@@ -56,37 +56,20 @@ pub struct AdminCredentials {
     pub token_file: String,
 }
 
-/// Bootstrap coordinates used for store administration. They stay outside the
-/// selected store to avoid circular authentication.
+/// Coordinates used for store administration, read directly from
+/// `secrets.skarbiec` to avoid authentication through the selected store.
 pub fn admin_credentials() -> Result<AdminCredentials, SkarbiecError> {
-    let url = crate::config_file::resolve(
-        "STADO_CREDENTIALS_ADMIN_URL",
-        "credentials.admin.url",
-        crate::config::skarbiec_url(),
-    );
-    let consumer = crate::config_file::resolve(
-        "STADO_CREDENTIALS_ADMIN_CONSUMER",
-        "credentials.admin.consumer",
-        "local-operator",
-    );
-    let token_file = crate::config_file::resolve(
-        "STADO_CREDENTIALS_ADMIN_TOKEN_FILE",
-        "credentials.admin.token_file",
-        "~/.stado/local-operator-skarbiec-token",
-    );
-    let token_file = crate::config_file::expand_tilde(&token_file)
-        .to_string_lossy()
-        .to_string();
-    if consumer.trim().is_empty() || token_file.trim().is_empty() {
+    let consumer = crate::config::skarbiec_consumer();
+    let token_file = crate::config::skarbiec_token_file();
+    if consumer != "stado" || token_file.trim().is_empty() {
         return Err(SkarbiecError::Deployment(
-            "credentials.admin.consumer and credentials.admin.token_file must be non-empty"
-                .to_string(),
+            "secrets.skarbiec.consumer must be stado and token_file must be non-empty".to_string(),
         ));
     }
     Ok(AdminCredentials {
-        url,
-        consumer,
-        token_file,
+        url: crate::config::skarbiec_url().to_string(),
+        consumer: consumer.to_string(),
+        token_file: token_file.to_string(),
     })
 }
 

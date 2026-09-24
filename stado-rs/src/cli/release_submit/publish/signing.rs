@@ -27,7 +27,7 @@ pub(crate) async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError
         .map_err(|error| {
             CmdError::click(format!(
                 "cannot read signing key {item:?} as {}: {error}",
-                crate::config::release_signing_skarbiec_consumer()
+                crate::config::skarbiec_consumer()
             ))
         })?
         .ok_or_else(|| {

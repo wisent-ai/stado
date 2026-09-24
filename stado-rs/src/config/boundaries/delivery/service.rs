@@ -1,13 +1,13 @@
-//! Service boundary: deployers, their actions and its Skarbiec grant.
+//! Service boundary: deployers and their actions.
+//!
+//! A product deploys as itself: its bearer is the vault item named after
+//! the product, read through Stado's Skarbiec identity.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
-use crate::config::skarbiec_url;
-use crate::config_file::{expand_tilde, resolve as cfg};
 use serde_json::Value;
 
-pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
 /// What the service API lets a deployer do, from the declaration.
 pub fn service_api_actions() -> Vec<String> {
     super::super::declared_actions("service")
@@ -17,7 +17,6 @@ pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api", "image-v
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceDeployer {
     item: String,
-    consumer: String,
     services: Vec<String>,
     actions: Vec<String>,
 }
@@ -25,10 +24,6 @@ pub struct ServiceDeployer {
 impl ServiceDeployer {
     pub fn item(&self) -> &str {
         &self.item
-    }
-
-    pub fn consumer(&self) -> &str {
-        &self.consumer
     }
 
     pub fn services(&self) -> &[String] {
@@ -81,35 +76,36 @@ pub(crate) fn parse_service_deployers(
         }
         let Some(entry) = raw_entry.as_object() else {
             problems.push(format!(
-                "service_api.deployers.{product} must contain consumer, item, services, and actions"
+                "service_api.deployers.{product} must contain item, services, and actions"
             ));
             continue;
         };
         for key in entry.keys() {
-            if !matches!(key.as_str(), "consumer" | "item" | "services" | "actions") {
-                problems.push(format!(
-                    "service_api.deployers.{product} contains unsupported key {key:?}"
-                ));
-                entry_valid = false;
+            match key.as_str() {
+                "item" | "services" | "actions" => {}
+                "consumer" => {
+                    problems.push(format!(
+                        "service_api.deployers.{product}.consumer is retired; configure \
+                         Stado's secrets.skarbiec identity instead"
+                    ));
+                    entry_valid = false;
+                }
+                _ => {
+                    problems.push(format!(
+                        "service_api.deployers.{product} contains unsupported key {key:?}"
+                    ));
+                    entry_valid = false;
+                }
             }
         }
         let item = entry
             .get("item")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let consumer = entry
-            .get("consumer")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !canonical(item) || !item.ends_with("-deployer") {
+        if item != product.as_str() {
             problems.push(format!(
-                "service_api.deployers.{product}.item must name one canonical *-deployer item"
-            ));
-            entry_valid = false;
-        }
-        if consumer != item {
-            problems.push(format!(
-                "service_api.deployers.{product}.consumer must equal its exact item {item:?}"
+                "service_api.deployers.{product}.item must be the product's own name \
+                 {product:?}, not {item:?}"
             ));
             entry_valid = false;
         }
@@ -191,7 +187,6 @@ pub(crate) fn parse_service_deployers(
                 product.to_string(),
                 ServiceDeployer {
                     item: item.to_string(),
-                    consumer: consumer.to_string(),
                     services,
                     actions,
                 },
@@ -230,38 +225,6 @@ static SERVICE_API_DEPLOYERS: LazyLock<Result<BTreeMap<String, ServiceDeployer>,
         };
         parse_service_deployers(configured.as_ref())
     });
-static SERVICE_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_SERVICE_SKARBIEC_URL",
-        "service_api.skarbiec.url",
-        skarbiec_url(),
-    )
-});
-static SERVICE_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_SERVICE_SKARBIEC_CONSUMER",
-        "service_api.skarbiec.consumer",
-        SERVICE_API_VERIFIER_CONSUMER,
-    )
-});
-static SERVICE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
-    let default = std::env::var("HOME")
-        .map(|home| {
-            std::path::Path::new(&home)
-                .join(".stado")
-                .join("stado-service-api-verifier-skarbiec-token")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_default();
-    expand_tilde(&cfg(
-        "WC_SERVICE_SKARBIEC_TOKEN_FILE",
-        "service_api.skarbiec.token_file",
-        &default,
-    ))
-    .to_string_lossy()
-    .into_owned()
-});
 
 pub fn service_api_deployers(
 ) -> Result<&'static BTreeMap<String, ServiceDeployer>, &'static [String]> {
@@ -276,16 +239,4 @@ pub fn service_deployer_for(service: &str, action: &str) -> Option<&'static Serv
         .ok()?
         .values()
         .find(|deployer| deployer.allows(service, action))
-}
-
-pub fn service_skarbiec_url() -> &'static str {
-    SERVICE_SKARBIEC_URL.as_str()
-}
-
-pub fn service_skarbiec_consumer() -> &'static str {
-    SERVICE_SKARBIEC_CONSUMER.as_str()
-}
-
-pub fn service_skarbiec_token_file() -> &'static str {
-    SERVICE_SKARBIEC_TOKEN_FILE.as_str()
 }

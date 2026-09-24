@@ -6,9 +6,8 @@
 //! The broker is the one this fleet runs — `SKARBIEC_BIN`, then `PATH`, then
 //! `~/.stado/bin/skarbiec` — and it decrypts every read it answers.
 //!
-//! The item names and token fields are the ones the product's own policies
-//! name (`<namespace>-object-api`, `<product>-release-publisher`, field
-//! `token`); nothing here is a value that tunes the product.
+//! The item names and token fields match the product policies:
+//! `<namespace>-object-api`, `<product>`, field `token`.
 
 // The cases use different halves of this fixture, so unused-in-one-case is the
 // normal state rather than a finding.
@@ -43,7 +42,7 @@ pub fn object_item(namespace: &str) -> String {
 
 /// The Skarbiec item holding one product's release-publisher bearer.
 pub fn publisher_item(product: &str) -> String {
-    format!("{product}-release-publisher")
+    product.to_string()
 }
 
 /// The bearer one item holds. Distinct per item, because every verifier

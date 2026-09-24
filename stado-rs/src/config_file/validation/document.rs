@@ -22,8 +22,8 @@ pub(super) fn schema_version(root: &Map<String, Value>, problems: &mut Vec<Strin
     }
 }
 
-/// The credential store selector, its admin grant, and the alert channels —
-/// each judged against the catalog rather than against a literal list.
+/// The credential store selector and alert channels, judged against the
+/// capability catalog rather than a literal list.
 pub(super) fn credentials_and_alerts(root: &Map<String, Value>, problems: &mut Vec<String>) {
     if let Some(store) = field_in(root, &crate::capabilities::CREDENTIALS_STORE_CONFIG) {
         match store.as_str().filter(|value| !value.trim().is_empty()) {
@@ -33,16 +33,6 @@ pub(super) fn credentials_and_alerts(root: &Map<String, Value>, problems: &mut V
                 }
             }
             None => problems.push("credentials.store must be a non-empty string".to_string()),
-        }
-    }
-    for field in [
-        &crate::capabilities::CREDENTIALS_ADMIN_CONSUMER_CONFIG,
-        &crate::capabilities::CREDENTIALS_ADMIN_TOKEN_FILE_CONFIG,
-    ] {
-        if field_in(root, field)
-            .is_some_and(|value| !value.as_str().is_some_and(|entry| !entry.trim().is_empty()))
-        {
-            problems.push(format!("{} must be a non-empty string", field.path));
         }
     }
     if let Some(channels) = field_in(root, &crate::capabilities::ALERT_CHANNELS_CONFIG) {

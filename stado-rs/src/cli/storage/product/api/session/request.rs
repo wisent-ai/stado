@@ -97,7 +97,7 @@ impl RemoteObjectApi {
                 ))
             })?
         } else {
-            crate::skarbiec::Client::release_publisher_reader()
+            crate::skarbiec::Client::stado()
                 .map_err(|error| {
                     CmdError::click(format!(
                         "cannot acquire release publisher credentials: {error}"

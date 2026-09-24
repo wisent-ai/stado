@@ -114,14 +114,8 @@ impl SkarbiecFixture {
             .env("STADO_CREDENTIALS_STORE", "skarbiec")
             .env("SKARBIEC_BIN", &self.skarbiec)
             .env("SKARBIEC_LAUNCHER", &self.skarbiec)
-            .env(
-                "STADO_CREDENTIALS_ADMIN_URL",
-                format!("http://127.0.0.1:{}", self.port),
-            )
-            .env("STADO_CREDENTIALS_ADMIN_CONSUMER", "stado-control-plane")
-            .env("STADO_CREDENTIALS_ADMIN_TOKEN_FILE", &self.token)
             .env("WC_SKARBIEC_URL", format!("http://127.0.0.1:{}", self.port))
-            .env("WC_SKARBIEC_CONSUMER", "stado-control-plane")
+            .env("WC_SKARBIEC_CONSUMER", "stado")
             .env("WC_SKARBIEC_TOKEN_FILE", &self.token)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", &self.storage)
@@ -162,7 +156,7 @@ impl SkarbiecFixture {
         let minted = self.skarbiec(&[
             "grant",
             "issue",
-            "stado-control-plane",
+            "stado",
             "--capabilities",
             "read:stado-cli-login#username",
         ]);

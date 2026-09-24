@@ -1,14 +1,13 @@
-//! Integration boundary constants and shared name checking.
+//! Integration boundary constants and shared name checking. Integration
+//! clients and providers are read through Stado's one Skarbiec identity
+//! without a separate verifier identity.
 
 mod clients;
-mod endpoints;
 mod providers;
 
 pub use clients::*;
-pub use endpoints::*;
 pub use providers::*;
 
-pub const INTEGRATION_API_VERIFIER_CONSUMER: &str = "stado-integration-api-verifier";
 /// Domains reachable through `/api/integration/`. Stado serves only the
 /// read-only fleet projection; every product-integration domain moved to the
 /// private `wisent-integrations` service together with its client grants.

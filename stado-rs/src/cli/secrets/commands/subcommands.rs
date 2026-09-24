@@ -131,6 +131,18 @@ pub enum CredentialGrantCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Merge retired consumer capabilities into Stado's existing bearer.
+    #[command(name = "consolidate")]
+    Consolidate {
+        #[arg(long)]
+        host: String,
+        #[arg(long = "from", required = true)]
+        sources: Vec<String>,
+        #[arg(long)]
+        token_file: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Report one consumer's recorded grant.
     Show {
         #[arg(long)]

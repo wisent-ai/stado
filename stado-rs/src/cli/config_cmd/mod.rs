@@ -1,5 +1,5 @@
 //! `stado config SUB` — configuration lifecycle commands:
-//! show | validate | init | migrate | set | unset.
+//! show | validate | init | migrate | migrate-identities | set | unset.
 //!
 //! One component per group of verbs. `keys` holds the two that change a single
 //! dotted key of the file, `document` holds the three that act on the file as
@@ -12,7 +12,7 @@ mod show;
 
 use super::CmdError;
 
-use document::{init, migrate, validate};
+use document::{init, migrate, migrate_identities, validate};
 use keys::{set, unset};
 use show::show;
 
@@ -20,6 +20,7 @@ pub fn run(sub: &str, key: Option<&str>, value: Option<&str>) -> Result<(), CmdE
     match sub {
         "init" => init(),
         "migrate" => migrate(),
+        "migrate-identities" => migrate_identities(),
         "validate" => validate(),
         "show" => show(),
         "set" => match (key, value) {
@@ -37,7 +38,7 @@ pub fn run(sub: &str, key: Option<&str>, value: Option<&str>) -> Result<(), CmdE
             )),
         },
         other => Err(CmdError::click(format!(
-            "unknown config subcommand: {other} (show|validate|init|migrate|set|unset)"
+            "unknown config subcommand: {other} (show|validate|init|migrate|migrate-identities|set|unset)"
         ))),
     }
 }

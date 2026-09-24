@@ -1,15 +1,15 @@
-//! Skarbiec-backed boundaries: the triple each one binds, and the documents
-//! that hang off them.
+//! Skarbiec-backed configuration: Stado's one identity and the documents that
+//! hang off it.
 
 use crate::capabilities::config::ConfigField;
 
-/// The three keys a Skarbiec-backed boundary binds: the verifier endpoint, the
-/// consumer it authenticates as, and the owner-only file holding the grant.
+/// The three keys an identity binds: the vault endpoint, the consumer it
+/// authenticates as, and the owner-only file holding its bearer.
 ///
-/// They are a triple rather than three loose entries because the rule that
-/// matters is a relation between boundaries — every boundary's token file must
-/// name a different grant — and stating that rule over a list of literal dotted
-/// paths is how a boundary gets forgotten when a new API surface is added.
+/// Stado binds `secrets.skarbiec` (consumer `stado`). The workload agent
+/// keeps a binding for the vault it reads job secrets from, which may be on
+/// another host; it reads there as `stado` except on a rented machine.
+/// Other Stado boundaries use the same identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SkarbiecBinding {
     pub url: ConfigField,
@@ -43,55 +43,6 @@ pub const SECRETS_SKARBIEC: SkarbiecBinding =
     skarbiec_binding!("secrets-skarbiec", "WC_SKARBIEC", "secrets.skarbiec");
 pub const AGENT_SKARBIEC: SkarbiecBinding =
     skarbiec_binding!("agent-skarbiec", "WC_AGENT_SKARBIEC", "agent.skarbiec");
-pub const OBJECT_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "object-api-skarbiec",
-    "WC_OBJECT_SKARBIEC",
-    "object_api.skarbiec"
-);
-pub const RELEASE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "release-api-skarbiec",
-    "WC_RELEASE_SKARBIEC",
-    "release_api.skarbiec"
-);
-pub const RELEASE_PUBLISHER_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "release-publisher-skarbiec",
-    "WC_RELEASE_PUBLISHER_SKARBIEC",
-    "release.publisher_skarbiec"
-);
-pub const MACHINE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "machine-api-skarbiec",
-    "WC_MACHINE_SKARBIEC",
-    "machine_api.skarbiec"
-);
-pub const SERVICE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "service-api-skarbiec",
-    "WC_SERVICE_SKARBIEC",
-    "service_api.skarbiec"
-);
-pub const RATE_LIMIT_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "rate-limit-skarbiec",
-    "WC_RATE_LIMIT_SKARBIEC",
-    "rate_limit.skarbiec"
-);
-pub const INTEGRATION_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "integration-skarbiec",
-    "WC_INTEGRATION_SKARBIEC",
-    "integration.skarbiec"
-);
-pub const BACKEND_MESSAGING_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
-    "backend-messaging-skarbiec",
-    "WC_BACKEND_MESSAGING_SKARBIEC",
-    "backend.messaging.skarbiec"
-);
-
-/// Provider grants Stado resolves on an integration's behalf live behind their
-/// own endpoint, distinct from the integration verifier above.
-pub const INTEGRATION_PROVIDER_SKARBIEC_URL_CONFIG: ConfigField = ConfigField::scalar(
-    "integration-provider-skarbiec-url",
-    "WC_INTEGRATION_PROVIDER_SKARBIEC_URL",
-    "integration.provider_skarbiec.url",
-);
-
 pub const AGENT_SKARBIEC_ITEMS_CONFIG: ConfigField = ConfigField::list(
     "agent-skarbiec-items",
     "WC_AGENT_SKARBIEC_ITEMS",

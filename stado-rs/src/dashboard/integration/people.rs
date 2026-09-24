@@ -603,7 +603,7 @@ async fn write_provider_item(item: &str, value: &Value) -> Result<(), HandlerErr
     if !policy.items().iter().any(|allowed| allowed == item) {
         return Err(HandlerError::ProviderUnavailable);
     }
-    crate::skarbiec::Client::integration_provider("people")
+    crate::skarbiec::Client::stado()
         .map_err(|_| HandlerError::ProviderUnavailable)?
         .write_item(item, "api_credential", value)
         .await
@@ -794,7 +794,7 @@ async fn prerequisites(body: &[u8]) -> HandlerResult {
     {
         return Err(HandlerError::ProviderUnavailable);
     }
-    let provider = crate::skarbiec::Client::integration_provider("people")
+    let provider = crate::skarbiec::Client::stado()
         .map_err(|_| HandlerError::ProviderUnavailable)?;
     let mut prerequisites = Vec::new();
     for (name, item) in [

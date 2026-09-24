@@ -1,5 +1,5 @@
-//! Preserve an isolated verifier bearer while making its capabilities
-//! match config.
+//! Reconcile item reads on Stado's grant without replacing unrelated
+//! capabilities.
 
 pub(in crate::cli::host) mod shadow;
 
@@ -10,8 +10,7 @@ use crate::cli::CmdError;
 use crate::cli::host::checks::recovery::verifier::release::remote_skarbiec_metadata;
 use crate::cli::host::secrets::vault::vault_word;
 
-/// Preserve an isolated verifier bearer while making its capabilities match config.
-#[allow(clippy::too_many_arguments)]
+/// Ensure the declared item reads on Stado's grant, preserving other scopes.
 pub(super) async fn reconcile_verifier(
     target: &str,
     kind: &str,
@@ -20,7 +19,6 @@ pub(super) async fn reconcile_verifier(
     token_file_env: &str,
     token_file_default: &str,
     items: std::collections::BTreeSet<String>,
-    replace_capabilities: bool,
 ) -> Result<Value, CmdError> {
     if items.is_empty() {
         return Err(CmdError::click(format!(
@@ -166,86 +164,47 @@ pub(super) async fn reconcile_verifier(
             .await?;
         }
     }
-    let capabilities = items
-        .iter()
-        .map(|item| format!("read:{item}#token"))
-        .collect::<Vec<_>>()
-        .join(",");
     let common = format!(
         "set -eu; \
          PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; export PATH; \
          GNUPGHOME={}; export GNUPGHOME; \
          SKARBIEC_VAULT_FILE={}; export SKARBIEC_VAULT_FILE; \
-         token_file={}; staged=''; \
-         if [ -L \"$token_file\" ]; then exit 40; fi",
+         token_file={}; \
+         if [ ! -f \"$token_file\" ] || [ -L \"$token_file\" ]; then \
+           printf '%s\\n' 'Stado grant file is missing or a symlink' >&2; exit 40; \
+         fi",
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),
         crate::deploy::shlex_quote(&token_file),
     );
-    let command = if replace_capabilities {
-        format!(
-            "{common}; \
-             if [ -f \"$token_file\" ]; then source_file=\"$token_file\"; \
-             else \
-               staged=\"$token_file.stado-new.$$\"; \
-               trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
-               umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
-               source_file=\"$staged\"; \
-             fi; \
-             {} grant issue {} --capabilities {} --replace-capabilities \
-               --token-file \"$source_file\" --ttl-seconds {} > /dev/null; \
-             if [ -n \"$staged\" ]; then /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; fi",
-            crate::deploy::shlex_quote(&skarbiec),
-            crate::deploy::shlex_quote(consumer),
-            crate::deploy::shlex_quote(&capabilities),
-            ttl,
-        )
-    } else {
-        let item = items
-            .first()
-            .expect("product-scoped release verifier has one item");
-        format!(
-            "{common}; \
-             if [ -f \"$token_file\" ]; then \
-               {} grant ensure {} {} --field token --token-file \"$token_file\" > /dev/null; \
-             else \
-               staged=\"$token_file.stado-new.$$\"; \
-               trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
-               umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
-               {} grant issue {} --capabilities {} --replace-capabilities \
-                 --token-file \"$staged\" --ttl-seconds {} > /dev/null; \
-               /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; \
-             fi",
+    let mut command = common;
+    for item in &items {
+        command.push_str(&format!(
+            "; {} grant ensure {} {} --field token --token-file \"$token_file\" > /dev/null",
             crate::deploy::shlex_quote(&skarbiec),
             crate::deploy::shlex_quote(consumer),
             crate::deploy::shlex_quote(item),
-            crate::deploy::shlex_quote(&skarbiec),
-            crate::deploy::shlex_quote(consumer),
-            crate::deploy::shlex_quote(&capabilities),
-            ttl,
-        )
-    };
+        ));
+    }
     let reconciled = crate::deploy::host_channel::run_command(&resolved, &command, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !reconciled.ok() {
         return Err(CmdError::click(format!(
-            "{}: {kind} verifier reconciliation failed without replacing its token file: {}",
+            "{}: {kind} item grant reconciliation failed: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&reconciled, "remote command failed")
         )));
     }
-
-    let item_list = items.iter().cloned().collect::<Vec<_>>();
     let report = json!({
         "target": resolved.name,
         "kind": kind,
         "consumer": consumer,
-        "items": item_list,
+        "items": items,
         "source_lifecycles": source_lifecycles,
         "bearer_preserved": bearer_preserved,
         "expires_at": expires_at,
-        "exact": replace_capabilities,
+        "exact": false,
     });
     Ok(report)
 }

@@ -1,4 +1,8 @@
-//! The control-plane Skarbiec endpoint, grant and declared owner vault.
+//! Stado's one Skarbiec identity: endpoint, consumer, bearer file and the
+//! declared owner vault.
+//!
+//! Stado presents itself to the vault as `stado`. Its API boundaries use
+//! these accessors for the endpoint and bearer file.
 
 use std::sync::LazyLock;
 
@@ -15,7 +19,7 @@ static SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_SKARBIEC_CONSUMER",
         "secrets.skarbiec.consumer",
-        "stado-control-plane",
+        "stado",
     )
 });
 static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
@@ -23,7 +27,7 @@ static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
         .map(|home| {
             std::path::Path::new(&home)
                 .join(".stado")
-                .join("control-plane-skarbiec-token")
+                .join("stado-skarbiec-token")
                 .to_string_lossy()
                 .into_owned()
         })
@@ -52,12 +56,12 @@ pub fn skarbiec_url() -> &'static str {
     SKARBIEC_URL.as_str()
 }
 
-/// Scoped Skarbiec grant consumer name.
+/// Stado's Skarbiec consumer name: `stado`.
 pub fn skarbiec_consumer() -> &'static str {
     SKARBIEC_CONSUMER.as_str()
 }
 
-/// Owner-only file containing the scoped Skarbiec grant.
+/// Owner-only file holding Stado's Skarbiec bearer.
 pub fn skarbiec_token_file() -> &'static str {
     SKARBIEC_TOKEN_FILE.as_str()
 }

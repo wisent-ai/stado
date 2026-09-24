@@ -4,9 +4,8 @@ use crate::deploy::host_precheck_runner::verdict::report::command_failure;
 use crate::deploy::{host_channel, production_runner, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-/// The consumer identity the runner presents to Brama. It is the same name the
-/// installer writes into `routes/kronika-agent-id`, so the authorization this
-/// function checks and the identity the runner actually uses are one word.
+/// The precheck runner acts as Kronika's agent, not as Stado's control
+/// plane; Brama's route and the installed agent identity must agree.
 const BRAMA_CONSUMER: &str = "kronika";
 
 pub(crate) struct BramaSkarbiecContext {

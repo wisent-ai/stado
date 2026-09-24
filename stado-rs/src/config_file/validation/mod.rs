@@ -30,48 +30,16 @@ pub fn validate(data: &Value) -> Vec<String> {
     providers::cloud_release_coordinates(root, &active_providers, &mut problems);
     providers::azure_control_plane(root, &active_providers, &mut problems);
     let configured_items = planes::workload_secret_fields(root, &mut problems);
-    let control_token_file = field_in(root, &crate::capabilities::SECRETS_SKARBIEC.token_file)
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let object_token_file = field_in(root, &crate::capabilities::OBJECT_API_SKARBIEC.token_file)
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let release_token_file = field_in(root, &crate::capabilities::RELEASE_API_SKARBIEC.token_file)
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let machine_token_file = field_in(root, &crate::capabilities::MACHINE_API_SKARBIEC.token_file)
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    planes::retired_identities(root, &mut problems);
     planes::messaging(root, &mut problems);
     planes::rate_limit(root, &configured_items, &mut problems);
     planes::integration(root, &configured_items, &mut problems);
-    planes::object_api(root, control_token_file, object_token_file, &mut problems);
+    planes::object_api(root, &mut problems);
     planes::database_api(root, &mut problems);
     planes::web_api(root, &mut problems);
-    planes::release_api(
-        root,
-        control_token_file,
-        object_token_file,
-        release_token_file,
-        &mut problems,
-    );
-    planes::machine_api(
-        root,
-        control_token_file,
-        object_token_file,
-        release_token_file,
-        machine_token_file,
-        &mut problems,
-    );
-    planes::service_api(
-        root,
-        &active_providers,
-        control_token_file,
-        object_token_file,
-        release_token_file,
-        machine_token_file,
-        &mut problems,
-    );
+    planes::release_api(root, &mut problems);
+    planes::machine_api(root, &mut problems);
+    planes::service_api(root, &mut problems);
     let port = field_in(root, &crate::capabilities::DASHBOARD_PORT_CONFIG);
     if let Some(port) = port.filter(|p| !p.is_null()) {
         let ok = port.as_i64().is_some_and(|p| p > 0 && p < 65536);

@@ -22,7 +22,6 @@
 
 mod fingerprints;
 mod host;
-mod publication;
 mod refusals;
 mod servers;
 #[path = "../support/skarbiec.rs"]

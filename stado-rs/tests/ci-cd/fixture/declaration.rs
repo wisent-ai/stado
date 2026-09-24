@@ -45,11 +45,8 @@ pub(crate) fn release_env(
         .env("WC_STADO_STORAGE_NAMESPACE", "ci-release")
         .env("STADO_CONFIG", home.join(".stado/config.json"))
         .env("WC_SKARBIEC_URL", vault.url())
-        .env(
-            "WC_RELEASE_SIGNING_SKARBIEC_CONSUMER",
-            "stado-release-coordinator",
-        )
-        .env("WC_RELEASE_SIGNING_SKARBIEC_TOKEN_FILE", &vault.token)
+        .env("WC_SKARBIEC_CONSUMER", "stado")
+        .env("WC_SKARBIEC_TOKEN_FILE", &vault.token)
         .env("WC_VAST_AUTO_LIST", "false")
         .env("STADO_RELEASE_SIGNING_KEY_ITEM", "ci-release-signing")
         .env("STADO_RELEASE_SIGNING_KEY_ID", "ci-release-key");

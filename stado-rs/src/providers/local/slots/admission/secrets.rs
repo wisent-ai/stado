@@ -38,10 +38,17 @@ fn agent_secret_client() -> Result<crate::skarbiec::Client, StorageError> {
             == crate::skarbiec::GrantMode::TransientHandoff
     {
         crate::skarbiec::Client::configured()
+    } else if crate::config::agent_skarbiec_url().trim().is_empty()
+        && crate::config::agent_skarbiec_consumer() == crate::config::skarbiec_consumer()
+    {
+        // The local agent reads its own host's vault through Stado's grant.
+        crate::skarbiec::Client::stado()
     } else {
-        return Err(StorageError::Other(
-            "workload secrets require a dedicated agent Skarbiec grant".to_string(),
-        ));
+        return Err(StorageError::Other(format!(
+            "workload secrets for consumer {} need its grant at {}, which is missing",
+            crate::config::agent_skarbiec_consumer(),
+            agent_token_file
+        )));
     }
     .map_err(|error| {
         StorageError::Other(format!(

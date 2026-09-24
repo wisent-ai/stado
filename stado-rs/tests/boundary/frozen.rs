@@ -102,7 +102,7 @@ fn no_boundary_the_listener_found_closed_stays_frozen_at_its_boot_verdict() {
     // Nothing serves either endpoint: every verifier fails, so the listener
     // boots with the shut boundaries this case is about.
     let dead = format!("http://127.0.0.1:{}", crate::vault::reserved_port());
-    let listener = env.start(&dead, &dead);
+    let listener = env.start(&dead);
 
     let boot = listener.state();
     let boot_stamps = verdict_stamps(&boot);

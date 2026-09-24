@@ -205,12 +205,10 @@ pub(super) fn azure_control_plane(
     }
     if azure_provider
         && field_in(root, &crate::capabilities::SECRETS_SKARBIEC.consumer).and_then(Value::as_str)
-            != Some("stado-control-plane")
+            != Some("stado")
     {
         problems.push(
-            "Azure coordinator/dashboard must use the dedicated read-only \
-             secrets.skarbiec.consumer stado-control-plane"
-                .to_string(),
+            "Azure coordinator/dashboard must use secrets.skarbiec.consumer stado".to_string(),
         );
     }
     if azure_provider {
@@ -227,14 +225,14 @@ pub(super) fn azure_control_plane(
             );
         }
         if agent_consumer.is_empty()
+            || !agent_consumer.ends_with("-agent")
             || matches!(
                 agent_consumer,
-                "stado-control-plane" | "stado-local-agent" | "stado-azure-agent"
+                "stado" | "stado-control-plane" | "stado-local-agent" | "stado-azure-agent"
             )
         {
             problems.push(
-                "Azure dispatch requires a newly scoped workload-agent consumer distinct from \
-                 control-plane, local-agent, and revoked legacy Azure-agent grants"
+                "Azure dispatch requires a scoped workload-agent consumer ending in -agent"
                     .to_string(),
             );
         }

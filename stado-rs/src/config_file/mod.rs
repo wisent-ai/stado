@@ -69,11 +69,7 @@ pub fn template() -> Value {
         "providers": [local],
         "providers_disabled": disabled,
         "credentials": {
-            "store": "skarbiec",
-            "admin": {
-                "consumer": "local-operator",
-                "token_file": "~/.stado/local-operator-skarbiec-token"
-            }
+            "store": "skarbiec"
         },
         "storage": {
             "backend": "local",

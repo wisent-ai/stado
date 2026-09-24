@@ -67,11 +67,10 @@ pub(crate) async fn apply_release_verifier_repair(target: &str) -> Result<Value,
         target,
         "release",
         "matching local and target release_api.publishers",
-        crate::config::RELEASE_API_VERIFIER_CONSUMER,
-        "WC_RELEASE_SKARBIEC_TOKEN_FILE",
-        "stado-release-api-verifier-skarbiec-token",
+        crate::config::skarbiec_consumer(),
+        "WC_SKARBIEC_TOKEN_FILE",
+        "stado-skarbiec-token",
         items,
-        true,
     )
     .await
 }
@@ -92,11 +91,10 @@ pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value,
         target,
         "service",
         "service_api.deployers",
-        crate::config::SERVICE_API_VERIFIER_CONSUMER,
-        "WC_SERVICE_SKARBIEC_TOKEN_FILE",
-        "stado-service-api-verifier-skarbiec-token",
+        crate::config::skarbiec_consumer(),
+        "WC_SKARBIEC_TOKEN_FILE",
+        "stado-skarbiec-token",
         items,
-        true,
     )
     .await
 }

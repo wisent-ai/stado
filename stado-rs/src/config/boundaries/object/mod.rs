@@ -4,11 +4,9 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-mod endpoints;
 mod policy;
 mod queue;
 
-pub use endpoints::*;
 pub use policy::*;
 pub use queue::*;
 
@@ -34,12 +32,8 @@ pub const ACTIVE_OBJECT_NAMESPACES: &[&str] = &[
     "wisent-trade",
 ];
 
-pub const OBJECT_API_VERIFIER_CONSUMER: &str = "stado-object-api-verifier";
-/// Route-scoped bearer the dashboard verifies for host-health publication.
-///
-/// The object verifier reads this item too because the host-health endpoint is
-/// served by the same dashboard process and must not fall back to the broad
-/// coordinator grant.
+/// Route-scoped bearer the dashboard verifies for host-health publication,
+/// read, like every object bearer, as Stado's one identity `stado`.
 pub const HOST_HEALTH_API_ITEM: &str = "stado-host-health-api";
 
 /// What the object API lets a grant do, from the boundaries' declaration.

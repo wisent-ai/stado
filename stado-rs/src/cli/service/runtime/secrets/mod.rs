@@ -10,7 +10,7 @@ pub(crate) mod grant;
 pub(crate) mod sync;
 
 pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
-    let vault = crate::skarbiec::Client::service_verifier()
+    let vault = crate::skarbiec::Client::stado()
         .map_err(|err| CmdError::click(err.to_string()))?;
     // Both callers -- auth-check and secret-sync -- want exactly one field, and
     // asking for the whole item is refused outright by a broker that requires a

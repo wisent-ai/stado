@@ -35,8 +35,8 @@ environment = {
     "STADO_CONFIG": config,
     "GNUPGHOME": f"{home}/.gnupg",
     "SKARBIEC_VAULT_FILE": f"{home}/.stado/skarbiec.vault.json",
-    "WC_OBJECT_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-object-api-verifier-skarbiec-token",
-    "WC_RELEASE_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-release-api-verifier-skarbiec-token",
+    "WC_SKARBIEC_CONSUMER": "stado",
+    "WC_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-skarbiec-token",
     "WC_STORAGE_BACKEND": "local",
     "WC_LOCAL_STORAGE_PATH": store,
 }

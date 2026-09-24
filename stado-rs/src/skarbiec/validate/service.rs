@@ -16,7 +16,7 @@ pub async fn validate_service_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
-    let client = Client::service_verifier()?;
+    let client = Client::stado()?;
     let expected = deployers
         .values()
         .map(|policy| policy.item().to_string())
@@ -28,23 +28,18 @@ pub async fn validate_service_verifier() -> Result<usize, SkarbiecError> {
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    if visible != expected {
+    if !expected.is_subset(&visible) {
         let missing = expected
             .difference(&visible)
             .cloned()
             .collect::<Vec<_>>()
             .join(",");
-        let unexpected = visible
-            .difference(&expected)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(",");
         return Err(SkarbiecError::Deployment(format!(
-            "service verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+            "service verifier grant is missing items [{missing}]"
         )));
     }
     let mut token_owners = HashMap::<Vec<u8>, String>::new();
-    let object_client = Client::object_verifier()?;
+    let object_client = Client::stado()?;
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
         SkarbiecError::Deployment(format!(
             "invalid object_api.namespaces while validating service bearers: {}",
@@ -64,7 +59,7 @@ pub async fn validate_service_verifier() -> Result<usize, SkarbiecError> {
             );
         }
     }
-    let release_client = Client::release_verifier()?;
+    let release_client = Client::stado()?;
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
         SkarbiecError::Deployment(format!(
             "invalid release_api.publishers while validating service bearers: {}",

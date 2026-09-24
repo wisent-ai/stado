@@ -36,6 +36,12 @@ enum NativeCredentialOperations {
             .init(id: "consumer", label: "Consumer", required: true),
             .init(id: "token", label: "Bearer file on the target (optional)", option: "--token-file"),
         ], mutates: false),
+        .init(id: "grant-consolidate", title: "Merge retired grants into Stado", path: ["credentials", "grant", "consolidate"], fields: [
+            .init(id: "sources", label: "Retired consumers (one per line)", option: "--from", required: true, multiple: true),
+            .init(id: "token", label: "Existing Stado bearer file on selected host (absolute path)", option: "--token-file", required: true),
+        ]),
+        .init(id: "migrate-identities", title: "Migrate this Stado source's identity configuration", path: ["config", "migrate-identities"],
+            hostPlacement: .none, jsonOutput: false),
         .init(id: "backup-audit", title: "Audit backups or reclaim verified twins", path: ["credentials", "backup", "audit"], fields: [
             .init(id: "objects", label: "Object URIs", option: "--object", multiple: true),
             .init(id: "namespaces", label: "Inventory namespaces", option: "--inventory-namespace", multiple: true),

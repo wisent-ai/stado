@@ -1,25 +1,36 @@
-//! The vault boundaries this deployment reads and writes through, each with
-//! its endpoint, consumer, token file and policy map
-//! that says what it may touch. A policy map that will not resolve is
+//! The one vault identity this deployment reads and writes through — its
+//! endpoint, consumer (`stado`) and token file — and the policy maps that say
+//! which items each boundary may touch. A policy map that will not resolve is
 //! reported in place, under an `errors` key, rather than failing the command:
 //! `config show` is what an operator runs to find out why.
+//!
+//! Stado's API boundaries share one Skarbiec identity.
 
 use serde_json::{Map, Value};
 
 use crate::config;
 
 pub(super) fn insert(resolved: &mut Map<String, Value>) {
+    resolved.insert("skarbiec_url".into(), Value::from(config::skarbiec_url()));
     resolved.insert(
-        "object_skarbiec_url".into(),
-        Value::from(config::object_skarbiec_url()),
+        "skarbiec_consumer".into(),
+        Value::from(config::skarbiec_consumer()),
     );
     resolved.insert(
-        "object_skarbiec_consumer".into(),
-        Value::from(config::object_skarbiec_consumer()),
+        "skarbiec_token_file".into(),
+        Value::from(config::skarbiec_token_file()),
     );
     resolved.insert(
-        "object_skarbiec_token_file".into(),
-        Value::from(config::object_skarbiec_token_file()),
+        "agent_skarbiec_url".into(),
+        Value::from(config::agent_skarbiec_url()),
+    );
+    resolved.insert(
+        "agent_skarbiec_consumer".into(),
+        Value::from(config::agent_skarbiec_consumer()),
+    );
+    resolved.insert(
+        "agent_skarbiec_token_file".into(),
+        Value::from(config::agent_skarbiec_token_file()),
     );
     let object_namespaces = match config::object_api_namespaces() {
         Ok(namespaces) => Value::Object(
@@ -83,30 +94,6 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
         "skarbiec_vault_file".into(),
         Value::from(config::skarbiec_vault_file()),
     );
-    resolved.insert(
-        "release_skarbiec_url".into(),
-        Value::from(config::release_skarbiec_url()),
-    );
-    resolved.insert(
-        "release_skarbiec_consumer".into(),
-        Value::from(config::release_skarbiec_consumer()),
-    );
-    resolved.insert(
-        "release_skarbiec_token_file".into(),
-        Value::from(config::release_skarbiec_token_file()),
-    );
-    resolved.insert(
-        "release_publisher_skarbiec_url".into(),
-        Value::from(config::release_publisher_skarbiec_url()),
-    );
-    resolved.insert(
-        "release_publisher_skarbiec_consumer".into(),
-        Value::from(config::release_publisher_skarbiec_consumer()),
-    );
-    resolved.insert(
-        "release_publisher_skarbiec_token_file".into(),
-        Value::from(config::release_publisher_skarbiec_token_file()),
-    );
     let release_publishers = match config::release_api_publishers() {
         Ok(publishers) => Value::Object(
             publishers
@@ -133,18 +120,6 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
         )])),
     };
     resolved.insert("release_api_publishers".into(), release_publishers);
-    resolved.insert(
-        "service_skarbiec_url".into(),
-        Value::from(config::service_skarbiec_url()),
-    );
-    resolved.insert(
-        "service_skarbiec_consumer".into(),
-        Value::from(config::service_skarbiec_consumer()),
-    );
-    resolved.insert(
-        "service_skarbiec_token_file".into(),
-        Value::from(config::service_skarbiec_token_file()),
-    );
     let service_deployers = match config::service_api_deployers() {
         Ok(deployers) => Value::Object(
             deployers
@@ -153,7 +128,6 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
                     (
                         product.clone(),
                         Value::Object(Map::from_iter([
-                            ("consumer".into(), Value::from(policy.consumer())),
                             ("item".into(), Value::from(policy.item())),
                             (
                                 "services".into(),
@@ -191,18 +165,6 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
         )])),
     };
     resolved.insert("service_api_deployers".into(), service_deployers);
-    resolved.insert(
-        "agent_skarbiec_url".into(),
-        Value::from(config::agent_skarbiec_url()),
-    );
-    resolved.insert(
-        "agent_skarbiec_consumer".into(),
-        Value::from(config::agent_skarbiec_consumer()),
-    );
-    resolved.insert(
-        "agent_skarbiec_token_file".into(),
-        Value::from(config::agent_skarbiec_token_file()),
-    );
     resolved.insert(
         "agent_skarbiec_items".into(),
         Value::Array(

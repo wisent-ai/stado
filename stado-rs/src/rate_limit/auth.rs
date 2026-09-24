@@ -23,7 +23,7 @@ pub async fn authenticate(
     if supplied.is_empty() {
         return Ok(None);
     }
-    let verifier = SkarbiecClient::rate_limit_verifier()?;
+    let verifier = SkarbiecClient::stado()?;
     let configured = clients().map_err(|error| RateLimitError::Configuration(error.to_string()))?;
     let mut matched = None;
     for client in configured.values() {
@@ -43,7 +43,7 @@ pub async fn authenticate(
 
 pub async fn validate_verifier() -> Result<usize, RateLimitError> {
     let configured = clients().map_err(|error| RateLimitError::Configuration(error.to_string()))?;
-    let verifier = SkarbiecClient::rate_limit_verifier()?;
+    let verifier = SkarbiecClient::stado()?;
     let expected = configured
         .values()
         .map(|client| client.item().to_string())

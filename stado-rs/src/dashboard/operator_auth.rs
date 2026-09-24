@@ -9,7 +9,6 @@ use url::Url;
 
 use super::{trusted_request_host, Request};
 
-const MESSAGING_CONSUMER: &str = "wisent-backend-business-messaging";
 const EMAIL_ITEM: &str = "wisent-backend-email-provider";
 const APNS_ITEM: &str = "wisent-backend-apns";
 const FCM_ITEM: &str = "wisent-backend-fcm";
@@ -29,6 +28,7 @@ pub(super) enum OperatorAuthError {
     Response(reqwest::StatusCode),
 }
 
+/// Backend messaging items are read through Stado's Skarbiec identity.
 fn messaging_vault() -> Result<crate::skarbiec::Client, OperatorAuthError> {
     let configured = crate::config::backend_messaging_skarbiec_items();
     let required = REQUIRED_ITEMS.iter().copied().collect::<BTreeSet<_>>();
@@ -41,30 +41,10 @@ fn messaging_vault() -> Result<crate::skarbiec::Client, OperatorAuthError> {
         && actual
             .iter()
             .all(|item| required.contains(item) || *item == EMAIL_ITEM);
-    let token_file = crate::config::backend_messaging_skarbiec_token_file();
-    let distinct_grant = !token_file.is_empty()
-        && token_file != crate::config::skarbiec_token_file()
-        && token_file != crate::config::agent_skarbiec_token_file()
-        && token_file != crate::config::object_skarbiec_token_file()
-        && token_file != crate::config::release_skarbiec_token_file()
-        && token_file != crate::config::service_skarbiec_token_file();
-    if crate::config::backend_messaging_skarbiec_consumer() != MESSAGING_CONSUMER
-        || !items_valid
-        || !distinct_grant
-    {
+    if !items_valid {
         return Err(OperatorAuthError::Configuration);
     }
-    let url = crate::config::backend_messaging_skarbiec_url();
-    if !url.starts_with("https://") && !url.starts_with("http://127.0.0.1:") {
-        return Err(OperatorAuthError::Configuration);
-    }
-    crate::skarbiec::Client::new(
-        url,
-        MESSAGING_CONSUMER,
-        token_file,
-        crate::skarbiec::GrantMode::RereadPerRequest,
-    )
-    .map_err(|_| OperatorAuthError::Configuration)
+    crate::skarbiec::Client::stado().map_err(|_| OperatorAuthError::Configuration)
 }
 
 fn required(value: &Value) -> Result<&str, OperatorAuthError> {

@@ -1,13 +1,12 @@
-//! Machine boundary: submit/status/cancel clients and its Skarbiec grant.
+//! Machine boundary: submit/status/cancel clients. Their bearers are read as
+//! Stado's Skarbiec identity `stado`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
-use crate::config::{canonical_machine_name, skarbiec_url};
-use crate::config_file::{expand_tilde, resolve as cfg};
+use crate::config::canonical_machine_name;
 use serde_json::Value;
 
-pub const MACHINE_API_VERIFIER_CONSUMER: &str = "stado-machine-api-verifier";
 /// What the machine API lets a client do, from the boundaries' declaration.
 pub fn machine_api_actions() -> Vec<String> {
     super::super::declared_actions("machine")
@@ -174,38 +173,6 @@ static MACHINE_API_CLIENTS: LazyLock<Result<BTreeMap<String, MachineApiClient>, 
         };
         parse_machine_api_clients(configured.as_ref())
     });
-static MACHINE_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_MACHINE_SKARBIEC_URL",
-        "machine_api.skarbiec.url",
-        skarbiec_url(),
-    )
-});
-static MACHINE_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_MACHINE_SKARBIEC_CONSUMER",
-        "machine_api.skarbiec.consumer",
-        MACHINE_API_VERIFIER_CONSUMER,
-    )
-});
-static MACHINE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
-    let default = std::env::var("HOME")
-        .map(|home| {
-            std::path::Path::new(&home)
-                .join(".stado")
-                .join("stado-machine-api-verifier-skarbiec-token")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_default();
-    expand_tilde(&cfg(
-        "WC_MACHINE_SKARBIEC_TOKEN_FILE",
-        "machine_api.skarbiec.token_file",
-        &default,
-    ))
-    .to_string_lossy()
-    .into_owned()
-});
 
 pub fn machine_api_clients(
 ) -> Result<&'static BTreeMap<String, MachineApiClient>, &'static [String]> {
@@ -213,16 +180,4 @@ pub fn machine_api_clients(
         Ok(clients) => Ok(clients),
         Err(problems) => Err(problems.as_slice()),
     }
-}
-
-pub fn machine_skarbiec_url() -> &'static str {
-    MACHINE_SKARBIEC_URL.as_str()
-}
-
-pub fn machine_skarbiec_consumer() -> &'static str {
-    MACHINE_SKARBIEC_CONSUMER.as_str()
-}
-
-pub fn machine_skarbiec_token_file() -> &'static str {
-    MACHINE_SKARBIEC_TOKEN_FILE.as_str()
 }

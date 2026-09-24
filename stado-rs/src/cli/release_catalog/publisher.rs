@@ -2,18 +2,8 @@
 //! before `release submit` can publish it, in the order the guards require,
 //! from the typed operations this fleet already has.
 //!
-//! On 2026-09-18 seventeen cataloged products could not be released and two
-//! more - jeden-desktop, transcript-lake - were refused at `release submit`
-//! with `release_api.publishers declares no publisher for <product>/`. Each
-//! refusal had the same four-part remedy scattered over four commands and
-//! one guard message: mint `<product>-release-publisher` on the vault owner,
-//! let the release client read it, declare the publisher on every host that
-//! serves or submits releases, then reconcile the release verifier. Done by
-//! hand, one product at a time, the steps were skipped, reordered or run on
-//! the replica the owner overwrites at the next sync - which is how a
-//! `skarbiec grant ensure` that answered "effective: true" was gone within
-//! the hour. This command is that remedy as one product path, idempotent, so
-//! the next product follows the same correct path without anyone typing it.
+//! The command mints the product's publisher item, grants Stado read access,
+//! declares it on the participating hosts and checks their release policies.
 
 use serde_json::{json, Value};
 
@@ -27,10 +17,9 @@ use crate::cli::CmdError;
 /// verifier reconciliation mints (`openssl rand -hex 32`).
 const BEARER_BYTES: usize = 32;
 
-/// The publisher item and prefix a product's declaration names, as the
-/// configuration validator requires them.
+/// The publisher item and prefix a product's declaration names.
 pub(super) fn publisher_declaration(product: &str) -> (String, Value) {
-    let item = format!("{product}-release-publisher");
+    let item = product.to_string();
     let declared = json!({ "item": item, "prefix": format!("{product}/") });
     (item, declared)
 }
@@ -58,13 +47,9 @@ fn home_relative(path: &str) -> String {
 
 /// Declare `product`'s release publisher across the fleet.
 ///
-/// `owner` is the host whose vault is authoritative; `client` is the host
-/// that runs `release submit`, whose `release.publisher_skarbiec` names the
-/// release client's consumer and bearer file; `targets` are further hosts
-/// that serve the release API and must carry the same declaration;
-/// `reloads` are `host=service` pairs naming the managed unit on that host
-/// whose process caches the publisher table for its lifetime, reconciled the
-/// way `host config-set --reload-service` reconciles it.
+/// `owner` holds the authoritative vault, `client` submits the release,
+/// `targets` serve the release API and `reloads` names the managed services
+/// whose publisher policy must be refreshed after the declaration changes.
 pub(super) async fn declare_publisher(
     product: &str,
     owner: &str,
@@ -85,11 +70,8 @@ pub(super) async fn declare_publisher(
         .collect::<Result<Vec<_>, _>>()?;
     vault_word("product", product)?;
     let (item, declared) = publisher_declaration(product);
-    let consumer = crate::config::release_publisher_skarbiec_consumer().to_string();
-    // The configured path is expanded against this machine's home; on the
-    // owner the same file lives under that host's home, so it is named the
-    // way the host channel resolves it: rooted at $HOME.
-    let token_file = home_relative(crate::config::release_publisher_skarbiec_token_file());
+    let consumer = crate::config::skarbiec_consumer().to_string();
+    let token_file = home_relative(crate::config::skarbiec_token_file());
     let mut report = Vec::new();
 
     // 1. The item, on the owner, once.

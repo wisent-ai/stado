@@ -24,7 +24,7 @@ pub(in crate::capabilities::registry) const AUTHENTICATION: &[CapabilityVariant]
         aliases: &[],
         provider: Some(ProviderId::Skarbiec),
         implementation: "dashboard::authorize_release",
-        summary: "Product-prefix scoped immutable release publisher bearers resolved from mapped <product>-release-publisher/token items.",
+        summary: "Product-prefix scoped immutable release publisher bearers resolved from mapped <product>/token items.",
         configurable: true,
         constructible: false,
         adapter: RuntimeAdapter::None,

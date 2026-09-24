@@ -1,14 +1,22 @@
-//! Workload-agent and backend-messaging Skarbiec grants.
+//! Workload-agent Skarbiec coordinates and the backend-messaging item list.
+//!
+//! Local agents read as `stado`; their vault URL and token file can point to
+//! another host. Rented machines receive a separately scoped grant because
+//! its bearer is shipped onto hardware Stado does not own.
 
 use std::sync::LazyLock;
 
-use crate::config::skarbiec_url;
 use crate::config_file::{expand_tilde, resolve as cfg, resolve_list as cfg_list};
 
 static AGENT_SKARBIEC_URL: LazyLock<String> =
     LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url", ""));
-static AGENT_SKARBIEC_CONSUMER: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_CONSUMER", "agent.skarbiec.consumer", ""));
+static AGENT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_AGENT_SKARBIEC_CONSUMER",
+        "agent.skarbiec.consumer",
+        crate::config::skarbiec_consumer(),
+    )
+});
 static AGENT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     let default = std::env::var("HOME")
         .map(|home| {
@@ -36,29 +44,6 @@ static AGENT_SKARBIEC_SECRET_FIELDS: LazyLock<Vec<String>> = LazyLock::new(|| {
         &[],
     )
 });
-static BACKEND_MESSAGING_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_BACKEND_MESSAGING_SKARBIEC_URL",
-        "backend.messaging.skarbiec.url",
-        skarbiec_url(),
-    )
-});
-static BACKEND_MESSAGING_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_BACKEND_MESSAGING_SKARBIEC_CONSUMER",
-        "backend.messaging.skarbiec.consumer",
-        "",
-    )
-});
-static BACKEND_MESSAGING_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
-    expand_tilde(&cfg(
-        "WC_BACKEND_MESSAGING_SKARBIEC_TOKEN_FILE",
-        "backend.messaging.skarbiec.token_file",
-        "",
-    ))
-    .to_string_lossy()
-    .into_owned()
-});
 static BACKEND_MESSAGING_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|| {
     cfg_list(
         "WC_BACKEND_MESSAGING_SKARBIEC_ITEMS",
@@ -84,13 +69,14 @@ pub(crate) fn resident_worker_environment_key(name: &str) -> &str {
 }
 
 /// Skarbiec endpoint reachable by workload agents. Cloud agents require HTTPS;
-/// a device-local agent may leave this empty and use [`skarbiec_url`].
+/// a device-local agent may leave this empty and use
+/// [`crate::config::skarbiec_url`].
 pub fn agent_skarbiec_url() -> &'static str {
     AGENT_SKARBIEC_URL.as_str()
 }
 
-/// Consumer name of the dedicated workload-agent grant. Its exact read scopes
-/// are minted from the workloads this deployment is allowed to execute.
+/// Consumer the agent reads workload secrets as: `stado`, or the scoped
+/// `*-agent` consumer whose bearer is projected into rented machines.
 pub fn agent_skarbiec_consumer() -> &'static str {
     AGENT_SKARBIEC_CONSUMER.as_str()
 }
@@ -114,23 +100,8 @@ pub fn agent_skarbiec_secret_fields() -> &'static [String] {
     &AGENT_SKARBIEC_SECRET_FIELDS
 }
 
-/// HTTPS Skarbiec endpoint of the backend business-messaging grant, which
-/// Stado reads only to resolve the operator-session Supabase project.
-pub fn backend_messaging_skarbiec_url() -> &'static str {
-    BACKEND_MESSAGING_SKARBIEC_URL.as_str()
-}
-
-/// Dedicated consumer whose grant contains only backend messaging providers.
-pub fn backend_messaging_skarbiec_consumer() -> &'static str {
-    BACKEND_MESSAGING_SKARBIEC_CONSUMER.as_str()
-}
-
-/// Owner-only grant file for the backend business-messaging grant.
-pub fn backend_messaging_skarbiec_token_file() -> &'static str {
-    BACKEND_MESSAGING_SKARBIEC_TOKEN_FILE.as_str()
-}
-
-/// Exact provider and device-registry items visible to the messaging grant.
+/// Backend messaging items Stado resolves for the operator session through
+/// its own Skarbiec identity.
 pub fn backend_messaging_skarbiec_items() -> &'static [String] {
     &BACKEND_MESSAGING_SKARBIEC_ITEMS
 }

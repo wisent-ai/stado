@@ -21,21 +21,6 @@ pub const CREDENTIALS_STORE_CONFIG: ConfigField = ConfigField::scalar(
     "STADO_CREDENTIALS_STORE",
     "credentials.store",
 );
-pub const CREDENTIALS_ADMIN_URL_CONFIG: ConfigField = ConfigField::scalar(
-    "credentials-admin-url",
-    "STADO_CREDENTIALS_ADMIN_URL",
-    "credentials.admin.url",
-);
-pub const CREDENTIALS_ADMIN_CONSUMER_CONFIG: ConfigField = ConfigField::scalar(
-    "credentials-admin-consumer",
-    "STADO_CREDENTIALS_ADMIN_CONSUMER",
-    "credentials.admin.consumer",
-);
-pub const CREDENTIALS_ADMIN_TOKEN_FILE_CONFIG: ConfigField = ConfigField::scalar(
-    "credentials-admin-token-file",
-    "STADO_CREDENTIALS_ADMIN_TOKEN_FILE",
-    "credentials.admin.token_file",
-);
 
 pub const API_URL_CONFIG: ConfigField = ConfigField::scalar("api-url", "STADO_API_URL", "api.url");
 pub const DEPLOYMENT_ID_CONFIG: ConfigField =
@@ -84,19 +69,6 @@ pub const ALERT_RESEND_FIELD_CONFIG: ConfigField = ConfigField::scalar(
     "alert-resend-field",
     "WC_RESEND_FIELD",
     "alerts.resend_field",
-);
-/// Paging authenticates with its own grant rather than the control-plane one,
-/// so the alert section carries a consumer and token file but no endpoint: the
-/// verifier URL is the deployment's single Skarbiec.
-pub const ALERT_SKARBIEC_CONSUMER_CONFIG: ConfigField = ConfigField::scalar(
-    "alert-skarbiec-consumer",
-    "WC_ALERT_SKARBIEC_CONSUMER",
-    "alerts.skarbiec.consumer",
-);
-pub const ALERT_SKARBIEC_TOKEN_FILE_CONFIG: ConfigField = ConfigField::scalar(
-    "alert-skarbiec-token-file",
-    "WC_ALERT_SKARBIEC_TOKEN_FILE",
-    "alerts.skarbiec.token_file",
 );
 
 /// Which vault on this machine holds the operator's own items.

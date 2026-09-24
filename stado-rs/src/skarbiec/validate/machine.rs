@@ -15,7 +15,7 @@ pub async fn validate_machine_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
-    let client = Client::machine_verifier()?;
+    let client = Client::stado()?;
     let expected = clients
         .values()
         .map(|policy| policy.item().to_string())
@@ -27,24 +27,19 @@ pub async fn validate_machine_verifier() -> Result<usize, SkarbiecError> {
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    if visible != expected {
+    if !expected.is_subset(&visible) {
         let missing = expected
             .difference(&visible)
             .cloned()
             .collect::<Vec<_>>()
             .join(",");
-        let unexpected = visible
-            .difference(&expected)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(",");
         return Err(SkarbiecError::Deployment(format!(
-            "machine verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+            "machine verifier grant is missing items [{missing}]"
         )));
     }
 
     let mut token_owners = HashMap::<Vec<u8>, String>::new();
-    let object_client = Client::object_verifier()?;
+    let object_client = Client::stado()?;
     let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
         SkarbiecError::Deployment(format!(
             "invalid object_api.namespaces while validating machine bearers: {}",
@@ -64,7 +59,7 @@ pub async fn validate_machine_verifier() -> Result<usize, SkarbiecError> {
             );
         }
     }
-    let release_client = Client::release_verifier()?;
+    let release_client = Client::stado()?;
     let publishers = crate::config::release_api_publishers().map_err(|problems| {
         SkarbiecError::Deployment(format!(
             "invalid release_api.publishers while validating machine bearers: {}",
@@ -84,7 +79,7 @@ pub async fn validate_machine_verifier() -> Result<usize, SkarbiecError> {
             );
         }
     }
-    let service_client = Client::service_verifier()?;
+    let service_client = Client::stado()?;
     let deployers = crate::config::service_api_deployers().map_err(|problems| {
         SkarbiecError::Deployment(format!(
             "invalid service_api.deployers while validating machine bearers: {}",

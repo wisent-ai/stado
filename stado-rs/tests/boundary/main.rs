@@ -28,11 +28,6 @@ use fixture::{past_cooldown, Env, OBJECT_UNAVAILABLE};
 use policy::{ABSENT_KEY, NAMESPACE, UNDECLARED_RELEASE_KEY};
 use vault::{bearer, object_item, Vault};
 
-/// How the verifier's own words reach `last_error` when the refusal is about
-/// this host's deployment rather than about the vault being unreachable.
-/// Copied from a live run of the listener, prefix and spacing included.
-const DEPLOYMENT: &str = "Skarbiec deployment configuration: ";
-
 /// One object read, addressed the way an operator's client addresses it.
 fn object_target(namespace: &str, key: &str) -> String {
     format!("/api/object?uri=stado://{namespace}/{key}")
@@ -49,12 +44,8 @@ fn a_shut_object_boundary_reopens_without_a_restart() {
     // the verifier's item set does not match the policy and the boundary is
     // shut the moment the process boots.
     let (withheld, granted) = items.split_last().expect("the policy names items");
-    vault.grant(
-        stado::config::OBJECT_API_VERIFIER_CONSUMER,
-        granted,
-        &env.grant("object"),
-    );
-    let listener = env.start(&vault.url(), &vault.url());
+    vault.grant("stado", granted, &env.grant("stado"));
+    let listener = env.start(&vault.url());
     let target = object_target(NAMESPACE, ABSENT_KEY);
     let namespace_bearer = bearer(&object_item(NAMESPACE));
 
@@ -71,13 +62,11 @@ fn a_shut_object_boundary_reopens_without_a_restart() {
     // already has the read permission.
     let closed = listener.boundary("object");
     assert_eq!(closed["ready"], Value::Bool(false), "{closed}");
-    assert_eq!(
-        closed["last_error"],
-        Value::String(format!(
-            "{DEPLOYMENT}object verifier grant item set mismatch \
-             (missing=[{withheld}], unexpected=[])"
-        )),
-        "the operator must read what refused and about which item"
+    assert!(
+        closed["last_error"]
+            .as_str()
+            .is_some_and(|reason| reason.contains(withheld)),
+        "the operator must see which item is missing: {closed}"
     );
     assert!(
         closed["checked_at"].is_string(),
@@ -107,11 +96,7 @@ fn a_shut_object_boundary_reopens_without_a_restart() {
     // revalidation the read above claimed is the cooldown's anchor, so the
     // burst below is inside the window by construction.
     let anchor = listener.boundary("object")["checked_at"].clone();
-    vault.grant(
-        stado::config::OBJECT_API_VERIFIER_CONSUMER,
-        &items,
-        &env.grant("object"),
-    );
+    vault.grant("stado", &items, &env.grant("stado"));
 
     // A burst inside the cooldown is answered from the recorded verdict, so a
     // fleet hammering a shut boundary cannot turn into one vault sweep per
@@ -178,20 +163,13 @@ fn a_release_coordinate_reopens_a_boundary_it_is_not_gated_by() {
     // The object boundary is whole, because a release-coordinate request
     // spends its one revalidation on the first closed boundary in its plan and
     // `object` comes first.
-    vault.grant(
-        stado::config::OBJECT_API_VERIFIER_CONSUMER,
-        &object,
-        &env.grant("object"),
-    );
     let (withheld, granted) = publishers
         .split_last()
         .expect("the policy names release publishers");
-    vault.grant(
-        stado::config::RELEASE_API_VERIFIER_CONSUMER,
-        granted,
-        &env.grant("release"),
-    );
-    let listener = env.start(&vault.url(), &vault.url());
+    let mut initial_grant = object.clone();
+    initial_grant.extend(granted.iter().cloned());
+    vault.grant("stado", &initial_grant, &env.grant("stado"));
+    let listener = env.start(&vault.url());
 
     let closed = listener.boundary("release");
     assert_eq!(
@@ -199,12 +177,11 @@ fn a_release_coordinate_reopens_a_boundary_it_is_not_gated_by() {
         Value::Bool(false),
         "the release boundary starts shut in this case: {closed}"
     );
-    assert_eq!(
-        closed["last_error"],
-        Value::String(format!(
-            "{DEPLOYMENT}release verifier grant item set mismatch \
-             (missing=[{withheld}], unexpected=[])"
-        ))
+    assert!(
+        closed["last_error"]
+            .as_str()
+            .is_some_and(|reason| reason.contains(withheld)),
+        "the release verdict must name the missing item: {closed}"
     );
     assert_eq!(
         listener.boundary("object")["ready"],
@@ -237,11 +214,7 @@ fn a_release_coordinate_reopens_a_boundary_it_is_not_gated_by() {
 
     // And it is a way back, not only a fresh timestamp: with the grant
     // repaired, the same ungated route reopens the boundary.
-    vault.grant(
-        stado::config::RELEASE_API_VERIFIER_CONSUMER,
-        &publishers,
-        &env.grant("release"),
-    );
+    vault.grant("stado", &items, &env.grant("stado"));
     past_cooldown();
     let reopening = listener.get(&target, None);
     assert_eq!(reopening.status, 401, "body: {}", reopening.body);

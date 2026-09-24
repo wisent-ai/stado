@@ -41,7 +41,7 @@ fn local_inventory_filters_real_items_and_refuses_an_unprotected_vault() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|grant| grant["consumer"] == "stado-control-plane"));
+        .any(|grant| grant["consumer"] == "stado"));
     let absent = fixture.stado(
         &[
             "credentials",

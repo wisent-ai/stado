@@ -1,13 +1,11 @@
-//! Registry-policy boundary: clients, actions and its Skarbiec grant.
+//! Registry-policy boundary: clients and actions. Client bearers are read as
+//! Stado's Skarbiec identity `stado`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
-use crate::config::skarbiec_url;
-use crate::config_file::{expand_tilde, resolve as cfg};
 use serde_json::Value;
 
-pub const REGISTRY_API_VERIFIER_CONSUMER: &str = "stado-registry-api-verifier";
 /// Actions a registry-API client may be granted.
 ///
 /// `policy-read`, `cleanup-read`, and `converge-read` answer questions;
@@ -164,38 +162,6 @@ static REGISTRY_API_CLIENTS: LazyLock<Result<BTreeMap<String, RegistryApiClient>
         };
         parse_registry_api_clients(configured.as_ref())
     });
-static REGISTRY_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_REGISTRY_SKARBIEC_URL",
-        "registry_api.skarbiec.url",
-        skarbiec_url(),
-    )
-});
-static REGISTRY_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_REGISTRY_SKARBIEC_CONSUMER",
-        "registry_api.skarbiec.consumer",
-        REGISTRY_API_VERIFIER_CONSUMER,
-    )
-});
-static REGISTRY_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
-    let default = std::env::var("HOME")
-        .map(|home| {
-            std::path::Path::new(&home)
-                .join(".stado")
-                .join("stado-registry-api-verifier-skarbiec-token")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_default();
-    expand_tilde(&cfg(
-        "WC_REGISTRY_SKARBIEC_TOKEN_FILE",
-        "registry_api.skarbiec.token_file",
-        &default,
-    ))
-    .to_string_lossy()
-    .into_owned()
-});
 
 pub fn registry_api_clients(
 ) -> Result<&'static BTreeMap<String, RegistryApiClient>, &'static [String]> {
@@ -203,16 +169,4 @@ pub fn registry_api_clients(
         Ok(clients) => Ok(clients),
         Err(problems) => Err(problems.as_slice()),
     }
-}
-
-pub fn registry_skarbiec_url() -> &'static str {
-    REGISTRY_SKARBIEC_URL.as_str()
-}
-
-pub fn registry_skarbiec_consumer() -> &'static str {
-    REGISTRY_SKARBIEC_CONSUMER.as_str()
-}
-
-pub fn registry_skarbiec_token_file() -> &'static str {
-    REGISTRY_SKARBIEC_TOKEN_FILE.as_str()
 }

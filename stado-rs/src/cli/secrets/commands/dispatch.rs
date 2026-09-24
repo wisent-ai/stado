@@ -161,6 +161,9 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 super::host::grant_item_read(&host, &consumer, &item, &field, &token_file, json)
                     .await
             }
+            CredentialGrantCommands::Consolidate { host, sources, token_file, json } => {
+                super::host::consolidate_grants(&host, &sources, &token_file, json).await
+            }
             CredentialGrantCommands::Show {
                 host,
                 consumer,

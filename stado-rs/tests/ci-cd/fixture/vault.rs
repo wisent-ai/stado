@@ -1,9 +1,8 @@
 //! The vault this journey reads its signing identity from, started the way a
 //! fleet builder would find it.
 //!
-//! The grant is minted in the provision hook rather than afterwards, because
-//! the broker reads its vault once at start and a grant written later answered
-//! with a refusal.
+//! The grant is minted before the broker starts, since this fixture's broker
+//! reads its vault at startup.
 
 use super::super::*;
 
@@ -43,59 +42,25 @@ impl SkarbiecFixture {
                 "context": {"service": "native-signing"}
             }),
         );
-        // Inside the build job the signing step reads the identity through
-        // the broker as consumer `stado-control-plane`, with the grant file
-        // at `$HOME/.stado/control-plane-skarbiec-token` - the route a fleet
-        // builder takes. The grant is minted before the broker serves, in the
-        // fixture's provision hook, because the broker reads its vault once
-        // at start: a grant written to the file afterwards answered 403.
-        let token = home.join(".stado/control-plane-skarbiec-token");
+        let token = home.join(".stado/stado-skarbiec-token");
         fs::create_dir_all(token.parent().unwrap()).unwrap();
-        let token_for_hook = token.clone();
-        let home_for_hook = home.to_path_buf();
         Self::start(
             home,
             &[item, apple],
-            home.join("release-signing-grant"),
+            token,
             Some((
-                "stado-release-coordinator",
-                "read:ci-release-signing#private_key",
+                "stado",
+                "read:ci-release-signing#private_key,\
+                 read:desktop-signing-apple-development#certificate,\
+                 read:desktop-signing-apple-development#private_key",
             )),
-            move |gnupg, vault| {
-                let minted = Command::new(skarbiec_support::real_skarbiec_binary())
-                    .env_clear()
-                    .env("HOME", &home_for_hook)
-                    .env("GNUPGHOME", gnupg)
-                    .env("SKARBIEC_VAULT_FILE", vault)
-                    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-                    .args([
-                        "grant",
-                        "issue",
-                        "stado-control-plane",
-                        "--capabilities",
-                        "read:desktop-signing-apple-development#certificate,\
-                         read:desktop-signing-apple-development#private_key",
-                    ])
-                    .output()
-                    .expect("the Skarbiec CLI runs");
-                assert!(
-                    minted.status.success(),
-                    "real Skarbiec refused the control-plane signing grant: {}",
-                    String::from_utf8_lossy(&minted.stderr)
-                );
-                let grant: Value = serde_json::from_slice(&minted.stdout).unwrap();
-                fs::write(&token_for_hook, grant["token"].as_str().unwrap()).unwrap();
-                fs::set_permissions(&token_for_hook, fs::Permissions::from_mode(0o600)).unwrap();
-            },
+            |_, _| {},
         )
     }
 }
 
-/// One field of a fleet secret, read through the operator's own Skarbiec CLI:
-/// the owner read, which is also the fallback the signing step itself uses
-/// when the broker will not serve the item. The Stado profile's broker read
-/// refuses `local-operator` for this item with 403, so `stado secrets get`
-/// is not the route. A refusal blocks the journey and says so.
+/// Read a fleet secret through the operator's Skarbiec CLI. Failure blocks
+/// the journey instead of supplying a fixture value.
 fn fleet_secret(item: &str, field: &str) -> String {
     let binary = skarbiec_support::real_skarbiec_binary();
     let read = Command::new(&binary)

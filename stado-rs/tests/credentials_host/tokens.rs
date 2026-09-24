@@ -179,3 +179,47 @@ fn mismatched_and_symlink_bearers_refuse_without_overwriting_the_destination() {
         b"destination-remains-unchanged"
     );
 }
+
+#[test]
+fn consolidation_keeps_the_stado_bearer_and_adds_retired_field_reads() {
+    let host = IsolatedHost::new(true);
+    put(&host);
+    for (consumer, field) in [("stado", "username"), ("old-object-reader", "password")] {
+        let minted = host.run(&[
+            "credentials", "token", "mint", "--host", TARGET, consumer,
+            "--capabilities", &format!("read:{ITEM}#{field}"),
+            "--token-file-name", consumer, "--json",
+        ], None);
+        assert!(minted.status.success(), "{}", said(&minted));
+    }
+    let token = host.home.join(".stado/stado");
+    let token_path = token.to_str().unwrap();
+    let before_token = fs::read(&token).unwrap();
+    let before_vault = host.vault_bytes();
+    let wrong = host.home.join(".stado/wrong");
+    write_private(&wrong, b"not-the-stado-bearer");
+    let refused = host.run(&[
+        "credentials", "grant", "consolidate", "--host", TARGET,
+        "--from", "old-object-reader", "--token-file", wrong.to_str().unwrap(),
+    ], None);
+    assert!(!refused.status.success(), "{}", said(&refused));
+    assert_eq!(host.vault_bytes(), before_vault, "wrong bearer changed the vault");
+
+    let merged = host.run(&[
+        "credentials", "grant", "consolidate", "--host", TARGET,
+        "--from", "old-object-reader", "--token-file", token_path, "--json",
+    ], None);
+    assert!(merged.status.success(), "{}", said(&merged));
+    assert_eq!(fs::read(&token).unwrap(), before_token, "consolidation rotated the bearer file");
+    let verified = host.broker_command().args([
+        "grant", "verify", "stado", ITEM, "--field", "password",
+        "--token-file", token_path,
+    ]).output().unwrap();
+    assert!(verified.status.success(), "{}", said(&verified));
+    assert_eq!(report(&verified)["allowed"], true);
+    let listed = host.broker_command().args(["grant", "list"]).output().unwrap();
+    assert!(listed.status.success(), "{}", said(&listed));
+    let grants = report(&listed);
+    assert!(grants.as_array().unwrap().iter().any(|grant| grant["consumer"] == "old-object-reader"),
+        "source grant must survive the cutover: {grants}");
+}

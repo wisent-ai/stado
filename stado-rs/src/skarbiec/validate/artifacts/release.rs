@@ -14,7 +14,7 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
-    let client = Client::release_verifier()?;
+    let client = Client::stado()?;
     let expected = publishers
         .values()
         .map(|policy| policy.item().to_string())
@@ -26,19 +26,14 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    if visible != expected {
+    if !expected.is_subset(&visible) {
         let missing = expected
             .difference(&visible)
             .cloned()
             .collect::<Vec<_>>()
             .join(",");
-        let unexpected = visible
-            .difference(&expected)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(",");
         return Err(SkarbiecError::Deployment(format!(
-            "release verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+            "release verifier grant is missing items [{missing}]"
         )));
     }
 
@@ -48,7 +43,7 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
-    let object_client = Client::object_verifier()?;
+    let object_client = Client::stado()?;
     let mut token_owners = HashMap::<Vec<u8>, String>::new();
     // Both sweeps share their verifier client concurrently while Skarbiec's
     // bounded admission and GPG executors retain control of broker capacity.

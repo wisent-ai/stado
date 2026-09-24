@@ -1,17 +1,15 @@
 //! The planes a product declares for itself: its object namespaces, its
-//! databases, its web products and edge, and its release publishers. Each
-//! verifier grant has to be distinct from every grant declared before it.
+//! databases, its web products and edge, and its release publishers. They are
+//! verified through Stado's Skarbiec identity.
 
 use serde_json::{Map, Value};
 
-use crate::config_file::readers::{field_in, py_truthy};
+use crate::config_file::readers::field_in;
 
 /// The product-object plane: namespaces that parse and cover what the queue
-/// reads, and a verifier grant that is not the coordinator's.
+/// reads.
 pub(in crate::config_file::validation) fn object_api(
     root: &Map<String, Value>,
-    control_token_file: &str,
-    object_token_file: &str,
     problems: &mut Vec<String>,
 ) {
     let object_api = root.get("object_api").and_then(Value::as_object);
@@ -25,44 +23,6 @@ pub(in crate::config_file::validation) fn object_api(
             // writes, or `config set` would write a document under which the
             // agent's next claim answers 401.
             Ok(namespaces) => problems.extend(crate::config::queue_prefix_problem(&namespaces)),
-        }
-        let object_skarbiec = object_api
-            .and_then(|section| section.get("skarbiec"))
-            .and_then(Value::as_object);
-        if field_in(root, &crate::capabilities::OBJECT_API_SKARBIEC.url)
-            .is_some_and(|url| !py_truthy(url))
-        {
-            problems.push(
-                "object_api.skarbiec.url, when set, must be a non-empty verifier endpoint"
-                    .to_string(),
-            );
-        }
-        if field_in(root, &crate::capabilities::OBJECT_API_SKARBIEC.consumer)
-            .and_then(Value::as_str)
-            != Some(crate::config::OBJECT_API_VERIFIER_CONSUMER)
-        {
-            problems.push(format!(
-                "object_api.skarbiec.consumer must be the dedicated least-privilege consumer {:?}",
-                crate::config::OBJECT_API_VERIFIER_CONSUMER
-            ));
-        }
-        if object_token_file.is_empty() {
-            problems.push(
-                "object_api.skarbiec.token_file must name the owner-only verifier grant file"
-                    .to_string(),
-            );
-        }
-        if !object_token_file.is_empty() && object_token_file == control_token_file {
-            problems.push(
-            "object_api.skarbiec.token_file must be distinct from the coordinator Skarbiec grant"
-                .to_string(),
-        );
-        }
-        if object_skarbiec.is_some_and(|section| section.contains_key("token")) {
-            problems.push(
-            "object_api.skarbiec.token is forbidden; store the verifier grant only in its owner-only token_file"
-                .to_string(),
-        );
         }
     }
 }
@@ -113,13 +73,9 @@ pub(in crate::config_file::validation) fn web_api(
     }
 }
 
-/// The immutable-release plane: publishers that parse, and a verifier grant
-/// distinct from the coordinator's and the product-object one.
+/// The immutable-release plane: publishers that parse.
 pub(in crate::config_file::validation) fn release_api(
     root: &Map<String, Value>,
-    control_token_file: &str,
-    object_token_file: &str,
-    release_token_file: &str,
     problems: &mut Vec<String>,
 ) {
     let release_api = root.get("release_api").and_then(Value::as_object);
@@ -129,46 +85,6 @@ pub(in crate::config_file::validation) fn release_api(
             &crate::capabilities::RELEASE_API_PUBLISHERS_CONFIG,
         )) {
             problems.extend(release_problems);
-        }
-        let release_skarbiec = release_api
-            .and_then(|section| section.get("skarbiec"))
-            .and_then(Value::as_object);
-        if field_in(root, &crate::capabilities::RELEASE_API_SKARBIEC.url)
-            .is_some_and(|url| !py_truthy(url))
-        {
-            problems.push(
-                "release_api.skarbiec.url, when set, must be a non-empty verifier endpoint"
-                    .to_string(),
-            );
-        }
-        if field_in(root, &crate::capabilities::RELEASE_API_SKARBIEC.consumer)
-            .and_then(Value::as_str)
-            != Some(crate::config::RELEASE_API_VERIFIER_CONSUMER)
-        {
-            problems.push(format!(
-                "release_api.skarbiec.consumer must be the dedicated least-privilege consumer {:?}",
-                crate::config::RELEASE_API_VERIFIER_CONSUMER
-            ));
-        }
-        if release_token_file.is_empty() {
-            problems.push(
-            "release_api.skarbiec.token_file must name the owner-only release verifier grant file"
-                .to_string(),
-        );
-        }
-        if !release_token_file.is_empty()
-            && (release_token_file == control_token_file || release_token_file == object_token_file)
-        {
-            problems.push(
-            "release_api.skarbiec.token_file must be distinct from coordinator and product-object verifier grants"
-                .to_string(),
-        );
-        }
-        if release_skarbiec.is_some_and(|section| section.contains_key("token")) {
-            problems.push(
-            "release_api.skarbiec.token is forbidden; store the verifier grant only in its owner-only token_file"
-                .to_string(),
-        );
         }
     }
 }

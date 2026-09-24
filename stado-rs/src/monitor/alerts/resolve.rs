@@ -169,7 +169,7 @@ async fn resolve_resend(to: Option<String>, from: Option<String>) -> Option<Rese
     };
     // The coordinator's grant does not carry the resend key, and reading with
     // it turned the only configured channel into no channel at all.
-    let vault = crate::skarbiec::Client::alert_key_reader()
+    let vault = crate::skarbiec::Client::stado()
         .map_err(|err| channel_failed("resend-configuration", &err.to_string()))
         .ok()?;
     let item = crate::config::alert_resend_item();
@@ -204,7 +204,7 @@ async fn resolve_resend(to: Option<String>, from: Option<String>) -> Option<Rese
 /// to no channel with a structured failure line, never a panic.
 async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
     let phone = phone.filter(|value| !value.is_empty())?;
-    let provider = crate::skarbiec::Client::integration_provider("most")
+    let provider = crate::skarbiec::Client::stado()
         .map_err(|err| channel_failed("most-configuration", &err.to_string()))
         .ok()?;
     // Field by field: the listener refuses a read that names no field, so the

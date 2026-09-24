@@ -88,12 +88,10 @@ impl Env {
         self.home().join(format!("{name}-grant"))
     }
 
-    /// Start the listener. `object_vault` and `release_vault` are the endpoints
-    /// those two verifiers read; a case whose subject is an unreachable vault
-    /// passes a port nothing listens on.
-    pub fn start(&self, object_vault: &str, release_vault: &str) -> Listener {
+    /// Start the listener against one vault endpoint. A dead address exercises
+    /// the refusal and retry path without substituting a simulated broker.
+    pub fn start(&self, vault_url: &str) -> Listener {
         let port = reserved_port();
-        let dead = format!("http://127.0.0.1:{}", reserved_port());
         let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
         command
             .args([
@@ -115,26 +113,9 @@ impl Env {
             .env("STADO_CONFIG", self.home().join("no-such-config.json"))
             .env("WC_OBJECT_API_NAMESPACES", policy::namespaces())
             .env("WC_RELEASE_API_PUBLISHERS", policy::publishers())
-            .env("WC_SKARBIEC_URL", &dead)
-            .env("WC_SKARBIEC_TOKEN_FILE", self.grant("coordinator"))
-            .env("WC_OBJECT_SKARBIEC_URL", object_vault)
-            .env(
-                "WC_OBJECT_SKARBIEC_CONSUMER",
-                stado::config::OBJECT_API_VERIFIER_CONSUMER,
-            )
-            .env("WC_OBJECT_SKARBIEC_TOKEN_FILE", self.grant("object"))
-            .env("WC_RELEASE_SKARBIEC_URL", release_vault)
-            .env(
-                "WC_RELEASE_SKARBIEC_CONSUMER",
-                stado::config::RELEASE_API_VERIFIER_CONSUMER,
-            )
-            .env("WC_RELEASE_SKARBIEC_TOKEN_FILE", self.grant("release"))
-            .env("WC_MACHINE_SKARBIEC_URL", &dead)
-            .env("WC_SERVICE_SKARBIEC_URL", &dead)
-            .env("WC_RATE_LIMIT_SKARBIEC_URL", &dead)
-            .env("WC_REGISTRY_SKARBIEC_URL", &dead)
-            .env("WC_INTEGRATION_SKARBIEC_URL", &dead)
-            .env("WC_INTEGRATION_PROVIDER_SKARBIEC_URL", &dead)
+            .env("WC_SKARBIEC_URL", vault_url)
+            .env("WC_SKARBIEC_CONSUMER", "stado")
+            .env("WC_SKARBIEC_TOKEN_FILE", self.grant("stado"))
             .env("WC_DASHBOARD_BOUNDARY_ATTEMPTS", "1")
             .env(
                 "WC_DASHBOARD_BOUNDARY_RECHECK_SECONDS",

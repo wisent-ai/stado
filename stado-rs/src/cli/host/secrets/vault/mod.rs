@@ -1,5 +1,6 @@
 //! `stado host vault ...` and `stado host grant ...`.
 
+pub(in crate::cli::host) mod consolidate;
 pub(in crate::cli::host) mod grants;
 pub(in crate::cli::host) mod item;
 pub(in crate::cli::host) mod mirror;

@@ -1,4 +1,6 @@
-//! Authenticated release publishers and their declared products.
+//! Authenticated release publishers and their declared products. A product
+//! publishes as itself: its bearer is the vault item named after the product,
+//! read through Stado's Skarbiec identity.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -102,10 +104,11 @@ fn parse_declared_release_publishers(
             .get("item")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let expected_item = format!("{product}-release-publisher");
+        let expected_item = product.as_str();
         if item != expected_item {
             problems.push(format!(
-                "release_api.publishers.{product}.item must be {expected_item:?}, got {item:?}"
+                "release_api.publishers.{product}.item must be the product's own name \
+                 {expected_item:?}, got {item:?}"
             ));
             entry_valid = false;
         }

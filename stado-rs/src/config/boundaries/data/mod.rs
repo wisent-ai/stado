@@ -1,11 +1,10 @@
-//! Data boundaries: databases, web products, integrations and rate limits.
+//! Data boundaries: databases, web products and integrations. Rate limits are
+//! verified through Stado's Skarbiec identity.
 
 mod database;
 mod integration;
-mod rate_limit;
 mod web;
 
 pub use database::*;
 pub use integration::*;
-pub use rate_limit::*;
 pub use web::*;

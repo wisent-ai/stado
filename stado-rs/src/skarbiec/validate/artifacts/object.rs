@@ -23,36 +23,29 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
     if let Some(problem) = crate::config::queue_prefix_problem(namespaces) {
         return Err(SkarbiecError::Deployment(problem));
     }
-    let client = Client::object_verifier()?;
+    let client = Client::stado()?;
     let expected = namespaces
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<BTreeSet<_>>();
-    let mut visible = client
+    let visible = client
         .list_items()
         .await?
         .into_iter()
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    // The object boundary must remain available during a rolling upgrade where
-    // the route-scoped host-health item has not been reconciled yet. Its own
-    // authorization path diagnoses that absence; unknown extra items still
-    // close the object boundary.
-    let host_health_visible = visible.remove(crate::config::HOST_HEALTH_API_ITEM);
-    if visible != expected {
+    let host_health_visible = visible.contains(crate::config::HOST_HEALTH_API_ITEM);
+    // This client also reads other Stado boundaries; only the declared object
+    // items must be visible here. Host-health has its own authorization check.
+    if !expected.is_subset(&visible) {
         let missing = expected
             .difference(&visible)
             .cloned()
             .collect::<Vec<_>>()
             .join(",");
-        let unexpected = visible
-            .difference(&expected)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(",");
         return Err(SkarbiecError::Deployment(format!(
-            "object verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+            "object verifier grant is missing items [{missing}]"
         )));
     }
 

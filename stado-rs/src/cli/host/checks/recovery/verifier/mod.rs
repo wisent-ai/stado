@@ -101,11 +101,10 @@ pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, 
         target,
         "object",
         "matching local and target object_api.namespaces plus the host-health route",
-        crate::config::OBJECT_API_VERIFIER_CONSUMER,
-        "WC_OBJECT_SKARBIEC_TOKEN_FILE",
-        "stado-object-api-verifier-skarbiec-token",
+        crate::config::skarbiec_consumer(),
+        "WC_SKARBIEC_TOKEN_FILE",
+        "stado-skarbiec-token",
         items,
-        true,
     )
     .await
 }

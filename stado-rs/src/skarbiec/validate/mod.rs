@@ -51,7 +51,7 @@ pub async fn validate_integration_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
-    let verifier = Client::integration_verifier()?;
+    let verifier = Client::stado()?;
     let expected = clients
         .values()
         .map(|policy| policy.item().to_string())
@@ -63,13 +63,13 @@ pub async fn validate_integration_verifier() -> Result<usize, SkarbiecError> {
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    if visible != expected {
-        return Err(SkarbiecError::Deployment(
-            "integration verifier grant item set mismatch".to_string(),
-        ));
+    if !expected.is_subset(&visible) {
+        let missing = expected.difference(&visible).cloned().collect::<Vec<_>>();
+        return Err(SkarbiecError::Deployment(format!(
+            "integration verifier grant is missing items {missing:?}"
+        )));
     }
-
-    let verifier_grant = read_grant(crate::config::integration_skarbiec_token_file())?;
+    let verifier_grant = read_grant(crate::config::skarbiec_token_file())?;
     let verifier_digest = Sha256::digest(verifier_grant.as_bytes()).to_vec();
     let mut bearer_digests = BTreeSet::new();
     for (name, policy) in clients {
@@ -98,7 +98,7 @@ pub async fn validate_integration_provider(domain: &str) -> Result<usize, Skarbi
             "integration provider domain {domain:?} is not configured"
         ))
     })?;
-    let provider = Client::integration_provider(domain)?;
+    let provider = Client::stado()?;
     let expected = policy.items().iter().cloned().collect::<BTreeSet<_>>();
     let visible = provider
         .list_items()
@@ -107,9 +107,10 @@ pub async fn validate_integration_provider(domain: &str) -> Result<usize, Skarbi
         .filter(|item| item.deleted != Some(true))
         .map(|item| item.id)
         .collect::<BTreeSet<_>>();
-    if visible != expected {
+    if !expected.is_subset(&visible) {
+        let missing = expected.difference(&visible).cloned().collect::<Vec<_>>();
         return Err(SkarbiecError::Deployment(format!(
-            "integration provider grant item set mismatch for domain {domain:?}"
+            "integration provider grant is missing items {missing:?} for domain {domain:?}"
         )));
     }
     Ok(expected.len())
