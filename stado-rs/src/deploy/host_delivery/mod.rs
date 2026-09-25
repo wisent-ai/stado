@@ -16,5 +16,4 @@ mod script;
 mod stages;
 
 pub use deliver::deliver_host;
-pub(crate) use deliver::transfer_native_sdk;
 pub use script::DELIVERED_STATUS;
