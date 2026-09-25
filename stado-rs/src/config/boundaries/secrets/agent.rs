@@ -36,14 +36,33 @@ static AGENT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     .into_owned()
 });
 static AGENT_SKARBIEC_ITEMS: LazyLock<Vec<String>> =
-    LazyLock::new(|| cfg_list("WC_AGENT_SKARBIEC_ITEMS", "agent.skarbiec.items", &[]));
+    LazyLock::new(|| env_and_file_list("WC_AGENT_SKARBIEC_ITEMS", "agent.skarbiec.items"));
 static AGENT_SKARBIEC_SECRET_FIELDS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    cfg_list(
+    env_and_file_list(
         "WC_AGENT_SKARBIEC_SECRET_FIELDS",
         "agent.skarbiec.secret_fields",
-        &[],
     )
 });
+
+/// The workload secret lists are the union of the unit's environment and the
+/// config file. An agent unit pins its list in its environment, and
+/// `release catalog enroll` adds a new product's build secrets to the file;
+/// if the environment replaced the file, the added secrets would never reach
+/// the agent that runs the product's jobs.
+fn env_and_file_list(variable: &str, key: &str) -> Vec<String> {
+    let mut entries = cfg_list(variable, key, &[]);
+    if std::env::var(variable).is_ok_and(|value| !value.trim().is_empty()) {
+        let from_file = crate::config_file::get(key)
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
+        for entry in from_file.iter().filter_map(|value| value.as_str()) {
+            if !entries.iter().any(|known| known == entry) {
+                entries.push(entry.to_string());
+            }
+        }
+    }
+    entries
+}
 static BACKEND_MESSAGING_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|| {
     cfg_list(
         "WC_BACKEND_MESSAGING_SKARBIEC_ITEMS",
@@ -107,13 +126,27 @@ pub fn backend_messaging_skarbiec_items() -> &'static [String] {
 }
 
 /// Whether a job may project one exact Skarbiec field into its environment.
-/// Matching without allocating keeps this check cheap on every admission path.
+/// Matching without allocating keeps this check cheap on every admission path;
+/// only a reference the loaded list lacks is looked up again in the config
+/// file as it is now, so a product enrolled after this agent started is
+/// served without restarting it.
 pub fn agent_secret_reference_allowed(item: &str, field: &str) -> bool {
-    AGENT_SKARBIEC_SECRET_FIELDS.iter().any(|entry| {
+    let matches = |entry: &str| {
         entry
             .split_once('#')
             .is_some_and(|(allowed_item, allowed_field)| {
                 allowed_item == item && allowed_field == field
             })
-    })
+    };
+    AGENT_SKARBIEC_SECRET_FIELDS
+        .iter()
+        .any(|entry| matches(entry))
+        || crate::config_file::get_fresh("agent.skarbiec.secret_fields")
+            .and_then(|value| value.as_array().cloned())
+            .is_some_and(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .any(matches)
+            })
 }

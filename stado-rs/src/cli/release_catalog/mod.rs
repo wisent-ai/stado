@@ -32,9 +32,10 @@ pub struct CatalogArgs {
 enum CatalogCommands {
     /// Set up everything a checkout's release manifest needs from the fleet:
     /// its release publisher, the build secrets its platforms and deliveries
-    /// read (declared for and granted to the workload agent), the running
-    /// service's own consumer with exactly `runtime.grants` and its bearer on
-    /// every rollout target, and a check that every required platform
+    /// read (declared for and granted to the workload agent), for a service
+    /// its rollout policy (created from runtime.port when absent) and its own
+    /// consumer with exactly `runtime.grants` and its bearer on every rollout
+    /// target, and a check that every required platform
     /// declares post-build tests. `build submit` and `release submit` run the
     /// same steps before their first write.
     Enroll {

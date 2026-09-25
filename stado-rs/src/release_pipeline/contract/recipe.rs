@@ -100,6 +100,16 @@ pub struct RuntimeContract {
     /// token.
     #[serde(default)]
     pub grants: Vec<String>,
+    /// The loopback port the service answers on once it is live. With it,
+    /// enrollment creates the product's rollout policy when the registry has
+    /// none: a blue-green target on the host the service directory places it
+    /// on (or the vault owner), with two candidate ports Stado picks itself.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// The HTTP path that answers 200 when the service is ready; `/healthz`
+    /// when absent.
+    #[serde(default)]
+    pub readiness_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
