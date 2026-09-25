@@ -127,6 +127,7 @@ pub(super) async fn plan_redelivery(
     queue_immutable(request_path, &request_bytes).await?;
     let consumer = if delivery.target.is_empty() {
         builder(
+            &crate::cli::release_submit::builds::builder::Fleet::read().await?,
             &manifest.platforms[&delivery.platform].runner_platform,
             None,
             None,

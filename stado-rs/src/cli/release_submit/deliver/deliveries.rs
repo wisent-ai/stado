@@ -98,6 +98,7 @@ pub(crate) async fn run_deliveries(
             // live builder of the platform.
             let consumer = if d.target.is_empty() {
                 builder(
+                    &crate::cli::release_submit::builds::builder::Fleet::read().await?,
                     &m.platforms[&d.platform].runner_platform,
                     None,
                     None,

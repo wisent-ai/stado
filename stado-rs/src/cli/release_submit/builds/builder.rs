@@ -8,6 +8,30 @@ use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::ScratchReceipt;
 
+/// The registry and every live capacity publication, read once for all the
+/// platforms one submission places. Each placement used to read both again:
+/// the capacity read alone is a listing plus one download per publishing
+/// host, repeated for every platform of every build.
+pub(crate) struct Fleet {
+    registry: crate::targets::Registry,
+    capacity: BTreeMap<String, serde_json::Value>,
+}
+
+impl Fleet {
+    pub(crate) async fn read() -> Result<Self, CmdError> {
+        let registry = crate::targets::fetch_registry_remote()
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let store = JobStorage::new()
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let capacity = crate::queue::capacity::read_consumer_capacity(&store)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        Ok(Self { registry, capacity })
+    }
+}
+
 /// Pin one job to a live host of `platform`.
 ///
 /// `scratch` is what the last build of the product being placed wrote to
@@ -30,26 +54,19 @@ use crate::release_pipeline::ScratchReceipt;
 /// and Cargo admits one at a time, so among hosts otherwise alike the one
 /// compiling fewer of them goes first. Delivery jobs pass an empty map.
 pub(crate) async fn builder(
+    fleet: &Fleet,
     platform: &str,
     pinned: Option<&str>,
     scratch: Option<&ScratchReceipt>,
     secret_env: &BTreeMap<String, String>,
     in_flight: &BTreeMap<String, usize>,
 ) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let store = JobStorage::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let capacity = crate::queue::capacity::read_consumer_capacity(&store)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let (registry, capacity) = (&fleet.registry, &fleet.capacity);
     // Keep each live consumer's own publication, not merely its name: the
     // claimability judgement below is made from it, so no extra host read is
     // needed to know whether a candidate can take the work it would be pinned.
     let mut live_consumers = BTreeMap::new();
-    for (consumer, publication) in &capacity {
+    for (consumer, publication) in capacity {
         let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
         if let Some(target) = registry
             .lookup_self(identity)
@@ -70,7 +87,7 @@ pub(crate) async fn builder(
     let mut considered: Vec<(String, Claimability)> = Vec::new();
     let mut candidates: Vec<_> = registry
         .targets
-        .into_iter()
+        .iter()
         .filter_map(|target| {
             if target.release_platform != platform || pinned.is_some_and(|name| target.name != name)
             {
@@ -140,7 +157,7 @@ pub(crate) async fn builder(
     candidates
         .into_iter()
         .next()
-        .map(|(_, _, _, _, target, consumer)| (target, consumer))
+        .map(|(_, _, _, _, target, consumer)| (target.clone(), consumer))
         .ok_or_else(|| {
             // Name the store this looked in. Builders are selected from capacity
             // publications, not from the registry's platform declaration, so a host

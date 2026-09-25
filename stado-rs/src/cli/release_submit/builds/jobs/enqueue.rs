@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::cli::build_cmd::timing::phase;
-use crate::cli::release_submit::builds::builder::builder;
+use crate::cli::release_submit::builds::builder::{builder, Fleet};
 use crate::cli::release_submit::builds::history;
 use crate::cli::release_submit::builds::jobs::command::release_worker_command;
 use crate::cli::release_submit::builds::jobs::{input, persist_worker_request, secret_refs};
@@ -34,6 +34,7 @@ pub const RELEASE_BUILD_RUN_SCOPE: &str = "release-platform";
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn enqueue(
     store: &JobStorage,
+    fleet: &Fleet,
     id: &str,
     m: &ReleasePipelineManifest,
     version: &str,
@@ -138,6 +139,7 @@ pub(crate) async fn enqueue(
                 .as_ref()
                 .map(|request| request.builder.as_str());
             let (host, consumer) = builder(
+                fleet,
                 &recipe.runner_platform,
                 pinned,
                 history.scratch.as_ref(),
@@ -229,6 +231,7 @@ pub(crate) async fn enqueue(
         // Another coordinator published the request first. Keep that placement
         // and apply the normal claim gate before creating its queue plan.
         builder(
+            fleet,
             &recipe.runner_platform,
             Some(&request.builder),
             history.scratch.as_ref(),

@@ -4,6 +4,7 @@
 //! already-published one and re-opens a stale publication.
 
 use crate::cli::release_cmd;
+use crate::cli::release_submit::builds::builder::Fleet;
 use crate::cli::release_submit::builds::jobs::enqueue::enqueue;
 use crate::cli::release_submit::builds::jobs::terminal::{job_output_tail, read_terminal_job};
 use crate::cli::release_submit::run::source::build_uri;
@@ -30,6 +31,8 @@ pub(crate) async fn enqueue_platforms(
 ) -> Result<Option<CmdError>, CmdError> {
     let source_input_uri = build_uri(&build.product, &build.build_id, "inputs/source.tar.gz");
     let mut enqueue_failure = None;
+    // Read on the first platform that needs a job, then shared by the rest.
+    let mut fleet: Option<Fleet> = None;
     for p in platforms {
         // A platform stays recorded as Submitted while its job runs, and
         // nothing wrote Failed when the job ended badly. A resubmission then
@@ -93,8 +96,18 @@ pub(crate) async fn enqueue_platforms(
                 .get(p)
                 .filter(|platform| platform.state == PlatformRunState::Failed)
                 .map(|platform| platform.job_id.as_str());
+            if fleet.is_none() {
+                match Fleet::read().await {
+                    Ok(read) => fleet = Some(read),
+                    Err(error) => {
+                        enqueue_failure = Some(error);
+                        break;
+                    }
+                }
+            }
             let r = match enqueue(
                 store,
+                fleet.as_ref().expect("read above"),
                 &build.build_id,
                 m,
                 &build.version,
