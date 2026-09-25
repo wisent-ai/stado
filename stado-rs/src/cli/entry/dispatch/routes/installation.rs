@@ -2,7 +2,6 @@
 
 use crate::cli::entry::spec::root::installation::InstallationCommands;
 use crate::cli::hosts::disk_cleanup;
-use crate::cli::integrations::mail;
 use crate::cli::setup::onboarding;
 use crate::cli::work::autonomy;
 use crate::cli::*;
@@ -31,7 +30,6 @@ pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdErr
         InstallationCommands::Billing(sub) => billing::dispatch(&sub).await,
         InstallationCommands::Azure(sub) => azure::dispatch(sub).await,
         InstallationCommands::Cloudflare(sub) => cloudflare::dispatch(sub).await,
-        InstallationCommands::Mail(sub) => mail::dispatch(&sub).await,
         InstallationCommands::DiskCleanup {
             once,
             watch,

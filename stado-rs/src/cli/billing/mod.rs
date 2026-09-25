@@ -26,9 +26,10 @@
 //!
 //! Mail is wired in as advisory evidence: providers announce closure,
 //! failed payment and credit expiry by email days before the API starts
-//! refusing calls. The sweep reuses `cli/mail.rs`'s read-only Gmail client
-//! and is fault-isolated — no Gmail token, no scope, or a dead Gmail never
-//! fails the watch, it only prints why the evidence is missing.
+//! refusing calls. The sweep reads the provider notices Skrzynka has
+//! received and is fault-isolated — Skrzynka missing, refusing, or holding
+//! no mailbox never fails the watch, it only prints why the evidence is
+//! missing.
 //!
 //! The components follow the verbs and the reads: `show` renders a
 //! published snapshot for a human, `watch` holds the foreground watchdog

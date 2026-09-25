@@ -281,8 +281,7 @@ pub enum LifecycleCommands {
 }
 
 /// Default `--lines` for `service logs`: one byte's worth of lines. Derived
-/// from `u8::MAX` rather than written as a number, the same way
-/// `cli/mod.rs::default_mail_results` derives its default from `u8::BITS`.
+/// from `u8::MAX` rather than written as a number.
 fn default_log_lines() -> usize {
     usize::from(u8::MAX)
 }

@@ -9,15 +9,14 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MailAnalysis {
+    /// Skrzynka's message id: `skrzynka message show <id>` opens it.
     pub id: String,
-    pub thread_id: String,
-    pub gmail_url: String,
+    pub mailbox_id: String,
     pub date: String,
-    pub internal_date: Option<String>,
+    pub received_at: String,
     pub from: String,
     pub to: String,
     pub subject: String,
-    pub labels: Vec<String>,
     pub snippet: String,
     pub categories: Vec<String>,
     pub amounts: Vec<String>,

@@ -1,11 +1,13 @@
 //! `billing watch` — the foreground watchdog loop.
 //!
 //! The poll body is deliberately small and the pieces around it are the
-//! components: `mail` runs the fault-isolated Gmail sweep, `report` emits
-//! the poll (JSON document or human tables), and `render` holds the tables
-//! themselves. The loop below owns only the de-duplication state and the
-//! order the three storage operations happen in.
+//! components: `mail` runs the fault-isolated sweep of provider notices
+//! Skrzynka received, `constants` says which mail counts as one, `report`
+//! emits the poll (JSON document or human tables), and `render` holds the
+//! tables themselves. The loop below owns only the de-duplication state and
+//! the order the three storage operations happen in.
 
+mod constants;
 mod mail;
 mod render;
 mod report;

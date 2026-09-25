@@ -1,9 +1,5 @@
 {
-  "why": "What the analysis pass looks for in a message body. Two of these are syntax — an HTML tag, a run of whitespace, a URL — and two are vocabulary that grows: the currencies this fleet is billed in, and the way English mail writes a date. The vocabulary is the reason this is a file rather than five regexes in the source: adding a currency is adding a word to a record, and the record says which currencies were chosen and why the date shapes stop where they do.",
-  "tag": "(?s)<[^>]*>",
-  "tag_why": "An HTML element, removed before the body is read as text.",
-  "space": "\\s+",
-  "space_why": "Any run of whitespace, collapsed to one so a flattened body reads as sentences.",
+  "why": "What the analysis pass looks for in a message body. One of these is syntax — a URL — and two are vocabulary that grows: the currencies this fleet is billed in, and the way English mail writes a date. The vocabulary is the reason this is a file rather than three regexes in the source: adding a currency is adding a word to a record, and the record says which currencies were chosen and why the date shapes stop where they do.",
   "url": "https?://[^\\s<>\\\"')\\]]+",
   "url_why": "A link, ended at the characters that cannot appear inside one in mail: quotes, angle brackets, a closing paren or bracket.",
   "amount": "(?i)(?:USD|EUR|GBP|PLN)\\s*\\d[\\d,]*(?:\\.\\d{1,2})?|[$€£]\\s*\\d[\\d,]*(?:\\.\\d{1,2})?|\\d[\\d,]*(?:\\.\\d{1,2})?\\s*(?:USD|EUR|GBP|PLN)",

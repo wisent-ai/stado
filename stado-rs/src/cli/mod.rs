@@ -89,7 +89,7 @@ pub(crate) use entry::spec::jobs::{
     ArtifactAliasCommands, ArtifactCommands, ArtifactImportCommands, MachineCommands,
     ScheduleCommands,
 };
-pub(crate) use entry::spec::spend::billing::{default_mail_results, BillingCommands, MailCommands};
+pub(crate) use entry::spec::spend::billing::BillingCommands;
 pub(crate) use entry::spec::spend::cost::CostCommands;
 pub(crate) use entry::spec::spend::quota::QuotaCommands;
 pub(crate) use entry::spec::spend::vast::VastCommands;

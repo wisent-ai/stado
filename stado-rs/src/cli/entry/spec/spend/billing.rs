@@ -1,5 +1,6 @@
-//! Cross-cloud spend and credit balances, and the Gmail mailbox the
-//! provider's side of those conversations arrives in.
+//! Cross-cloud spend and credit balances. The provider notices that arrive
+//! by mail are read through Skrzynka by `billing watch`; Stado has no mail
+//! client of its own.
 
 use clap::Subcommand;
 
@@ -30,34 +31,4 @@ pub(crate) enum BillingCommands {
         #[arg(long)]
         json: bool,
     },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum MailCommands {
-    /// Search Gmail and list categorized message metadata.
-    Search {
-        /// Gmail search expression, for example: from:microsoft.com azure.
-        #[arg(long, default_value = "")]
-        query: String,
-        /// Maximum messages to read.
-        #[arg(long, default_value_t = default_mail_results())]
-        max_results: usize,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Aggregate categories, financial amounts, dates, links, and required actions.
-    Analyze {
-        /// Gmail search expression.
-        #[arg(long, default_value = "")]
-        query: String,
-        /// Maximum messages to read.
-        #[arg(long, default_value_t = default_mail_results())]
-        max_results: usize,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-pub(crate) fn default_mail_results() -> usize {
-    usize::try_from(u8::BITS).expect("u8 bit width fits usize")
 }

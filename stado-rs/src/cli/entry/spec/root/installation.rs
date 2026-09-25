@@ -67,10 +67,6 @@ pub(crate) enum InstallationCommands {
     #[command(subcommand)]
     Cloudflare(cloudflare::CloudflareCommands),
 
-    /// Search and deterministically analyze Gmail messages without modifying them.
-    #[command(subcommand)]
-    Mail(MailCommands),
-
     /// Run registry-authorized cleanup for this local target.
     #[command(name = "disk-cleanup")]
     DiskCleanup {

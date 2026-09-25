@@ -74,7 +74,6 @@ fn storage_adapter(name: &str) -> Option<crate::capabilities::StorageAdapter> {
 /// Ceiling on ONE probe. Bounds the command against a black-holed endpoint
 /// — the failure mode of an unreachable release channel or a firewalled
 /// cloud API, which drop packets rather than refusing them, so the socket
-/// never returns. Derived digit-free from `u8::BITS`, the same way
-/// `crate::cli::default_mail_results` derives its page size. Probes run
+/// never returns. Derived digit-free from `u8::BITS`. Probes run
 /// concurrently, so this bounds the whole command and not one row of it.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(u8::BITS as u64);

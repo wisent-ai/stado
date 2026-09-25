@@ -113,9 +113,9 @@ fn print_mail(evaluation: &HealthEvaluation, mail: &MailProbe) {
                 message.from.clone(),
                 message.subject.clone(),
                 message.amounts.join(", "),
-                message.gmail_url.clone(),
+                format!("skrzynka message show {}", message.id),
             ]
         })
         .collect();
-    table::print(&["DATE", "FROM", "SUBJECT", "AMOUNTS", "LINK"], &rows);
+    table::print(&["DATE", "FROM", "SUBJECT", "AMOUNTS", "OPEN"], &rows);
 }

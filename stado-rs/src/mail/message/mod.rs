@@ -1,42 +1,22 @@
-//! Deterministic analysis of one Gmail message document.
+//! Deterministic analysis of one message Skrzynka received.
 //!
-//! The rule tables below are the whole classifier: `headers` reads the
-//! published header names, `body` reconstructs the text, `text` flattens
-//! and harvests it, and `patterns` holds the compiled scanners.
+//! The rule tables below are the whole classifier: `text` harvests the
+//! message text and `patterns` holds the compiled scanners. Skrzynka has
+//! already turned the message into plain text.
 
-mod body;
-mod headers;
 mod patterns;
 mod text;
 
-use serde_json::Value;
+use super::{MailAnalysis, SkrzynkaMessage};
 
-use super::MailAnalysis;
-
-use body::extract_body;
-use headers::header;
 use patterns::{AMOUNT_RE, DATE_RE, URL_RE};
-use text::{html_to_text, regex_values};
+use text::regex_values;
 
-pub(super) fn analyze_message(message: &Value) -> MailAnalysis {
-    let payload = message.get("payload").unwrap_or(&Value::Null);
-    let plain = extract_body(payload, "text/plain");
-    let html = extract_body(payload, "text/html");
-    let body = if plain.trim().is_empty() {
-        html_to_text(&html)
-    } else {
-        plain
-    };
-    let subject = header(payload, "subject");
-    let from = header(payload, "from");
-    let to = header(payload, "to");
-    let date = header(payload, "date");
-    let snippet = message
-        .get("snippet")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let combined = format!("{subject}\n{from}\n{snippet}\n{body}");
+pub fn analyze(message: &SkrzynkaMessage) -> MailAnalysis {
+    let combined = format!(
+        "{}\n{}\n{}\n{}",
+        message.subject, message.sender, message.snippet, message.body_text
+    );
     let lowered = combined.to_ascii_lowercase();
 
     let category_rules: &[(&str, &[&str])] = &[
@@ -84,38 +64,18 @@ pub(super) fn analyze_message(message: &Value) -> MailAnalysis {
         .map(str::to_string)
         .collect::<Vec<_>>();
 
-    let id = message
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
     MailAnalysis {
-        gmail_url: format!("https://mail.google.com/mail/u/me/#all/{id}"),
-        id,
-        thread_id: message
-            .get("threadId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        date,
-        internal_date: message
-            .get("internalDate")
-            .and_then(Value::as_str)
-            .and_then(|value| value.parse::<i64>().ok())
-            .and_then(chrono::DateTime::from_timestamp_millis)
-            .map(|value| value.to_rfc3339()),
-        from,
-        to,
-        subject,
-        labels: message
-            .get("labelIds")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
-        snippet,
+        id: message.id.clone(),
+        mailbox_id: message.mailbox_id.clone(),
+        date: message
+            .sent_at
+            .clone()
+            .unwrap_or_else(|| message.received_at.clone()),
+        received_at: message.received_at.clone(),
+        from: message.sender.clone(),
+        to: message.recipients.clone(),
+        subject: message.subject.clone(),
+        snippet: message.snippet.clone(),
         categories,
         amounts: regex_values(&AMOUNT_RE, &combined),
         date_mentions: regex_values(&DATE_RE, &combined),
