@@ -467,12 +467,16 @@ pub(crate) fn merge(
         };
         merge_environment(&mut environment, component, worker)?;
     }
-    let mut merged: BTreeMap<String, String> = host.env.into_iter().collect();
-    merged.extend(
-        environment
-            .into_iter()
-            .map(|(name, (value, _))| (name, value)),
-    );
+    // The host plan is rendered from this machine's current configuration;
+    // a replaced unit's environment is what it was installed with. Where both
+    // name a variable, the configuration wins: otherwise the one process keeps
+    // the retired identities (`stado-control-plane`, `stado-local-agent`) and
+    // endpoints the units carried, and the migration it completes is undone.
+    let mut merged: BTreeMap<String, String> = environment
+        .into_iter()
+        .map(|(name, (value, _))| (name, value))
+        .collect();
+    merged.extend(host.env);
     host.env = merged.into_iter().collect();
     let binary = host
         .exec_args
