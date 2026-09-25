@@ -65,13 +65,31 @@ stado_loaded_identity() {
 # it. A program outside a `current` tree keeps the exact comparison: the
 # control-plane job that went on executing the shared global binary its plist
 # no longer named is the case that comparison exists for.
+# Whether the process image is still the file installed at the program path.
+# An install that replaces the program in place (a rename over it) leaves the
+# path, and so `comm`, unchanged while the process keeps the old inode: on
+# 2026-09-23 skarbiec 0.4.3 was installed and its unit went on running 0.4.2
+# because this check read `already_correct`. An image that cannot be read is
+# not evidence of a replacement, so it counts as current.
+stado_image_current() {
+  if [ \"$os\" = Darwin ]; then
+    running_inode=$(/usr/sbin/lsof -a -p \"$1\" -d txt -Fi 2>/dev/null | /usr/bin/sed -n 's/^i//p' | /usr/bin/head -n 1)
+    installed_inode=$(/usr/bin/stat -f %i \"$program\" 2>/dev/null)
+  else
+    running_inode=$(/usr/bin/stat -L -c %i \"/proc/$1/exe\" 2>/dev/null)
+    installed_inode=$(/usr/bin/stat -c %i \"$program\" 2>/dev/null)
+  fi
+  [ -z \"$running_inode\" ] || [ -z \"$installed_inode\" ] || [ \"$running_inode\" = \"$installed_inode\" ]
+}
 stado_process_serves() {
   running=''
   serves=no
   [ -n \"$1\" ] || return 0
   running=$(/bin/ps -p \"$1\" -o comm= 2>/dev/null)
   case \"$running\" in
-    \"$program\") serves=yes; return 0 ;;
+    \"$program\")
+      if stado_image_current \"$1\"; then serves=yes; else running=\"$running (replaced on disk)\"; fi
+      return 0 ;;
   esac
   case \"$program\" in
     */current/*) ;;

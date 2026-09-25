@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado service ensure` reloads a unit whose program was replaced in place:** it compared only the running program's path with the declared one, so after an install renamed a new binary over `~/.stado/bin/<product>` it answered `already_correct` while the process went on running the old image. It now also compares the running image's inode (`lsof -d txt` on macOS, `/proc/<pid>/exe` on Linux) with the installed file and reloads the unit when they differ; an image it cannot read is not treated as replaced.
+
 - **`stado credentials item delete --host <host> <item>` removes a retired item from the owner vault:** a retired product's item (such as `wisent-products-release-publisher`) kept every grant that could read it from being revoked, and no Stado command could delete an item on the vault owner. The command runs Skarbiec's own `delete` there, which refuses lifecycle- or Weles-controlled items and keeps the deletion restorable.
 
 - **`stado credentials grant revoke-retired --host <host> <consumer>` removes a role identity once `stado` covers it:** after consolidation the retired consumers (`stado-control-plane`, `stado-release-client`, the verifiers, product client consumers) stayed in the vault beside `stado`, with no command to remove them. The command revokes one only when the `stado` grant already holds every capability it had, and never revokes `stado`. `backend.push_skarbiec`, which nothing reads, is retired with the other role identities.
