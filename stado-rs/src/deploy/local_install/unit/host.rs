@@ -58,6 +58,35 @@ fn command(plan: &InstallPlan) -> Result<Commands, DeployError> {
         })
 }
 
+/// Whether a captured unit runs one of the resident roles the host process
+/// carries. A Stado unit that runs anything else — a periodic
+/// `stado product sync`, say — is not a part of the host and is left alone.
+/// An argv this build cannot parse counts as resident, so the merge names it.
+pub(super) fn resident_role(plan: &InstallPlan) -> bool {
+    if plan.kind == "watchdog" || plan.kind == "failure-fixer" {
+        return true;
+    }
+    let Ok(parsed) = command(plan) else {
+        return true;
+    };
+    matches!(
+        parsed,
+        Commands::Installation(InstallationCommands::DiskCleanup { .. })
+            | Commands::Platform(PlatformCommands::Host(HostCommands::State(
+                HostStateCommands::CollectBeacon { .. }
+            )))
+            | Commands::Work(WorkCommands::Agent(_))
+            | Commands::Platform(PlatformCommands::Resolver(ResolverCommands::Serve { .. }))
+            | Commands::Platform(PlatformCommands::Release(ReleaseCommands::Agent(_)))
+            | Commands::Planes(
+                PlaneCommands::Coordinator { .. }
+                    | PlaneCommands::LocalControlPlane { .. }
+                    | PlaneCommands::CloudControlPlane { .. }
+                    | PlaneCommands::Dashboard { .. }
+            )
+    )
+}
+
 fn check_target(expected: &str, actual: &str, label: &str) -> Result<(), DeployError> {
     if expected != actual {
         return Err(DeployError(format!(

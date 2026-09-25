@@ -139,7 +139,15 @@ fn discover(
             kind,
             content,
         };
-        components.push(Component::from_definition(plan, definition)?);
+        let component = Component::from_definition(plan, definition)?;
+        if !super::resident_role(&component.plan) {
+            eprintln!(
+                "[host] {} runs {:?}, which is not a resident Stado role; left as it is",
+                component.plan.label, component.plan.exec_args
+            );
+            continue;
+        }
+        components.push(component);
     }
     components.sort_by(|left, right| left.plan.label.cmp(&right.plan.label));
     Ok(components)
