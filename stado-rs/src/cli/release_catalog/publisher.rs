@@ -231,13 +231,14 @@ fn vault_owner(this_host: &str) -> Result<String, CmdError> {
         std::path::PathBuf::from(declared)
     };
     let launcher = crate::cli::secrets::skarbiec_launcher()?;
-    let status = crate::cli::secrets::launcher_json(&launcher, &vault, &["sync-status"])
-        .map_err(|error| {
+    let status = crate::cli::secrets::launcher_json(&launcher, &vault, &["sync-status"]).map_err(
+        |error| {
             CmdError::click(format!(
                 "cannot tell which host owns the vault: skarbiec sync-status on {} failed: {error}",
                 vault.display()
             ))
-        })?;
+        },
+    )?;
     let bonds = status.as_array().ok_or_else(|| {
         CmdError::click(format!(
             "cannot tell which host owns the vault: skarbiec sync-status on {} answered {status}",

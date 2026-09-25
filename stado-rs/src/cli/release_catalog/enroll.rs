@@ -139,8 +139,14 @@ async fn ensure_workload_secrets(
     }
 
     let (owner, client) = fleet_hosts().await?;
-    let mut fields: BTreeSet<String> = declared_fields.iter().map(|entry| entry.to_string()).collect();
-    let mut items: BTreeSet<String> = declared_items.iter().map(|entry| entry.to_string()).collect();
+    let mut fields: BTreeSet<String> = declared_fields
+        .iter()
+        .map(|entry| entry.to_string())
+        .collect();
+    let mut items: BTreeSet<String> = declared_items
+        .iter()
+        .map(|entry| entry.to_string())
+        .collect();
     for (item, field) in &missing {
         fields.insert(format!("{item}#{field}"));
         items.insert(item.clone());
@@ -152,7 +158,16 @@ async fn ensure_workload_secrets(
         write_host_config(host, AGENT_ITEMS_KEY, &json!(items).to_string()).await?;
     }
     if client != owner {
-        vault_token_sync(&client, &owner, consumer, &token_file, &token_file, false, false).await?;
+        vault_token_sync(
+            &client,
+            &owner,
+            consumer,
+            &token_file,
+            &token_file,
+            false,
+            false,
+        )
+        .await?;
     }
     for (item, field) in &missing {
         grant_item_read(&owner, consumer, item, field, &token_file, false).await?;
