@@ -136,10 +136,10 @@ pub(super) fn change_consumers(
         Ok(())
     })?;
     // Declaring a consumer grants nothing in Skarbiec: a grant there is per
-    // item, so `oko` stood on `oko`'s consumer list for weeks while every
-    // read of `oko-database` answered 403 (defect 133b75aa). A grant now
-    // widens each named consumer's own Skarbiec grant to read the item, the
-    // union path that keeps its bearer and every capability it holds.
+    // item, so a product could stand on an item's consumer list while every
+    // read of that item answered 403. A grant now widens each named
+    // consumer's own Skarbiec grant to read the item, the union path that
+    // keeps its bearer and every capability it holds.
     let settled = if grant {
         settle_reads(&item, consumers)
     } else {
