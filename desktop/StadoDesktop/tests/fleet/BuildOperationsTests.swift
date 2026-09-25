@@ -41,6 +41,15 @@ final class BuildOperationsTests: XCTestCase {
             store.problem?.contains("build \(missing) does not exist") == true,
             store.problem ?? "no refusal")
 
+        let progress = try XCTUnwrap(operations.first { $0.id == "build-progress" })
+        let request = try progress.request(host: "", values: ["build": missing], content: "")
+        XCTAssertFalse(request.arguments.contains("--json"), "the progress read is the text report")
+        let followed = await store.run(request, fleet: control, expectedSource: control.requestGeneration)
+        XCTAssertFalse(followed, "progress of a build the store does not hold was read")
+        XCTAssertTrue(
+            store.problem?.contains("build \(missing) does not exist") == true,
+            store.problem ?? "no refusal")
+
         let release = try XCTUnwrap(operations.first { $0.id == "release-build" })
         let released = await store.run(
             try release.request(host: "", values: ["build": missing], content: ""),

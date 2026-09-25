@@ -18,10 +18,9 @@ case "${1:-}" in
     # refused by macOS (`reading workspace …: Operation not permitted`).
     # The package pins its dependencies to published tags, so SwiftPM builds
     # it from this source alone, in the package's own `.build` inside the
-    # job tree. The Fleet Expansion and Products screens are driven against
-    # STADO_BIN.
-    swift test --package-path "$source_dir/desktop/StadoDesktop" \
-      --filter 'FleetExpansionTests|ProductOperationsTests'
+    # job tree. `FleetTests` holds the screens that drive STADO_BIN through a
+    # real isolated API: Fleet Expansion, Products and the build operations.
+    swift test --package-path "$source_dir/desktop/StadoDesktop" --filter FleetTests
     ;;
   *) printf 'usage: qualify.sh cli|desktop\n' >&2; exit 64 ;;
 esac

@@ -96,6 +96,12 @@ enum NativeReleaseSourceOperations {
         .init(id: "build-status", title: "Read a build and what each platform's job did", path: ["build", "status"], hostPlacement: .none, fields: [
             .init(id: "build", label: "Build ID from build submit or build list", required: true),
         ], mutates: false),
+        // The same read as text: each platform's queue wait, every finished
+        // step with its exit and duration, the step running now and what it
+        // is blocked on — the lines `stado build status` prints in a terminal.
+        .init(id: "build-progress", title: "Read what each platform's build job is doing now (steps, durations, waits)", path: ["build", "status"], hostPlacement: .none, fields: [
+            .init(id: "build", label: "Build ID from build submit or build list", required: true),
+        ], mutates: false, jsonOutput: false),
         .init(id: "build-list", title: "List recent builds", path: ["build", "list"], hostPlacement: .none, fields: [
             .init(id: "product", label: "One product (blank lists every product's builds)", option: "--product"),
         ], mutates: false),
