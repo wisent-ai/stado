@@ -74,6 +74,20 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             }
         }
     }
+    // An integration provider reads its items as Stado too.
+    if let Some(providers) = root
+        .get_mut("integration")
+        .and_then(|value| value.get_mut("providers"))
+        .and_then(Value::as_object_mut)
+    {
+        for provider in providers.values_mut().filter_map(Value::as_object_mut) {
+            for key in ["consumer", "token_file"] {
+                if provider.remove(key).is_some() {
+                    removed.push("an integration provider identity");
+                }
+            }
+        }
+    }
     let secrets = root
         .entry("secrets")
         .or_insert_with(|| Value::Object(Map::new()))
