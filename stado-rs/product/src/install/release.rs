@@ -1,7 +1,7 @@
 use super::plan::{Placement, Prepared};
 use crate::{
     catalog::text,
-    common::{atomic_json, checked, file_members, platform, sha256, unpack, Runtime},
+    common::{atomic_json, checked, file_members, platform, sha256, stado, unpack, Runtime},
     paths, signing,
 };
 use anyhow::{bail, Context, Result};
@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 pub fn prepare(
@@ -42,7 +41,7 @@ pub fn prepare(
     let output = output.canonicalize()?;
     let archive = output.join(format!("{id}-{version}-{platform}.tar.gz"));
     let fetched = checked(
-        crate::common::stado()
+        stado()
             .args([
                 "release",
                 "fetch",

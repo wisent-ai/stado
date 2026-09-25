@@ -3,6 +3,9 @@ __pycache__/
 dist/
 build/
 .build/
+# `build/` names build output everywhere except this source module: how the
+# product catalog builds an installation recipe.
+!stado-rs/product/src/install/recipes/build/
 .env
 .DS_Store
 **/.DS_Store
