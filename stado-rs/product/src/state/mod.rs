@@ -79,11 +79,45 @@ impl ProductState {
     }
 }
 
+/// The state the separate `wisent-products` program kept about itself: a
+/// receipt for its own pipx installation and its onboarding outbox. That
+/// program is Stado now and the catalog holds no such product, so the
+/// directory is not a set of receipts; read as one, its outbox refused every
+/// install on the hosts it ran on. It moves once, out of the receipt tree,
+/// the way `creation::state` moves the former creation journal; nothing is
+/// deleted.
+const FORMER_PROGRAM: &str = "wisent-products";
+
+fn retire_former_program(runtime: &Runtime, root: &std::path::Path) -> Result<()> {
+    let former = root.join(FORMER_PROGRAM);
+    if !former.is_dir() {
+        return Ok(());
+    }
+    let retired = runtime.home.join(".local/state/stado/retired");
+    let destination = retired.join(FORMER_PROGRAM);
+    if destination.exists() {
+        bail!(
+            "{} is still in the receipt tree and {} already exists; merge or remove one of them",
+            former.display(),
+            destination.display()
+        );
+    }
+    fs::create_dir_all(&retired)?;
+    fs::rename(&former, &destination).with_context(|| {
+        format!(
+            "moving the former program's state {} to {}",
+            former.display(),
+            destination.display()
+        )
+    })
+}
+
 pub fn all(runtime: &Runtime) -> Result<Vec<ProductState>> {
     let root = runtime.home.join(".stado/products");
     if !root.exists() {
         return Ok(Vec::new());
     }
+    retire_former_program(runtime, &root)?;
     let mut states = Vec::new();
     for product in fs::read_dir(root)? {
         let product = product?;

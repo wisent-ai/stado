@@ -3,4 +3,5 @@
 
 mod catalog;
 mod fixture;
+mod former;
 mod refusals;
