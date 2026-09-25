@@ -104,6 +104,9 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 to,
                 json,
             } => super::host::rename_vault_item(&host, &from, &to, json).await,
+            CredentialItemCommands::Delete { host, item, json } => {
+                super::host::delete_vault_item(&host, &item, json).await
+            }
             CredentialItemCommands::StampFingerprints { host, apply, json } => {
                 super::host::stamp_vault_fingerprints(&host, apply, json).await
             }

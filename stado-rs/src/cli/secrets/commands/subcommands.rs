@@ -34,6 +34,15 @@ pub enum CredentialItemCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Delete one owner-controlled item from a host's vault, for items whose
+    /// product or role is retired; Skarbiec keeps the deletion restorable.
+    Delete {
+        #[arg(long)]
+        host: String,
+        item: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Give one host-vault item a new id, keeping its payload, history and
     /// tags; grants naming the old id must be reissued.
     Rename {

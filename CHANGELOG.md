@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado credentials item delete --host <host> <item>` removes a retired item from the owner vault:** a retired product's item (such as `wisent-products-release-publisher`) kept every grant that could read it from being revoked, and no Stado command could delete an item on the vault owner. The command runs Skarbiec's own `delete` there, which refuses lifecycle- or Weles-controlled items and keeps the deletion restorable.
+
 - **`stado credentials grant revoke-retired --host <host> <consumer>` removes a role identity once `stado` covers it:** after consolidation the retired consumers (`stado-control-plane`, `stado-release-client`, the verifiers, product client consumers) stayed in the vault beside `stado`, with no command to remove them. The command revokes one only when the `stado` grant already holds every capability it had, and never revokes `stado`. `backend.push_skarbiec`, which nothing reads, is retired with the other role identities.
 
 - **`stado credentials token sync --shared-vault` delivers a bearer to a host that reads the owner's vault through its route:** token custody compared the bearer with the destination's own declared vault copy, so a host that had moved onto the shared vault through its Skarbiec resolver adapter was refused with "destination vault differs from source owner or consumer grant". With `--shared-vault`, and only when the registry places Skarbiec on the source host and the destination declares a resolver adapter for it, the bearer is verified against the owner's grant.
