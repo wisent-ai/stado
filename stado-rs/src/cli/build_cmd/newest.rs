@@ -15,7 +15,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::cli::build_cmd::{
-    current_build, ensure_build, ensure_object_store, read_source, stage_source,
+    current_build, ensure_build, ensure_object_store, read_source, snapshot_source,
 };
 use crate::cli::release_newest::{plan, workspace, Planned, Standing};
 use crate::cli::CmdError;
@@ -249,7 +249,7 @@ async fn build_checkout(
 ) -> Result<(String, BuildRunState, Option<String>), CmdError> {
     let reading = read_source(&entry.checkout, Some(commit), version)?;
     ensure_object_store().await?;
-    let staged = stage_source(&reading).await?;
+    let staged = snapshot_source(&reading)?;
     let (build, enqueue_failure) = ensure_build(&reading, &staged, version).await?;
     Ok((
         build.build_id,

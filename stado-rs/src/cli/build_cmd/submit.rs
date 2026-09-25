@@ -99,9 +99,33 @@ pub(crate) async fn ensure_object_store() -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Snapshot the committed tree, publish it as the create-only source object
+/// Snapshot the committed tree and name the objects it will become. Git
+/// only: nothing is written, so a build can be recorded — and a refusal
+/// written on it — before anything the fleet must set up has been asked for.
+pub(crate) fn snapshot_source(reading: &SourceReading) -> Result<StagedSource, CmdError> {
+    let snapshot_phase = super::timing::phase("snapshot the committed tree");
+    let archive = snapshot(&reading.root, &reading.commit)?;
+    drop(snapshot_phase);
+    let source_sha256 = release_control::sha256_bytes(&archive);
+    let manifest_sha256 = release_control::sha256_bytes(&reading.manifest_bytes);
+    let source_uri = format!(
+        "stado://sources/{}/{}/source.tar.gz",
+        reading.manifest.product, source_sha256
+    );
+    Ok(StagedSource {
+        archive,
+        source_sha256,
+        manifest_sha256,
+        source_uri,
+    })
+}
+
+/// Enroll the product, publish the snapshot as the create-only source object
 /// and record the manifest and source identity in the product catalog.
-pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource, CmdError> {
+pub(crate) async fn publish_source(
+    reading: &SourceReading,
+    staged: &StagedSource,
+) -> Result<(), CmdError> {
     // Whatever the manifest needs from the fleet is set up before the first
     // write: the source object is written with the product's own publisher
     // bearer, and its jobs read the build secrets the manifest names. A
@@ -116,42 +140,47 @@ pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource
             eprintln!("warning: {finding}");
         }
     }
-    let snapshot_phase = super::timing::phase("snapshot the committed tree");
-    let archive = snapshot(&reading.root, &reading.commit)?;
-    drop(snapshot_phase);
-    let source_sha256 = release_control::sha256_bytes(&archive);
-    let manifest_sha256 = release_control::sha256_bytes(&reading.manifest_bytes);
-    let source_uri = format!(
-        "stado://sources/{}/{}/source.tar.gz",
-        reading.manifest.product, source_sha256
-    );
     let meta = BTreeMap::from([
         ("stado-source-commit".into(), reading.commit.clone()),
-        ("stado-source-sha256".into(), source_sha256.clone()),
-        ("stado-manifest-sha256".into(), manifest_sha256.clone()),
+        ("stado-source-sha256".into(), staged.source_sha256.clone()),
+        (
+            "stado-manifest-sha256".into(),
+            staged.manifest_sha256.clone(),
+        ),
     ]);
     {
-        let _phase =
-            super::timing::phase(format!("upload the {} byte source archive", archive.len()));
-        immutable(&source_uri, &archive, "application/gzip", &meta).await?;
+        let _phase = super::timing::phase(format!(
+            "upload the {} byte source archive",
+            staged.archive.len()
+        ));
+        immutable(
+            &staged.source_uri,
+            &staged.archive,
+            "application/gzip",
+            &meta,
+        )
+        .await?;
     }
     let _phase = super::timing::phase("record the source in the product catalog");
     release_catalog::publish_entry(
         reading.product.clone(),
-        manifest_sha256.clone(),
+        staged.manifest_sha256.clone(),
         Some(CatalogSourceIdentity {
             commit: reading.commit.clone(),
-            source_sha256: source_sha256.clone(),
-            source_uri: source_uri.clone(),
+            source_sha256: staged.source_sha256.clone(),
+            source_uri: staged.source_uri.clone(),
         }),
     )
     .await?;
-    Ok(StagedSource {
-        archive,
-        source_sha256,
-        manifest_sha256,
-        source_uri,
-    })
+    Ok(())
+}
+
+/// The snapshot, published: what a release run consumes before it records
+/// its build.
+pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource, CmdError> {
+    let staged = snapshot_source(reading)?;
+    publish_source(reading, &staged).await?;
+    Ok(staged)
 }
 
 /// The record of this staged source's build: created if it is new, loaded
@@ -252,13 +281,22 @@ pub(crate) async fn queue_build(
     Ok(enqueue_failure)
 }
 
-/// The build of this staged source, recorded and queued.
+/// The build of this snapshot, recorded, published and queued.
+///
+/// The build is recorded and bound to the pushed changes it covers before
+/// the product is enrolled and its source published, so a refusal there is
+/// written on the build and those changes read `failed` instead of waiting
+/// for a build that was never recorded. Enrollment used to run first, and a
+/// submission it refused left every covered change `queued` for good.
 pub(crate) async fn ensure_build(
     reading: &SourceReading,
     staged: &StagedSource,
     version: &str,
 ) -> Result<(BuildRun, Option<CmdError>), CmdError> {
     let mut build = record_build(reading, staged, version).await?;
+    if let Err(error) = publish_source(reading, staged).await {
+        return Err(persist_build_failure(&mut build, error).await);
+    }
     let enqueue_failure = queue_build(&mut build, &reading.manifest).await?;
     Ok((build, enqueue_failure))
 }
@@ -272,7 +310,7 @@ pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
         let _phase = super::timing::phase("ensure the object store");
         ensure_object_store().await?;
     }
-    let staged = stage_source(&reading).await?;
+    let staged = snapshot_source(&reading)?;
     let (build, enqueue_failure) = ensure_build(&reading, &staged, &args.version).await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&build)?)

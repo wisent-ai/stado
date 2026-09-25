@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 pub(crate) use report::current_build;
 pub(crate) use submit::{
-    ensure_build, ensure_object_store, read_source, record_build, stage_source,
+    ensure_build, ensure_object_store, read_source, record_build, snapshot_source, stage_source,
 };
 
 /// A build id as `stado build status` prints it: the same 32 lowercase
