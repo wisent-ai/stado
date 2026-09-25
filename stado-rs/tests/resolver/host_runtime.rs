@@ -139,13 +139,27 @@ fn finite_proxy_commands_share_the_host_pid_and_stop_only_their_listener() {
     std::fs::copy(env!("CARGO_BIN_EXE_stado"), &client)
         .expect("separately installed native client");
     drop(reservation);
-    let ensure = host
-        .command_at(
-            &client,
-            &["release", "proxy", "--state", state, "--bind", &bind],
-        )
-        .output()
-        .expect("finite proxy command");
+    // Sibling tests fork while `fs::copy` holds the new file open for
+    // writing; until their children exec, Linux refuses to run the copy with
+    // ETXTBSY. The copy is complete, so wait for those children to let go.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let ensure = loop {
+        match host
+            .command_at(
+                &client,
+                &["release", "proxy", "--state", state, "--bind", &bind],
+            )
+            .output()
+        {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            result => break result.expect("finite proxy command"),
+        }
+    };
     assert!(ensure.status.success(), "{}", said(&ensure));
     let response = http_get(port, "/healthz", &[]).expect("forwarded actual API");
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");

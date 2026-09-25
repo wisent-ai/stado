@@ -24,26 +24,41 @@ pub fn published(run: &mut Run) -> Result<Releases> {
             .context("real Stado configuration file is required for isolated consumers")?,
     )
     .canonicalize()?;
-    let mut status = Command::new(&run.binary);
-    status
-        .args(["release", "status", "jeden", "--json"])
-        .env("STADO_CONFIG", &config);
-    let response = command(run, status)?.json()?;
+    // The release store is the authority on what can be installed. Run
+    // records are not: on 2026-09-25 runs of jeden 0.1.16 and 0.1.17 read
+    // `completed`/`published` while neither `release.json` existed, so a
+    // journey chosen from them failed on a fetch no install could satisfy.
     let platform = stado_product::common::platform()?;
-    let mut published: Vec<_> = response["runs"]
+    let mut listing = Command::new(&run.binary);
+    listing
+        .args(["storage", "objects", "releases", "jeden/", "--json"])
+        .env("STADO_CONFIG", &config);
+    let objects = command(run, listing)?.json()?;
+    let suffix = format!("/{platform}/release.json");
+    let mut manifests: Vec<(String, String)> = objects["objects"]
         .as_array()
-        .context("actual release runs")?
+        .context("actual release store objects")?
         .iter()
-        .filter(|run| {
-            run["state"] == "completed" && run["platforms"][&platform]["state"] == "published"
+        .filter_map(|object| {
+            let uri = object["uri"].as_str()?;
+            uri.ends_with(&suffix).then(|| {
+                (
+                    object["updated_at"].as_str().unwrap_or_default().to_owned(),
+                    uri.to_owned(),
+                )
+            })
         })
         .collect();
-    published.sort_by(|a, b| b["created_at"].as_str().cmp(&a["created_at"].as_str()));
+    manifests.sort_by(|a, b| b.0.cmp(&a.0));
     let mut coordinates = Vec::<Coordinate>::new();
-    for release in published {
-        let source = release["source_commit"]
+    for (_, uri) in manifests {
+        let mut read = Command::new(&run.binary);
+        read.args(["storage", "cat", &uri])
+            .env("STADO_CONFIG", &config);
+        let manifest = command(run, read)?.json()?;
+        let source = manifest["source_revision"]
             .as_str()
-            .context("published source commit")?;
+            .context("published source revision")?;
         if coordinates
             .iter()
             .any(|coordinate| coordinate.source == source)
@@ -51,7 +66,7 @@ pub fn published(run: &mut Run) -> Result<Releases> {
             continue;
         }
         coordinates.push(Coordinate {
-            version: release["version"]
+            version: manifest["version"]
                 .as_str()
                 .context("published version")?
                 .to_owned(),
@@ -61,7 +76,7 @@ pub fn published(run: &mut Run) -> Result<Releases> {
             break;
         }
     }
-    ensure!(coordinates.len() == 2, "two real published Jeden releases are required on {platform}; no lifecycle pass was performed");
+    ensure!(coordinates.len() == 2, "two real published Jeden releases are required in the release store on {platform}; no lifecycle pass was performed");
     let older = coordinates.pop().context("older published coordinate")?;
     let newer = coordinates.pop().context("newer published coordinate")?;
     Ok(Releases {
