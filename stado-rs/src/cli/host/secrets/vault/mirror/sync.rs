@@ -125,6 +125,42 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
     }
 }
 
+/// Publish TARGET's live vault to the encrypted mirror with `skarbiec
+/// sync-push`, so a copy that pulls sees the owner's renames and grants.
+/// Without it, a grant made on the owner never reaches another host's copy,
+/// and `credentials token sync` there refuses with "synchronize the vault
+/// first".
+pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-push")]).await?;
+    if report.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec refused to push the vault to its mirror: {}",
+            resolved.name,
+            report
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("no detail")
+        )));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "status": "vault_pushed",
+                "skarbiec": report,
+            }))?
+        );
+    } else {
+        println!(
+            "{}: live vault pushed to the mirror ({})",
+            resolved.name,
+            report.get("branch").and_then(Value::as_str).unwrap_or("-")
+        );
+    }
+    Ok(())
+}
+
 /// Pull the encrypted Skarbiec mirror into TARGET's live vault.
 ///
 /// Not a merge, whatever the name suggests. `skarbiec sync-pull` copies the

@@ -25,8 +25,17 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         SecretsCommands::Doctor { json } => doctor(json),
         SecretsCommands::Vault { command, json } => match command {
             None => vault_authority(json),
-            Some(CredentialVaultCommands::Sync { host, check, json }) => {
-                super::host::sync_vault(&host, check, json).await
+            Some(CredentialVaultCommands::Sync {
+                host,
+                check,
+                push,
+                json,
+            }) => {
+                if push {
+                    super::host::push_vault(&host, json).await
+                } else {
+                    super::host::sync_vault(&host, check, json).await
+                }
             }
         },
         SecretsCommands::InspectVault {

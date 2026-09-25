@@ -104,12 +104,17 @@ pub enum CredentialTokenCommands {
 
 #[derive(Subcommand)]
 pub enum CredentialVaultCommands {
-    /// Pull a host's Skarbiec mirror into its declared live vault.
+    /// Pull a host's Skarbiec mirror into its declared live vault, or with
+    /// --push publish the vault owner's live vault to the mirror.
     Sync {
         #[arg(long)]
         host: String,
         #[arg(long)]
         check: bool,
+        /// Publish HOST's live vault to the mirror every copy pulls from.
+        /// Run it on the vault owner after a change other copies must see.
+        #[arg(long, conflicts_with = "check")]
+        push: bool,
         #[arg(long)]
         json: bool,
     },
