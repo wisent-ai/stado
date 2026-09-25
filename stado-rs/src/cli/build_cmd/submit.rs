@@ -102,12 +102,19 @@ pub(crate) async fn ensure_object_store() -> Result<(), CmdError> {
 /// Snapshot the committed tree, publish it as the create-only source object
 /// and record the manifest and source identity in the product catalog.
 pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource, CmdError> {
-    // The source object is written with the product's own publisher bearer;
-    // a product this host has never declared gets its publisher here, before
-    // the write that would otherwise refuse (defect 465ab45a).
+    // Whatever the manifest needs from the fleet is set up before the first
+    // write: the source object is written with the product's own publisher
+    // bearer, and its jobs read the build secrets the manifest names. A
+    // required platform without post-build tests still builds, and is named
+    // here because none of its builds can qualify a task.
     {
-        let _phase = super::timing::phase("declare the release publisher when absent");
-        release_catalog::ensure_publisher(&reading.manifest.product).await?;
+        let _phase = super::timing::phase("enroll the product in the fleet");
+        let enrollment = release_catalog::enroll(&reading.manifest).await?;
+        if let Err(finding) =
+            release_catalog::untested_refusal(&reading.manifest.product, &enrollment.untested)
+        {
+            eprintln!("warning: {finding}");
+        }
     }
     let snapshot_phase = super::timing::phase("snapshot the committed tree");
     let archive = snapshot(&reading.root, &reading.commit)?;

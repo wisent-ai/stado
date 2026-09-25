@@ -36,7 +36,7 @@ fn mint_bearer() -> String {
 }
 
 /// `~/…` for a path under this machine's home, unchanged otherwise.
-fn home_relative(path: &str) -> String {
+pub(super) fn home_relative(path: &str) -> String {
     match std::env::var("HOME") {
         Ok(home) if !home.is_empty() && path.starts_with(&home) => {
             format!("~{}", &path[home.len()..])
@@ -176,19 +176,17 @@ pub(super) async fn declare_publisher(
 /// so the first build or release of a new product publishes instead of
 /// refusing with `release_api.publishers declares no publisher`.
 ///
-/// Until 2026-09-25 that refusal was the only way a new product learned it
-/// needed `catalog declare-publisher`, and the command needed a person to
-/// know which host owns the vault: Skrzynka and Spis were never built by the
-/// fleet because nobody had run it (defect 465ab45a). Both hosts are already
-/// facts Stado can read: the client is this host's registry target, and the
-/// owner is the host this vault replicates, or this host when its vault is
-/// the authority. The declaration itself is `declare_publisher`, unchanged.
-pub(crate) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
+/// That refusal used to be the only way a new product learned it needed
+/// `catalog declare-publisher`, and the command needed a person to know which
+/// host owns the vault. Both hosts are facts Stado can read: the client is
+/// this host's registry target, and the owner is the host this vault
+/// replicates, or this host when its vault is the authority. The declaration
+/// itself is `declare_publisher`, unchanged.
+pub(super) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
     if crate::config::release_publisher_declared(product) {
         return Ok(());
     }
-    let client = this_host().await?;
-    let owner = vault_owner(&client)?;
+    let (owner, client) = fleet_hosts().await?;
     eprintln!(
         "{product}: this host declares no release publisher for it; declaring it now \
          (vault owner {owner}, release client {client})"
@@ -202,6 +200,13 @@ pub(crate) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
                  --client {client}): {error}"
             ))
         })
+}
+
+/// The vault owner and this host, as registry target names.
+pub(super) async fn fleet_hosts() -> Result<(String, String), CmdError> {
+    let client = this_host().await?;
+    let owner = vault_owner(&client)?;
+    Ok((owner, client))
 }
 
 /// This host's registry target, as `stado resolver` identifies it.

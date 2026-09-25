@@ -13,11 +13,12 @@ use super::CmdError;
 mod adopt;
 mod central;
 mod checkout;
+mod enroll;
 mod publisher;
 
 use central::sync_catalog;
 use checkout::sync;
-pub(crate) use publisher::ensure_publisher;
+pub(crate) use enroll::enroll;
 
 const CATALOG_PREFIX: &str = "release-catalog";
 
@@ -29,6 +30,17 @@ pub struct CatalogArgs {
 
 #[derive(Subcommand)]
 enum CatalogCommands {
+    /// Set up everything a checkout's release manifest needs from the fleet:
+    /// its release publisher, the build secrets its platforms and deliveries
+    /// read (declared for and granted to the workload agent), and a check that
+    /// every required platform declares post-build tests. `build submit` and
+    /// `release submit` run the same steps before their first write.
+    Enroll {
+        /// The product checkout whose `.wisent-release.json` is read.
+        checkout: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Register products from checked-out manifests or one central catalog.
     Sync {
         #[arg(long, required_unless_present = "catalog", conflicts_with = "catalog")]
@@ -195,6 +207,51 @@ async fn audit(json: bool) -> Result<(), CmdError> {
     }
 }
 
+/// `catalog enroll`: the enrollment `build submit` runs, for one checkout's
+/// manifest as it is in the working tree, reported step by step.
+async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), CmdError> {
+    let path = checkout.join(release_pipeline::PRODUCT_MANIFEST);
+    let bytes = std::fs::read(&path)
+        .map_err(|error| CmdError::click(format!("cannot read {}: {error}", path.display())))?;
+    let ProductManifest::Release(manifest) =
+        release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
+    else {
+        return Err(CmdError::click(format!(
+            "{} declares releases:false; there is nothing to enroll",
+            path.display()
+        )));
+    };
+    let enrollment = enroll(&manifest).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "product": manifest.product,
+                "steps": enrollment.steps,
+            }))?
+        );
+    } else {
+        for step in &enrollment.steps {
+            println!("{}: {step}", manifest.product);
+        }
+    }
+    untested_refusal(&manifest.product, &enrollment.untested)
+}
+
+/// The refusal for required platforms without post-build tests: their builds
+/// pass, and no task they carry can ever be qualified.
+pub(crate) fn untested_refusal(product: &str, untested: &[String]) -> Result<(), CmdError> {
+    if untested.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{product}: required platform(s) {} declare no post-build tests, so no build of them can \
+         qualify a task (it stays awaiting_tests); add a `tests` list of real product journeys to \
+         each in .wisent-release.json",
+        untested.join(", ")
+    )))
+}
+
 pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
     match args.command {
         CatalogCommands::Sync {
@@ -209,6 +266,7 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
             )),
         },
         CatalogCommands::Audit { json } => audit(json).await,
+        CatalogCommands::Enroll { checkout, json } => enroll_checkout(&checkout, json).await,
         CatalogCommands::DeclarePublisher {
             product,
             owner,
