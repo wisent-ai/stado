@@ -102,8 +102,13 @@ fn discover(
         if label == host.label && in_own_domain {
             continue;
         }
-        let content = std::fs::read_to_string(&path)
+        let bytes = std::fs::read(&path)
             .map_err(|error| DeployError(format!("reading {}: {error}", path.display())))?;
+        // Other vendors keep binary plists beside ours in the system domain;
+        // every unit Stado writes is text, so a file that is not cannot be one.
+        let Ok(content) = String::from_utf8(bytes) else {
+            continue;
+        };
         let Ok(parsed) = parse_local_unit_file(&content, kind) else {
             continue;
         };
