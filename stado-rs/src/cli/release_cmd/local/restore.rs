@@ -82,14 +82,53 @@ pub(in crate::cli::release_cmd) async fn restore_local(
         ))
     })?;
     let digest = hex::encode(sha2::Sha256::digest(&bytes));
+    // Retained archives keep the layout their delivery used, which is not
+    // always `bin/stado`: the host release path retains the published archive
+    // whole. The member is the one regular file named `stado`.
+    let mut members = Vec::new();
+    let mut bundle = tar::Archive::new(flate2::read::GzDecoder::new(std::io::Cursor::new(&bytes)));
+    for entry in bundle.entries().map_err(|error| {
+        CmdError::click(format!(
+            "release restore-local: unreadable retained archive: {error}"
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            CmdError::click(format!(
+                "release restore-local: unreadable archive entry: {error}"
+            ))
+        })?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let path = entry
+            .path()
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "release restore-local: unreadable archive path: {error}"
+                ))
+            })?
+            .to_string_lossy()
+            .into_owned();
+        if path.rsplit('/').next() == Some("stado") {
+            members.push(path);
+        }
+    }
+    drop(bundle);
     drop(bytes);
+    let [member] = members.as_slice() else {
+        return Err(CmdError::click(format!(
+            "release restore-local: {} must carry exactly one regular file named stado, \
+             found {members:?}",
+            archive.display()
+        )));
+    };
     println!(
-        "release restore-local: reinstalling Stado {version} from {} (sha256 {digest})",
+        "release restore-local: reinstalling Stado {version} member {member} from {} (sha256 {digest})",
         archive.display()
     );
     install_archive(
         "stado".to_string(),
-        "bin/stado",
+        member,
         &archive.to_string_lossy(),
         &digest,
         Some(version.to_string()),
