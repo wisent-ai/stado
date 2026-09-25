@@ -209,11 +209,15 @@ async fn follow(build_id: &str) -> Result<(), CmdError> {
         }
         // A build whose submitter has not queued a job yet has nothing to
         // follow; `current_build` with `wait` owns that wait and its limit.
+        // A build that already failed on one platform still has the other's
+        // job to wait for, and `--wait` waits for it: following stopped at
+        // the failure used to leave that wait silent for as long as the
+        // other job ran, which was an hour twice on one day.
         let building = build
             .platforms
             .values()
             .any(|platform| platform.state == PlatformRunState::Submitted);
-        if !building || build.state != BuildRunState::Waiting {
+        if !building {
             return Ok(());
         }
         tokio::time::sleep(FOLLOW_POLL).await;
