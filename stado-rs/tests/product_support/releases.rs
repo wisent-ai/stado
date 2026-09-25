@@ -24,34 +24,44 @@ pub fn published(run: &mut Run) -> Result<Releases> {
             .context("real Stado configuration file is required for isolated consumers")?,
     )
     .canonicalize()?;
-    // The release store is the authority on what can be installed. Run
-    // records are not: runs of jeden 0.1.16 and 0.1.17 read
-    // `completed`/`published` while neither `release.json` existed, so a
-    // journey chosen from them failed on a fetch no install could satisfy.
-    let platform = stado_product::common::platform()?;
-    let mut listing = Command::new(&run.binary);
-    listing
-        .args(["storage", "objects", "releases", "jeden/", "--json"])
+    let mut status = Command::new(&run.binary);
+    status
+        .args(["release", "status", "jeden", "--json"])
         .env("STADO_CONFIG", &config);
-    let objects = command(run, listing)?.json()?;
-    let suffix = format!("/{platform}/release.json");
-    let mut manifests: Vec<(String, String)> = objects["objects"]
+    let response = command(run, status)?.json()?;
+    let platform = stado_product::common::platform()?;
+    let newest = response["runs"]
         .as_array()
-        .context("actual release store objects")?
+        .context("actual release runs")?
         .iter()
-        .filter_map(|object| {
-            let uri = object["uri"].as_str()?;
-            uri.ends_with(&suffix).then(|| {
-                (
-                    object["updated_at"].as_str().unwrap_or_default().to_owned(),
-                    uri.to_owned(),
-                )
-            })
-        })
-        .collect();
-    manifests.sort_by(|a, b| b.0.cmp(&a.0));
+        .filter(|run| run["platforms"][&platform]["state"] == "published")
+        .max_by(|a, b| a["created_at"].as_str().cmp(&b["created_at"].as_str()))
+        .and_then(|run| run["version"].as_str())
+        .with_context(|| format!("no Jeden run has published {platform}"))?
+        .to_owned();
+    // The run record is not the authority on what can be installed; the
+    // release route is. Runs of jeden 0.1.16 and 0.1.17 read `published`
+    // while neither `release.json` was there, and `release status` lists
+    // only recent runs, so the journey asks the route itself: every patch
+    // version from the newest published one down, each manifest read
+    // through the same public route an install uses. A builder holds no
+    // publisher credential to list the store instead.
+    let (line, patch) = newest
+        .rsplit_once('.')
+        .with_context(|| format!("{newest} is not a MAJOR.MINOR.PATCH version"))?;
+    let patch: u64 = patch
+        .parse()
+        .with_context(|| format!("{newest} has no numeric patch"))?;
     let mut coordinates = Vec::<Coordinate>::new();
-    for (_, uri) in manifests {
+    for candidate in (0..=patch).rev() {
+        let version = format!("{line}.{candidate}");
+        let uri = format!("stado://releases/jeden/{version}/{platform}/release.json");
+        let mut stat = Command::new(&run.binary);
+        stat.args(["storage", "stat", &uri, "--json"])
+            .env("STADO_CONFIG", &config);
+        if command(run, stat)?.json()?["state"] != "present" {
+            continue;
+        }
         let mut read = Command::new(&run.binary);
         read.args(["storage", "cat", &uri])
             .env("STADO_CONFIG", &config);
@@ -66,10 +76,7 @@ pub fn published(run: &mut Run) -> Result<Releases> {
             continue;
         }
         coordinates.push(Coordinate {
-            version: manifest["version"]
-                .as_str()
-                .context("published version")?
-                .to_owned(),
+            version,
             source: source.to_owned(),
         });
         if coordinates.len() == 2 {
