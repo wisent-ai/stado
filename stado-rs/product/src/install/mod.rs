@@ -13,7 +13,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::{path::Path, process::Command};
+use std::process::Command;
 
 pub fn recipe<'a>(product: &'a Value, surface: &str) -> Result<&'a Value> {
     product["installations"]

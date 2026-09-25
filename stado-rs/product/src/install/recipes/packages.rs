@@ -72,12 +72,22 @@ pub fn prepare(
                 arguments.extend(["--features".to_owned(), features.join(",")]);
             }
         }
-        cargo::execute(
+        let built = cargo::execute(
             runtime,
             &super::build::manifest::inside(root, text(recipe, "manifest")?)?,
             "build",
             &arguments,
         )?;
+        if built.code != 0 {
+            bail!(
+                "Cargo build of {} failed: {}; evidence {}",
+                text(recipe, "manifest")?,
+                built.report["error"]
+                    .as_str()
+                    .unwrap_or("no error was recorded"),
+                built.report["evidence"].as_str().unwrap_or("unrecorded")
+            );
+        }
         let mut placements = Vec::new();
         for binary in binaries {
             let source = staging.join("release").join(&binary);

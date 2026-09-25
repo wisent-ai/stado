@@ -1,5 +1,5 @@
 mod definition;
-use crate::common::{atomic_write, capture, checked, emit, Arguments, Runtime};
+use crate::common::{atomic_write, checked, emit, Arguments, Runtime};
 use anyhow::{bail, Context, Result};
 use definition::Surface;
 use serde_json::{json, Value};

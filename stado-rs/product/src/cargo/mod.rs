@@ -9,13 +9,13 @@ use std::{
     process::Command,
 };
 
-struct Execution {
-    report: Value,
+pub(crate) struct Execution {
+    pub(crate) report: Value,
     stdout: Vec<u8>,
-    code: i32,
+    pub(crate) code: i32,
 }
 
-fn execute(
+pub(crate) fn execute(
     runtime: &Runtime,
     requested: &Path,
     operation: &str,

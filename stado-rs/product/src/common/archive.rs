@@ -20,7 +20,8 @@ pub fn platform() -> Result<String> {
     Ok(format!("{operating_system}-{architecture}"))
 }
 
-pub fn relative(path: &Path) -> Result<()> {
+/// `path` itself, once it is known to stay beneath whatever root it is joined to.
+pub fn relative(path: &Path) -> Result<&Path> {
     if path.as_os_str().is_empty()
         || path.components().any(|component| {
             matches!(
@@ -34,7 +35,7 @@ pub fn relative(path: &Path) -> Result<()> {
             path.display()
         );
     }
-    Ok(())
+    Ok(path)
 }
 
 pub fn unpack(path: &Path, destination: &Path) -> Result<()> {
