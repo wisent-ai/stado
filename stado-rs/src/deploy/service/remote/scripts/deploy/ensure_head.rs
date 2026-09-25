@@ -74,10 +74,10 @@ stado_loaded_identity() {
 stado_image_current() {
   if [ \"$os\" = Darwin ]; then
     running_inode=$(/usr/sbin/lsof -a -p \"$1\" -d txt -Fi 2>/dev/null | /usr/bin/sed -n 's/^i//p' | /usr/bin/head -n 1)
-    installed_inode=$(/usr/bin/stat -f %i \"$program\" 2>/dev/null)
+    installed_inode=$(/usr/bin/stat -L -f %i \"$program\" 2>/dev/null)
   else
     running_inode=$(/usr/bin/stat -L -c %i \"/proc/$1/exe\" 2>/dev/null)
-    installed_inode=$(/usr/bin/stat -c %i \"$program\" 2>/dev/null)
+    installed_inode=$(/usr/bin/stat -L -c %i \"$program\" 2>/dev/null)
   fi
   [ -z \"$running_inode\" ] || [ -z \"$installed_inode\" ] || [ \"$running_inode\" = \"$installed_inode\" ]
 }
