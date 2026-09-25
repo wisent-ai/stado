@@ -99,8 +99,21 @@ fn merge_environment(
         } else {
             name
         };
-        if let Some((previous, owner)) = values.get(name) {
+        if let Some((previous, owner)) = values.get_mut(name) {
             if previous != value {
+                // A search path is a list, not a setting: the host process
+                // needs every directory any replaced unit searched, in the
+                // order they were first named.
+                if name == "PATH" {
+                    let mut entries: Vec<&str> = previous.split(':').collect();
+                    for entry in value.split(':') {
+                        if !entries.contains(&entry) {
+                            entries.push(entry);
+                        }
+                    }
+                    *previous = entries.join(":");
+                    continue;
+                }
                 return Err(DeployError(format!(
                     "host consolidation cannot merge variable {name}: units {owner} and {} disagree",
                     component.label
