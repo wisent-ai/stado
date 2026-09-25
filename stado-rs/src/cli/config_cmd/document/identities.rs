@@ -17,6 +17,7 @@ const RETIRED: &[&str] = &[
     "rate_limit.skarbiec",
     "integration.skarbiec",
     "integration.provider_skarbiec",
+    "backend.push_skarbiec",
     "backend.messaging.skarbiec.url",
     "backend.messaging.skarbiec.consumer",
     "backend.messaging.skarbiec.token_file",

@@ -16,6 +16,7 @@ const RETIRED_SECTIONS: &[&str] = &[
     "rate_limit.skarbiec",
     "integration.skarbiec",
     "integration.provider_skarbiec",
+    "backend.push_skarbiec",
 ];
 
 const RETIRED_KEYS: &[&str] = &[

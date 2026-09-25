@@ -165,6 +165,16 @@ pub enum CredentialGrantCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Revoke a retired consumer whose every capability the stado grant
+    /// already holds, leaving one identity on the host's vault.
+    #[command(name = "revoke-retired")]
+    RevokeRetired {
+        #[arg(long)]
+        host: String,
+        consumer: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Report one consumer's recorded grant.
     Show {
         #[arg(long)]

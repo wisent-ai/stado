@@ -184,6 +184,11 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 token_file,
                 json,
             } => super::host::consolidate_grants(&host, &sources, &token_file, json).await,
+            CredentialGrantCommands::RevokeRetired {
+                host,
+                consumer,
+                json,
+            } => super::host::revoke_retired(&host, &consumer, json).await,
             CredentialGrantCommands::Show {
                 host,
                 consumer,

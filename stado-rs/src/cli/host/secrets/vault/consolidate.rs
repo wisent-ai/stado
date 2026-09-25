@@ -207,3 +207,79 @@ pub async fn consolidate(
     }
     Ok(())
 }
+
+/// Revoke a retired consumer's grant on HOST once Stado holds everything it
+/// A capability on an item the vault no longer holds (a role-named item that
+/// was renamed to its product) opens nothing, so it does not keep the retired
+/// grant alive.
+/// could read, so one identity is left instead of one per role.
+///
+/// Refused for `stado` itself, and refused while the retired grant still
+/// carries a capability the `stado` grant lacks: `consolidate` first, then
+/// revoke, so no reader loses access in between.
+pub async fn revoke_retired(host: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
+    if consumer == "stado" {
+        return Err(CmdError::usage(
+            "stado is the identity that remains; it is never revoked",
+        ));
+    }
+    let (target, listing) = remote_skarbiec_json(host, &["grant".into(), "list".into()]).await?;
+    let rows = listing.as_array().ok_or_else(|| {
+        CmdError::click(format!(
+            "{}: Skarbiec grant list did not answer an array",
+            target.name
+        ))
+    })?;
+    let capabilities_of = |name: &str| -> Option<BTreeSet<String>> {
+        let grant = rows.iter().find(|row| row["consumer"] == name)?;
+        Some(
+            grant["capabilities"]
+                .as_array()?
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}:{}#{}",
+                        entry["action"].as_str().unwrap_or_default(),
+                        entry["item"].as_str().unwrap_or_default(),
+                        entry["field"].as_str().unwrap_or_default()
+                    )
+                })
+                .collect(),
+        )
+    };
+    let retired = capabilities_of(consumer).ok_or_else(|| {
+        CmdError::click(format!(
+            "{}: no grant for {consumer}; nothing to revoke",
+            target.name
+        ))
+    })?;
+    let stado = capabilities_of("stado").ok_or_else(|| {
+        CmdError::click(format!(
+            "{}: no grant for stado; consolidate before revoking",
+            target.name
+        ))
+    })?;
+    let missing: Vec<&String> = retired.difference(&stado).collect();
+    if !missing.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: stado does not hold {missing:?} that {consumer} can read; run `stado credentials grant consolidate --host {} --from {consumer} --token-file <stado bearer>` first",
+            target.name, target.name
+        )));
+    }
+    remote_skarbiec_json(
+        host,
+        &["grant".into(), "revoke".into(), consumer.to_string()],
+    )
+    .await?;
+    let report = json!({"host": target.name, "revoked": consumer, "covered_by": "stado", "capabilities": retired});
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "{}: revoked {consumer}; stado holds all {} of its capabilities",
+            target.name,
+            retired.len()
+        );
+    }
+    Ok(())
+}

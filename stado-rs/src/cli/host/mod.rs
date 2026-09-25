@@ -57,6 +57,7 @@ pub use crate::cli::host::machine::users::reboot;
 pub use crate::cli::host::machine::users::runners::cron;
 pub use crate::cli::host::machine::users::runners::gpu_power_limit;
 pub use crate::cli::host::secrets::vault::consolidate::consolidate as consolidate_grants;
+pub use crate::cli::host::secrets::vault::consolidate::revoke_retired;
 pub use crate::cli::host::secrets::vault::grants::grant_item_read;
 pub use crate::cli::host::secrets::vault::grants::grant_show;
 pub(crate) use crate::cli::host::secrets::vault::item::put::store_vault_item;
