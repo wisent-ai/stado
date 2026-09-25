@@ -24,6 +24,10 @@
           ]
         },
         {
+          "name": "source-documentation",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--package", "stado-source-checks", "--test", "documentation"]
+        },
+        {
           "name": "clippy",
           "argv": [
             "cargo",
@@ -45,10 +49,6 @@
         {
           "name": "source-native-resident-identity",
           "argv": ["/bin/sh", "-c", "STADO_TEST_NATIVE_LABEL=com.wisent.always-on.stado-object-api,com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent exec \"$HOME/.cargo/bin/cargo\" test --manifest-path stado-rs/Cargo.toml --locked --release --test resolver native_identity -- --ignored --nocapture"]
-        },
-        {
-          "name": "source-documentation",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
         },
         {
           "name": "source-release-newest",
@@ -85,6 +85,10 @@
           ]
         },
         {
+          "name": "source-documentation",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--package", "stado-source-checks", "--test", "documentation"]
+        },
+        {
           "name": "clippy",
           "argv": [
             "cargo",
@@ -102,10 +106,6 @@
         {
           "name": "source-single-process-runtime",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
-        },
-        {
-          "name": "source-documentation",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "documentation"]
         },
         {
           "name": "source-release-newest",

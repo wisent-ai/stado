@@ -4103,6 +4103,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stado-source-checks"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "string_cache"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

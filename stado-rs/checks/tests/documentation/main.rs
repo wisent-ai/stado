@@ -51,10 +51,14 @@ fn is_release_history(path: &str) -> bool {
     KEPT_MARKDOWN.contains(&path) || path.starts_with(CHANGELOG_ARCHIVE)
 }
 
+/// The repository is the nearest directory above this package that holds
+/// Stado's release manifest, so the checks read the whole tree whichever
+/// package compiles them.
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("the crate sits inside the repository")
+        .ancestors()
+        .find(|directory| directory.join(".wisent-release.json").is_file())
+        .expect("the package sits inside the Stado repository")
         .to_path_buf()
 }
 

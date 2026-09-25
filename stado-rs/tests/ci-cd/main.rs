@@ -174,6 +174,48 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         scratch["bytes"].as_u64().unwrap() > 0 && scratch["free_bytes"].as_u64().unwrap() > 0,
         "the build measured nothing: {scratch}"
     );
+    // Every submission phase says how long it took, and the build record
+    // reads back each step the worker ran with its exit and duration, in
+    // text and in the `--json` document Stado Desktop shows.
+    let submitted = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        submitted.contains("[build submit] snapshot the committed tree: took ")
+            && submitted.contains("[build submit] stage the build inputs in the queue: took "),
+        "the submission did not report its phases: {submitted}"
+    );
+    let build_id = release["build_id"]
+        .as_str()
+        .expect("the run names its build");
+    let mut text = Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    );
+    release_env(&mut text, home.path(), &storage, &vault);
+    let text = run(text.args(["build", "status", build_id]));
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.lines()
+            .any(|line| line.trim_start().starts_with("step ")
+                && line.contains(": exit Some(0) after ")),
+        "build status did not name the steps and what they took: {text}"
+    );
+    let mut json = Command::new(
+        std::env::var_os("STADO_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_stado").into()),
+    );
+    release_env(&mut json, home.path(), &storage, &vault);
+    let json: Value =
+        serde_json::from_slice(&run(json.args(["build", "status", build_id, "--json"])).stdout)
+            .unwrap();
+    let steps = json["progress"][platform]["steps"]
+        .as_array()
+        .expect("the build document carries each platform's steps");
+    assert!(
+        !steps.is_empty() && steps.iter().all(|step| step["seconds"].is_u64()),
+        "every finished step carries its duration: {json}"
+    );
+    assert!(
+        json["progress"][platform]["running"].is_null(),
+        "a finished build still names a running step: {json}"
+    );
     println!("verified release platform={platform}; installed=ci-release-probe 1.0.0");
     println!("release evidence retained at {}", home.keep().display());
 }

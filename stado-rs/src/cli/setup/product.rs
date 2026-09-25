@@ -4,7 +4,7 @@
 //!
 //! The catalog is `catalog/products.yml` at the root of this repository and
 //! the implementation is the `stado-product` crate beside this one. Both were
-//! the separate `wisent-products` program until 2026-09-25; Stado already owns
+//! the separate `wisent-products` program until Stado 0.22.0; Stado already owns
 //! the hosts, services and releases those operations act on, so they run here
 //! in the same process rather than through a second executable Stado had to
 //! download before it could install anything.

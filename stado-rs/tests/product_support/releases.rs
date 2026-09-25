@@ -25,7 +25,7 @@ pub fn published(run: &mut Run) -> Result<Releases> {
     )
     .canonicalize()?;
     // The release store is the authority on what can be installed. Run
-    // records are not: on 2026-09-25 runs of jeden 0.1.16 and 0.1.17 read
+    // records are not: runs of jeden 0.1.16 and 0.1.17 read
     // `completed`/`published` while neither `release.json` existed, so a
     // journey chosen from them failed on a fetch no install could satisfy.
     let platform = stado_product::common::platform()?;

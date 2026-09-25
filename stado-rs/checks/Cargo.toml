@@ -1,0 +1,21 @@
+[package]
+name = "stado-source-checks"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Checks of the Stado source tree that do not need Stado compiled"
+license-file = "../../LICENSE"
+
+# These checks read the repository and the published documentation, never
+# the `stado` crate. As integration tests of `stado` they could not start
+# until that crate had compiled — 11 to 28 minutes on the release builders —
+# so build d2714c62 spent its whole compile before learning that a page named
+# a deleted file. In this package they compile in seconds and run as the
+# release recipe's first gate after formatting.
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[[test]]
+name = "documentation"
+path = "tests/documentation/main.rs"

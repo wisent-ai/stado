@@ -102,7 +102,9 @@ pub(crate) async fn ensure_object_store() -> Result<(), CmdError> {
 /// Snapshot the committed tree, publish it as the create-only source object
 /// and record the manifest and source identity in the product catalog.
 pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource, CmdError> {
+    let snapshot_phase = super::timing::phase("snapshot the committed tree");
     let archive = snapshot(&reading.root, &reading.commit)?;
+    drop(snapshot_phase);
     let source_sha256 = release_control::sha256_bytes(&archive);
     let manifest_sha256 = release_control::sha256_bytes(&reading.manifest_bytes);
     let source_uri = format!(
@@ -114,7 +116,12 @@ pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource
         ("stado-source-sha256".into(), source_sha256.clone()),
         ("stado-manifest-sha256".into(), manifest_sha256.clone()),
     ]);
-    immutable(&source_uri, &archive, "application/gzip", &meta).await?;
+    {
+        let _phase =
+            super::timing::phase(format!("upload the {} byte source archive", archive.len()));
+        immutable(&source_uri, &archive, "application/gzip", &meta).await?;
+    }
+    let _phase = super::timing::phase("record the source in the product catalog");
     release_catalog::publish_entry(
         reading.product.clone(),
         manifest_sha256.clone(),
@@ -149,16 +156,19 @@ pub(crate) async fn record_build(
         &staged.source_sha256,
         &staged.manifest_sha256,
     );
-    queue_immutable(
-        &build_path(&m.product, &id, "inputs/source.tar.gz"),
-        &staged.archive,
-    )
-    .await?;
-    queue_immutable(
-        &build_path(&m.product, &id, "manifest.json"),
-        &reading.manifest_bytes,
-    )
-    .await?;
+    {
+        let _phase = super::timing::phase("stage the build inputs in the queue");
+        queue_immutable(
+            &build_path(&m.product, &id, "inputs/source.tar.gz"),
+            &staged.archive,
+        )
+        .await?;
+        queue_immutable(
+            &build_path(&m.product, &id, "manifest.json"),
+            &reading.manifest_bytes,
+        )
+        .await?;
+    }
     let now = Utc::now().to_rfc3339();
     let mut build = load_build(&id).await?.unwrap_or(BuildRun {
         schema_version: 1,
@@ -182,8 +192,11 @@ pub(crate) async fn record_build(
     {
         return Err(CmdError::click("durable build identity mismatch"));
     }
-    crate::cli::release_submit::changes::bind(&reading.root, &reading.commit, &id, &m.product)
-        .await?;
+    {
+        let _phase = super::timing::phase("bind the commit to its release batch");
+        crate::cli::release_submit::changes::bind(&reading.root, &reading.commit, &id, &m.product)
+            .await?;
+    }
     build.failure = None;
     save_build(&mut build).await?;
     Ok(build)
@@ -204,7 +217,9 @@ pub(crate) async fn queue_build(
         }
     };
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
+    let enqueue_phase = super::timing::phase("queue the platform jobs");
     let mut enqueue_failure = enqueue_platforms(&store, build, m, &platforms).await?;
+    drop(enqueue_phase);
     let queued_nothing = build
         .platforms
         .values()
@@ -214,6 +229,7 @@ pub(crate) async fn queue_build(
             return Err(persist_build_failure(build, error).await);
         }
     }
+    let _phase = super::timing::phase("read what the queued jobs did");
     refresh_build(&store, build, m).await?;
     if let Some(error) = &enqueue_failure {
         build.failure = Some(format!("not every platform was queued: {error}"));
@@ -234,8 +250,14 @@ pub(crate) async fn ensure_build(
 }
 
 pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
-    let reading = read_source(&args.source, args.commit.as_deref(), &args.version)?;
-    ensure_object_store().await?;
+    let reading = {
+        let _phase = super::timing::phase("read the committed manifest and version");
+        read_source(&args.source, args.commit.as_deref(), &args.version)?
+    };
+    {
+        let _phase = super::timing::phase("ensure the object store");
+        ensure_object_store().await?;
+    }
     let staged = stage_source(&reading).await?;
     let (build, enqueue_failure) = ensure_build(&reading, &staged, &args.version).await?;
     if args.json {

@@ -2,7 +2,7 @@
   "schema_version": "1",
   "scan": {
     "why": "What this repository publishes and this gate therefore reads: the crate's own source, its tests and its declarations, in the text formats a reader opens. Build output and vendored trees are not ours to police.",
-    "directories": ["src", "tests", "data"],
+    "directories": ["src", "tests", "data", "checks"],
     "extensions": ["rs", "json", "md", "toml"]
   },
   "why": "wisent-ai/stado is a public repository. Comments in this tree explain themselves with the incident that motivated them, which is right, and several of them have done it by naming the operator's own machines, home directory and words. Those belong in the fleet's registry and in the change's own record, never in source somebody outside this workshop reads. The patterns below are shapes, not names: a pattern that spelled a person or a machine would publish exactly what it exists to keep out.",

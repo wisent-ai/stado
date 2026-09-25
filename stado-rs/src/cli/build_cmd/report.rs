@@ -1,7 +1,11 @@
 //! `stado build status` and `stado build list`: the read side of the build
 //! records, joined to what the queue says about each platform's job.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
+
+use super::progress::Progress;
 
 use crate::cli::build_cmd::{require_build_id, BuildListArgs, BuildStatusArgs};
 use crate::cli::release_submit::{build_path, load_build, refresh_build, save_build, terminal_job};
@@ -114,7 +118,7 @@ async fn queued_build(mut build: BuildRun, declared: usize) -> Result<BuildRun, 
     Ok(build)
 }
 
-fn print_build(build: &BuildRun) {
+fn print_build(build: &BuildRun, progress: &BTreeMap<String, Progress>) {
     println!(
         "build {} product={} version={} commit={} state={}: {}",
         build.build_id,
@@ -146,18 +150,85 @@ fn print_build(build: &BuildRun) {
                 .map(|failure| format!(" failure: {failure}"))
                 .unwrap_or_default()
         );
+        if let Some(progress) = progress.get(name) {
+            for line in progress.lines(platform.state == PlatformRunState::Submitted) {
+                println!("    {line}");
+            }
+        }
     }
     if let Some(failure) = &build.failure {
         println!("  failure: {failure}");
     }
 }
 
+/// What every platform's job did and, while it builds, what it is doing.
+async fn platform_progress(build: &BuildRun) -> Result<BTreeMap<String, Progress>, CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let now = chrono::Utc::now();
+    let mut progress = BTreeMap::new();
+    for (name, platform) in &build.platforms {
+        progress.insert(
+            name.clone(),
+            super::progress::read(&store, &platform.job_id, now).await,
+        );
+    }
+    Ok(progress)
+}
+
+/// How often a text `--wait` rereads the jobs to report a new step. A step
+/// lasts from seconds to half an hour; a quarter of a minute says when one
+/// started without rereading every log each heartbeat.
+const FOLLOW_POLL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Follow a build on stderr until no platform is still building: each
+/// platform's queue wait, every step as it starts and as it ends, and how
+/// long it took. `--json` stays one document and does not follow.
+async fn follow(build_id: &str) -> Result<(), CmdError> {
+    let mut said = std::collections::HashSet::new();
+    loop {
+        let build = current_build(build_id, false).await?;
+        let progress = platform_progress(&build).await?;
+        for (name, progress) in &progress {
+            let mut lines = progress.lines(false);
+            if let Some(running) = &progress.running {
+                lines.push(format!(
+                    "step {}: started at {}",
+                    running.name, running.since
+                ));
+            }
+            for line in lines {
+                if said.insert(format!("{name}\0{line}")) {
+                    eprintln!("[build status] {name}: {line}");
+                }
+            }
+        }
+        // A build whose submitter has not queued a job yet has nothing to
+        // follow; `current_build` with `wait` owns that wait and its limit.
+        let building = build
+            .platforms
+            .values()
+            .any(|platform| platform.state == PlatformRunState::Submitted);
+        if !building || build.state != BuildRunState::Waiting {
+            return Ok(());
+        }
+        tokio::time::sleep(FOLLOW_POLL).await;
+    }
+}
+
 pub(super) async fn status(args: &BuildStatusArgs) -> Result<(), CmdError> {
+    if args.wait && !args.json {
+        follow(&args.build_id).await?;
+    }
     let build = current_build(&args.build_id, args.wait).await?;
+    let progress = platform_progress(&build).await?;
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&build)?)
+        let mut document = serde_json::to_value(&build)?;
+        document["progress"] = serde_json::to_value(&progress)?;
+        println!("{}", serde_json::to_string_pretty(&document)?)
     } else {
-        print_build(&build)
+        print_build(&build, &progress)
     }
     Ok(())
 }

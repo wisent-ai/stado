@@ -8,8 +8,10 @@
 //! for consuming a build that has not passed.
 
 mod newest;
+mod progress;
 mod report;
 mod submit;
+pub(crate) mod timing;
 
 use std::path::PathBuf;
 

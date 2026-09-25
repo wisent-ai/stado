@@ -1,6 +1,8 @@
 {
   "why": "What the published tree carried when this ratchet was recorded. A file may hold fewer occurrences than its entry, never more, and the entry is removed once the file is clean.",
   "files": {
+    "checks/tests/documentation/main.rs": 2,
+    "checks/tests/documentation/published_paths.rs": 1,
     "data/catalog/products.json": 1,
     "data/fleet/space.json": 1,
     "data/memory/policies.json": 2,
@@ -480,8 +482,6 @@
     "tests/directory_forwards/main.rs": 2,
     "tests/directory_serving/main.rs": 16,
     "tests/disk_scope/main.rs": 3,
-    "tests/documentation/main.rs": 2,
-    "tests/documentation/published_paths.rs": 1,
     "tests/domain/main.rs": 1,
     "tests/failure_classification/main.rs": 2,
     "tests/host_disk_cleanup/main.rs": 2,

@@ -96,11 +96,19 @@ pub(crate) fn execute(
     let program = resolve_step_program(&command[0]);
     // The step's start is logged before the spawn, so a step that hangs or
     // dies leaves its name and argv in the job output instead of silence.
+    // The start time and the exit's duration are what `stado build status`
+    // reads back while the job runs: which step it is in, since when, and
+    // what every finished step cost.
     println!(
         "[release-worker] step {name}: {} {}",
         program.display(),
         command[1..].join(" ")
     );
+    println!(
+        "[release-worker] step {name}: started at {}",
+        chrono::Utc::now().to_rfc3339()
+    );
+    let started = std::time::Instant::now();
     let status = Command::new(&program)
         .args(&command[1..])
         .current_dir(source)
@@ -113,7 +121,11 @@ pub(crate) fn execute(
                 program.display()
             ))
         })?;
-    println!("[release-worker] step {name}: exit {:?}", status.code());
+    println!(
+        "[release-worker] step {name}: exit {:?} after {}s",
+        status.code(),
+        started.elapsed().as_secs()
+    );
     Ok(StepReceipt {
         name: name.into(),
         argv: argv.to_vec(),
