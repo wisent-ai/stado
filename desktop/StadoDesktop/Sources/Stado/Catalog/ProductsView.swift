@@ -50,6 +50,14 @@ struct ProductsView: View {
                         inspector
                     }
                 }
+                Divider()
+                ScrollView {
+                    NativeCapabilityActions(host: scope, fleet: fleetStore,
+                        operations: NativeProductOperations.all)
+                        .disabled(!fleetStore.isConfigured)
+                        .padding(WisentDesign.Space.x4)
+                }
+                .frame(maxHeight: ProductsLayout.operationsHeight)
                 WisentMutationBar(outcome: store.mutation) { store.clearMutation() }
                     .padding(.horizontal, WisentDesign.Space.x4)
                     .padding(.bottom, store.mutation == .idle ? 0 : WisentDesign.Space.x3)
@@ -219,4 +227,10 @@ private struct ProductDecision: Identifiable {
     let releaseVersion: String?
     let sourceCommit: String?
     var id: String { "\(verb)/\(product)/\(surface)/\(host ?? "local")" }
+}
+
+private enum ProductsLayout {
+    /// Room for the catalog, provisioning, reconciliation, compiler and
+    /// documentation operations under the product table.
+    static let operationsHeight: CGFloat = 220
 }

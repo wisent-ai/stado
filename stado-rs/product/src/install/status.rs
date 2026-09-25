@@ -90,8 +90,7 @@ pub fn inspect(
         } else if state.installed_paths.is_empty() {
             report["status"] = json!("unknown");
             detail = "receipt names no installed artifact".to_owned();
-        } else if state.release.is_some() {
-            let release = state.release.as_ref().unwrap();
+        } else if let Some(release) = &state.release {
             let accepted = release["coordinate"]["source_revision"]
                 .as_str()
                 .context("release receipt has no accepted source revision")?;
