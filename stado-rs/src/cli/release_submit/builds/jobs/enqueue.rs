@@ -47,10 +47,11 @@ pub(crate) async fn enqueue(
 ) -> Result<PlatformRun, CmdError> {
     // The fleet's daily ceiling. A release submits one build per platform,
     // and on 2026-09-21 that was 47 of the 58 builds this fleet started in a
-    // day. Recipes and their poller are gone, so this is now the path that
-    // spends the ration: the refusal is asked here so it names the release,
-    // and the charge is taken by `submit_batch` when the job is submitted,
-    // so nothing spends without being counted and nothing is counted twice.
+    // day. The charge below asks and records in one registry generation, and
+    // its refusal names the release (`a release build`) and verifies a
+    // recorded user exception exactly as a separate question would. A second
+    // read of the registry here only to ask first cost every platform one
+    // more round trip to the control host on every submission.
     let intent = crate::scheduler::builds::approval::BuildIntent {
         product: &m.product,
         revision: commit,
@@ -63,22 +64,6 @@ pub(crate) async fn enqueue(
         ),
         None => stable_run_id(RELEASE_BUILD_RUN_SCOPE, &format!("{id}\0{platform}")),
     };
-    let now = chrono::Utc::now();
-    let budget_phase = phase(format!(
-        "{platform}: read the registry and the build budget"
-    ));
-    let (document, _generation) = crate::cli::registry::fetch_versioned_document().await?;
-    let budget = crate::scheduler::builds::BuildBudget::read(&document, now);
-    if !budget.already_charged(&submission_run_id)
-        && !crate::scheduler::builds::approval::charged(&document, &submission_run_id)
-    {
-        if let Some(refusal) = budget.refusal(usize::from(true), "a release build") {
-            crate::scheduler::builds::approval::verify(&intent)
-                .await
-                .map_err(|error| CmdError::click(format!("{refusal}\n{error}")))?;
-        }
-    }
-    drop(budget_phase);
     let request_phase = phase(format!(
         "{platform}: read the saved request and queue state"
     ));
