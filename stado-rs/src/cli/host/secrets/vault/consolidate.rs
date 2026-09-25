@@ -209,10 +209,11 @@ pub async fn consolidate(
 }
 
 /// Revoke a retired consumer's grant on HOST once Stado holds everything it
+/// could read, so one identity is left instead of one per role.
+///
 /// A capability on an item the vault no longer holds (a role-named item that
 /// was renamed to its product) opens nothing, so it does not keep the retired
 /// grant alive.
-/// could read, so one identity is left instead of one per role.
 ///
 /// Refused for `stado` itself, and refused while the retired grant still
 /// carries a capability the `stado` grant lacks: `consolidate` first, then
@@ -259,7 +260,24 @@ pub async fn revoke_retired(host: &str, consumer: &str, json_output: bool) -> Re
             target.name
         ))
     })?;
-    let missing: Vec<&String> = retired.difference(&stado).collect();
+    let (_, items) = remote_skarbiec_json(host, &["list".into()]).await?;
+    let held: BTreeSet<&str> = items
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("deleted").and_then(Value::as_bool) != Some(true))
+        .filter_map(|row| row.get("id").and_then(Value::as_str))
+        .collect();
+    let item_of = |capability: &str| -> String {
+        let rest = capability.split_once(':').map_or("", |(_, rest)| rest);
+        rest.rsplit_once('#')
+            .map_or(rest, |(item, _)| item)
+            .to_string()
+    };
+    let missing: Vec<&String> = retired
+        .difference(&stado)
+        .filter(|capability| held.contains(item_of(capability).as_str()))
+        .collect();
     if !missing.is_empty() {
         return Err(CmdError::click(format!(
             "{}: stado does not hold {missing:?} that {consumer} can read; run `stado credentials grant consolidate --host {} --from {consumer} --token-file <stado bearer>` first",
