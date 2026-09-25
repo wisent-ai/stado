@@ -48,6 +48,21 @@ install -m 0755 "$target_dir/release/stado" "$staged/stado"
 # Source CLI checks run in `quality`; these flows consume the staged binary
 # and retain the same evidence required by the qualification entrypoint.
 export WISENT_TEST_EVIDENCE_DIR="$output_dir/test-evidence"
+
+# The release journey starts a real Skarbiec broker, and nothing guaranteed
+# a builder had one: Skarbiec publishes no linux-amd64 release, so every
+# Linux build since the journey was added failed with `no real skarbiec
+# binary`. The manifest pins a Skarbiec source as the `skarbiec` input and
+# the worker extracts it to WISENT_INPUT_SKARBIEC_DIR; it is compiled here,
+# into its own directory of the builder's cache, and handed to the tests as
+# SKARBIEC_BIN — the path the tests themselves name.
+skarbiec_source=${WISENT_INPUT_SKARBIEC_DIR:?WISENT_INPUT_SKARBIEC_DIR is required}
+skarbiec_target="$target_dir/skarbiec-input"
+printf '[qualification] skarbiec broker\n'
+CARGO_TARGET_DIR="$skarbiec_target" cargo build \
+  --manifest-path "$skarbiec_source/Cargo.toml" \
+  --locked --release --bin skarbiec
+export SKARBIEC_BIN="$skarbiec_target/release/skarbiec"
 for journey in product product_registry product_sources product_releases; do
   printf '[qualification] %s\n' "$journey"
   cargo test \

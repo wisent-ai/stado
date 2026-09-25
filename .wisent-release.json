@@ -7,6 +7,13 @@
     "path": "stado-rs/Cargo.toml",
     "pattern": "(?m)^version\\s*=\\s*\"(?P<version>[^\"]+)\"\\s*$"
   },
+  "inputs": {
+    "skarbiec": {
+      "uri": "stado://sources/skarbiec/618c0d4a46be1eab6071bf091844f965651c6669b6803972f557fd8de76d8d06/source.tar.gz",
+      "sha256": "618c0d4a46be1eab6071bf091844f965651c6669b6803972f557fd8de76d8d06",
+      "mount": "skarbiec"
+    }
+  },
   "platforms": {
     "darwin-arm64": {
       "runner_platform": "darwin-arm64",

@@ -93,13 +93,24 @@ pub fn published(run: &mut Run) -> Result<Releases> {
     })
 }
 
+/// The product under test, whose executables this journey installs.
+const PRODUCT: &str = "jeden";
+
 pub fn product(run: &Run, releases: &Releases, arguments: &[&str]) -> Result<Command> {
     let mut cmd = run.product(arguments);
     let inherited = env::var_os("PATH").context("real dependency PATH is required")?;
+    // The isolated home installs `jeden`, and `stado product` refuses an
+    // install that would change what a name on PATH runs. A builder that
+    // carries its own `jeden` elsewhere on PATH (a Homebrew copy in
+    // `/opt/homebrew/bin` on one fleet Mac) made that refusal fire on the
+    // journey's own first install, so a directory that already holds the
+    // product is left out; every other real dependency is still found.
     let path = env::join_paths(
         [run.home.join(".local/bin"), run.home.join(".stado/bin")]
             .into_iter()
-            .chain(env::split_paths(&inherited)),
+            .chain(
+                env::split_paths(&inherited).filter(|directory| !directory.join(PRODUCT).exists()),
+            ),
     )?;
     cmd.env("STADO_CONFIG", &releases.config).env("PATH", path);
     Ok(cmd)
