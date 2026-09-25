@@ -229,6 +229,30 @@ async fn retire(
     Ok(())
 }
 
+/// The roles an installed host unit already runs. Its argv is the only
+/// record of them once the units it replaced are retired, so a later
+/// installation starts from it rather than from a bare `stado serve`, and
+/// takes its environment from the current configuration.
+fn adopt_installed(mut host: InstallPlan, home: &Path) -> InstallPlan {
+    let path = host.unit_path(home);
+    let Some(content) = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    else {
+        return host;
+    };
+    let Ok(parsed) = parse_local_unit_file(&content, native_kind(host.os)) else {
+        return host;
+    };
+    if parsed.arguments.get(1).map(String::as_str) != Some("serve") {
+        return host;
+    }
+    let mut arguments = parsed.arguments;
+    arguments[0] = host.exec_args.first().cloned().unwrap_or(parsed.program);
+    host.exec_args = arguments;
+    host
+}
+
 /// Merge, install and retire, in that order. Nothing is written before the
 /// merge has accepted every discovered unit.
 pub(crate) async fn install(
@@ -238,6 +262,7 @@ pub(crate) async fn install(
     runner: &Runner,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
+    let host = adopt_installed(host, home);
     let components = discover(&host, home, component_plan)?;
     let registry = crate::targets::load_registry_auto()
         .await
