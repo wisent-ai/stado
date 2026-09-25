@@ -185,7 +185,7 @@ struct ProductsView: View {
             title: "\(value.verb.capitalized) \(value.productName) \(value.surface)?",
             lines: [
                 value.releaseVersion == nil && value.sourceCommit == nil
-                    ? "Stado executes the canonical recipe from Wisent Products."
+                    ? "Stado executes the canonical recipe from its product catalog."
                     : "Stado verifies the signed published release and its accepted source. It does not compile or re-sign its bytes. Both coordinates are required.",
                 value.surface == "service" ? "The service lifecycle is delegated back to Stado on \(value.host ?? "the selected host")." : "The installation is local to this Mac and its previous state is retained for rollback.",
             ],
