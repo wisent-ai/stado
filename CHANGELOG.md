@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado host build` no longer fills the target's disk:** each build compiled into a fresh `target/` inside its run directory, several gigabytes apiece, and six recovery builds took the control host to `No space left on device`, which stopped its object API for the fleet. Builds now share one target under `~/.stado/build-cache/host-build/cargo-target`, a root the `build_caches` cleaner owns, copy only the executable to `<run>/…/target/release/<bin>` for `stado host run-attached`, and are refused before compiling when the host is already under its disk low watermark, naming the free space, the watermark and `stado space reclaim`.
+
 - **`stado bootstrap --local --target <this machine>` installs one Stado process:** the host-unit install that merges every Stado unit on the machine into one `stado serve` unit, loads it and retires the replaced units as `.retired-<date>` files was never called; bootstrap installed the local target as a separate queue agent. A local target is now installed as the host unit.
 
 - **A host moves to one Stado identity and product-named items with two commands:** `stado credentials item rename --host <host> <from> <to>` moves a vault item to a new id with Skarbiec's own rename on the host, keeping its payload, history and tags, and refuses when the destination already exists; `stado config migrate-identities` now also points every `release_api.publishers` and `service_api.deployers` entry at the item named after its product, drops deployer consumers, and moves a retired workload-agent consumer to `stado`. Grants that named the old item ids are reissued with `stado credentials grant consolidate`.
