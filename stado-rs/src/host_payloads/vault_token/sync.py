@@ -80,8 +80,14 @@ def export(vault, consumer, file):
     return {"owner": owner, "grant": grant, "token": token.decode(), "source_token_file": str(path)}
 
 
-def install(vault, consumer, file, source, check):
-    owner, grant = grant_at(vault, consumer)
+def install(vault, consumer, file, source, check, shared=False):
+    # A host that reads the owner's vault through its resolver route has no
+    # authoritative copy of its own; the owner's grant, verified on the owner
+    # at export, is the grant its bearer must match.
+    def current_grant():
+        return (source["owner"], source["grant"]) if shared else grant_at(vault, consumer)
+
+    owner, grant = current_grant()
     if owner != source["owner"] or grant != source["grant"]:
         raise ValueError("destination vault differs from source owner or consumer grant; synchronize the vault first")
     token = token_bytes(source["token"].encode())
@@ -103,7 +109,7 @@ def install(vault, consumer, file, source, check):
                 output.write(token)
                 output.flush()
                 os.fsync(output.fileno())
-            if grant_at(vault, consumer) != (owner, grant):
+            if current_grant() != (owner, grant):
                 raise ValueError("destination grant changed during token delivery")
             os.replace(staged, path)
             staged = None
@@ -111,7 +117,7 @@ def install(vault, consumer, file, source, check):
             if staged is not None:
                 staged.unlink(missing_ok=True)
     verify_token(read_token(path), grant)
-    if grant_at(vault, consumer) != (owner, grant):
+    if current_grant() != (owner, grant):
         raise ValueError("destination grant changed after token delivery; delivered bearer is not verified")
     return {
         "status": "token_checked" if check else "token_synced" if changed else "token_unchanged",
@@ -134,8 +140,15 @@ def main():
     operation, vault, consumer, file = sys.argv[1:]
     if operation == "export":
         result = export(vault, consumer, file)
-    elif operation in ("install", "check"):
-        result = install(vault, consumer, file, json.load(sys.stdin), operation == "check")
+    elif operation in ("install", "check", "install-shared", "check-shared"):
+        result = install(
+            vault,
+            consumer,
+            file,
+            json.load(sys.stdin),
+            operation.startswith("check"),
+            operation.endswith("-shared"),
+        )
     else:
         raise ValueError("unknown token custody operation")
     print(json.dumps(result))

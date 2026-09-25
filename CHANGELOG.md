@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado credentials token sync --shared-vault` delivers a bearer to a host that reads the owner's vault through its route:** token custody compared the bearer with the destination's own declared vault copy, so a host that had moved onto the shared vault through its Skarbiec resolver adapter was refused with "destination vault differs from source owner or consumer grant". With `--shared-vault`, and only when the registry places Skarbiec on the source host and the destination declares a resolver adapter for it, the bearer is verified against the owner's grant.
+
 - **`stado credentials token mint --token-item <item> --token-file-name <file>` writes the registered bearer to the consumer's file:** a bearer registered from a vault item could not be written to the file its consumer reads, so the two disagreed and every read with that file was refused with "does not hash to the bearer the vault recorded". The owner now writes the item's own value to `~/.stado/<file>` (a file holding another bearer is refused, not overwritten); `stado credentials token sync` delivers it to other hosts.
 
 - **`stado credentials vault sync --host <owner> --push` publishes the owner's vault to the mirror:** Stado could only pull the mirror, so a grant or item rename made on the vault owner never reached another host's copy until someone ran Skarbiec by hand, and `credentials token sync` there refused with "synchronize the vault first". `--push` runs `skarbiec sync-push` on the owner; the other copies then pull with `--check` first, as before.

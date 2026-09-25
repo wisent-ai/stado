@@ -103,6 +103,7 @@ pub(super) async fn declare_publisher(
             &token_file,
             false,
             false,
+            false,
         )
         .await?;
         report

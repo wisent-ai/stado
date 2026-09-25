@@ -183,6 +183,7 @@ async fn ensure_workload_secrets(
             &token_file,
             false,
             false,
+            false,
         )
         .await?;
     }

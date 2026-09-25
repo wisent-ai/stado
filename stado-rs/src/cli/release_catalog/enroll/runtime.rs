@@ -114,7 +114,7 @@ pub(super) async fn ensure_runtime_grant(
     let path = format!("~/.stado/{token_file}");
     let mut delivered = Vec::new();
     for target in targets.iter().filter(|target| **target != owner) {
-        vault_token_sync(&owner, target, product, &path, &path, false, false).await?;
+        vault_token_sync(&owner, target, product, &path, &path, false, false, false).await?;
         delivered.push(target.clone());
     }
     Ok(json!({

@@ -99,6 +99,11 @@ pub enum CredentialTokenCommands {
         /// Verify the destination without changing its file.
         #[arg(long)]
         check: bool,
+        /// HOST reads FROM_HOST's vault through its own Skarbiec resolver
+        /// route; verify the bearer against FROM_HOST's grant, not a local
+        /// copy. Refused unless the registry declares that route.
+        #[arg(long)]
+        shared_vault: bool,
         #[arg(long)]
         json: bool,
     },

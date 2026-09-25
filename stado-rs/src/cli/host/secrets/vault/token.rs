@@ -130,6 +130,7 @@ pub async fn vault_token_sync(
     source_token_file: &str,
     token_file: &str,
     check: bool,
+    shared_vault: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
     use crate::cli::host::machine::users::credentials::credential_host;
@@ -152,6 +153,45 @@ pub async fn vault_token_sync(
         .await
         .map_err(|error| error.machine_readable(json_output))?;
     let runner = crate::deploy::production_runner();
+    // `--shared-vault` names a destination that reads the source's vault
+    // through its own resolver route instead of a copy. The registry decides
+    // whether that is true: the destination declares a resolver adapter for
+    // Skarbiec, and the service directory places Skarbiec on the source.
+    if shared_vault {
+        let registry = crate::targets::load_registry_auto()
+            .await
+            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        let document = serde_json::to_value(&registry)
+            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        let document = &document;
+        let routed = document
+            .pointer("/service_directory/services/skarbiec/active_host")
+            .and_then(Value::as_str)
+            == Some(source.target.name.as_str());
+        let adapter = document
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|host| {
+                host.get("name").and_then(Value::as_str) == Some(destination.target.name.as_str())
+            })
+            .and_then(|host| host.pointer("/service_resolver/adapters"))
+            .and_then(Value::as_array)
+            .is_some_and(|adapters| {
+                adapters.iter().any(|adapter| {
+                    adapter.get("service").and_then(Value::as_str) == Some("skarbiec")
+                })
+            });
+        if !routed || !adapter {
+            return Err(CmdError::click(format!(
+                "{}: --shared-vault needs the service directory to place skarbiec on {} and {} to declare a resolver adapter for skarbiec (placed there: {routed}, adapter: {adapter})",
+                destination.target.name, source.target.name, destination.target.name
+            ))
+            .stating(FailureCode::Refused)
+            .machine_readable(json_output));
+        }
+    }
     let program = include_str!("../../../../host_payloads/vault_token/sync.py");
     let exported = host_channel::run_program(
         &source.target,
@@ -189,7 +229,12 @@ pub async fn vault_token_sync(
             "/usr/bin/python3",
             "-c",
             program,
-            if check { "check" } else { "install" },
+            match (check, shared_vault) {
+                (true, true) => "check-shared",
+                (true, false) => "check",
+                (false, true) => "install-shared",
+                (false, false) => "install",
+            },
             &destination.vault,
             consumer,
             token_file,

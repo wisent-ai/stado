@@ -144,6 +144,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 source_token_file,
                 token_file,
                 check,
+                shared_vault,
                 json,
             } => {
                 super::host::vault_token_sync(
@@ -153,6 +154,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                     &source_token_file,
                     &token_file,
                     check,
+                    shared_vault,
                     json,
                 )
                 .await
