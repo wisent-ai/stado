@@ -229,10 +229,12 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // Never fatal: the archive is verified and the install is the point, so a
     // receipt that cannot be written is named and the delivery continues.
     match (
-        std::env::var("WISENT_VERSION")
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
+        stado_version.clone().or_else(|| {
+            std::env::var("WISENT_VERSION")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        }),
         crate::self_update::platform_triple_short(),
     ) {
         (Some(version), Ok(platform)) => {
