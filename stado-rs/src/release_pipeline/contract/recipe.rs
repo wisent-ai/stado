@@ -91,6 +91,15 @@ pub struct RuntimeContract {
     pub minimum_stado_version: String,
     #[serde(default)]
     pub rollback_compatible_with: Vec<String>,
+    /// What the running service is allowed to do as its own Skarbiec
+    /// consumer (named after the product), in `stado credentials token mint
+    /// --capabilities` form: `read:<item>#<field>` for a secret it reads,
+    /// `call:brama#<alias>` for a Brama route it calls. Enrollment grants
+    /// exactly these on the vault owner and delivers the bearer to every
+    /// host the product rolls out to, so a new service needs no hand-minted
+    /// token.
+    #[serde(default)]
+    pub grants: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
