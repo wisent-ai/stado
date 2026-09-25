@@ -24,7 +24,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
         SecretsCommands::Vault { command, json } => match command {
-            None => vault_authority(json),
+            None => vault_authority(json).await,
             Some(CredentialVaultCommands::Sync {
                 host,
                 check,

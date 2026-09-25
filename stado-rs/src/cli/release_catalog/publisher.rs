@@ -222,7 +222,7 @@ pub(super) async fn fleet_hosts() -> Result<(String, String), CmdError> {
 }
 
 /// This host's registry target, as `stado resolver` identifies it.
-async fn this_host() -> Result<String, CmdError> {
+pub(crate) async fn this_host() -> Result<String, CmdError> {
     let store = std::sync::Arc::new(crate::targets::RegistryStore::open().await?);
     let (bootstrap, _, _) = crate::cli::resolver::read_local_snapshot(&store)
         .await

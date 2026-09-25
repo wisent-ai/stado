@@ -19,6 +19,7 @@ mod publisher;
 use central::sync_catalog;
 use checkout::sync;
 pub(crate) use enroll::enroll;
+pub(crate) use publisher::this_host;
 
 const CATALOG_PREFIX: &str = "release-catalog";
 

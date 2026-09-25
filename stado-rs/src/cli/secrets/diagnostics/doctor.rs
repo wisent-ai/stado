@@ -13,19 +13,38 @@ use crate::cli::secrets::store::resolve::skarbiec_binary;
 /// here to this machine's own candidates, so the two cannot answer
 /// differently: `stado host vaults <target>` and this command state one
 /// verdict in one vocabulary.
-pub(crate) fn vault_authority(json_output: bool) -> Result<(), CmdError> {
+///
+/// It also names the host that owns the fleet vault, the registry's
+/// `skarbiec` active host. A different host declaring a local copy in
+/// `secrets.skarbiec.vault_file` is refused: that copy diverges from the
+/// owner (grants minted there never reach it) and was how lukasz-macbook came
+/// to hold its own Skarbiec on 2026-09-25.
+pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
     let candidates = crate::credential_store::owner::candidates_present()
         .map_err(|error| CmdError::click(error.to_string()))?;
     let declared = crate::config::skarbiec_vault_file();
     let verdict = crate::credential_store::owner::authority(Some(declared), &candidates);
-    let state = verdict
+    let mut state = verdict
         .get("state")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown")
         .to_string();
     // The resolver is asked as well as described: a report that computed the
     // state itself and never called `vault()` could agree with nothing.
-    let resolved = crate::credential_store::owner::vault();
+    let mut resolved = crate::credential_store::owner::vault().map_err(|error| error.to_string());
+    let owner_host = crate::cli::directory::active_host("skarbiec").await?;
+    let this_host = crate::cli::release_catalog::this_host().await.ok();
+    if let (Some(owner), Some(here)) = (&owner_host, &this_host) {
+        if owner != here && !declared.trim().is_empty() {
+            state = "local_copy_on_non_owner".to_string();
+            resolved = Err(format!(
+                "{here} declares a local vault copy ({declared}) in secrets.skarbiec.vault_file, \
+                 but the fleet vault is owned by {owner} (the registry's skarbiec active host); \
+                 read the owner through secrets.skarbiec.url and remove \
+                 secrets.skarbiec.vault_file"
+            ));
+        }
+    }
     if json_output {
         println!(
             "{}",
@@ -39,7 +58,8 @@ pub(crate) fn vault_authority(json_output: bool) -> Result<(), CmdError> {
                     serde_json::Value::from(declared)
                 },
                 "candidates": candidates,
-                "refusal": resolved.as_ref().err().map(ToString::to_string),
+                "owner_host": owner_host,
+                "refusal": resolved.as_ref().err(),
             }))?
         );
     } else {
@@ -50,6 +70,9 @@ pub(crate) fn vault_authority(json_output: bool) -> Result<(), CmdError> {
         }
         if !declared.trim().is_empty() {
             println!("declared: {declared}");
+        }
+        if let Some(owner) = &owner_host {
+            println!("fleet vault owner: {owner}");
         }
         for candidate in &candidates {
             println!(
@@ -76,7 +99,7 @@ pub(crate) fn vault_authority(json_output: bool) -> Result<(), CmdError> {
         // unparseable — one report per invocation, and the exit status is the
         // part a script gates on.
         Err(_) if json_output => Err(CmdError::silent(1)),
-        Err(error) => Err(CmdError::click(error.to_string())),
+        Err(error) => Err(CmdError::click(error)),
     }
 }
 

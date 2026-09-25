@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **One fleet vault: only its owner publishes the mirror, and a non-owner may not declare a local copy:** hosts kept their own Skarbiec copy declared in `secrets.skarbiec.vault_file`, grants minted on the owner never reached them, and two copies pushing one mirror made the owner's push fail `fetch first`. `stado credentials vault sync --push` now refuses any host other than the registry's `skarbiec` active host, and `stado credentials vault` names that owner (`owner_host`) and refuses, with state `local_copy_on_non_owner`, a different host that declares a local copy; such a host reads the owner through `secrets.skarbiec.url`.
+
 - **`stado service ensure` reloads a unit whose program was replaced in place:** it compared only the running program's path with the declared one, so after an install renamed a new binary over `~/.stado/bin/<product>` it answered `already_correct` while the process went on running the old image. It now also compares the running image's inode (`lsof -d txt` on macOS, `/proc/<pid>/exe` on Linux) with the installed file and reloads the unit when they differ; an image it cannot read is not treated as replaced.
 
 - **`stado credentials item delete --host <host> <item>` removes a retired item from the owner vault:** a retired product's item (such as `wisent-products-release-publisher`) kept every grant that could read it from being revoked, and no Stado command could delete an item on the vault owner. The command runs Skarbiec's own `delete` there, which refuses lifecycle- or Weles-controlled items and keeps the deletion restorable.

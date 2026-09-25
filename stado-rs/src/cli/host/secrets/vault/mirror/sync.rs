@@ -130,7 +130,20 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
 /// Without it, a grant made on the owner never reaches another host's copy,
 /// and `credentials token sync` there refuses with "synchronize the vault
 /// first".
+///
+/// Only the vault owner, the registry's `skarbiec` active host, publishes.
+/// A whole-file vault cannot be merged, so a second writer makes the mirror
+/// alternate between copies: on 2026-09-25 lukasz-macbook's copy had pushed
+/// and the owner's push was rejected `fetch first`.
 pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
+    if let Some(owner) = crate::cli::directory::active_host("skarbiec").await? {
+        if owner != target {
+            return Err(CmdError::click(format!(
+                "{target} does not own the fleet vault: the registry's skarbiec active host is \
+                 {owner}, and only the owner publishes the mirror; push from {owner}"
+            )));
+        }
+    }
     let (resolved, report) = remote_skarbiec_json(target, &[String::from("sync-push")]).await?;
     if report.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(CmdError::click(format!(
