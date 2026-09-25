@@ -6,9 +6,13 @@ description = "Policy-controlled queue and compute control plane for AI workload
 license-file = "../LICENSE"
 
 # `checks` holds the source checks that must not wait for this crate to
-# compile; one lockfile and one target directory serve both.
+# compile; one lockfile and one target directory serve both. The journeys
+# build throwaway crates of their own under `target/` (`product-runs/`,
+# `ci-cd-runs/`), and Cargo would otherwise claim them for this workspace
+# and refuse them as non-members.
 [workspace]
 members = [".", "product", "checks"]
+exclude = ["target"]
 
 [dependencies]
 anyhow = "1"
