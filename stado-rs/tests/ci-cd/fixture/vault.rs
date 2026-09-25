@@ -28,34 +28,34 @@ impl SkarbiecFixture {
         // isolated home points at. The journey signs with the fleet's real
         // identity, read through the product's own secret command the way a
         // fleet builder reads it; without it every darwin journey ended at
-        // `cannot read desktop-signing-apple-development#certificate`.
-        let apple = SkarbiecItem::new(
-            "desktop-signing-apple-development",
-            "bundle",
-            json!({
-                "schema": "skarbiec.item.v2",
-                "kind": "bundle",
-                "fields": {
-                    "certificate": fleet_secret("desktop-signing-apple-development", "certificate"),
-                    "private_key": fleet_secret("desktop-signing-apple-development", "private_key"),
-                },
-                "context": {"service": "native-signing"}
-            }),
-        );
+        // `cannot read desktop-signing-apple-development#certificate`. A
+        // Linux build signs no Apple code and its builder holds no fleet
+        // vault, so there the item is neither read nor granted: reading it
+        // anyway refused every Linux journey with `vault not initialized`.
+        let mut items = vec![item];
+        let mut grants = String::from("read:ci-release-signing#private_key");
+        if cfg!(target_os = "macos") {
+            items.push(SkarbiecItem::new(
+                "desktop-signing-apple-development",
+                "bundle",
+                json!({
+                    "schema": "skarbiec.item.v2",
+                    "kind": "bundle",
+                    "fields": {
+                        "certificate": fleet_secret("desktop-signing-apple-development", "certificate"),
+                        "private_key": fleet_secret("desktop-signing-apple-development", "private_key"),
+                    },
+                    "context": {"service": "native-signing"}
+                }),
+            ));
+            grants.push_str(
+                ",read:desktop-signing-apple-development#certificate,\
+                 read:desktop-signing-apple-development#private_key",
+            );
+        }
         let token = home.join(".stado/stado-skarbiec-token");
         fs::create_dir_all(token.parent().unwrap()).unwrap();
-        Self::start(
-            home,
-            &[item, apple],
-            token,
-            Some((
-                "stado",
-                "read:ci-release-signing#private_key,\
-                 read:desktop-signing-apple-development#certificate,\
-                 read:desktop-signing-apple-development#private_key",
-            )),
-            |_, _| {},
-        )
+        Self::start(home, &items, token, Some(("stado", &grants)), |_, _| {})
     }
 }
 
