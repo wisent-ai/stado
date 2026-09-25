@@ -82,7 +82,12 @@ decides where and when to run it, then records what happened.
   read-only MCP interface; Desktop uses `WisentDesignSystem` from
   `wisent-ai/wisent-components` for its visual tokens and SwiftUI primitives;
 - a loopback mobile-egress proxy whose upstream sockets are pinned to a named
-  tether interface and whose process lifecycle is managed as a Stado service.
+  tether interface and whose process lifecycle is managed as a Stado service;
+- the canonical Wisent product catalog, `catalog/products.yml`, and every
+  product's lifecycle through `stado product`: registry changes, installation,
+  update, rollback, removal, native Apple signing, scheduled updates, and
+  canonical Cargo and Swift source builds
+  ([product catalog](https://stado.wisent.com/docs/products)).
 
 ### Explicit non-goals for 0.5
 

@@ -48,11 +48,13 @@ install -m 0755 "$target_dir/release/stado" "$staged/stado"
 # Source CLI checks run in `quality`; these flows consume the staged binary
 # and retain the same evidence required by the qualification entrypoint.
 export WISENT_TEST_EVIDENCE_DIR="$output_dir/test-evidence"
-printf '[qualification] native-product-sdk\n'
-cargo test \
-  --manifest-path "$source_dir/stado-rs/Cargo.toml" \
-  --locked --release --test product -- --nocapture
-printf '[qualification] native-sdk-release-pipeline\n'
+for journey in product product_registry product_sources product_releases; do
+  printf '[qualification] %s\n' "$journey"
+  cargo test \
+    --manifest-path "$source_dir/stado-rs/Cargo.toml" \
+    --locked --release --test "$journey" -- --nocapture
+done
+printf '[qualification] release-pipeline\n'
 cargo test \
   --manifest-path "$source_dir/stado-rs/Cargo.toml" \
   --locked --release --test ci-cd \
@@ -62,5 +64,10 @@ bash "$source_dir/tests/fleet-expansion/qualify.sh" cli
 case "${WISENT_PLATFORM:?WISENT_PLATFORM is required}" in
   darwin-arm64)
     bash "$source_dir/tests/fleet-expansion/qualify.sh" desktop
+    # Apple signing needs a Darwin host and the fleet's certificate item.
+    printf '[qualification] product_signing\n'
+    cargo test \
+      --manifest-path "$source_dir/stado-rs/Cargo.toml" \
+      --locked --release --test product_signing -- --nocapture
     ;;
 esac

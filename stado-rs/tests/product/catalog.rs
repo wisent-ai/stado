@@ -1,8 +1,7 @@
 use crate::fixture::Journey;
-use stado::cli::setup::product::Surface;
 
 #[test]
-fn native_catalog_exposes_the_stado_cli_without_installing_a_surface() {
+fn catalog_exposes_the_stado_cli_without_installing_a_surface() {
     let journey = Journey::new();
     let catalog = journey.catalog();
     let products = catalog["products"]
@@ -17,7 +16,7 @@ fn native_catalog_exposes_the_stado_cli_without_installing_a_surface() {
             .as_array()
             .expect("installation recipes are absent")
             .iter()
-            .any(|recipe| recipe["surface"] == Surface::Cli.as_str()),
+            .any(|recipe| recipe["surface"] == "cli"),
         "the real catalog omitted the Stado CLI installation recipe"
     );
     journey.assert_no_installation();

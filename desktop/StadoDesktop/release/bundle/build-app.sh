@@ -1,5 +1,5 @@
 #!/bin/sh
-# The product catalogue calls this build. Installation belongs to wisent-products.
+# The product catalogue calls this build. Installation belongs to stado product.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 REPO=$(CDPATH= cd -- "$ROOT/../.." && pwd)

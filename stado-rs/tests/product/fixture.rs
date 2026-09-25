@@ -1,4 +1,4 @@
-//! Real Stado and qualified SDK executables; isolated consumer data, retained proof.
+//! The real Stado executable; isolated consumer data, retained proof.
 
 use serde_json::{json, Value};
 use std::{
@@ -150,19 +150,8 @@ impl Journey {
         serde_json::from_slice(&output.stdout).expect("the real product catalog is not JSON")
     }
 
-    pub fn sdk_path(&self) -> PathBuf {
-        let platform = if cfg!(target_os = "macos") {
-            "darwin-arm64"
-        } else {
-            "linux-amd64"
-        };
-        self.home
-            .join(".stado/cache/product-sdk")
-            .join(stado::deploy::native_signing::runtime::VERSION)
-            .join(platform)
-            .join("wisent-products")
-    }
-
+    /// No product surface was recorded: the consumer's product records hold
+    /// no lifecycle receipt for any surface of any product.
     pub fn assert_no_installation(&self) {
         let records = self.home.join(".stado/products");
         match fs::read_dir(&records) {
@@ -172,12 +161,12 @@ impl Journey {
                     if !product.file_type().unwrap().is_dir() {
                         continue;
                     }
-                    for surface in
-                        <stado::cli::setup::product::Surface as clap::ValueEnum>::value_variants()
-                    {
-                        let record = product.path().join(format!("{}.json", surface.as_str()));
+                    for record in fs::read_dir(product.path()).unwrap() {
+                        let record = record.unwrap().path();
                         assert!(
-                            !record.try_exists().unwrap(),
+                            record
+                                .extension()
+                                .is_none_or(|extension| extension != "json"),
                             "an installation was recorded: {}",
                             record.display()
                         );

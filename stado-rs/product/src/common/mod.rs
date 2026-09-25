@@ -37,8 +37,7 @@ impl Runtime {
         let output = env::var_os("WISENT_OUTPUT_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| workspace.join("stado/.wisent-output"));
-        let embedded_catalog =
-            catalog.is_none() && !workspace.join(CATALOG).is_file();
+        let embedded_catalog = catalog.is_none() && !workspace.join(CATALOG).is_file();
         let catalog = catalog.unwrap_or_else(|| workspace.join(CATALOG));
         Ok(Self {
             catalog,

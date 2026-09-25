@@ -12,7 +12,7 @@ case "${1:-}" in
     cargo test --manifest-path "$source_dir/stado-rs/Cargo.toml" --locked --release --test fleet_expansion -- --nocapture
     ;;
   desktop)
-    wisent-products swift --package-path "$source_dir/desktop/StadoDesktop" test \
+    "$STADO_BIN" product swift --package-path "$source_dir/desktop/StadoDesktop" test \
       --test-product StadoDesktopPackageTests --filter FleetExpansionTests
     ;;
   *) printf 'usage: qualify.sh cli|desktop\n' >&2; exit 64 ;;

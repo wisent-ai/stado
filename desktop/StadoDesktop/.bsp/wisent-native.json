@@ -4,7 +4,8 @@
   "bspVersion": "2.2.0",
   "argv": [
     "/usr/bin/env",
-    "wisent-products",
+    "stado",
+    "product",
     "swift",
     "sourcekit"
   ],

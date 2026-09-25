@@ -34,13 +34,13 @@ struct ProductsView: View {
                     if store.isRefreshing {
                         Group {
                             let loadingTitle = "Reading products"
-                            WisentSectionBox(title: loadingTitle, detail: "The canonical Wisent Products catalog is read through stado product catalog.") {
+                            WisentSectionBox(title: loadingTitle, detail: "The canonical Wisent product catalog is read through stado product catalog.") {
                                 WisentSkeletonList(label: loadingTitle)
                             }
                         }
                             .padding(WisentDesign.Space.x6)
                     } else {
-                        WisentEmptyPanel(title: "No product catalog", detail: "Install wisent-ai/wisent-products, then refresh.", symbol: "shippingbox")
+                        WisentEmptyPanel(title: "No product catalog", detail: "The selected Stado API host answered with no products; it may run a Stado older than 0.22.0, which read the catalog from another program.", symbol: "shippingbox")
                             .padding(WisentDesign.Space.x6)
                     }
                     Spacer()

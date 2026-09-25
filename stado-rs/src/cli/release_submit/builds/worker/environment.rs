@@ -78,8 +78,7 @@ pub(super) fn build_environment(
         .and_then(|executable| executable.parent().map(Path::to_path_buf))
     {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
-        let directories =
-            std::iter::once(directory).chain(std::env::split_paths(&inherited));
+        let directories = std::iter::once(directory).chain(std::env::split_paths(&inherited));
         if let Ok(path) = std::env::join_paths(directories) {
             environment.insert("PATH".into(), path.to_string_lossy().into_owned());
         }

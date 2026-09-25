@@ -61,9 +61,7 @@ fn retire_predecessors(product: &Value, host: &str) -> Result<Vec<Value>> {
         let unit = unit
             .as_str()
             .context("service.retired_units must hold unit names")?;
-        let output = capture(
-            stado().args(["service", "remove", unit, "--host", host, "--json"]),
-        )?;
+        let output = capture(stado().args(["service", "remove", unit, "--host", host, "--json"]))?;
         let stderr = String::from_utf8_lossy(&output.stderr);
         if output.status.success() {
             let receipt = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
@@ -84,8 +82,7 @@ fn retire_predecessors(product: &Value, host: &str) -> Result<Vec<Value>> {
 
 pub fn observe(product: &Value, host: &str) -> Result<Value> {
     let id = text(product, "id")?;
-    let output =
-        capture(stado().args(["service", "serving", id, "--host", host, "--json"]))?;
+    let output = capture(stado().args(["service", "serving", id, "--host", host, "--json"]))?;
     let payload = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
     let ready = output.status.success()
         && payload.as_array().is_some_and(|rows| {

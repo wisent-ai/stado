@@ -27,7 +27,11 @@ impl Journal {
         if default && !root.exists() && former.join("creation.sqlite3").is_file() {
             fs::create_dir_all(root.parent().context("creation state has no parent")?)?;
             fs::rename(&former, &root).with_context(|| {
-                format!("moving creation state {} to {}", former.display(), root.display())
+                format!(
+                    "moving creation state {} to {}",
+                    former.display(),
+                    root.display()
+                )
             })?;
         }
         if !root.exists() {

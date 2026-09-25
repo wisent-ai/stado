@@ -58,8 +58,7 @@ struct SigningSection: View {
         let selectedProduct = product.trimmingCharacters(in: .whitespaces)
         guard !selectedProduct.isEmpty else { return }
         let generation = fleetStore.requestGeneration
-        var arguments = ["product", "signatures", selectedProduct, "--surface", surface, "--json"]
-        if apply { arguments.append("--apply") }
+        let arguments = Self.arguments(product: selectedProduct, surface: surface, apply: apply)
         working = true
         problem = nil
         defer { working = false }
@@ -77,5 +76,10 @@ struct SigningSection: View {
             guard generation == fleetStore.requestGeneration else { return }
             problem = error.localizedDescription
         }
+    }
+
+    /// `stado product signing report` reads; `reconcile` repairs the recorded paths.
+    static func arguments(product: String, surface: String, apply: Bool) -> [String] {
+        ["product", "signing", apply ? "reconcile" : "report", product, "--surface", surface, "--json"]
     }
 }

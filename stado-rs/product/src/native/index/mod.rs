@@ -103,6 +103,7 @@ pub fn publish(package: &Path, binary: &Path, report: &Value, editor: &Path) -> 
     atomic_json(&package.join(SETTINGS), &settings)?;
     let mut argv = vec![
         std::env::current_exe()?.to_string_lossy().into_owned(),
+        "product".to_owned(),
         "swift".to_owned(),
     ];
     if editor != package {

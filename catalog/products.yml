@@ -1,6 +1,6 @@
 schema_version: 1
 authority:
-  owner: wisent-products
+  owner: stado
   rule: One record per product - something sold or used as a product of its own (the
     operator, 2026-09-02). Repositories, surfaces, services, websites, libraries and
     infrastructure are attributes of a product; a package is not a product. Every
@@ -391,8 +391,8 @@ products:
   visibility: public
   family: wisent
   owner_repository: wisent-ai/stado
-  description: Fleet control plane for queues, jobs, placement, leases, hosts and
-    declared services.
+  description: Fleet control plane for queues, jobs, placement, leases, hosts, declared
+    services, and the Wisent product catalog with every product's installation and signing.
   roadmap:
   - title: Add AWS managed autoscaling
     status: planned

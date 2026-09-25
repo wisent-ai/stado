@@ -10,7 +10,7 @@ private struct RepairCatalog: Decodable, Sendable {
 @MainActor
 final class RepairStore: ObservableObject {
     @Published private(set) var services: [RepairService] = []
-    @Published private(set) var declaration = "stado-rs/data/service-catalog.json"
+    @Published private(set) var declaration = "stado-rs/data/catalog/repair-catalog.json"
     @Published private(set) var reports: [String: RepairReport] = [:]
     @Published private(set) var receipts: [String: OperatorCommandResult] = [:]
     @Published private(set) var loadingCatalog = false

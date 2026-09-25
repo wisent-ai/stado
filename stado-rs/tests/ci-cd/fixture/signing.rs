@@ -1,4 +1,5 @@
-//! Real native SDK preparation and the pinned Apple issuer for Darwin journeys.
+//! The pinned Apple issuer for Darwin journeys. The release worker signs with
+//! its own `stado product signing`, so nothing else is prepared for it.
 
 use super::*;
 
@@ -12,34 +13,14 @@ pub(crate) fn seed_native_signing_input(home: &Path, storage: &Path) {
         "cannot read the selected release-store configuration: {}",
         String::from_utf8_lossy(&selected.stderr)
     );
-    fs::write(home.join("native-sdk-config.stdout.json"), &selected.stdout).unwrap();
-    fs::write(home.join("native-sdk-config.stderr.log"), &selected.stderr).unwrap();
+    fs::write(home.join("signing-config.stdout.json"), &selected.stdout).unwrap();
+    fs::write(home.join("signing-config.stderr.log"), &selected.stderr).unwrap();
     let selected: serde_json::Value = serde_json::from_slice(&selected.stdout).unwrap();
     let config = PathBuf::from(
         selected["file"]
             .as_str()
             .expect("selected Stado configuration path is absent"),
     );
-    let prepared = Command::new(env!("CARGO_BIN_EXE_stado"))
-        .env("HOME", home)
-        .env("STADO_CONFIG", &config)
-        .env("WISENT_WORKSPACE", home.join("workspace"))
-        .args(["product", "catalog", "--json"])
-        .output()
-        .expect("the native SDK consumer runs");
-    fs::write(home.join("native-sdk.stdout.json"), &prepared.stdout).unwrap();
-    fs::write(home.join("native-sdk.stderr.log"), &prepared.stderr).unwrap();
-    fs::write(
-        home.join("native-sdk.exit.txt"),
-        prepared.status.to_string(),
-    )
-    .unwrap();
-    assert!(
-        prepared.status.success(),
-        "blocked: the qualified native SDK could not be prepared through Stado: {}",
-        String::from_utf8_lossy(&prepared.stderr)
-    );
-
     let namespace = std::env::var("WC_STADO_STORAGE_NAMESPACE")
         .ok()
         .filter(|value| !value.is_empty())

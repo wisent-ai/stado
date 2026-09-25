@@ -80,10 +80,12 @@ impl Credentials {
             .filter(|s| !s.is_empty());
         // Without a named credential, Stado signs with the fleet's item; see
         // [`crate::Build::signing_item`].
-        let item = std::env::var("WISENT_CODESIGN_CREDENTIAL_ITEM").ok().or_else(|| {
-            let fleet = crate::build().signing_item;
-            (certificate.is_none() && !fleet.is_empty()).then(|| fleet.to_owned())
-        });
+        let item = std::env::var("WISENT_CODESIGN_CREDENTIAL_ITEM")
+            .ok()
+            .or_else(|| {
+                let fleet = crate::build().signing_item;
+                (certificate.is_none() && !fleet.is_empty()).then(|| fleet.to_owned())
+            });
         if let Some(item) = item {
             if item.trim().is_empty() || item.contains('#') {
                 bail!("WISENT_CODESIGN_CREDENTIAL_ITEM requires an item id, not an item#field coordinate");
