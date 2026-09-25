@@ -89,6 +89,12 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 tags,
                 json,
             } => super::host::retag_vault_item(&host, &item, tags.as_deref(), json).await,
+            CredentialItemCommands::Rename {
+                host,
+                from,
+                to,
+                json,
+            } => super::host::rename_vault_item(&host, &from, &to, json).await,
             CredentialItemCommands::StampFingerprints { host, apply, json } => {
                 super::host::stamp_vault_fingerprints(&host, apply, json).await
             }

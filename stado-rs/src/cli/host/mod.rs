@@ -61,6 +61,7 @@ pub use crate::cli::host::secrets::vault::grants::grant_item_read;
 pub use crate::cli::host::secrets::vault::grants::grant_show;
 pub(crate) use crate::cli::host::secrets::vault::item::put::store_vault_item;
 pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
+pub use crate::cli::host::secrets::vault::item::rename::rename_vault_item;
 pub use crate::cli::host::secrets::vault::item::retag::retag_vault_item;
 pub use crate::cli::host::secrets::vault::item::show::vault_item_show;
 pub use crate::cli::host::secrets::vault::item::stamp::stamp_vault_fingerprints;

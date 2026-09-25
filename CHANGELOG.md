@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **A host moves to one Stado identity and product-named items with two commands:** `stado credentials item rename --host <host> <from> <to>` moves a vault item to a new id with Skarbiec's own rename on the host, keeping its payload, history and tags, and refuses when the destination already exists; `stado config migrate-identities` now also points every `release_api.publishers` and `service_api.deployers` entry at the item named after its product, drops deployer consumers, and moves a retired workload-agent consumer to `stado`. Grants that named the old item ids are reissued with `stado credentials grant consolidate`.
+
 - **`stado product` works on hosts that ran the former `wisent-products` program:** that program kept its own receipt and its onboarding outbox under `~/.stado/products/wisent-products`, and Stado reads that tree as installation receipts, so every `stado product install`, `paths` and ownership check refused with `parsing receipt .../onboarding.json: missing field product`. The directory now moves once to `~/.local/state/stado/retired/wisent-products` before receipts are read; nothing is deleted, and a destination that already exists is refused with both paths named.
 
 - **`stado product swift test` no longer deadlocks a test that builds its own product:** Stado exported `SWIFTPM_BUILD_DIR` to the `swift` command it runs, and so to the program under test; a test that ran `swift build` (the oko-desktop signed install journey) reused the scratch the outer `swift test` holds locked and waited on it until it was killed. The scratch now reaches SwiftPM only as `--scratch-path`, and the variable is removed from the child's environment.

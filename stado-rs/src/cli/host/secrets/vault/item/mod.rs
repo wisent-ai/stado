@@ -2,6 +2,7 @@
 //! items hold so duplicates can be found.
 
 pub(in crate::cli::host) mod put;
+pub(in crate::cli::host) mod rename;
 pub(in crate::cli::host) mod retag;
 pub(in crate::cli::host) mod show;
 pub(in crate::cli::host) mod stamp;

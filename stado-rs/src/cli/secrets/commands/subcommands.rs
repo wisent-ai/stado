@@ -34,6 +34,16 @@ pub enum CredentialItemCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Give one host-vault item a new id, keeping its payload, history and
+    /// tags; grants naming the old id must be reissued.
+    Rename {
+        #[arg(long)]
+        host: String,
+        from: String,
+        to: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Stamp payload fingerprints onto the owner vault's items so the
     /// duplicate report and the duplicate refusal cover every row.
     StampFingerprints {

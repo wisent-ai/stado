@@ -49,6 +49,31 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             removed.push(*key);
         }
     }
+    // A product is its own identity: its publisher and deployer entries name
+    // the item called after the product, and a deployer no longer carries a
+    // consumer of its own. `stado credentials item rename` moves the vault
+    // items to the same names.
+    for (section, entries) in [("release_api", "publishers"), ("service_api", "deployers")] {
+        let Some(table) = root
+            .get_mut(section)
+            .and_then(|value| value.get_mut(entries))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        for (product, entry) in table.iter_mut() {
+            let Some(entry) = entry.as_object_mut() else {
+                continue;
+            };
+            if entry.get("item").and_then(Value::as_str) != Some(product.as_str()) {
+                entry.insert("item".into(), Value::from(product.as_str()));
+                removed.push("a role-named product item");
+            }
+            if entry.remove("consumer").is_some() {
+                removed.push("a product deployer consumer");
+            }
+        }
+    }
     let secrets = root
         .entry("secrets")
         .or_insert_with(|| Value::Object(Map::new()))
@@ -60,6 +85,31 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
         .as_object_mut()
         .ok_or_else(|| CmdError::click("secrets.skarbiec must be an object"))?;
     let previous = skarbiec.insert("consumer".into(), Value::from("stado"));
+    let token_file = skarbiec.get("token_file").cloned();
+    // On a host Stado owns, its workload agent reads as Stado too; a scoped
+    // `*-agent` grant stays for rented machines.
+    if let Some(agent) = root
+        .get_mut("agent")
+        .and_then(|value| value.get_mut("skarbiec"))
+        .and_then(Value::as_object_mut)
+    {
+        let retired = agent
+            .get("consumer")
+            .and_then(Value::as_str)
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "stado-local-agent" | "stado-azure-agent" | "stado-control-plane"
+                )
+            });
+        if retired {
+            agent.insert("consumer".into(), Value::from("stado"));
+            if let Some(token_file) = token_file {
+                agent.insert("token_file".into(), token_file);
+            }
+            removed.push("agent.skarbiec.consumer");
+        }
+    }
     let changed = !removed.is_empty() || previous.as_ref().and_then(Value::as_str) != Some("stado");
     if !changed {
         println!(
