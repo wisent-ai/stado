@@ -119,14 +119,27 @@ pub fn prepare(
         .join(".build/package-install")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&scratch)?;
-    let mut command = match kind {
+    // npm exports every command-line setting to the processes it starts, the
+    // preparation of a git dependency included, so `--global --prefix` made
+    // that nested install place the dependency itself into the product's
+    // prefix instead of installing its build tools in the clone: Weles failed
+    // on `@wisent/cost-tracker` with `tsc: command not found` (defect
+    // 1fd8865c). The versioned prefix is instead an npm project of its own,
+    // found from the working directory, which npm does not export.
+    let (mut command, directory, bin) = match kind {
         "npm" => {
+            fs::write(prefix.join("package.json"), "{\"private\":true}\n")?;
             let mut command = Command::new("npm");
             command
-                .args(["install", "--global", "--install-links", "--prefix"])
-                .arg(&prefix)
+                .args([
+                    "install",
+                    "--install-links",
+                    "--no-save",
+                    "--no-audit",
+                    "--no-fund",
+                ])
                 .arg(root);
-            command
+            (command, prefix.clone(), prefix.join("node_modules/.bin"))
         }
         "pip" | "pipx" => {
             let mut command = Command::new("pipx");
@@ -140,11 +153,11 @@ pub fn prepare(
                 .env("PIPX_HOME", prefix.join("pipx"))
                 .env("PIPX_BIN_DIR", prefix.join("bin"))
                 .env("PIPX_MAN_DIR", prefix.join("man"));
-            command
+            (command, root.to_path_buf(), prefix.join("bin"))
         }
         _ => bail!("unsupported package recipe {kind}"),
     };
-    let installation = checked(command.env("TMPDIR", &scratch).current_dir(root));
+    let installation = checked(command.env("TMPDIR", &scratch).current_dir(&directory));
     fs::remove_dir_all(&scratch)?;
     installation?;
     let mut placements = vec![Placement {
@@ -153,7 +166,7 @@ pub fn prepare(
         symbolic: false,
     }];
     for binary in binaries {
-        let executable = prefix.join("bin").join(&binary);
+        let executable = bin.join(&binary);
         if !executable.is_file() {
             bail!(
                 "package installer reported success but {} is absent",
