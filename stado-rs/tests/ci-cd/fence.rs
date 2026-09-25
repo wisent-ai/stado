@@ -25,7 +25,7 @@ fn platform_nobody_builds() -> &'static str {
 fn commit_unbuildable_version(source: &Path) -> String {
     fs::write(
         source.join("Cargo.toml"),
-        "[package]\nname = \"ci-release-probe\"\nversion = \"2.0.0\"\nedition = \"2021\"\n",
+        "[package]\nname = \"ci-release-probe\"\nversion = \"2.0.0\"\nedition = \"2021\"\n\n[workspace]\n",
     )
     .unwrap();
     let mut manifest: Value =

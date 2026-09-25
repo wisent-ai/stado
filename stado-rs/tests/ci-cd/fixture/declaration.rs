@@ -64,9 +64,12 @@ pub(crate) fn release_env(
 pub(crate) fn fixture_source(home: &Path, platform: &str, delivery_target: &str) -> PathBuf {
     let source = home.join("source");
     fs::create_dir_all(source.join("src")).unwrap();
+    // The job extracts this source beneath the Stado checkout's `target/`,
+    // so the fixture declares its own workspace rather than letting Cargo
+    // search upward into Stado's.
     fs::write(
         source.join("Cargo.toml"),
-        "[package]\nname = \"ci-release-probe\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+        "[package]\nname = \"ci-release-probe\"\nversion = \"1.0.0\"\nedition = \"2021\"\n\n[workspace]\n",
     )
     .unwrap();
     fs::write(

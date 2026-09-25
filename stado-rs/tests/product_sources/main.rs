@@ -34,9 +34,11 @@ fn journey(run: &mut Run) -> Result<()> {
     let workspace = run.root.join("workspace");
     let checkout = workspace.join("sample");
     fs::create_dir_all(checkout.join("src"))?;
+    // The run lives beneath the Stado checkout's `target/`; like any
+    // canonical checkout, the sample is its own workspace root.
     fs::write(
         checkout.join("Cargo.toml"),
-        "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
     )?;
     fs::write(
         checkout.join("Cargo.lock"),

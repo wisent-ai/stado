@@ -14,13 +14,18 @@ pub struct Observation {
 }
 
 impl Observation {
+    /// A failure names the evidence and quotes both streams: `stado product
+    /// … --json` reports its refusal in the JSON it prints on stdout, and a
+    /// builder deletes the evidence directory with the job, so a sentence
+    /// that quoted stderr alone read `stderr: ` and nothing else.
     pub fn passed(&self) -> Result<()> {
         ensure!(
             self.status.success(),
-            "command failed with {}; evidence: {}; stderr: {}",
+            "command failed with {}; evidence: {}; stderr: {}; stdout: {}",
             self.status,
             self.directory.display(),
-            fs::read_to_string(self.directory.join("stderr.log"))?
+            fs::read_to_string(self.directory.join("stderr.log"))?,
+            fs::read_to_string(self.directory.join("stdout.log"))?
         );
         Ok(())
     }

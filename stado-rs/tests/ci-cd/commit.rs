@@ -45,7 +45,7 @@ fn committed_submission_preserves_active_work_and_installs_the_selected_source()
         .args(["rev-parse", "HEAD"]))
     .stdout;
     let working_version =
-        b"[package]\nname = \"unfinished\"\nversion = \"9.0.0\"\nedition = \"2021\"\n";
+        b"[package]\nname = \"unfinished\"\nversion = \"9.0.0\"\nedition = \"2021\"\n\n[workspace]\n";
     fs::write(source.join("Cargo.toml"), working_version).unwrap();
     git(&source, &["add", "Cargo.toml"]);
     let working_manifest = b"unfinished manifest\n";

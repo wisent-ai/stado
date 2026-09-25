@@ -124,9 +124,11 @@ fn a_declared_cargo_build_leaves_its_binary_in_the_run_tree() {
     let run = fixture.run("build-success");
     let source = run.join("source");
     std::fs::create_dir_all(source.join("src")).unwrap();
+    // The run tree sits beneath the Stado checkout's `target/`; the fixture
+    // is its own workspace, as a checkout of its own would be.
     std::fs::write(
         source.join("Cargo.toml"),
-        "[package]\nname = \"host-run-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "[package]\nname = \"host-run-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
     )
     .unwrap();
     std::fs::write(
