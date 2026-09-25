@@ -131,6 +131,7 @@ pub(super) async fn plan_redelivery(
             None,
             None,
             &delivery.secret_env,
+            &std::collections::BTreeMap::new(),
         )
         .await?
         .1

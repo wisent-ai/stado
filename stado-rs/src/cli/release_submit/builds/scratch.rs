@@ -7,65 +7,15 @@
 //! rustc metadata with no space left. A watermark says when a host is in
 //! trouble; it says nothing about whether a build fits. The builder measures
 //! its scratch tree before removing it and leaves [`ScratchReceipt`] beside its
-//! receipt, and this module turns that record into a placement verdict.
+//! receipt, [`super::history`] finds the newest one among the product's own
+//! builds, and this module turns that record into a placement verdict.
 
 use serde_json::Value;
 
-use crate::cli::CmdError;
 use crate::deploy::host_gates::RELEASE_SCRATCH_SHORT;
-use crate::queue::storage::JobStorage;
-use crate::release_pipeline::{ScratchReceipt, SCRATCH_LEAF};
-
-/// How many scratch records, newest first, are opened looking for one that
-/// parses before the search gives up. The newest nearly always does; a store
-/// full of damaged records must not cost the whole history on every
-/// submission.
-const EVIDENCE_RUNS_EXAMINED: usize = 40;
+use crate::release_pipeline::ScratchReceipt;
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-
-/// The newest scratch record for `product` on `platform`, or `None` when no
-/// measuring worker has built that pair yet. Silence is not a requirement:
-/// a build with no evidence is placed the way it always was.
-///
-/// A compile happens in a build, and a build job's bootstrap leaves the
-/// record at `runs/build/<product>/<build>/platforms/<platform>/output/`
-/// (or under that platform's `attempts/<id>/output/` for a retry). This used
-/// to walk every product's release runs instead: 1,753 objects under
-/// `runs/release-pipeline/` listed, then up to forty `run.json` downloads,
-/// once per platform on every submission — and release runs have not
-/// compiled anything since builds got records of their own, so the evidence
-/// it found there was a stale build's. One listing of this product's builds
-/// finds the newest record by name and time.
-pub(crate) async fn last_scratch(
-    store: &JobStorage,
-    product: &str,
-    platform: &str,
-) -> Result<Option<ScratchReceipt>, CmdError> {
-    let platform_segment = format!("/platforms/{platform}/");
-    let leaf = format!("/output/{SCRATCH_LEAF}");
-    let mut blobs = store
-        .list_blobs_with_meta(&format!("runs/build/{product}/"))
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .into_iter()
-        .filter(|blob| blob.name.contains(&platform_segment) && blob.name.ends_with(&leaf))
-        .collect::<Vec<_>>();
-    blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
-    for blob in blobs.iter().take(EVIDENCE_RUNS_EXAMINED) {
-        let Some(bytes) = store
-            .read_bytes(&blob.name)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?
-        else {
-            continue;
-        };
-        if let Ok(receipt) = serde_json::from_slice::<ScratchReceipt>(&bytes) {
-            return Ok(Some(receipt));
-        }
-    }
-    Ok(None)
-}
 
 /// The free disk one capacity publication states, in bytes, when it states
 /// one at all.

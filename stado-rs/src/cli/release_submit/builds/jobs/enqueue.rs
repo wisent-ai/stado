@@ -7,9 +7,9 @@ use serde_json::{Map, Value};
 
 use crate::cli::build_cmd::timing::phase;
 use crate::cli::release_submit::builds::builder::builder;
+use crate::cli::release_submit::builds::history;
 use crate::cli::release_submit::builds::jobs::command::release_worker_command;
 use crate::cli::release_submit::builds::jobs::{input, persist_worker_request, secret_refs};
-use crate::cli::release_submit::builds::scratch::last_scratch;
 use crate::cli::release_submit::run::source::{build_path, build_uri, queue_immutable};
 use crate::cli::storage;
 use crate::cli::CmdError;
@@ -116,7 +116,7 @@ pub(crate) async fn enqueue(
         }
     }
     let recipe = &m.platforms[platform];
-    let scratch = last_scratch(store, &m.product, &recipe.runner_platform).await?;
+    let history = history::read(store, &m.product, platform).await?;
     drop(request_phase);
     let builder_phase = phase(format!("{platform}: choose and admit a builder host"));
     let (builder_name, consumer) =
@@ -140,8 +140,9 @@ pub(crate) async fn enqueue(
             let (host, consumer) = builder(
                 &recipe.runner_platform,
                 pinned,
-                scratch.as_ref(),
+                history.scratch.as_ref(),
                 &recipe.secret_env,
+                &history.in_flight,
             )
             .await?;
             (host.name, consumer)
@@ -230,8 +231,9 @@ pub(crate) async fn enqueue(
         builder(
             &recipe.runner_platform,
             Some(&request.builder),
-            scratch.as_ref(),
+            history.scratch.as_ref(),
             &recipe.secret_env,
+            &history.in_flight,
         )
         .await?
         .1

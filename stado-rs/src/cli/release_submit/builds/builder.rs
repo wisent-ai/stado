@@ -24,11 +24,17 @@ use crate::release_pipeline::ScratchReceipt;
 /// `secret_env` is what the job projects into its environment, as
 /// `item#field` references. A host whose publication lists
 /// `secret_fields` without one of them cannot resolve it and is unfit.
+///
+/// `in_flight` counts the builds of the same product each builder is running
+/// now (see [`super::history`]). They share one Cargo build directory there,
+/// and Cargo admits one at a time, so among hosts otherwise alike the one
+/// compiling fewer of them goes first. Delivery jobs pass an empty map.
 pub(crate) async fn builder(
     platform: &str,
     pinned: Option<&str>,
     scratch: Option<&ScratchReceipt>,
     secret_env: &BTreeMap<String, String>,
+    in_flight: &BTreeMap<String, usize>,
 ) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
@@ -112,8 +118,10 @@ pub(crate) async fn builder(
                 _ => return None,
             };
             let free = published_free_bytes(publication).unwrap_or_default();
+            let sharing = in_flight.get(&target.name).copied().unwrap_or_default();
             Some((
                 waiting_for_resources,
+                sharing,
                 interactive,
                 free,
                 target,
@@ -125,13 +133,14 @@ pub(crate) async fn builder(
         left.0
             .cmp(&right.0)
             .then_with(|| left.1.cmp(&right.1))
-            .then_with(|| right.2.cmp(&left.2))
-            .then_with(|| left.3.name.cmp(&right.3.name))
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| right.3.cmp(&left.3))
+            .then_with(|| left.4.name.cmp(&right.4.name))
     });
     candidates
         .into_iter()
         .next()
-        .map(|(_, _, _, target, consumer)| (target, consumer))
+        .map(|(_, _, _, _, target, consumer)| (target, consumer))
         .ok_or_else(|| {
             // Name the store this looked in. Builders are selected from capacity
             // publications, not from the registry's platform declaration, so a host
