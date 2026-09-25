@@ -186,6 +186,17 @@ pub(super) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
     if crate::config::release_publisher_declared(product) {
         return Ok(());
     }
+    // A publisher is the bearer a write to the release object API carries.
+    // A store this process writes directly — the local backend with no API
+    // configured, as an isolated release journey runs — takes no bearer, and
+    // asking which host owns the fleet vault there refused every such run
+    // with `no installed Skarbiec launcher` before its first write.
+    if crate::config::stado_api_url().is_empty()
+        && crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+            == Some(crate::capabilities::StorageAdapter::Local)
+    {
+        return Ok(());
+    }
     let (owner, client) = fleet_hosts().await?;
     eprintln!(
         "{product}: this host declares no release publisher for it; declaring it now \
