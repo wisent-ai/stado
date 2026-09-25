@@ -91,6 +91,17 @@ fn discover(
         let Some(component) = component_kind(&parsed.program, &parsed.arguments) else {
             continue;
         };
+        // A unit that runs the bare binary serves no role: launchd starts it,
+        // it prints its help and exits. There is nothing to merge, and it must
+        // not refuse the one unit that replaces it.
+        if parsed.arguments.len() <= 1 {
+            eprintln!(
+                "[host] {} runs {:?} with no command; left out of the host unit",
+                path.display(),
+                parsed.arguments
+            );
+            continue;
+        }
         let mut plan = component_plan(component, &label)?;
         plan.label = label;
         let unit = match host.os {
