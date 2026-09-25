@@ -35,7 +35,13 @@ pub(crate) struct Running {
     pub name: String,
     pub since: String,
     pub seconds: i64,
+    /// What the step is stuck behind, when its output says so.
+    pub blocked_on: Option<String>,
 }
+
+/// What Cargo prints while another Cargo process on the same host holds the
+/// build directory or package cache this one needs.
+const CARGO_LOCK_WAIT: &str = "Blocking waiting for file lock";
 
 /// One platform job as far as the queue and its log tell.
 #[derive(Debug, Default, PartialEq, Serialize)]
@@ -61,6 +67,7 @@ pub(crate) fn steps(log: &str, now: DateTime<Utc>) -> Progress {
                     name: name.to_owned(),
                     since: at.to_rfc3339(),
                     seconds: (now - at).num_seconds().max(0),
+                    blocked_on: None,
                 });
             }
         } else if let Some((name, exit)) = rest.split_once(EXIT) {
@@ -80,6 +87,19 @@ pub(crate) fn steps(log: &str, now: DateTime<Utc>) -> Progress {
                 exit: exit.to_owned(),
                 seconds,
             });
+        }
+    }
+    // A step whose newest line is Cargo's lock wait is not compiling: another
+    // build on this host holds the shared build directory. A Stado darwin job
+    // spent 49 minutes on that one line, and `running for` alone read as a
+    // slow compile.
+    if let Some(running) = progress.running.as_mut() {
+        let last = log.lines().rev().find(|line| !line.trim().is_empty());
+        if let Some(line) = last.filter(|line| line.trim_start().starts_with(CARGO_LOCK_WAIT)) {
+            running.blocked_on = Some(format!(
+                "{} — another Cargo process on this host holds it",
+                line.trim()
+            ));
         }
     }
     progress
@@ -130,8 +150,15 @@ impl Progress {
         }
         lines.push(match &self.running {
             Some(running) => format!(
-                "step {}: running for {}s (since {})",
-                running.name, running.seconds, running.since
+                "step {}: running for {}s (since {}){}",
+                running.name,
+                running.seconds,
+                running.since,
+                running
+                    .blocked_on
+                    .as_deref()
+                    .map(|blocked| format!("; blocked: {blocked}"))
+                    .unwrap_or_default()
             ),
             None if self.steps.is_empty() => {
                 "preparing the source and toolchain; no step has started".to_owned()

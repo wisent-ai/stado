@@ -197,6 +197,9 @@ async fn follow(build_id: &str) -> Result<(), CmdError> {
                     "step {}: started at {}",
                     running.name, running.since
                 ));
+                if let Some(blocked) = &running.blocked_on {
+                    lines.push(format!("step {}: blocked: {blocked}", running.name));
+                }
             }
             for line in lines {
                 if said.insert(format!("{name}\0{line}")) {
