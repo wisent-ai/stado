@@ -55,11 +55,6 @@ let package = Package(
             path: "tests/service",
         ),
         .testTarget(
-            name: "ProductTests",
-            dependencies: ["Stado"],
-            path: "tests/product"
-        ),
-        .testTarget(
             name: "MemoryTests",
             dependencies: ["Stado"],
             path: "tests/memory"
