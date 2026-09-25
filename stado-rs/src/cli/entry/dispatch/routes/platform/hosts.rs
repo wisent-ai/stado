@@ -124,8 +124,9 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             target,
             manifest_path,
             binary,
+            check,
             json,
-        } => host::build(&target, &manifest_path, &binary, json).await,
+        } => host::build(&target, &manifest_path, &binary, check, json).await,
         HostRunCommands::RunAttached {
             target,
             program,
