@@ -179,6 +179,21 @@ pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError>
     Ok(entries)
 }
 
+/// The products whose handed-off work no build has taken yet: every ticket
+/// still `queued`. `stado build newest --queued` builds exactly these, which
+/// is the daily batch the handoff promises.
+pub(crate) async fn queued_products() -> Result<std::collections::BTreeSet<String>, CmdError> {
+    let store = JobStorage::new().await.map_err(failure)?;
+    let observations = status::observations(&store).await?;
+    Ok(entries(&store)
+        .await?
+        .into_iter()
+        .map(|change| status::for_change(change, &observations))
+        .filter(|status| status.state == "queued")
+        .map(|status| status.change.product)
+        .collect())
+}
+
 /// Freeze only tickets whose commits the selected build actually contains.
 /// Called before queueing the build; later submissions cannot join its batch.
 pub(crate) async fn bind(

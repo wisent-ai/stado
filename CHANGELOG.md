@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado build newest --queued` is the daily batch over handed-off work:** `stado release changes submit` only queued tickets and nothing built them; every batch so far was typed by an agent. `--queued` builds exactly the products whose tickets are still `queued`, from the workspace checkouts, and names queued products the workspace holds no checkout of. A daily schedule runs it: `stado schedule create --cron "0 2 * * *" --pinned-host <workspace host> "stado build newest --queued --root <workspace>"`.
+
 - **A publisher declaration looks for its item in the fleet vault, not the declaring host's copy:** `release catalog enroll` minted `tama` on the vault owner and then refused to declare it on lukasz-macbook because that host's local copy lacked the item. The guard now reads the item from the registry's `skarbiec` active host, the vault every verifier reads.
 
 - **`stado config migrate-identities` runs again after another key is retired:** its backup had a fixed name, so a second run refused with `File exists` and left the newly retired `backend.push_skarbiec` in place. The backup is now stamped with the time. `stado config unset` no longer says the removed key "is required" when the config it would leave is invalid for another reason; it names those reasons.

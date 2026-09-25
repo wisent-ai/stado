@@ -29,8 +29,14 @@ pub struct BuildNewestArgs {
     root: Option<PathBuf>,
     /// Build only these products; repeat for several. The default is every
     /// product the workspace holds.
-    #[arg(long = "product")]
+    #[arg(long = "product", conflicts_with = "queued")]
     products: Vec<String>,
+    /// Build only the products with handed-off work no build has taken yet
+    /// (`stado release changes list` state `queued`). This is the daily batch:
+    /// agents hand work off and compile nothing, and a schedule runs
+    /// `stado build newest --queued` over the workspace once a day.
+    #[arg(long)]
+    queued: bool,
     /// Read what would be built and why the rest is skipped, without
     /// queueing anything.
     #[arg(long)]
@@ -105,7 +111,29 @@ fn describe(entry: &Planned) -> String {
 
 pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
     let root = workspace(args.root.clone())?;
-    let planned = plan(&root, &args.products).await?;
+    let planned = if args.queued {
+        let wanted = crate::cli::release_submit::changes::queued_products().await?;
+        if wanted.is_empty() {
+            println!("no handed-off work is queued; nothing to build");
+            return Ok(());
+        }
+        let planned: Vec<Planned> = plan(&root, &[])
+            .await?
+            .into_iter()
+            .filter(|entry| wanted.contains(&entry.product))
+            .collect();
+        for product in &wanted {
+            if !planned.iter().any(|entry| &entry.product == product) {
+                println!(
+                    "  {product}  has queued work but {} holds no checkout of it",
+                    root.display()
+                );
+            }
+        }
+        planned
+    } else {
+        plan(&root, &args.products).await?
+    };
     if args.plan {
         if args.json {
             let report = serde_json::json!({
