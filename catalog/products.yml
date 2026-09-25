@@ -677,11 +677,9 @@ products:
     repository: wisent-ai/tama-desktop
   installations:
   - surface: cli
-    kind: cargo
+    kind: stado-release
     repository: wisent-ai/tama
-    manifest: rust/crates/tama-cli/Cargo.toml
-    binaries:
-    - tama
+    manifest: .wisent-release.json
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/tama-desktop
