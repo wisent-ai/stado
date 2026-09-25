@@ -190,7 +190,7 @@ pub fn commit(
             backups,
             host: host.map(str::to_owned),
             source_revision: Some(plan.source_revision.clone()),
-            previous: existing.map(Box::new),
+            previous: existing.map(|existing| Box::new(existing.without_previous())),
             source_directory: plan.source_directory.clone(),
             release: plan.release.clone(),
             extra,

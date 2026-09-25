@@ -38,7 +38,7 @@ pub fn remove(
     if current.status != "removing" {
         ownership::verify(&current)
             .context("recorded files changed; refusing to delete unverified replacement files")?;
-        let previous = current.clone();
+        let previous = current.clone().without_previous();
         current.backups = backup(runtime, id, &removable)?;
         current.extra.insert(
             "backup_fingerprints".to_owned(),

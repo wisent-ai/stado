@@ -63,12 +63,35 @@ impl ProductState {
                 return Err(error).with_context(|| format!("reading receipt {}", path.display()))
             }
         };
-        let state: Self = serde_json::from_slice(&bytes)
-            .with_context(|| format!("parsing receipt {}", path.display()))?;
+        // Receipts written before history was capped nest every earlier
+        // installation in `previous`; a tool reinstalled a few hundred times
+        // is deeper than serde_json's default limit, and one such file used to
+        // refuse every product command. Read it whole, keep one level.
+        let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+        deserializer.disable_recursion_limit();
+        let state = Self::deserialize(&mut deserializer)
+            .and_then(|state| deserializer.end().map(|()| state))
+            .with_context(|| format!("parsing receipt {}", path.display()))?
+            .with_one_previous();
         if state.product != product || state.surface != surface {
             bail!("receipt identity differs from its path: {}", path.display());
         }
         Ok(Some(state))
+    }
+
+    /// Rollback reads only the state directly before this one, so that is
+    /// all a receipt keeps.
+    pub fn with_one_previous(mut self) -> Self {
+        if let Some(previous) = self.previous.as_mut() {
+            previous.previous = None;
+        }
+        self
+    }
+
+    /// This state as the `previous` of the next one: without its own history.
+    pub fn without_previous(mut self) -> Self {
+        self.previous = None;
+        self
     }
 
     pub fn save(&self, runtime: &Runtime) -> Result<()> {

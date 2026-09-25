@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado product` reads receipts of tools installed hundreds of times:** each install nested the whole previous receipt, history included, so a tool reinstalled a few hundred times wrote a receipt deeper than the JSON parser's recursion limit, and that one file refused every `stado product` install, `paths` and ownership check with `recursion limit exceeded`. A receipt now keeps only the state directly before it, which is all rollback reads, and existing deep receipts are read whole and rewritten flat on the next change.
+
 - **`stado host build` no longer fills the target's disk:** each build compiled into a fresh `target/` inside its run directory, several gigabytes apiece, and six recovery builds took the control host to `No space left on device`, which stopped its object API for the fleet. Builds now share one target under `~/.stado/build-cache/host-build/cargo-target`, a root the `build_caches` cleaner owns, copy only the executable to `<run>/…/target/release/<bin>` for `stado host run-attached`, and are refused before compiling when the host is already under its disk low watermark, naming the free space, the watermark and `stado space reclaim`.
 
 - **`stado bootstrap --local --target <this machine>` installs one Stado process:** the host-unit install that merges every Stado unit on the machine into one `stado serve` unit, loads it and retires the replaced units as `.retired-<date>` files was never called; bootstrap installed the local target as a separate queue agent. A local target is now installed as the host unit.
