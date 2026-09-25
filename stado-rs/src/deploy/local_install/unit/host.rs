@@ -50,7 +50,12 @@ fn command(plan: &InstallPlan) -> Result<Commands, DeployError> {
             ))
         })?
         .command
-        .ok_or_else(|| DeployError(format!("{} has no component command", plan.label)))
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{} has no component command: its unit runs {:?}",
+                plan.label, plan.exec_args
+            ))
+        })
 }
 
 fn check_target(expected: &str, actual: &str, label: &str) -> Result<(), DeployError> {
