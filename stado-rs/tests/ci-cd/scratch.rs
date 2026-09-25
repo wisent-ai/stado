@@ -3,45 +3,21 @@
 
 use super::*;
 
-/// A prior run of the same product on this platform, whose builder measured a
-/// scratch tree no host in this fleet can hold.
+/// A prior build of the same product on this platform, whose builder
+/// measured a scratch tree no host in this fleet can hold. The record sits
+/// where a build job's bootstrap leaves it: beside that platform's output.
 fn seed_measured_scratch(storage: &Path, platform: &str) {
-    let run_id = "5eed5eed5eed5eed5eed5eed5eed5eed";
+    let build_id = "5eed5eed5eed5eed5eed5eed5eed5eed";
     let job_id = "job-5eed5eed5eed5eed5eed5eed";
-    let output_prefix = format!("status/{job_id}/output/");
-    let run = storage.join(format!("runs/release-pipeline/{run_id}"));
-    fs::create_dir_all(&run).unwrap();
-    fs::write(
-        run.join("run.json"),
-        serde_json::to_vec(&json!({
-            "schema_version": 1,
-            "run_id": run_id,
-            "product": "ci-release-probe",
-            "version": "0.9.0",
-            "channel": "candidate",
-            "state": "completed",
-            "platforms": {
-                platform: {
-                    "platform": platform,
-                    "builder": "ci-runner",
-                    "job_id": job_id,
-                    "output_prefix": output_prefix,
-                    "state": "published"
-                }
-            },
-            "deliveries": {},
-            "failure": null
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let output = storage.join(&output_prefix);
+    let output = storage.join(format!(
+        "runs/build/ci-release-probe/{build_id}/platforms/{platform}/output"
+    ));
     fs::create_dir_all(&output).unwrap();
     fs::write(
         output.join("scratch.json"),
         serde_json::to_vec(&json!({
             "schema_version": 1,
-            "run_id": run_id,
+            "run_id": build_id,
             "job_id": job_id,
             "product": "ci-release-probe",
             "platform": platform,

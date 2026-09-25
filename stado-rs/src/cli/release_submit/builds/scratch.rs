@@ -16,10 +16,10 @@ use crate::deploy::host_gates::RELEASE_SCRATCH_SHORT;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{ScratchReceipt, SCRATCH_LEAF};
 
-/// How many run objects, newest first, are opened looking for evidence
-/// before the search gives up. Evidence is nearly always in the first or
-/// second, and a product that was never built by a measuring worker must not
-/// cost the whole history on every submission.
+/// How many scratch records, newest first, are opened looking for one that
+/// parses before the search gives up. The newest nearly always does; a store
+/// full of damaged records must not cost the whole history on every
+/// submission.
 const EVIDENCE_RUNS_EXAMINED: usize = 40;
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -27,41 +27,34 @@ const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 /// The newest scratch record for `product` on `platform`, or `None` when no
 /// measuring worker has built that pair yet. Silence is not a requirement:
 /// a build with no evidence is placed the way it always was.
+///
+/// A compile happens in a build, and a build job's bootstrap leaves the
+/// record at `runs/build/<product>/<build>/platforms/<platform>/output/`
+/// (or under that platform's `attempts/<id>/output/` for a retry). This used
+/// to walk every product's release runs instead: 1,753 objects under
+/// `runs/release-pipeline/` listed, then up to forty `run.json` downloads,
+/// once per platform on every submission — and release runs have not
+/// compiled anything since builds got records of their own, so the evidence
+/// it found there was a stale build's. One listing of this product's builds
+/// finds the newest record by name and time.
 pub(crate) async fn last_scratch(
     store: &JobStorage,
     product: &str,
     platform: &str,
 ) -> Result<Option<ScratchReceipt>, CmdError> {
+    let platform_segment = format!("/platforms/{platform}/");
+    let leaf = format!("/output/{SCRATCH_LEAF}");
     let mut blobs = store
-        .list_blobs_with_meta("runs/release-pipeline/")
+        .list_blobs_with_meta(&format!("runs/build/{product}/"))
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .into_iter()
-        .filter(|blob| blob.name.ends_with("/run.json"))
+        .filter(|blob| blob.name.contains(&platform_segment) && blob.name.ends_with(&leaf))
         .collect::<Vec<_>>();
     blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
     for blob in blobs.iter().take(EVIDENCE_RUNS_EXAMINED) {
-        let Some(text) = store
-            .download_text(&blob.name)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?
-        else {
-            continue;
-        };
-        let Ok(run) = serde_json::from_str::<Value>(&text) else {
-            continue;
-        };
-        if run["product"].as_str() != Some(product) {
-            continue;
-        }
-        let Some(prefix) = run["platforms"][platform]["output_prefix"].as_str() else {
-            continue;
-        };
         let Some(bytes) = store
-            .read_bytes(&format!(
-                "{}{SCRATCH_LEAF}",
-                prefix.trim_end_matches('/').to_owned() + "/"
-            ))
+            .read_bytes(&blob.name)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?
         else {
