@@ -123,7 +123,7 @@ pub(super) fn unset(key: &str) -> Result<(), CmdError> {
     let problems = config_file::validate(&document);
     if !problems.is_empty() {
         return Err(CmdError::click(format!(
-            "{key} is required, config unchanged: {}",
+            "config unchanged: without {key} the config is invalid: {}",
             problems.join("; ")
         )));
     }

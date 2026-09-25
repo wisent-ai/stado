@@ -159,7 +159,13 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             token_file.display()
         )));
     }
-    let backup = std::path::PathBuf::from(format!("{}.before-identity-migration", path.display()));
+    // Stamped, because the migration runs again each time another key is
+    // retired: a fixed name refused the second run with `File exists`.
+    let backup = std::path::PathBuf::from(format!(
+        "{}.before-identity-migration-{}",
+        path.display(),
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+    ));
     let mut backup_file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
