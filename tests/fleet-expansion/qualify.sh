@@ -12,8 +12,16 @@ case "${1:-}" in
     cargo test --manifest-path "$source_dir/stado-rs/Cargo.toml" --locked --release --test fleet_expansion -- --nocapture
     ;;
   desktop)
-    "$STADO_BIN" product swift --package-path "$source_dir/desktop/StadoDesktop" test \
-      --test-product StadoDesktopPackageTests --filter FleetExpansionTests
+    # The job's checkout is not a canonical workspace, and `stado product
+    # swift` resolves dependencies from the operator's canonical checkouts:
+    # on a release worker that read ~/Documents/CodingProjects/Wisent and was
+    # refused by macOS (`reading workspace …: Operation not permitted`).
+    # The package pins its dependencies to published tags, so SwiftPM builds
+    # it from this source alone, in the package's own `.build` inside the
+    # job tree. The Fleet Expansion and Products screens are driven against
+    # STADO_BIN.
+    swift test --package-path "$source_dir/desktop/StadoDesktop" \
+      --filter 'FleetExpansionTests|ProductOperationsTests'
     ;;
   *) printf 'usage: qualify.sh cli|desktop\n' >&2; exit 64 ;;
 esac
