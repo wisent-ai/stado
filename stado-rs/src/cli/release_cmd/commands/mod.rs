@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-use super::local::{ReleaseConvergeLocalReadersArgs, ReleaseInstallLocalArgs};
+use super::local::{
+    ReleaseConvergeLocalReadersArgs, ReleaseInstallLocalArgs, ReleaseRestoreLocalArgs,
+};
 use super::publication::{ReleaseClaimCoordinateArgs, ReleaseKeygenArgs, ReleasePrepareArgs};
 use super::rollout::{
     ReleaseActiveBinaryArgs, ReleaseAgentArgs, ReleasePolicyApplyArgs, ReleasePromoteArgs,
@@ -91,6 +93,10 @@ pub enum ReleaseCommands {
     /// Install a delivered release archive's binary on this very host.
     #[command(name = "install-local")]
     InstallLocal(ReleaseInstallLocalArgs),
+    /// Reinstall a Stado release an earlier delivery retained on this very
+    /// host, when the installed Stado cannot serve.
+    #[command(name = "restore-local")]
+    RestoreLocal(ReleaseRestoreLocalArgs),
     /// Reconcile live readers of an already-installed native binary.
     #[command(name = "converge-local-readers", hide = true)]
     ConvergeLocalReaders(ReleaseConvergeLocalReadersArgs),

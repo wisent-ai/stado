@@ -14,7 +14,6 @@ use super::{converge_service_local_stado_readers, regular_file_matches, ReleaseI
 pub(in crate::cli::release_cmd) async fn install_local(
     args: &ReleaseInstallLocalArgs,
 ) -> Result<(), CmdError> {
-    use sha2::Digest as _;
     let name = if args.name.is_empty() {
         args.member
             .rsplit('/')
@@ -24,7 +23,6 @@ pub(in crate::cli::release_cmd) async fn install_local(
     } else {
         args.name.clone()
     };
-    let home = crate::config_file::expand_tilde("~");
     let stado_version =
         if name == "stado" && std::env::var("WISENT_PRODUCT").ok().as_deref() == Some("stado") {
             let version = std::env::var("WISENT_VERSION")
@@ -41,8 +39,28 @@ pub(in crate::cli::release_cmd) async fn install_local(
         };
     let archive = std::env::var("WISENT_RELEASE_ARCHIVE")
         .map_err(|_| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint"))?;
+    let expected = std::env::var("WISENT_RELEASE_SHA256")
+        .map_err(|_| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint"))?;
+    install_archive(name, &args.member, &archive, &expected, stado_version, true).await
+}
+
+/// Verify one release archive, install its member under `$HOME/.stado/bin`,
+/// and reconcile every reader of the replaced name. `install-local` feeds it
+/// the delivery contract's archive; `restore-local` feeds it an archive an
+/// earlier delivery retained on this host, and does not declare the version
+/// because the declaration lives in the registry it is restoring access to.
+pub(in crate::cli::release_cmd) async fn install_archive(
+    name: String,
+    member: &str,
+    archive: &str,
+    expected: &str,
+    stado_version: Option<String>,
+    declare: bool,
+) -> Result<(), CmdError> {
+    use sha2::Digest as _;
+    let home = crate::config_file::expand_tilde("~");
     if stado_version.is_some()
-        && !std::fs::symlink_metadata(&archive)
+        && !std::fs::symlink_metadata(archive)
             .map_err(|error| {
                 CmdError::click(format!(
                     "cannot inspect delivered Stado archive {archive}: {error}"
@@ -55,9 +73,7 @@ pub(in crate::cli::release_cmd) async fn install_local(
             "delivered Stado archive must be a regular file, not a symlink",
         ));
     }
-    let expected = std::env::var("WISENT_RELEASE_SHA256")
-        .map_err(|_| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint"))?;
-    let bytes = std::fs::read(&archive).map_err(|error| {
+    let bytes = std::fs::read(archive).map_err(|error| {
         CmdError::click(format!("cannot read delivered archive {archive}: {error}"))
     })?;
     let actual = hex::encode(sha2::Sha256::digest(&bytes));
@@ -83,11 +99,11 @@ pub(in crate::cli::release_cmd) async fn install_local(
         })?;
         retained_dir.join(crate::deploy::host_release::READER_ARCHIVE_NAME)
     } else {
-        PathBuf::from(&archive)
+        PathBuf::from(archive)
     };
     let decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
     let mut bundle = tar::Archive::new(decoder);
-    let member = args.member.trim_start_matches('/');
+    let member = member.trim_start_matches('/');
     let mut payload: Option<Vec<u8>> = None;
     for entry in bundle
         .entries()
@@ -116,8 +132,8 @@ pub(in crate::cli::release_cmd) async fn install_local(
             "release archive carries no regular member {member}"
         )));
     };
-    if stado_version.is_some() && Path::new(&archive) != reader_archive {
-        retain_archive(Path::new(&archive), &reader_archive)?;
+    if stado_version.is_some() && Path::new(archive) != reader_archive {
+        retain_archive(Path::new(archive), &reader_archive)?;
     }
     let directory = home.join(".stado").join("bin");
     std::fs::create_dir_all(&directory).map_err(|error| {
@@ -307,7 +323,7 @@ pub(in crate::cli::release_cmd) async fn install_local(
             destination.display()
         );
     }
-    if let Some(version) = stado_version.as_deref() {
+    if let Some(version) = stado_version.as_deref().filter(|_| declare) {
         declare_delivered_version(&name, version).await?;
     }
     Ok(())

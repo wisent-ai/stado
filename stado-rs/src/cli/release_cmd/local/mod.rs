@@ -10,6 +10,9 @@ use crate::cli::CmdError;
 
 pub(super) mod converge;
 pub(super) mod install;
+pub(super) mod restore;
+
+pub use restore::ReleaseRestoreLocalArgs;
 
 /// `stado release install-local` — the delivery contract's local endpoint.
 ///

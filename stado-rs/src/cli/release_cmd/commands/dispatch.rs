@@ -2,6 +2,7 @@
 
 use crate::cli::release_cmd::local::converge::converge_local_readers;
 use crate::cli::release_cmd::local::install::install_local;
+use crate::cli::release_cmd::local::restore::restore_local;
 use crate::cli::release_cmd::publication::claims::claim_coordinate;
 use crate::cli::release_cmd::publication::signing::{keygen, prepare};
 use crate::cli::release_cmd::rollout::policy::apply_policy;
@@ -50,6 +51,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
         ReleaseCommands::InstallLocal(args) => install_local(&args).await,
+        ReleaseCommands::RestoreLocal(args) => restore_local(&args).await,
         ReleaseCommands::ConvergeLocalReaders(args) => converge_local_readers(&args).await,
         ReleaseCommands::ClaimCoordinate(args) => claim_coordinate(&args).await,
         ReleaseCommands::DeclareVersion(args) => {
