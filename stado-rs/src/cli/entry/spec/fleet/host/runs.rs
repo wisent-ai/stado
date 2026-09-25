@@ -63,10 +63,7 @@ pub(crate) enum HostRunCommands {
     ///
     /// The command is fixed to `cargo build --locked --release`; only the
     /// manifest and binary name vary. The manifest must resolve below the
-    /// selected account's `$HOME/.stado/work/runs`. `--check` runs
-    /// `cargo check --locked` instead: seconds, not minutes, no binary, and
-    /// the last built binary stays in place. Check a batch of edits first and
-    /// release-build once.
+    /// selected account's `$HOME/.stado/work/runs`.
     Build {
         target: String,
         /// Absolute Cargo.toml path inside a delivered managed run.
@@ -75,9 +72,6 @@ pub(crate) enum HostRunCommands {
         /// Declared Cargo binary target to build.
         #[arg(long = "bin")]
         binary: String,
-        /// Only check that the source compiles (`cargo check --locked`).
-        #[arg(long)]
-        check: bool,
         /// Capture Cargo's stdout, stderr, and exit status in one JSON receipt.
         #[arg(long)]
         json: bool,

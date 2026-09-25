@@ -89,7 +89,6 @@ pub async fn build(
     target: &str,
     manifest_path: &str,
     binary: &str,
-    check: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
     crate::deploy::host_run::validate_run_descendant(manifest_path)
@@ -102,7 +101,6 @@ pub async fn build(
         &resolved,
         manifest_path,
         binary,
-        check,
         &crate::deploy::production_runner(),
     )
     .await

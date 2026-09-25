@@ -19,15 +19,10 @@ pub struct BuildOutcome {
     pub stderr: String,
 }
 
-/// `check` runs `cargo check` instead: the same run tree, toolchain and
-/// target cache, no release binary and no copy, so a source error costs
-/// seconds rather than a 4-7 minute release build, and a failed check leaves
-/// the binary the last build produced where it was.
 pub async fn build(
     target: &ComputeTarget,
     manifest_path: &str,
     binary: &str,
-    check: bool,
     runner: &Runner,
 ) -> Result<BuildOutcome, DeployError> {
     // A release build takes gigabytes. On the control host that is the
@@ -68,21 +63,14 @@ pub async fn build(
     script
         .push_str("export CARGO_TARGET_DIR=\"$HOME/.stado/build-cache/host-build/cargo-target\"\n");
     script.push_str("mkdir -p \"$CARGO_TARGET_DIR\" || exit 73\n");
-    if check {
-        script.push_str(&format!(
-            "\"$cargo\" check --locked --manifest-path \"$path\" --bin {binary} || exit $?\n",
-            binary = shlex_quote(binary)
-        ));
-    } else {
-        script.push_str(&format!(
-            "\"$cargo\" build --locked --release --manifest-path \"$path\" --bin {binary} || exit $?\n\
-             # Only the executable enters the run directory, where run-attached\n\
-             # accepts it and remove-run-directory takes it away again.\n\
-             mkdir -p \"${{path%/*}}/target/release\" || exit 73\n\
-             cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit 73\n",
-            binary = shlex_quote(binary)
-        ));
-    }
+    script.push_str(&format!(
+        "\"$cargo\" build --locked --release --manifest-path \"$path\" --bin {binary} || exit $?\n\
+         # Only the executable enters the run directory, where run-attached\n\
+         # accepts it and remove-run-directory takes it away again.\n\
+         mkdir -p \"${{path%/*}}/target/release\" || exit 73\n\
+         cp \"$CARGO_TARGET_DIR/release/\"{binary} \"${{path%/*}}/target/release/\"{binary} || exit 73\n",
+        binary = shlex_quote(binary)
+    ));
 
     let output =
         host_channel::run_script_with_timeout(target, &script, BUILD_TIMEOUT, runner).await?;
@@ -90,11 +78,7 @@ pub async fn build(
         target: target.name.clone(),
         manifest_path: manifest_path.to_string(),
         binary: binary.to_string(),
-        status: match (output.ok(), check) {
-            (true, true) => "checked",
-            (true, false) => "built",
-            (false, _) => "failed",
-        },
+        status: if output.ok() { "built" } else { "failed" },
         exit_code: output.code,
         stdout: output.stdout,
         stderr: output.stderr,

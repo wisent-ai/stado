@@ -17,8 +17,6 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
-- **`stado host build --check` checks that source compiles without a release build:** `host build` could only run `cargo build --locked --release`, so every source error cost a 4-7 minute release build, and one session ran six such builds in a row, one only to find an unresolved import. `--check` runs `cargo check --locked` in the same run tree and target cache, reports `checked`, and leaves the last built binary in place. Check each batch of edits with it and release-build once.
-
 - **`stado config migrate-identities` runs again after another key is retired:** its backup had a fixed name, so a second run refused with `File exists` and left the newly retired `backend.push_skarbiec` in place. The backup is now stamped with the time. `stado config unset` no longer says the removed key "is required" when the config it would leave is invalid for another reason; it names those reasons.
 
 - **One fleet vault: only its owner publishes the mirror, and a non-owner may not declare a local copy:** hosts kept their own Skarbiec copy declared in `secrets.skarbiec.vault_file`, grants minted on the owner never reached them, and two copies pushing one mirror made the owner's push fail `fetch first`. `stado credentials vault sync --push` now refuses any host other than the registry's `skarbiec` active host, and `stado credentials vault` names that owner (`owner_host`) and refuses, with state `local_copy_on_non_owner`, a different host that declares a local copy; such a host reads the owner through `secrets.skarbiec.url`.
