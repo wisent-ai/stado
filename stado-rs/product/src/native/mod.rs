@@ -135,11 +135,25 @@ fn execute(
         atomic_json(&evidence.join("result.json"), &report)?;
         let output = capture(&mut command())?;
         io::stderr().write_all(&output.stderr)?;
+        // SwiftPM prints its compiler errors on standard output, which
+        // `--json` replaces with this report. A failed `--json` build of
+        // oko-desktop said only `Swift build failed (exit status: 1)` and its
+        // evidence held no compiler line, so both streams are kept beside the
+        // report and a failure names where they are.
+        let compiler_stdout = evidence.join("swift.stdout.log");
+        let compiler_stderr = evidence.join("swift.stderr.log");
+        fs::write(&compiler_stdout, &output.stdout)?;
+        fs::write(&compiler_stderr, &output.stderr)?;
+        report["compiler_output"] = json!({"stdout": compiler_stdout, "stderr": compiler_stderr});
         stdout = output.stdout;
         report["exit_status"] = json!(output.status.code());
         if !output.status.success() {
             code = output.status.code().unwrap_or(1);
-            bail!("Swift {operation} failed ({})", output.status);
+            bail!(
+                "Swift {operation} failed ({}); the compiler's output is in {}",
+                output.status,
+                compiler_stdout.display()
+            );
         }
         report["state"] = json!("verifying_source_identity");
         atomic_json(&evidence.join("result.json"), &report)?;
