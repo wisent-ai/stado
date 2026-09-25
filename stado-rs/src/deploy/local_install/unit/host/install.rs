@@ -58,29 +58,48 @@ fn discover(
     component_plan: &dyn Fn(&str, &str) -> Result<InstallPlan, DeployError>,
 ) -> Result<Vec<Component>, DeployError> {
     let host_path = host.unit_path(home);
-    let directory = host_path
+    let own = host_path
         .parent()
-        .ok_or_else(|| DeployError(format!("{} has no unit directory", host_path.display())))?;
-    let entries = match std::fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(DeployError(format!(
-                "reading {}: {error}",
-                directory.display()
-            )))
+        .ok_or_else(|| DeployError(format!("{} has no unit directory", host_path.display())))?
+        .to_path_buf();
+    // A Mac keeps Stado units in both launchd domains when the registry's
+    // domain for it changed after they were installed: the mini is declared
+    // graphical (it hosts Weles) while its Stado units sit in the system
+    // domain. The one host unit replaces them wherever they are.
+    let mut directories = vec![own.clone()];
+    if host.os == LocalOs::Darwin {
+        directories.push(if host.daemon.is_some() {
+            home.join("Library/LaunchAgents")
+        } else {
+            PathBuf::from(SYSTEM_DAEMON_DIRECTORY)
+        });
+    }
+    let mut found = Vec::new();
+    for directory in &directories {
+        let entries = match std::fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(DeployError(format!(
+                    "reading {}: {error}",
+                    directory.display()
+                )))
+            }
+        };
+        for entry in entries {
+            let path = entry
+                .map_err(|error| DeployError(format!("reading {}: {error}", directory.display())))?
+                .path();
+            found.push((path, *directory == own));
         }
-    };
+    }
     let kind = native_kind(host.os);
     let mut components = Vec::new();
-    for entry in entries {
-        let path = entry
-            .map_err(|error| DeployError(format!("reading {}: {error}", directory.display())))?
-            .path();
+    for (path, in_own_domain) in found {
         let Some(label) = label_of(&path, host.os) else {
             continue;
         };
-        if label == host.label {
+        if label == host.label && in_own_domain {
             continue;
         }
         let content = std::fs::read_to_string(&path)
@@ -127,6 +146,9 @@ fn retired_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Where launchd keeps system-domain daemons.
+const SYSTEM_DAEMON_DIRECTORY: &str = "/Library/LaunchDaemons";
+
 fn sudo(arguments: &[&str]) -> CommandSpec {
     let mut argv = vec!["/usr/bin/sudo".to_string(), "-n".to_string()];
     argv.extend(arguments.iter().map(|argument| argument.to_string()));
@@ -142,7 +164,7 @@ async fn retire(
     let path = PathBuf::from(&component.native_definition().path);
     let target = retired_path(&path);
     let label = &component.plan.label;
-    let (stop, rename) = match (host.os, host.daemon.is_some()) {
+    let (stop, rename) = match (host.os, path.starts_with(SYSTEM_DAEMON_DIRECTORY)) {
         (LocalOs::Darwin, true) => (
             sudo(&["/bin/launchctl", "bootout", &format!("system/{label}")]),
             Some(sudo(&[
