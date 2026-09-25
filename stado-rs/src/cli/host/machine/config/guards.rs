@@ -21,6 +21,12 @@ use crate::cli::host::secrets::vault::item::read_vault_phase;
 /// on the host and nowhere an operator was looking. A publisher declaration
 /// whose item does not exist is the defect, never the missing item: mint the
 /// item first, then declare it.
+///
+/// The item is looked for in the vault the host's verifier reads: the fleet
+/// vault on its owner, the registry's `skarbiec` active host. Reading the
+/// declaring host's own file refused `tama` on lukasz-macbook on 2026-09-25
+/// right after `enroll` had minted it on the owner, because that host's
+/// local copy no longer receives the owner's items.
 pub(super) async fn refuse_unminted_publisher(
     target: &str,
     key: &str,
@@ -43,7 +49,10 @@ pub(super) async fn refuse_unminted_publisher(
     else {
         return Ok(());
     };
-    let resolved = crate::deploy::host_channel::canonical_target(target)
+    let vault_host = crate::cli::directory::active_host("skarbiec")
+        .await?
+        .unwrap_or_else(|| target.to_string());
+    let resolved = crate::deploy::host_channel::canonical_target(&vault_host)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
@@ -75,14 +84,14 @@ pub(super) async fn refuse_unminted_publisher(
         return Ok(());
     }
     Err(CmdError::click(format!(
-        "{host} does not hold Skarbiec item {item:?}, so declaring publisher {product:?} would \
-         close that host's whole release publication boundary: its release verifier compares the \
-         declared publisher set against its grant's item set, and one unmintable name makes them \
-         unequal for every product, answering 401 or 503 to every release-catalog read on the \
-         fleet. Mint the item on {host} first - `stado credentials item put --host {host} {item} \
-         --type token` - then declare it and run `stado repair stado --step release-verifier \
-         --target {host} --apply`.",
-        host = resolved.name
+        "the fleet vault on {owner} does not hold Skarbiec item {item:?}, so declaring publisher \
+         {product:?} on {target} would close that host's whole release publication boundary: its \
+         release verifier compares the declared publisher set against its grant's item set, and \
+         one unmintable name makes them unequal for every product, answering 401 or 503 to every \
+         release-catalog read on the fleet. Mint the item on {owner} first - `stado credentials \
+         item put --host {owner} {item} --type token` - then declare it and run `stado repair \
+         stado --step release-verifier --target {target} --apply`.",
+        owner = resolved.name
     )))
 }
 
