@@ -58,6 +58,11 @@ fn command(plan: &InstallPlan) -> Result<Commands, DeployError> {
         })
 }
 
+/// The environment a Stado process reads its Skarbiec identity from.
+pub(super) fn skarbiec_identity(name: &str) -> bool {
+    name.starts_with("WC_SKARBIEC_") || name.starts_with("WC_AGENT_SKARBIEC_")
+}
+
 /// Whether a captured unit runs one of the resident roles the host process
 /// carries. A Stado unit that runs anything else — a periodic
 /// `stado product sync`, say — is not a part of the host and is left alone.
@@ -467,16 +472,24 @@ pub(crate) fn merge(
         };
         merge_environment(&mut environment, component, worker)?;
     }
-    // The host plan is rendered from this machine's current configuration;
-    // a replaced unit's environment is what it was installed with. Where both
-    // name a variable, the configuration wins: otherwise the one process keeps
-    // the retired identities (`stado-control-plane`, `stado-local-agent`) and
-    // endpoints the units carried, and the migration it completes is undone.
-    let mut merged: BTreeMap<String, String> = environment
-        .into_iter()
-        .map(|(name, (value, _))| (name, value))
+    // A replaced unit's environment is what its role needs (its storage
+    // backend, its interpreter), so it is kept over the plan's defaults. Its
+    // Skarbiec identity is not: that is the current configuration's, or the
+    // one process keeps the retired identities (`stado-control-plane`,
+    // `stado-local-agent`) the units were installed with.
+    let identity: Vec<(String, String)> = host
+        .env
+        .iter()
+        .filter(|(name, _)| skarbiec_identity(name))
+        .cloned()
         .collect();
-    merged.extend(host.env);
+    let mut merged: BTreeMap<String, String> = host.env.into_iter().collect();
+    merged.extend(
+        environment
+            .into_iter()
+            .map(|(name, (value, _))| (name, value)),
+    );
+    merged.extend(identity);
     host.env = merged.into_iter().collect();
     let binary = host
         .exec_args

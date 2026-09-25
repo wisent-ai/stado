@@ -229,27 +229,59 @@ async fn retire(
     Ok(())
 }
 
-/// The roles an installed host unit already runs. Its argv is the only
-/// record of them once the units it replaced are retired, so a later
-/// installation starts from it rather than from a bare `stado serve`, and
-/// takes its environment from the current configuration.
+/// The roles an installed host unit already runs. Its argv and the
+/// environment of the units it retired are the only record of them once
+/// those units are `.retired-*` files, so a later installation starts from
+/// them rather than from a bare `stado serve`; the Skarbiec identity still
+/// comes from the current configuration.
 fn adopt_installed(mut host: InstallPlan, home: &Path) -> InstallPlan {
     let path = host.unit_path(home);
-    let Some(content) = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-    else {
+    let kind = native_kind(host.os);
+    let read = |path: &Path| {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|content| parse_local_unit_file(&content, kind).ok())
+    };
+    let Some(installed) = read(&path) else {
         return host;
     };
-    let Ok(parsed) = parse_local_unit_file(&content, native_kind(host.os)) else {
-        return host;
-    };
-    if parsed.arguments.get(1).map(String::as_str) != Some("serve") {
+    if installed.arguments.get(1).map(String::as_str) != Some("serve") {
         return host;
     }
-    let mut arguments = parsed.arguments;
-    arguments[0] = host.exec_args.first().cloned().unwrap_or(parsed.program);
+    let mut environment: std::collections::BTreeMap<String, String> =
+        host.env.iter().cloned().collect();
+    environment.extend(installed.env.clone());
+    let mut directories = vec![path.parent().map(Path::to_path_buf)];
+    if host.os == LocalOs::Darwin {
+        directories.push(Some(PathBuf::from(SYSTEM_DAEMON_DIRECTORY)));
+        directories.push(Some(home.join("Library/LaunchAgents")));
+    }
+    let mut retired: Vec<PathBuf> = directories
+        .into_iter()
+        .flatten()
+        .filter_map(|directory| std::fs::read_dir(directory).ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.to_string_lossy().contains(".retired-"))
+        .collect();
+    retired.sort();
+    retired.dedup();
+    for unit in retired.iter().filter_map(|path| read(path)) {
+        if component_kind(&unit.program, &unit.arguments).is_some() {
+            environment.extend(unit.env);
+        }
+    }
+    for (name, value) in &host.env {
+        if super::skarbiec_identity(name) {
+            environment.insert(name.clone(), value.clone());
+        }
+    }
+    let mut arguments = installed.arguments;
+    arguments[0] = host.exec_args.first().cloned().unwrap_or(installed.program);
     host.exec_args = arguments;
+    host.env = environment.into_iter().collect();
     host
 }
 
