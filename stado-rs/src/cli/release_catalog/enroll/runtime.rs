@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
-use crate::cli::host::vault_token_sync;
+use crate::cli::host::{vault_token_sync, TokenSyncMode};
 use crate::cli::{registry, CmdError};
 use crate::release_control;
 
@@ -114,7 +114,16 @@ pub(super) async fn ensure_runtime_grant(
     let path = format!("~/.stado/{token_file}");
     let mut delivered = Vec::new();
     for target in targets.iter().filter(|target| **target != owner) {
-        vault_token_sync(&owner, target, product, &path, &path, false, false, false).await?;
+        vault_token_sync(
+            &owner,
+            target,
+            product,
+            &path,
+            &path,
+            TokenSyncMode::Install,
+            false,
+        )
+        .await?;
         delivered.push(target.clone());
     }
     Ok(json!({

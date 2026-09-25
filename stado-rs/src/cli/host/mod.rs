@@ -70,7 +70,7 @@ pub use crate::cli::host::secrets::vault::item::stamp::stamp_vault_fingerprints;
 pub(crate) use crate::cli::host::secrets::vault::item::vault_item_state;
 pub use crate::cli::host::secrets::vault::mirror::sync::{push_vault, sync_vault};
 pub use crate::cli::host::secrets::vault::token::vault_token_mint;
-pub use crate::cli::host::secrets::vault::token::vault_token_sync;
+pub use crate::cli::host::secrets::vault::token::{vault_token_sync, TokenSyncMode};
 pub(crate) use crate::cli::host::secrets::vault::vault_word;
 pub use crate::cli::host::secrets::vault::vaults;
 pub use crate::cli::host::secrets::weles::sync_acquisition_scopes;

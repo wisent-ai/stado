@@ -121,6 +121,42 @@ pub async fn vault_token_mint(
     Ok(())
 }
 
+/// How `vault_token_sync` delivers: verify only or install, and whether the
+/// destination reads the source's vault through its resolver route instead
+/// of holding a copy.
+#[derive(Clone, Copy)]
+pub enum TokenSyncMode {
+    Install,
+    Check,
+    InstallShared,
+    CheckShared,
+}
+
+impl TokenSyncMode {
+    pub fn from_flags(check: bool, shared_vault: bool) -> Self {
+        match (check, shared_vault) {
+            (true, true) => Self::CheckShared,
+            (true, false) => Self::Check,
+            (false, true) => Self::InstallShared,
+            (false, false) => Self::Install,
+        }
+    }
+
+    fn shared_vault(self) -> bool {
+        matches!(self, Self::InstallShared | Self::CheckShared)
+    }
+
+    /// The mode word the host-side payload reads.
+    fn payload_word(self) -> &'static str {
+        match self {
+            Self::CheckShared => "check-shared",
+            Self::Check => "check",
+            Self::InstallShared => "install-shared",
+            Self::Install => "install",
+        }
+    }
+}
+
 /// Deliver a bootstrap bearer without minting, renewing, or widening a grant.
 /// Both declared vaults must already hold the same owner and complete grant.
 pub async fn vault_token_sync(
@@ -129,8 +165,7 @@ pub async fn vault_token_sync(
     consumer: &str,
     source_token_file: &str,
     token_file: &str,
-    check: bool,
-    shared_vault: bool,
+    mode: TokenSyncMode,
     json_output: bool,
 ) -> Result<(), CmdError> {
     use crate::cli::host::machine::users::credentials::credential_host;
@@ -157,7 +192,7 @@ pub async fn vault_token_sync(
     // through its own resolver route instead of a copy. The registry decides
     // whether that is true: the destination declares a resolver adapter for
     // Skarbiec, and the service directory places Skarbiec on the source.
-    if shared_vault {
+    if mode.shared_vault() {
         let registry = crate::targets::load_registry_auto()
             .await
             .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
@@ -229,12 +264,7 @@ pub async fn vault_token_sync(
             "/usr/bin/python3",
             "-c",
             program,
-            match (check, shared_vault) {
-                (true, true) => "check-shared",
-                (true, false) => "check",
-                (false, true) => "install-shared",
-                (false, false) => "install",
-            },
+            mode.payload_word(),
             &destination.vault,
             consumer,
             token_file,

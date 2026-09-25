@@ -30,7 +30,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
-use crate::cli::host::{grant_item_read, vault_token_sync, write_host_config};
+use crate::cli::host::{grant_item_read, vault_token_sync, write_host_config, TokenSyncMode};
 use crate::cli::CmdError;
 use crate::release_pipeline::ReleasePipelineManifest;
 
@@ -181,8 +181,7 @@ async fn ensure_workload_secrets(
             consumer,
             &token_file,
             &token_file,
-            false,
-            false,
+            TokenSyncMode::Install,
             false,
         )
         .await?;

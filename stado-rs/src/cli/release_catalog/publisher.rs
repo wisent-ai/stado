@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::cli::host::{
     grant_item_read, store_vault_item, vault_item_state, vault_token_sync, vault_word,
-    write_host_config,
+    write_host_config, TokenSyncMode,
 };
 use crate::cli::CmdError;
 
@@ -101,8 +101,7 @@ pub(super) async fn declare_publisher(
             &consumer,
             &token_file,
             &token_file,
-            false,
-            false,
+            TokenSyncMode::Install,
             false,
         )
         .await?;

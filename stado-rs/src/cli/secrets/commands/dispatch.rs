@@ -156,8 +156,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                     &consumer,
                     &source_token_file,
                     &token_file,
-                    check,
-                    shared_vault,
+                    super::host::TokenSyncMode::from_flags(check, shared_vault),
                     json,
                 )
                 .await
