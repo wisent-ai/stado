@@ -61,6 +61,7 @@ pub use crate::cli::host::secrets::vault::consolidate::revoke_retired;
 pub use crate::cli::host::secrets::vault::grants::grant_item_read;
 pub use crate::cli::host::secrets::vault::grants::grant_show;
 pub use crate::cli::host::secrets::vault::item::delete::delete_vault_item;
+pub(crate) use crate::cli::host::secrets::vault::item::put::store_vault_item;
 pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
 pub use crate::cli::host::secrets::vault::item::rename::rename_vault_item;
 pub use crate::cli::host::secrets::vault::item::retag::retag_vault_item;
