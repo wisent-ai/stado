@@ -48,22 +48,6 @@
             "-D",
             "warnings"
           ]
-        },
-        {
-          "name": "source-single-process-runtime",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
-        },
-        {
-          "name": "source-native-resident-identity",
-          "argv": ["/bin/sh", "-c", "STADO_TEST_NATIVE_LABEL=com.wisent.always-on.stado-object-api,com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent exec \"$HOME/.cargo/bin/cargo\" test --manifest-path stado-rs/Cargo.toml --locked --release --test resolver native_identity -- --ignored --nocapture"]
-        },
-        {
-          "name": "source-release-newest",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
-        },
-        {
-          "name": "source-fleet-expansion-cli",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
         }
       ],
       "build": {
@@ -72,6 +56,24 @@
           "deploy/release/build_stado.sh"
         ]
       },
+      "tests": [
+        {
+          "name": "single-process-runtime",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
+        },
+        {
+          "name": "native-resident-identity",
+          "argv": ["/bin/sh", "-c", "STADO_TEST_NATIVE_LABEL=com.wisent.always-on.stado-object-api,com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent exec \"$HOME/.cargo/bin/cargo\" test --manifest-path stado-rs/Cargo.toml --locked --release --test resolver native_identity -- --ignored --nocapture"]
+        },
+        {
+          "name": "release-newest",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
+        },
+        {
+          "name": "fleet-expansion-cli",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
+        }
+      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
@@ -109,18 +111,6 @@
             "-D",
             "warnings"
           ]
-        },
-        {
-          "name": "source-single-process-runtime",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
-        },
-        {
-          "name": "source-release-newest",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
-        },
-        {
-          "name": "source-fleet-expansion-cli",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
         }
       ],
       "build": {
@@ -129,6 +119,20 @@
           "deploy/release/build_stado.sh"
         ]
       },
+      "tests": [
+        {
+          "name": "single-process-runtime",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
+        },
+        {
+          "name": "release-newest",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
+        },
+        {
+          "name": "fleet-expansion-cli",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
+        }
+      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
