@@ -59,6 +59,10 @@ tempfile = "3"
 # that word, and inventing it locally would have been the second vocabulary
 # this dependency exists to prevent.
 wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors", rev = "dc809f44cce81ac1b9b325f55fd9b2f3127930e9" }
+# The Wisent product catalog and product lifecycle behind `stado product`,
+# formerly the separate `wisent-products` program. Its catalog is
+# `../catalog/products.yml` at the root of this repository.
+stado-product = { path = "product" }
 
 [dev-dependencies]
 parking_lot = "0.12"

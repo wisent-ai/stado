@@ -125,7 +125,7 @@ pub(crate) enum PlatformCommands {
     /// Run host-local network egress processes under Stado service management.
     #[command(subcommand)]
     Egress(egress::EgressCommands),
-    /// Install, inspect, update, roll back and remove canonical Wisent products.
+    /// The Wisent product catalog: install, update, sign and build every product surface.
     #[command(subcommand)]
     Product(product::ProductCommands),
     /// Atomically relocate a declared service group between registered hosts.

@@ -120,8 +120,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
         return !args.iter().any(|arg| arg == "--apply");
     }
     if family == "product" {
-        return matches!(operation, "catalog" | "status")
-            || (operation == "signatures" && !args.iter().any(|arg| arg == "--apply"));
+        return product_read_only(args);
     }
     if family == "space" {
         return operation == "report"
@@ -220,4 +219,31 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("web", "status")
             | ("alerts", "channels")
     )
+}
+
+/// `stado product` operations that only read. The global `--catalog PATH` may
+/// precede the operation, so it is skipped before the operation is named.
+fn product_read_only(args: &[String]) -> bool {
+    let mut words = Vec::new();
+    let mut rest = args.iter().skip(1);
+    while let Some(word) = rest.next() {
+        if word == "--catalog" {
+            rest.next();
+        } else if !word.starts_with("--catalog=") {
+            words.push(word.as_str());
+        }
+    }
+    let flag = |name: &str| args.iter().any(|arg| arg == name);
+    match words.first().copied().unwrap_or("") {
+        "catalog" => !flag("--output"),
+        "status" | "paths" | "documentation" => true,
+        "signing" => matches!(
+            words.get(1).copied().unwrap_or(""),
+            "inspect" | "report" | "residue"
+        ),
+        "schedule" => !flag("--install") && !flag("--remove"),
+        "sync" => flag("--dry-run"),
+        "create" => flag("--status"),
+        _ => false,
+    }
 }

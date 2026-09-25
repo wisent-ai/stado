@@ -1,0 +1,34 @@
+[package]
+name = "stado-product"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "The Wisent product catalog, installation, signing and native source tools behind `stado product`"
+license-file = "../../LICENSE"
+
+# The catalog this crate embeds is `../../catalog/products.yml`, at the root of
+# the Stado repository; `stado product` is the only program that runs this code.
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+plist = "1"
+clap = "4"
+yaml-rust = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
+fs2 = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+url = "2"
+toml = "0.8"
+tar = "0.4"
+flate2 = "1"
+base64 = "0.22"
+libc = "0.2"
+regex = "1"
+scraper = "0.24"

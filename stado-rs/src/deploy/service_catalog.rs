@@ -4,11 +4,10 @@
 //! Until now "run Weles here" meant knowing what the unit runs — a path, an
 //! argument vector, a platform directory — which is how the always-on set on
 //! `control-host` came to be a sequence of one-off hand installs instead
-//! of a list the product offers. This catalog is generated from the canonical
-//! `wisent-products/catalog/products.yml` by
-//! `wisent-products catalog`, then compiled into
-//! this binary as [`data/catalog/service-catalog.json`]. Product identity never starts
-//! in Stado.
+//! of a list the product offers. Each entry is the `service` declaration of
+//! one product in the canonical catalog, `catalog/products.yml` at the root of
+//! this repository, read from the copy compiled into this binary; the same
+//! rows are what `stado product catalog --output PATH` writes.
 //!
 //! Resolution order for what a unit runs stays: operator flags, then the
 //! host's own registry `services[]` entry, then this catalog, then the older
@@ -48,18 +47,13 @@ pub struct CatalogService {
     pub retired_units: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct CatalogDocument {
-    services: Vec<CatalogService>,
-}
-
-const DOCUMENT: &str = include_str!("../../data/catalog/service-catalog.json");
-
-/// Every shipped entry, in the document's order.
+/// Every shipped entry, in the catalog's order.
 pub fn all() -> Result<Vec<CatalogService>, String> {
-    let document: CatalogDocument = serde_json::from_str(DOCUMENT)
-        .map_err(|error| format!("the shipped service catalog is not valid JSON: {error}"))?;
-    Ok(document.services)
+    let services = stado_product::catalog::embedded()
+        .and_then(|catalog| stado_product::catalog::services(&catalog))
+        .map_err(|error| format!("the compiled product catalog is invalid: {error:#}"))?;
+    serde_json::from_value::<Vec<CatalogService>>(services["services"].clone())
+        .map_err(|error| format!("a catalog service declaration is malformed: {error}"))
 }
 
 /// One entry by its product name or stable init-system identity.

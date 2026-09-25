@@ -31,7 +31,7 @@ restore_runner_apphosts() {
   for executable in Runner.Listener Runner.Worker; do
     /usr/bin/codesign --verify --strict "$signed_runtime/bin/$executable"
   done
-  "${WISENT_PRODUCTS_BIN:?qualified native SDK is required}" signing sign \
+  "${STADO_BIN:?the host's Stado signer is required}" product signing sign \
     --product stado --hardened-runtime --json \
     --boolean-entitlement com.apple.security.cs.allow-jit=true \
     --boolean-entitlement com.apple.security.cs.allow-unsigned-executable-memory=true \
@@ -52,7 +52,6 @@ restore_runner_apphosts() {
 pub(crate) const MACOS_RUNTIME_REPAIR: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=__RUNNER_ROOT__
-export WISENT_PRODUCTS_BIN=__SIGNER_PROGRAM__
 __MACOS_RUNTIME_FUNCTIONS__
 [ -f "$runner_root/.runner" ] || { printf '%s\n' 'runner is not registered' >&2; exit 1; }
 if runner_signatures_valid; then

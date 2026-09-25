@@ -70,6 +70,20 @@ pub(super) fn build_environment(
                 .to_string(),
         );
     }
+    // Build steps sign and build through `stado product`. The first `stado`
+    // on their PATH is this worker's own executable, so a step can never
+    // reach a different installed Stado than the one running the job.
+    if let Some(directory) = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(Path::to_path_buf))
+    {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let directories =
+            std::iter::once(directory).chain(std::env::split_paths(&inherited));
+        if let Ok(path) = std::env::join_paths(directories) {
+            environment.insert("PATH".into(), path.to_string_lossy().into_owned());
+        }
+    }
     for (name, input) in &request.inputs {
         let key = name
             .bytes()

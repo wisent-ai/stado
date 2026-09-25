@@ -139,7 +139,7 @@ async fn sign_helper(
     .map_err(|error| DeployError(format!("Apple issuer chain is not text: {error}")))?;
     let certificate = signing_credential("certificate").await?;
     let request = serde_json::json!({
-        "program": signer,
+        "signer": [signer, "product"],
         "identifier": APPLE_CHALLENGE_HELPER_BUNDLE_ID,
         "target": staged,
         "previous": previous,
@@ -176,14 +176,13 @@ async fn sign_helper(
     Ok(())
 }
 
-/// Resolve the pinned shared signer this fleet signs native code with,
-/// installing it into its Stado-owned cache when the host has none. The
-/// pin, the payload and the receipt check live in
-/// [`crate::deploy::native_signing`], shared with the release worker.
+/// The host's own Stado, which signs through `stado product signing`. The
+/// probe and its refusal live in [`crate::deploy::native_signing`], shared
+/// with runner reconciliation.
 async fn signing_program(
     target: &ComputeTarget,
     home: &str,
     runner: &Runner,
 ) -> Result<String, DeployError> {
-    crate::deploy::native_signing::runtime::on_host(target, home, runner).await
+    crate::deploy::native_signing::host_signer(target, home, runner).await
 }

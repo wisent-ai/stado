@@ -59,13 +59,12 @@ pub async fn repair_runtime(
             .parent()
             .ok_or_else(|| DeployError("runner has no install directory".to_string()))?;
     }
-    let home = host_channel::remote_home(target, runner).await?;
-    let signer = crate::deploy::native_signing::runtime::on_host(target, &home, runner).await?;
+    // `run_runner_reconciliation` names the host's Stado as `STADO_BIN` and
+    // refuses a host whose Stado cannot sign.
     let script = replace(
         MACOS_RUNTIME_REPAIR,
         &[
             ("__RUNNER_ROOT__", shlex_quote(&root.to_string_lossy())),
-            ("__SIGNER_PROGRAM__", shlex_quote(&signer)),
             (
                 "__MACOS_RUNTIME_FUNCTIONS__",
                 MACOS_RUNTIME_FUNCTIONS.to_string(),

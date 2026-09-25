@@ -1,0 +1,1711 @@
+schema_version: 1
+authority:
+  owner: wisent-products
+  rule: One record per product - something sold or used as a product of its own (the
+    operator, 2026-09-02). Repositories, surfaces, services, websites, libraries and
+    infrastructure are attributes of a product; a package is not a product. Every
+    record names its family, wisent or standalone, and that too is the operator's call.
+products:
+- id: ster
+  name: Ster
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/ster
+  description: Native representation reading, direction learning, evaluation and activation
+    steering.
+  roadmap: []
+  integrations:
+  - product: preferences
+    description: Ster trains steering vectors from the contrastive pair sets Preferences
+      exports as format ster-pairs.
+    source: preferences/src/lib/validate.ts:134-145
+  - product: skryba
+    description: Ster trains a LoRA adapter from the writer's own prose Skryba exports
+      — `ExampleSet` deserializes the file `ster tune sft` takes, and `PairSet` deserializes
+      the pairs `ster tune dpo` takes.
+    source: ster/src/tune.rs:304-315
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/ster/README.md
+  - wisent-ai/ster-desktop/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/ster
+  - kind: desktop
+    repository: wisent-ai/ster-desktop
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/ster
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/ster-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:02Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: jeden
+  name: Jeden
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/jeden
+  description: Private, local-first coding-agent harness with controlled tools and
+    durable sessions.
+  roadmap:
+  - title: Freeze the production contracts
+    status: planned
+    outcome: Version the capability, operation, session, Brama, Weles, SDK, release,
+      marketplace and worker contracts before parallel implementation.
+    source: jeden/roadmap/roadmap.yaml:69-111
+  - title: Ship one canonical session service
+    status: planned
+    outcome: Serve TUI, CLI, RPC, ACP, SDK and headless clients through one protocol
+      and one typed session ledger.
+    source: jeden/roadmap/roadmap.yaml:93-107
+  - title: Complete production certification
+    status: planned
+    outcome: Pass all 23 behavioral acceptance scopes against one signed release digest.
+    source: jeden/roadmap/roadmap.yaml:115-551
+  integrations:
+  - product: brama
+    description: Jeden sends every model request through Brama.
+    source: jeden/README.md:80-95
+  - product: weles
+    description: Jeden delegates identity and account operations to Weles.
+    source: jeden/roadmap/roadmap.yaml:87-91
+  - product: stado
+    description: Stado selects the execution host and carries Jeden's attached stream.
+    source: https://stado.wisent.com/docs
+  - product: skarbiec
+    description: Jeden acquires its own scoped credentials from Skarbiec.
+    source: https://skarbiec.wisent.com/docs
+  - product: tama
+    description: Tama supplies the coding-agent policy enforced around Jeden sessions.
+    source: jeden/README.md:80-95
+  - product: probierz
+    description: Probierz records quality evidence for Jeden release gates.
+    source: jeden/README.md:80-95
+  - product: most
+    description: Jeden uses Most for approved messaging connectors.
+    source: jeden/README.md:80-95
+  - product: oko
+    description: Oko presents the team and session view over Jeden work.
+    source: jeden/README.md:80-95
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/jeden/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/jeden
+  - kind: desktop
+    repository: wisent-ai/jeden-desktop
+  - kind: mobile
+    repository: wisent-ai/jeden-ios
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/jeden
+    manifest: .wisent-release.json
+    after_install:
+    - [jeden, contracts, install, --omp]
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/jeden-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:03Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: brama
+  name: Brama
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/brama
+  description: Authenticated provider-neutral gateway for LLM inference and routing.
+  roadmap: []
+  integrations:
+  - product: skarbiec
+    description: Brama redeems provider credentials and capability routes from Skarbiec.
+    source: https://brama.wisent.com/docs/integrations
+  - product: weles
+    description: Brama delegates browser-based account reauthentication to Weles.
+    source: https://brama.wisent.com/docs/integrations
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/brama/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/brama
+  - kind: cli
+    repository: wisent-ai/brama
+  - kind: desktop
+    repository: wisent-ai/brama-desktop
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/brama
+    manifest: .wisent-release.json
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/brama
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/brama-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:03Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  service:
+    installable: true
+    program: $HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec
+    args: []
+    unit: com.wisent.always-on.brama
+    summary: The authenticated provider-neutral gateway every Wisent model call goes
+      through.
+  dependencies:
+  - product: skarbiec
+    surface: service
+    for_surface: service
+- id: weles
+  name: Weles
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/weles
+  description: Authorized browser-workflow execution across managed hosts.
+  roadmap: []
+  integrations:
+  - product: brama
+    description: Weles uses Brama when an authorized browser workflow needs model
+      reasoning.
+    source: weles/README.md:142-212
+  - product: skarbiec
+    description: Weles receives organization-scoped credentials through Skarbiec boundaries.
+    source: https://weles.wisent.com/docs
+  - product: stado
+    description: Stado places Weles execution on an authorized managed host.
+    source: https://weles.wisent.com/docs
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/weles/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/weles
+  - kind: desktop
+    repository: wisent-ai/weles-desktop
+  - kind: web
+    repository: wisent-ai/weles-web
+  - kind: library
+    repository: wisent-ai/weles-client
+  - kind: cli
+    repository: wisent-ai/weles
+  installations:
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/weles
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/weles-desktop
+    manifest: .wisent-desktop-release.json
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/weles
+    binaries:
+    - weles
+    - weles-mcp
+  service:
+    installable: true
+    unit: com.wisent.weles-admission
+    program: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/weles-api-launcher
+    args: []
+    summary: One Weles process per host serving the API and admission, the resident
+      task dispatcher that executes authorized browser workflows, and the keyword-planner
+      routes.
+    retired_units:
+    - com.wisent.weles-worker
+    - com.wisent.compute.service.weles-keyword-planner-api
+    - com.wisent.compute.service.com.wisent.always-on.weles
+    - com.wisent.always-on.weles-api
+    - com.wisent.compute.service.weles-api
+    - com.wisent.weles-auto-deploy
+    - com.wisent.compute.service.weles-release-cutover
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:03Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: service
+  - product: skarbiec
+    surface: service
+    for_surface: service
+- id: skarbiec
+  name: Skarbiec
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/skarbiec
+  description: Credential and authentication management for people, agents and services.
+  roadmap: []
+  integrations:
+  - product: weles
+    description: Skarbiec uses Weles admission workflows for credential lifecycle
+      operations.
+    source: ARCHITECTURE.md:263-267
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/skarbiec/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/skarbiec
+  - kind: cli
+    repository: wisent-ai/skarbiec
+  - kind: desktop
+    repository: wisent-ai/skarbiec-desktop
+  - kind: managed-control-plane
+    repository: wisent-ai/skarbiec-hub
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/skarbiec
+    manifest: .wisent-release.json
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/skarbiec
+    host_config:
+      object_api.skarbiec.url: http://127.0.0.1:8895
+      release_api.skarbiec.url: http://127.0.0.1:8895
+      service_api.skarbiec.url: http://127.0.0.1:8895
+      secrets.skarbiec.url: http://127.0.0.1:8895
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/skarbiec-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:04Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  service:
+    installable: true
+    unit: com.wisent.always-on.skarbiec
+    program: $HOME/.stado/bin/skarbiec
+    args:
+    - serve
+    - --port
+    - '8895'
+    env:
+      SKARBIEC_VAULT_FILE: $HOME/.stado/skarbiec.vault.json
+      SKARBIEC_CAP_SOCKET: $HOME/.stado/skarbiec.vault.sock
+      SKARBIEC_AUDIT_FILE: $HOME/.stado/skarbiec.audit.jsonl
+    summary: The credential and authentication vault; one process serves the HTTP
+      API, the capability socket every workload redeems through, and replication of
+      every bond the vault pulls.
+    retired_units:
+    - com.wisent.compute.service.skarbiec-replica-sync
+    - com.wisent.compute.service.skarbiec-control-plane
+    - com.wisent.skarbiec
+    - com.wisent.compute.service.com.wisent.skarbiec-weles
+- id: most
+  name: Most
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/most
+  description: Messaging and real-world communication for AI agents.
+  roadmap:
+  - title: Add Twilio RCS transport
+    status: planned
+    outcome: Add an executable RCS adapter only after provider approval and the capability,
+      credential, cost and failure contracts are defined.
+    source: https://most.wisent.com/docs/integrations
+  - title: Publish the first immutable release
+    status: planned
+    outcome: Replace unsupported source-only production installation with an immutable
+      public release.
+    source: most/README.md:153-158
+  integrations: []
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/most/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/most
+  - kind: desktop
+    repository: wisent-ai/most-desktop
+  installations:
+  - surface: service
+    kind: cargo
+    repository: wisent-ai/most
+    manifest: most-rs/Cargo.toml
+    binaries:
+    - most-server
+    - most-migrate
+    - most-cli
+    - most-mcp
+    - most-bootstrap
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/most-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:04Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: stado
+  name: Stado
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/stado
+  description: Fleet control plane for queues, jobs, placement, leases, hosts and
+    declared services.
+  roadmap:
+  - title: Add AWS managed autoscaling
+    status: planned
+    outcome: Implement and qualify an Amazon EC2 Auto Scaling managed-compute adapter.
+    source: https://stado.wisent.com/docs/integrations
+  - title: Add Azure managed autoscaling
+    status: planned
+    outcome: Implement and qualify an Azure VM Scale Sets managed-compute adapter.
+    source: https://stado.wisent.com/docs/integrations
+  - title: Earn from the idle GPU on a compute marketplace
+    status: in_progress
+    outcome: List the idle GPU automatically on Vast.ai and withdraw the offer when
+      fleet work returns; the capability ships and awaits its credential.
+    source: https://stado.wisent.com/docs/vast
+  - title: Sell tokens from the fleet's own inference endpoint
+    status: planned
+    outcome: Publish the OpenAI-compatible deployment behind a public origin with
+      declared prices, throughput and rate limits, so model output is sold per token
+      while yieldable mode keeps the board available to fleet work.
+    source: https://stado.wisent.com/docs/earning
+  - title: Operate a customer's own fleet
+    status: planned
+    outcome: Run enrollment, placement, delivery, declared repair and evidence for
+      machines and cloud accounts the customer owns, with the provider's cost and
+      the management fee separately visible.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell macOS builds, signing and updates
+    status: planned
+    outcome: Offer the publisher runner, Developer ID signing, notarization and
+      Sparkle publication as a paid surface per release or per repository.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell interactive GPU sessions
+    status: planned
+    outcome: Charge for a streamed display session on a fleet GPU, which a container
+      marketplace cannot serve.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell browser work with a verifiable receipt
+    status: planned
+    outcome: Charge per authorized browser run whose signed receipt an independent
+      client verifies.
+    source: https://stado.wisent.com/docs/earning
+  - title: Host releases and updates for other products
+    status: planned
+    outcome: Offer the immutable object plane, channels, promotion, rollback and
+      public hostnames as a subscription for a product whose updates Stado carries.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell disposable isolated environments
+    status: planned
+    outcome: Charge per lease for a scratch target that is destroyed when the run ends.
+    source: https://stado.wisent.com/docs/earning
+  - title: Sell cloud cost reduction as a service
+    status: planned
+    outcome: Charge for attributed cost, forecast, anomaly and savings reporting with
+      autonomy budgets that block new cloud spend, against a customer's own accounts.
+    source: https://stado.wisent.com/docs/earning
+  integrations:
+  - product: skarbiec
+    description: Stado obtains scoped host and workload credentials from Skarbiec.
+    source: https://stado.wisent.com/docs
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/stado/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/stado
+  - kind: service
+    repository: wisent-ai/stado
+  - kind: desktop
+    repository: wisent-ai/stado
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/stado
+    manifest: .wisent-release.json
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/stado
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: local-build
+    repository: wisent-ai/stado
+    command: desktop/StadoDesktop/release/bundle/build-app.sh
+    bundle_path: desktop/StadoDesktop/.build/Stado.app
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:04Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  service:
+    installable: true
+    unit: com.wisent.always-on.stado-object-api
+    program: $HOME/.stado/services/com.wisent.always-on.stado-object-api/current/$STADO_PLATFORM/stado
+    args:
+    - serve
+    - --api
+    - --bind
+    - 127.0.0.1
+    - --port
+    - '8765'
+    env:
+      WC_STORAGE_BACKEND: local
+      WC_LOCAL_STORAGE_PATH: $HOME/.stado/local-storage
+    summary: The core object API for registry, queue and release state.
+- id: lem
+  name: Lem
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/lem
+  description: Research and conference-management harness for producing and validating
+    papers.
+  roadmap: []
+  integrations:
+  - product: brama
+    description: Lem routes research and figure model calls through Brama.
+    source: https://lem.wisent.com/docs/architecture
+  - product: skarbiec
+    description: Lem acquires scoped tokens and credentials from Skarbiec.
+    source: https://lem.wisent.com/docs/architecture
+  - product: weles
+    description: Lem delegates authorized browser research to Weles.
+    source: https://lem.wisent.com/docs/architecture
+  - product: stado
+    description: Lem uses Stado for service discovery and remote execution.
+    source: https://lem.wisent.com/docs/architecture
+  - product: probierz
+    description: Probierz records evidence for Lem figure-quality loops.
+    source: lem/README.md:30-46
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/lem/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/lem
+  - kind: desktop
+    repository: wisent-ai/lem-desktop
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/lem
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/lem-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:05Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: echo
+  name: Echo
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/echo
+  description: Operational and growth platform for products built by AI agents.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/echo/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/echo
+  - kind: web
+    repository: wisent-ai/echo-web
+  - kind: desktop
+    repository: wisent-ai/echo-desktop
+  installations:
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/echo
+    binaries:
+    - echo-cli
+    - echo-mcp
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/echo-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:05Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: probierz
+  name: Probierz
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/probierz
+  description: Quality-evidence platform for testing software through real journeys.
+  roadmap: []
+  integrations:
+  - product: brama
+    description: Probierz routes model-backed authoring and evaluation through Brama.
+    source: probierz/README.md:1-200
+  - product: stado
+    description: Probierz uses Stado for remote execution and managed capacity.
+    source: probierz/README.md:1-200
+  - product: tama
+    description: Tama prevents known violations before Probierz executes real journeys.
+    source: https://probierz.wisent.com/docs/pipeline
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/probierz/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/probierz
+  - kind: cli
+    repository: wisent-ai/probierz
+  - kind: desktop
+    repository: wisent-ai/probierz-desktop
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/probierz
+    manifest: .wisent-release.json
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/probierz
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/probierz-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:05Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  service:
+    installable: true
+    unit: com.wisent.compute.service.probierz
+    program: $HOME/.stado/bin/probierz
+    args:
+    - intake
+    - serve
+    - --bind
+    - 127.0.0.1:9790
+    summary: The one Probierz process per host, the failure intake that desktop applications
+      post wisent-errors envelopes to; it needs no harness directory.
+    retired_units:
+    - com.wisent.probierz-intake
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: service
+- id: tama
+  name: Tama
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/tama-desktop
+  description: Interactive management and enforcement of coding-agent policy.
+  roadmap:
+  - title: Publish the supported binary release
+    status: planned
+    outcome: Move the current development build onto a public, supported release channel.
+    source: tama-desktop/README.md:1-150
+  integrations: []
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/tama-desktop/README.md
+  - wisent-ai/tama/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/tama
+  - kind: desktop
+    repository: wisent-ai/tama-desktop
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/tama
+    manifest: rust/crates/tama-cli/Cargo.toml
+    binaries:
+    - tama
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/tama-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:06Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  dependencies:
+  - product: tama
+    surface: cli
+    for_surface: desktop
+- id: byk
+  name: Byk
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/byk-desktop
+  description: Wisent trading assistant.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/byk-desktop/README.md
+  surfaces:
+  - kind: desktop
+    repository: wisent-ai/byk-desktop
+  - kind: mobile
+    repository: wisent-ai/byk-ios
+  - kind: web
+    repository: wisent-ai/wisent-trade
+  - kind: cli
+    repository: wisent-ai/wisent-trade
+    docs_origin: https://trade.wisent.ai
+  installations:
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/byk-desktop
+    manifest: .wisent-desktop-release.json
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/wisent-trade
+    binaries:
+    - byk
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:06Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: las
+  name: Las
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/las
+  description: Local catalogue of Wisent tools and their supported combinations.
+  roadmap:
+  - title: Add the managed organization catalogue
+    status: planned
+    outcome: Provide organization catalogue, governance distribution and fleet operation
+      without disabling the local federation when no managed grant exists.
+    source: las/README.md:461-470
+  integrations:
+  - product: weles
+    description: Las exposes approved Weles capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  - product: skarbiec
+    description: Las exposes approved Skarbiec capabilities through its federated
+      catalogue.
+    source: las/README.md:12-38
+  - product: tama
+    description: Las exposes approved Tama capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  - product: stado
+    description: Las exposes approved Stado capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  - product: lem
+    description: Las exposes approved Lem capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  - product: echo
+    description: Las exposes approved Echo capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  - product: most
+    description: Las exposes approved Most capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  - product: probierz
+    description: Las exposes approved Probierz capabilities through its federated
+      catalogue.
+    source: las/README.md:12-38
+  - product: byk
+    description: Las exposes approved Byk capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  - product: brama
+    description: Las exposes approved Brama capabilities through its federated catalogue.
+    source: las/README.md:12-38
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/las/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/las
+  - kind: web
+    repository: wisent-ai/las
+  installations:
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/las
+    binaries:
+    - las
+    - las-mcp
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:06Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: skrzynka
+  name: Skrzynka
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/skrzynka
+  description: Self-hosted email operations for people and local tools.
+  roadmap: []
+  integrations:
+  - product: skarbiec
+    description: Skrzynka obtains mailbox and OAuth credentials from Skarbiec.
+    source: https://skrzynka.wisent.com/docs/integrations
+  evidence:
+  - wisent-landing-new/src/data/productPortals.ts
+  - wisent-ai/skrzynka/README.md
+  surfaces:
+  - kind: service
+    repository: wisent-ai/skrzynka
+  - kind: cli
+    repository: wisent-ai/skrzynka
+  - kind: desktop
+    repository: wisent-ai/skrzynka-desktop
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/skrzynka
+    manifest: Cargo.toml
+    binaries:
+    - skrzynka
+  - surface: service
+    kind: cargo
+    repository: wisent-ai/skrzynka
+    manifest: Cargo.toml
+    binaries:
+    - skrzynka
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/skrzynka-desktop
+    manifest: .wisent-desktop-release.json
+  service:
+    installable: true
+    unit: com.wisent.always-on.skrzynka
+    program: $HOME/.local/bin/skrzynka
+    args:
+    - --skarbiec-bin
+    - $HOME/.local/bin/skarbiec
+    - serve
+    - --bind
+    - 127.0.0.1:8788
+    env:
+      PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+    summary: Skrzynka loopback mail API and scheduled IMAP synchronization; credentials
+      remain in the account's Skarbiec vault.
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:07Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: oko
+  name: Oko
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/oko
+  description: Catalogue and operational view of agent sessions and goals.
+  roadmap:
+  - title: Ship the evidence-locked daily digest
+    status: planned
+    outcome: Produce daily highlights and a decision journal from user-authored transcript
+      evidence.
+    source: https://oko.wisent.com/docs/transcript-intelligence
+  - title: Turn repeated friction into reviewed proposals
+    status: planned
+    outcome: Add frustration analytics, company-context proposals and approved hook
+      or automation proposals.
+    source: https://oko.wisent.com/docs/transcript-intelligence
+  - title: Connect cost to real outcomes
+    status: planned
+    outcome: Join recorded cost with proven goal completion and feed per-task success
+      rates back into model routing.
+    source: https://oko.wisent.com/docs/transcript-intelligence
+  integrations:
+  - product: transcript-lake
+    description: Oko rebuilds its session catalogue and search projection from Transcript
+      Lake.
+    source: https://oko.wisent.com/docs/integrations
+  - product: brama
+    description: Oko routes transcript-intelligence model work through Brama.
+    source: https://oko.wisent.com/docs/transcript-intelligence
+  evidence:
+  - wisent-ai/oko/README.md
+  - wisent-ai/oko-desktop/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/oko
+  - kind: service
+    repository: wisent-ai/oko
+  - kind: mobile
+    repository: wisent-ai/oko-ios
+  - kind: desktop
+    repository: wisent-ai/oko-desktop
+    onboarding_id: oko-macos
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/oko
+    manifest: .wisent-release.json
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/oko
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/oko-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:07Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  service:
+    installable: true
+    unit: com.wisent.compute.service.oko-autonomy
+    program: $HOME/.stado/bin/oko
+    args:
+    - serve
+    env:
+      PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+    summary: The one Oko process per host (oko serve), which owns the PTY broker; autonomy,
+      the Slack responder, catalogue synchronisation and task handover are Oko routines
+      Stado schedules.
+    retired_units:
+    - ai.wisent.oko.pty-broker
+    - ai.wisent.oko.transcript-index
+    - ai.wisent.oko.tasks-control
+    - ai.wisent.oko.suggestions
+    - com.wisent.compute.service.oko-goal-lifecycle
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: service
+- id: singularity
+  name: Singularity
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/singularity
+  description: Autonomous digital being that creates value, earns revenue, learns,
+    self-modifies, and creates child beings.
+  roadmap: []
+  integrations:
+  - product: brama
+    description: Singularity routes cognition through Brama.
+    source: ARCHITECTURE.md:335-341
+  - product: las
+    description: Singularity obtains approved dynamic skills through Las.
+    source: ARCHITECTURE.md:335-341
+  evidence:
+  - wisent-ai/singularity/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/singularity
+  - kind: desktop
+    repository: wisent-ai/singularity-desktop
+  - kind: web
+    repository: wisent-ai/singularity-landing
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/singularity
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/singularity-desktop
+    manifest: .wisent-desktop-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:08Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: transcript-lake
+  name: Transcript Lake
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/transcript-lake
+  description: Durable local storage and streaming of agent transcripts.
+  roadmap:
+  - title: Add verified Gemini and Qwen adapters
+    status: planned
+    outcome: Add streaming adapters only after the corresponding local transcript
+      formats are verified.
+    source: https://transcript-lake.wisent.com/docs/integrations/
+  integrations:
+  - product: tama
+    description: Transcript Lake retains Tama hook-decision segments with session
+      records.
+    source: https://transcript-lake.wisent.com/docs/integrations/
+  evidence:
+  - wisent-ai/transcript-lake/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/transcript-lake
+  - kind: service
+    repository: wisent-ai/transcript-lake
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/transcript-lake
+    manifest: .wisent-release.json
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/transcript-lake
+    manifest: .wisent-release.json
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:08Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+  service:
+    installable: true
+    unit: com.wisent.compute.service.transcript-lake
+    program: $HOME/.local/bin/transcript-lake
+    args:
+    - stream
+    - --json
+    summary: The one Transcript Lake process per host, continuously streaming local
+      agent transcripts into the lake.
+    retired_units:
+    - com.wisent.transcript-lake-stream
+- id: kronika
+  name: Kronika
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/kronika
+  description: Automated documentation creation and maintenance.
+  roadmap:
+  - title: Add retained provenance and freshness
+    status: planned
+    outcome: Preserve stable source-span provenance, freshness history and retained
+      document versions.
+    source: kronika/README.md:72-99
+  - title: Add managed team documentation
+    status: planned
+    outcome: Provide multi-repository orchestration, team review, organization search
+      and supported publishing as a managed service.
+    source: kronika/README.md:31-35
+  integrations:
+  - product: brama
+    description: Kronika sends source-bounded documentation requests through Brama.
+    source: kronika/README.md:55-70
+  evidence:
+  - wisent-ai/kronika/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/kronika
+  - kind: web
+    repository: wisent-ai/kronika
+  installations:
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/kronika
+    binaries:
+    - kronika
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-02T19:53:08Z'
+  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
+    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
+    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
+    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
+    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
+    cli jak i aplikacje desktopowa".'
+- id: spis
+  name: Spis
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/spis
+  description: Evidence-grade open reference corpus of real interfaces, with provenance,
+    hashes, and measured state for every record.
+  roadmap: []
+  integrations:
+  - product: weles
+    description: Spis uses Weles for authorized web and onboarding reference capture.
+    source: spis/README.md:38-54
+  - product: stado
+    description: Stado coordinates Spis capture work across managed hosts.
+    source: spis/README.md:38-54
+  evidence:
+  - wisent-ai/spis/README.md
+  - wisent-ai/spis-desktop/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/spis
+  - kind: desktop
+    repository: wisent-ai/spis-desktop
+  installations:
+  - surface: cli
+    kind: stado-release
+    repository: wisent-ai/spis
+    manifest: .wisent-release.json
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/spis-desktop
+    manifest: .wisent-desktop-release.json
+- id: glina
+  name: Glina
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/glina
+  description: AI-sculpted game assets. Brama-modeled Blender sculpting with a verified
+    GLB quality gate.
+  roadmap: []
+  integrations:
+  - product: skarbiec
+    description: Glina acquires generation credentials through Skarbiec.
+    source: glina/README.md:3-32
+  - product: weles
+    description: Glina delegates browser work to Weles.
+    source: glina/README.md:3-32
+  - product: brama
+    description: Glina routes model planning through Brama.
+    source: glina/README.md:3-32
+  - product: probierz
+    description: Probierz records Glina's game-asset quality journeys.
+    source: glina/README.md:93-95
+  evidence:
+  - wisent-ai/glina/README.md
+  - wisent-ai/glina-desktop/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/glina
+  - kind: desktop
+    repository: wisent-ai/glina-desktop
+  installations:
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/glina
+    binaries:
+    - glina
+    - glina-mcp
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/glina-desktop
+    manifest: .wisent-desktop-release.json
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: cli
+  - product: skarbiec
+    surface: service
+    for_surface: cli
+- id: skryba
+  name: Skryba
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/skryba
+  description: Detector-directed text rewriting with a native Rust GRPO policy and
+    commissioned human rewrites.
+  roadmap: []
+  integrations:
+  - product: brama
+    description: Skryba generates rewrite candidates through Brama.
+    source: skryba/README.md:15-20
+  - product: handtohuman
+    description: Skryba commissions human rewrites through HandToHuman.
+    source: skryba/README.md:15-20
+  - product: ster
+    description: Skryba's `writing-style export` emits the SFT example set `ster tune
+      sft` reads and the contrastive pair set `ster tune dpo` reads; Ster owns the
+      local weights and trains the adapter.
+    source: skryba/src/writing_style.rs:97-123
+  evidence:
+  - wisent-ai/skryba/README.md
+  - wisent-ai/skryba-desktop/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/skryba
+  - kind: desktop
+    repository: wisent-ai/skryba-desktop
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/skryba
+    manifest: Cargo.toml
+    binaries:
+    - skryba
+  - surface: desktop
+    kind: desktop-release
+    repository: wisent-ai/skryba-desktop
+    manifest: .wisent-desktop-release.json
+  dependencies:
+  - product: brama
+    surface: service
+    for_surface: cli
+  - product: handtohuman
+    surface: library
+    for_surface: cli
+- id: handtohuman
+  name: HandToHuman
+  status: active
+  visibility: private
+  family: standalone
+  owner_repository: wisent-ai/handtohuman
+  description: Standardized human work with automatic staffing, recovery, delivery
+    evidence, and provider-independent task lifecycles.
+  roadmap: []
+  integrations:
+  - product: stado
+    description: HandToHuman submits compute work and places residential-egress workers
+      through Stado.
+    source: handtohuman/README.md:78-86
+  - product: skarbiec
+    description: HandToHuman obtains scoped lease credentials from Skarbiec.
+    source: handtohuman/README.md:78-86
+  - product: weles
+    description: HandToHuman uses Weles for authorized residential-egress workflows.
+    source: handtohuman/README.md:78-86
+  evidence:
+  - wisent-ai/handtohuman/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/handtohuman
+  - kind: library
+    repository: wisent-ai/handtohuman
+  - kind: web
+    repository: wisent-ai/handtohuman
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/handtohuman
+    manifest: Cargo.toml
+    binaries:
+    - handtohuman
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-03T01:51:39Z'
+  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe."
+    - placing it in a family is treating it as a product.'
+- id: wisent-app
+  name: Wisent App
+  status: active
+  visibility: public
+  family: wisent
+  owner_repository: wisent-ai/wisent-app
+  description: The operated customer-facing application for discovering, creating
+    and running every Wisent AI capability under one account, on the web and on iOS.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/wisent-app/README.md
+  - wisent-ai/wisent-ios-main/README.md
+  surfaces:
+  - kind: web
+    repository: wisent-ai/wisent-app
+  - kind: android
+    repository: wisent-ai/wisent-android
+  - kind: mobile
+    repository: wisent-ai/wisent-ios-main
+    onboarding_id: wisent-ios
+  - kind: cli
+    repository: wisent-ai/wisent-app
+    docs_origin: https://wisent-app.com
+  installations:
+  - surface: web
+    kind: stado-release
+    repository: wisent-ai/wisent-app
+    manifest: .wisent-release.json
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/wisent-app
+    binaries:
+    - wisent-app
+- id: preferences
+  name: Preferences
+  status: active
+  visibility: private
+  family: standalone
+  owner_repository: wisent-ai/preferences
+  description: Pairwise preference voting that ranks generators per category with
+    Bradley-Terry, builds a taste profile for each voter, and exports text choices
+    as Ster contrastive pairs.
+  roadmap: []
+  integrations:
+  - product: ster
+    description: Preferences exports a voter's text choices as the contrastive pair
+      set Ster trains steering vectors from.
+    source: preferences/README.md
+  - product: brama
+    description: Preferences verifies human identity against the same canonical Wisent
+      Supabase project Brama uses, and models are reached only through Brama.
+    source: preferences/README.md
+  evidence:
+  - wisent-ai/preferences/README.md
+  - wisent-ai/wisent-supabase-preferences/README.md
+  surfaces:
+  - kind: web
+    repository: wisent-ai/preferences
+  - kind: cli
+    repository: wisent-ai/preferences
+  installations:
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/preferences
+    binaries:
+    - preferences
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-03T01:51:39Z'
+  approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe."
+    - placing it in a family is treating it as a product.'
+- id: humanmaxx
+  name: HumanMaxx
+  status: preview
+  visibility: private
+  family: standalone
+  owner_repository: lbartoszcze/humanmaxx-web
+  description: A fitness app that counts calories and macros, keeps custom training
+    logs, gives rule-based training and nutrition suggestions and scores repetition
+    quality in sets; a native iOS client on a Supabase backend, with its own brand
+    and identity. Documentation site in lbartoszcze/humanmaxx-web.
+  roadmap: []
+  integrations: []
+  evidence:
+  - lbartoszcze/humanmaxx-web/README.md
+  - lbartoszcze/humanmaxx-landing/README.md
+  surfaces:
+  - kind: web
+    repository: lbartoszcze/humanmaxx-web
+  - kind: mobile
+    repository: lbartoszcze/humanmaxx-ios
+  - kind: service
+    repository: lbartoszcze/humanmaxx-supabase
+  - kind: cli
+    repository: lbartoszcze/humanmaxx-web
+    docs_origin: https://humanmaxx-web.vercel.app
+  installations:
+  - surface: web
+    kind: local-build
+    repository: lbartoszcze/humanmaxx-web
+    command: npm ci && npm run build
+  - surface: service
+    kind: local-build
+    repository: lbartoszcze/humanmaxx-supabase
+    command: supabase db push
+  - surface: cli
+    kind: npm
+    repository: lbartoszcze/humanmaxx-web
+    binaries:
+    - humanmaxx
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-03T01:51:40Z'
+  approval_note: 'Operator, 2026-09-02, ordering the split: "mamy produkty wisentowe
+    i niewisentowe. rozgrupuj je na dwa typy. na przyklad skrzynka to jest wisentowy
+    produkt. ale juz humanmaxx powinien byc osobny."'
+- id: peptomaxx
+  name: PeptoMaxx
+  status: preview
+  visibility: private
+  family: standalone
+  owner_repository: lbartoszcze/peptomaxx-web
+  description: A care-plan application that organizes a plan supplied by a clinician;
+    Next.js web client and canonical Supabase backend, with a native iOS companion
+    and its own product website.
+  roadmap: []
+  integrations: []
+  evidence:
+  - lbartoszcze/peptomaxx-web/README.md
+  surfaces:
+  - kind: web
+    repository: lbartoszcze/peptomaxx-web
+  - kind: mobile
+    repository: lbartoszcze/peptomaxx-ios
+  - kind: cli
+    repository: lbartoszcze/peptomaxx-web
+    docs_origin: https://peptomaxx.com
+  installations:
+  - surface: web
+    kind: local-build
+    repository: lbartoszcze/peptomaxx-web
+    command: npm ci && npm run build
+  - surface: cli
+    kind: npm
+    repository: lbartoszcze/peptomaxx-web
+    binaries:
+    - peptomaxx
+- id: needher
+  name: NeedHer AI
+  status: active
+  visibility: private
+  family: standalone
+  owner_repository: wisent-ai/needher-ai-web
+  description: A private consumer web application for consented AI companion experiences
+    and policy-controlled image and video generation, combining companion and creator
+    surfaces with an operated media pipeline. Its own brand at needher.ai with its
+    own identity project.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/needher-ai-web/README.md
+  - https://www.needher.ai/docs
+  surfaces:
+  - kind: web
+    repository: wisent-ai/needher-ai-web
+  - kind: desktop
+    repository: wisent-ai/needher-ai-desktop
+  - kind: library
+    repository: wisent-ai/needher-comfyui-watermark-nodes
+  - kind: cli
+    repository: wisent-ai/needher-ai-web
+    docs_origin: https://www.needher.ai
+  installations:
+  - surface: web
+    kind: local-build
+    repository: wisent-ai/needher-ai-web
+    command: npm ci && npm run build
+  - surface: desktop
+    kind: local-build
+    repository: wisent-ai/needher-ai-desktop
+    command: npm install && npm run build
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/needher-ai-web
+    binaries:
+    - needher-archive
+- id: aiwritecheck
+  name: AIWriteCheck
+  status: active
+  visibility: private
+  family: standalone
+  owner_repository: wisent-ai/ai-text-detector-web
+  description: An AI-pattern score for text that shows its evidence and its limits;
+    the web app at app.aiwritecheck.com and the product site at aiwritecheck.com,
+    its own brand.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/ai-text-detector-web/README.md
+  - https://aiwritecheck.com/docs
+  surfaces:
+  - kind: web
+    repository: wisent-ai/ai-text-detector-web
+  - kind: cli
+    repository: wisent-ai/ai-text-detector-web
+    docs_origin: https://aiwritecheck.com
+  installations:
+  - surface: web
+    kind: local-build
+    repository: wisent-ai/ai-text-detector-web
+    command: npm ci && npm run build
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/ai-text-detector-web
+    binaries:
+    - aiwritecheck
+- id: undetectabletext
+  name: UndetectableText
+  status: active
+  visibility: private
+  family: standalone
+  owner_repository: wisent-ai/ai-text-generator-web
+  description: Turns stiff AI copy into natural writing without losing the facts;
+    the web app at app.undetectabletext.com and the product site at undetectabletext.com,
+    its own brand.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/ai-text-generator-web/README.md
+  - https://undetectabletext.com/docs
+  surfaces:
+  - kind: web
+    repository: wisent-ai/ai-text-generator-web
+  - kind: cli
+    repository: wisent-ai/ai-text-generator-web
+    docs_origin: https://undetectabletext.com
+  installations:
+  - surface: web
+    kind: local-build
+    repository: wisent-ai/ai-text-generator-web
+    command: npm ci && npm run build
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/ai-text-generator-web
+    binaries:
+    - undetectabletext
+- id: turbot
+  name: Turbot
+  status: preview
+  visibility: private
+  family: standalone
+  owner_repository: wisent-ai/turbot-web
+  description: Secure conversations with AI characters, served at turbot.wisent.ai
+    from a Next.js sign-in shell over its own Supabase project; the earlier SwiftUI
+    iOS app is archived in wisent-ai/turbot-ios.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/turbot-web/README.md
+  - wisent-ai/turbot-ios/README.md
+  surfaces:
+  - kind: web
+    repository: wisent-ai/turbot-web
+  - kind: cli
+    repository: wisent-ai/turbot-web
+    docs_origin: https://turbot.wisent.com
+  installations:
+  - surface: web
+    kind: local-build
+    repository: wisent-ai/turbot-web
+    command: npm ci && npm run build
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/turbot-web
+    binaries:
+    - turbot-archive
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-03T01:51:40Z'
+  approval_note: 'Operator, 2026-09-02: "needhim to tez nasz produkt. dodaj go normalnie.
+    to ze cos nie ma kodu albo repozytorium nie ma znaczenia. tak samo z turbot-web."'
+- id: needsomeone
+  name: NeedSomeone
+  status: preview
+  visibility: private
+  family: standalone
+  owner_repository: lbartoszcze/needsomeone-ai-web
+  description: 'Someone to talk to, create with, or count on: AI characters, practical
+    assistants, shared rooms and generated media in one place. A Next.js web app in
+    lbartoszcze/needsomeone-ai-web, not deployed as of 2026-09-02; its landing repository
+    is empty.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - lbartoszcze/needsomeone-ai-web/README.md
+  surfaces:
+  - kind: web
+    repository: lbartoszcze/needsomeone-ai-web
+  - kind: cli
+    repository: lbartoszcze/needsomeone-ai-web
+    docs_origin: https://app.needsomeone.ai
+  installations:
+  - surface: web
+    kind: local-build
+    repository: lbartoszcze/needsomeone-ai-web
+    command: npm ci && npm run build
+  - surface: cli
+    kind: npm
+    repository: lbartoszcze/needsomeone-ai-web
+    binaries:
+    - needsomeone-archive
+  approved_by: Lukasz Bartoszcze
+  approved_at: '2026-09-02T23:49:12Z'
+  approval_note: dodaj jeszcze do produktow needsomeone i needhim. to sa niewisnetowe
+    produkty (2026-09-02)
+- id: needhim
+  name: NeedHim
+  status: preview
+  visibility: private
+  family: standalone
+  owner_repository: lbartoszcze/needhim-ai-web
+  description: A private consumer web application for consented AI companion experiences,
+    the counterpart of NeedHer in the same family. Its own brand at needhim.ai with
+    its own identity project.
+  roadmap: []
+  integrations: []
+  evidence:
+  - lbartoszcze/needhim-ai-web
+  surfaces:
+  - kind: web
+    repository: lbartoszcze/needhim-ai-web
+  - kind: cli
+    repository: lbartoszcze/needhim-ai-web
+    docs_origin: https://www.needhim.ai
+  installations:
+  - surface: web
+    kind: local-build
+    repository: lbartoszcze/needhim-ai-web
+    command: npm ci && npm run build
+  - surface: cli
+    kind: npm
+    repository: lbartoszcze/needhim-ai-web
+    binaries:
+    - needhim-archive
+  approved_by: Lukasz Bartoszcze
+  approved_at: '2026-09-02T23:49:12Z'
+  approval_note: dodaj jeszcze do produktow needsomeone i needhim. to sa niewisnetowe
+    produkty (2026-09-02)
+- id: wisent-enterprise
+  name: Wisent Enterprise
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/wisent-enterprise
+  description: 'The operated web console over the Wisent platform: representations,
+    activation analysis, classifiers, contrastive pairs, evaluation, models, deployment,
+    and the compute instances and jobs behind them.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/wisent-enterprise/README.md
+  surfaces:
+  - kind: web
+    repository: wisent-ai/wisent-enterprise
+  - kind: cli
+    repository: wisent-ai/wisent-enterprise
+    docs_origin: https://enterprise.wisent.com
+  installations:
+  - surface: web
+    kind: local-build
+    repository: wisent-ai/wisent-enterprise
+    command: npm ci && npm run build
+  - surface: cli
+    kind: npm
+    repository: wisent-ai/wisent-enterprise
+    binaries:
+    - wisent-enterprise
+- id: ugc
+  name: UGC
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/creator-portal
+  description: 'Commissioning user-generated content from real creators: discovery,
+    briefs, rights, assets, statistics and payment records. Creators sign up and are
+    paid through the creator portal; the campaign ledger and its CLI are packages
+    of the estate rather than records here.'
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/creator-portal/README.md
+  - wisent-ai/ugc-cli/README.md
+  surfaces:
+  - kind: web
+    repository: wisent-ai/creator-portal
+  - kind: cli
+    repository: wisent-ai/ugc-cli
+  installations:
+  - surface: web
+    kind: local-build
+    repository: wisent-ai/creator-portal
+    command: npm ci && npm run build
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/ugc-cli
+    manifest: Cargo.toml
+    binaries:
+    - ugc-cli
+- id: transcript-label-trainer
+  name: Transcript Label Trainer
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/transcript-label-trainer
+  description: Small Models for Your Custom Harness Needs.
+  roadmap: []
+  integrations:
+  - product: stado
+    description: Stado places this trainer's label-model training and lake root, and
+      its capability model names the trainer as the reader of both declared registry
+      keys.
+    source: stado/stado-rs/src/capabilities.rs:1421-1437
+  - product: oko
+    description: Oko's local goal lifecycle classifier defers to the lifecycle output
+      schema this repository owns.
+    source: oko/Sources/OkoKit/Goals/LocalGoalLifecycleClassifier.swift:615-619
+  - product: jeden
+    description: Jeden vendors the goal lifecycle system prompt this repository owns
+      and requires it byte-identical.
+    source: jeden/rust/goal_lifecycle.rs:21-24
+  evidence:
+  - wisent-ai/transcript-label-trainer/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/transcript-label-trainer
+  - kind: web
+    repository: wisent-ai/transcript-label-trainer
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/transcript-label-trainer
+    manifest: Cargo.toml
+    binaries:
+    - transcript-label-trainer
+    features:
+    - hf
+  approved_by: lukaszbartoszcze
+  approved_at: '2026-09-03T23:30:00Z'
+  approval_note: 'Operator, 2026-09-03: "releases: false is not an argument against
+    cataloguing" - the catalogue already carries kind: cargo products built from a
+    checkout, and "it is a product in everything but the record".'

@@ -6,10 +6,14 @@ import sys
 
 
 def sign(request):
-    for name in ("program", "identifier", "target", "certificate", "private_key"):
+    for name in ("identifier", "target", "certificate", "private_key"):
         if not isinstance(request.get(name), str) or not request[name]:
             raise ValueError("native signing request is missing {}".format(name))
-    argv = [request["program"], "signing", "sign", "--identifier", request["identifier"]]
+    signer = request.get("signer")
+    if not isinstance(signer, list) or not signer or not all(isinstance(word, str) and word for word in signer):
+        raise ValueError("native signing request is missing signer")
+    # `signer` is the host's Stado and its `product` command.
+    argv = signer + ["signing", "sign", "--identifier", request["identifier"]]
     previous = request.get("previous")
     if previous:
         argv.extend(["--previous", previous])

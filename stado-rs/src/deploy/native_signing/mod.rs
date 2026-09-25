@@ -1,8 +1,8 @@
-//! Fleet signing credentials and the qualified native Rust SDK that consumes
-//! them. Builders and provisioned hosts use the same immutable SDK release;
-//! an existing executable alone is never accepted as provenance.
+//! Fleet signing credentials and the signer that consumes them: Stado's own
+//! `stado product signing`. A builder signs with the Stado running its job; a
+//! provisioned host signs with the Stado the fleet installed on it.
 
-pub mod runtime;
+use crate::deploy::shlex_quote;
 
 use crate::deploy::host_channel;
 use crate::deploy::{DeployError, Runner};
@@ -59,12 +59,12 @@ pub(crate) async fn signing_credential(field: &str) -> Result<String, DeployErro
     )
 }
 
-/// The environment that hands the fleet's Apple identity to the pinned
-/// signer on this very machine: the certificate with Apple's issuer chain
-/// appended, and the private key, as `wisent-products signing` reads them
-/// into a temporary keychain it removes afterwards. A build host keeps no
-/// identity of its own, so a darwin release signs the same way on every
-/// builder the fleet may place it on.
+/// The environment that hands the fleet's Apple identity to the signer on
+/// this very machine: the certificate with Apple's issuer chain appended, and
+/// the private key, as `stado product signing` reads them into a temporary
+/// keychain it removes afterwards. A build host keeps no identity of its own,
+/// so a darwin release signs the same way on every builder the fleet may place
+/// it on.
 pub async fn signing_environment() -> Result<Vec<(String, String)>, DeployError> {
     let issuers = String::from_utf8(
         pinned_artifact(
@@ -85,27 +85,57 @@ pub async fn signing_environment() -> Result<Vec<(String, String)>, DeployError>
     ])
 }
 
+/// The argv prefix that runs this machine's signer: the executable running
+/// now, so a build job signs with exactly the Stado that runs it.
+pub fn local_signer() -> Vec<String> {
+    let executable = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "stado".into());
+    vec![executable, "product".into()]
+}
+
+/// The Stado the fleet installed on `target`, after it has answered that it
+/// carries `product signing`. A host whose Stado predates the command is
+/// refused by name: converging its Stado release is the repair, and no other
+/// signing program is looked for.
+pub(crate) async fn host_signer(
+    target: &ComputeTarget,
+    home: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let program = format!("{home}/.stado/bin/stado");
+    let probe = host_channel::run_program(
+        target,
+        &[program.as_str(), "product", "signing", "sign", "--help"],
+        runner,
+    )
+    .await?;
+    if !probe.ok() {
+        return Err(DeployError(format!(
+            "{}: {program} cannot sign native code: `stado product signing sign` is not \
+             available there ({}); converge Stado on this host first",
+            target.name,
+            probe.detail().trim()
+        )));
+    }
+    Ok(program)
+}
+
 /// Run the compiled runner reconciliation with credentials confined to stdin
 /// and the signing child's environment, never a persistent host keychain.
+/// The script signs through `"$STADO_BIN" product signing`.
 pub(crate) async fn run_runner_reconciliation(
     target: &ComputeTarget,
     script: &str,
     runner: &Runner,
 ) -> Result<crate::deploy::CommandOutput, DeployError> {
     let home = host_channel::remote_home(target, runner).await?;
-    let signer = runtime::on_host(target, &home, runner).await?;
-    let mut prepared = format!(
-        "set -e\nexport WISENT_PRODUCTS_BIN={}\n",
-        crate::deploy::shlex_quote(&signer)
-    );
+    let signer = host_signer(target, &home, runner).await?;
+    let mut prepared = format!("set -e\nexport STADO_BIN={}\n", shlex_quote(&signer));
     for (name, value) in signing_environment().await? {
         use std::fmt::Write;
-        writeln!(
-            &mut prepared,
-            "export {name}={}",
-            crate::deploy::shlex_quote(&value)
-        )
-        .map_err(|error| DeployError(format!("cannot prepare signing environment: {error}")))?;
+        writeln!(&mut prepared, "export {name}={}", shlex_quote(&value))
+            .map_err(|error| DeployError(format!("cannot prepare signing environment: {error}")))?;
     }
     prepared.push_str(script);
     host_channel::run_script(target, &prepared, runner).await
