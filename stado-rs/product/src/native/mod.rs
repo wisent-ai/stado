@@ -119,7 +119,12 @@ fn execute(
                 .args(&argv)
                 .current_dir(&root.path)
                 .env(workspace::WORKSPACE_ENV, &workspace)
-                .env(workspace::SCRATCH_ENV, &scratch)
+                // The scratch reaches SwiftPM as `--scratch-path` above. As an
+                // environment variable it would also reach the program under
+                // test, and a test that builds its own product with `swift
+                // build` would then wait forever on the lock this very `swift
+                // test` holds on that scratch.
+                .env_remove(workspace::SCRATCH_ENV)
                 .env("TMPDIR", &temporary)
                 .env("GIT_ALLOW_PROTOCOL", "")
                 .env(
