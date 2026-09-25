@@ -17,6 +17,7 @@ mod publisher;
 
 use central::sync_catalog;
 use checkout::sync;
+pub(crate) use publisher::ensure_publisher;
 
 const CATALOG_PREFIX: &str = "release-catalog";
 
@@ -45,6 +46,10 @@ enum CatalogCommands {
     /// Declare one product's release publisher across the fleet: mint its
     /// item on the vault owner, grant the release client access, declare it on
     /// every participating host, then reconcile each host's verifier grant.
+    /// `build submit` and `release submit` run this themselves for a product
+    /// this host has not declared, with this host as the client and the vault
+    /// owner read from `skarbiec sync-status`; run it by hand only to declare
+    /// further API targets or reloads.
     DeclarePublisher {
         /// The product, as its release manifest names it.
         product: String,

@@ -195,31 +195,83 @@ pub fn release_api_publishers(
 
 /// A publishing client needs only its declared products; the serving API still
 /// requires its complete active publisher table through `release_api_publishers`.
+///
+/// A declaration carries nothing the product name does not: its item must be
+/// the product and its prefix `<product>/`. So a key whose product this host
+/// has not declared yet still resolves to that product's publisher, and the
+/// caller reads the product's own bearer instead of refusing. Whether the
+/// bearer exists and the serving API accepts it is the serving side's answer;
+/// `stado build submit` declares the publisher before its first write when
+/// this host's table lacks it (`release_catalog::ensure_publisher`).
 pub fn release_client_publisher_for_key(
     key: &str,
-) -> Result<Option<&'static ReleasePublisher>, &'static [String]> {
+) -> Result<Option<ReleasePublisher>, &'static [String]> {
     match &*RELEASE_API_PUBLISHERS {
         Ok(publishers) => Ok(publishers
             .values()
-            .find(|publisher| publisher.allows_key(key))),
+            .find(|publisher| publisher.allows_key(key))
+            .cloned()
+            .or_else(|| derived_publisher(key))),
         Err(problems) => Err(problems.as_slice()),
     }
 }
 
-pub fn release_publisher_for_key(key: &str) -> Option<&'static ReleasePublisher> {
-    release_api_publishers()
-        .ok()?
-        .values()
-        .find(|publisher| publisher.allows_key(key))
+/// The publisher a product's declaration would name, from the first segment
+/// of `key`: item `<product>`, prefix `<product>/`.
+fn derived_publisher(key: &str) -> Option<ReleasePublisher> {
+    let (product, rest) = key.trim_start_matches('/').split_once('/')?;
+    if product.is_empty()
+        || rest.is_empty()
+        || crate::remote::object_store::ObjectRef::new(product, "sentinel").is_err()
+    {
+        return None;
+    }
+    Some(ReleasePublisher {
+        item: product.to_string(),
+        prefix: format!("{product}/"),
+    })
 }
 
-pub fn release_publisher_for_list(prefix: &str) -> Option<(&'static ReleasePublisher, String)> {
-    release_api_publishers()
-        .ok()?
-        .values()
-        .find_map(|publisher| {
+/// Whether this host's configuration declares `product`'s release publisher.
+pub fn release_publisher_declared(product: &str) -> bool {
+    matches!(&*RELEASE_API_PUBLISHERS, Ok(publishers) if publishers.contains_key(product))
+}
+
+/// The serving API's publisher for `key`. A product declared after this
+/// process loaded its configuration is looked up again in the file as it is
+/// on disk now, so `ensure_publisher`'s declaration takes effect on the
+/// serving hosts without restarting them; the declared table is still the
+/// only authority, and a key no declaration names is still refused.
+pub fn release_publisher_for_key(key: &str) -> Option<ReleasePublisher> {
+    let find = |publishers: &BTreeMap<String, ReleasePublisher>| {
+        publishers
+            .values()
+            .find(|publisher| publisher.allows_key(key))
+            .cloned()
+    };
+    find(release_api_publishers().ok()?).or_else(|| find(&fresh_release_publishers()?))
+}
+
+pub fn release_publisher_for_list(prefix: &str) -> Option<(ReleasePublisher, String)> {
+    let find = |publishers: &BTreeMap<String, ReleasePublisher>| {
+        publishers.values().find_map(|publisher| {
             publisher
                 .authorized_list_prefix(prefix)
-                .map(|authorized| (publisher, authorized))
+                .map(|authorized| (publisher.clone(), authorized))
         })
+    };
+    find(release_api_publishers().ok()?).or_else(|| find(&fresh_release_publishers()?))
+}
+
+/// The publisher table in the config file as it is now, when the table is
+/// read from the file at all (`WC_RELEASE_API_PUBLISHERS` pins it for the
+/// process's lifetime) and is complete.
+fn fresh_release_publishers() -> Option<BTreeMap<String, ReleasePublisher>> {
+    let pinned = std::env::var("WC_RELEASE_API_PUBLISHERS")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    if pinned {
+        return None;
+    }
+    parse_release_publishers(crate::config_file::get_fresh("release_api.publishers").as_ref()).ok()
 }

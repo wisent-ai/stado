@@ -84,6 +84,17 @@ pub fn load_config_file() -> Result<&'static Map<String, Value>, ConfigError> {
     Ok(&CACHE.get().expect("cache just initialized").data)
 }
 
+/// The config file as it is on disk now, bypassing the process-wide cache.
+/// For the one declaration a long-running process must see without a
+/// restart: a release publisher declared after the process loaded its
+/// configuration (see `release_publisher_for_key`).
+pub fn load_config_file_fresh() -> Result<Map<String, Value>, ConfigError> {
+    match find_config_file() {
+        None => Ok(Map::new()),
+        Some(path) => load_uncached(&path),
+    }
+}
+
 /// The path of the loaded config file, or None when running file-less.
 /// Mirrors Python `config_path()`: forces a load first.
 pub fn config_path() -> Result<Option<PathBuf>, ConfigError> {

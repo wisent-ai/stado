@@ -32,7 +32,7 @@ mod validation;
 
 pub(crate) use discovery::expand_tilde;
 pub use discovery::{config_path, find_config_file, load_config_file};
-pub use readers::{field_value, get, resolve, resolve_list};
+pub use readers::{field_value, get, get_fresh, resolve, resolve_list};
 pub use validation::validate;
 
 /// Root configuration contract written by `stado config init`.

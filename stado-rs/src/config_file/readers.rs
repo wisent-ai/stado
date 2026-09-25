@@ -8,7 +8,7 @@
 
 use serde_json::{Map, Value};
 
-use super::discovery::load_config_file;
+use super::discovery::{load_config_file, load_config_file_fresh};
 
 /// Dotted-key walk over a JSON object; None when any segment is missing or
 /// an intermediate value is not an object (Python `_get`).
@@ -49,6 +49,13 @@ pub(super) fn get_in<'a>(data: &'a Map<String, Value>, dotted: &str) -> Option<&
 pub fn get(dotted: &str) -> Option<Value> {
     let data = load_config_file().expect("invalid stado config file");
     get_in(data, dotted).cloned()
+}
+
+/// Read a dotted key from the file as it is on disk now, not from the
+/// process-wide cache; `None` when the file cannot be read or lacks the key.
+pub fn get_fresh(dotted: &str) -> Option<Value> {
+    let data = load_config_file_fresh().ok()?;
+    get_in(&data, dotted).cloned()
 }
 
 /// Python truthiness for JSON values (used by `validate`).

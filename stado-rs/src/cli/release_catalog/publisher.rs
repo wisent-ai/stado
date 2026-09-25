@@ -171,3 +171,77 @@ pub(super) async fn declare_publisher(
     }
     Ok(())
 }
+
+/// Declare `product`'s publisher when this host's configuration does not,
+/// so the first build or release of a new product publishes instead of
+/// refusing with `release_api.publishers declares no publisher`.
+///
+/// Until 2026-09-25 that refusal was the only way a new product learned it
+/// needed `catalog declare-publisher`, and the command needed a person to
+/// know which host owns the vault: Skrzynka and Spis were never built by the
+/// fleet because nobody had run it (defect 465ab45a). Both hosts are already
+/// facts Stado can read: the client is this host's registry target, and the
+/// owner is the host this vault replicates, or this host when its vault is
+/// the authority. The declaration itself is `declare_publisher`, unchanged.
+pub(crate) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
+    if crate::config::release_publisher_declared(product) {
+        return Ok(());
+    }
+    let client = this_host().await?;
+    let owner = vault_owner(&client)?;
+    eprintln!(
+        "{product}: this host declares no release publisher for it; declaring it now \
+         (vault owner {owner}, release client {client})"
+    );
+    declare_publisher(product, &owner, &client, &[], &[], false)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{product} has no release publisher and declaring one failed \
+                 (stado release catalog declare-publisher {product} --owner {owner} \
+                 --client {client}): {error}"
+            ))
+        })
+}
+
+/// This host's registry target, as `stado resolver` identifies it.
+async fn this_host() -> Result<String, CmdError> {
+    let store = std::sync::Arc::new(crate::targets::RegistryStore::open().await?);
+    let (bootstrap, _, _) = crate::cli::resolver::read_local_snapshot(&store)
+        .await
+        .map_err(CmdError::click)?;
+    crate::cli::resolver::current_target(&bootstrap).map_err(CmdError::click)
+}
+
+/// The host that owns the fleet vault: the bond this host's vault
+/// replicates, or this host when its vault replicates nothing. A vault whose
+/// status cannot be read is refused rather than guessed, because a publisher
+/// minted on a replica is overwritten by the next pull.
+fn vault_owner(this_host: &str) -> Result<String, CmdError> {
+    let declared = crate::config::skarbiec_vault_file();
+    let vault = if declared.is_empty() {
+        let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+        std::path::Path::new(&home).join(".stado/skarbiec.vault.json")
+    } else {
+        std::path::PathBuf::from(declared)
+    };
+    let launcher = crate::cli::secrets::skarbiec_launcher()?;
+    let status = crate::cli::secrets::launcher_json(&launcher, &vault, &["sync-status"])
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot tell which host owns the vault: skarbiec sync-status on {} failed: {error}",
+                vault.display()
+            ))
+        })?;
+    let bonds = status.as_array().ok_or_else(|| {
+        CmdError::click(format!(
+            "cannot tell which host owns the vault: skarbiec sync-status on {} answered {status}",
+            vault.display()
+        ))
+    })?;
+    Ok(bonds
+        .iter()
+        .find(|bond| bond.get("role").and_then(Value::as_str) == Some("replica"))
+        .and_then(|bond| bond.get("bond").and_then(Value::as_str))
+        .map_or_else(|| this_host.to_owned(), str::to_owned))
+}
