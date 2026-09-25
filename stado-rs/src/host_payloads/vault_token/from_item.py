@@ -41,8 +41,34 @@ def main():
         report = invoke(skarbiec, [*arguments, "--token-file", str(token_path)])
     if not isinstance(report, dict) or report.get("ok") is not True:
         raise SystemExit("skarbiec grant issue did not report a successful registration")
+    destination = os.environ.get("STADO_TOKEN_DESTINATION")
+    if destination:
+        persist(Path(destination), token)
     report.pop("token", None)
     print(json.dumps(report))
+
+
+def persist(destination, token):
+    """Keep the registered bearer where its consumer reads it on this host.
+
+    The bearer is the item's own value, so every holder of the item keeps
+    working; a file that already holds another bearer is refused rather than
+    overwritten, because whoever reads it would lose access silently."""
+    if destination.is_symlink():
+        raise SystemExit(f"{destination} must not be a symlink")
+    if destination.exists():
+        if destination.read_text(encoding="utf-8").strip() != token:
+            raise SystemExit(
+                f"{destination} holds another bearer; move it aside before registering this one"
+            )
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    pending = destination.with_name(destination.name + f".pending.{os.getpid()}")
+    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        output.write(token)
+    os.link(pending, destination)
+    os.unlink(pending)
 
 
 if __name__ == "__main__":

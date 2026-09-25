@@ -43,11 +43,6 @@ pub async fn vault_token_mint(
     }
     if let Some(name) = token_file_name {
         release_component("token file name", name)?;
-        if token_item.is_some() {
-            return Err(CmdError::usage(
-                "--token-item and --token-file-name cannot be used together",
-            ));
-        }
         if raw_token {
             return Err(CmdError::usage(
                 "--raw-token and --token-file-name cannot be used together",

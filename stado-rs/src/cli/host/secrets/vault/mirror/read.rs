@@ -39,7 +39,17 @@ pub(in crate::cli::host) async fn remote_skarbiec_json_at(
     };
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
     let tool_path = skarbiec_tool_path(&home);
-    let token_file = if let Some(name) = token_file_name {
+    // A bearer taken from a vault item is persisted by the host payload that
+    // registers it, so the file holds that same value; the preparation below
+    // would otherwise create a random bearer the grant never names.
+    let item_destination = match (token_source, token_file_name) {
+        (Some(_), Some(name)) => {
+            release_component("token file name", name)?;
+            Some(format!("{home}/.stado/{name}"))
+        }
+        _ => None,
+    };
+    let token_file = if let (None, Some(name)) = (token_source, token_file_name) {
         release_component("token file name", name)?;
         let path = format!("{home}/.stado/{name}");
         let script = format!(
@@ -94,6 +104,13 @@ fi
         gnupg_environment.as_str(),
         vault_environment.as_str(),
     ];
+    let destination_environment = item_destination
+        .as_ref()
+        .map(|path| format!("STADO_TOKEN_DESTINATION={path}"));
+    if let Some(environment) = &destination_environment {
+        invocation.push(environment.as_str());
+    }
+    let token_file = token_file.or(item_destination);
     let output = if let Some((item, field)) = token_source {
         invocation.extend(["/usr/bin/python3", "-", skarbiec.as_str(), item, field]);
         invocation.extend(arguments.iter().map(String::as_str));

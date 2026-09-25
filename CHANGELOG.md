@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado credentials token mint --token-item <item> --token-file-name <file>` writes the registered bearer to the consumer's file:** a bearer registered from a vault item could not be written to the file its consumer reads, so the two disagreed and every read with that file was refused with "does not hash to the bearer the vault recorded". The owner now writes the item's own value to `~/.stado/<file>` (a file holding another bearer is refused, not overwritten); `stado credentials token sync` delivers it to other hosts.
+
 - **`stado credentials vault sync --host <owner> --push` publishes the owner's vault to the mirror:** Stado could only pull the mirror, so a grant or item rename made on the vault owner never reached another host's copy until someone ran Skarbiec by hand, and `credentials token sync` there refused with "synchronize the vault first". `--push` runs `skarbiec sync-push` on the owner; the other copies then pull with `--check` first, as before.
 
 - **`stado product` reads receipts of tools installed hundreds of times:** each install nested the whole previous receipt, history included, so a tool reinstalled a few hundred times wrote a receipt deeper than the JSON parser's recursion limit, and that one file refused every `stado product` install, `paths` and ownership check with `recursion limit exceeded`. A receipt now keeps only the state directly before it, which is all rollback reads, and existing deep receipts are read whole and rewritten flat on the next change.

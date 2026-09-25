@@ -78,7 +78,9 @@ pub enum CredentialTokenCommands {
         token_field: Option<String>,
         #[arg(long, conflicts_with = "token_item")]
         raw_token: bool,
-        #[arg(long, conflicts_with_all = ["raw_token", "token_item"])]
+        /// With --token-item, the item's own value is written here on the
+        /// vault owner, so the consumer's file and the registered bearer agree.
+        #[arg(long, conflicts_with = "raw_token")]
         token_file_name: Option<String>,
         #[arg(long)]
         json: bool,
