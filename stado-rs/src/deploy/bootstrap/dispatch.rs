@@ -119,9 +119,12 @@ pub async fn run_bootstrap(
         }
         if let Some(t) = registry.lookup(target) {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
+                // A machine Stado runs on is one host process: `stado serve`
+                // carries every role, and the install merges this machine's
+                // separate Stado units into it and retires them.
                 return local_install::install_local(
                     &t.name,
-                    "agent",
+                    "host",
                     dry_run,
                     daemon_domain,
                     runner,
