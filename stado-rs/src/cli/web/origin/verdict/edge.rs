@@ -153,22 +153,27 @@ fn quoted_body(body: &str) -> String {
 }
 
 pub(crate) fn edge_state(origin: &PublicOrigin, selection: &EdgeSelection) -> &'static str {
-    // A `web-edge` origin is what release clients read directly: it agrees
-    // when the configured release URL is that origin, and the read-back
-    // through that URL is the proof it serves.
+    // An origin release clients read directly — `api.url` is that origin —
+    // has no second edge in front of it to ask which origin it selected: the
+    // read-back through that URL is the proof it serves. That is every
+    // `web-edge` origin, and a funnel origin since the public edge's
+    // forwarding routes were withdrawn on 2026-09-22.
+    if reads_directly(origin) {
+        return "agrees";
+    }
     if origin.publication == public_origin::WEB_EDGE {
-        let configured = crate::config::stado_api_url();
-        return if configured.trim_end_matches('/') == origin.origin() {
-            "agrees"
-        } else {
-            "differs"
-        };
+        return "differs";
     }
     match &selection.origin {
         Some(selected) if *selected == origin.origin() => "agrees",
         Some(_) => "differs",
         None => "unreadable",
     }
+}
+
+/// Whether release clients are configured to read this origin itself.
+pub(crate) fn reads_directly(origin: &PublicOrigin) -> bool {
+    crate::config::stado_api_url().trim_end_matches('/') == origin.origin()
 }
 
 /// The row for a public origin no declaration covers.

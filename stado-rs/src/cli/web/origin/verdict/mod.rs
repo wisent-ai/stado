@@ -60,12 +60,14 @@ pub(crate) async fn examine(
         Some(publication) => publication,
         None => PublicationReading::Unknown(publication_read.detail.clone().unwrap_or_default()),
     };
-    // A `web-edge` origin is itself the endpoint release clients read; there
-    // is no second edge in front of it to ask which origin it selected, so
-    // only the read-back through the configured release URL counts.
+    // An origin release clients read directly (every `web-edge` origin, and
+    // any origin `api.url` names) has no second edge in front of it to ask
+    // which origin it selected, so only the read-back through the configured
+    // release URL counts.
+    let direct = origin.publication == WEB_EDGE || edge::reads_directly(origin);
     let complete = dns_read.complete()
         && publication_read.complete()
-        && (origin.publication == WEB_EDGE || selection.observation.complete())
+        && (direct || selection.observation.complete())
         && selection.readback_observation.complete();
     let edge = edge::edge_state(origin, selection);
     let word = if complete {
