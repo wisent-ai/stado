@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **The key that repairs a host no longer depends on the service it repairs:** every host command read the host's SSH key from Skarbiec, and when that Skarbiec was the broken service on the host (charless-mac-mini, 2026-09-21) no product command could reach the host without `STADO_HOST_SSH_KEY_FILE` set by hand. Each successful read now keeps the key owner-only under `~/.stado/host-keys/<host>`, and when the vault does not answer (as opposed to answering that the key is absent) that key is used.
+
 - **`stado release active-binary` answers for a product the host runs under its own declaration:** when release control has no target for the host, the command used to refuse (`release product "skarbiec" has no target "charless-mac-mini"`) while `release host-state` read the same program `in-sync`, and Weles, which asks this command for the Skarbiec it runs, did not start. It now answers from `targets[].managed_versions` and the host's software report, printing the program's path when the report names it at the declared version (`state: declared` with `--json`), and refuses with what is missing or stale otherwise.
 
 - **A janitor cleaner that receives no scan budget says so:** seven cleaners returned without recording anything when their share of `max_scan_items` was zero, so `stado space report` could show `scanned 0` with an empty `skipped` map under real disk pressure and nobody could tell a spent budget from a cleaner that never ran. Each now records `scan_cap` and sets `caps.scan`.
