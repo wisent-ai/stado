@@ -76,12 +76,9 @@ pub(in crate::cli::release_cmd) async fn active_binary(
         .products
         .get(&args.product)
         .ok_or_else(|| CmdError::click(format!("unknown release product {:?}", args.product)))?;
-    let target = policy.targets.get(target_name).ok_or_else(|| {
-        CmdError::click(format!(
-            "release product {:?} has no target {target_name:?}",
-            args.product
-        ))
-    })?;
+    let Some(target) = policy.targets.get(target_name) else {
+        return declared_binary(&args.product, target_entry, target_name, args.json);
+    };
     let active = crate::release_agent::active_binary(&args.product, target_name, policy, target)
         .await
         .map_err(CmdError::click)?;
@@ -101,6 +98,63 @@ pub(in crate::cli::release_cmd) async fn active_binary(
         );
     } else {
         println!("{}", active.path.display());
+    }
+    Ok(())
+}
+
+/// The binary of a product this host runs under its own declaration rather
+/// than under release control: `targets[].managed_versions` names the
+/// version, and the host's software report names the program at that version.
+///
+/// `release host-state` already judged such a host `in-sync` while this
+/// command refused it: on charless-mac-mini on 2026-09-26 host-state read
+/// skarbiec 0.3.12 running and in sync, and `active-binary skarbiec` answered
+/// `release product "skarbiec" has no target "charless-mac-mini"`, so Weles,
+/// which asks this command for the Skarbiec it runs, had not started for two
+/// days. Both reads now answer from what the host declares and reports.
+fn declared_binary(
+    product: &str,
+    target: &crate::targets::ComputeTarget,
+    target_name: &str,
+    as_json: bool,
+) -> Result<(), CmdError> {
+    let declared = target.managed_versions.get(product).ok_or_else(|| {
+        CmdError::click(format!(
+            "release product {product:?} has no target {target_name:?}, and {target_name} \
+             declares no managed version of {product} either"
+        ))
+    })?;
+    let report = crate::host_software::load(target_name);
+    let row = report.find(product).ok_or_else(|| {
+        CmdError::click(format!(
+            "{target_name} declares {product} {declared}, but its software report ({}) names no \
+             {product} program; `stado release host-state --host {target_name}` records one",
+            report.summary()
+        ))
+    })?;
+    if &row.version != declared {
+        return Err(CmdError::click(format!(
+            "{target_name} declares {product} {declared}, and its software report ({}) names {} \
+             at version {}; `stado release host-state --host {target_name}` says which is stale",
+            report.age(),
+            row.path,
+            row.version
+        )));
+    }
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "state": "declared",
+                "product": product,
+                "target": target_name,
+                "version": declared,
+                "sha256": row.sha256,
+                "path": row.path,
+            }))?
+        );
+    } else {
+        println!("{}", row.path);
     }
     Ok(())
 }
