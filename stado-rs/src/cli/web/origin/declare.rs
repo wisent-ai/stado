@@ -11,6 +11,14 @@
 //! that could not be asked has established nothing, and a declaration nobody
 //! checked is the defect this capability exists to remove — so the command
 //! says which of the two happened and neither is silently accepted.
+//!
+//! One name is exempt from the first refusal: a `tailscale-funnel` node's own
+//! tailnet name. Tailscale publishes that record only while the node's Funnel
+//! is on, and Funnel is switched on by `converge` for a declared origin, so
+//! demanding the record first made the funnel origin impossible to declare
+//! at all — which is how charless-mac-mini had no release origin from
+//! 2026-09-22. It is declared as `pending-publication`, and `converge` and
+//! `status` judge the public name afterwards.
 
 use serde_json::{json, Value};
 
@@ -52,7 +60,7 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
     }
     let resolution = public_origin::resolve(&origin.hostname).await;
     match resolution.state {
-        public_origin::ResolutionState::Unresolved => {
+        public_origin::ResolutionState::Unresolved if !publishes_own_tailnet_name(&origin) => {
             // The refusal sentence already says what the resolver found, so
             // the resolution detail is not appended: one condition, one
             // sentence, and an operator reading it twice starts looking for
@@ -63,6 +71,7 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
             ))
             .stating(FailureCode::Refused));
         }
+        public_origin::ResolutionState::Unresolved => {}
         public_origin::ResolutionState::Unavailable => {
             return Err(CmdError::click(format!(
                 "refusing to declare public origin {:?}: whether {} has a public A or AAAA \
@@ -74,6 +83,11 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
         }
         public_origin::ResolutionState::Resolved => {}
     }
+    let publicness = if resolution.state == public_origin::ResolutionState::Resolved {
+        "public"
+    } else {
+        PENDING_PUBLICATION
+    };
 
     let row = public_origin::to_row(&origin);
     let name = origin.name.clone();
@@ -118,6 +132,7 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
         "change": change.get(),
         "generation": generation,
         "resolution": resolution.to_json(),
+        "publicness": publicness,
     });
     if request.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -131,8 +146,31 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
             origin.publication,
         );
         println!("  {}", resolution.detail);
+        if publicness == PENDING_PUBLICATION {
+            println!(
+                "  {} is the node's own tailnet name: Tailscale publishes it while Funnel is on; \
+                 `stado web origin converge {} --apply` turns Funnel on and reads the public name back",
+                origin.hostname, origin.name
+            );
+        }
     }
     Ok(())
+}
+
+/// The declaration was accepted before its name is public, because only the
+/// publication it declares can make the name public.
+const PENDING_PUBLICATION: &str = "pending-publication";
+
+/// Whether this origin is a `tailscale-funnel` publication of the declared
+/// target's own tailnet name. The registry validator already refuses a
+/// tailnet name whose node label is not the target.
+fn publishes_own_tailnet_name(origin: &PublicOrigin) -> bool {
+    origin.publication == public_origin::TAILSCALE_FUNNEL
+        && origin
+            .hostname
+            .strip_suffix(".ts.net")
+            .and_then(|node| node.split('.').next())
+            == Some(origin.target.as_str())
 }
 
 pub(crate) async fn remove(name: &str, json_output: bool) -> Result<(), CmdError> {

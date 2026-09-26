@@ -77,6 +77,43 @@ fn declaring_this_hosts_own_name_over_a_live_upstream_is_refused_and_writes_noth
     );
 }
 
+/// A funnel node's own tailnet name is published by Tailscale only while the
+/// node's Funnel is on, and `converge` is what turns it on for a declared
+/// origin. So that name is declared before any public record exists, as
+/// `pending-publication`, and lands on disk; any other unresolvable name is
+/// still refused by the case above.
+#[test]
+fn a_funnel_nodes_own_tailnet_name_is_declared_pending_publication_and_persisted() {
+    let fixture = Fixture::new();
+    let upstream = Upstream::bind();
+    let tailnet_name = format!("{TARGET}.tailnet-under-test.ts.net");
+    let declared = fixture.stado(&[
+        "web",
+        "origin",
+        "declare",
+        ORIGIN,
+        "--hostname",
+        &tailnet_name,
+        "--target",
+        TARGET,
+        "--upstream",
+        &upstream.origin(),
+        "--path",
+        PUBLISHED_PATH,
+        "--json",
+    ]);
+
+    assert!(declared.status.success(), "{}", stderr(&declared));
+    let receipt = report(&declared);
+    assert_eq!(receipt["publicness"], json!("pending-publication"));
+    assert_eq!(receipt["publication"], json!("tailscale-funnel"));
+    assert_eq!(receipt["resolution"]["state"], json!("dns_unresolved"));
+    let persisted = fixture
+        .persisted_origins()
+        .expect("an accepted declaration is on disk");
+    assert_eq!(persisted[0]["hostname"], json!(tailnet_name));
+}
+
 /// `/docs/channels`: a host-control route and a public download origin are
 /// separate choices. This host's own name is both here — it is the SSH
 /// destination the target declares — so the write is refused and the store is

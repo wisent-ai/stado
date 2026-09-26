@@ -12,9 +12,9 @@
 //! hostname, the target that publishes it and how; a directly reachable
 //! server, a reverse proxy, a tunnel or a provider-managed edge can all carry
 //! the same requests, and `/docs/web-hosting` says so. The default
-//! publication, `web-edge`, is the `stado web` declaration that owns the same
-//! hostname on the fleet's declared web edge; `tailscale-funnel` remains for a
-//! tailnet whose policy publishes the node's own name.
+//! publication, `tailscale-funnel`, publishes the target node's own tailnet
+//! name through its Funnel; `web-edge` publishes through the `stado web`
+//! declaration that owns the same hostname on a declared web edge.
 
 mod converge;
 mod declare;
@@ -25,7 +25,7 @@ mod withdraw;
 use clap::Subcommand;
 
 use crate::cli::CmdError;
-use crate::public_origin::{PUBLICATIONS, WEB_EDGE};
+use crate::public_origin::{PUBLICATIONS, TAILSCALE_FUNNEL};
 
 /// The `stado web` declaration that owns a `web-edge` origin's hostname: its
 /// name, the edge it names, and the service it is published in front of.
@@ -102,11 +102,12 @@ pub(crate) enum OriginCommands {
         /// Registry target whose publication serves it.
         #[arg(long)]
         target: String,
-        /// How that target publishes it: `web-edge`, through the `stado web`
-        /// declaration that owns the same hostname, or `tailscale-funnel`.
+        /// How that target publishes it: `tailscale-funnel`, through the
+        /// node's own Funnel, or `web-edge`, through the `stado web`
+        /// declaration that owns the same hostname.
         #[arg(
             long,
-            default_value = WEB_EDGE,
+            default_value = TAILSCALE_FUNNEL,
             value_parser = clap::builder::PossibleValuesParser::new(PUBLICATIONS)
         )]
         publication: String,

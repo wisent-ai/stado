@@ -77,7 +77,7 @@ pub const WEB_EDGE: &str = "web-edge";
 /// Every publication method a declaration may name. A closed vocabulary
 /// rather than a free string, because a publication nothing can converge is a
 /// declaration with no reality check.
-pub const PUBLICATIONS: &[&str] = &[WEB_EDGE, TAILSCALE_FUNNEL];
+pub const PUBLICATIONS: &[&str] = &[TAILSCALE_FUNNEL, WEB_EDGE];
 
 /// The largest number of paths one origin may publish. A publication is a set
 /// of handler rules on a host; an unbounded list would be an unbounded write.
