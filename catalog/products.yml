@@ -467,6 +467,8 @@ products:
     kind: stado-release
     repository: wisent-ai/stado
     manifest: .wisent-release.json
+    after_install:
+    - [stado, release, converge-local-readers, --archive, '{release_archive}', --sha256, '{release_archive_sha256}']
   - surface: service
     kind: stado-release
     repository: wisent-ai/stado

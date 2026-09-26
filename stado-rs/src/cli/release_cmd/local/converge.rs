@@ -53,6 +53,39 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
     let executable = directory.join(&args.name);
     let mut log = |message: &str| println!("{message}");
+    // The queue agent recycles itself only when `stado.release-version`
+    // names a version other than the one it was compiled from, and only
+    // `release install-local` wrote that file. A `stado product install`
+    // left it at 0.22.0 under a 0.22.5 binary on 2026-09-26, so the object
+    // API that carries the agent stayed on the replaced image indefinitely.
+    // This command is the installed binary when it runs from the install, so
+    // its own version is the installed one.
+    let running = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "release converge-local-readers: cannot resolve its own executable: {error}"
+            ))
+        })?;
+    if std::fs::canonicalize(&executable).ok().as_deref() == Some(running.as_path()) {
+        let marker = directory.join("stado.release-version");
+        let staged = directory.join("stado.release-version.release-incoming");
+        std::fs::write(&staged, format!("{}\n", env!("CARGO_PKG_VERSION")))
+            .and_then(|()| std::fs::rename(&staged, &marker))
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "release converge-local-readers: cannot record the installed Stado release \
+                     coordinate at {}: {error}",
+                    marker.display()
+                ))
+            })?;
+        log(&format!(
+            "release converge-local-readers: {} names {}, so queue agents on an older image \
+             recycle themselves after their active jobs",
+            marker.display(),
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
     crate::self_update::recycle_replaced_units(
         "release converge-local-readers",
         &directory,

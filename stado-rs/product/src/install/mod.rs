@@ -153,21 +153,50 @@ pub fn perform(
             installed.save(runtime)?;
         }
         if let Some(steps) = selected.get("after_install") {
+            // `{release_archive}` and `{release_archive_sha256}` name the
+            // verified archive this installation came from, so a step can hand
+            // the exact bytes to the product's own reconciler: Stado's
+            // `release converge-local-readers` restarts every unit still
+            // executing the binary this install replaced. Without it the 0.22.5
+            // install on 2026-09-26 left the object API on lukasz-macbook on
+            // the replaced image, and the next build's resident-identity test
+            // failed on exactly that.
+            let archive = installed
+                .release
+                .as_ref()
+                .and_then(|release| release["destination"].as_str())
+                .map(str::to_owned);
+            let archive_sha256 = installed
+                .release
+                .as_ref()
+                .and_then(|release| release["artifact"]["artifact_sha256"].as_str())
+                .map(str::to_owned);
             for step in steps.as_array().context("after_install must be an array")? {
                 let argv = step
                     .as_array()
                     .context("after_install command must be argv")?
                     .iter()
                     .map(|value| {
-                        value
+                        let word = value
                             .as_str()
-                            .context("after_install arguments must be strings")
+                            .context("after_install arguments must be strings")?;
+                        match word {
+                            "{release_archive}" => archive.clone().context(
+                                "after_install names {release_archive}, and this installation \
+                                 came from no verified release archive",
+                            ),
+                            "{release_archive_sha256}" => archive_sha256.clone().context(
+                                "after_install names {release_archive_sha256}, and this \
+                                 installation came from no verified release archive",
+                            ),
+                            word => Ok(word.to_owned()),
+                        }
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let (name, arguments) = argv
                     .split_first()
                     .context("after_install has an empty command")?;
-                let binary = installed.installed_paths.iter().find(|path| path.file_name().and_then(|s| s.to_str()) == Some(*name))
+                let binary = installed.installed_paths.iter().find(|path| path.file_name().and_then(|s| s.to_str()) == Some(name.as_str()))
                     .with_context(|| format!("after_install names a binary this installation did not produce: {name}"))?;
                 checked(Command::new(binary).args(arguments))?;
             }
