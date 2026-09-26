@@ -129,6 +129,8 @@ pub(super) fn scan_build_caches(
         return;
     };
     if remaining_scan <= 0 {
+        report.caps.scan = true;
+        report.skip_builds("scan_cap", 1);
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {

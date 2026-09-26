@@ -32,6 +32,8 @@ pub fn scan_chromium_clones(
         return;
     };
     if remaining_scan <= 0 {
+        report.caps.scan = true;
+        report.skip_clones("scan_cap", 1);
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {

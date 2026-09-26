@@ -42,6 +42,8 @@ pub fn scan_release_store(
         return;
     };
     if remaining_scan <= 0 {
+        report.caps.scan = true;
+        report.skip_release_store("scan_cap", 1);
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {

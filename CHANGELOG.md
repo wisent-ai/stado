@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **A janitor cleaner that receives no scan budget says so:** seven cleaners returned without recording anything when their share of `max_scan_items` was zero, so `stado space report` could show `scanned 0` with an empty `skipped` map under real disk pressure and nobody could tell a spent budget from a cleaner that never ran. Each now records `scan_cap` and sets `caps.scan`.
+
 - **`stado build newest --queued` is the daily batch over handed-off work:** `stado release changes submit` only queued tickets and nothing built them; every batch so far was typed by an agent. `--queued` builds exactly the products whose tickets are still `queued`, from the workspace checkouts, and names queued products the workspace holds no checkout of. A daily schedule runs it: `stado schedule create --cron "0 2 * * *" --pinned-host <workspace host> "stado build newest --queued --root <workspace>"`.
 
 - **A publisher declaration looks for its item in the fleet vault, not the declaring host's copy:** `release catalog enroll` minted `tama` on the vault owner and then refused to declare it on lukasz-macbook because that host's local copy lacked the item. The guard now reads the item from the registry's `skarbiec` active host, the vault every verifier reads.

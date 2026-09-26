@@ -24,6 +24,8 @@ pub fn scan_weles(
         return;
     };
     if remaining_scan <= 0 {
+        report.caps.scan = true;
+        report.skip_weles("scan_cap", 1);
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {

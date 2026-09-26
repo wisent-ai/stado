@@ -75,6 +75,8 @@ pub fn scan_backup_twins(
         return;
     };
     if remaining_scan <= 0 {
+        report.caps.scan = true;
+        report.skip_backup_twins("scan_cap", 1);
         return;
     }
     let body = |report: &mut CleanupReport| -> Result<(), JanitorError> {
