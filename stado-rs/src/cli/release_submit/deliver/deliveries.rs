@@ -33,7 +33,9 @@ pub(crate) async fn run_deliveries(
         // finished. A previous coordinator may have stopped before recording
         // failures from later deliveries.
         let prior_failure = match run.deliveries.get(&d.name) {
-            Some(current) if current.state != DeliveryRunState::Passed => {
+            Some(current)
+                if current.state != DeliveryRunState::Passed && !current.job_id.is_empty() =>
+            {
                 read_terminal_job(&store, &current.job_id)
                     .await?
                     .filter(|job| {
@@ -42,7 +44,13 @@ pub(crate) async fn run_deliveries(
             }
             _ => None,
         };
-        if !run.deliveries.contains_key(&d.name) || prior_failure.is_some() {
+        // A delivery a previous pass could not place has no job to wait for;
+        // it is placed again, now that its target may publish capacity.
+        let unplaced = run
+            .deliveries
+            .get(&d.name)
+            .is_some_and(|current| current.job_id.is_empty());
+        if !run.deliveries.contains_key(&d.name) || prior_failure.is_some() || unplaced {
             let a = &artifacts[&d.platform];
             let request = DeliveryRequest {
                 schema_version: 1,
@@ -108,7 +116,31 @@ pub(crate) async fn run_deliveries(
                 .await?
                 .1
             } else {
-                target_consumer(&d.target).await?
+                // One target that publishes no capacity used to fail the
+                // whole run here, before any delivery was queued: Stado 0.22.5
+                // was published on 2026-09-26 and reached no host because
+                // charless-mac-mini was out of disk. That target's delivery
+                // is recorded failed with the refusal and the rest are queued.
+                match target_consumer(&d.target).await {
+                    Ok(consumer) => consumer,
+                    Err(refusal) => {
+                        run.deliveries.insert(
+                            d.name.clone(),
+                            DeliveryRun {
+                                name: d.name.clone(),
+                                platform: d.platform.clone(),
+                                job_id: String::new(),
+                                output_prefix: String::new(),
+                                required: d.required,
+                                state: DeliveryRunState::Failed,
+                                receipt_sha256: None,
+                                failure: Some(format!("not queued on {}: {refusal}", d.target)),
+                            },
+                        );
+                        save(run).await?;
+                        continue;
+                    }
+                }
             };
             // Match platform retries: each failed job anchors exactly one
             // replacement, including a resume interrupted before save(run).
@@ -159,9 +191,20 @@ pub(crate) async fn run_deliveries(
     // must not prevent later targets from receiving the same immutable
     // release: they are independent deliveries, even though their required
     // verdicts are collected into one release result.
+    let mut required_failure = None;
     for d in &m.deliveries {
         let current = run.deliveries[&d.name].clone();
         if current.state == DeliveryRunState::Passed {
+            continue;
+        }
+        if current.job_id.is_empty() {
+            if d.required && required_failure.is_none() {
+                required_failure = Some(format!(
+                    "required delivery {} failed: {}",
+                    d.name,
+                    current.failure.clone().unwrap_or_default()
+                ));
+            }
             continue;
         }
         let job = terminal(&store, &current.job_id).await?;
@@ -191,18 +234,20 @@ pub(crate) async fn run_deliveries(
                 job_output_tail(&store, &current.job_id).await
             ))
         };
-        if d.required && !ok {
+        if d.required && !ok && required_failure.is_none() {
             // The delivery's own failure, not only its name. This refusal used
             // to end the release with `required delivery fleet-macbook failed`
             // and nothing else, while the cause - the delivery job's error and
             // the tail of its output - sat one field away in the run document
-            // this loop had just written.
+            // this loop had just written. Every other delivery's verdict is
+            // still collected before the run fails.
             let cause = updated.failure.clone().unwrap_or_else(|| job.state.clone());
-            return Err(CmdError::click(format!(
-                "required delivery {} failed: {cause}",
-                d.name
-            )));
+            required_failure = Some(format!("required delivery {} failed: {cause}", d.name));
         }
     }
-    Ok(())
+    save(run).await?;
+    match required_failure {
+        Some(failure) => Err(CmdError::click(failure)),
+        None => Ok(()),
+    }
 }

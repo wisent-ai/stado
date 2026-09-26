@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **One host without capacity no longer stops a release from reaching every other host:** a delivery that names a target resolved that target's consumer from its capacity publication, and a target that published none failed the whole run before any delivery was queued. Stado 0.22.5 was published on 2026-09-26 with both platforms built and reached no host because charless-mac-mini was out of disk. That target's delivery is now recorded `failed` with `not queued on <target>: <refusal>`, every other delivery is queued and its verdict collected, and the run fails afterwards only if a required delivery failed. The next `stado release resume` places the unqueued delivery again.
+
 - **`stado web origin status` judges an origin release clients read directly:** when `api.url` is the declared origin itself — the funnel origin on charless-mac-mini since the public deployment's forwarding routes were withdrawn on 2026-09-22 — the report no longer asks that origin for `/api/release/origin`, which it does not serve and answered `404 page not found`, leaving every such row `diagnostic-incomplete`. The edge state is `agrees` and the release read-back through that URL decides `serving`.
 
 - **`stado build status` says when a building job's host last wrote anything:** three superseded Stado build jobs read `running for` seven hours on 2026-09-26 while their logs had not changed since the evening before, and nothing in the report told a dead job from a slow one. A job still building now also reads `host last streamed output <n>s ago (at <time>)`, and `--json` carries `last_output` with `at` and `seconds_ago`, read from when the queue last received the job's log.
