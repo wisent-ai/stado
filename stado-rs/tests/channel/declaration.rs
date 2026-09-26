@@ -141,6 +141,32 @@ fn an_origin_naming_an_undeclared_target_is_refused_and_the_store_is_unchanged()
     assert_eq!(fixture.persisted_origins(), None);
 }
 
+/// A `web-edge` origin is terminated by the fleet's declared web edge, in a
+/// zone the operator holds. A tailnet name is published by the tailnet or not
+/// at all, so the document declaring one is refused before it is stored.
+#[test]
+fn a_web_edge_origin_on_a_tailnet_name_is_refused_and_the_store_is_unchanged() {
+    let fixture = Fixture::new();
+    let before = fixture.registry_bytes();
+    let upstream = Upstream::bind();
+    let tailnet_name = format!("{}.tailnet-under-test.ts.net", fixture::short_hostname());
+    let mut document = declared_document(&tailnet_name, TARGET, &upstream.origin());
+    document["public_origins"][0]["publication"] = json!("web-edge");
+
+    let pushed = fixture.push(&document);
+    assert_eq!(pushed.status.code(), Some(1));
+    let complaint = stderr(&pushed);
+    assert!(
+        complaint.contains(&format!(
+            "registry.public_origins[0].hostname {tailnet_name} is a tailnet name, and a web-edge \
+             publication serves a hostname in a zone the declared web edge terminates"
+        )),
+        "the refusal must say why a tailnet name cannot be a web-edge origin: {complaint}"
+    );
+    assert_eq!(fixture.registry_bytes(), before);
+    assert_eq!(fixture.persisted_origins(), None);
+}
+
 /// The accepted write, read back off the disk it landed on and then withdrawn.
 ///
 /// The declaration is made through `registry push` rather than `web origin
