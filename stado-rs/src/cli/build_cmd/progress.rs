@@ -51,6 +51,19 @@ pub(crate) struct Progress {
     pub waiting: Option<String>,
     pub steps: Vec<Finished>,
     pub running: Option<Running>,
+    /// When the host last wrote the job's log, and how long ago. The agent
+    /// rewrites it on every heartbeat, so a job whose log stopped moving is a
+    /// job no host is running any more, whatever the queue still says: on
+    /// 2026-09-26 three superseded Stado build jobs read `running for 7h`
+    /// while their logs had not changed since the evening before.
+    pub last_output: Option<LastOutput>,
+}
+
+/// The last write of a job's streamed log.
+#[derive(Debug, PartialEq, Serialize)]
+pub(crate) struct LastOutput {
+    pub at: String,
+    pub seconds_ago: i64,
 }
 
 /// Read the worker's step lines out of one job log.
@@ -131,7 +144,19 @@ pub(crate) async fn read(store: &JobStorage, job_id: &str, now: DateTime<Utc>) -
         .read_bytes(&format!("status/{job_id}/output/command_output.log"))
         .await
     {
-        Ok(Some(bytes)) => steps(&String::from_utf8_lossy(&bytes), now),
+        Ok(Some(bytes)) => {
+            let mut progress = steps(&String::from_utf8_lossy(&bytes), now);
+            progress.last_output = store
+                .updated_at(&format!("status/{job_id}/output/command_output.log"))
+                .await
+                .ok()
+                .flatten()
+                .map(|at| LastOutput {
+                    at: at.to_rfc3339(),
+                    seconds_ago: (now - at).num_seconds().max(0),
+                });
+            progress
+        }
         Ok(None) => waiting("claimed; its host has streamed no output yet".to_owned()),
         Err(error) => waiting(format!("its output log could not be read: {error}")),
     }
@@ -165,6 +190,12 @@ impl Progress {
             }
             None => "between steps: the last one ended and the next has not started".to_owned(),
         });
+        if let Some(last) = &self.last_output {
+            lines.push(format!(
+                "host last streamed output {}s ago (at {})",
+                last.seconds_ago, last.at
+            ));
+        }
         lines
     }
 }

@@ -38,6 +38,14 @@ impl JobStorage {
         self.backend.download_bytes(blob_path).await
     }
 
+    /// When a blob was last written, or `None` when it is absent.
+    pub async fn updated_at(
+        &self,
+        blob_path: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, StorageError> {
+        self.backend.updated_at(blob_path).await
+    }
+
     /// Download one blob to `filename`; `false` when it is absent.
     pub async fn download_blob(
         &self,
