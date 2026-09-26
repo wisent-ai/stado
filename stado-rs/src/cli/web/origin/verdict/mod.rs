@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use super::report::declaration_row;
 use crate::deploy::host_gates::{observe, ReadState};
 use crate::deploy::DeployError;
-use crate::public_origin::{self, funnel, PublicOrigin, Resolution, ResolutionState};
+use crate::public_origin::{self, funnel, PublicOrigin, Resolution, ResolutionState, WEB_EDGE};
 use crate::targets::Registry;
 
 pub(crate) use edge::{edge_selection, undeclared_row, EdgeSelection};
@@ -57,12 +57,15 @@ pub(crate) async fn examine(
         dns_read.detail = Some(resolution.detail.clone());
     }
     let publication = match publication {
-        Some(publication) => PublicationReading::Read(publication),
+        Some(publication) => publication,
         None => PublicationReading::Unknown(publication_read.detail.clone().unwrap_or_default()),
     };
+    // A `web-edge` origin is itself the endpoint release clients read; there
+    // is no second edge in front of it to ask which origin it selected, so
+    // only the read-back through the configured release URL counts.
     let complete = dns_read.complete()
         && publication_read.complete()
-        && selection.observation.complete()
+        && (origin.publication == WEB_EDGE || selection.observation.complete())
         && selection.readback_observation.complete();
     let edge = edge::edge_state(origin, selection);
     let word = if complete {
@@ -109,20 +112,43 @@ pub(crate) async fn examine(
     row
 }
 
-/// Read the declared target's own publication table.
+/// Read how the declared publication carries this origin: the target's own
+/// funnel table, or the web declaration that owns the hostname.
 async fn publication_of(
     origin: &PublicOrigin,
     registry: &Registry,
-) -> Result<funnel::Publication, DeployError> {
+) -> Result<PublicationReading, DeployError> {
+    if origin.publication == WEB_EDGE {
+        return Ok(match super::web_edge_owner(&origin.hostname) {
+            Ok(owner) => PublicationReading::WebEdge {
+                product: Some(owner.product),
+                edge: Some(owner.edge),
+                detail: String::new(),
+            },
+            Err(detail) => PublicationReading::WebEdge {
+                product: None,
+                edge: None,
+                detail,
+            },
+        });
+    }
     let runner = crate::deploy::production_runner();
     let target = crate::deploy::host_channel::resolve_target(registry, &origin.target)?;
     funnel::read(origin, target, &runner)
         .await
+        .map(PublicationReading::Read)
         .map_err(|error| DeployError(error.to_string()))
 }
 
 pub(crate) enum PublicationReading {
     Read(funnel::Publication),
+    /// A `web-edge` origin: the web declaration that owns the hostname and
+    /// the edge it names, or why no declaration does.
+    WebEdge {
+        product: Option<String>,
+        edge: Option<String>,
+        detail: String,
+    },
     Unknown(String),
 }
 
@@ -130,6 +156,10 @@ impl PublicationReading {
     pub fn state(&self) -> &'static str {
         match self {
             Self::Read(publication) => publication.state(),
+            Self::WebEdge {
+                product: Some(_), ..
+            } => "published",
+            Self::WebEdge { product: None, .. } => "unpublished",
             Self::Unknown(_) => "unknown",
         }
     }
@@ -144,13 +174,26 @@ impl PublicationReading {
                 publication.funnel_enabled,
                 publication.missing.join(", ")
             ),
-            Self::Unknown(detail) => detail.clone(),
+            Self::WebEdge {
+                product: Some(product),
+                edge,
+                ..
+            } => format!(
+                "web declaration {product} owns this hostname on the {} edge",
+                edge.as_deref().unwrap_or("declared")
+            ),
+            Self::WebEdge { detail, .. } | Self::Unknown(detail) => detail.clone(),
         }
     }
 
     pub fn to_json(&self) -> Value {
         let mut value = match self {
             Self::Read(publication) => publication.to_json(),
+            Self::WebEdge { product, edge, .. } => json!({
+                "state": self.state(),
+                "web_declaration": product,
+                "edge": edge,
+            }),
             Self::Unknown(_) => json!({
                 "state": "unknown",
                 "funnel_enabled": Value::Null,
@@ -200,15 +243,30 @@ fn origin_error(
         // re-run `origin converge` against a host already doing everything it
         // can, while every push to the stado repository stayed red on a 503
         // from the release object route.
-        ResolutionState::Unresolved if publication.state() == "published" => format!(
+        ResolutionState::Unresolved if matches!(publication, PublicationReading::Read(read) if read.state() == "published") =>
+        {
+            format!(
             "{} publishes every declared path with funnel enabled, and no public resolver knows \
              that name: a ts.net name is served by the tailnet, so the grant this node holds is \
              not the half that is missing. Repair it in the tailnet policy, or declare the \
              origin the tailnet does serve. Detail: {}",
             resolution.hostname, resolution.detail
-        ),
+            )
+        }
         ResolutionState::Unavailable | ResolutionState::Unresolved => resolution.detail.clone(),
         ResolutionState::Resolved => match publication.state() {
+            "published"
+                if edge == "differs"
+                    && matches!(publication, PublicationReading::WebEdge { .. }) =>
+            {
+                format!(
+                    "{} is published by the web edge, but release clients read {}; point \
+                     `api.url` (STADO_API_URL) at https://{}",
+                    resolution.hostname,
+                    crate::config::stado_api_url(),
+                    resolution.hostname
+                )
+            }
             "published" if edge == "differs" => format!(
                 "{} publishes every declared path, but {}",
                 resolution.hostname, selection.detail

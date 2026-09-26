@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::{MAX_PATHS, POLICY_KEY, PUBLICATIONS};
+use super::{MAX_PATHS, POLICY_KEY, PUBLICATIONS, WEB_EDGE};
 use crate::targets::{ssh_hostname, ComputeTarget};
 
 /// Suffix of a tailnet MagicDNS name, matching [`crate::remote::tailnet`].
@@ -123,6 +123,17 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
         // a machine that can never serve that SNI, and the first public read
         // would be what discovered it.
         if let Some(node) = hostname.strip_suffix(MAGICDNS_SUFFIX) {
+            // The declared web edge terminates names in a zone the operator
+            // holds; a tailnet name is published by the tailnet or not at all.
+            if publication == WEB_EDGE {
+                return Err(refuse(
+                    &format!("{location}.hostname"),
+                    &format!(
+                        "{hostname} is a tailnet name, and a {WEB_EDGE} publication serves a \
+                         hostname in a zone the declared web edge terminates"
+                    ),
+                ));
+            }
             let label = match node.split('.').next() {
                 Some(label) => label,
                 None => node,

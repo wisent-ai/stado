@@ -153,6 +153,17 @@ fn quoted_body(body: &str) -> String {
 }
 
 pub(crate) fn edge_state(origin: &PublicOrigin, selection: &EdgeSelection) -> &'static str {
+    // A `web-edge` origin is what release clients read directly: it agrees
+    // when the configured release URL is that origin, and the read-back
+    // through that URL is the proof it serves.
+    if origin.publication == public_origin::WEB_EDGE {
+        let configured = crate::config::stado_api_url();
+        return if configured.trim_end_matches('/') == origin.origin() {
+            "agrees"
+        } else {
+            "differs"
+        };
+    }
     match &selection.origin {
         Some(selected) if *selected == origin.origin() => "agrees",
         Some(_) => "differs",

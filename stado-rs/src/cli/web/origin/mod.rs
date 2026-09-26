@@ -11,8 +11,10 @@
 //! What it does NOT do is choose a network provider. The declaration names a
 //! hostname, the target that publishes it and how; a directly reachable
 //! server, a reverse proxy, a tunnel or a provider-managed edge can all carry
-//! the same requests, and `/docs/web-hosting` says so. `tailscale-funnel` is
-//! implemented because it is the one free public entrance this fleet has.
+//! the same requests, and `/docs/web-hosting` says so. The default
+//! publication, `web-edge`, is the `stado web` declaration that owns the same
+//! hostname on the fleet's declared web edge; `tailscale-funnel` remains for a
+//! tailnet whose policy publishes the node's own name.
 
 mod converge;
 mod declare;
@@ -23,7 +25,47 @@ mod withdraw;
 use clap::Subcommand;
 
 use crate::cli::CmdError;
-use crate::public_origin::{PUBLICATIONS, TAILSCALE_FUNNEL};
+use crate::public_origin::{PUBLICATIONS, WEB_EDGE};
+
+/// The `stado web` declaration that owns a `web-edge` origin's hostname: its
+/// name, the edge it names, and the service it is published in front of.
+pub(crate) struct WebEdgeOwner {
+    pub product: String,
+    pub edge: String,
+    pub upstream_service: Option<String>,
+}
+
+/// Find the web declaration that owns `hostname`, or say why none does.
+///
+/// A `web-edge` origin is only as published as that declaration: without one
+/// the edge terminates nothing for the name, and the refusal names the
+/// command that creates it.
+pub(crate) fn web_edge_owner(hostname: &str) -> Result<WebEdgeOwner, String> {
+    let products = match crate::config::web_api_products() {
+        Ok(products) => products,
+        Err(_) if crate::config_file::get("web_api.products").is_none() => {
+            return Err(no_owner(hostname));
+        }
+        Err(problems) => return Err(problems.join("; ")),
+    };
+    products
+        .iter()
+        .find(|(_, product)| product.hostname() == hostname && product.owns_its_hostname())
+        .map(|(name, product)| WebEdgeOwner {
+            product: name.clone(),
+            edge: product.edge().to_string(),
+            upstream_service: product.upstream_service().map(str::to_string),
+        })
+        .ok_or_else(|| no_owner(hostname))
+}
+
+fn no_owner(hostname: &str) -> String {
+    format!(
+        "no `stado web` declaration owns {hostname}, so no edge terminates it; declare one in \
+         front of the service that serves the paths with `stado web declare <name> --hostname \
+         {hostname} --upstream-service <service>` and publish it with `stado web route <name>`"
+    )
+}
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum OriginCommands {
@@ -60,10 +102,11 @@ pub(crate) enum OriginCommands {
         /// Registry target whose publication serves it.
         #[arg(long)]
         target: String,
-        /// How that target publishes it.
+        /// How that target publishes it: `web-edge`, through the `stado web`
+        /// declaration that owns the same hostname, or `tailscale-funnel`.
         #[arg(
             long,
-            default_value = TAILSCALE_FUNNEL,
+            default_value = WEB_EDGE,
             value_parser = clap::builder::PossibleValuesParser::new(PUBLICATIONS)
         )]
         publication: String,
@@ -97,8 +140,10 @@ pub(crate) enum OriginCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Make the declared target publish every declared path, then read the
-    /// node's own table and the public name back.
+    /// Make the declared publication carry every declared path, then read the
+    /// publication and the public name back. A `web-edge` origin converges
+    /// through `stado web route` for the declaration that owns its hostname;
+    /// a `tailscale-funnel` origin through the node's own handler table.
     ///
     /// Without `--apply` nothing is sent and the receipt is the plan.
     Converge {

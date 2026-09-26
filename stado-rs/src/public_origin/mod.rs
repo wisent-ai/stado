@@ -31,9 +31,12 @@
 //!   machine's, which knows MagicDNS names no client outside the tailnet can
 //!   resolve — and answers in the three words `/docs/channels` already
 //!   specifies: `dns_unresolved`, `dns_resolved`, `dns_unavailable`.
-//! - [`funnel`] is the convergence half: it reads the declared target's
-//!   publication and makes it match the declaration, through the host channel
-//!   and its owning typed command, never a hand-run tunnel verb.
+//! - [`funnel`] is the convergence half of a `tailscale-funnel` publication:
+//!   it reads the declared target's publication and makes it match the
+//!   declaration, through the host channel and its owning typed command,
+//!   never a hand-run tunnel verb. A `web-edge` publication converges through
+//!   `stado web route` instead, because the fleet's declared web edge already
+//!   terminates TLS for every hostname a web declaration names.
 //!
 //! The key is TOP-LEVEL and unmodelled by [`crate::targets::Registry`], so it
 //! round-trips through `Registry::extra` and a build that predates it preserves
@@ -53,18 +56,28 @@ pub use validate::validate_registry_contract;
 /// The top-level registry key holding every public-origin declaration.
 pub const POLICY_KEY: &str = "public_origins";
 
-/// The one publication method implemented today.
+/// A publication through a Tailscale Funnel on the declared target.
 ///
-/// A public origin needs a reachable endpoint and a certificate for its own
-/// name. No fleet host holds a public address, and Tailscale Funnel routes by
-/// SNI and holds a certificate for no name outside `*.ts.net`, so the fleet's
-/// one free public entrance publishes a `*.ts.net` name and nothing else. The
-/// field is a closed vocabulary rather than a free string because a
-/// publication nothing can converge is a declaration with no reality check.
+/// Funnel routes by SNI and holds a certificate for no name outside
+/// `*.ts.net`, so it publishes only the node's own tailnet name, and whether
+/// that name exists in public DNS is decided by the tailnet's policy, which no
+/// command in this fleet writes.
 pub const TAILSCALE_FUNNEL: &str = "tailscale-funnel";
 
-/// Every publication method a declaration may name.
-pub const PUBLICATIONS: &[&str] = &[TAILSCALE_FUNNEL];
+/// A publication through the fleet's declared web edge: the `stado web`
+/// declaration that owns the same hostname, `--upstream-service` in front of
+/// the service that serves the paths, terminated by the edge that declaration
+/// names (`stado` or `cloudflare`).
+///
+/// This is the publication that needs no network vendor: the hostname lives
+/// in a zone the operator holds, and DNS, TLS and forwarding belong to the
+/// declared edge, as `/docs/web-hosting` says.
+pub const WEB_EDGE: &str = "web-edge";
+
+/// Every publication method a declaration may name. A closed vocabulary
+/// rather than a free string, because a publication nothing can converge is a
+/// declaration with no reality check.
+pub const PUBLICATIONS: &[&str] = &[WEB_EDGE, TAILSCALE_FUNNEL];
 
 /// The largest number of paths one origin may publish. A publication is a set
 /// of handler rules on a host; an unbounded list would be an unbounded write.

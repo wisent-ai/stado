@@ -18,7 +18,7 @@
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::public_origin::{self, funnel, PublicOrigin, ResolutionState};
+use crate::public_origin::{self, funnel, PublicOrigin, ResolutionState, WEB_EDGE};
 
 pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
@@ -27,6 +27,9 @@ pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Resu
             "no public origin {name:?} is declared; declare it with `stado web origin declare`"
         ))
     })?;
+    if origin.publication == WEB_EDGE {
+        return converge_web_edge(&origin, apply, json_output).await;
+    }
     let runner = crate::deploy::production_runner();
     let target = crate::deploy::host_channel::canonical_target(&origin.target)
         .await
@@ -80,6 +83,80 @@ pub(crate) async fn converge(name: &str, apply: bool, json_output: bool) -> Resu
         for change in &changes {
             println!("  {} {} -> {}", change.change, change.path, change.upstream);
         }
+        println!("  resolution: {}", resolution.detail);
+        println!("  readback:   {}", readback.detail);
+        if let Some(refusal) = &refusal {
+            println!("  refused:    {refusal}");
+        }
+    }
+    if refusal.is_some() {
+        return Err(CmdError::silent(1));
+    }
+    Ok(())
+}
+
+/// Converge a `web-edge` origin: publish the web declaration that owns its
+/// hostname with `stado web route` (which prints its own receipt), then ask
+/// the world whether the name resolves and the first declared path answers.
+async fn converge_web_edge(
+    origin: &PublicOrigin,
+    apply: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let owner = super::web_edge_owner(&origin.hostname).map_err(CmdError::click)?;
+    let routed = crate::cli::web::route::route(&owner.product, !apply, json_output).await;
+    let resolution = public_origin::resolve(&origin.hostname).await;
+    let readback = read_back(origin, resolution.state).await;
+    let refusal = match &routed {
+        Err(error) => Some(format!(
+            "stado web route {} did not publish {}: {error}",
+            owner.product, origin.hostname
+        )),
+        Ok(()) => match resolution.state {
+            ResolutionState::Unresolved => Some(format!(
+                "{} is routed by web declaration {} on the {} edge, and no public resolver has \
+                 an A or AAAA record for it yet: {}",
+                origin.hostname, owner.product, owner.edge, resolution.detail
+            )),
+            ResolutionState::Unavailable => Some(format!(
+                "whether {} is publicly resolvable could not be established: {}",
+                origin.hostname, resolution.detail
+            )),
+            ResolutionState::Resolved if readback.state != "answered" => {
+                Some(format!("{}: {}", origin.origin(), readback.detail))
+            }
+            ResolutionState::Resolved => None,
+        },
+    };
+    let status = match (&refusal, apply) {
+        (Some(_), _) => "refused",
+        (None, true) => "converged",
+        (None, false) => "planned",
+    };
+    let receipt = json!({
+        "schema": "stado.public-origin-converge-receipt.v1",
+        "name": origin.name,
+        "target": origin.target,
+        "publication": origin.publication,
+        "origin": origin.origin(),
+        "applied": apply,
+        "status": status,
+        "web_declaration": {
+            "product": owner.product,
+            "edge": owner.edge,
+            "upstream_service": owner.upstream_service,
+        },
+        "resolution": resolution.to_json(),
+        "readback": readback.to_json(),
+        "refusal": refusal,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&receipt)?);
+    } else {
+        println!(
+            "{} {} through web declaration {} on the {} edge",
+            status, origin.name, owner.product, owner.edge
+        );
         println!("  resolution: {}", resolution.detail);
         println!("  readback:   {}", readback.detail);
         if let Some(refusal) = &refusal {

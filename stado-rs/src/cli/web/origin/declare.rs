@@ -38,6 +38,18 @@ pub(crate) async fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError>
         upstream: request.upstream.to_string(),
         paths: request.paths.to_vec(),
     };
+    // A `web-edge` origin is published by the web declaration that owns its
+    // hostname; declaring the origin first would record a public claim no
+    // edge carries.
+    if origin.publication == public_origin::WEB_EDGE {
+        super::web_edge_owner(&origin.hostname).map_err(|detail| {
+            CmdError::click(format!(
+                "refusing to declare public origin {:?}: {detail}",
+                origin.name
+            ))
+            .stating(FailureCode::Refused)
+        })?;
+    }
     let resolution = public_origin::resolve(&origin.hostname).await;
     match resolution.state {
         public_origin::ResolutionState::Unresolved => {
