@@ -680,6 +680,8 @@ products:
     kind: stado-release
     repository: wisent-ai/tama
     manifest: .wisent-release.json
+    after_install:
+    - [tama, hooks, release]
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/tama-desktop
