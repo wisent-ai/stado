@@ -33,6 +33,7 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
         "render" => render(&text("service-name")?),
         "sparkle" => super::sparkle::deliver(),
         "supabase" => super::supabase::deliver(),
+        "testflight" => super::testflight::deliver(&text("ipa")?),
         "vercel-files" => vercel_files(
             &text("bundle")?,
             &text("team-id")?,

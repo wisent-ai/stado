@@ -18,6 +18,7 @@ mod deliver;
 mod python;
 mod sparkle;
 mod supabase;
+mod testflight;
 
 use std::fs;
 use std::io::Read;

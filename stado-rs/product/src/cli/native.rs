@@ -76,6 +76,20 @@ pub fn deliver() -> Command {
              supabase-receipt.json",
         ))
         .subcommand(
+            Command::new("testflight")
+                .about(
+                    "Upload the verified release's .ipa to App Store Connect with xcrun altool \
+                     (AC_API_KEY_ID, AC_API_ISSUER_ID, AC_API_KEY_P8); writes \
+                     testflight-receipt.json",
+                )
+                .arg(
+                    Arg::new("ipa")
+                        .long("ipa")
+                        .required(true)
+                        .help("The release's .ipa file name"),
+                ),
+        )
+        .subcommand(
             Command::new("render")
                 .about(
                     "Start a deploy of the Render service of this name (RENDER_API_KEY); \

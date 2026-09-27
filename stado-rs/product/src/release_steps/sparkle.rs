@@ -17,7 +17,7 @@ use super::{output_dir, required, RECORD_SCHEMA};
 const PUBLIC_UPDATES: &str = "https://updates.wisent.ai";
 
 /// The bytes of the one regular file named `basename` in the gzipped release.
-fn member(archive: &PathBuf, basename: &str) -> Result<Vec<u8>> {
+pub(super) fn member(archive: &PathBuf, basename: &str) -> Result<Vec<u8>> {
     let mut bundle = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(archive)?));
     for entry in bundle.entries()? {
         let mut entry = entry?;
