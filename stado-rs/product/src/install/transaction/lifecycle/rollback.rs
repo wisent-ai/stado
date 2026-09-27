@@ -111,7 +111,11 @@ pub fn rollback(runtime: &Runtime, product: &Value, surface: &str) -> Result<Pro
             remove_path(runtime, path)?;
         }
     }
-    ownership::verify(&previous)?;
+    ownership::verify_content(&previous)?;
+    let identities = ownership::code_identities(&previous)?;
+    previous
+        .extra
+        .insert("code_identities".to_owned(), identities);
     if surface == "service" {
         let host = previous
             .host

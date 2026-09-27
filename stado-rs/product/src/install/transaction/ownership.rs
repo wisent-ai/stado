@@ -77,6 +77,29 @@ pub fn guard(current: &state::ProductState, path: &Path) -> Result<Option<serde_
     Ok(Some(actual))
 }
 pub fn verify(state: &state::ProductState) -> Result<()> {
+    verify_content(state)?;
+    for path in &state.installed_paths {
+        let report = signing::inspect(path)?;
+        if !signing::acceptable(&report) {
+            bail!(
+                "{} has unstable code identity: {}",
+                path.display(),
+                report["error"]
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The recorded release and placement fingerprints hold, whatever the code
+/// identity of the files.
+///
+/// A rollback restores the bytes the install replaced, and those are
+/// whatever the host ran before, often a local build with no Developer ID.
+/// Requiring a stable identity of them refused the rollback AFTER it had
+/// placed the backup, on 2026-09-27, leaving Tama's receipt `rolling_back`
+/// with install and remove both refusing; `code_identities` records them.
+pub fn verify_content(state: &state::ProductState) -> Result<()> {
     if let Some(receipt) = &state.release {
         super::super::release::verify_files(receipt)?;
     }
@@ -105,15 +128,15 @@ pub fn verify(state: &state::ProductState) -> Result<()> {
             }
         }
     }
-    for path in &state.installed_paths {
-        let report = signing::inspect(path)?;
-        if !signing::acceptable(&report) {
-            bail!(
-                "{} has unstable code identity: {}",
-                path.display(),
-                report["error"]
-            );
-        }
-    }
     Ok(())
+}
+
+/// Each installed path's code identity, for a receipt that does not require
+/// one to be stable.
+pub fn code_identities(state: &state::ProductState) -> Result<Value> {
+    let mut identities = serde_json::Map::new();
+    for path in &state.installed_paths {
+        identities.insert(path.display().to_string(), signing::inspect(path)?);
+    }
+    Ok(Value::Object(identities))
 }
