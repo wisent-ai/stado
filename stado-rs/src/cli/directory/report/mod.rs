@@ -6,7 +6,6 @@ use serde_json::Value;
 use crate::observations;
 use crate::targets;
 
-use crate::cli::registry;
 use crate::cli::CmdError;
 
 use crate::cli::directory::document::{click, directory, read_document, services};

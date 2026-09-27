@@ -74,7 +74,7 @@ pub(super) async fn read_document() -> Result<Value, CmdError> {
     let Some((_, Some(copy))) = targets::last_good_after(&cause) else {
         return Err(authority);
     };
-    let document = crate::cli::resolver::directory::document::last_good_document()
+    let document = crate::cli::resolver::last_good_document()
         .map_err(|cache| click(format!("{cause}; recovery registry failed ({cache})")))?;
     eprintln!("{}", copy.notice);
     Ok(document)

@@ -21,6 +21,7 @@ pub use crate::cli::resolver::directory::document::canonical_document;
 pub use crate::cli::resolver::directory::document::canonical_document_or_last_good;
 pub use crate::cli::resolver::serve::serve;
 
+pub(crate) use crate::cli::resolver::directory::document::last_good_document;
 pub(crate) use crate::cli::resolver::directory::read_local_snapshot;
 pub(crate) use crate::cli::resolver::directory::source::current_target;
 pub(crate) use crate::cli::resolver::directory::source::snapshot_source;
