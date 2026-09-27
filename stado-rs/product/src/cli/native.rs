@@ -90,6 +90,29 @@ pub fn deliver() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("github-mirror")
+                .about(
+                    "Mirror the verified release on GitHub (WISENT_MIRROR_TOKEN): tag v<version> \
+                     at the release's SOURCE_REVISION, a release titled '<title> <version>', and \
+                     the archive as its asset; writes github-mirror-receipt.json",
+                )
+                .arg(
+                    Arg::new("repository")
+                        .long("repository")
+                        .required(true)
+                        .help("OWNER/NAME"),
+                )
+                .arg(
+                    Arg::new("title")
+                        .long("title")
+                        .required(true)
+                        .help("The release title's product name"),
+                )
+                .arg(Arg::new("signed-binary").long("signed-binary").help(
+                    "Refuse unless this archive path carries a valid Developer ID signature",
+                )),
+        )
+        .subcommand(
             Command::new("render")
                 .about(
                     "Start a deploy of the Render service of this name (RENDER_API_KEY); \

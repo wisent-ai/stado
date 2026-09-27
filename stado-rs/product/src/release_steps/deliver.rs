@@ -30,6 +30,13 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
             .with_context(|| format!("--{name} is required"))
     };
     match action {
+        "github-mirror" => super::mirror::deliver(
+            &text("repository")?,
+            &text("title")?,
+            arguments
+                .get_one::<String>("signed-binary")
+                .map(String::as_str),
+        ),
         "render" => render(&text("service-name")?),
         "sparkle" => super::sparkle::deliver(),
         "supabase" => super::supabase::deliver(),

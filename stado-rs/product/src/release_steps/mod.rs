@@ -15,6 +15,7 @@
 //!   their upload to PyPI from the verified release archive.
 
 mod deliver;
+mod mirror;
 mod python;
 mod sparkle;
 mod supabase;
