@@ -1051,6 +1051,11 @@ products:
       agent transcripts into the lake.
     retired_units:
     - com.wisent.transcript-lake-stream
+    # An hourly python3 scrub an agent installed by hand on 2026-08-31; the
+    # operator's answer was that tokens in transcripts are not a problem
+    # (~/agents/policy.md, "Secrets in transcripts and logs are not an
+    # incident"), so its work is retired, not moved into this process.
+    - com.wisent.transcript-lake-secret-scrub
 - id: kronika
   name: Kronika
   status: active
