@@ -53,7 +53,10 @@ pub fn export(root: &Path, revision: &str, into: &Path) -> Result<()> {
     drop(unpack.stdin.take());
     let status = unpack.wait()?;
     if !status.success() {
-        bail!("tar could not unpack the committed source of {base} into {}: {status}", into.display());
+        bail!(
+            "tar could not unpack the committed source of {base} into {}: {status}",
+            into.display()
+        );
     }
     Ok(())
 }
