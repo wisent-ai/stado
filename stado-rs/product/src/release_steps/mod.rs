@@ -14,6 +14,7 @@
 //!   package's wheel and sdist in `release/python-distributions.tar`, and
 //!   their upload to PyPI from the verified release archive.
 
+mod deliver;
 mod python;
 
 use std::fs;
@@ -24,6 +25,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+pub use deliver::run as run_deliver;
 pub use python::run as run_python;
 
 /// Every archive entry's modification time: 2000-01-01T00:00:00Z, the value
@@ -105,8 +107,14 @@ fn source_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Resu
     Ok(())
 }
 
-/// `stado product source-bundle`: run by a release manifest's build step.
-pub fn run_source_bundle() -> Result<i32> {
+/// `stado product source-bundle [--name FILE] [--include PATH]…`: run by a
+/// release manifest's build step. Without `--include` the whole checkout is
+/// bundled; with it, only those files and directories (an absent one is
+/// skipped, as the replaced growth-tactics script skipped it).
+pub fn run_source_bundle(name: &str, includes: &[String]) -> Result<i32> {
+    if name.contains('/') || !name.ends_with(".tar") {
+        bail!("--name is a file name ending in .tar, not {name:?}");
+    }
     let source = PathBuf::from(required("WISENT_SOURCE_DIR")?);
     if !source.is_dir() {
         bail!("WISENT_SOURCE_DIR is not a directory: {}", source.display());
@@ -114,7 +122,24 @@ pub fn run_source_bundle() -> Result<i32> {
     let product = required("WISENT_PRODUCT")?;
     let version = required("WISENT_VERSION")?;
     let mut files = Vec::new();
-    source_files(&source, &source, &mut files)?;
+    if includes.is_empty() {
+        source_files(&source, &source, &mut files)?;
+    }
+    for include in includes {
+        if include.starts_with('/') || include.split('/').any(|part| part == "..") {
+            bail!("--include names a path inside the checkout, not {include:?}");
+        }
+        let path = source.join(include);
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!("{include} is a symbolic link; a source bundle carries files, not links")
+            }
+            Ok(metadata) if metadata.is_dir() => source_files(&source, &path, &mut files)?,
+            Ok(_) => files.push(path),
+        }
+    }
     if files.is_empty() {
         bail!("the source checkout {} holds no files", source.display());
     }
@@ -129,7 +154,7 @@ pub fn run_source_bundle() -> Result<i32> {
         fs::remove_dir_all(&release)?;
     }
     fs::create_dir_all(&release)?;
-    let bundle = release.join("source-bundle.tar");
+    let bundle = release.join(name);
     let mut archive = tar::Builder::new(fs::File::create(&bundle)?);
     let mut digests = serde_json::Map::new();
     for path in &files {

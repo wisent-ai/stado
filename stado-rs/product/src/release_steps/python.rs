@@ -129,7 +129,7 @@ fn build() -> Result<i32> {
 
 /// Extract `archive` into `destination`, refusing links and members that
 /// would land outside it.
-fn safe_unpack(archive: &Path, destination: &Path) -> Result<()> {
+pub(super) fn safe_unpack(archive: &Path, destination: &Path) -> Result<()> {
     let file = fs::File::open(archive)?;
     let gzip = archive
         .file_name()
@@ -162,7 +162,7 @@ fn safe_unpack(archive: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn find(directory: &Path, name: &str) -> Result<Vec<PathBuf>> {
+pub(super) fn find(directory: &Path, name: &str) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();

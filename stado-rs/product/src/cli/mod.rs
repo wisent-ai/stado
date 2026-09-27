@@ -60,6 +60,7 @@ pub fn augment(command: Command) -> Command {
         .subcommand(native::cargo())
         .subcommand(native::source_bundle())
         .subcommand(native::python())
+        .subcommand(native::deliver())
         .subcommand(native::swift())
         .subcommand(native::documentation())
 }
@@ -92,7 +93,23 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         }
         "paths" => crate::paths::run(arguments, &runtime),
         "cargo" => crate::cargo::run(arguments, &runtime),
-        "source-bundle" => crate::release_steps::run_source_bundle(),
+        "source-bundle" => crate::release_steps::run_source_bundle(
+            arguments
+                .get_one::<String>("name")
+                .context("bundle name is missing")?,
+            &arguments
+                .get_many::<String>("include")
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        "deliver" => {
+            let (action, arguments) = arguments
+                .remove_subcommand()
+                .context("delivery is missing")?;
+            crate::release_steps::run_deliver(&action, &arguments)
+        }
         "python" => crate::release_steps::run_python(
             arguments
                 .get_one::<String>("operation")

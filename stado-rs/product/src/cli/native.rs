@@ -31,10 +31,23 @@ pub fn cargo() -> Command {
 }
 
 pub fn source_bundle() -> Command {
-    Command::new("source-bundle").about(
-        "Release build step: the checkout's files in a reproducible \
-         $WISENT_OUTPUT_DIR/release/source-bundle.tar with each file's digest",
-    )
+    Command::new("source-bundle")
+        .about(
+            "Release build step: the checkout's files in a reproducible \
+             $WISENT_OUTPUT_DIR/release/<name> with each file's digest",
+        )
+        .arg(
+            Arg::new("name")
+                .long("name")
+                .default_value("source-bundle.tar")
+                .help("The bundle's file name under release/"),
+        )
+        .arg(
+            Arg::new("include")
+                .long("include")
+                .action(clap::ArgAction::Append)
+                .help("Bundle only this checkout path (file or directory); repeatable"),
+        )
 }
 
 pub fn python() -> Command {
@@ -45,6 +58,32 @@ pub fn python() -> Command {
              deliver-pypi: verify WISENT_RELEASE_ARCHIVE against WISENT_RELEASE_SHA256 and \
              upload its one wheel and one sdist with twine, writing pypi-evidence.json",
         ))
+}
+
+pub fn deliver() -> Command {
+    Command::new("deliver")
+        .about("Release deliveries to hosting providers, run by a manifest's deliveries")
+        .subcommand_required(true)
+        .subcommand(
+            Command::new("render")
+                .about(
+                    "Deploy the Render service of this name (RENDER_API_KEY) and wait until \
+                     it is live; writes render-evidence.json",
+                )
+                .arg(Arg::new("service-name").long("service-name").required(true)),
+        )
+        .subcommand(
+            Command::new("vercel-files")
+                .about(
+                    "Upload the source/ files of a bundle in the verified release to Vercel \
+                     (VERCEL_TOKEN) as a production deployment and wait until it is ready; \
+                     writes vercel-evidence.json",
+                )
+                .arg(Arg::new("bundle").long("bundle").required(true))
+                .arg(Arg::new("team-id").long("team-id").required(true))
+                .arg(Arg::new("project-id").long("project-id").required(true))
+                .arg(Arg::new("project-name").long("project-name").required(true)),
+        )
 }
 
 pub fn swift() -> Command {
