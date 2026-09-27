@@ -77,6 +77,12 @@ pub fn augment(command: Command) -> Command {
                 .arg(clap::Arg::new("crx").long("crx").required(true).help("Where the .crx is written"))
                 .arg(clap::Arg::new("update-manifest").long("update-manifest").required(true).help("Where the update manifest .xml is written")),
         )
+        .subcommand(
+            Command::new("tree-archive")
+                .about("Pack one directory, under its own name, as a reproducible .tar.gz: path order, no owner, time zero, modes 0755/0644, links kept")
+                .arg(clap::Arg::new("source").long("source").required(true).help("The directory, e.g. an .xcarchive"))
+                .arg(clap::Arg::new("output").long("output").required(true).help("The .tar.gz written")),
+        )
         .subcommand(native::swift())
         .subcommand(native::documentation())
 }
@@ -150,6 +156,15 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 crx: PathBuf::from(text("crx")?),
                 update_manifest: PathBuf::from(text("update-manifest")?),
             })
+        }
+        "tree-archive" => {
+            let path = |name: &str| -> Result<PathBuf> {
+                arguments
+                    .get_one::<String>(name)
+                    .map(PathBuf::from)
+                    .with_context(|| format!("tree-archive requires --{name}"))
+            };
+            crate::release_steps::run_tree_archive(&path("source")?, &path("output")?)
         }
         "python" => crate::release_steps::run_python(
             arguments

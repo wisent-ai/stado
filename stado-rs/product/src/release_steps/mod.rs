@@ -22,6 +22,7 @@ mod python;
 mod sparkle;
 mod supabase;
 mod testflight;
+mod tree_archive;
 mod zipapp;
 
 use std::fs;
@@ -36,6 +37,7 @@ pub use crx3::{run as run_crx3, Request as Crx3Request};
 pub use deliver::run as run_deliver;
 pub use linkage::run as run_linkage;
 pub use python::run as run_python;
+pub use tree_archive::run as run_tree_archive;
 
 /// Every archive entry's modification time: 2000-01-01T00:00:00Z, the value
 /// the replaced scripts used, so a bundle rebuilt from one commit keeps the
