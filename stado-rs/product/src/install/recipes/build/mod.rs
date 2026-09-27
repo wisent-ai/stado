@@ -48,7 +48,7 @@ pub fn release(
     // worker's git archive does: an uncommitted edit another session is
     // making in this checkout neither enters the install nor fails it.
     let committed = evidence.join("source");
-    source::export(root, &revision, &committed)?;
+    let archive_sha256 = source::export(root, &revision, &committed)?;
     let root = committed.as_path();
     let document = manifest::load(root, text(recipe, "manifest")?)?;
     if document["product"] != id {
@@ -67,6 +67,7 @@ pub fn release(
             root.to_string_lossy().into_owned(),
         ),
         ("WISENT_SOURCE_COMMIT".to_owned(), revision.clone()),
+        ("WISENT_SOURCE_SHA256".to_owned(), archive_sha256),
         (
             "WISENT_OUTPUT_DIR".to_owned(),
             output.to_string_lossy().into_owned(),

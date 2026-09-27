@@ -31,8 +31,10 @@ pub fn verify_unchanged(
 /// The committed tree of `revision` (a `-dirty` suffix names its base) as
 /// plain files under `into`, the way the release worker unpacks a git
 /// archive: a local install builds what was committed, never another
-/// session's half-written edit in the same checkout.
-pub fn export(root: &Path, revision: &str, into: &Path) -> Result<()> {
+/// session's half-written edit in the same checkout. Returns the SHA-256 of
+/// the archive it unpacked, the identity the worker hands a build as
+/// `WISENT_SOURCE_SHA256` beside the commit.
+pub fn export(root: &Path, revision: &str, into: &Path) -> Result<String> {
     let base = revision.trim_end_matches("-dirty");
     fs::create_dir_all(into)?;
     let archive = checked(
@@ -58,7 +60,7 @@ pub fn export(root: &Path, revision: &str, into: &Path) -> Result<()> {
             into.display()
         );
     }
-    Ok(())
+    Ok(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&archive.stdout)))
 }
 
 fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Value> {
