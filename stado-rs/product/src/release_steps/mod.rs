@@ -14,6 +14,7 @@
 //!   package's wheel and sdist in `release/python-distributions.tar`, and
 //!   their upload to PyPI from the verified release archive.
 
+mod crx3;
 mod deliver;
 mod linkage;
 mod mirror;
@@ -34,6 +35,7 @@ use sha2::{Digest, Sha256};
 pub use deliver::run as run_deliver;
 pub use linkage::run as run_linkage;
 pub use python::run as run_python;
+pub use crx3::{run as run_crx3, Request as Crx3Request};
 
 /// Every archive entry's modification time: 2000-01-01T00:00:00Z, the value
 /// the replaced scripts used, so a bundle rebuilt from one commit keeps the

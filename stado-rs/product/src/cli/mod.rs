@@ -66,6 +66,17 @@ pub fn augment(command: Command) -> Command {
                 .about("Prove each .app bundle's @rpath dependencies resolve inside it, as dyld resolves them")
                 .arg(clap::Arg::new("bundle").required(true).num_args(1..).help("A .app bundle; repeatable")),
         )
+        .subcommand(
+            Command::new("crx3")
+                .about("Pack a browser extension directory as a signed CRX3 and its Omaha update manifest, refusing a key whose extension id is not the pinned one")
+                .arg(clap::Arg::new("extension").long("extension").required(true).help("The unpacked extension directory"))
+                .arg(clap::Arg::new("key").long("key").required(true).help("The RSA private key (PEM) that signs it"))
+                .arg(clap::Arg::new("expected-id").long("expected-id").required(true).help("The extension id the key must produce"))
+                .arg(clap::Arg::new("codebase").long("codebase").required(true).help("The URL the update manifest points at"))
+                .arg(clap::Arg::new("version").long("version").required(true).help("The version written into manifest.json and the update manifest"))
+                .arg(clap::Arg::new("crx").long("crx").required(true).help("Where the .crx is written"))
+                .arg(clap::Arg::new("update-manifest").long("update-manifest").required(true).help("Where the update manifest .xml is written")),
+        )
         .subcommand(native::swift())
         .subcommand(native::documentation())
 }
@@ -123,6 +134,23 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 .cloned()
                 .collect::<Vec<_>>(),
         ),
+        "crx3" => {
+            let text = |name: &str| -> Result<String> {
+                arguments
+                    .get_one::<String>(name)
+                    .cloned()
+                    .with_context(|| format!("crx3 requires --{name}"))
+            };
+            crate::release_steps::run_crx3(&crate::release_steps::Crx3Request {
+                extension: PathBuf::from(text("extension")?),
+                key: PathBuf::from(text("key")?),
+                expected_id: text("expected-id")?,
+                codebase: text("codebase")?,
+                version: text("version")?,
+                crx: PathBuf::from(text("crx")?),
+                update_manifest: PathBuf::from(text("update-manifest")?),
+            })
+        }
         "python" => crate::release_steps::run_python(
             arguments
                 .get_one::<String>("operation")
