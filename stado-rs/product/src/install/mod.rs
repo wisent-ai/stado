@@ -201,26 +201,47 @@ pub fn perform(
                 .as_ref()
                 .and_then(|release| release["artifact"]["artifact_sha256"].as_str())
                 .map(str::to_owned);
+            let mut outcomes = Vec::new();
             for step in steps.as_array().context("after_install must be an array")? {
-                let argv = step
+                let words = step
                     .as_array()
                     .context("after_install command must be argv")?
                     .iter()
                     .map(|value| {
-                        let word = value
+                        value
                             .as_str()
-                            .context("after_install arguments must be strings")?;
-                        match word {
-                            "{release_archive}" => archive.clone().context(
-                                "after_install names {release_archive}, and this installation \
-                                 came from no verified release archive",
-                            ),
-                            "{release_archive_sha256}" => archive_sha256.clone().context(
-                                "after_install names {release_archive_sha256}, and this \
-                                 installation came from no verified release archive",
-                            ),
-                            word => Ok(word.to_owned()),
-                        }
+                            .context("after_install arguments must be strings")
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                // A step that hands the release archive to a reconciler has
+                // nothing to hand when the installation was built from source.
+                // The binary is already placed, so failing here would leave
+                // the receipt interrupted over a working install; the step is
+                // recorded as not run, with the reason, and the install ends.
+                let needs_archive = words
+                    .iter()
+                    .any(|word| matches!(*word, "{release_archive}" | "{release_archive_sha256}"));
+                if needs_archive && archive.is_none() {
+                    let reason =
+                        "this installation was built from source, so there is no verified \
+                         release archive to hand to the step; readers it would reconcile \
+                         keep their image until a release install";
+                    eprintln!("{id}: after_install step {words:?} not run: {reason}");
+                    outcomes.push(json!({"argv": words, "ran": false, "reason": reason}));
+                    continue;
+                }
+                let argv = words
+                    .iter()
+                    .map(|word| match *word {
+                        "{release_archive}" => archive.clone().context(
+                            "after_install names {release_archive}, and this installation \
+                             came from no verified release archive",
+                        ),
+                        "{release_archive_sha256}" => archive_sha256.clone().context(
+                            "after_install names {release_archive_sha256}, and this \
+                             installation came from no verified release archive",
+                        ),
+                        word => Ok(word.to_owned()),
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let (name, arguments) = argv
@@ -229,7 +250,11 @@ pub fn perform(
                 let binary = installed.installed_paths.iter().find(|path| path.file_name().and_then(|s| s.to_str()) == Some(name.as_str()))
                     .with_context(|| format!("after_install names a binary this installation did not produce: {name}"))?;
                 checked(Command::new(binary).args(arguments))?;
+                outcomes.push(json!({"argv": argv, "ran": true}));
             }
+            installed
+                .extra
+                .insert("after_install".to_owned(), json!(outcomes));
         }
         transaction::ownership::verify(&installed)?;
         installed.status = "installed".to_owned();
