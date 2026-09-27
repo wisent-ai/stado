@@ -9,7 +9,7 @@ use crate::targets;
 use crate::cli::registry;
 use crate::cli::CmdError;
 
-use crate::cli::directory::document::{click, directory, services};
+use crate::cli::directory::document::{click, directory, read_document, services};
 
 mod markers;
 pub(in crate::cli::directory) mod publish;
@@ -23,7 +23,7 @@ pub(in crate::cli::directory) mod publish;
 /// for twelve days while the laptop it named was closed. `never` beside it
 /// says the fleet has no evidence for the line it just printed.
 pub(in crate::cli::directory) async fn show(as_json: bool) -> Result<(), CmdError> {
-    let document = registry::fetch_document().await?;
+    let document = read_document().await?;
     let block = directory(&document)?;
     if as_json {
         println!("{}", serde_json::to_string_pretty(block)?);
@@ -69,7 +69,7 @@ const PROFILES_KEY: &str = "placement_profiles";
 /// fleet, and editing that from a per-service command would put a
 /// fleet-shaped decision behind a service-shaped verb.
 pub(in crate::cli::directory) async fn profiles(as_json: bool) -> Result<(), CmdError> {
-    let document = registry::fetch_document().await?;
+    let document = read_document().await?;
     let declared = document
         .get(PROFILES_KEY)
         .and_then(Value::as_array)

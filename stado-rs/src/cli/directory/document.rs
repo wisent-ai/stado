@@ -54,6 +54,32 @@ pub(super) fn service<'a>(
     })
 }
 
+/// The registry document for a verb that only reads the directory: the
+/// authority first, then this host's last-known-good copy, announced on
+/// stderr with its age and the authority's own refusal.
+///
+/// On 2026-09-27 the object API answered `503 object authorization
+/// unavailable` for over twelve hours. `stado doctor` kept reading the copy
+/// through `read_registry`, but `service directory connect` read the authority
+/// alone and exited 69, so Oko could not reach Brama and its task judge was
+/// down for the whole outage although every route it needed sat in the copy
+/// on this disk. Writers keep `registry::fetch_document`: a mutation committed
+/// against a stale generation is exactly what the authority exists to refuse.
+pub(super) async fn read_document() -> Result<Value, CmdError> {
+    let authority = match registry::fetch_document().await {
+        Ok(document) => return Ok(document),
+        Err(error) => error,
+    };
+    let cause = authority.to_string();
+    let Some((_, Some(copy))) = targets::last_good_after(&cause) else {
+        return Err(authority);
+    };
+    let document = crate::cli::resolver::directory::document::last_good_document()
+        .map_err(|cache| click(format!("{cause}; recovery registry failed ({cache})")))?;
+    eprintln!("{}", copy.notice);
+    Ok(document)
+}
+
 /// This machine's fleet name. The directory keys endpoints by target name, not
 /// by hostname, so a hostname comparison would miss on every host whose fleet
 /// name differs from its own idea of itself.

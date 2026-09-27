@@ -9,7 +9,9 @@ use crate::observations;
 use crate::cli::registry;
 use crate::cli::CmdError;
 
-use crate::cli::directory::document::{click, directory, service, this_target, DIRECTORY_KEY};
+use crate::cli::directory::document::{
+    click, directory, read_document, service, this_target, DIRECTORY_KEY,
+};
 use crate::cli::directory::routes::routable_address;
 
 pub(in crate::cli::directory) async fn bind(
@@ -17,7 +19,7 @@ pub(in crate::cli::directory) async fn bind(
     target: Option<String>,
     as_json: bool,
 ) -> Result<(), CmdError> {
-    let document = registry::fetch_document().await?;
+    let document = read_document().await?;
     let block = directory(&document)?;
     let entry = service(block, name)?;
     let asking = match target {
@@ -77,7 +79,7 @@ pub(in crate::cli::directory) async fn endpoint(
     target: Option<String>,
     as_json: bool,
 ) -> Result<(), CmdError> {
-    let document = registry::fetch_document().await?;
+    let document = read_document().await?;
     let block = directory(&document)?;
     let entry = service(block, name)?;
     let target = match target {

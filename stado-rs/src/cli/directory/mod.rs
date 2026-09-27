@@ -61,7 +61,7 @@ use crate::cli::directory::routes::endpoints::{bind, endpoint};
 /// such service, or a service with no active host — and a caller deciding
 /// which host to ask a question of has to say so rather than guess a name.
 pub(crate) async fn active_host(service: &str) -> Result<Option<String>, CmdError> {
-    let registry_document = crate::cli::registry::fetch_document().await?;
+    let registry_document = document::read_document().await?;
     let Ok(block) = document::directory(&registry_document) else {
         return Ok(None);
     };

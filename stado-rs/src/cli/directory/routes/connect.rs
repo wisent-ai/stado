@@ -8,7 +8,7 @@ use crate::observations;
 use crate::cli::registry;
 use crate::cli::CmdError;
 
-use crate::cli::directory::document::{click, directory, service, this_target};
+use crate::cli::directory::document::{click, directory, read_document, service, this_target};
 use crate::cli::directory::routes::{answers, routable_address, service_port};
 
 /// The loopback address `asking` declares for reaching `service`, or `None` when
@@ -68,7 +68,7 @@ pub(in crate::cli::directory) async fn connect(
     no_verify: bool,
     as_json: bool,
 ) -> Result<(), CmdError> {
-    let document = registry::fetch_document().await?;
+    let document = read_document().await?;
     let block = directory(&document)?;
     let entry = service(block, name)?;
     let asking = match target {
