@@ -1,3 +1,4 @@
+pub mod notarize;
 pub mod stage;
 use super::{
     core::{identifier, inspect},
@@ -32,7 +33,12 @@ pub fn run(action: &str, args: clap::ArgMatches, runtime: &Runtime) -> Result<i3
         emit(&json!({"residue": report}))?;
         return Ok(i32::from(failed));
     }
-    let reports = if action == "stage" {
+    let reports = if action == "notarize" {
+        notarize::notarize(
+            Path::new(args.required("--app")?),
+            args.optional("--evidence")?.map(Path::new),
+        )?
+    } else if action == "stage" {
         stage::stage(
             Path::new(args.required("--manifest")?),
             Path::new(args.required("--output")?),

@@ -15,6 +15,7 @@
 //!   their upload to PyPI from the verified release archive.
 
 mod deliver;
+mod linkage;
 mod mirror;
 mod python;
 mod sparkle;
@@ -31,6 +32,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 pub use deliver::run as run_deliver;
+pub use linkage::run as run_linkage;
 pub use python::run as run_python;
 
 /// Every archive entry's modification time: 2000-01-01T00:00:00Z, the value

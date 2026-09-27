@@ -61,6 +61,11 @@ pub fn augment(command: Command) -> Command {
         .subcommand(native::source_bundle())
         .subcommand(native::python())
         .subcommand(native::deliver())
+        .subcommand(
+            Command::new("linkage")
+                .about("Prove each .app bundle's @rpath dependencies resolve inside it, as dyld resolves them")
+                .arg(clap::Arg::new("bundle").required(true).num_args(1..).help("A .app bundle; repeatable")),
+        )
         .subcommand(native::swift())
         .subcommand(native::documentation())
 }
@@ -110,6 +115,14 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 .context("delivery is missing")?;
             crate::release_steps::run_deliver(&action, &arguments)
         }
+        "linkage" => crate::release_steps::run_linkage(
+            &arguments
+                .get_many::<String>("bundle")
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
         "python" => crate::release_steps::run_python(
             arguments
                 .get_one::<String>("operation")

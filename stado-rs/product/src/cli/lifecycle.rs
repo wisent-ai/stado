@@ -100,4 +100,9 @@ pub fn signing() -> Command {
             .arg(value("output", "Prepared release output directory").required(true))
             .arg(value("platform", "Declared release platform").required(true))
             .arg(flag("json", "Print verified stage signatures")))
+        .subcommand(Command::new("notarize")
+            .about("Notarize a signed .app with Apple's notary (AC_API_KEY_ID, AC_API_ISSUER_ID, AC_API_KEY_P8), staple it and check Gatekeeper; the notary's answer goes to --evidence, default $WISENT_OUTPUT_DIR/notary.json")
+            .arg(value("app", "Signed .app bundle to notarize").required(true))
+            .arg(value("evidence", "Where the notary's JSON answer is written"))
+            .arg(flag("json", "Print the notarization result")))
 }
