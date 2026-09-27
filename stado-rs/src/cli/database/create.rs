@@ -143,7 +143,7 @@ async fn priced_creation(
             text("billing_page").replace("{slug}", &slug)
         ),
     });
-    if accepted.map_or(true, |accepted| accepted < added) {
+    if accepted.is_none_or(|accepted| accepted < added) {
         return Err(CmdError::click(format!(
             "one more project adds ${added}/month compute to {slug} (plan {plan}, {running} running; {}); \
              pass --accept-monthly-usd {added} to create {name}. Report: {report}",
