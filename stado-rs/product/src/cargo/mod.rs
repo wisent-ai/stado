@@ -119,6 +119,21 @@ pub(crate) fn execute(
                 .env("TMPDIR", &scratch);
             command
         };
+        // Registry crates this host never downloaded would stop the offline
+        // resolution below. They are fetched first into Cargo's own cache,
+        // against the same private lockfile, with Git transport still off, so
+        // only registry sources whose checksums the lockfile pins can arrive.
+        report["state"] = json!("fetching_registry_crates");
+        atomic_json(&evidence.join("result.json"), &report)?;
+        checked(
+            Command::new("cargo")
+                .arg("fetch")
+                .args(options.iter().filter(|option| option.as_str() != "--offline"))
+                .current_dir(manifest.parent().unwrap())
+                .env("GIT_ALLOW_PROTOCOL", "")
+                .env("CARGO_RESOLVER_LOCKFILE_PATH", &lockfile)
+                .env("TMPDIR", &scratch),
+        )?;
         report["state"] = json!("resolving_canonical_sources");
         atomic_json(&evidence.join("result.json"), &report)?;
         let graph = checked(command("metadata").args(["--format-version", "1"]))?;
