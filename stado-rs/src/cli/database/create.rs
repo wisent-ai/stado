@@ -20,6 +20,9 @@ const API: &str = "https://api.supabase.com/v1";
 const TOKEN_ITEM: &str = "SUPABASE_ACCESS_TOKEN";
 const RUNNING: &str = "ACTIVE_HEALTHY";
 const PROVIDER: &str = include_str!("supabase-pricing.json");
+/// Supabase Root 2021 CA, as Supabase publishes it for verifying its
+/// database and pooler certificates.
+const SUPABASE_ROOT_CA: &str = include_str!("supabase-root-ca.pem");
 
 fn provider() -> Value {
     serde_json::from_str(PROVIDER).expect("supabase-pricing.json is valid JSON")
@@ -171,6 +174,10 @@ fn item_fields(
         "db_host": format!("db.{reference}.supabase.co"),
         "db_port": port,
         "db_name": "postgres",
+        // The provider's root CA: Supabase signs its Postgres and pooler
+        // certificates with its own root, which no public trust store holds,
+        // so a consumer verifying TLS needs it beside the address.
+        "ca_certificate": SUPABASE_ROOT_CA,
     });
     if let Some(pooler) = pooler {
         fields["pooler_host"] = pooler["db_host"].clone();
@@ -212,11 +219,18 @@ pub(super) async fn create(
     let item = format!("{name}-database");
 
     let (project, password, report) = match projects.iter().find(|p| p["name"] == name) {
-        Some(existing) => (
-            existing.clone(),
-            field(&item, "db_password").await.ok(),
-            json!({ "reused": true }),
-        ),
+        Some(existing) => {
+            // The item is rewritten whole, so the password it already holds is
+            // read from the owner vault first; without it the rewrite would
+            // erase the only copy.
+            let password = owner::read_string(&item, "db_password").map_err(|error| {
+                CmdError::click(format!(
+                    "{item} was not rewritten: its db_password could not be read from the owner vault here ({error}). \
+                     Run stado database create on the vault owner host."
+                ))
+            })?;
+            (existing.clone(), Some(password), json!({ "reused": true }))
+        }
         None => {
             let (slug, region, report) =
                 priced_creation(name, anchor, &token, &projects, accept_monthly_usd).await?;
