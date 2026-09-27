@@ -58,6 +58,8 @@ pub fn augment(command: Command) -> Command {
                 .arg(flag("json", "Print observed path collisions")),
         )
         .subcommand(native::cargo())
+        .subcommand(native::source_bundle())
+        .subcommand(native::python())
         .subcommand(native::swift())
         .subcommand(native::documentation())
 }
@@ -90,6 +92,12 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         }
         "paths" => crate::paths::run(arguments, &runtime),
         "cargo" => crate::cargo::run(arguments, &runtime),
+        "source-bundle" => crate::release_steps::run_source_bundle(),
+        "python" => crate::release_steps::run_python(
+            arguments
+                .get_one::<String>("operation")
+                .context("Python release operation is missing")?,
+        ),
         "swift" => crate::native::run(arguments, &runtime),
         "documentation" => {
             let (action, arguments) = arguments

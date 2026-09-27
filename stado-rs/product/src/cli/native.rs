@@ -30,6 +30,23 @@ pub fn cargo() -> Command {
         .arg(forwarded())
 }
 
+pub fn source_bundle() -> Command {
+    Command::new("source-bundle").about(
+        "Release build step: the checkout's files in a reproducible \
+         $WISENT_OUTPUT_DIR/release/source-bundle.tar with each file's digest",
+    )
+}
+
+pub fn python() -> Command {
+    Command::new("python")
+        .about("Release steps of a Python package: build its wheel and sdist, or upload them to PyPI")
+        .arg(Arg::new("operation").required(true).value_parser(["build", "deliver-pypi"]).help(
+            "build: python -m build into $WISENT_OUTPUT_DIR/release/python-distributions.tar; \
+             deliver-pypi: verify WISENT_RELEASE_ARCHIVE against WISENT_RELEASE_SHA256 and \
+             upload its one wheel and one sdist with twine, writing pypi-evidence.json",
+        ))
+}
+
 pub fn swift() -> Command {
     Command::new("swift")
         .about("Build and index canonical Swift sources, or serve recorded SourceKit settings")
