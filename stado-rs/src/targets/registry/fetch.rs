@@ -69,36 +69,44 @@ pub async fn fetch_registry_or_last_good_detail(
         Ok(registry) => return Ok((registry, None)),
         Err(error) => error,
     };
-    match load_last_good().filter(|_| !store_is_local_filesystem()) {
-        Some((registry, meta, age)) => {
-            let mut notice = format!(
-                "reading the last-known-good registry copy from {age}s ago ({}, read_at {}, generation {}) because the authority did not answer: {authority}",
-                registry_last_good_path().unwrap_or_default().display(),
-                meta.read_at,
-                meta.generation,
-            );
-            // Why the copy is as old as it is, when this process already
-            // knows. Without it the age looks like the authority's fault,
-            // and an operator chasing an unreachable store never learns
-            // that the last refresh reached this host and was refused.
-            if let Some(refusal) = last_good_refusal() {
-                notice.push_str(&format!(
-                    "; this process refused to refresh that copy ({}): {refusal}",
-                    refusal.kind()
-                ));
-            }
-            Ok((
-                registry,
-                Some(RegistryCopyNotice {
-                    notice,
-                    cause: authority.to_string(),
-                    read_at: meta.read_at,
-                    age_seconds: age,
-                }),
-            ))
-        }
+    match last_good_after(&authority.to_string()) {
+        Some(copy) => Ok(copy),
         None => Err(authority),
     }
+}
+
+/// The last-known-good copy for a reader whose authority read already failed
+/// with `cause`, or gave up on it: a diagnostic whose read budget ran out
+/// before the authority answered (`stado host gates` on 2026-09-27, while the
+/// object API answered 503 after longer than the budget) still has this copy
+/// to read, and without it reported every section as never read.
+pub fn last_good_after(cause: &str) -> Option<(Registry, Option<RegistryCopyNotice>)> {
+    let (registry, meta, age) = load_last_good().filter(|_| !store_is_local_filesystem())?;
+    let mut notice = format!(
+        "reading the last-known-good registry copy from {age}s ago ({}, read_at {}, generation {}) because the authority did not answer: {cause}",
+        registry_last_good_path().unwrap_or_default().display(),
+        meta.read_at,
+        meta.generation,
+    );
+    // Why the copy is as old as it is, when this process already
+    // knows. Without it the age looks like the authority's fault,
+    // and an operator chasing an unreachable store never learns
+    // that the last refresh reached this host and was refused.
+    if let Some(refusal) = last_good_refusal() {
+        notice.push_str(&format!(
+            "; this process refused to refresh that copy ({}): {refusal}",
+            refusal.kind()
+        ));
+    }
+    Some((
+        registry,
+        Some(RegistryCopyNotice {
+            notice,
+            cause: cause.to_string(),
+            read_at: meta.read_at,
+            age_seconds: age,
+        }),
+    ))
 }
 
 /// Fetch the canonical registry from the configured store (Python

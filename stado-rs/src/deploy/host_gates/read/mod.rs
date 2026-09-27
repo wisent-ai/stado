@@ -29,6 +29,13 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         },
     )
     .await;
+    // The authority read gave up (the object API can answer its 503 after
+    // longer than the budget); the last-known-good copy is still local.
+    let registry = registry.or_else(|| {
+        let cause = registry_read.detail.clone().unwrap_or_default();
+        crate::targets::last_good_after(&cause)
+            .map(|(registry, copy)| (registry, copy.map(|copy| copy.notice)))
+    });
     let Some((registry, notice)) = registry else {
         let mut observations = vec![registry_read];
         for (operation, source) in [
