@@ -71,9 +71,47 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
         }
     }
 
+    let python = python_steps(manifest);
+    if !python.is_empty() {
+        return Err(CmdError::click(format!(
+            "{product}: {} run Python, which this workshop does not use; give the product a \
+             build and delivery in its own language or Stado's packaging",
+            python.join(", ")
+        )));
+    }
+
     let untested = untested_platforms(manifest);
     steps.push(json!({ "step": "tests", "untested_required_platforms": untested }));
     Ok(Enrollment { steps, untested })
+}
+
+/// Every quality, build, test and delivery step whose program is Python, by
+/// name. las and echo built and delivered through `python3 release/*.py`
+/// long after the workshop removed Python, and enrolment passed them.
+fn python_steps(manifest: &ReleasePipelineManifest) -> Vec<String> {
+    let python = |argv: &[String]| {
+        argv.first().is_some_and(|program| {
+            let name = program.rsplit('/').next().unwrap_or(program);
+            name == "python" || name.starts_with("python3")
+        })
+    };
+    let mut found = Vec::new();
+    for (platform_name, platform) in &manifest.platforms {
+        for gate in platform.quality.iter().chain(&platform.tests) {
+            if python(&gate.argv) {
+                found.push(format!("{platform_name} step {}", gate.name));
+            }
+        }
+        if python(&platform.build.argv) {
+            found.push(format!("{platform_name} build"));
+        }
+    }
+    for delivery in &manifest.deliveries {
+        if python(&delivery.argv) {
+            found.push(format!("delivery {}", delivery.name));
+        }
+    }
+    found
 }
 
 /// Every `item#field` the manifest's platforms and deliveries read at build

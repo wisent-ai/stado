@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **Enrolment refuses a release manifest that runs Python:** `stado release catalog enroll`, and the enrolment `build submit` and `release submit` run first, now refuse a manifest whose quality, build, test or delivery step starts with `python` or `python3`, naming each step. las and echo built and delivered through `python3 release/*.py` after the workshop removed Python, and nothing noticed.
+
 - **Credential custody commands work while the object API is down:** `stado credentials grant show|item-read|consolidate`, `token mint` and `token sync` found the vault host's Skarbiec through the registry document read from the object API, with no last-known-good fallback. The object API authorizes through the `stado` bearer, so when that bearer stopped matching its grant on 2026-09-27 the API answered 503 and every command that could repair the bearer failed with it. They now fall back to this machine's last-known-good registry copy, as host resolution already did, and name both failures when neither answers.
 
 - **`stado credentials token sync --shared-vault` delivers to a host with no vault of its own:** a host that reads the owner through its resolver route and has retired its local copy, as `stado credentials vault` directs, was refused with `declares no vault authority`, so a bearer re-minted on the owner could not reach it and every credential read there answered HTTP 403 — lukasz-macbook on 2026-09-27. In shared mode the destination's vault is no longer resolved; the bearer is verified against the owner's grant, as before.
