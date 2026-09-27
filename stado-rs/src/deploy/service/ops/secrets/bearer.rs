@@ -89,8 +89,6 @@ pub async fn check_service_item_bearer(
     probe_url: &str,
     item: &str,
     field: &str,
-    consumer: Option<&str>,
-    token_file: Option<&str>,
     post_empty_json: bool,
     expected_status: Option<u16>,
     runner: &Runner,
@@ -100,8 +98,6 @@ pub async fn check_service_item_bearer(
     let body = AUTH_CHECK_BODY
         .replace("@PROBE_URL_B64@", &STANDARD.encode(probe_url.as_bytes()))
         .replace("@ITEM@", &shlex_quote(item))
-        .replace("@CONSUMER@", &shlex_quote(consumer.unwrap_or_default()))
-        .replace("@TOKEN_FILE@", &shlex_quote(token_file.unwrap_or_default()))
         .replace("@FIELD@", &shlex_quote(field))
         .replace("@TOKEN_B64@", "")
         .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })

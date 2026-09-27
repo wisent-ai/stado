@@ -114,18 +114,11 @@ pub enum CredentialCommands {
         /// The single registry host to check.
         #[arg(long)]
         host: String,
-        /// Skarbiec item containing the bearer. Required unless the bearer
-        /// is read from the unit's own runtime environment with --variable
-        /// and --env-file instead.
+        /// Skarbiec item containing the bearer, read on the host under
+        /// Stado's one identity. Required unless the bearer is read from the
+        /// unit's own runtime environment with --variable and --env-file.
         #[arg(long)]
         item: Option<String>,
-        /// Host-side Skarbiec consumer used to read --item (defaults to the
-        /// host's own selection).
-        #[arg(long)]
-        consumer: Option<String>,
-        /// Token file for --consumer.
-        #[arg(long)]
-        token_file: Option<String>,
         /// Exact string field in the Skarbiec item.
         #[arg(long, default_value = "token")]
         field: String,

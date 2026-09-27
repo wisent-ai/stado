@@ -54,20 +54,12 @@ pub(crate) const AUTH_CHECK_BODY: &str = "stado_check_item=@ITEM@
 stado_check_field=@FIELD@
 stado_check_var=@VARIABLE@
 stado_check_env_b64=@ENV_PATH_B64@
-stado_check_consumer=@CONSUMER@
-stado_check_token_file=@TOKEN_FILE@
 fail_check() {
   say 'auth_check_failed' \"$1\"
   exit 0
 }
 if [ \"$os\" = \"Darwin\" ]; then decode_flag=-D; else decode_flag=--decode; fi
 probe_url=$(printf '%s' '@PROBE_URL_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid probe URL payload'
-if [ -n \"$stado_check_consumer\" ]; then
-  export WC_SKARBIEC_CONSUMER=\"$stado_check_consumer\"
-fi
-if [ -n \"$stado_check_token_file\" ]; then
-  export WC_SKARBIEC_TOKEN_FILE=\"$stado_check_token_file\"
-fi
 probe_dir=\"$HOME/.stado/auth-check\"
 /bin/mkdir -p \"$probe_dir\" || fail_check 'cannot create probe directory'
 /bin/chmod 700 \"$probe_dir\" || fail_check 'cannot protect probe directory'
