@@ -43,9 +43,23 @@ impl Client {
         let status = response.status();
         let body = response.text().await?;
         if !status.is_success() {
+            let mut detail: String = body.chars().take(usize::from(u16::MAX)).collect();
+            // Every read answering this for the stado consumer means the grant
+            // on the vault owner and the bearer file the fleet holds diverged
+            // (2026-09-27: the owner's disk filled mid-write). Name the repair
+            // where the failure is read instead of leaving a bare 403.
+            if status == reqwest::StatusCode::FORBIDDEN
+                && detail.contains("consumer not authorized")
+            {
+                detail.push_str(
+                    " — if every stado read answers this, the stado grant no longer matches the \
+                     bearer file: `stado credentials grant rebind --host <vault owner> --token-file \
+                     <that host's stado token file>` binds it back with the same capabilities",
+                );
+            }
             return Err(SkarbiecError::Response {
                 status: status.as_u16(),
-                detail: body.chars().take(usize::from(u16::MAX)).collect(),
+                detail,
             });
         }
         serde_json::from_str(&body).map_err(|source| SkarbiecError::Response {

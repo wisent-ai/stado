@@ -174,6 +174,24 @@ pub enum CredentialGrantCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Bind the stado grant back to the bearer file the fleet holds, when
+    /// that file no longer opens it: same capabilities, audience and expiry.
+    ///
+    /// The recovery for every credential read answering "consumer not
+    /// authorized to read item field" after the owner's grant record and the
+    /// fleet's bearer file diverged. Refused when the file already opens the
+    /// grant; verified after.
+    #[command(name = "rebind")]
+    Rebind {
+        /// The host that owns the vault.
+        #[arg(long)]
+        host: String,
+        /// The stado bearer file on that host (absolute path).
+        #[arg(long)]
+        token_file: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Revoke a retired consumer whose every capability the stado grant
     /// already holds, leaving one identity on the host's vault.
     #[command(name = "revoke-retired")]
