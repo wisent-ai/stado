@@ -162,7 +162,7 @@ pub fn swift() -> Command {
 
 pub fn documentation() -> Command {
     Command::new("documentation")
-        .about("Check actual published documentation and GitHub repository policy")
+        .about("Check actual published documentation and GitHub repository policy, or generate a documentation site's search index")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
@@ -184,5 +184,15 @@ pub fn documentation() -> Command {
                     "include-archived",
                     "Inspect archived repositories as well as active ones",
                 )),
+        )
+        .subcommand(
+            Command::new("index")
+                .about(
+                    "Generate search-index.json and the docs/index.html topic cards of a static \
+                     documentation site from the pages its docs-manifest.json lists; --check \
+                     writes nothing and fails when either file is stale",
+                )
+                .arg(value("root", "The site checkout; defaults to the current directory"))
+                .arg(flag("check", "Refuse stale files instead of writing them")),
         )
 }

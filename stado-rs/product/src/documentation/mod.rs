@@ -1,5 +1,6 @@
 mod github;
 mod markdown;
+mod index;
 mod pages;
 use crate::{
     catalog,
@@ -27,6 +28,12 @@ pub fn run(operation: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> R
                 arguments.optional("--org")?.unwrap_or("wisent-ai"),
                 arguments.has("--include-archived"),
             )?
+        }
+        "index" => {
+            if !arguments.positional.is_empty() {
+                bail!("documentation index does not take positional arguments");
+            }
+            index::report(arguments.optional("--root")?, arguments.has("--check"))?
         }
         other => bail!("unknown documentation operation {other}"),
     };
