@@ -93,8 +93,14 @@ pub(super) async fn declare_publisher(
     report.push(json!({ "step": "item", "host": owner, "item": item, "minted": minted, "state_before": state }));
 
     // 2. The release client's bearer beside the owner's vault, so its grant
-    //    can be widened there and not on a replica the owner overwrites.
-    if client != owner {
+    //    can be widened there and not on a replica the owner overwrites. A
+    //    client that holds no vault of its own reads the owner's through
+    //    secrets.skarbiec.url, so its bearer already lives there; copying it
+    //    asked for a local vault authority and refused skryba's first
+    //    publisher on lukasz-macbook on 2026-09-27.
+    let client_reads_owner = this_host().await.is_ok_and(|here| here == client)
+        && crate::config::skarbiec_vault_file().trim().is_empty();
+    if client != owner && !client_reads_owner {
         vault_token_sync(
             client,
             owner,
