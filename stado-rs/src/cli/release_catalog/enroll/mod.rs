@@ -114,6 +114,56 @@ fn python_steps(manifest: &ReleasePipelineManifest) -> Vec<String> {
     found
 }
 
+/// Every step whose program is a file in the checkout that the checkout does
+/// not hold: the path the step runs, directly (`scripts/x.sh`) or through an
+/// interpreter (`bash release/x.sh`). codespy, growth-tactics and OpenEnv
+/// kept running `scripts/stado_release.py` for three weeks after the
+/// scripts directories were removed, and no build of them could start.
+pub(crate) fn missing_step_programs(
+    manifest: &ReleasePipelineManifest,
+    root: &std::path::Path,
+) -> Vec<String> {
+    let program = |argv: &[String]| -> Option<String> {
+        let first = argv.first()?;
+        let named = if first.contains('/') {
+            first
+        } else {
+            argv.get(1)
+                .filter(|word| word.contains('/') && !word.starts_with('-'))?
+        };
+        (!named.starts_with('/') && !root.join(named).exists()).then(|| named.clone())
+    };
+    let mut missing = Vec::new();
+    for (platform_name, platform) in &manifest.platforms {
+        for gate in platform.quality.iter().chain(&platform.tests) {
+            if let Some(path) = program(&gate.argv) {
+                missing.push(format!("{platform_name} step {} runs {path}", gate.name));
+            }
+        }
+        if let Some(path) = program(&platform.build.argv) {
+            missing.push(format!("{platform_name} build runs {path}"));
+        }
+    }
+    for delivery in &manifest.deliveries {
+        if let Some(path) = program(&delivery.argv) {
+            missing.push(format!("delivery {} runs {path}", delivery.name));
+        }
+    }
+    missing
+}
+
+/// The refusal for [`missing_step_programs`]: nothing is enrolled or written.
+pub(crate) fn missing_programs_refusal(product: &str, missing: &[String]) -> Result<(), CmdError> {
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{product}: {} — the checkout holds no such file; point the step at a Stado command \
+         or at a file the checkout holds",
+        missing.join("; ")
+    )))
+}
+
 /// Every `item#field` the manifest's platforms and deliveries read at build
 /// time, refused when one is not an `item#field` reference.
 fn secret_references(

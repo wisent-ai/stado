@@ -18,7 +18,7 @@ mod publisher;
 
 use central::sync_catalog;
 use checkout::sync;
-pub(crate) use enroll::enroll;
+pub(crate) use enroll::{enroll, missing_programs_refusal, missing_step_programs};
 pub(crate) use publisher::this_host;
 
 const CATALOG_PREFIX: &str = "release-catalog";
@@ -225,6 +225,10 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
             path.display()
         )));
     };
+    enroll::missing_programs_refusal(
+        &manifest.product,
+        &enroll::missing_step_programs(&manifest, checkout),
+    )?;
     let enrollment = enroll(&manifest).await?;
     if json {
         println!(

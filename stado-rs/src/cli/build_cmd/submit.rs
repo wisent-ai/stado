@@ -133,6 +133,10 @@ pub(crate) async fn publish_source(
     // here because none of its builds can qualify a task.
     {
         let _phase = super::timing::phase("enroll the product in the fleet");
+        release_catalog::missing_programs_refusal(
+            &reading.manifest.product,
+            &release_catalog::missing_step_programs(&reading.manifest, &reading.root),
+        )?;
         let enrollment = release_catalog::enroll(&reading.manifest).await?;
         if let Err(finding) =
             release_catalog::untested_refusal(&reading.manifest.product, &enrollment.untested)

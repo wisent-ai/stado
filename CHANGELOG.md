@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **A manifest step that runs a file the checkout does not hold is refused before anything is written:** `stado release catalog enroll` and `stado build submit` now check each quality, build, test and delivery step whose program is a checkout path (`scripts/x.sh`, or `bash release/x.sh`), and refuse with the steps and paths when the file is missing. codespy, growth-tactics and OpenEnv ran `scripts/stado_release.py` for three weeks after the scripts directories were removed, and every build of them failed at its first step.
+
 - **Enrolment refuses a release manifest that runs Python:** `stado release catalog enroll`, and the enrolment `build submit` and `release submit` run first, now refuse a manifest whose quality, build, test or delivery step starts with `python` or `python3`, naming each step. las and echo built and delivered through `python3 release/*.py` after the workshop removed Python, and nothing noticed.
 
 - **Credential custody commands work while the object API is down:** `stado credentials grant show|item-read|consolidate`, `token mint` and `token sync` found the vault host's Skarbiec through the registry document read from the object API, with no last-known-good fallback. The object API authorizes through the `stado` bearer, so when that bearer stopped matching its grant on 2026-09-27 the API answered 503 and every command that could repair the bearer failed with it. They now fall back to this machine's last-known-good registry copy, as host resolution already did, and name both failures when neither answers.
