@@ -1,6 +1,6 @@
 mod github;
-mod markdown;
 mod index;
+mod markdown;
 mod pages;
 use crate::{
     catalog,
