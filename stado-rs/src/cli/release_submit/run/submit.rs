@@ -214,8 +214,20 @@ pub(super) async fn continue_run(
         save(&mut run).await?;
         artifacts.insert(p.clone(), a);
     }
+    // A refusal that left only optional platforms unbuilt is recorded, not
+    // fatal: the manifest declared them skippable (see
+    // `constants::OPTIONAL_PLATFORM_CLAIM_GRACE_S`). Failing here threw away
+    // skarbiec 0.4.5's published darwin build on every resume because its
+    // optional linux-amd64 had no builder allowed its signing secret.
     if let Some(error) = enqueue_failure {
-        return Err(persist_failure(&mut run, error).await);
+        let required_unqueued = m
+            .platforms
+            .iter()
+            .any(|(platform, recipe)| recipe.required && !artifacts.contains_key(platform));
+        if required_unqueued {
+            return Err(persist_failure(&mut run, error).await);
+        }
+        run.failure = Some(format!("optional platform not built: {error}"));
     }
     run.state = ReleaseRunState::Delivering;
     save(&mut run).await?;
