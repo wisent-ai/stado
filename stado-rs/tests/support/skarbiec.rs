@@ -70,16 +70,27 @@ pub fn real_skarbiec_binary() -> PathBuf {
 /// builder. The job's own temporary directory sits two levels higher in the
 /// same job tree and is removed with the job; it is used only when it is that
 /// job's, never a system temporary directory beside an operator checkout.
+///
+/// A local `stado product update stado` builds the exported commit under
+/// `.wisent-output/install/<uuid>/source`, deeper still, and its temporary
+/// directory is the system one, so neither root fit and every local install
+/// failed its release journey (c2c2b87b). The last root is the short one Stado
+/// owns for exactly this, `~/.stado/test-runs`: a unix socket path is limited
+/// to 104 bytes, and the home is removed on drop like every other.
 pub fn isolated_gnupg_home() -> tempfile::TempDir {
     let mut checkout_build = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     checkout_build.pop();
     let job_tmp = std::env::temp_dir();
     let job_tree = job_tmp.parent().map(Path::to_path_buf);
-    let candidates = std::iter::once(checkout_build.join(".build")).chain(
-        job_tree
-            .filter(|tree| checkout_build.starts_with(tree))
-            .map(|_| job_tmp.clone()),
-    );
+    let owned_short_root = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".stado").join("test-runs"));
+    let candidates = std::iter::once(checkout_build.join(".build"))
+        .chain(
+            job_tree
+                .filter(|tree| checkout_build.starts_with(tree))
+                .map(|_| job_tmp.clone()),
+        )
+        .chain(owned_short_root);
     for parent in candidates {
         fs::create_dir_all(&parent).expect("create the ignored GnuPG fixture root");
         // libassuan rejects strlen(name) + 1 >= sizeof(sun_path); reserve one extra byte.
@@ -103,8 +114,8 @@ pub fn isolated_gnupg_home() -> tempfile::TempDir {
         return home;
     }
     panic!(
-        "GnuPG sockets cannot fit inside the checkout build directory {} nor this job's \
-         temporary directory {}",
+        "GnuPG sockets cannot fit inside the checkout build directory {}, this job's \
+         temporary directory {}, nor ~/.stado/test-runs",
         checkout_build.join(".build").display(),
         job_tmp.display()
     )
