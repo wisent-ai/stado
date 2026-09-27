@@ -82,8 +82,8 @@ pub fn isolated_gnupg_home() -> tempfile::TempDir {
     checkout_build.pop();
     let job_tmp = std::env::temp_dir();
     let job_tree = job_tmp.parent().map(Path::to_path_buf);
-    let owned_short_root = std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".stado").join("test-runs"));
+    let owned_short_root =
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".stado").join("test-runs"));
     let candidates = std::iter::once(checkout_build.join(".build"))
         .chain(
             job_tree
