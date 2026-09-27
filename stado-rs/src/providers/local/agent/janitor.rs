@@ -200,6 +200,17 @@ impl JanitorReports {
                         )
                         .await;
                         reports.record_memory(memory);
+                        // The third pass: the reconcilers this host declares
+                        // are loaded. The coordinator's own reconciliation
+                        // cannot restore the coordinator, and on
+                        // charless-mac-mini it and the release agent stayed
+                        // unloaded for a day and a half while this agent ran.
+                        crate::autonomy::service_reconciler::restore_reconcilers(
+                            &mut |message: &str| {
+                                crate::providers::local::agent::agent_log(message);
+                            },
+                        )
+                        .await;
                         tokio::time::sleep(interval).await;
                     }
                 });
