@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado credentials vault` accepts a host that reads the vault owner:** after `stado config unset secrets.skarbiec.vault_file`, which the command itself asks a non-owner host to run, it judged the leftover local vault files and answered `ambiguous`, telling the host to declare one of them again. A host that is not the registry's Skarbiec active host and declares no local copy now reports `reads_owner`, names the owner and `secrets.skarbiec.url`, and exits zero; its local files are reported as retired copies.
+
 - **`stado service ensure` accepts a unit its product declares for both init systems:** the Stado product declares the object API as `com.wisent.always-on.stado-object-api` (launchd) and `com.wisent.always-on.stado-object-api.service` (systemd), and ensure compared the two whole, so it refused that unit with `managed product declarations give … more than one unit identity` — on lukasz-macbook on 2026-09-27, while the unit ran an image replaced on disk. The two spellings are now one identity.
 
 - **A queue agent hands off when the same version is installed again under it:** the agent restarted itself only when `stado.release-version` named another version, so a reinstall of the version it already ran left it executing the replaced file for good — on lukasz-macbook on 2026-09-27 the object API kept an image no longer on disk after `stado product install stado` reinstalled 0.22.10. When the marker names the agent's own version but its running image is not the managed file, it now finishes its jobs and hands off, logging `release-image-replaced`.

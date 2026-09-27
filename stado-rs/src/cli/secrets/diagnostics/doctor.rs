@@ -43,6 +43,18 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
                  read the owner through secrets.skarbiec.url and remove \
                  secrets.skarbiec.vault_file"
             ));
+        } else if owner != here {
+            // A non-owner that declares no local copy is the configuration
+            // the refusal above asks for. Judging its leftover local files
+            // afterwards answered `ambiguous` and told it to declare one of
+            // them again — on lukasz-macbook on 2026-09-27, one command after
+            // `stado config unset secrets.skarbiec.vault_file`.
+            state = "reads_owner".to_string();
+            resolved = Err(format!(
+                "{here} holds no fleet vault: it reads the vault on {owner} through \
+                 secrets.skarbiec.url ({}); any vault file on this machine is a retired copy",
+                crate::config::skarbiec_url()
+            ));
         }
     }
     if json_output {
@@ -94,6 +106,7 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
     }
     match resolved {
         Ok(_) => Ok(()),
+        Err(_) if state == "reads_owner" => Ok(()),
         // With `--json` the document already carries `state` and `refusal`,
         // and a second JSON error printed after it makes the answer
         // unparseable — one report per invocation, and the exit status is the
