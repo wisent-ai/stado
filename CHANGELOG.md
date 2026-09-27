@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado credentials token sync --shared-vault` delivers to a host with no vault of its own:** a host that reads the owner through its resolver route and has retired its local copy, as `stado credentials vault` directs, was refused with `declares no vault authority`, so a bearer re-minted on the owner could not reach it and every credential read there answered HTTP 403 — lukasz-macbook on 2026-09-27. In shared mode the destination's vault is no longer resolved; the bearer is verified against the owner's grant, as before.
+
 - **`stado service repair-runner-runtime` repairs an adopted runner started by `start-runner.sh`:** `com.wisent.actions-runner.wisent-backend-publisher` on charless-mac-mini failed every start with `Failed to create CoreCLR, HRESULT: 0x8007000C`, and the repair refused it because its unit names `start-runner.sh` instead of `runsvc.sh`. A `com.wisent.actions-runner.*` unit whose program is `start-runner.sh` is now accepted; the repair script still checks that the directory is a runner install.
 
 - **A release client that reads the vault owner gets its publisher declared:** `declare-publisher` (and the automatic declaration `build submit`, `release submit` and `catalog enroll` run) copied the client's bearer into the owner's vault, which needs the client's own vault authority; a client whose `secrets.skarbiec.vault_file` is unset reads the owner already, and `catalog enroll skryba` on lukasz-macbook refused with `lukasz-macbook declares no vault authority`. That copy is now skipped for such a client; the item and its grant are written on the owner as before.

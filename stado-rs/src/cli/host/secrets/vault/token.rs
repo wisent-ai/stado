@@ -157,6 +157,16 @@ impl TokenSyncMode {
     }
 }
 
+/// The vault argument the shared install payload receives and ignores.
+const SHARED_VAULT_UNUSED: &str = "-";
+
+/// The destination of one token delivery: its host, and the vault the
+/// payload checks the grant in (unused for a shared-vault destination).
+struct SharedDestination {
+    target: crate::targets::ComputeTarget,
+    vault: String,
+}
+
 /// Deliver a bootstrap bearer without minting, renewing, or widening a grant.
 /// Both declared vaults must already hold the same owner and complete grant.
 pub async fn vault_token_sync(
@@ -184,9 +194,30 @@ pub async fn vault_token_sync(
     let source = credential_host(from_host)
         .await
         .map_err(|error| error.machine_readable(json_output))?;
-    let destination = credential_host(target)
-        .await
-        .map_err(|error| error.machine_readable(json_output))?;
+    // A shared-vault destination reads the owner through its resolver route
+    // and holds no vault of its own; the payload verifies its bearer against
+    // the owner's grant and never opens a destination vault. Requiring one
+    // refused `--shared-vault` onto lukasz-macbook on 2026-09-27 with
+    // `declares no vault authority`, after its local copy had been retired as
+    // `stado credentials vault` directs, so a re-minted owner bearer could not
+    // reach it.
+    let destination = if mode.shared_vault() {
+        let target = crate::deploy::host_channel::canonical_target(target)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
+        SharedDestination {
+            target,
+            vault: SHARED_VAULT_UNUSED.to_string(),
+        }
+    } else {
+        let host = credential_host(target)
+            .await
+            .map_err(|error| error.machine_readable(json_output))?;
+        SharedDestination {
+            target: host.target,
+            vault: host.vault,
+        }
+    };
     let runner = crate::deploy::production_runner();
     // `--shared-vault` names a destination that reads the source's vault
     // through its own resolver route instead of a copy. The registry decides
