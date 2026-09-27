@@ -19,10 +19,25 @@ const BUNDLE: &str = "python-distributions.tar";
 /// PyPI's upload endpoint.
 const PYPI_UPLOAD: &str = "https://upload.pypi.org/legacy/";
 
-pub fn run(operation: &str) -> Result<i32> {
+pub fn run(operation: &str, arguments: &clap::ArgMatches) -> Result<i32> {
     match operation {
         "build" => build(),
         "deliver-pypi" => deliver_pypi(),
+        "zipapp" => {
+            let packages: Vec<String> = arguments
+                .get_many::<String>("package")
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
+            let text = |name: &str| {
+                arguments
+                    .get_one::<String>(name)
+                    .cloned()
+                    .with_context(|| format!("zipapp requires --{name}"))
+            };
+            super::zipapp::build(&packages, &text("module")?, &text("name")?, &python())
+        }
         other => bail!("unknown Python release operation {other}"),
     }
 }

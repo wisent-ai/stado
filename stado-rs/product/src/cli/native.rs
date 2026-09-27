@@ -52,12 +52,16 @@ pub fn source_bundle() -> Command {
 
 pub fn python() -> Command {
     Command::new("python")
-        .about("Release steps of a Python package: build its wheel and sdist, or upload them to PyPI")
-        .arg(Arg::new("operation").required(true).value_parser(["build", "deliver-pypi"]).help(
+        .about("Release steps of a Python product: its wheel and sdist, their PyPI upload, or a zip application")
+        .arg(Arg::new("operation").required(true).value_parser(["build", "deliver-pypi", "zipapp"]).help(
             "build: python -m build into $WISENT_OUTPUT_DIR/release/python-distributions.tar; \
              deliver-pypi: verify WISENT_RELEASE_ARCHIVE against WISENT_RELEASE_SHA256 and \
-             upload its one wheel and one sdist with twine, writing pypi-evidence.json",
+             upload its one wheel and one sdist with twine, writing pypi-evidence.json; \
+             zipapp: the --package directories run as --module, at $WISENT_OUTPUT_DIR/bin/<--name>",
         ))
+        .arg(Arg::new("package").long("package").action(clap::ArgAction::Append).help("zipapp: a top-level package directory; repeatable"))
+        .arg(Arg::new("module").long("module").help("zipapp: the module the application runs"))
+        .arg(Arg::new("name").long("name").help("zipapp: the application's file name, ending in .pyz"))
 }
 
 pub fn deliver() -> Command {

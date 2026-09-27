@@ -20,6 +20,7 @@ mod python;
 mod sparkle;
 mod supabase;
 mod testflight;
+mod zipapp;
 
 use std::fs;
 use std::io::Read;

@@ -114,6 +114,7 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
             arguments
                 .get_one::<String>("operation")
                 .context("Python release operation is missing")?,
+            &arguments,
         ),
         "swift" => crate::native::run(arguments, &runtime),
         "documentation" => {
