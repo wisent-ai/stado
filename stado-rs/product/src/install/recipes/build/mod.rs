@@ -58,9 +58,15 @@ pub fn release(
     let spec = document["platforms"]
         .get(&platform)
         .with_context(|| format!("{id} has no {platform} release"))?;
-    let output = evidence.join("output");
+    // The release worker hands a build `<source>/.wisent-output` as its
+    // output, and every manifest's stage keys are written against that; an
+    // output beside the source left transcript-lake's `--target-dir
+    // .wisent-output/target` build staging nothing and the install failing
+    // with a bare "No such file or directory" (2026-09-27).
+    let output = committed.join(".wisent-output");
     let inputs = evidence.join("inputs");
-    fs::create_dir_all(&output)?;
+    fs::create_dir_all(&output)
+        .with_context(|| format!("creating the build output {}", output.display()))?;
     let mut environment = BTreeMap::from([
         (
             "WISENT_SOURCE_DIR".to_owned(),

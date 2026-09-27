@@ -26,11 +26,15 @@ fn files(path: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 pub fn stage(manifest: &Path, output: &Path, platform: &str) -> Result<Vec<Value>> {
-    let manifest: Value = serde_json::from_slice(&fs::read(manifest)?)?;
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(manifest).with_context(|| format!("reading {}", manifest.display()))?,
+    )?;
     let product = manifest["product"]
         .as_str()
         .context("release manifest has no product")?;
-    let root = output.canonicalize()?;
+    let root = output
+        .canonicalize()
+        .with_context(|| format!("the build output {} is missing", output.display()))?;
     let stage = manifest["platforms"][platform]["stage"]
         .as_object()
         .context("release platform has no stage map")?;
@@ -56,7 +60,14 @@ pub fn stage(manifest: &Path, output: &Path, platform: &str) -> Result<Vec<Value
             bail!("release signing path escapes its root");
         }
         let source = root.join(source);
-        if !source.canonicalize()?.starts_with(&root) {
+        let resolved = source.canonicalize().with_context(|| {
+            format!(
+                "the build did not produce stage key {} inside WISENT_OUTPUT_DIR {}",
+                source.strip_prefix(&root).unwrap_or(&source).display(),
+                root.display()
+            )
+        })?;
+        if !resolved.starts_with(&root) {
             bail!("release signing input escapes output: {}", source.display());
         }
         let mut members = Vec::new();
