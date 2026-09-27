@@ -104,6 +104,12 @@ pub fn revision(root: &Path) -> Result<String> {
             "status",
             "--porcelain",
             "--untracked-files=normal",
+            "--",
+            ".",
+            // Stado's own evidence and scratch inside the checkout are not
+            // source; see provenance::capture.
+            ":(top,exclude).wisent-output",
+            ":(top,exclude).build",
         ],
     )?
     .is_empty()

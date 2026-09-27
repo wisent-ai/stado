@@ -79,9 +79,19 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
                 .env("GIT_INDEX_FILE", &index)
                 .current_dir(root),
         )?;
+        // Stado writes its own command evidence and private scratch inside
+        // the checkout; counting them would make every run change the source
+        // it verifies, in any repository that does not happen to ignore them.
         checked(
             Command::new("git")
-                .args(["add", "--all", "--", "."])
+                .args([
+                    "add",
+                    "--all",
+                    "--",
+                    ".",
+                    ":(top,exclude).wisent-output",
+                    ":(top,exclude).build",
+                ])
                 .env("GIT_INDEX_FILE", &index)
                 .current_dir(root),
         )?;
