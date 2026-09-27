@@ -43,7 +43,11 @@ fn retired_units(run: &mut Run) -> Result<()> {
         .find(|row| row["name"] == "transcript-lake")
         .context("transcript-lake service missing from the derived catalog")?;
     ensure!(
-        lake["retired_units"] == serde_json::json!(["com.wisent.transcript-lake-stream"]),
+        lake["retired_units"]
+            == serde_json::json!([
+                "com.wisent.transcript-lake-stream",
+                "com.wisent.transcript-lake-secret-scrub"
+            ]),
         "the derived service catalog does not carry the retired units: {lake}"
     );
 
