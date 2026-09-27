@@ -16,6 +16,7 @@ struct DatabasesView: View {
     /// The declaration form, open on nothing. Its identity is a string no
     /// database can be named, so re-opening the sheet is always fresh.
     @State private var isDeclaring = false
+    @State private var isCreating = false
     @State private var pendingRemoval: DatabaseRow?
     @State private var consumerEditor: ConsumerEdit?
 
@@ -28,6 +29,7 @@ struct DatabasesView: View {
                 WisentAction("Declare…", symbol: "plus", kind: .primary) {
                     isDeclaring = true
                 },
+                WisentAction("Create…", symbol: "cylinder.split.1x2") { isCreating = true },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
                     Task { await store.refresh() }
                 },
@@ -57,6 +59,7 @@ struct DatabasesView: View {
         .sheet(isPresented: $isDeclaring) {
             DatabaseDeclareForm(store: store)
         }
+        .sheet(isPresented: $isCreating) { DatabaseCreateForm(store: store) }
         .sheet(item: $consumerEditor) { edit in
             DatabaseConsumerForm(edit: edit, store: store)
         }

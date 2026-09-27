@@ -14,6 +14,17 @@ pub(super) fn declare(
     consumers: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
+    report_mutation(json_output, declaration(name, engine, scopes, consumers)?)
+}
+
+/// Write one declaration and return its report, printing nothing: `create`
+/// folds it into its own single answer.
+pub(super) fn declaration(
+    name: &str,
+    engine: &str,
+    scopes: &[String],
+    consumers: &[String],
+) -> Result<Value, CmdError> {
     if !canonical_name(name) {
         return Err(CmdError::usage(
             "NAME must be lowercase letters, digits and dashes",
@@ -60,16 +71,13 @@ pub(super) fn declare(
         map.insert(name.to_string(), declaration.clone());
         Ok(())
     })?;
-    report_mutation(
-        json_output,
-        json!({
-            "declared": name,
-            "engine": engine,
-            "scopes": clean_scopes,
-            "consumers": clean_consumers,
-            "item": format!("{name}-database"),
-        }),
-    )
+    Ok(json!({
+        "declared": name,
+        "engine": engine,
+        "scopes": clean_scopes,
+        "consumers": clean_consumers,
+        "item": format!("{name}-database"),
+    }))
 }
 
 pub(super) fn remove(name: &str, json_output: bool) -> Result<(), CmdError> {

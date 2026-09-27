@@ -62,6 +62,26 @@ final class DatabasesStore: ObservableObject {
         ["database", "remove", name, "--json"]
     }
 
+    /// `stado database create`: without an accepted monthly figure the CLI
+    /// refuses and its sentence carries the bill one more project adds.
+    nonisolated static func createArguments(
+        name: String, consumers: [String], acceptMonthlyUSD: String
+    ) -> [String] {
+        var arguments = ["database", "create", name]
+        for consumer in consumers {
+            let trimmed = consumer.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty {
+                arguments += ["--consumer", trimmed]
+            }
+        }
+        let accepted = acceptMonthlyUSD.trimmingCharacters(in: .whitespaces)
+        if !accepted.isEmpty {
+            arguments += ["--accept-monthly-usd", accepted]
+        }
+        arguments.append("--json")
+        return arguments
+    }
+
     nonisolated static func consumerArguments(
         _ verb: String, name: String, consumers: [String]
     ) -> [String] {
@@ -123,6 +143,12 @@ final class DatabasesStore: ObservableObject {
     ) async -> Bool {
         await mutate(Self.declareArguments(
             name: name, engine: engine, scopes: scopes, consumers: consumers
+        ))
+    }
+
+    func create(name: String, consumers: [String], acceptMonthlyUSD: String) async -> Bool {
+        await mutate(Self.createArguments(
+            name: name, consumers: consumers, acceptMonthlyUSD: acceptMonthlyUSD
         ))
     }
 

@@ -220,6 +220,15 @@ pub(super) async fn create(
         None => {
             let (slug, region, report) =
                 priced_creation(name, anchor, &token, &projects, accept_monthly_usd).await?;
+            // The generated password exists only in this process until the
+            // item holds it, so a host that cannot write the item must not
+            // create the project.
+            owner::vault().map_err(|error| {
+                CmdError::click(format!(
+                    "{item} cannot be written here, so {name} was not created: {error}. \
+                     Run stado database create on the vault owner host."
+                ))
+            })?;
             let password = format!(
                 "{}{}",
                 uuid::Uuid::new_v4().simple(),
@@ -257,12 +266,11 @@ pub(super) async fn create(
     owner::write_item(&item, "bundle", &fields, &context)
         .map_err(|error| CmdError::click(error.to_string()))?;
 
-    super::verbs::declare(
+    let declared = super::verbs::declaration(
         name,
         "postgres",
         &["read".to_string(), "write".to_string()],
         consumers,
-        json_output,
     )?;
     let outcome = json!({
         "created": name,
@@ -272,6 +280,7 @@ pub(super) async fn create(
         "pooler": pooler.is_some(),
         "password_on_item": password.is_some(),
         "cost": report,
+        "declaration": declared,
     });
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
