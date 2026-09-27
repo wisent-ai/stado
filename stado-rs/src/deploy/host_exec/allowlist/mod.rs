@@ -21,8 +21,10 @@ pub use programs::{
 
 /// The punctuation an operator's word may contain on top of ASCII
 /// alphanumerics. Every one of these is inert to `/bin/sh`: no expansion,
-/// no word splitting, no redirection, no globbing.
-const SAFE_PUNCTUATION: &str = "-_./:%+";
+/// no word splitting, no redirection, no globbing. A comma is among them:
+/// POSIX sh has no brace expansion, and `lsblk -o NAME,SIZE,…` (8dd1faf0)
+/// could not be typed without it (9c6f86e9).
+const SAFE_PUNCTUATION: &str = "-_./:%+,";
 
 /// One approved remote program.
 #[derive(Clone, Copy, Debug)]

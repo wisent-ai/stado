@@ -62,10 +62,14 @@ async fn absent_legacy_declaration_cannot_authorize_a_real_listener() {
         std::net::TcpListener::bind("127.0.0.1:0").expect("first independent port"),
         std::net::TcpListener::bind("127.0.0.1:0").expect("second independent port"),
     ];
+    // A home of its own: the guard asks the release proxy under the target's
+    // home which pid it is, and the operator's real ~/.stado/release-proxy.sock
+    // answered with a live proxy's pid on 2026-09-27, failing this case (9c6f86e9).
+    let home = tempfile::tempdir().expect("scratch home");
     let target = ReleaseTargetPolicy {
         platform: std::env::consts::OS.to_string(),
         run_as_user: std::env::var("USER").expect("test account"),
-        home: std::env::var("HOME").expect("test home"),
+        home: home.path().to_string_lossy().into_owned(),
         state_dir: String::new(),
         runtime_root: String::new(),
         logs_root: String::new(),
