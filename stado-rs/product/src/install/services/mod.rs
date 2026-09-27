@@ -47,10 +47,15 @@ pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
 
 /// Withdraw every unit the catalog lists as this product's predecessor on
 /// `host`, after its one service is ready: a declaration left in the registry
-/// is one the reconciler starts again beside it. A unit Stado does not manage
-/// on the host is reported as such, because nothing in the registry can
-/// recreate it; any other refusal fails the install, since the host would
-/// still run two processes of the product.
+/// is one the reconciler starts again beside it.
+///
+/// A retired unit Stado does not manage is adopted first and then removed:
+/// the catalog's word that it is retired is the authority, and reporting it
+/// as "not managed" left `com.wisent.transcript-lake-secret-scrub`, installed
+/// by hand on 2026-08-31, loaded on lukasz-macbook for four weeks after the
+/// catalog retired it. A unit the host does not have is reported as absent.
+/// Any other refusal fails the install, since the host would still run two
+/// processes of the product.
 fn retire_predecessors(product: &Value, host: &str) -> Result<Vec<Value>> {
     let mut outcomes = Vec::new();
     for unit in product["service"]["retired_units"]
@@ -61,23 +66,58 @@ fn retire_predecessors(product: &Value, host: &str) -> Result<Vec<Value>> {
         let unit = unit
             .as_str()
             .context("service.retired_units must hold unit names")?;
-        let output = capture(stado().args(["service", "remove", unit, "--host", host, "--json"]))?;
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if output.status.success() {
-            let receipt = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
-            outcomes.push(json!({"unit": unit, "status": "removed", "receipt": receipt}));
-        } else if stderr.contains("is not a registry-managed service on") {
-            outcomes.push(json!({"unit": unit, "status": "not-managed", "detail": stderr.trim()}));
-        } else {
+        let removed = remove_unit(unit, host)?;
+        if removed.status.success() {
+            outcomes.push(json!({"unit": unit, "status": "removed", "receipt": receipt(&removed)}));
+            continue;
+        }
+        let stderr = String::from_utf8_lossy(&removed.stderr);
+        if !stderr.contains("is not a registry-managed service on") {
             bail!(
                 "could not retire {unit} on {host}; stado service remove exited {}: {}{}",
-                output.status,
-                String::from_utf8_lossy(&output.stdout),
+                removed.status,
+                String::from_utf8_lossy(&removed.stdout),
                 stderr.trim()
             );
         }
+        let adopted = capture(stado().args(["service", "adopt", unit, "--host", host, "--json"]))?;
+        let adoption = String::from_utf8_lossy(&adopted.stderr);
+        if !adopted.status.success() {
+            if adoption.contains("is not present on") {
+                outcomes.push(json!({"unit": unit, "status": "absent", "detail": adoption.trim()}));
+                continue;
+            }
+            bail!(
+                "could not retire {unit} on {host}: it is not managed, and stado service adopt \
+                 exited {}: {}",
+                adopted.status,
+                adoption.trim()
+            );
+        }
+        let removed = remove_unit(unit, host)?;
+        if !removed.status.success() {
+            bail!(
+                "adopted {unit} on {host} to retire it, and stado service remove then exited {}: {}",
+                removed.status,
+                String::from_utf8_lossy(&removed.stderr).trim()
+            );
+        }
+        outcomes.push(json!({
+            "unit": unit,
+            "status": "adopted-and-removed",
+            "adoption": receipt(&adopted),
+            "receipt": receipt(&removed),
+        }));
     }
     Ok(outcomes)
+}
+
+fn remove_unit(unit: &str, host: &str) -> Result<std::process::Output> {
+    capture(stado().args(["service", "remove", unit, "--host", host, "--json"]))
+}
+
+fn receipt(output: &std::process::Output) -> Value {
+    serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null)
 }
 
 pub fn observe(product: &Value, host: &str) -> Result<Value> {
