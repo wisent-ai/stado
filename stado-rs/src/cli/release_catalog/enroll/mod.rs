@@ -143,6 +143,19 @@ pub(crate) fn missing_step_programs(
         if let Some(path) = program(&platform.build.argv) {
             missing.push(format!("{platform_name} build runs {path}"));
         }
+        // The packager reads stage keys inside WISENT_OUTPUT_DIR, which is
+        // `<source>/.wisent-output`; a key that names that directory again
+        // points one level too deep, and the build fails at packaging after
+        // it has compiled everything.
+        for key in platform.stage.keys() {
+            if let Some(inside) = key.strip_prefix(".wisent-output/") {
+                missing.push(format!(
+                    "{platform_name} stages {key}, which the packager reads inside \
+                     WISENT_OUTPUT_DIR (<source>/.wisent-output) as .wisent-output/{key}; \
+                     stage {inside} instead"
+                ));
+            }
+        }
     }
     for delivery in &manifest.deliveries {
         if let Some(path) = program(&delivery.argv) {
@@ -158,8 +171,8 @@ pub(crate) fn missing_programs_refusal(product: &str, missing: &[String]) -> Res
         return Ok(());
     }
     Err(CmdError::click(format!(
-        "{product}: {} — the checkout holds no such file; point the step at a Stado command \
-         or at a file the checkout holds",
+        "{product}: {} — nothing was enrolled; point each step at a Stado command or a file \
+         the checkout holds, and each stage key at a path inside WISENT_OUTPUT_DIR",
         missing.join("; ")
     )))
 }
