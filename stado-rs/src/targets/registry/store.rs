@@ -95,34 +95,13 @@ impl RegistryStore {
                 location: registry_location(),
             });
         }
+        // A local store that an object API serves roots every client, this
+        // one included, in the queue namespace's directory, where that API
+        // writes the canonical document (JobStorage's StoreRoot::Client).
         let store = JobStorage::for_primary_reads().await?;
-        // A local store that an object API serves keeps the canonical
-        // document where that API writes it: the queue namespace's own
-        // directory. Reading `<root>/registry.json` there read a second,
-        // stale document: on charless-mac-mini the queue agent inside the
-        // object API resolved a 20/25 GiB disk policy that scanned nothing,
-        // while every client of that same API read the declared 8/20 policy,
-        // until the disk filled on 2026-09-27. A store no object API serves
-        // has no namespace directory and keeps its document at the root.
-        let served = format!(
-            "ecosystem/{}/{REGISTRY_BLOB}",
-            crate::config::QUEUE_OBJECT_NAMESPACE
-        );
-        let local_root = crate::config::wc_local_storage_path();
-        let blob = if crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
-            == Some(crate::capabilities::StorageAdapter::Local)
-            && !local_root.is_empty()
-            && crate::config_file::expand_tilde(local_root)
-                .join(&served)
-                .is_file()
-        {
-            served
-        } else {
-            REGISTRY_BLOB.to_string()
-        };
         Ok(Self {
             backend: Arc::clone(store.backend()),
-            blob,
+            blob: REGISTRY_BLOB.to_string(),
             location: registry_location(),
         })
     }

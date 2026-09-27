@@ -24,7 +24,12 @@ impl JobStorage {
     /// Build a normal client store whose reads must remain on the configured
     /// primary while writes retain the configured disaster-recovery mirror.
     pub(crate) async fn for_primary_reads() -> Result<Self, StorageError> {
-        Self::with_bucket_read_mode(config::bucket(), super::failover::ReadMode::PrimaryOnly).await
+        Self::with_bucket_read_mode(
+            config::bucket(),
+            super::failover::ReadMode::PrimaryOnly,
+            StoreRoot::Client,
+        )
+        .await
     }
     /// Like [`JobStorage::for_primary_reads`] with an explicit bucket.
     ///
@@ -32,7 +37,12 @@ impl JobStorage {
     /// GCS, but liveness observations still must not fail over to a
     /// disaster-recovery copy and turn an unread primary into live state.
     pub(crate) async fn with_bucket_primary_reads(bucket: &str) -> Result<Self, StorageError> {
-        Self::with_bucket_read_mode(bucket, super::failover::ReadMode::PrimaryOnly).await
+        Self::with_bucket_read_mode(
+            bucket,
+            super::failover::ReadMode::PrimaryOnly,
+            StoreRoot::Client,
+        )
+        .await
     }
 
     /// Build the authoritative backing store used by the Stado API server.
@@ -54,7 +64,12 @@ impl JobStorage {
                     .to_string(),
             ));
         }
-        Self::for_primary_reads().await
+        Self::with_bucket_read_mode(
+            config::bucket(),
+            super::failover::ReadMode::PrimaryOnly,
+            StoreRoot::Served,
+        )
+        .await
     }
 
     /// Like [`JobStorage::new`] but binds the "gcs" backend to an explicit
@@ -62,12 +77,18 @@ impl JobStorage {
     /// bucket for routing — it is rooted at `config::wc_local_storage_path()`
     /// — but keeps it as `bucket_name` like Python `JobStorage(bucket)`.
     pub async fn with_bucket(bucket: &str) -> Result<Self, StorageError> {
-        Self::with_bucket_read_mode(bucket, super::failover::ReadMode::Failover).await
+        Self::with_bucket_read_mode(
+            bucket,
+            super::failover::ReadMode::Failover,
+            StoreRoot::Client,
+        )
+        .await
     }
 
     async fn with_bucket_read_mode(
         bucket: &str,
         read_mode: super::failover::ReadMode,
+        root: StoreRoot,
     ) -> Result<Self, StorageError> {
         // An unset backend with a configured local path is not a
         // misconfiguration to refuse; it is the local-only profile this machine
@@ -107,7 +128,7 @@ impl JobStorage {
         let local_path = (adapter == StorageAdapter::Local)
             .then(|| LocalBackend::resolved_root(config::wc_local_storage_path()))
             .transpose()?
-            .map(|path| path.to_string_lossy().into_owned());
+            .map(|path| root.queue_root(&path).to_string_lossy().into_owned());
         let backend = construct_backend(
             adapter,
             BackendLocator {
@@ -178,9 +199,20 @@ impl JobStorage {
             return Ok(self);
         }
         if endpoint.adapter() == Some(StorageAdapter::Local) {
-            endpoint.path = LocalBackend::resolved_root(&endpoint.path)?
-                .to_string_lossy()
-                .into_owned();
+            // The mirror keeps the primary's layout: a client rooted in the
+            // served queue namespace mirrors into the same namespace of the
+            // backup, where the server's own mirror writes those keys.
+            let resolved = LocalBackend::resolved_root(&endpoint.path)?;
+            let primary_namespaced = self.local_path.as_deref().is_some_and(|path| {
+                std::path::Path::new(path).ends_with(StoreRoot::namespace_tail())
+            });
+            endpoint.path = if primary_namespaced {
+                StoreRoot::namespaced(&resolved)
+            } else {
+                resolved
+            }
+            .to_string_lossy()
+            .into_owned();
         }
         let backup = endpoint.build().await?;
         self.backend = Arc::new(super::failover::ReadFailoverBackend::new(
@@ -190,5 +222,60 @@ impl JobStorage {
         ));
         self.backup_endpoint = Some(Arc::new(endpoint));
         Ok(self)
+    }
+}
+
+/// Where a process roots a local store.
+///
+/// A store an object API serves keeps the fleet's queue under
+/// `ecosystem/<QUEUE_OBJECT_NAMESPACE>/`, the keys every remote agent reads
+/// and writes through that API. The server itself addresses the whole store
+/// (`Served`); every other process on that host — the queue agent inside the
+/// object API among them — is a queue client (`Client`) and roots its queue
+/// in that namespace. Rooted at the store top, the mini's agent published its
+/// capacity where no other host looks and claimed none of the fleet's jobs
+/// (0b6008fe). A store no object API serves has no namespace directory and
+/// stays rooted at its top.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StoreRoot {
+    Served,
+    Client,
+}
+
+impl StoreRoot {
+    fn namespace_tail() -> std::path::PathBuf {
+        std::path::Path::new("ecosystem").join(config::QUEUE_OBJECT_NAMESPACE)
+    }
+
+    fn namespaced(root: &std::path::Path) -> std::path::PathBuf {
+        root.join(Self::namespace_tail())
+    }
+
+    /// The directory this process's queue lives in, under a resolved root.
+    pub(crate) fn queue_root(self, root: &std::path::Path) -> std::path::PathBuf {
+        let served = Self::namespaced(root);
+        if self == Self::Client && served.is_dir() {
+            served
+        } else {
+            root.to_path_buf()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StoreRoot;
+
+    /// 0b6008fe: on a store an object API serves, a client's queue is the
+    /// served namespace; the server keeps the whole store; a store nothing
+    /// serves stays rooted at its top for both.
+    #[test]
+    fn a_client_of_a_served_store_roots_its_queue_in_the_served_namespace() {
+        let store = tempfile::tempdir().expect("scratch store");
+        assert_eq!(StoreRoot::Client.queue_root(store.path()), store.path());
+        let served = StoreRoot::namespaced(store.path());
+        std::fs::create_dir_all(&served).expect("served namespace");
+        assert_eq!(StoreRoot::Client.queue_root(store.path()), served);
+        assert_eq!(StoreRoot::Served.queue_root(store.path()), store.path());
     }
 }
