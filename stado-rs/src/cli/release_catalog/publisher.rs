@@ -142,6 +142,15 @@ pub(super) async fn declare_publisher(
     //    publication boundary, so any failure retracts every declaration
     //    written above before the error is returned.
     for host in &declared_on {
+        // A client that reads the owner's vault holds no vault a verifier
+        // could be reconciled against: the repair would judge its retired
+        // local copy (it refused with "token file does not match the
+        // consumer's recorded bearer" on 2026-09-27). Its declaration only
+        // lets its own build and release submit find the publisher.
+        if client_reads_owner && host == client {
+            report.push(json!({ "step": "verifier", "host": host, "repair": "not needed: reads the vault on the owner", "owner": owner }));
+            continue;
+        }
         let arguments = [
             "repair",
             "stado",
