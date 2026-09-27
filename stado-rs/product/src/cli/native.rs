@@ -21,7 +21,11 @@ pub fn cargo() -> Command {
         .arg(
             Arg::new("operation")
                 .required(true)
-                .value_parser(["build", "check", "test", "run", "metadata"]),
+                .value_parser(["build", "check", "test", "run", "metadata", "stage"])
+                .help(
+                    "stage: a locked release build of the forwarded --bin targets, each \
+                     binary placed at $WISENT_OUTPUT_DIR/<name> for a release manifest to stage",
+                ),
         )
         .arg(forwarded())
 }
