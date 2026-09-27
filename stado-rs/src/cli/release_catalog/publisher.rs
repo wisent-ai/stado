@@ -134,25 +134,69 @@ pub(super) async fn declare_publisher(
     //    compares its grant with its own publisher table; repairing only the
     //    owner leaves the client and API targets failing closed. Use a fresh
     //    process because this one read configuration before the writes above.
+    //    The reconciliation reads the authoritative publisher items from the
+    //    vault on the machine it runs on, so a client that reads the owner's
+    //    vault through secrets.skarbiec.url runs it on the owner: run here it
+    //    refused on lukasz-macbook's retired vault copies on 2026-09-27.
+    //    A declaration no verifier accepts closes that host's release
+    //    publication boundary, so any failure retracts every declaration
+    //    written above before the error is returned.
     for host in &declared_on {
-        let repair = std::process::Command::new(std::env::current_exe()?)
-            .args([
-                "repair",
-                "stado",
-                "--step",
-                "release-verifier",
-                "--target",
-                host,
-                "--apply",
-            ])
-            .output()?;
-        if !repair.status.success() {
+        let arguments = [
+            "repair",
+            "stado",
+            "--step",
+            "release-verifier",
+            "--target",
+            host.as_str(),
+            "--apply",
+        ];
+        let repaired = if client_reads_owner {
+            crate::cli::host::remote_stado_output(
+                owner,
+                &arguments,
+                std::time::Duration::from_secs(600),
+            )
+            .await
+            .map(|_| ())
+        } else {
+            let repair = std::process::Command::new(std::env::current_exe()?)
+                .args(arguments)
+                .output()?;
+            if repair.status.success() {
+                Ok(())
+            } else {
+                Err(CmdError::click(
+                    String::from_utf8_lossy(&repair.stderr).trim().to_string(),
+                ))
+            }
+        };
+        if let Err(error) = repaired {
+            let mut retracted = Vec::new();
+            for declared_host in &declared_on {
+                let outcome = crate::cli::host::remote_stado_output(
+                    declared_host,
+                    &["config", "unset", &key],
+                    std::time::Duration::from_secs(60),
+                )
+                .await;
+                retracted.push(match outcome {
+                    Ok(_) => format!("{declared_host}: retracted"),
+                    Err(retract) => format!("{declared_host}: NOT retracted ({retract})"),
+                });
+            }
             return Err(CmdError::click(format!(
-                "release-verifier repair on {host} failed after the declaration was written: {}",
-                String::from_utf8_lossy(&repair.stderr).trim()
+                "release-verifier repair for {host}{} failed after the declaration was written: \
+                 {error}; {key} was withdrawn so no verifier fails closed on it: {}",
+                if client_reads_owner {
+                    format!(" (run on the vault owner {owner})")
+                } else {
+                    String::new()
+                },
+                retracted.join("; ")
             )));
         }
-        report.push(json!({ "step": "verifier", "host": host, "repair": "release-verifier" }));
+        report.push(json!({ "step": "verifier", "host": host, "repair": "release-verifier", "ran_on": if client_reads_owner { owner } else { client } }));
     }
 
     // 5. The units whose processes cache the publisher table, last.

@@ -86,3 +86,53 @@ pub(crate) async fn remote_config_output(
     }
     Ok(output.stdout)
 }
+
+/// Run the host's own installed Stado with `arguments`, each carried base64
+/// encoded and decoded into its own argv word, and return its output.
+///
+/// A release client that holds no vault cannot reconcile a verifier: the
+/// reconciliation reads the authoritative publisher items from the vault on
+/// the machine it runs on. `declare-publisher` therefore runs it on the vault
+/// owner through this, with the owner's own binary and configuration.
+pub(crate) async fn remote_stado_output(
+    target: &str,
+    arguments: &[&str],
+    timeout: std::time::Duration,
+) -> Result<String, CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut script = CONFIG_SCRIPT_PREFIX.to_string();
+    let mut words = Vec::with_capacity(arguments.len());
+    for (index, argument) in arguments.iter().enumerate() {
+        script.push_str(&format!(
+            "a{index}=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n",
+            STANDARD.encode(argument.as_bytes())
+        ));
+        words.push(format!("\"$a{index}\""));
+    }
+    script.push_str(&format!("\"$binary\" {}\n", words.join(" ")));
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        timeout,
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        let detail = output.detail().trim().to_string();
+        return Err(CmdError::click(format!(
+            "stado {} on {} failed (exit {}): {}",
+            arguments.join(" "),
+            resolved.name,
+            output.code,
+            if detail.is_empty() {
+                "no output"
+            } else {
+                &detail
+            }
+        )));
+    }
+    Ok(output.stdout)
+}
