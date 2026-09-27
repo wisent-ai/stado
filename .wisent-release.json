@@ -75,7 +75,7 @@
         },
         {
           "name": "release-steps",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3", "--test", "product_documentation_index", "--test", "product_tree_archive"]
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3", "--test", "product_documentation_index", "--test", "product_tree_archive", "--test", "product_lock"]
         }
       ],
       "stage": {
@@ -138,7 +138,7 @@
         },
         {
           "name": "release-steps",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3", "--test", "product_documentation_index", "--test", "product_tree_archive"]
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3", "--test", "product_documentation_index", "--test", "product_tree_archive", "--test", "product_lock"]
         }
       ],
       "stage": {
