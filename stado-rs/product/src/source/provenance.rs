@@ -79,18 +79,28 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
                 .env("GIT_INDEX_FILE", &index)
                 .current_dir(root),
         )?;
+        checked(
+            Command::new("git")
+                .args(["add", "--all", "--", "."])
+                .env("GIT_INDEX_FILE", &index)
+                .current_dir(root),
+        )?;
         // Stado writes its own command evidence and private scratch inside
         // the checkout; counting them would make every run change the source
         // it verifies, in any repository that does not happen to ignore them.
+        // They leave the private index after the add: naming them in the add's
+        // pathspec fails outright in a repository that does ignore them.
         checked(
             Command::new("git")
                 .args([
-                    "add",
-                    "--all",
+                    "rm",
+                    "-r",
+                    "--cached",
+                    "--ignore-unmatch",
+                    "--quiet",
                     "--",
-                    ".",
-                    ":(top,exclude).wisent-output",
-                    ":(top,exclude).build",
+                    ":(top).wisent-output",
+                    ":(top).build",
                 ])
                 .env("GIT_INDEX_FILE", &index)
                 .current_dir(root),
