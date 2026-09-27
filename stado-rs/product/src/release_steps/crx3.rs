@@ -142,7 +142,10 @@ fn files(root: &Path, relative: &mut Vec<String>, out: &mut Vec<Vec<String>>) ->
         } else if kind.is_file() {
             out.push(relative.clone());
         } else {
-            bail!("{} is neither a file nor a directory", entry.path().display());
+            bail!(
+                "{} is neither a file nor a directory",
+                entry.path().display()
+            );
         }
         relative.pop();
     }
@@ -188,7 +191,9 @@ fn zip_extension(root: &Path, version: &str) -> Result<Vec<u8>> {
         ] {
             zip.extend(value.to_le_bytes());
         }
-        sizes.iter().for_each(|value| zip.extend(value.to_le_bytes()));
+        sizes
+            .iter()
+            .for_each(|value| zip.extend(value.to_le_bytes()));
         zip.extend(name_length.to_le_bytes());
         zip.extend(ZIP_EMPTY_U16.to_le_bytes());
         zip.extend(name.as_bytes());
@@ -205,7 +210,9 @@ fn zip_extension(root: &Path, version: &str) -> Result<Vec<u8>> {
         ] {
             central.extend(value.to_le_bytes());
         }
-        sizes.iter().for_each(|value| central.extend(value.to_le_bytes()));
+        sizes
+            .iter()
+            .for_each(|value| central.extend(value.to_le_bytes()));
         central.extend(name_length.to_le_bytes());
         // Extra field, comment, disk number and internal attributes: none;
         // then no external attributes, then where the local header starts.
@@ -215,7 +222,9 @@ fn zip_extension(root: &Path, version: &str) -> Result<Vec<u8>> {
         central.extend(ZIP_EMPTY_U32.to_le_bytes());
         central.extend(offset.to_le_bytes());
         central.extend(name.as_bytes());
-        count = count.checked_add(1).context("the extension has too many files")?;
+        count = count
+            .checked_add(1)
+            .context("the extension has too many files")?;
     }
     let directory_offset = u32::try_from(zip.len())?;
     let directory_length = u32::try_from(central.len())?;

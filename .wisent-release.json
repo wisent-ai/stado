@@ -72,6 +72,10 @@
         {
           "name": "fleet-expansion-cli",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
+        },
+        {
+          "name": "release-step-crx3",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3"]
         }
       ],
       "stage": {
@@ -131,6 +135,10 @@
         {
           "name": "fleet-expansion-cli",
           "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
+        },
+        {
+          "name": "release-step-crx3",
+          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3"]
         }
       ],
       "stage": {

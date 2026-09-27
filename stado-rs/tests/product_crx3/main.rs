@@ -27,7 +27,11 @@ fn scratch(label: &str) -> PathBuf {
         "{\"manifest_version\": 3, \"name\": \"journey\", \"version\": \"0.0.1\"}\n",
     )
     .unwrap();
-    fs::write(root.join("extension/background.js"), "chrome.runtime.onInstalled.addListener(() => {});\n").unwrap();
+    fs::write(
+        root.join("extension/background.js"),
+        "chrome.runtime.onInstalled.addListener(() => {});\n",
+    )
+    .unwrap();
     fs::write(root.join("extension/icons/icon.txt"), "icon\n".repeat(4096)).unwrap();
     root
 }
@@ -50,7 +54,12 @@ fn key(root: &Path, name: &str) -> String {
 /// spelled a–p, computed here with openssl alone.
 fn extension_id(root: &Path, key: &str) -> String {
     let public = root.join("public.der").to_string_lossy().into_owned();
-    assert!(run("openssl", &["rsa", "-in", key, "-pubout", "-outform", "DER", "-out", &public]).status.success());
+    assert!(run(
+        "openssl",
+        &["rsa", "-in", key, "-pubout", "-outform", "DER", "-out", &public]
+    )
+    .status
+    .success());
     let digest = run("openssl", &["dgst", "-sha256", "-binary", &public]).stdout;
     digest[..16]
         .iter()
@@ -66,7 +75,17 @@ fn pack(root: &Path, key: &str, expected_id: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(["product", "crx3", "--extension"])
         .arg(&extension)
-        .args(["--key", key, "--expected-id", expected_id, "--codebase", CODEBASE, "--version", VERSION, "--crx"])
+        .args([
+            "--key",
+            key,
+            "--expected-id",
+            expected_id,
+            "--codebase",
+            CODEBASE,
+            "--version",
+            VERSION,
+            "--crx",
+        ])
         .arg(&crx)
         .arg("--update-manifest")
         .arg(&update)
@@ -137,38 +156,73 @@ fn a_packed_extension_verifies_and_carries_its_version_and_update_manifest() {
     let verified = run(
         "openssl",
         &[
-            "dgst", "-sha256", "-keyform", "DER", "-verify",
+            "dgst",
+            "-sha256",
+            "-keyform",
+            "DER",
+            "-verify",
             &root.join("public.der").to_string_lossy(),
-            "-signature", &root.join("signature").to_string_lossy(),
+            "-signature",
+            &root.join("signature").to_string_lossy(),
             &root.join("signed").to_string_lossy(),
         ],
     );
     assert!(verified.status.success(), "{verified:?}");
 
     fs::write(root.join("extension.zip"), zip).unwrap();
-    let manifest = run("unzip", &["-p", &root.join("extension.zip").to_string_lossy(), "manifest.json"]);
+    let manifest = run(
+        "unzip",
+        &[
+            "-p",
+            &root.join("extension.zip").to_string_lossy(),
+            "manifest.json",
+        ],
+    );
     assert!(manifest.status.success(), "{manifest:?}");
     let manifest: serde_json::Value = serde_json::from_slice(&manifest.stdout).unwrap();
     assert_eq!(manifest["version"], VERSION);
     assert_eq!(manifest["name"], "journey");
-    let listing = run("unzip", &["-Z1", &root.join("extension.zip").to_string_lossy()]);
+    let listing = run(
+        "unzip",
+        &["-Z1", &root.join("extension.zip").to_string_lossy()],
+    );
     assert_eq!(
-        String::from_utf8_lossy(&listing.stdout).lines().collect::<Vec<_>>(),
+        String::from_utf8_lossy(&listing.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
         ["background.js", "icons/icon.txt", "manifest.json"]
     );
-    let tested = run("unzip", &["-t", &root.join("extension.zip").to_string_lossy()]);
+    let tested = run(
+        "unzip",
+        &["-t", &root.join("extension.zip").to_string_lossy()],
+    );
     assert!(tested.status.success(), "{tested:?}");
 
     let update = fs::read_to_string(root.join("out/skarbiec-autofill.xml")).unwrap();
-    assert!(update.contains(&format!("<app appid=\"{id}\">")), "{update}");
-    assert!(update.contains("codebase=\"https://stado.wisent.com/releases/skarbiec/1.2.3/linux-amd64/a&amp;b.crx\""), "{update}");
+    assert!(
+        update.contains(&format!("<app appid=\"{id}\">")),
+        "{update}"
+    );
+    assert!(
+        update.contains(
+            "codebase=\"https://stado.wisent.com/releases/skarbiec/1.2.3/linux-amd64/a&amp;b.crx\""
+        ),
+        "{update}"
+    );
     assert!(update.contains("version=\"1.2.3\""), "{update}");
-    assert!(!root.join("out/skarbiec-autofill.signed-data").exists(), "the signed-data scratch file stayed");
+    assert!(
+        !root.join("out/skarbiec-autofill.signed-data").exists(),
+        "the signed-data scratch file stayed"
+    );
 
     let again = pack(&root, &key, &id);
     assert!(again.status.success(), "{again:?}");
     let repacked = fs::read(root.join("out/skarbiec-autofill.crx")).unwrap();
-    assert_eq!(&repacked[12 + header_length..], zip, "one tree packs to one zip");
+    assert_eq!(
+        &repacked[12 + header_length..],
+        zip,
+        "one tree packs to one zip"
+    );
 }
 
 #[test]
@@ -177,20 +231,38 @@ fn a_key_with_another_id_or_a_bad_version_is_refused_and_nothing_is_written() {
     let key = key(&root, "key.pem");
     let refused = pack(&root, &key, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     assert!(!refused.status.success(), "{refused:?}");
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("expected pinned id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("expected pinned id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        "{refused:?}"
+    );
     assert!(!root.join("out").exists(), "a refused pack wrote output");
 
     let id = extension_id(&root, &key);
     let bad_version = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(["product", "crx3", "--extension"])
         .arg(root.join("extension"))
-        .args(["--key", &key, "--expected-id", &id, "--codebase", CODEBASE, "--version", "1.02", "--crx"])
+        .args([
+            "--key",
+            &key,
+            "--expected-id",
+            &id,
+            "--codebase",
+            CODEBASE,
+            "--version",
+            "1.02",
+            "--crx",
+        ])
         .arg(root.join("out/x.crx"))
         .arg("--update-manifest")
         .arg(root.join("out/x.xml"))
         .output()
         .unwrap();
     assert!(!bad_version.status.success(), "{bad_version:?}");
-    assert!(String::from_utf8_lossy(&bad_version.stderr).contains("invalid Chrome extension version: 1.02"), "{bad_version:?}");
+    assert!(
+        String::from_utf8_lossy(&bad_version.stderr)
+            .contains("invalid Chrome extension version: 1.02"),
+        "{bad_version:?}"
+    );
     assert!(!root.join("out").exists(), "a refused pack wrote output");
 }
