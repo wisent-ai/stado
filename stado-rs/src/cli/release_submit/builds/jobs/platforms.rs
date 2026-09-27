@@ -48,7 +48,12 @@ pub(crate) async fn enqueue_platforms(
             .is_some_and(|platform| platform.state == PlatformRunState::Submitted)
         {
             let job_id = build.platforms[p].job_id.clone();
-            if let Some(job) = read_terminal_job(store, &job_id).await? {
+            if let Some(reason) = super::fallback::release_silent_placement(store, &job_id).await? {
+                let platform = build.platforms.get_mut(p).expect("checked above");
+                platform.state = PlatformRunState::Failed;
+                platform.failure = Some(reason);
+                save_build(build).await?;
+            } else if let Some(job) = read_terminal_job(store, &job_id).await? {
                 if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) {
                     let platform = build.platforms.get_mut(p).expect("checked above");
                     platform.state = PlatformRunState::Failed;

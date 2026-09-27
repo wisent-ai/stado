@@ -3,6 +3,7 @@
 
 mod command;
 mod enqueue;
+mod fallback;
 
 pub(in crate::cli::release_submit) mod platforms;
 pub(in crate::cli::release_submit) mod terminal;
