@@ -35,6 +35,21 @@ pub fn release(
     root: &Path,
 ) -> Result<Prepared> {
     let id = text(product, "id")?;
+    let evidence = root
+        .join(".wisent-output/install")
+        .join(uuid::Uuid::new_v4().to_string());
+    let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
+    let revision = recorded["revision"]
+        .as_str()
+        .context("source snapshot has no revision")?
+        .trim_end_matches("-dirty")
+        .to_owned();
+    // Quality, build and signing run in the committed tree, as the release
+    // worker's git archive does: an uncommitted edit another session is
+    // making in this checkout neither enters the install nor fails it.
+    let committed = evidence.join("source");
+    source::export(root, &revision, &committed)?;
+    let root = committed.as_path();
     let document = manifest::load(root, text(recipe, "manifest")?)?;
     if document["product"] != id {
         bail!("release manifest product does not match {id}");
@@ -43,26 +58,15 @@ pub fn release(
     let spec = document["platforms"]
         .get(&platform)
         .with_context(|| format!("{id} has no {platform} release"))?;
-    let evidence = root
-        .join(".wisent-output/install")
-        .join(uuid::Uuid::new_v4().to_string());
     let output = evidence.join("output");
     let inputs = evidence.join("inputs");
     fs::create_dir_all(&output)?;
-    let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
-    let revision = recorded["revision"]
-        .as_str()
-        .context("source snapshot has no revision")?
-        .to_owned();
     let mut environment = BTreeMap::from([
         (
             "WISENT_SOURCE_DIR".to_owned(),
             root.to_string_lossy().into_owned(),
         ),
-        (
-            "WISENT_SOURCE_COMMIT".to_owned(),
-            revision.trim_end_matches("-dirty").to_owned(),
-        ),
+        ("WISENT_SOURCE_COMMIT".to_owned(), revision.clone()),
         (
             "WISENT_OUTPUT_DIR".to_owned(),
             output.to_string_lossy().into_owned(),
@@ -96,12 +100,6 @@ pub fn release(
     }
     step(&spec["build"], root, &environment)
         .with_context(|| format!("{id} build failed; evidence: {}", evidence.display()))?;
-    source::verify_unchanged(
-        root,
-        &recorded,
-        &evidence,
-        &root.join(".build/wisent-source"),
-    )?;
     if platform.starts_with("darwin-") {
         signing::stage(
             &manifest::inside(root, text(recipe, "manifest")?)?,

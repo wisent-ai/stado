@@ -28,6 +28,36 @@ pub fn verify_unchanged(
     Ok(())
 }
 
+/// The committed tree of `revision` (a `-dirty` suffix names its base) as
+/// plain files under `into`, the way the release worker unpacks a git
+/// archive: a local install builds what was committed, never another
+/// session's half-written edit in the same checkout.
+pub fn export(root: &Path, revision: &str, into: &Path) -> Result<()> {
+    let base = revision.trim_end_matches("-dirty");
+    fs::create_dir_all(into)?;
+    let archive = checked(
+        Command::new("git")
+            .args(["archive", "--format=tar", base])
+            .current_dir(root),
+    )?;
+    let mut unpack = Command::new("tar")
+        .args(["-x", "-f", "-", "-C"])
+        .arg(into)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .context("cannot run tar to unpack the committed source")?;
+    std::io::Write::write_all(
+        unpack.stdin.as_mut().context("tar has no stdin")?,
+        &archive.stdout,
+    )?;
+    drop(unpack.stdin.take());
+    let status = unpack.wait()?;
+    if !status.success() {
+        bail!("tar could not unpack the committed source of {base} into {}: {status}", into.display());
+    }
+    Ok(())
+}
+
 fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Value> {
     fs::create_dir_all(scratch)?;
     let revision = revision(root)?;

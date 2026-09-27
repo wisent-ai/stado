@@ -1,7 +1,7 @@
 mod index;
 pub(crate) use index::WorkspaceIndex;
 mod provenance;
-pub use provenance::{snapshot, verify_unchanged};
+pub use provenance::{export, snapshot, verify_unchanged};
 
 use crate::common::{capture, checked, Runtime};
 use anyhow::{bail, Result};
