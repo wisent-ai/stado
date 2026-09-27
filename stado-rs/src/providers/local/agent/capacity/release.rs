@@ -50,8 +50,11 @@ pub(crate) fn installed_stado_release_mismatch(log_fn: &mut dyn FnMut(&str)) -> 
     let installed = std::fs::read_to_string(&marker).ok()?;
     let installed = installed.trim();
     let running = env!("CARGO_PKG_VERSION");
-    if installed.is_empty() || installed == running {
+    if installed.is_empty() {
         return None;
+    }
+    if installed == running {
+        return replaced_image(&managed, running, log_fn);
     }
     match managed_binary_version(&managed) {
         Some(on_disk) if on_disk != running => Some(installed.to_string()),
@@ -80,4 +83,31 @@ pub(crate) fn installed_stado_release_mismatch(log_fn: &mut dyn FnMut(&str)) -> 
             None
         }
     }
+}
+
+/// The same version installed again under this process: the marker cannot
+/// tell it apart, and the process kept executing the replaced inode for good.
+/// On lukasz-macbook on 2026-09-27 `stado product install stado` reinstalled
+/// 0.22.10 over a 0.22.10 agent inside the object API; the marker read
+/// 0.22.10, nothing handed off, and the unit kept an image no longer on disk.
+/// When this process's image is not the managed file, a restart does change
+/// what runs, so the handoff is taken.
+fn replaced_image(
+    managed: &std::path::Path,
+    running: &str,
+    log_fn: &mut dyn FnMut(&str),
+) -> Option<String> {
+    let (installed, _) = crate::deploy::service::installed_image(managed).ok()?;
+    let own = std::process::id();
+    let images = crate::deploy::service::running_images(&[own]).ok()?;
+    let image = images.get(&own)?;
+    if image.is_same_file(&installed) {
+        return None;
+    }
+    log_fn(&format!(
+        "loop: release-image-replaced: {} was reinstalled at {running}, and this process still \
+         executes the file it replaced; handing off so the supervisor starts the installed one",
+        managed.display()
+    ));
+    Some(running.to_string())
 }
