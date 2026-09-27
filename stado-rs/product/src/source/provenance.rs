@@ -96,6 +96,9 @@ fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Val
                     "rm",
                     "-r",
                     "--cached",
+                    // Only the private index changes; the private index file
+                    // itself lives in .build and differs from what was added.
+                    "--force",
                     "--ignore-unmatch",
                     "--quiet",
                     "--",
