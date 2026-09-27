@@ -60,7 +60,9 @@ pub fn export(root: &Path, revision: &str, into: &Path) -> Result<String> {
             into.display()
         );
     }
-    Ok(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&archive.stdout)))
+    Ok(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+        &archive.stdout,
+    )))
 }
 
 fn capture(root: &Path, scratch: &Path, patch_path: Option<&Path>) -> Result<Value> {

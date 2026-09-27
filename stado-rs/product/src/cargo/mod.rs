@@ -128,7 +128,11 @@ pub(crate) fn execute(
         checked(
             Command::new("cargo")
                 .arg("fetch")
-                .args(options.iter().filter(|option| option.as_str() != "--offline"))
+                .args(
+                    options
+                        .iter()
+                        .filter(|option| option.as_str() != "--offline"),
+                )
                 .current_dir(manifest.parent().unwrap())
                 .env("GIT_ALLOW_PROTOCOL", "")
                 .env("CARGO_RESOLVER_LOCKFILE_PATH", &lockfile)
