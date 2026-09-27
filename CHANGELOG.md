@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **Credential custody commands work while the object API is down:** `stado credentials grant show|item-read|consolidate`, `token mint` and `token sync` found the vault host's Skarbiec through the registry document read from the object API, with no last-known-good fallback. The object API authorizes through the `stado` bearer, so when that bearer stopped matching its grant on 2026-09-27 the API answered 503 and every command that could repair the bearer failed with it. They now fall back to this machine's last-known-good registry copy, as host resolution already did, and name both failures when neither answers.
+
 - **`stado credentials token sync --shared-vault` delivers to a host with no vault of its own:** a host that reads the owner through its resolver route and has retired its local copy, as `stado credentials vault` directs, was refused with `declares no vault authority`, so a bearer re-minted on the owner could not reach it and every credential read there answered HTTP 403 — lukasz-macbook on 2026-09-27. In shared mode the destination's vault is no longer resolved; the bearer is verified against the owner's grant, as before.
 
 - **`stado service repair-runner-runtime` repairs an adopted runner started by `start-runner.sh`:** `com.wisent.actions-runner.wisent-backend-publisher` on charless-mac-mini failed every start with `Failed to create CoreCLR, HRESULT: 0x8007000C`, and the repair refused it because its unit names `start-runner.sh` instead of `runsvc.sh`. A `com.wisent.actions-runner.*` unit whose program is `start-runner.sh` is now accepted; the repair script still checks that the directory is a runner install.

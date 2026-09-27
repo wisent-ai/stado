@@ -90,7 +90,24 @@ pub(crate) async fn release_managed_skarbiec(
     home: &str,
 ) -> Result<String, CmdError> {
     let legacy = format!("{home}/.stado/bin/skarbiec");
-    let document = crate::cli::registry::fetch_document().await?;
+    // The authority first, then the last-known-good copy the host channel
+    // already resolves hosts from. Credential custody is how a broken bearer
+    // is repaired, and the authority is served by the object API, which
+    // authorizes through that same bearer: on 2026-09-27 a stado bearer that
+    // no longer matched its grant turned the object API into 503 'object
+    // authorization unavailable', and every grant and token command then died
+    // here, so the fleet's identity could be restored only by hand on the
+    // vault host.
+    let document = match crate::cli::registry::fetch_document().await {
+        Ok(document) => document,
+        Err(authority) => last_good_registry().map_err(|copy| {
+            CmdError::click(format!(
+                "the registry could not be read to find {}'s Skarbiec: authority: {authority}; \
+                 last-known-good copy: {copy}",
+                resolved.name
+            ))
+        })?,
+    };
     let control = crate::release_control::control(&document).map_err(CmdError::click)?;
     let Some(control) = control else {
         return Ok(legacy);
@@ -176,6 +193,17 @@ pub(crate) async fn release_managed_skarbiec(
         )));
     }
     Ok(path.to_string())
+}
+
+/// The last-known-good registry document this machine cached, as the host
+/// channel resolves hosts from when the authority does not answer.
+fn last_good_registry() -> Result<Value, String> {
+    let path = crate::targets::registry_last_good_path()
+        .ok_or_else(|| "last-known-good registry path is unavailable".to_string())?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{} is not valid registry JSON: {error}", path.display()))
 }
 
 /// The registry for `--registry-source` (Python `load_targets(source=...)`:
