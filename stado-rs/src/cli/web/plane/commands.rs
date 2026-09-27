@@ -5,7 +5,7 @@
 
 use clap::Subcommand;
 
-use crate::cli::web::{edge, origin};
+use crate::cli::web::{edge, origin, vercel};
 
 // `Declare` carries every flag the three kinds of declaration between them
 // need, so it is much larger than `List` or `Quality`. Boxing a clap
@@ -172,4 +172,8 @@ pub(crate) enum WebCommands {
         #[arg(long)]
         root: Option<String>,
     },
+    /// A product hosted on Vercel: its prebuilt build on a release worker,
+    /// and its production deploy as a manifest delivery.
+    #[command(subcommand)]
+    Vercel(vercel::VercelCommands),
 }
