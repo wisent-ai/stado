@@ -30,19 +30,19 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
-use crate::cli::host::{grant_item_read, vault_token_sync, write_host_config, TokenSyncMode};
+use crate::cli::host::{grant_item_read, vault_token_sync, TokenSyncMode};
 use crate::cli::CmdError;
 use crate::release_pipeline::ReleasePipelineManifest;
 
 use super::publisher::{ensure_publisher, fleet_hosts, home_relative};
 
+mod host_grant;
 mod rollout;
 mod runtime;
 
-/// The config keys the workload secret gate reads (`config::agent_skarbiec_items`
-/// and `config::agent_skarbiec_secret_fields`).
-const AGENT_ITEMS_KEY: &str = "agent.skarbiec.items";
-const AGENT_SECRET_FIELDS_KEY: &str = "agent.skarbiec.secret_fields";
+// The config keys the workload secret gate reads (`config::agent_skarbiec_items`
+// and `config::agent_skarbiec_secret_fields`) are written per host by
+// `host_grant::declare_on_host`.
 
 /// What enrolling one product found and did, step by step.
 pub(crate) struct Enrollment {
@@ -257,23 +257,10 @@ async fn ensure_workload_secrets(
     }
 
     let (owner, client) = fleet_hosts().await?;
-    let mut fields: BTreeSet<String> = declared_fields
-        .iter()
-        .map(|entry| entry.to_string())
-        .collect();
-    let mut items: BTreeSet<String> = declared_items
-        .iter()
-        .map(|entry| entry.to_string())
-        .collect();
-    for (item, field) in &missing {
-        fields.insert(format!("{item}#{field}"));
-        items.insert(item.clone());
-    }
     let mut hosts = vec![owner.clone(), client.clone()];
     hosts.dedup();
     for host in &hosts {
-        write_host_config(host, AGENT_SECRET_FIELDS_KEY, &json!(fields).to_string()).await?;
-        write_host_config(host, AGENT_ITEMS_KEY, &json!(items).to_string()).await?;
+        host_grant::declare_on_host(host, &missing).await?;
     }
     if client != owner {
         vault_token_sync(
