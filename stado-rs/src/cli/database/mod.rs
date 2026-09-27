@@ -16,6 +16,7 @@ use super::resolver::read_local_snapshot;
 use super::CmdError;
 
 mod commands;
+mod create;
 mod reads;
 mod verbs;
 mod writes;
@@ -41,6 +42,13 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             json,
         } => declare(&name, &engine, &scopes, &consumers, json),
         DatabaseCommands::Remove { name, json } => remove(&name, json),
+        DatabaseCommands::Create {
+            name,
+            consumers,
+            anchor,
+            accept_monthly_usd,
+            json,
+        } => create::create(&name, &anchor, &consumers, accept_monthly_usd, json).await,
         DatabaseCommands::Grant {
             name,
             consumers,

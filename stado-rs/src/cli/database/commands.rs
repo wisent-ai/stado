@@ -49,6 +49,32 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Create a hosted database the fleet does not have yet, then declare it.
+    ///
+    /// Creates a Supabase project named NAME in the organization and region
+    /// of the ANCHOR database's project, writes the credential item
+    /// `<name>-database` (coordinates, pooler, generated password) and
+    /// declares the database for its consumers. Before creating, it reads
+    /// the organization's plan and running projects and refuses unless
+    /// `--accept-monthly-usd` covers what one more project adds to the
+    /// compute bill; the credit balance is dashboard-only and is named as
+    /// unread. A project already named NAME is reused, never duplicated.
+    Create {
+        /// Logical database name, also the project name (lowercase letters, digits, dashes).
+        name: String,
+        /// Consumer allowed to resolve this database.
+        #[arg(long = "consumer", value_delimiter = ',', required = true)]
+        consumers: Vec<String>,
+        /// Declared database whose project's organization and region the new project joins.
+        #[arg(long, default_value = "oko")]
+        anchor: String,
+        /// Monthly compute cost in USD the operator accepts for the new project.
+        #[arg(long)]
+        accept_monthly_usd: Option<u64>,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove a database declaration from the Stado configuration.
     Remove {
         name: String,

@@ -1,0 +1,10 @@
+{
+  "source": "https://supabase.com/docs/guides/platform/manage-your-usage/compute",
+  "read": "2026-09-27",
+  "micro_monthly_usd": 10,
+  "paid_plan_compute_credit_usd": 10,
+  "free_plan_compute_usd": 0,
+  "created_instance_size": "micro",
+  "billing_page": "https://supabase.com/dashboard/org/{slug}/billing",
+  "direct_port": "5432"
+}
