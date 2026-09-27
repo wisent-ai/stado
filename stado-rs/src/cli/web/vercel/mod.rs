@@ -36,16 +36,22 @@ pub(super) const RECORD_SCHEMA: u32 = 1;
 pub(crate) enum VercelCommands {
     /// Build the checked-out product with Vercel and stage the prebuilt output.
     ///
-    /// Runs on a release worker. Reads VERCEL_TOKEN, VERCEL_ORG_ID and
-    /// VERCEL_PROJECT_ID from the platform's secret_env; writes
-    /// release/vercel-output.tar.gz and evidence/build.json under
-    /// WISENT_OUTPUT_DIR.
+    /// Runs on a release worker. Reads VERCEL_TOKEN, and VERCEL_ORG_ID and
+    /// VERCEL_PROJECT_ID unless --team-id and --project-id name them, from the
+    /// platform's secret_env; writes release/vercel-output.tar.gz and
+    /// evidence/build.json under WISENT_OUTPUT_DIR.
     Build {
         /// Serve a private Git dependency from a release input instead of
         /// GitHub: INPUT=OWNER/REPOSITORY.git, where INPUT is the manifest's
         /// input name and the input is a Git bundle directory. Repeatable.
         #[arg(long = "git-input")]
         git_inputs: Vec<String>,
+        /// The Vercel team, when the manifest names it rather than a secret.
+        #[arg(long)]
+        team_id: Option<String>,
+        /// The Vercel project, when the manifest names it rather than a secret.
+        #[arg(long)]
+        project_id: Option<String>,
     },
     /// Deploy the verified release's prebuilt output to Vercel production.
     ///
@@ -57,7 +63,11 @@ pub(crate) enum VercelCommands {
 
 pub(crate) async fn dispatch(command: VercelCommands) -> Result<(), CmdError> {
     match command {
-        VercelCommands::Build { git_inputs } => build(&git_inputs),
+        VercelCommands::Build {
+            git_inputs,
+            team_id,
+            project_id,
+        } => build(&git_inputs, team_id, project_id),
         VercelCommands::Deploy => deploy(),
     }
 }
@@ -85,15 +95,25 @@ pub(super) fn run(command: &mut Command) -> Result<(), CmdError> {
     Ok(())
 }
 
-fn build(git_inputs: &[String]) -> Result<(), CmdError> {
+fn build(
+    git_inputs: &[String],
+    team_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<(), CmdError> {
     let source = PathBuf::from(required("WISENT_SOURCE_DIR")?);
     let output = PathBuf::from(required("WISENT_OUTPUT_DIR")?);
     let product = required("WISENT_PRODUCT")?;
     let version = required("WISENT_VERSION")?;
     let platform = required("WISENT_PLATFORM")?;
     let token = required("VERCEL_TOKEN")?;
-    let organisation = required("VERCEL_ORG_ID")?;
-    let project = required("VERCEL_PROJECT_ID")?;
+    let organisation = match team_id {
+        Some(team) => team,
+        None => required("VERCEL_ORG_ID")?,
+    };
+    let project = match project_id {
+        Some(project) => project,
+        None => required("VERCEL_PROJECT_ID")?,
+    };
 
     let work = output.join("work");
     std::fs::create_dir_all(&work)
