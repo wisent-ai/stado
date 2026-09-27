@@ -275,7 +275,7 @@ pub(super) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
 /// The vault owner and this host, as registry target names.
 pub(super) async fn fleet_hosts() -> Result<(String, String), CmdError> {
     let client = this_host().await?;
-    let owner = vault_owner(&client)?;
+    let owner = vault_owner().await?;
     Ok((owner, client))
 }
 
@@ -288,36 +288,19 @@ pub(crate) async fn this_host() -> Result<String, CmdError> {
     crate::cli::resolver::current_target(&bootstrap).map_err(CmdError::click)
 }
 
-/// The host that owns the fleet vault: the bond this host's vault
-/// replicates, or this host when its vault replicates nothing. A vault whose
-/// status cannot be read is refused rather than guessed, because a publisher
-/// minted on a replica is overwritten by the next pull.
-fn vault_owner(this_host: &str) -> Result<String, CmdError> {
-    let declared = crate::config::skarbiec_vault_file();
-    let vault = if declared.is_empty() {
-        let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
-        std::path::Path::new(&home).join(".stado/skarbiec.vault.json")
-    } else {
-        std::path::PathBuf::from(declared)
-    };
-    let launcher = crate::cli::secrets::skarbiec_launcher()?;
-    let status = crate::cli::secrets::launcher_json(&launcher, &vault, &["sync-status"]).map_err(
-        |error| {
-            CmdError::click(format!(
-                "cannot tell which host owns the vault: skarbiec sync-status on {} failed: {error}",
-                vault.display()
-            ))
-        },
-    )?;
-    let bonds = status.as_array().ok_or_else(|| {
-        CmdError::click(format!(
-            "cannot tell which host owns the vault: skarbiec sync-status on {} answered {status}",
-            vault.display()
-        ))
-    })?;
-    Ok(bonds
-        .iter()
-        .find(|bond| bond.get("role").and_then(Value::as_str) == Some("replica"))
-        .and_then(|bond| bond.get("bond").and_then(Value::as_str))
-        .map_or_else(|| this_host.to_owned(), str::to_owned))
+/// The host that owns the fleet vault: the registry's `skarbiec` active host,
+/// the same answer `stado credentials vault` gives. It used to be read from
+/// this machine's local vault file's replication bonds, which named this host
+/// the owner once its local copy was retired and replicated nothing; grants
+/// were then minted against a vault nobody reads ("lukasz-macbook declares no
+/// vault authority").
+async fn vault_owner() -> Result<String, CmdError> {
+    crate::cli::directory::active_host("skarbiec")
+        .await?
+        .ok_or_else(|| {
+            CmdError::click(
+                "cannot tell which host owns the vault: the service directory places no \
+                 skarbiec active host",
+            )
+        })
 }
