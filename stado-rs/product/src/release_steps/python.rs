@@ -175,6 +175,36 @@ pub(super) fn find(directory: &Path, name: &str) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
+/// PyPI refuses a distribution whose metadata carries a direct reference
+/// (`Requires-Dist: name @ git+https://…`) with a bare HTTP 400 after the
+/// upload has started, and `twine check` does not catch it (pypa/twine#726).
+/// wisent-gradio's delivery checked this before uploading; every Python
+/// delivery does now.
+fn refuse_direct_references(sdist: &Path) -> Result<()> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(sdist)?));
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if !entry.path()?.to_string_lossy().ends_with("PKG-INFO") {
+            continue;
+        }
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut text)?;
+        if let Some(line) = text
+            .lines()
+            .find(|line| line.starts_with("Requires-Dist:") && line.contains("@ "))
+        {
+            bail!(
+                "{} declares a direct dependency, which PyPI rejects: {:?}. Publish that \
+                 dependency to an index and require it by name and version, or keep this \
+                 product off PyPI; nothing was uploaded",
+                sdist.display(),
+                line.trim()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn deliver_pypi() -> Result<i32> {
     let token = required("PYPI_TOKEN")?;
     let archive = PathBuf::from(required("WISENT_RELEASE_ARCHIVE")?);
@@ -208,6 +238,7 @@ fn deliver_pypi() -> Result<i32> {
         fs::create_dir_all(&unpacked)?;
         safe_unpack(&bundle, &unpacked)?;
         let (wheel, sdist) = distributions(&unpacked.join("distributions"))?;
+        refuse_direct_references(&sdist)?;
         run_checked(
             Command::new(python())
                 .args([
