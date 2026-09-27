@@ -77,7 +77,7 @@ pub(in crate::cli::release_cmd) async fn active_binary(
         .get(&args.product)
         .ok_or_else(|| CmdError::click(format!("unknown release product {:?}", args.product)))?;
     let Some(target) = policy.targets.get(target_name) else {
-        return declared_binary(&args.product, target_entry, target_name, args.json);
+        return declared_binary(&args.product, target_entry, target_name, args.json).await;
     };
     let active = crate::release_agent::active_binary(&args.product, target_name, policy, target)
         .await
@@ -112,7 +112,7 @@ pub(in crate::cli::release_cmd) async fn active_binary(
 /// `release product "skarbiec" has no target "charless-mac-mini"`, so Weles,
 /// which asks this command for the Skarbiec it runs, had not started for two
 /// days. Both reads now answer from what the host declares and reports.
-fn declared_binary(
+async fn declared_binary(
     product: &str,
     target: &crate::targets::ComputeTarget,
     target_name: &str,
@@ -141,15 +141,57 @@ fn declared_binary(
             row.version
         )));
     }
+    // Attested, not merely declared: the signed release of that version, and
+    // the receipt its delivery left on this host, must both name these bytes.
+    // Weles refuses a Skarbiec with no signed release digests, so a
+    // `declared` answer kept weles-admission down on charless-mac-mini on
+    // 2026-09-27 even after this command stopped refusing.
+    let platform = target.release_platform.as_str();
+    let artifact =
+        crate::cli::release_cmd::verified_artifact_for_submit(product, declared, platform).await?;
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            CmdError::click("this account has no HOME, so no delivery receipt is found")
+        })?;
+    let receipt_path = home
+        .join(".stado/releases")
+        .join(product)
+        .join(declared)
+        .join(platform)
+        .join("release-receipt.json");
+    let receipt: serde_json::Value = std::fs::read(&receipt_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{target_name} runs {product} {declared} at {}, and no delivery receipt at {} \
+                 attests it; deliver the release to this host so it records one",
+                row.path,
+                receipt_path.display()
+            ))
+        })?;
+    let archive = receipt["sha256"].as_str().unwrap_or_default();
+    let installed = receipt["artifact_sha256"].as_str().unwrap_or_default();
+    if archive != artifact.artifact_sha256 || installed != row.sha256 {
+        return Err(CmdError::click(format!(
+            "{target_name} runs {product} {declared} at {}, but its delivery receipt names \
+             archive {archive} and file {installed}, while the signed release names archive {} \
+             and the host reports file {}",
+            row.path, artifact.artifact_sha256, row.sha256
+        )));
+    }
     if as_json {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "state": "declared",
+                "state": "active",
                 "product": product,
                 "target": target_name,
                 "version": declared,
-                "sha256": row.sha256,
+                "platform": platform,
+                "artifact_sha256": artifact.artifact_sha256,
+                "manifest_sha256": artifact.manifest_sha256,
                 "path": row.path,
             }))?
         );
