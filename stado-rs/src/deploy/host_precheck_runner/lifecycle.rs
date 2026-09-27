@@ -44,11 +44,24 @@ pub async fn repair_runtime(
                     == std::path::Path::new(&Platform::DarwinArm64.runner_root(profile))
                         .join("start-runner.sh")
         });
+    // An adopted runner whose unit starts `start-runner.sh` beside its
+    // install, as `com.wisent.actions-runner.wisent-backend-publisher` on
+    // charless-mac-mini does, was refused here although its apphosts were the
+    // ones failing (`Failed to create CoreCLR, HRESULT: 0x8007000C`). The
+    // repair script itself checks that the directory is a runner install.
+    let adopted_launcher = managed.unit_id().starts_with("com.wisent.actions-runner.")
+        && path
+            .file_name()
+            .is_some_and(|name| name == "start-runner.sh");
     if !path.is_absolute()
-        || (!declared_launcher && path.file_name().is_none_or(|name| name != "runsvc.sh"))
+        || (!declared_launcher
+            && !adopted_launcher
+            && path.file_name().is_none_or(|name| name != "runsvc.sh"))
     {
         return Err(DeployError(
-            "runner unit must directly declare GitHub's runsvc.sh or its matching declared Stado runner launcher".to_string(),
+            "runner unit must directly declare GitHub's runsvc.sh, start-runner.sh in an adopted \
+             runner install, or its matching declared Stado runner launcher"
+                .to_string(),
         ));
     }
     let mut root = path
