@@ -69,11 +69,17 @@ pub fn deliver() -> Command {
              (WISENT_SPARKLE_UPLOAD_BASE_URL, WISENT_SPARKLE_TOKEN) from the verified release; \
              writes sparkle-appcast-receipt.json",
         ))
+        .subcommand(Command::new("supabase").about(
+            "Push the verified release's supabase-source.tar (migrations, functions) to the \
+             Supabase project SUPABASE_PROJECT_REF with SUPABASE_ACCESS_TOKEN and \
+             SUPABASE_DB_PASSWORD, carrying split migrations in as applied; writes \
+             supabase-receipt.json",
+        ))
         .subcommand(
             Command::new("render")
                 .about(
-                    "Deploy the Render service of this name (RENDER_API_KEY) and wait until \
-                     it is live; writes render-evidence.json",
+                    "Start a deploy of the Render service of this name (RENDER_API_KEY); \
+                     writes render-evidence.json with the deploy and the status Render answered",
                 )
                 .arg(Arg::new("service-name").long("service-name").required(true)),
         )
