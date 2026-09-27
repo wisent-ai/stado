@@ -64,6 +64,11 @@ pub fn deliver() -> Command {
     Command::new("deliver")
         .about("Release deliveries to hosting providers, run by a manifest's deliveries")
         .subcommand_required(true)
+        .subcommand(Command::new("sparkle").about(
+            "Upload a desktop release's update archive, its Sparkle signature and appcast.xml \
+             (WISENT_SPARKLE_UPLOAD_BASE_URL, WISENT_SPARKLE_TOKEN) from the verified release; \
+             writes sparkle-appcast-receipt.json",
+        ))
         .subcommand(
             Command::new("render")
                 .about(

@@ -16,6 +16,7 @@
 
 mod deliver;
 mod python;
+mod sparkle;
 
 use std::fs;
 use std::io::Read;
@@ -32,6 +33,10 @@ pub use python::run as run_python;
 /// the replaced scripts used, so a bundle rebuilt from one commit keeps the
 /// digest earlier releases of these products were published under.
 const ARCHIVE_EPOCH: u64 = 946_684_800;
+
+/// The shape of the delivery receipts these steps write, the one the replaced
+/// scripts wrote, so their readers keep reading them.
+const RECORD_SCHEMA: u32 = 1;
 
 /// Directories no release carries: version control and interpreter caches.
 const EXCLUDED: [&str; 5] = [
