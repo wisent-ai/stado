@@ -156,14 +156,14 @@ fn build(root: &Path) -> Result<(Vec<Value>, Vec<Group>)> {
         let canonical = page
             .select(&CANONICAL)
             .filter_map(|link| link.value().attr("href"))
-            .last();
+            .next_back();
         if canonical != Some(url) {
             bail!("{source}: canonical URL {canonical:?} does not match {url:?}");
         }
         let summary = page
             .select(&DESCRIPTION)
             .filter_map(|meta| meta.value().attr("content"))
-            .last()
+            .next_back()
             .unwrap_or_default();
         let mut article = Article::default();
         for element in page.select(&ARTICLE) {
