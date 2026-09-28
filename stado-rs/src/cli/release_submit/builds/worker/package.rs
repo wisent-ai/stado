@@ -44,10 +44,28 @@ fn collect(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<(), C
     }
     Ok(())
 }
+/// Package the stage map's paths out of `output` (`WISENT_OUTPUT_DIR`).
+///
+/// A declared path that is missing there but present in `source` is the
+/// signature of a build that wrote into its checkout instead of its output
+/// (`<source>/dist`), and it is refused as that, naming both places, rather
+/// than as a path that is simply not there.
 pub(super) fn package(
+    output: &Path,
     source: &Path,
     stage: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>, CmdError> {
+    for from in stage.keys() {
+        if !output.join(from).exists() && source.join(from).exists() {
+            return Err(CmdError::click(format!(
+                "staged path {from} is in the source tree {} but not in WISENT_OUTPUT_DIR {}: \
+                 the build wrote into its checkout; a release build writes only inside \
+                 WISENT_OUTPUT_DIR, where the stage map is read",
+                source.display(),
+                output.display()
+            )));
+        }
+    }
     let gz = GzBuilder::new()
         .mtime(0)
         .write(Vec::new(), Compression::best());
@@ -55,7 +73,7 @@ pub(super) fn package(
     for (from, to) in stage {
         let base = Path::new(from);
         let mut paths = Vec::new();
-        collect(source, base, &mut paths)?;
+        collect(output, base, &mut paths)?;
         for path in paths {
             let suffix = path.strip_prefix(base).unwrap_or(Path::new(""));
             let destination = if suffix.as_os_str().is_empty() {
@@ -63,8 +81,8 @@ pub(super) fn package(
             } else {
                 Path::new(to).join(suffix)
             };
-            let bytes = std::fs::read(source.join(&path))?;
-            let metadata = std::fs::metadata(source.join(&path))?;
+            let bytes = std::fs::read(output.join(&path))?;
+            let metadata = std::fs::metadata(output.join(&path))?;
             let mut header = tar::Header::new_gnu();
             header.set_size(bytes.len() as u64);
             header.set_uid(0);

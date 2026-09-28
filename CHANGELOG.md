@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **A release build that wrote its staged files into the checkout is refused as that:** when a stage-map path is missing from `WISENT_OUTPUT_DIR` but present in `WISENT_SOURCE_DIR`, the build worker names both directories and says the build wrote into its checkout, instead of reporting only that the staged path is not there. las's `release/build-package.sh` port wrote `<source>/dist/las.tgz` this way and its release could not be packaged.
+
 - **`stado product npm pack` and `stado product deliver npm`:** an npm package's release build and publish as Stado commands. `pack` runs `npm pack --ignore-scripts` in `WISENT_SOURCE_DIR`, refuses anything but exactly one artifact, and stages it as `release/npm-package.tgz` with `npm-package.tgz.sha256`; `deliver npm` verifies the release archive against `WISENT_RELEASE_SHA256`, unpacks it refusing links and escaping members, publishes the one `npm-package.tgz` inside unchanged with `NPM_TOKEN` (`--access public --ignore-scripts`), and writes `npm-receipt.json` with npm's answer. las carried both as `release/build-package.sh` and `release/deliver-npm.sh`.
 
 - **`stado product source-bundle` stages `release/SOURCE_REVISION` from `WISENT_SOURCE_COMMIT`:** `stado product deliver github-mirror` tags the commit named by the release archive's `SOURCE_REVISION`, and a bundle carried none, so a source-bundle product could not be mirrored without a repository script writing that file (echo kept `release/build.sh` and `release/deliver-github-mirror.sh` for exactly this). A commit id that is not 40 hexadecimal characters is refused. Manifests stage the file with `"release/SOURCE_REVISION": "SOURCE_REVISION"`.

@@ -246,7 +246,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     // tree instead, so the first entry always reported
     // `staged path .../source/stage/LICENSE ... is not there` and no release
     // carrying a stage mapping could ever be packaged through this path.
-    let bytes = package(&output, &recipe.stage)?;
+    let bytes = package(&output, &source, &recipe.stage)?;
     std::fs::create_dir_all("output")?;
     std::fs::write("output/release.tar.gz", &bytes)?;
     let receipt = receipt(
