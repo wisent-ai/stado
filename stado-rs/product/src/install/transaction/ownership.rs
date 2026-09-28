@@ -42,13 +42,16 @@ pub fn shared(runtime: &Runtime, product: &str, surface: &str) -> Result<BTreeSe
 /// transcript-lake's cli and service surfaces both place
 /// `~/.stado/bin/transcript-lake` from one stado-release manifest, and each
 /// refused to replace it while the other owned it, so neither could ever be
-/// updated (2026-09-28).
+/// updated (2026-09-28). Only a finished receipt qualifies: `installed`, or
+/// `rolled_back` to the files it restored. `ready` is a readiness verdict
+/// `stado product status` computes, never a stored status, and requiring it
+/// made the rule match nothing.
 pub fn sibling(other: &state::ProductState, product: &str, surface: &str, recipe: &Value) -> bool {
     let same =
         |key: &str| other.recipe.get(key).is_some() && other.recipe.get(key) == recipe.get(key);
     other.product == product
         && other.surface != surface
-        && other.status == "ready"
+        && matches!(other.status.as_str(), "installed" | "rolled_back")
         && same("kind")
         && same("repository")
         && same("manifest")
