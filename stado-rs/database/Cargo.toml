@@ -6,7 +6,7 @@ description = "Connect a Wisent product to its Stado-declared fleet database as 
 license-file = "../../LICENSE"
 
 [dependencies]
-sea-orm = { version = "1.1", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json"] }
+sea-orm = { version = "1.1", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json", "postgres-array"] }
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

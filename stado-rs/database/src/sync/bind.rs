@@ -68,6 +68,18 @@ impl Bind for String {
     }
 }
 
+/// A `TEXT[]` parameter.
+impl Bind for Vec<String> {
+    fn bind(&self) -> Value {
+        let items = self.iter().map(|item| item.bind()).collect();
+        Value::Array(sea_orm::sea_query::ArrayType::String, Some(Box::new(items)))
+    }
+
+    fn null() -> Value {
+        Value::Array(sea_orm::sea_query::ArrayType::String, None)
+    }
+}
+
 macro_rules! scalar {
     ($($rust:ty => $variant:ident),* $(,)?) => {
         $(impl Bind for $rust {
