@@ -195,6 +195,12 @@ pub struct Job {
     /// Exclusive GPU use: the agent admits it only with no other active workload.
     #[serde(default)]
     pub exclusive: bool,
+    /// The job ends by stopping the worker agent that runs it (an
+    /// upgrade-then-restart maintenance job). Its submitter declares it; the
+    /// reapers read it and record the job completed when the agent vanishes,
+    /// instead of requeuing it into the next agent generation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminates_agent: bool,
     /// Measured peak GPU memory (GiB); 0 = not measured.
     #[serde(default)]
     pub peak_vram_gb: i64,

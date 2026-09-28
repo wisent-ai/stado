@@ -91,8 +91,8 @@ pub async fn check_running_jobs(
                     .any(|variant| live.contains_key(&format!("{}-{hostname}", variant.id)));
                 if agent_live {
                     // Agent up != this old job progresses (restarts
-                    // orphan it). Heartbeat is proof; self-terminating
-                    // cmds (pkill wc agent) -> kill IS success.
+                    // orphan it). Heartbeat is proof; a job declared
+                    // terminates_agent -> the agent stopping IS success.
                     if hg::any_job_heartbeat_fresh(store, std::slice::from_ref(&job_id), 1800.0)
                         .await
                     {

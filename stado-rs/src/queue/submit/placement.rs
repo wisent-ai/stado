@@ -129,6 +129,7 @@ pub(super) fn build_planned_job(
     job.output_uri = options.output_uri.clone();
     job.verify_command = options.verify_command.clone();
     job.exclusive = options.exclusive;
+    job.terminates_agent = options.terminates_agent;
     job.schedule_id = options.schedule_id.clone();
     job.re_submission_of = options.re_submission_of.clone();
     job.yieldable = options.yieldable;

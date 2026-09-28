@@ -40,7 +40,7 @@ mod self_terminating;
 pub use checkpoint::{any_job_checkpoint_fresh, any_job_checkpoint_fresh_jids};
 pub use heartbeat::any_job_heartbeat_fresh;
 pub use running_refs::{build_ref_to_jids, fresh_jids_pointing_to_ref};
-pub use self_terminating::{finalize_if_self_terminating, is_self_terminating_command};
+pub use self_terminating::finalize_if_self_terminating;
 
 /// Sentinel returned by [`fresh_jids_pointing_to_ref`] when the running/
 /// listing itself fails, so callers defer (treat the VM as in-use).

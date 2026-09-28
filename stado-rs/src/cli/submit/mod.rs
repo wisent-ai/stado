@@ -97,6 +97,11 @@ pub struct SubmitArgs {
     /// full finetunes whose peak VRAM cannot be safely shared.
     #[arg(long)]
     exclusive: bool,
+    /// The command ends by stopping the worker agent that runs it (an
+    /// upgrade-then-restart maintenance job). The agent vanishing is then its
+    /// success: the reapers record it completed instead of requeuing it.
+    #[arg(long)]
+    terminates_agent: bool,
     /// Background job: the local worker may evict this job for a
     /// strictly-higher-priority queued job that does not otherwise fit.
     /// Requires --on-yield. The worker runs that hook (with WC_JOB_PID set),

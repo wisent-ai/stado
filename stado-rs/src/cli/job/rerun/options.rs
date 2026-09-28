@@ -50,6 +50,7 @@ pub(super) fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions 
         output_uri: original.output_uri.clone(),
         verify_command: original.verify_command.clone(),
         exclusive: original.exclusive,
+        terminates_agent: original.terminates_agent,
         re_submission_of: original.job_id.clone(),
         yieldable: original.yieldable,
         yield_command: original.yield_command.clone(),

@@ -117,6 +117,9 @@ pub struct SubmitOptions {
     pub output_uri: String,
     pub verify_command: String,
     pub exclusive: bool,
+    /// See `Job::terminates_agent`.
+    #[serde(default)]
+    pub terminates_agent: bool,
     pub run_id: String,
     pub schedule_id: String,
     pub re_submission_of: String,
@@ -159,6 +162,7 @@ impl Default for SubmitOptions {
             output_uri: String::new(),
             verify_command: String::new(),
             exclusive: false,
+            terminates_agent: false,
             run_id: String::new(),
             schedule_id: String::new(),
             re_submission_of: String::new(),
