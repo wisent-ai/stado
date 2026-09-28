@@ -175,6 +175,17 @@ async fn audit(json: bool) -> Result<(), CmdError> {
     let mut failures = Vec::new();
     for product in publishers.keys() {
         let uri = catalog_uri(product);
+        // A publisher declared for a product the catalog never received is a
+        // product nothing builds: say which, and the command that registers
+        // it, instead of the object store's bare 404.
+        if matches!(super::storage::fetch_object_versioned(&uri).await, Ok(None)) {
+            failures.push(format!(
+                "{product}: release_api.publishers declares it but the release catalog holds no \
+                 entry for it, so nothing builds it; register its checkout with `stado release \
+                 catalog enroll <checkout>`, or remove the declaration if the product is retired"
+            ));
+            continue;
+        }
         match super::storage::fetch_object(&uri).await.and_then(|bytes| {
             let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
             release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
