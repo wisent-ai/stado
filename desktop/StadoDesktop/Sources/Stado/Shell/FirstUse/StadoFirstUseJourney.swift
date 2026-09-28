@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WisentDesignSystem
 import WisentAuth
 import WisentOnboarding
 
