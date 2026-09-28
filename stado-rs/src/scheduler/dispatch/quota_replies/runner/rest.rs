@@ -106,8 +106,8 @@ pub(super) async fn run_azure_rest(args: &[&str]) -> Result<String, RepliesError
                 Some(json!({
                     "name": row.get("name").and_then(Value::as_str).unwrap_or(""),
                     "title": properties.get("title").and_then(Value::as_str).unwrap_or(""),
-                    "problem": properties
-                        .get("problemClassificationDisplayName")
+                    "serviceId": properties
+                        .get("serviceId")
                         .and_then(Value::as_str)
                         .unwrap_or(""),
                 }))

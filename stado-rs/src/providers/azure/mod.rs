@@ -52,7 +52,9 @@ pub mod network;
 mod provider;
 
 pub use arm::{ArmClient, AzureError, ARM_API_BASE};
-pub use builders::{parse_image_urn, power_state, vm_body, vm_is_alive};
+pub use builders::{
+    parse_image_urn, power_state, vm_body, vm_is_alive, MANAGED_TAG, MANAGED_TAG_VALUE,
+};
 pub use provider::AzureProvider;
 
 pub(crate) use arm::{vm_path, COMPUTE_API_VERSION};

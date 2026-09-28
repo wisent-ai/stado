@@ -9,6 +9,10 @@ use super::arm::vm_path;
 
 const VM_EXTENSION_API_VERSION: &str = "2022-11-01";
 const AGENT_GRANT_EXTENSION_NAME: &str = "stado-agent-grant";
+/// Tag Stado writes on every resource it creates; its value is [`MANAGED_TAG_VALUE`].
+/// Inventory reads ownership from this tag, never from free text.
+pub const MANAGED_TAG: &str = "wisent_managed";
+pub const MANAGED_TAG_VALUE: &str = "true";
 
 // --- Pure builders + classification (split out for tests) ---
 
@@ -105,7 +109,7 @@ pub fn vm_body(
     let mut body = json!({
         "location": location,
         "tags": {
-            "wisent_managed": "true",
+            (MANAGED_TAG): MANAGED_TAG_VALUE,
             "wisent_created": chrono::Utc::now()
                 .to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
         },

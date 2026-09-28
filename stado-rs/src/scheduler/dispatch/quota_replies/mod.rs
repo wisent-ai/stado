@@ -20,8 +20,8 @@
 //!   - the most recent communication is FROM Microsoft (sender domain
 //!     contains "@techsupport.microsoft.com" or "@microsoft.com"),
 //!     i.e. the customer has not already replied,
-//!   - the ticket is a quota-classification (problemClassification
-//!     contains "Quota" or "subscription limit").
+//!   - the ticket was filed under Azure Support's quota service (its
+//!     `serviceId` names "Service and subscription limits (quotas)").
 //!
 //! Dry-run prints the (ticket, region, planned body length) and skips
 //! the create_communication call.

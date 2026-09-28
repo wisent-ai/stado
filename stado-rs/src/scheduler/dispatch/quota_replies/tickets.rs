@@ -58,7 +58,12 @@ pub fn last_communication_is_from_ms(
     Ok(MS_SENDER.iter().any(|dom| sender.contains(dom)))
 }
 
-/// Python `_open_quota_tickets`.
+/// Azure Support's service "Service and subscription limits (quotas)": a
+/// ticket belongs to quota triage when its `serviceId` names this service.
+const QUOTA_SERVICE_NAME: &str = "06bfd9d3-516b-d5c6-5802-169c800dec89";
+
+/// Open tickets filed under the quota service, read from the ticket's
+/// `serviceId` field rather than words in its classification's display name.
 fn open_quota_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, RepliesError> {
     let rows = az(
         runner,
@@ -68,8 +73,7 @@ fn open_quota_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, RepliesError>
             "tickets",
             "list",
             "--query",
-            "[?status=='Open'].{name:name, title:title, \
-             problem:problemClassificationDisplayName}",
+            "[?status=='Open'].{name:name, title:title, serviceId:serviceId}",
         ],
     )?;
     let Some(rows) = rows.as_array() else {
@@ -78,12 +82,10 @@ fn open_quota_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, RepliesError>
     Ok(rows
         .iter()
         .filter(|r| {
-            let problem = r
-                .get("problem")
+            r.get("serviceId")
                 .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_lowercase();
-            problem.contains("quota") || problem.contains("subscription limit")
+                .and_then(|id| id.trim_end_matches('/').rsplit('/').next())
+                .is_some_and(|service| service.eq_ignore_ascii_case(QUOTA_SERVICE_NAME))
         })
         .cloned()
         .collect())
