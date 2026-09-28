@@ -51,7 +51,7 @@ fn git(args: &[&str]) -> Result<String, Refusal> {
 fn version_order(left: &str, right: &str) -> Ordering {
     let key = |tag: &str| {
         let found = TAG.captures(tag)?;
-        let number = |index| found[index].parse::<u64>().ok();
+        let number = |index: usize| found[index].parse::<u64>().ok();
         let pre = found.get(4).map(|m| m.as_str().to_string());
         Some((
             number(1)?,

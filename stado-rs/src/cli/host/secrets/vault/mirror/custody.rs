@@ -83,7 +83,7 @@ fn read_token(path: &Path) -> Result<Option<Vec<u8>>, CmdError> {
     }
     let mut data = Vec::new();
     let bound = (TOKEN_LIMIT + "\r\n".len() + 1) as u64;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(bound)
         .read_to_end(&mut data)
         .map_err(refused)?;

@@ -9,7 +9,6 @@
 //! reads back; statuses are `removed`, `absent`, `refused` and `failed`.
 
 use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use nix::libc;
