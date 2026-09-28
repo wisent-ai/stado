@@ -110,24 +110,49 @@ fn bundle_names(load: Loader, path: &str) -> Read<Vec<String>> {
     Ok(names)
 }
 
-/// Whether an `exports` target resolves to anything: a path, or a condition
-/// map or fallback array with at least one path in it. `null` (and anything
-/// else) blocks the entry point in Node, so it is not part of the contract.
-fn reachable(target: &serde_json::Value) -> bool {
+/// Node's `resolvePackageTarget` under one condition set: `Some(true)` for a
+/// path, `Some(false)` when the first matching branch is blocked (`null`),
+/// `None` when nothing matches so the caller moves on. Condition keys are
+/// tried in their written order and the first one the set holds decides.
+fn resolve(target: &serde_json::Value, conditions: &[&str]) -> Option<bool> {
     match target {
-        serde_json::Value::String(path) => !path.is_empty(),
-        serde_json::Value::Object(map) => map.values().any(reachable),
-        serde_json::Value::Array(items) => items.iter().any(reachable),
-        _ => false,
+        serde_json::Value::String(path) => Some(!path.is_empty()),
+        serde_json::Value::Null => Some(false),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .find_map(|item| resolve(item, conditions).filter(|resolved| *resolved)),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .filter(|(condition, _)| conditions.contains(&condition.as_str()))
+            .find_map(|(_, branch)| resolve(branch, conditions)),
+        _ => Some(false),
     }
+}
+
+/// Whether an `exports` target opens an entry point under at least one of
+/// the condition sets the product declares (`--export-conditions`, each a
+/// comma-separated set such as the one its consumers load it with).
+fn reachable(target: &serde_json::Value, condition_sets: &[String]) -> bool {
+    condition_sets.iter().any(|set| {
+        let conditions = set.split(',').map(str::trim).collect::<Vec<_>>();
+        resolve(target, &conditions) == Some(true)
+    })
 }
 
 /// The entry points `exports` opens (or `main`, when there is no `exports`).
 /// A map whose keys all start with "." is a subpath map; one without any is a
 /// condition map for the root; Node refuses a mix, and so does this.
-fn export_names(document: &serde_json::Value, path: &str) -> Read<Vec<String>> {
+fn export_names(
+    document: &serde_json::Value,
+    path: &str,
+    conditions: &[String],
+) -> Read<Vec<String>> {
     let exports = &document["exports"];
     let root = || vec![".".to_string()];
+    let reachable = |target: &serde_json::Value| reachable(target, conditions);
+    if !exports.is_null() && conditions.is_empty() {
+        return Err(format!("{path}: declares exports, so name the condition sets its consumers load it with (--export-conditions, e.g. one per environment); which entry points resolve depends on them"));
+    }
     match exports {
         serde_json::Value::Null => Ok(match &document["main"] {
             serde_json::Value::String(main) if !main.is_empty() => root(),
@@ -160,7 +185,7 @@ fn export_names(document: &serde_json::Value, path: &str) -> Read<Vec<String>> {
 
 /// A package.json's contract: its name (`package:`), every entry point it
 /// opens (`export:`) and every command it installs (`bin:`).
-fn package_names(load: Loader, path: &str) -> Read<Vec<String>> {
+fn package_names(load: Loader, path: &str, conditions: &[String]) -> Read<Vec<String>> {
     let document: serde_json::Value = serde_json::from_slice(&load(path)?)
         .map_err(|error| format!("{path}: not JSON ({error})"))?;
     let name = document["name"]
@@ -169,7 +194,7 @@ fn package_names(load: Loader, path: &str) -> Read<Vec<String>> {
         .ok_or_else(|| format!("{path}: declares no package name"))?;
     let mut names = vec![format!("package:{name}")];
     names.extend(
-        export_names(&document, path)?
+        export_names(&document, path, conditions)?
             .into_iter()
             .map(|key| format!("export:{key}")),
     );
@@ -196,7 +221,7 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
         names.extend(bundle_names(load, plist)?);
     }
     if let Some(package) = &sources.package_json {
-        names.extend(package_names(load, package)?);
+        names.extend(package_names(load, package, &sources.export_conditions)?);
     }
     if let Some(manifest) = &sources.products {
         for name in products(manifest, &text(load, manifest)?)? {

@@ -25,6 +25,13 @@ pub struct AppSources {
     /// command; its `version` is the declared version when no Info.plist is named
     #[arg(long)]
     pub package_json: Option<String>,
+    /// A condition set the package's consumers resolve `exports` with, as a
+    /// comma-separated set of condition names (for example
+    /// `import,node,default`); `exports` keys are tried in their written
+    /// order and the first one in the set decides, as in Node. Repeat once
+    /// per environment. Required when the package.json declares `exports`
+    #[arg(long = "export-conditions", requires = "package_json")]
+    pub export_conditions: Vec<String>,
     /// A Package.swift whose executable products are `product:` names
     #[arg(long)]
     pub products: Option<String>,
