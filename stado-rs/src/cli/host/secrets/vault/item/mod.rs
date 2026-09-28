@@ -1,10 +1,8 @@
-//! One vault item: show it, retag it, replace it, or stamp what the vault's
+//! One vault item: show it, change it, replace it, or stamp what the vault's
 //! items hold so duplicates can be found.
 
-pub(in crate::cli::host) mod delete;
+pub(in crate::cli::host) mod change;
 pub(in crate::cli::host) mod put;
-pub(in crate::cli::host) mod rename;
-pub(in crate::cli::host) mod retag;
 pub(in crate::cli::host) mod show;
 pub(in crate::cli::host) mod stamp;
 

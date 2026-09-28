@@ -70,11 +70,11 @@ pub use crate::cli::host::secrets::vault::consolidate::consolidate as consolidat
 pub use crate::cli::host::secrets::vault::consolidate::revoke::revoke_retired;
 pub use crate::cli::host::secrets::vault::grants::grant_item_read;
 pub use crate::cli::host::secrets::vault::grants::grant_show;
-pub use crate::cli::host::secrets::vault::item::delete::delete_vault_item;
+pub use crate::cli::host::secrets::vault::item::change::delete::delete_vault_item;
+pub use crate::cli::host::secrets::vault::item::change::rename::rename_vault_item;
+pub use crate::cli::host::secrets::vault::item::change::retag::retag_vault_item;
 pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
 pub(crate) use crate::cli::host::secrets::vault::item::put::{store_vault_item, write_vault_item};
-pub use crate::cli::host::secrets::vault::item::rename::rename_vault_item;
-pub use crate::cli::host::secrets::vault::item::retag::retag_vault_item;
 pub use crate::cli::host::secrets::vault::item::show::vault_item_show;
 pub use crate::cli::host::secrets::vault::item::stamp::stamp_vault_fingerprints;
 pub use crate::cli::host::secrets::vault::item::summarize_local as summarize_item_local;
