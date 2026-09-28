@@ -182,7 +182,9 @@ async fn audit(json: bool) -> Result<(), CmdError> {
             failures.push(format!(
                 "{product}: release_api.publishers declares it but the release catalog holds no \
                  entry for it, so nothing builds it; register its checkout with `stado release \
-                 catalog enroll <checkout>`, or remove the declaration if the product is retired"
+                 catalog enroll <checkout>`, or for a retired product withdraw the declaration \
+                 with `stado config unset release_api.publishers.{product}` on every host that \
+                 holds it"
             ));
             continue;
         }
