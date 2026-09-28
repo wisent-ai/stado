@@ -8,6 +8,7 @@
 //! the twins it proved in the same run.
 
 mod files;
+mod roots;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -254,6 +255,13 @@ fn classify(pass: &LocalPass) {
 
 /// The whole host half, in the order the operator side reads it.
 pub fn run(pass: &LocalPass) {
+    if let Some(detail) = roots::overlapping(&pass.backup, &pass.primary) {
+        emit(format!(
+            "STADO_BACKUP_AUDIT_UNAVAILABLE\t{}",
+            one_line(&detail)
+        ));
+        return;
+    }
     emit_namespaces("local_storage", &pass.primary);
     emit_namespaces("local_backup", &pass.backup);
     let complete = inventory(pass);
