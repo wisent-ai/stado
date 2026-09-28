@@ -44,6 +44,9 @@ fn release_coordinates_error(api_url: &str, version: &str, platform: &str) -> Op
     None
 }
 
+/// The route every release object is publicly read through.
+const RELEASE_ROUTE: &str = "/api/release/object";
+
 /// The state the release route answers for an object it does not hold.
 const ABSENT_STATE: &str = "absent";
 
@@ -80,6 +83,28 @@ impl Default for HttpReleaseFetcher {
     }
 }
 
+impl HttpReleaseFetcher {
+    /// Where release objects are read: the one registry `public_origins`
+    /// declaration that publishes [`RELEASE_ROUTE`], because that is the
+    /// origin the fleet says answers it (the configured `api.url` named an
+    /// edge that stopped forwarding the route on 2026-09-22). Self-update is
+    /// the recovery root, so a registry that cannot be read, or that declares
+    /// no public origin at all, leaves the configured `api.url`; a declaration
+    /// set that publishes the route from none or several origins is refused.
+    async fn release_origin(&self) -> Result<String, SelfUpdateError> {
+        let Ok(document) = crate::cli::registry::fetch_document().await else {
+            return Ok(self.api_url.clone());
+        };
+        match crate::public_origin::publishing(&document, RELEASE_ROUTE) {
+            Ok(origin) => Ok(origin.origin()),
+            Err(_) if crate::public_origin::declarations(&document).is_empty() => {
+                Ok(self.api_url.clone())
+            }
+            Err(refusal) => Err(SelfUpdateError::Fetch(refusal)),
+        }
+    }
+}
+
 #[async_trait]
 impl ReleaseFetcher for HttpReleaseFetcher {
     async fn fetch(&self, object_path: &str) -> Result<Option<Vec<u8>>, SelfUpdateError> {
@@ -98,8 +123,9 @@ impl ReleaseFetcher for HttpReleaseFetcher {
             ));
         }
         let release_uri = format!("stado://releases/stado/{object_path}");
-        let mut endpoint = url::Url::parse(&self.api_url)
-            .and_then(|base| base.join("/api/release/object"))
+        let origin = self.release_origin().await?;
+        let mut endpoint = url::Url::parse(&origin)
+            .and_then(|base| base.join(RELEASE_ROUTE))
             .map_err(|error| SelfUpdateError::Fetch(format!("invalid release API: {error}")))?;
         endpoint.query_pairs_mut().append_pair("uri", &release_uri);
         let response = self
@@ -129,7 +155,7 @@ impl ReleaseFetcher for HttpReleaseFetcher {
                 "{endpoint} -> HTTP {status} without the release route's absent answer, so {} \
                  does not serve /api/release/object; set api.url to the scheme and host of \
                  `stado web origin url /api/release/object`",
-                self.api_url
+                origin
             )));
         }
         if !status.is_success() {
