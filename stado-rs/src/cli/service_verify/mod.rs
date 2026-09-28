@@ -104,7 +104,9 @@ use crate::targets::load_registry_auto;
 pub(crate) use crate::cli::service_verify::finding::Finding;
 
 use crate::cli::service_verify::checks::local::local_findings;
-use crate::cli::service_verify::checks::standby::{merge_serving, serving_standbys, standby_findings};
+use crate::cli::service_verify::checks::standby::{
+    merge_serving, serving_standbys, standby_findings,
+};
 use crate::cli::service_verify::checks::{endpoint_for, probe_hosts};
 use crate::cli::service_verify::finding::emit;
 use crate::cli::service_verify::probe::remote::remote_findings;

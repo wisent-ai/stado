@@ -89,7 +89,10 @@ pub(in crate::cli::service_verify) async fn serving_standbys(
 
 /// Replace the listed standby rows that a probe found serving, so a host
 /// appears once per service: as the failure, not also as the quiet listing.
-pub(in crate::cli::service_verify) fn merge_serving(listed: &mut Vec<Finding>, serving: Vec<Finding>) {
+pub(in crate::cli::service_verify) fn merge_serving(
+    listed: &mut Vec<Finding>,
+    serving: Vec<Finding>,
+) {
     listed.retain(|row| {
         !serving
             .iter()
