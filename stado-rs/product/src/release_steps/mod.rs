@@ -9,7 +9,8 @@
 //!
 //! - `stado product source-bundle`: the checkout's files in a reproducible
 //!   `release/source-bundle.tar`, with each file's digest in
-//!   `output/build-metadata.json` inside it.
+//!   `output/build-metadata.json` inside it, and `release/SOURCE_REVISION`
+//!   from `WISENT_SOURCE_COMMIT` when the build request carries one.
 //! - `stado product python build` / `deliver-pypi` (module `python`): a Python
 //!   package's wheel and sdist in `release/python-distributions.tar`, and
 //!   their upload to PyPI from the verified release archive.
@@ -203,6 +204,16 @@ pub fn run_source_bundle(name: &str, includes: &[String]) -> Result<i32> {
         false,
     )?;
     archive.finish()?;
+    // A delivery that mirrors the release (`deliver github-mirror`) tags the
+    // commit named in the archive's SOURCE_REVISION; the worker builds an
+    // unpacked git archive, so the request's commit is the only source of it.
+    if let Ok(revision) = std::env::var("WISENT_SOURCE_COMMIT") {
+        let revision = revision.trim();
+        if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("WISENT_SOURCE_COMMIT is not a 40-character commit id: {revision:?}");
+        }
+        fs::write(release.join("SOURCE_REVISION"), format!("{revision}\n"))?;
+    }
     println!("staged {} ({} files)", bundle.display(), files.len());
     Ok(0)
 }
