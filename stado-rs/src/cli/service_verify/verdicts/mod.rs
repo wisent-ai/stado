@@ -4,7 +4,7 @@ pub(in crate::cli::service_verify) mod ownership;
 pub(in crate::cli::service_verify) mod record;
 
 use crate::cli::CmdError;
-use crate::observations::{MISOWNED, UNREACHABLE};
+use crate::observations::{MISOWNED, STANDBY_SERVING, UNREACHABLE};
 
 use crate::cli::service_verify::Finding;
 
@@ -19,9 +19,9 @@ use crate::cli::service_verify::Finding;
 /// names repairs nothing, which is why folding the two into one number would
 /// cost the reader the only thing that tells them apart.
 ///
-/// A standby row is `unverified` and is exempt by the same rule: nothing
-/// looked, because there is nothing there to look at yet. It has to stay
-/// visible in the table and out of the count, and one state word does both.
+/// A standby row nobody dialled is `unverified` and is exempt by the same
+/// rule. A standby that answered from its own host is `standby_serving`: a
+/// second copy beside the active host, counted as the third failure.
 pub(in crate::cli::service_verify) fn fail_on_unreachable(
     findings: &[Finding],
 ) -> Result<(), CmdError> {
@@ -33,8 +33,15 @@ pub(in crate::cli::service_verify) fn fail_on_unreachable(
     };
     let broken = count(UNREACHABLE);
     let misowned = count(MISOWNED);
-    if broken == 0 && misowned == 0 {
+    let second_copies = count(STANDBY_SERVING);
+    if broken == 0 && misowned == 0 && second_copies == 0 {
         return Ok(());
+    }
+    if second_copies > 0 {
+        eprintln!(
+            "{second_copies} standby host(s) are serving a service that is active elsewhere; \
+             each keeps its own copy of the service's state beside the active host's"
+        );
     }
     if broken > 0 {
         eprintln!(

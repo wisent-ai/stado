@@ -80,10 +80,12 @@
 //! can only pick a reading and then be confidently wrong for everyone who
 //! picked the other one, in a report that looks definite either way.
 //!
-//! Probing therefore uses `endpoints` alone. Standby addresses are listed as
-//! their own `unverified` rows: visible, because an address nobody prints is
-//! an address nobody maintains until the move that needs it, and never
-//! failures, because nothing is supposed to answer on them yet.
+//! Consumer probing therefore uses `endpoints` alone. Standby addresses are
+//! listed as their own `unverified` rows: visible, because an address nobody
+//! prints is an address nobody maintains until the move that needs it. They
+//! are dialled once, from the standby host itself: silence there is the
+//! declared state and adds nothing, while an answer is `standby_serving`, a
+//! second copy beside the active host and a failure of the sweep.
 
 // The three state words are imported, never respelled here. This command
 // writes them into the observation record and other commands read them back
@@ -102,7 +104,7 @@ use crate::targets::load_registry_auto;
 pub(crate) use crate::cli::service_verify::finding::Finding;
 
 use crate::cli::service_verify::checks::local::local_findings;
-use crate::cli::service_verify::checks::standby::standby_findings;
+use crate::cli::service_verify::checks::standby::{merge_serving, serving_standbys, standby_findings};
 use crate::cli::service_verify::checks::{endpoint_for, probe_hosts};
 use crate::cli::service_verify::finding::emit;
 use crate::cli::service_verify::probe::remote::remote_findings;
@@ -132,9 +134,12 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
     // The standby addresses this machine holds, printed beside what it can
     // actually reach. An operator on the box asking "what am I party to" is
     // owed the address it would serve on as well as the ones it calls; the
-    // sweep reads them out of the directory itself and drops this copy.
+    // sweep reads them out of the directory itself and keeps only the rows
+    // this host found serving, which no directory read can produce.
     if let Some(directory) = registry.service_directory.as_ref() {
-        findings.extend(standby_findings(directory, Some(me.as_str())));
+        let mut standby = standby_findings(directory, Some(me.as_str()));
+        merge_serving(&mut standby, serving_standbys(directory, &me).await);
+        findings.extend(standby);
     }
     record_observations(&findings);
     emit(&findings, json_output);
@@ -175,7 +180,7 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
                 .push((name.clone(), endpoint));
         }
     }
-    let standby = standby_findings(directory, host);
+    let mut standby = standby_findings(directory, host);
     if per_host.is_empty() && standby.is_empty() {
         return Err(CmdError::click(match host {
             Some(only) => format!("no service in the directory names host {only}"),
@@ -191,6 +196,29 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
             findings.extend(remote_findings(target, declared).await);
         }
     }
+    // A standby answers only from its own host: this one directly, the others
+    // through their own `--local`, which reports a serving standby as a
+    // probed row. A host holding nothing but a standby address is visited too,
+    // because that is exactly the host a serving copy hides on.
+    let mut serving = Vec::new();
+    if let Some(local) = me.as_deref().filter(|name| host.map_or(true, |only| only == *name)) {
+        serving.extend(serving_standbys(directory, local).await);
+    }
+    let standby_only: std::collections::BTreeSet<String> = standby
+        .iter()
+        .map(|row| row.host.clone())
+        .filter(|name| !per_host.contains_key(name) && me.as_deref() != Some(name.as_str()))
+        .collect();
+    for target in &standby_only {
+        serving.extend(remote_findings(target, &[]).await);
+    }
+    let (serving_rows, other): (Vec<Finding>, Vec<Finding>) = findings
+        .into_iter()
+        .partition(|finding| finding.state == crate::observations::STANDBY_SERVING);
+    findings = other;
+    serving.extend(serving_rows);
+    serving.retain(|finding| finding.state == crate::observations::STANDBY_SERVING);
+    merge_serving(&mut standby, serving);
     findings.extend(standby);
     judge_ownership(&registry, &mut findings).await;
     record_observations(&findings);

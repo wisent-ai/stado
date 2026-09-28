@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::observations::{OBSERVED, UNREACHABLE, UNVERIFIED};
+use crate::observations::{OBSERVED, STANDBY_SERVING, UNREACHABLE, UNVERIFIED};
 
 use crate::cli::service_verify::probe::root_cause;
 use crate::cli::service_verify::Finding;
@@ -101,6 +101,7 @@ pub(in crate::cli::service_verify) async fn remote_findings(
             state: match row.get("state").and_then(Value::as_str) {
                 Some(OBSERVED) => OBSERVED,
                 Some(UNREACHABLE) => UNREACHABLE,
+                Some(STANDBY_SERVING) => STANDBY_SERVING,
                 _ => UNVERIFIED,
             },
             detail: field(row, "detail"),

@@ -24,6 +24,11 @@ pub const UNVERIFIED: &str = "unverified";
 /// because the socket is alive and restarting the declared service repairs
 /// nothing — the declaration is what is wrong. This is a failure.
 pub const MISOWNED: &str = "misowned";
+/// A host the directory declares a standby for a service answered on its
+/// standby address: a second copy is serving beside the active host. A
+/// standby is by definition not serving, so this is a failure; for Skarbiec it
+/// is a second vault taking writes the owner never sees.
+pub const STANDBY_SERVING: &str = "standby_serving";
 
 /// One look, by one machine, at one fact, at one moment.
 ///

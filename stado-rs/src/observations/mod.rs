@@ -60,6 +60,8 @@ mod staleness;
 mod store;
 
 pub use display::{describe, describe_in, render};
-pub use observation::{service_fact, Observation, MISOWNED, OBSERVED, UNREACHABLE, UNVERIFIED};
+pub use observation::{
+    service_fact, Observation, MISOWNED, OBSERVED, STANDBY_SERVING, UNREACHABLE, UNVERIFIED,
+};
 pub use staleness::{freshness, freshness_in, Freshness, DEFAULT_TTL};
 pub use store::{load, record};

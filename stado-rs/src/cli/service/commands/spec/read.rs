@@ -179,8 +179,11 @@ pub enum ReadCommands {
     /// the directory's addresses answer, from the machines that must call
     /// them -- the one question every other check in this binary skips.
     /// States are `observed`, `unreachable`, `misowned` for a port a different
-    /// declared unit is holding, and `unverified` for a probe that could not
-    /// run; the last is never folded into the others.
+    /// declared unit is holding, `standby_serving` for a standby host that
+    /// answers on its standby address (a second copy beside the active host,
+    /// probed from that standby host itself), and `unverified` for a probe
+    /// that could not run or a standby address that stays silent as declared;
+    /// the last is never folded into the others.
     ///
     /// `misowned` exists because an answer was once the whole of `observed`'s
     /// evidence. On the service's active host the port's owner is resolved by
@@ -190,9 +193,10 @@ pub enum ReadCommands {
     /// own resolver adapter and are not judged on ownership, because that
     /// socket is owned by the resolver by design.
     ///
-    /// Exits non-zero on `unreachable` and `misowned`, counted separately: the
-    /// first usually means the service needs attention, the second means the
-    /// declaration does.
+    /// Exits non-zero on `unreachable`, `misowned` and `standby_serving`,
+    /// counted separately: the first usually means the service needs
+    /// attention, the second means the declaration does, the third means a
+    /// standby unit is running and must be stopped.
     Verify {
         /// Check one host's declarations instead of the whole fleet.
         #[arg(long)]
