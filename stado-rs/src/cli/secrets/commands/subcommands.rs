@@ -127,6 +127,15 @@ pub enum CredentialTokenCommands {
         #[arg(last = true)]
         arguments: Vec<String>,
     },
+    /// Host primitive used by `sync`: export, install or check one bearer
+    /// against the declared consumer grant, reading an export on stdin.
+    #[command(name = "custody-local", hide = true)]
+    CustodyLocal {
+        operation: String,
+        vault: String,
+        consumer: String,
+        file: String,
+    },
 }
 
 #[derive(Subcommand)]

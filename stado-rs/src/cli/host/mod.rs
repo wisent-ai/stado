@@ -62,6 +62,7 @@ pub use crate::cli::host::secrets::vault::consolidate::consolidate as consolidat
 pub use crate::cli::host::secrets::vault::consolidate::revoke_retired;
 pub use crate::cli::host::secrets::vault::grants::grant_item_read;
 pub use crate::cli::host::secrets::vault::grants::grant_show;
+pub use crate::cli::host::secrets::vault::mirror::custody::custody_local;
 pub use crate::cli::host::secrets::vault::mirror::from_item::register_item_local;
 pub use crate::cli::host::secrets::vault::item::delete::delete_vault_item;
 pub(crate) use crate::cli::host::secrets::vault::item::put::store_vault_item;

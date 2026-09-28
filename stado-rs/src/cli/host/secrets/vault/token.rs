@@ -43,6 +43,12 @@ impl TokenSyncMode {
 /// The vault argument the shared install payload receives and ignores.
 const SHARED_VAULT_UNUSED: &str = "-";
 
+/// Run the host's installed Stado custody primitive with the operation,
+/// vault, consumer and token file as `$1`–`$4`; stdin passes through.
+const HOST_CUSTODY: &str = r#"stado="$HOME/.stado/bin/stado"
+[ -x "$stado" ] || stado="$(command -v stado)"
+exec "$stado" credentials token custody-local "$@""#;
+
 /// The destination of one token delivery: its host, and the vault the
 /// payload checks the grant in (unused for a shared-vault destination).
 struct SharedDestination {
@@ -141,13 +147,13 @@ pub async fn vault_token_sync(
             .machine_readable(json_output));
         }
     }
-    let program = include_str!("../../../../host_payloads/vault_token/sync.py");
     let exported = host_channel::run_program(
         &source.target,
         &[
-            "/usr/bin/python3",
+            "/bin/sh",
             "-c",
-            program,
+            HOST_CUSTODY,
+            "stado-token-custody",
             "export",
             &source.vault,
             consumer,
@@ -175,9 +181,10 @@ pub async fn vault_token_sync(
     let installed = host_channel::run_program_with_stdin(
         &destination.target,
         &[
-            "/usr/bin/python3",
+            "/bin/sh",
             "-c",
-            program,
+            HOST_CUSTODY,
+            "stado-token-custody",
             mode.payload_word(),
             &destination.vault,
             consumer,

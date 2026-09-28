@@ -1,6 +1,7 @@
 //! The target-local mirror of the control-plane vault, and the sync that
 //! keeps it honest.
 
+pub(in crate::cli::host) mod custody;
 pub(in crate::cli::host) mod from_item;
 pub(in crate::cli::host) mod read;
 pub(in crate::cli::host) mod sync;
