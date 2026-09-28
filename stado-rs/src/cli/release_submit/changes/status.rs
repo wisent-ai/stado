@@ -5,7 +5,7 @@ use crate::release_pipeline::{BuildReceipt, BuildRun, BuildRunState, ProductMani
 use futures::StreamExt;
 use std::collections::HashMap;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Observation {
     created_at: String,
     run_id: String,
@@ -72,7 +72,19 @@ async fn batch_observation(
     if batch.is_empty() || !batch.iter().any(|change| wanted.contains(&change.id)) {
         return Ok(None);
     }
-    let run_path = format!("{}run.json", path.trim_end_matches("changes.json"));
+    let root = path.trim_end_matches("changes.json");
+    // A terminal build's observation never changes: its receipts are
+    // immutable and nothing re-enters a finished build. It is kept beside the
+    // batch the first time it is read, and later reads take that one file
+    // instead of the run, the manifest and every platform's receipt, which
+    // over a hundred builds cost `changes list` 78 s.
+    let kept_path = format!("{root}observation.json");
+    if let Some(text) = store.download_text(&kept_path).await.map_err(failure)? {
+        if let Ok(observation) = serde_json::from_str::<Observation>(&text) {
+            return Ok(Some((batch, observation)));
+        }
+    }
+    let run_path = format!("{root}run.json");
     let Some(text) = store.download_text(&run_path).await.map_err(failure)? else {
         return Ok(None);
     };
@@ -80,6 +92,13 @@ async fn batch_observation(
     let observation = observe(store, &mut run).await?;
     if batch.iter().any(|change| change.product != run.product) {
         return Err(CmdError::click("build batch product mismatch"));
+    }
+    if matches!(run.state, BuildRunState::Passed | BuildRunState::Failed)
+        && matches!(observation.state.as_str(), "passed" | "failed")
+    {
+        let _ = store
+            .create_text_if_absent(&kept_path, &serde_json::to_string(&observation)?)
+            .await;
     }
     Ok(Some((batch, observation)))
 }
