@@ -103,8 +103,24 @@ pub(super) async fn recycle_launchd(
         let Some((program, installed)) = selected else {
             continue;
         };
-        let argv = crate::deploy::service::process_arguments(pid)
-            .map_err(|error| format!("{context}: {}: {error}", unit.label))?;
+        // A process that exited since the inventory was read holds no image
+        // and needs no restart: launchd starts its unit again from the
+        // installed file. `stado release agent` exits this way while the
+        // install replaces it, and reading its arguments then failed every
+        // fleet-macbook delivery of stado 0.22.13 with KERN_PROCARGS2 EINVAL.
+        if !crate::providers::local::helpers::pid_alive(pid as i32) {
+            log_fn(&format!(
+                "{context}: {} pid {pid} exited before it could be recycled; launchd starts \
+                 it again from the installed {program}",
+                unit.label
+            ));
+            continue;
+        }
+        let argv = match crate::deploy::service::process_arguments(pid) {
+            Ok(argv) => argv,
+            Err(_) if !crate::providers::local::helpers::pid_alive(pid as i32) => continue,
+            Err(error) => return Err(format!("{context}: {}: {error}", unit.label)),
+        };
         if defers_to_release_handshake(&argv) {
             log_fn(&format!(
                 "{context}: {} is running the replaced {program} and recycles itself through \
