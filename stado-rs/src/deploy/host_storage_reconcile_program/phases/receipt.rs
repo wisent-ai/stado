@@ -140,16 +140,24 @@ pub(super) fn status_phase(context: &Context) -> Step<()> {
     Ok(())
 }
 
-/// Every recorded writer is in `wanted`; a fence with no writers has none out of it.
-pub(super) fn every_writer(fence: &Value, wanted: &str) -> bool {
-    fence
+/// Every recorded writer is in `wanted`. A fence whose `writers` is absent or
+/// not a list is not proof of anything and is refused, never read as empty.
+pub(super) fn every_writer(fence: &Value, wanted: &str) -> Step<bool> {
+    let writers = fence
         .get("writers")
         .and_then(Value::as_array)
-        .is_none_or(|writers| {
-            writers
-                .iter()
-                .all(|writer| writer.get("status").and_then(Value::as_str) == Some(wanted))
-        })
+        .ok_or_else(|| "lifecycle fence records no writer list".to_string())?;
+    Ok(writers
+        .iter()
+        .all(|writer| writer.get("status").and_then(Value::as_str) == Some(wanted)))
+}
+
+/// A recorded time in seconds; absent or not a number is refused.
+pub(super) fn seconds(document: &Value, key: &str, label: &str) -> Step<f64> {
+    document
+        .get(key)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| format!("{label} records no numeric {key}"))
 }
 
 /// Record an immutable typed document (the lifecycle decisions or the final

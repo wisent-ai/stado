@@ -19,15 +19,17 @@ const MODE_BITS: u32 = 0o7777;
 const PRIVATE_DIRECTORY: u32 = 0o700;
 const PRIVATE_FILE: u32 = 0o600;
 
-/// Return once nothing accepts connections on the loopback port. The native
-/// manager was already told to stop the writer; this watches it happen: an
-/// accepted connection is held until the far end closes it (the process
-/// exiting closes every socket it owns), then the port is tried again.
+/// Prove nothing accepts connections on the loopback port. The caller has
+/// already seen the writer's process and unit gone, so a port that still
+/// accepts is held by something else: the probe connection is closed at once
+/// and the step refuses, naming the port, instead of waiting on a peer.
 pub(super) fn listener_closed(port: u16) -> Result<(), String> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut discard = [0u8; 4096];
-    while let Ok(mut connection) = TcpStream::connect(address) {
-        while matches!(connection.read(&mut discard), Ok(read) if read > 0) {}
+    if let Ok(connection) = TcpStream::connect(address) {
+        drop(connection);
+        return Err(format!(
+            "port {port} still accepts connections after its writer stopped"
+        ));
     }
     println!("STADO_LISTENER_CLOSED\t{port}");
     Ok(())

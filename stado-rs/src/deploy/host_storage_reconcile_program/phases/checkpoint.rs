@@ -195,7 +195,7 @@ pub(super) fn checkpoint(context: &Context) -> Step<()> {
     if !fence_is_complete(context, &fence) {
         return Err("durable lifecycle fence is incomplete".to_string());
     }
-    if !every_writer(&fence, "stopped") {
+    if !every_writer(&fence, "stopped")? {
         return Err("durable lifecycle fence does not stop every recorded writer".to_string());
     }
     let fence_winner = conflict_winner_from_fence(context, &fence)?;

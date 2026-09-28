@@ -6,7 +6,7 @@ use std::fs;
 
 use serde_json::{json, Value};
 
-use super::receipt::{emit, every_writer, read_fence, save, set, status};
+use super::receipt::{emit, every_writer, read_fence, save, seconds, set, status};
 use super::union::prove_live_additive_union;
 use super::{conflict_winner_from_fence, text, Context, Evidence, Step, FENCE_SCHEMA};
 use crate::deploy::host_storage_reconcile_program::fs::{
@@ -187,11 +187,12 @@ pub(super) fn apply(context: &Context, mut receipt: Value, evidence: &Evidence) 
     if conflict_winner_from_fence(context, &fence)? != evidence.conflict_winner {
         return Err("pinned conflict winner differs from the durable lifecycle fence".to_string());
     }
-    let seconds = |value: &Value, key: &str| value.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+    let rechecked = seconds(&fence, "rechecked_at", "durable lifecycle fence")?;
+    let checkpointed = seconds(&receipt, "checkpointed_at", "checkpoint receipt")?;
     if text(&fence, "status") != Some("fenced")
         || !truthy(object(&fence, "queue").get("drained"))
-        || !every_writer(&fence, "stopped")
-        || seconds(&fence, "rechecked_at") < seconds(&receipt, "checkpointed_at")
+        || !every_writer(&fence, "stopped")?
+        || rechecked < checkpointed
     {
         return Err("lifecycle fence was not rechecked after checkpoint".to_string());
     }
@@ -266,7 +267,7 @@ pub(super) fn activate(context: &Context, mut receipt: Value) -> Step<()> {
             "runtime activation and lifecycle restoration are not durably proved".to_string(),
         );
     }
-    if !every_writer(&fence, "restored") {
+    if !every_writer(&fence, "restored")? {
         return Err(
             "activated fence does not restore every captured native service state".to_string(),
         );

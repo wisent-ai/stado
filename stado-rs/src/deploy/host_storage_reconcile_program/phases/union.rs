@@ -199,10 +199,11 @@ fn fence_holds(context: &Context, evidence: &Evidence, fence: &Value) -> Step<bo
     if conflict_winner_from_fence(context, fence)? != evidence.conflict_winner {
         return Err("pinned conflict winner differs from the durable lifecycle fence".to_string());
     }
+    let stopped = every_writer(fence, "stopped")?;
     Ok(
         fence.get("status").and_then(Value::as_str) == Some("fenced")
             && truthy(object(fence, "queue").get("drained"))
-            && every_writer(fence, "stopped"),
+            && stopped,
     )
 }
 
