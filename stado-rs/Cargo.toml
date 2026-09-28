@@ -6,12 +6,14 @@ description = "Policy-controlled queue and compute control plane for AI workload
 license-file = "../LICENSE"
 
 # `checks` holds the source checks that must not wait for this crate to
-# compile; one lockfile and one target directory serve both. The journeys
+# compile; one lockfile and one target directory serve both. `database`
+# is the crate products depend on to reach their fleet database through
+# SeaORM, without linking the whole control plane. The journeys
 # build throwaway crates of their own under `target/` (`product-runs/`,
 # `ci-cd-runs/`), and Cargo would otherwise claim them for this workspace
 # and refuse them as non-members.
 [workspace]
-members = [".", "product", "checks"]
+members = [".", "product", "checks", "database"]
 exclude = ["target"]
 
 [dependencies]

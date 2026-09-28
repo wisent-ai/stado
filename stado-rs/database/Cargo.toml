@@ -1,0 +1,14 @@
+[package]
+name = "stado-database"
+version = "0.1.0"
+edition = "2021"
+description = "Connect a Wisent product to its Stado-declared fleet database as a SeaORM connection"
+license-file = "../../LICENSE"
+
+[dependencies]
+sea-orm = { version = "1.1", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-json"] }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["process"] }
