@@ -86,6 +86,7 @@ pub(in crate::autonomy::inventory) async fn collect_azure(
             break;
         }
     }
+    adopt_managed_children(&mut source.resources);
     source
 }
 
@@ -120,7 +121,7 @@ fn azure_resource(subscription: &str, item: &Value, observed_at: DateTime<Utc>) 
         .and_then(Value::as_str)
         .map(str::to_string);
     resource.labels = object_strings(item.get("tags"));
-    if created_by_stado(item, &name) {
+    if carries_stado_tag(item) {
         resource
             .labels
             .insert("managed-by".to_string(), "stado".to_string());
@@ -136,25 +137,36 @@ fn azure_resource(subscription: &str, item: &Value, observed_at: DateTime<Utc>) 
     resource
 }
 
-/// Ownership read from what Stado itself wrote at creation: its tag on the
-/// resource, its name, or — for a disk or NIC ARM attaches to a VM — the name
-/// of the managing resource, taken as the last segment of the `managedBy` ARM
-/// resource id rather than searched for words.
-fn created_by_stado(item: &Value, name: &str) -> bool {
-    let tagged = item
-        .pointer(&format!("/tags/{}", crate::providers::azure::MANAGED_TAG))
+/// Ownership Stado itself wrote at creation: its tag on the resource.
+fn carries_stado_tag(item: &Value) -> bool {
+    item.pointer(&format!("/tags/{}", crate::providers::azure::MANAGED_TAG))
         .and_then(Value::as_str)
-        == Some(crate::providers::azure::MANAGED_TAG_VALUE);
-    let manager_named = item
-        .get("managedBy")
-        .and_then(Value::as_str)
-        .and_then(|id| id.trim_end_matches('/').rsplit('/').next())
-        .is_some_and(stado_named);
-    tagged || stado_named(name) || manager_named
+        == Some(crate::providers::azure::MANAGED_TAG_VALUE)
 }
 
-fn stado_named(name: &str) -> bool {
-    name.starts_with("stado-") || name.starts_with("wisent-")
+/// A disk or NIC ARM creates for a VM carries no tag of its own; it is Stado's
+/// when its `managedBy` is exactly the ARM id of a resource this read found
+/// tagged. Runs after every page, so the owner may come later in the listing.
+fn adopt_managed_children(resources: &mut [ResourceRecord]) {
+    let owned: std::collections::HashSet<String> = resources
+        .iter()
+        .filter(|resource| carries_stado_tag(&resource.evidence))
+        .filter_map(|resource| value_text(&resource.evidence, &["id"]))
+        .map(|id| id.to_ascii_lowercase())
+        .collect();
+    for resource in resources.iter_mut() {
+        if carries_stado_tag(&resource.evidence) {
+            continue;
+        }
+        let managed = value_text(&resource.evidence, &["managedBy"])
+            .is_some_and(|manager| owned.contains(&manager.to_ascii_lowercase()));
+        if managed {
+            resource
+                .labels
+                .insert("managed-by".to_string(), "stado".to_string());
+            resource.apply_identity_labels();
+        }
+    }
 }
 
 fn azure_resource_type(native: &str) -> &str {
