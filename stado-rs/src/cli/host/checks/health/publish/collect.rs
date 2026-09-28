@@ -91,7 +91,13 @@ pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
         )
         .await
         {
-            Ok(state) => unit_entry(&state),
+            Ok(state) => {
+                let mut entry = unit_entry(&state);
+                if let Value::Object(fields) = &mut entry {
+                    super::runner_listener::apply(fields, state.program.as_deref());
+                }
+                entry
+            }
             // The read itself could not be run. That is this host's own
             // failure to describe, never another word for `inactive`.
             Err(error) => json!({"state": STATE_UNREADABLE, "detail": error.to_string()}),
