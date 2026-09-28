@@ -1,6 +1,7 @@
 //! The one-line predicates every validator in this module agrees on, and the
 //! serde defaults the schema fills omitted fields with.
 
+use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 pub(in crate::release_pipeline) fn default_required() -> bool {
@@ -56,4 +57,14 @@ pub(in crate::release_pipeline) fn argv(value: &[String]) -> bool {
         && value
             .iter()
             .all(|part| !part.is_empty() && !part.as_bytes().contains(&0))
+}
+
+/// The refusal for a delivery that breaks the manifest's delivery rules.
+pub(in crate::release_pipeline) const DELIVERY_RULES: &str = "deliveries require unique names, \
+     declared platforms, non-empty argv, and an after list naming only earlier deliveries";
+
+/// Every name in `after` is among the deliveries `declared` before it, so a
+/// delivery order can never loop.
+pub(in crate::release_pipeline) fn earlier(after: &[String], declared: &BTreeSet<&str>) -> bool {
+    after.iter().all(|prior| declared.contains(prior.as_str()))
 }

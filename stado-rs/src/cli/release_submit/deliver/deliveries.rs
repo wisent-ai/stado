@@ -1,26 +1,17 @@
 //! Queue every declared delivery of one published run, then collect the
-//! verdict each one reached.
+//! verdict each one reached. A delivery that names others in `after` is
+//! queued only once each of them has passed.
 
 use std::collections::BTreeMap;
 
-use serde_json::Map;
-
-use crate::cli::release_submit::builds::builder::{builder, target_consumer};
-use crate::cli::release_submit::builds::jobs::terminal::{
-    job_output_tail, read_terminal_job, terminal,
-};
-use crate::cli::release_submit::builds::jobs::{input, secret_refs};
-use crate::cli::release_submit::deliver::{delivery_job_command, DeliveryRequest};
-use crate::cli::release_submit::run::source::{
-    queue_immutable, run_path, run_source_input_uri, run_uri,
-};
+use crate::cli::release_submit::builds::jobs::terminal::{job_output_tail, terminal};
+use crate::cli::release_submit::deliver::queue::{queue_delivery, record_unqueued};
 use crate::cli::release_submit::run::state::save;
 use crate::cli::CmdError;
 use crate::models::job_state;
 use crate::queue::storage::JobStorage;
-use crate::queue::submit::{stable_run_id, submit_batch, SubmitOptions};
 use crate::release_control::{self, ReleaseArtifactRef};
-use crate::release_pipeline::{DeliveryRun, DeliveryRunState, ReleasePipelineManifest, ReleaseRun};
+use crate::release_pipeline::{DeliveryRunState, ReleasePipelineManifest, ReleaseRun};
 
 pub(crate) async fn run_deliveries(
     run: &mut ReleaseRun,
@@ -28,175 +19,34 @@ pub(crate) async fn run_deliveries(
     artifacts: &BTreeMap<String, ReleaseArtifactRef>,
 ) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    for d in &m.deliveries {
-        // The queue, not a stale release summary, decides whether an attempt
-        // finished. A previous coordinator may have stopped before recording
-        // failures from later deliveries.
-        let prior_failure = match run.deliveries.get(&d.name) {
-            Some(current)
-                if current.state != DeliveryRunState::Passed && !current.job_id.is_empty() =>
-            {
-                read_terminal_job(&store, &current.job_id)
-                    .await?
-                    .filter(|job| {
-                        matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED)
-                    })
-            }
-            _ => None,
-        };
-        // A delivery a previous pass could not place has no job to wait for;
-        // it is placed again, now that its target may publish capacity.
-        let unplaced = run
-            .deliveries
-            .get(&d.name)
-            .is_some_and(|current| current.job_id.is_empty());
-        if !run.deliveries.contains_key(&d.name) || prior_failure.is_some() || unplaced {
-            let a = &artifacts[&d.platform];
-            let request = DeliveryRequest {
-                schema_version: 1,
-                run_id: run.run_id.clone(),
-                name: d.name.clone(),
-                product: run.product.clone(),
-                version: run.version.clone(),
-                platform: d.platform.clone(),
-                argv: d.argv.clone(),
-                required: d.required,
-                secret_env: d.secret_env.clone(),
-                source_path: "source.tar.gz".into(),
-                source_uri: run.source_uri.clone(),
-                source_sha256: run.source_sha256.clone(),
-                archive_path: "release.tar.gz".into(),
-                archive_uri: a.archive_uri.clone(),
-                archive_sha256: a.artifact_sha256.clone(),
-                manifest_uri: a.manifest_uri.clone(),
-                manifest_sha256: a.manifest_sha256.clone(),
-            };
-            let bytes = serde_json::to_vec(&request)?;
-            let sha = release_control::sha256_bytes(&bytes);
-            let uri = run_uri(
-                &run.product,
-                &run.run_id,
-                &format!("deliveries/{}/request.json", d.name),
-            );
-            queue_immutable(
-                &run_path(
-                    &run.product,
-                    &run.run_id,
-                    &format!("deliveries/{}/request.json", d.name),
-                ),
-                &bytes,
-            )
-            .await?;
-            let mut resolved = Map::new();
-            resolved.insert("request".into(), input(&uri, "delivery-request.json", &sha));
-            resolved.insert(
-                "archive".into(),
-                input(&a.archive_uri, "release.tar.gz", &a.artifact_sha256),
-            );
-            resolved.insert(
-                "source".into(),
-                input(
-                    &run_source_input_uri(run),
-                    "source.tar.gz",
-                    &run.source_sha256,
-                ),
-            );
-            // A delivery that names its target runs ON that target and
-            // installs locally; only target-less deliveries fall back to any
-            // live builder of the platform.
-            let consumer = if d.target.is_empty() {
-                builder(
-                    &crate::cli::release_submit::builds::builder::Fleet::read().await?,
-                    &m.platforms[&d.platform].runner_platform,
-                    None,
-                    None,
-                    &d.secret_env,
-                    &BTreeMap::new(),
-                )
-                .await?
-                .1
-            } else {
-                // One target that publishes no capacity used to fail the
-                // whole run here, before any delivery was queued: Stado 0.22.5
-                // was published on 2026-09-26 and reached no host because
-                // charless-mac-mini was out of disk. That target's delivery
-                // is recorded failed with the refusal and the rest are queued.
-                match target_consumer(&d.target).await {
-                    Ok(consumer) => consumer,
-                    Err(refusal) => {
-                        run.deliveries.insert(
-                            d.name.clone(),
-                            DeliveryRun {
-                                name: d.name.clone(),
-                                platform: d.platform.clone(),
-                                job_id: String::new(),
-                                output_prefix: String::new(),
-                                required: d.required,
-                                state: DeliveryRunState::Failed,
-                                receipt_sha256: None,
-                                failure: Some(format!("not queued on {}: {refusal}", d.target)),
-                            },
-                        );
-                        save(run).await?;
-                        continue;
-                    }
-                }
-            };
-            // Match platform retries: each failed job anchors exactly one
-            // replacement, including a resume interrupted before save(run).
-            let submission_run_id = match &prior_failure {
-                Some(job) => stable_run_id(
-                    "release-delivery",
-                    &format!("{}\0{}\0{}", run.run_id, d.name, job.job_id),
-                ),
-                None => stable_run_id("release-delivery", &format!("{}\0{}", run.run_id, d.name)),
-            };
-            let options = SubmitOptions {
-                pinned_host: consumer,
-                priority: crate::primitives::constants::RELEASE_JOB_PRIORITY,
-                run_id: submission_run_id,
-                output_uri: run_uri(
-                    &run.product,
-                    &run.run_id,
-                    &format!("deliveries/{}/output", d.name),
-                ),
-                input_artifacts: resolved.clone(),
-                resolved_input_artifacts: resolved,
-                secret_env: secret_refs(&d.secret_env),
-                ..Default::default()
-            };
-            let command = delivery_job_command(&run.product).to_string();
-            let mut jobs = submit_batch(std::slice::from_ref(&command), &options).await?;
-            let job = jobs
-                .pop()
-                .ok_or_else(|| CmdError::click("durable delivery submission returned no job"))?;
-            run.deliveries.insert(
-                d.name.clone(),
-                DeliveryRun {
-                    name: d.name.clone(),
-                    platform: d.platform.clone(),
-                    job_id: job.job_id.clone(),
-                    output_prefix: format!("status/{}/output/", job.job_id),
-                    required: d.required,
-                    state: DeliveryRunState::Submitted,
-                    receipt_sha256: None,
-                    failure: None,
-                },
-            );
-            save(run).await?;
-        }
+    for d in m.deliveries.iter().filter(|d| d.after.is_empty()) {
+        queue_delivery(run, m, artifacts, &store, d).await?;
     }
 
-    // Queue every target before waiting for any one of them. A silent host
-    // must not prevent later targets from receiving the same immutable
-    // release: they are independent deliveries, even though their required
-    // verdicts are collected into one release result.
+    // Queue every independent target before waiting for any one of them. A
+    // silent host must not prevent later targets from receiving the same
+    // immutable release: they are independent deliveries, even though their
+    // required verdicts are collected into one release result. A delivery
+    // with `after` is queued here, in declaration order, once the verdicts
+    // it names are in: a schema delivery that failed must not be followed by
+    // the application that reads that schema.
     let mut required_failure = None;
     for d in &m.deliveries {
-        let current = run.deliveries[&d.name].clone();
-        if current.state == DeliveryRunState::Passed {
+        let passed = |name: &str| {
+            run.deliveries
+                .get(name)
+                .is_some_and(|prior| prior.state == DeliveryRunState::Passed)
+        };
+        if passed(&d.name) {
             continue;
         }
+        if let Some(prior) = d.after.iter().find(|prior| !passed(prior)) {
+            let failure = format!("not queued: delivery {prior} did not pass");
+            record_unqueued(run, d, failure);
+        } else if !d.after.is_empty() {
+            queue_delivery(run, m, artifacts, &store, d).await?;
+        }
+        let current = run.deliveries[&d.name].clone();
         if current.job_id.is_empty() {
             if d.required && required_failure.is_none() {
                 required_failure = Some(format!(

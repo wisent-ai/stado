@@ -10,7 +10,9 @@ use crate::release_pipeline::contract::manifest::{
 };
 use crate::release_pipeline::{PRODUCT_MANIFEST, RUNNER_PLATFORMS, SCHEMA_VERSION};
 
-use super::predicates::{argv, env_name, identifier, platform_identifier, safe_relative, sha256};
+use super::predicates::{
+    argv, earlier, env_name, identifier, platform_identifier, safe_relative, sha256, DELIVERY_RULES,
+};
 use super::roles::{runtime_role, RuntimeRole};
 
 pub fn parse_product_manifest(bytes: &[u8]) -> Result<ProductManifest, String> {
@@ -269,13 +271,12 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
     let mut deliveries = BTreeSet::new();
     for delivery in &manifest.deliveries {
         if !identifier(&delivery.name)
-            || !deliveries.insert(delivery.name.as_str())
             || !manifest.platforms.contains_key(&delivery.platform)
             || !argv(&delivery.argv)
+            || !earlier(&delivery.after, &deliveries)
+            || !deliveries.insert(delivery.name.as_str())
         {
-            return Err(
-                "deliveries require unique names, declared platforms, and non-empty argv".into(),
-            );
+            return Err(DELIVERY_RULES.into());
         }
         let mut secret_names = BTreeSet::new();
         for (name, reference) in &delivery.secret_env {

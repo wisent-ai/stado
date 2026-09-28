@@ -141,4 +141,9 @@ pub struct Delivery {
     /// builder placement for deliveries that publish elsewhere.
     #[serde(default)]
     pub target: String,
+    /// Earlier deliveries of the same manifest that must pass before this
+    /// one is queued, such as a schema migration before the application
+    /// that reads it. Deliveries without it are queued together.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
 }
