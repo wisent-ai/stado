@@ -128,17 +128,33 @@ fn item_fields(
     }
     if let Some(password) = password {
         fields["db_password"] = json!(password);
+        let secret = userinfo(password);
         fields["direct_url"] = json!(format!(
-            "postgresql://postgres:{password}@db.{reference}.supabase.co:{port}/postgres"
+            "postgresql://postgres:{secret}@db.{reference}.supabase.co:{port}/postgres"
         ));
         if let Some(pooler) = pooler {
             fields["pooler_url"] = json!(format!(
-                "postgresql://{}:{password}@{}:{}/postgres",
-                pooler["db_user"].as_str().unwrap_or_default(),
+                "postgresql://{}:{secret}@{}:{}/postgres",
+                userinfo(pooler["db_user"].as_str().unwrap_or_default()),
                 pooler["db_host"].as_str().unwrap_or_default(),
                 pooler["db_port"]
             ));
         }
     }
     fields
+}
+
+/// A user or password as it may stand in a URL's userinfo: every byte but
+/// the unreserved characters percent-encoded, so `#`, `/`, `?`, `@`, `:` or
+/// a literal `%` in a password reach the server as themselves.
+fn userinfo(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
