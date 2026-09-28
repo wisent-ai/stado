@@ -17,10 +17,11 @@
 //!
 //! - No record, and the replacement runs the role: the unit steps aside
 //!   (`handed_over`). Only a caller that can bring the unit back starts one.
-//! - The resolver published its listeners bound after the record was written:
-//!   the listener is acquired. The record says `acquired` until the old
-//!   unit's retirement is confirmed, which is retried every pass, and
-//!   `complete` after it.
+//! - The replacement's live pid published its listeners bound after the
+//!   record was written: the listener is acquired. The pid is checked, not
+//!   only the time, because after a restore the old resolver listens again.
+//!   The record says `acquired` until the old unit's retirement is confirmed,
+//!   which is retried every pass, and `complete` after it.
 //! - `complete`: the unit stays retired. Registry health after that is the
 //!   resolver's own business: a `backing_off` over a failed refresh keeps its
 //!   listeners bound, and bringing the old unit back beside it would only
@@ -33,8 +34,7 @@
 //! - `handed_over` with nothing published since, or the replacement between
 //!   two restarts: the resolver has not answered; the unit stays out.
 //! - `refused`: kept until a different replacement artefact is installed, or
-//!   until the replacement serves anyway, which only happens once the old unit
-//!   let go of the ports.
+//!   until the replacement's own pid holds the listeners anyway.
 //!
 //! Every decision follows what the host published; none follows a clock.
 
