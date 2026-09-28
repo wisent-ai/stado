@@ -117,9 +117,11 @@ async fn priced_creation(
             CmdError::click(format!(
                 "anchor project {anchor_ref} is not visible to {TOKEN_ITEM}"
             ))
+            .stating(crate::primitives::failure::FailureCode::Refused)
         })?;
     let slug = organization_of(anchor_project).ok_or_else(|| {
         CmdError::click(format!("anchor project {anchor_ref} names no organization"))
+            .stating(crate::primitives::failure::FailureCode::Refused)
     })?;
     let region = anchor_project["region"]
         .as_str()
@@ -150,10 +152,18 @@ async fn priced_creation(
         ),
     });
     if accepted.is_none_or(|accepted| accepted < added) {
+        // A cost the operator has not accepted is a refusal of the request,
+        // not an unattributed failure: say what to accept and where the
+        // credit balance can be read.
         return Err(CmdError::click(format!(
             "one more project adds ${added}/month compute to {slug} (plan {plan}, {running} running; {}); \
-             pass --accept-monthly-usd {added} to create {name}. Report: {report}",
+             {name} was not created. Report: {report}",
             text("source")
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused)
+        .helping(format!(
+            "pass --accept-monthly-usd {added} to accept it; the credit balance is at {}",
+            text("billing_page").replace("{slug}", &slug)
         )));
     }
     Ok((slug, region, report))
