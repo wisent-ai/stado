@@ -73,10 +73,16 @@ pub(super) fn prepare(
             root.display()
         ))
     })?;
-    // The change is read from git objects at `commit` and must already be on
-    // the remote main, so the branch the checkout has open does not matter: a
-    // pushed main commit is submitted even while another session works on a
-    // feature branch in the same checkout.
+    // Every repository has one checkout and it works on main; a checkout left
+    // on another branch is refused, naming the branch, so it is brought back
+    // to main rather than worked around.
+    let branch = git(&root, &["branch", "--show-current"])?;
+    if branch != "main" {
+        return Err(CmdError::refused(format!(
+            "{} is on branch '{branch}', not main; the one checkout of a repository works on main, so return it to main (keeping any other session's edits) and submit again",
+            root.display()
+        )));
+    }
     let commit = super::super::resolve_commit(&root, Some(commit))?;
     let repository = repository(&root)?;
     // Ask the remote, not a possibly stale origin/main tracking ref. No fetch,
