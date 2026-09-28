@@ -36,7 +36,10 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
         // A publisher declared for a product the catalog never received is a
         // product nothing builds: say which, and the command that registers
         // it or withdraws it, instead of the object store's bare 404.
-        if matches!(crate::cli::storage::fetch_object_versioned(&uri).await, Ok(None)) {
+        if matches!(
+            crate::cli::storage::fetch_object_versioned(&uri).await,
+            Ok(None)
+        ) {
             failures.push(format!(
                 "{product}: release_api.publishers declares it but the release catalog holds no \
                  entry for it, so nothing builds it; register its checkout with `stado release \
@@ -45,16 +48,18 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
             ));
             continue;
         }
-        match crate::cli::storage::fetch_object(&uri).await.and_then(|bytes| {
-            let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
-            release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
-            if uri != catalog_uri(&entry.product) {
-                return Err(CmdError::click(
-                    "catalog entry product disagrees with object coordinate",
-                ));
-            }
-            Ok(entry)
-        }) {
+        match crate::cli::storage::fetch_object(&uri)
+            .await
+            .and_then(|bytes| {
+                let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
+                release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
+                if uri != catalog_uri(&entry.product) {
+                    return Err(CmdError::click(
+                        "catalog entry product disagrees with object coordinate",
+                    ));
+                }
+                Ok(entry)
+            }) {
             Ok(entry) if products.insert(entry.product.clone()) => entries.push(entry),
             Ok(entry) => failures.push(format!("duplicate catalog product {}", entry.product)),
             Err(error) => failures.push(format!("{uri}: {error}")),

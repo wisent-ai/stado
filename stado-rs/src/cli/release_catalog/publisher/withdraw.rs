@@ -33,7 +33,10 @@ pub(crate) async fn withdraw_publisher(
 ) -> Result<(), CmdError> {
     vault_word("product", product)?;
     let uri = super::super::catalog_uri(product);
-    if crate::cli::storage::fetch_object_versioned(&uri).await?.is_some() {
+    if crate::cli::storage::fetch_object_versioned(&uri)
+        .await?
+        .is_some()
+    {
         return Err(CmdError::click(format!(
             "{product}: the release catalog still holds {uri}, so the daily batch builds it and \
              its releases need the publisher; withdraw a publisher only for a retired product"
