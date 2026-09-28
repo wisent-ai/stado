@@ -84,20 +84,19 @@ pub async fn handoff_standing(
     let record = read_record(target, unit, runner).await?;
     let published = read_published(target, &process.declared, runner).await?;
     let current: Option<u32> = process.pid.trim().parse().ok();
-    // Before any handoff the old unit may be the one listening, so only the
-    // replacement's own pid counts.
-    let listening_now = not_running.is_none()
-        && published
-            .as_ref()
-            .is_some_and(|seen| seen.listening && Some(seen.pid) == current);
-    // After the old unit stepped aside, anything that bound the ports is the
-    // replacement's resolver, even a pid that has restarted since: the
-    // listener was acquired, whatever the registry's health says.
-    let acquired_since = |since: i64| {
-        published
-            .as_ref()
-            .is_some_and(|seen| seen.listening && seen.written > since)
+    // Only the replacement's own live pid holding the listeners proves an
+    // acquisition, whatever the registry's health says. A timestamp alone
+    // cannot tell it from the old unit: after a restore the old resolver
+    // listens again, and its publication must never read as the
+    // replacement's. A replacement that bound and then restarted is simply
+    // recognized on the pass that finds its next pid listening.
+    let listening_since = |since: i64| {
+        not_running.is_none()
+            && published.as_ref().is_some_and(|seen| {
+                seen.listening && Some(seen.pid) == current && seen.written > since
+            })
     };
+    let listening_now = listening_since(i64::MIN);
     let Some(record) = record else {
         return Ok(match not_running {
             Some(reason) => Handoff::Kept(reason.to_string()),
@@ -116,7 +115,7 @@ pub async fn handoff_standing(
     if record.state == "acquired" {
         return Ok(Handoff::Complete);
     }
-    if acquired_since(record.since) {
+    if listening_since(record.since) {
         return Ok(Handoff::Complete);
     }
     if record.state == "refused" {
