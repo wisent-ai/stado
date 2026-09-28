@@ -13,6 +13,9 @@ use super::*;
 mod advance;
 mod expiry;
 mod start;
+mod tick;
+
+use tick::{running_tick, verification_failure};
 
 pub use advance::*;
 pub use expiry::*;

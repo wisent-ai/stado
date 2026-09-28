@@ -58,52 +58,7 @@ pub async fn advance_slot(
     // `reap` and not `child.try_wait`: observing the exit is what releases the
     // janitor's shared cleanup hold, so nothing below this line can retain it.
     let Some(exit_status) = slot.reap(log_fn)? else {
-        // Still running: refresh the peak-VRAM attribution and, on the
-        // heartbeat interval, the status blob + streamed log.
-        let used = gpu::smi_job_used_gb(pid).await;
-        if used > slot.slot.peak_vram_gb {
-            slot.slot.peak_vram_gb = used;
-        }
-        if !slot.paused && slot.last_hb.elapsed() > Duration::from_secs(HEARTBEAT_INTERVAL_S) {
-            write_heartbeat(store, &job_id).await?;
-            let expected_work_dir = job_work_dir(&job_id)?;
-            if !work_dir_is_directory(&expected_work_dir) {
-                slot.workdir_missing = true;
-                log_fn(&workdir_missing_diagnostic(
-                    &job_id,
-                    "heartbeat",
-                    &expected_work_dir,
-                ));
-            } else {
-                // Stream the in-progress command_output.log from the
-                // queue-owned persistent job tree on each heartbeat. An
-                // existing but empty log is intentionally different from the
-                // missing-tree diagnostic above.
-                let log_path = expected_work_dir.join("output/command_output.log");
-                if log_path.exists() {
-                    let upload = async {
-                        let mut bytes = tokio::fs::read(&log_path).await?;
-                        let secrets = output_redactions(&slot.slot.job).await?;
-                        redact_secret_bytes(&mut bytes, &secrets);
-                        store
-                            .upload_bytes(
-                                &format!("status/{job_id}/output/command_output.log"),
-                                &bytes,
-                            )
-                            .await
-                    };
-                    // The upload finishes or the store refuses it; a slow
-                    // object store was losing the job's output log here.
-                    if let Err(exc) = upload.await {
-                        log_fn(&format!(
-                            "heartbeat log upload failed for {job_id}: {}",
-                            head_chars(&exc.to_string(), 160)
-                        ));
-                    }
-                }
-            }
-            slot.last_hb = Instant::now();
-        }
+        running_tick(&mut slot, store, &job_id, pid, log_fn).await?;
         return Ok(SlotOutcome::Running(slot));
     };
 
@@ -123,45 +78,17 @@ pub async fn advance_slot(
     let mut verification_failed = false;
     let verify_cmd = verify_command(&slot.slot.job);
     if ret == 0 && !slot.workdir_missing && !verify_cmd.is_empty() {
-        // Verification hook — see Job.verify_command docstring. Runs in
-        // the same workdir as the original command. Non-zero exit
-        // reverses the COMPLETED→FAILED. The verify command must define
-        // its own clear failure conditions; the runner does not impose
-        // a wall-clock cap.
-        let secret_environment = match resolve_job_secret_environment(&slot.slot.job).await {
-            Ok(environment) => environment,
-            Err(_) => {
-                ret = i32::MAX;
-                verification_failed = true;
-                log_fn(&format!(
-                    "verify_command secret resolution failed for {job_id}"
-                ));
-                BTreeMap::new()
-            }
-        };
-        let mut command = tokio::process::Command::new("/bin/sh");
-        inherit_safe_agent_environment(&mut command);
-        match command
-            .arg("-c")
-            .arg(&verify_cmd)
-            .current_dir(&expected_work_dir)
-            .envs(secret_environment)
-            .output()
-            .await
+        if let Some(code) = verification_failure(
+            &slot.slot.job,
+            &verify_cmd,
+            &expected_work_dir,
+            &job_id,
+            log_fn,
+        )
+        .await
         {
-            Ok(out) => {
-                let vrc = python_returncode(out.status);
-                if vrc != 0 {
-                    ret = 1000 + vrc;
-                    verification_failed = true;
-                    log_fn(&format!("verify_command failed for {job_id}: rc={vrc}"));
-                }
-            }
-            Err(_) => {
-                ret = 1999;
-                verification_failed = true;
-                log_fn(&format!("verify_command failed to start for {job_id}"));
-            }
+            ret = code;
+            verification_failed = true;
         }
     }
     // Close the log file BEFORE uploading. Earlier this was deferred
