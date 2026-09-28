@@ -107,7 +107,8 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             let receipt = if created {
                 status::for_change(saved, &Default::default())
             } else {
-                status::for_change(saved, &status::observations(&store).await?)
+                let wanted = std::iter::once(saved.id.clone()).collect();
+                status::for_change(saved, &status::observations(&store, &wanted).await?)
             };
             if *json {
                 println!("{}", serde_json::to_string(&receipt)?);
@@ -125,11 +126,14 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
         ChangesCommand::List { task, json } => {
             let store = JobStorage::new().await.map_err(failure)?;
             let mut statuses = Vec::new();
-            let observations = status::observations(&store).await?;
-            for change in entries(&store).await? {
-                if task.as_ref().is_some_and(|task| task != &change.task_id) {
-                    continue;
-                }
+            let listed: Vec<Change> = entries(&store)
+                .await?
+                .into_iter()
+                .filter(|change| task.as_ref().is_none_or(|task| task == &change.task_id))
+                .collect();
+            let wanted = listed.iter().map(|change| change.id.clone()).collect();
+            let observations = status::observations(&store, &wanted).await?;
+            for change in listed {
                 statuses.push(status::for_change(change, &observations));
             }
             if *json {
@@ -184,9 +188,10 @@ pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError>
 /// is the daily batch the handoff promises.
 pub(crate) async fn queued_products() -> Result<std::collections::BTreeSet<String>, CmdError> {
     let store = JobStorage::new().await.map_err(failure)?;
-    let observations = status::observations(&store).await?;
-    Ok(entries(&store)
-        .await?
+    let pending = entries(&store).await?;
+    let wanted = pending.iter().map(|change| change.id.clone()).collect();
+    let observations = status::observations(&store, &wanted).await?;
+    Ok(pending
         .into_iter()
         .map(|change| status::for_change(change, &observations))
         .filter(|status| status.state == "queued")
@@ -218,7 +223,8 @@ pub(crate) async fn bind(
         source::repository(root)?
     };
     let mut covered = Vec::new();
-    let observations = status::observations(&store).await?;
+    let wanted = candidates.iter().map(|change| change.id.clone()).collect();
+    let observations = status::observations(&store, &wanted).await?;
     for change in candidates {
         if change.product == product
             && change.repository == repository

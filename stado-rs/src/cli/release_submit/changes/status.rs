@@ -23,6 +23,7 @@ pub(super) struct Observation {
 /// qualification reached Oko's ledger at all.
 pub(super) async fn observations(
     store: &JobStorage,
+    wanted: &std::collections::HashSet<String>,
 ) -> Result<HashMap<String, Observation>, CmdError> {
     let batches: Vec<String> = store
         .list_paths("runs/build/", 0)
@@ -32,7 +33,7 @@ pub(super) async fn observations(
         .filter(|path| path.ends_with("/changes.json"))
         .collect();
     let answers = futures::stream::iter(&batches)
-        .map(|path| batch_observation(store, path))
+        .map(|path| batch_observation(store, path, wanted))
         .buffered(crate::queue::copy::DEFAULT_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
@@ -52,11 +53,15 @@ pub(super) async fn observations(
     Ok(observations)
 }
 
-/// One frozen batch and what its build observed; nothing for an empty batch
-/// or a build whose run record is gone.
+/// One frozen batch and what its build observed; nothing for an empty batch,
+/// a batch that covers none of the `wanted` changes, or a build whose run
+/// record is gone. Observing a batch reads its run, its manifest and every
+/// job of the build; doing that for the whole build history made `changes
+/// list` take 124 s when it answers only for the changes still listed.
 async fn batch_observation(
     store: &JobStorage,
     path: &str,
+    wanted: &std::collections::HashSet<String>,
 ) -> Result<Option<(Vec<Change>, Observation)>, CmdError> {
     let text = store
         .download_text(path)
@@ -64,7 +69,7 @@ async fn batch_observation(
         .map_err(failure)?
         .ok_or_else(|| CmdError::click(format!("build batch missing: {path}")))?;
     let batch: Vec<Change> = serde_json::from_str(&text)?;
-    if batch.is_empty() {
+    if batch.is_empty() || !batch.iter().any(|change| wanted.contains(&change.id)) {
         return Ok(None);
     }
     let run_path = format!("{}run.json", path.trim_end_matches("changes.json"));
