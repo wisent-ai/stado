@@ -10,9 +10,9 @@ use super::*;
 /// leaving the command's JSON contract unchanged. A unit that could not be
 /// retired is the command's failure: the replacement runs, but its
 /// predecessor may run beside it. A kept role unit is not a failure. A role
-/// that shares its unit's listener is never handed over here: only the
-/// reconciler can repair the unit if the role does not take, so it starts
-/// the handoff, and this command reports the unit `kept` until it has.
+/// that shares its unit's listener is not touched here: the reconciler hands
+/// it over under the unit's lease and can repair it if the role does not
+/// take, so this command only says so.
 pub(super) async fn retire_after_ensure(
     target: &crate::targets::ComputeTarget,
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
@@ -21,10 +21,7 @@ pub(super) async fn retire_after_ensure(
 ) -> Result<(), CmdError> {
     let Some(entry) = entry else { return Ok(()) };
     let mut failed = Vec::new();
-    let never = |_: &str| false;
-    for retirement in
-        service::retire_catalog_predecessors(target, entry, running, &never, runner).await
-    {
+    for retirement in service::retire_catalog_predecessors(target, entry, running, runner).await {
         eprintln!(
             "{}: {} replaced {}: {} ({})",
             target.name, entry.name, retirement.unit, retirement.state, retirement.detail
@@ -32,6 +29,16 @@ pub(super) async fn retire_after_ensure(
         if retirement.state == "failed" {
             failed.push(format!("{}: {}", retirement.unit, retirement.detail));
         }
+    }
+    for role in entry
+        .role_units
+        .iter()
+        .filter(|role| service::listener_role(role))
+    {
+        eprintln!(
+            "{}: {} replaces {}: left to the autonomy reconciler, which hands its listener over",
+            target.name, entry.name, role.unit
+        );
     }
     if failed.is_empty() {
         return Ok(());

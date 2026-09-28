@@ -1,8 +1,11 @@
 use crate::deploy::service::*;
 
 mod handoff;
+mod listener;
+mod record;
 
 pub use handoff::*;
+pub use listener::{hand_over_role, listener_role, listener_standing};
 
 /// What retiring one catalog-retired unit on one host did.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -26,10 +29,8 @@ pub struct PredecessorRetirement {
 /// again beside the process that replaced it. A role unit is retired only when
 /// [`role_process`] proves `running`, the replacement's unit on this host,
 /// runs its role; otherwise it is `kept`, because it is still doing that work.
-/// A role that shares the old unit's listener is handed over, see [`handoff`];
-/// a handoff is started only for a unit `may_hand_over` names, one the caller
-/// can bring back if the role does not take, while one already under way is
-/// completed or undone whoever asks.
+/// A role that shares the old unit's listener is not retired here at all: it
+/// is handed over by the reconciler, under the unit's lease, see [`handoff`].
 ///
 /// The unit file itself stays where it is: [`set_label_autostart`] records the
 /// init system's own disabled override, which outlives the file and is what
@@ -39,116 +40,39 @@ pub async fn retire_catalog_predecessors(
     target: &ComputeTarget,
     replacement: &crate::deploy::service_catalog::CatalogService,
     running: &ManagedService,
-    may_hand_over: &(dyn Fn(&str) -> bool + Sync),
     runner: &Runner,
 ) -> Vec<PredecessorRetirement> {
     let mut retirements = Vec::with_capacity(replacement.retired_units.len());
     for unit in &replacement.retired_units {
         retirements.push(retirement(target, unit, runner).await);
     }
-    for role in &replacement.role_units {
-        let may = may_hand_over(&role.unit);
-        retirements.push(role_retirement(target, running, role, may, false, runner).await);
+    for role in replacement
+        .role_units
+        .iter()
+        .filter(|role| !listener_role(role))
+    {
+        retirements.push(
+            match role_process(target, running, &role.flag, runner).await {
+                Ok((_, None)) => retirement(target, &role.unit, runner).await,
+                Ok((_, Some(reason))) => PredecessorRetirement {
+                    unit: role.unit.clone(),
+                    state: "kept".to_string(),
+                    detail: reason,
+                },
+                Err(error) => PredecessorRetirement {
+                    unit: role.unit.clone(),
+                    state: "kept".to_string(),
+                    detail: format!("its role could not be checked: {error}"),
+                },
+            },
+        );
     }
     retirements
 }
 
-/// For a replacement the registry holds stopped: undo every listener handoff
-/// under way for it, so the unit that stepped aside is brought back.
-pub async fn recover_handoffs(
-    target: &ComputeTarget,
-    replacement: &crate::deploy::service_catalog::CatalogService,
-    running: &ManagedService,
-    runner: &Runner,
-) -> Vec<PredecessorRetirement> {
-    let mut recovered = Vec::new();
-    for role in &replacement.role_units {
-        if role.readiness.as_deref() == Some(RESOLVER_STATE) {
-            let outcome = role_retirement(target, running, role, false, true, runner).await;
-            // Nothing under way reads `kept`; only an undo or its failure is news.
-            if outcome.state != "kept" {
-                recovered.push(outcome);
-            }
-        }
-    }
-    recovered
-}
-
-async fn role_retirement(
-    target: &ComputeTarget,
-    running: &ManagedService,
-    role: &crate::deploy::service_catalog::RoleUnit,
-    may_hand_over: bool,
-    stopped: bool,
-    runner: &Runner,
-) -> PredecessorRetirement {
-    let unit = role.unit.clone();
-    let answer = |state: &str, detail: String| PredecessorRetirement {
-        unit: unit.clone(),
-        state: state.to_string(),
-        detail,
-    };
-    // A replacement that cannot even be inspected runs no role; a handoff under
-    // way for it is still read, so the unit that stepped aside is not lost.
-    let (process, not_running) = match role_process(target, running, &role.flag, runner).await {
-        Ok(found) => found,
-        Err(error) if role.readiness.as_deref() == Some(RESOLVER_STATE) => (
-            RunningProgram::default(),
-            Some(format!(
-                "{} could not be inspected: {error}",
-                running.unit_id()
-            )),
-        ),
-        Err(error) => return answer("kept", format!("its role could not be checked: {error}")),
-    };
-    if role.readiness.as_deref() != Some(RESOLVER_STATE) {
-        return match not_running {
-            None => retirement(target, &role.unit, runner).await,
-            Some(reason) => answer("kept", reason),
-        };
-    }
-    let standing = handoff_standing(
-        target,
-        &process,
-        not_running.as_deref(),
-        stopped,
-        &role.unit,
-        runner,
-    )
-    .await;
-    let outcome = match standing {
-        Ok(Handoff::Complete) => return retirement(target, &role.unit, runner).await,
-        Ok(Handoff::Kept(detail)) => return answer("kept", detail),
-        Ok(Handoff::Waiting(detail)) => Ok(("awaiting_resolver".to_string(), detail)),
-        Ok(Handoff::Start) if !may_hand_over => {
-            return answer(
-                "kept",
-                format!(
-                    "{} runs the resolver role, but only the reconciler of a host that declares \
-                     {unit} can hand it over and bring it back",
-                    running.unit_id()
-                ),
-            )
-        }
-        Ok(Handoff::Start) => start_handoff(target, &role.unit, &process, runner).await,
-        Ok(Handoff::Restore {
-            scopes,
-            artefact,
-            detail,
-        }) => restore_handoff(target, &role.unit, &artefact, &scopes, runner)
-            .await
-            .map(|()| ("restored".to_string(), detail)),
-        Err(error) => Err(error),
-    };
-    match outcome {
-        Ok((state, detail)) => answer(&state, detail),
-        Err(error) => answer("failed", error.to_string()),
-    }
-}
-
 /// Whether `role`'s unit is out of the way on `target` and must not be
-/// repaired: the replacement runs the role, and either the role needs nothing
-/// more, or its resolver serves, or the unit stepped aside for it and the
+/// repaired: the replacement runs the role, or, for a role that shares its
+/// listener, the listener was acquired or the unit stepped aside and the
 /// resolver has not answered yet. The detail when it is; `None` otherwise,
 /// including when that cannot be established.
 pub async fn role_retired(
@@ -157,29 +81,15 @@ pub async fn role_retired(
     role: &crate::deploy::service_catalog::RoleUnit,
     runner: &Runner,
 ) -> Option<String> {
-    let (process, not_running) = role_process(target, running, &role.flag, runner)
+    if listener_role(role) {
+        return listener::listener_retired(target, running, role, runner).await;
+    }
+    let (_, not_running) = role_process(target, running, &role.flag, runner)
         .await
         .ok()?;
-    if role.readiness.as_deref() != Some(RESOLVER_STATE) {
-        return not_running
-            .is_none()
-            .then(|| format!("{} runs its role ({})", running.unit_id(), role.flag));
-    }
-    match handoff_standing(
-        target,
-        &process,
-        not_running.as_deref(),
-        false,
-        &role.unit,
-        runner,
-    )
-    .await
-    .ok()?
-    {
-        Handoff::Complete => Some(format!("the resolver in {} serves", running.unit_id())),
-        Handoff::Waiting(detail) => Some(detail),
-        Handoff::Start | Handoff::Restore { .. } | Handoff::Kept(_) => None,
-    }
+    not_running
+        .is_none()
+        .then(|| format!("{} runs its role ({})", running.unit_id(), role.flag))
 }
 
 async fn retirement(target: &ComputeTarget, unit: &str, runner: &Runner) -> PredecessorRetirement {

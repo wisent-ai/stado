@@ -19,6 +19,7 @@ use crate::queue::StorageError;
 use super::gate::MutationGate;
 use super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
 
+mod listeners;
 mod roles;
 mod standby;
 mod strays;
@@ -90,10 +91,7 @@ pub(super) async fn retire(
         active,
     } in replacements
     {
-        let handoffs = entry
-            .role_units
-            .iter()
-            .any(|role| role.readiness.as_deref() == Some(service::RESOLVER_STATE));
+        let handoffs = entry.role_units.iter().any(service::listener_role);
         if !active && !handoffs {
             continue;
         }
@@ -140,35 +138,38 @@ pub(super) async fn retire(
                 continue;
             }
         };
-        let may_hand_over = |unit: &str| declared.contains(&(host.clone(), unit.to_string()));
-        let retirements = if *active {
-            service::retire_catalog_predecessors(&target, entry, running, &may_hand_over, runner)
-                .await
-        } else {
-            service::recover_handoffs(&target, entry, running, runner).await
-        };
-        for retirement in retirements {
-            let (classification, changed) = match retirement.state.as_str() {
-                "retired" => ("retired", true),
-                "handed_over" => ("handed_over", true),
-                "restored" => ("restored", true),
-                "kept" => ("kept", false),
-                "awaiting_resolver" => ("awaiting_resolver", false),
-                "absent" => continue,
-                _ => ("repair_failed", false),
-            };
-            if changed {
-                summary.changed += 1;
-            } else if classification == "repair_failed" {
-                summary.failures += 1;
+        if *active {
+            for retirement in
+                service::retire_catalog_predecessors(&target, entry, running, runner).await
+            {
+                let (classification, changed) = match retirement.state.as_str() {
+                    "retired" => ("retired", true),
+                    "kept" => ("kept", false),
+                    "absent" => continue,
+                    _ => ("repair_failed", false),
+                };
+                if changed {
+                    summary.changed += 1;
+                } else if classification == "repair_failed" {
+                    summary.failures += 1;
+                }
+                outcomes.push(row(
+                    &retirement.unit,
+                    classification,
+                    changed,
+                    format!("replaced by {}: {}", entry.name, retirement.detail),
+                ));
             }
-            outcomes.push(row(
-                &retirement.unit,
-                classification,
-                changed,
-                format!("replaced by {}: {}", entry.name, retirement.detail),
-            ));
         }
+        let replaced = listeners::Replaced {
+            target: &target,
+            running,
+            entry,
+            active: *active,
+        };
+        outcomes.extend(
+            listeners::hand_over_listeners(&replaced, declared, runner, gate, summary).await?,
+        );
     }
     outcomes.extend(strays::retire_strays(policy, runner, summary).await);
     outcomes.extend(standby::stop_serving_standbys(findings, policy, runner, gate, summary).await?);
