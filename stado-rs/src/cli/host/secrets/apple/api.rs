@@ -44,7 +44,7 @@ pub(super) fn bearer(key: &ApiKey) -> Result<String, CmdError> {
         .map_err(|error| refused(format!("the API key is not a P-256 PKCS#8 key: {error}")))?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| refused(error))?
+        .map_err(refused)?
         .as_secs();
     let header = json!({"alg": "ES256", "kid": key.key_id, "typ": "JWT"});
     let claims = json!({

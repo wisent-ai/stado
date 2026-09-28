@@ -3,7 +3,7 @@
 //! install`, and proof that a stopped writer's listener is closed.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::process::{Command, Stdio};
