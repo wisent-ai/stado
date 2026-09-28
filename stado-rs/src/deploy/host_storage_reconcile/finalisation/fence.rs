@@ -25,6 +25,25 @@ STADO_RECONCILE_OWNER_TOKEN={owner_token} STADO_RECONCILE_LOCK_FD={lock_fd} \
     )
 }
 
+/// One host step (`stado host storage-root-reconcile-host ARGUMENTS`), run
+/// by the resident worker's own binary: the worker is the transaction tool
+/// on this host, so the step is the same revision as the transaction.
+pub(in crate::deploy::host_storage_reconcile) fn host_step_script(
+    arguments: &[&str],
+) -> Result<String, DeployError> {
+    let tool = std::env::current_exe()
+        .map_err(|error| DeployError(format!("cannot locate the transaction tool: {error}")))?;
+    let mut script = format!(
+        "{} host storage-root-reconcile-host",
+        shlex_quote(&tool.to_string_lossy())
+    );
+    for argument in arguments {
+        script.push(' ');
+        script.push_str(&shlex_quote(argument));
+    }
+    Ok(script)
+}
+
 pub(in crate::deploy::host_storage_reconcile) fn remote_failure_detail(
     output: &crate::deploy::CommandOutput,
     fallback: &str,

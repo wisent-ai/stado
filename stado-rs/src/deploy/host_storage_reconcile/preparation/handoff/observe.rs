@@ -5,25 +5,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn prove_listener_closed(
     port: u16,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    let script = format!(
-        r#"PORT={} /usr/bin/python3 - <<'PY'
-import os, socket, time
-port = int(os.environ['PORT'])
-deadline = time.monotonic() + 30
-while True:
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.settimeout(0.2)
-    result = probe.connect_ex(('127.0.0.1', port))
-    probe.close()
-    if result != 0:
-        print('STADO_LISTENER_CLOSED\t' + str(port))
-        break
-    if time.monotonic() >= deadline:
-        raise SystemExit('object API listener remained open')
-    time.sleep(0.2)
-PY"#,
-        port
-    );
+    let script = host_step_script(&["listener-closed", "--port", &port.to_string()])?;
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_LISTENER_CLOSED\t{port}");
     if !output.ok() || !output.stdout.lines().any(|line| line == marker) {
@@ -41,29 +23,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn snapshot_unit_file(
     path: &str,
     runner: &Runner,
 ) -> Result<Option<FileSnapshot>, DeployError> {
-    let script = format!(
-        r#"STADO_UNIT_PATH={} /usr/bin/python3 - <<'PY'
-import base64, hashlib, json, os, stat
-path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))
-try:
-    info = os.lstat(path)
-except FileNotFoundError:
-    print('STADO_UNIT_SNAPSHOT\tabsent')
-    raise SystemExit(0)
-if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-    raise SystemExit('unit path is not a regular non-symlink file')
-with open(path, 'rb') as handle:
-    body = handle.read()
-print('STADO_UNIT_SNAPSHOT\t' + json.dumps({{
-    'body_base64': base64.b64encode(body).decode('ascii'),
-    'sha256': hashlib.sha256(body).hexdigest(),
-    'mode': stat.S_IMODE(info.st_mode),
-    'uid': info.st_uid,
-    'gid': info.st_gid,
-}}, sort_keys=True, separators=(',', ':')))
-PY"#,
-        shlex_quote(path)
-    );
+    let script = host_step_script(&["unit-snapshot", "--path", path])?;
     let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(format!(

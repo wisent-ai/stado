@@ -11,8 +11,6 @@ program="$HOME/.stado/bin/stado"
 store=@PRIMARY@
 backup_backend=@BACKUP_BACKEND@
 backup_store=@BACKUP@
-config=@CONFIG@
-port=@PORT@
 log="$HOME/.stado/logs/$label.log"
 work="$HOME/.stado/work/object-api-recovery"
 [ -x "$program" ] && [ -d "$store" ] && [ -r "$store/registry.json" ]
@@ -25,37 +23,7 @@ fi
 /bin/chmod 600 "$log"
 staged=$(/usr/bin/mktemp "$work/$label.captured-prior.XXXXXX")
 trap '/bin/rm -f "$staged"' EXIT HUP INT TERM
-account=$(/usr/bin/id -un)
-/usr/bin/python3 - "$staged" "$label" "$program" "$store" "$backup_backend" "$backup_store" "$account" "$log" "$HOME" "$config" "$port" <<'PY'
-import plistlib, sys
-path, label, program, store, backup_backend, backup_store, account, log, home, config, port = sys.argv[1:]
-environment = {
-    "HOME": home,
-    "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-    "STADO_CONFIG": config,
-    "GNUPGHOME": f"{home}/.gnupg",
-    "SKARBIEC_VAULT_FILE": f"{home}/.stado/skarbiec.vault.json",
-    "WC_SKARBIEC_CONSUMER": "stado",
-    "WC_SKARBIEC_TOKEN_FILE": f"{home}/.stado/stado-skarbiec-token",
-    "WC_STORAGE_BACKEND": "local",
-    "WC_LOCAL_STORAGE_PATH": store,
-}
-if backup_store:
-    environment["WC_BACKUP_STORAGE_BACKEND"] = backup_backend
-    environment["WC_BACKUP_LOCAL_STORAGE_PATH"] = backup_store
-document = {
-    "Label": label,
-    "ProgramArguments": [program, "dashboard", "--bind", "127.0.0.1", "--port", port],
-    "EnvironmentVariables": environment,
-    "RunAtLoad": True,
-    "KeepAlive": True,
-    "UserName": account,
-    "StandardOutPath": log,
-    "StandardErrorPath": log,
-}
-with open(path, "wb") as handle:
-    plistlib.dump(document, handle, fmt=plistlib.FMT_XML, sort_keys=False)
-PY
+printf '%s' @PLIST@ | /usr/bin/base64 -D > "$staged"
 /usr/bin/plutil -lint "$staged" >/dev/null
 /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
 /usr/bin/sudo -n /bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
@@ -113,6 +81,7 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
     let port = writer
         .listener_port
         .ok_or_else(|| DeployError("captured object API port is absent".to_string()))?;
+    let unit = object_api_unit(primary, backup, config, port)?;
     let body = ROLLBACK_OBJECT_API_SCRIPT
         .replace("@PRIMARY@", &shlex_quote(primary))
         .replace(
@@ -120,9 +89,87 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
             &shlex_quote(if backup.is_some() { "local" } else { "" }),
         )
         .replace("@BACKUP@", &shlex_quote(backup.unwrap_or("")))
-        .replace("@CONFIG@", &shlex_quote(config))
+        .replace("@PLIST@", &shlex_quote(&unit))
         .replace("@PORT@", &port.to_string());
     Ok(prepared_script(body))
+}
+
+/// The object API's launchd definition as the transaction restores it,
+/// base64-encoded XML: the worker renders it on the host it runs on, for the
+/// account it runs as.
+fn object_api_unit(
+    primary: &str,
+    backup: Option<&str>,
+    config: &str,
+    port: u16,
+) -> Result<String, DeployError> {
+    use plist::{Dictionary, Value as Plist};
+    let home = std::env::var("HOME").map_err(|_| DeployError("HOME is not set".to_string()))?;
+    let account = nix::unistd::User::from_uid(nix::unistd::getuid())
+        .ok()
+        .flatten()
+        .map(|user| user.name)
+        .ok_or_else(|| DeployError("the managed account has no user name".to_string()))?;
+    let label = "com.wisent.always-on.stado-object-api";
+    let log = format!("{home}/.stado/logs/{label}.log");
+    let text = |value: &str| Plist::String(value.to_string());
+    let mut environment = Dictionary::new();
+    for (name, value) in [
+        ("HOME", home.clone()),
+        (
+            "PATH",
+            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string(),
+        ),
+        ("STADO_CONFIG", config.to_string()),
+        ("GNUPGHOME", format!("{home}/.gnupg")),
+        (
+            "SKARBIEC_VAULT_FILE",
+            format!("{home}/.stado/skarbiec.vault.json"),
+        ),
+        ("WC_SKARBIEC_CONSUMER", "stado".to_string()),
+        (
+            "WC_SKARBIEC_TOKEN_FILE",
+            format!("{home}/.stado/stado-skarbiec-token"),
+        ),
+        ("WC_STORAGE_BACKEND", "local".to_string()),
+        ("WC_LOCAL_STORAGE_PATH", primary.to_string()),
+    ] {
+        environment.insert(name.to_string(), Plist::String(value));
+    }
+    if let Some(backup) = backup {
+        environment.insert("WC_BACKUP_STORAGE_BACKEND".to_string(), text("local"));
+        environment.insert("WC_BACKUP_LOCAL_STORAGE_PATH".to_string(), text(backup));
+    }
+    let program = format!("{home}/.stado/bin/stado");
+    let port = port.to_string();
+    let arguments = [
+        program.as_str(),
+        "dashboard",
+        "--bind",
+        "127.0.0.1",
+        "--port",
+        port.as_str(),
+    ];
+    let mut unit = Dictionary::new();
+    unit.insert("Label".to_string(), text(label));
+    unit.insert(
+        "ProgramArguments".to_string(),
+        Plist::Array(arguments.iter().map(|argument| text(argument)).collect()),
+    );
+    unit.insert(
+        "EnvironmentVariables".to_string(),
+        Plist::Dictionary(environment),
+    );
+    unit.insert("RunAtLoad".to_string(), Plist::Boolean(true));
+    unit.insert("KeepAlive".to_string(), Plist::Boolean(true));
+    unit.insert("UserName".to_string(), text(&account));
+    unit.insert("StandardOutPath".to_string(), text(&log));
+    unit.insert("StandardErrorPath".to_string(), text(&log));
+    let mut bytes = Vec::new();
+    Plist::Dictionary(unit)
+        .to_writer_xml(&mut bytes)
+        .map_err(|error| DeployError(format!("cannot render the object API unit: {error}")))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn recovered_object_store(

@@ -103,6 +103,7 @@ pub mod host_release;
 pub mod host_run;
 pub mod host_state;
 pub mod host_storage_reconcile;
+pub mod host_storage_reconcile_host;
 pub mod host_storage_reconcile_program;
 pub mod host_users;
 pub mod host_volume;

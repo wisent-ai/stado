@@ -122,6 +122,14 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             crate::deploy::host_storage_reconcile_program::run(&phase, &transaction);
             Ok(())
         }
+        HostStateCommands::StorageRootReconcileHost(command) => {
+            crate::deploy::host_storage_reconcile_host::dispatch(command)
+                .await
+                .map_err(|refusal| {
+                    eprintln!("{refusal}");
+                    crate::cli::CmdError::silent(crate::cli::CLICK_ERROR_CODE)
+                })
+        }
         HostStateCommands::StorageRootReconcileWorker {
             target,
             target_config,

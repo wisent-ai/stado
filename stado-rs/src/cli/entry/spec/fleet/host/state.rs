@@ -250,6 +250,11 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         transaction: String,
     },
+    /// The host steps of `stado host storage-root-reconcile` outside its
+    /// receipt phases: launching the resident worker, unit files, listener
+    /// and object API observations.
+    #[command(name = "storage-root-reconcile-host", hide = true, subcommand)]
+    StorageRootReconcileHost(crate::deploy::host_storage_reconcile_host::HostCommands),
     #[command(name = "storage-root-reconcile-worker", hide = true)]
     StorageRootReconcileWorker {
         target: String,

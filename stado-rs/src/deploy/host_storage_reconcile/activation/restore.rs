@@ -9,57 +9,22 @@ pub(super) async fn restore_unit_snapshot(
         .unit_snapshot
         .as_ref()
         .ok_or_else(|| DeployError(format!("{} has no captured exact unit bytes", writer.label)))?;
+    let command = host_step_script(&[
+        "restore-unit",
+        "--path",
+        &writer.path,
+        "--sha256",
+        &snapshot.sha256,
+        "--mode",
+        &snapshot.mode.to_string(),
+        "--uid",
+        &snapshot.uid.to_string(),
+        "--gid",
+        &snapshot.gid.to_string(),
+    ])?;
     let script = format!(
-        r#"STADO_UNIT_PATH={} STADO_UNIT_BODY={} STADO_UNIT_SHA={} STADO_UNIT_MODE={} STADO_UNIT_UID={} STADO_UNIT_GID={} /usr/bin/python3 - <<'PY'
-import base64, hashlib, os, stat, subprocess, tempfile
-path = os.path.expanduser(os.path.expandvars(os.environ['STADO_UNIT_PATH']))
-body = base64.b64decode(os.environ['STADO_UNIT_BODY'])
-expected = os.environ['STADO_UNIT_SHA']
-if hashlib.sha256(body).hexdigest() != expected:
-    raise SystemExit('captured unit bytes fail their digest')
-expected_metadata = (int(os.environ['STADO_UNIT_MODE']),
-                     int(os.environ['STADO_UNIT_UID']),
-                     int(os.environ['STADO_UNIT_GID']))
-work = os.path.expanduser('~/.stado/work/storage-root-reconcile-units')
-os.makedirs(work, mode=0o700, exist_ok=True)
-fd, temporary = tempfile.mkstemp(prefix='unit.', dir=work)
-try:
-    with os.fdopen(fd, 'wb') as handle:
-        handle.write(body)
-        handle.flush()
-        os.fsync(handle.fileno())
-    command = ['/usr/bin/sudo', '-n', '/usr/bin/install',
-               '-m', format(expected_metadata[0], 'o'),
-               '-o', os.environ['STADO_UNIT_UID'],
-               '-g', os.environ['STADO_UNIT_GID'], temporary, path]
-    result = subprocess.run(command, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, close_fds=False)
-    if result.returncode != 0:
-        raise SystemExit((result.stderr or result.stdout).strip())
-finally:
-    try:
-        os.unlink(temporary)
-    except FileNotFoundError:
-        pass
-info = os.lstat(path)
-if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-    raise SystemExit('restored unit is not a regular file')
-observed_metadata = (stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid)
-if observed_metadata != expected_metadata:
-    raise SystemExit('restored unit mode/uid/gid mismatch: expected ' +
-                     str(expected_metadata) + ', observed ' + str(observed_metadata))
-with open(path, 'rb') as handle:
-    if hashlib.sha256(handle.read()).hexdigest() != expected:
-        raise SystemExit('restored unit digest mismatch')
-print('STADO_UNIT_RESTORED\t' + expected)
-PY"#,
-        shlex_quote(&writer.path),
-        shlex_quote(&snapshot.body_base64),
-        shlex_quote(&snapshot.sha256),
-        snapshot.mode,
-        snapshot.uid,
-        snapshot.gid,
+        "STADO_UNIT_BODY={} {command}",
+        shlex_quote(&snapshot.body_base64)
     );
     let output = host_channel::run_script(target, &script, runner).await?;
     let marker = format!("STADO_UNIT_RESTORED\t{}", snapshot.sha256);
