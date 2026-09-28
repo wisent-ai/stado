@@ -63,7 +63,7 @@ pub(super) fn prepare(
     session: &str,
 ) -> Result<Change, CmdError> {
     if !is_work_id(task) || session.trim().is_empty() {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "a pending change requires an Oko work id (task-<16 hex digits> or defect-<8 hex digits>) and a session",
         ));
     }
@@ -73,11 +73,10 @@ pub(super) fn prepare(
             root.display()
         ))
     })?;
-    if git(&root, &["branch", "--show-current"])? != "main" {
-        return Err(CmdError::click(
-            "submit pushed changes from the canonical main checkout",
-        ));
-    }
+    // The change is read from git objects at `commit` and must already be on
+    // the remote main, so the branch the checkout has open does not matter: a
+    // pushed main commit is submitted even while another session works on a
+    // feature branch in the same checkout.
     let commit = super::super::resolve_commit(&root, Some(commit))?;
     let repository = repository(&root)?;
     // Ask the remote, not a possibly stale origin/main tracking ref. No fetch,
@@ -86,14 +85,13 @@ pub(super) fn prepare(
         &root,
         &["ls-remote", "--exit-code", "origin", "refs/heads/main"],
     )?;
-    let head = remote
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| CmdError::click("origin has no main branch"))?;
+    let head = remote.split_whitespace().next().ok_or_else(|| {
+        CmdError::refused(format!("{repository} has no main branch on origin"))
+    })?;
     if !contains(&root, &commit, head)? {
-        return Err(CmdError::click(
-            "commit is not on the pushed origin/main history",
-        ));
+        return Err(CmdError::refused(format!(
+            "{commit} is not on {repository} origin/main ({head}); push it to main first, or fetch so this checkout holds origin's main"
+        )));
     }
     let manifest = super::super::committed_file(&root, &commit, PRODUCT_MANIFEST)?;
     let ProductManifest::Release(manifest) =
