@@ -67,29 +67,38 @@ fn local(source: &Path, arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Give the unpacked scratch copy its own `project_id` and answer it. The
-/// local stack names its containers and volumes after it, so two
-/// verifications of one product on one worker, or a developer's own local
-/// stack of that product, would otherwise share and stop each other's
-/// database. A config without exactly one `project_id` line is refused: the
-/// CLI would fall back to a shared default name, and the cleanup would stop
-/// a database this run never started.
+/// Give the unpacked scratch copy its own `project_id` and its own host ports
+/// and answer the id. The local stack names its containers and volumes after
+/// the id and binds every `*port` key of `config.toml` on the host, so two
+/// verifications on one worker, or a developer's own local stack of any
+/// product, would otherwise share a database or refuse to start on a taken
+/// port. A config without exactly one `project_id` line is refused: the CLI
+/// would fall back to a shared default name, and the cleanup would stop a
+/// database this run never started.
 fn isolate(source: &Path) -> Result<String> {
     let config = source.join("supabase/config.toml");
     let text = fs::read_to_string(&config)
         .with_context(|| format!("the bundle holds no {}", config.display()))?;
     let scratch = format!("verify-{}", uuid::Uuid::new_v4().simple());
     let mut replaced = 0;
-    let lines: Vec<String> = text
-        .lines()
-        .map(|line| match line.trim_start().starts_with("project_id") {
-            true => {
-                replaced += 1;
-                format!("project_id = \"{scratch}\"")
-            }
-            false => line.to_owned(),
-        })
-        .collect();
+    // Held until the config is written, so every port handed out is distinct.
+    let mut reserved = Vec::new();
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let (key, value) = line.split_once('=').unwrap_or((line, ""));
+        let key = key.trim();
+        if key == "project_id" {
+            replaced += 1;
+            lines.push(format!("project_id = \"{scratch}\""));
+        } else if key.ends_with("port") && value.trim().parse::<u16>().is_ok() {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .context("cannot reserve a free host port for the scratch database")?;
+            lines.push(format!("{key} = {}", listener.local_addr()?.port()));
+            reserved.push(listener);
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
     if replaced != 1 {
         bail!(
             "{} declares {replaced} project_id lines (one is required to give the scratch \
@@ -98,6 +107,7 @@ fn isolate(source: &Path) -> Result<String> {
         );
     }
     fs::write(&config, lines.join("\n") + "\n")?;
+    drop(reserved);
     Ok(scratch)
 }
 
