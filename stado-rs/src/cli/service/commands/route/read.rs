@@ -75,8 +75,18 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
         } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ReadCommands::OnboardingCatalog => onboarding_catalog().await,
         ReadCommands::Status { name, json } => status(&name, json).await,
-        ReadCommands::ServeRoles { pid } => {
-            crate::cli::integrations::runtime::roles::print_roles(pid)
-        }
+        ReadCommands::ServeRoles {
+            pid,
+            resolver_state,
+        } => match pid {
+            Some(pid) => crate::cli::integrations::runtime::roles::print_roles(pid),
+            None if resolver_state => {
+                crate::cli::integrations::runtime::roles::print_resolver_state();
+                Ok(())
+            }
+            None => Err(CmdError::click(
+                "serve-roles needs --pid PID or --resolver-state",
+            )),
+        },
     }
 }

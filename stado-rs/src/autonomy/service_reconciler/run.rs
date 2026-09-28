@@ -49,6 +49,7 @@ pub async fn reconcile(
     let mut outcomes = Vec::new();
     let mut gate = MutationGate::new(store, policy, &decision_id);
     let replacements = super::predecessors::replacements(&statuses);
+    let declared = super::predecessors::declared_units(&statuses);
 
     for status in statuses {
         let is_beacon = status.service.unit_id().contains("host-health-beacon")
@@ -239,6 +240,7 @@ pub async fn reconcile(
     outcomes.extend(
         super::predecessors::retire(
             &replacements,
+            &declared,
             &findings,
             policy,
             &runner,

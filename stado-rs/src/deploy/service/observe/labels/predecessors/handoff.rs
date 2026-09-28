@@ -1,26 +1,30 @@
 //! Handing a listener from a role unit to the role inside the product's one
 //! process.
 //!
-//! The old resolver unit and `stado serve --resolver` bind the same ports, so
-//! the new resolver cannot serve while the old unit runs, and a switched-on
-//! flag says nothing about whether it ever will. Such a role is proven only
-//! by the resolver's own published state: `serving`, written by the
-//! replacement's pid. Reaching it needs the old unit out of the way first, so
-//! the handoff spans passes and is decided by what the resolver publishes,
-//! never by how long anybody waited:
+//! The old resolver unit and `stado serve --resolver` bind the same ports.
+//! While the old unit holds them the new resolver's bind fails, and the
+//! supervisor ends the whole `stado serve` over it, so the replacement comes
+//! and goes with a new pid each time. A switched-on flag proves nothing; the
+//! proof is the resolver's own published state, `serving`, written after the
+//! old unit stepped aside by the replacement's current pid.
 //!
-//! 1. The replacement runs the role and does not serve: the old unit is
-//!    retired and the host records the handoff (replacement pid, when, the
-//!    autostart scopes withdrawn) in `~/.stado/role-handoffs/<unit>`.
-//! 2. A later pass reads `serving` by that pid: the handoff is complete.
-//! 3. It reads another state that pid published after the handoff: the
-//!    resolver tried with the ports free and did not serve, so the withdrawn
-//!    autostart is restored, the record is marked refused, and the
-//!    reconciler's repair of the declared unit starts it again.
-//! 4. Nothing newer than the handoff: the resolver has not tried yet, and the
-//!    unit stays out and unrepaired.
-//! 5. A refused record for the same pid keeps the unit running; a new
-//!    replacement process, with a new pid, gets a new handoff.
+//! The host keeps one record per unit in `~/.stado/role-handoffs/<unit>`,
+//! keyed by the unit and not by a pid, because the replacement's pid does not
+//! survive the handoff it is waiting for: when the handoff started, the
+//! autostart scopes it withdrew, and the replacement artefact it was for.
+//!
+//! - No record, and the replacement runs the role: the unit steps aside
+//!   (`handed_over`). Only a caller that can bring the unit back starts one.
+//! - `handed_over`, and the resolver published `serving` since, by the pid the
+//!   replacement runs now: complete, the unit stays retired.
+//! - `handed_over`, and it published anything else since, or the replacement
+//!   no longer runs the role: the withdrawn scopes are restored and the record
+//!   is marked `refused` for that artefact, so the declared unit is repaired.
+//! - `handed_over` with nothing published since: the resolver has not tried;
+//!   the unit stays out.
+//! - `refused`: kept until a different replacement artefact is installed.
+//!
+//! Every decision follows what the host published; none follows a clock.
 
 use crate::deploy::service::*;
 
@@ -33,67 +37,105 @@ pub const RESOLVER_STATE: &str = "resolver-state";
 pub enum Handoff {
     /// The replacement's resolver serves: the unit stays retired.
     Complete,
-    /// The unit still runs and nothing was tried with this pid: step aside.
-    Start { pid: u32 },
-    /// Handed over; the resolver has published nothing since.
+    /// Nothing was tried for this replacement: the unit may step aside.
+    Start,
+    /// Handed over; the resolver has not published since.
     Waiting(String),
-    /// Handed over and the resolver did not serve: bring the unit back.
+    /// Handed over and the role did not take: bring the unit back, and refuse
+    /// `artefact`, the replacement build the handoff was for.
     Restore {
-        pid: u32,
         scopes: Vec<String>,
+        artefact: String,
         detail: String,
     },
-    /// This pid was refused before: the unit keeps its work.
-    Refused(String),
+    /// The unit keeps its work: why.
+    Kept(String),
 }
 
-/// Decide from the replacement's live process and the host's record.
+/// The host's record for one unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Record {
+    since: i64,
+    state: String,
+    scopes: Vec<String>,
+    artefact: String,
+}
+
+/// Decide from the replacement's process, whether it runs the role (`None`)
+/// or why not, whether the registry holds the replacement `stopped` rather
+/// than between two restarts, the host's record and what the resolver
+/// published.
 pub async fn handoff_standing(
     target: &ComputeTarget,
     process: &RunningProgram,
+    not_running: Option<&str>,
+    stopped: bool,
     unit: &str,
     runner: &Runner,
 ) -> Result<Handoff, DeployError> {
-    let pid: u32 = process.pid.trim().parse().map_err(|_| {
-        DeployError(format!(
-            "{}: the replacement pid {:?} is not a number",
-            target.name, process.pid
-        ))
-    })?;
-    let published = process.resolver_state.as_ref();
-    if let Some((state, by, _)) = published {
-        if state == "serving" && *by == pid {
-            return Ok(Handoff::Complete);
-        }
-    }
     let record = read_record(target, unit, runner).await?;
-    let Some((recorded, since, state, scopes)) = record.filter(|record| record.0 == pid) else {
-        return Ok(Handoff::Start { pid });
+    let published = read_published(target, &process.declared, runner).await?;
+    let current: Option<u32> = process.pid.trim().parse().ok();
+    let serving_now = |since: i64| {
+        not_running.is_none()
+            && published.as_ref().is_some_and(|(state, pid, written)| {
+                state == "serving" && Some(*pid) == current && *written > since
+            })
     };
-    if state == "refused" {
-        return Ok(Handoff::Refused(format!(
-            "{unit} came back after the resolver in pid {recorded} did not serve with its ports free"
-        )));
+    let Some(record) = record else {
+        return Ok(match not_running {
+            Some(reason) => Handoff::Kept(reason.to_string()),
+            None if serving_now(i64::MIN) => Handoff::Complete,
+            None => Handoff::Start,
+        });
+    };
+    if record.state == "refused" {
+        return Ok(
+            if not_running.is_none() && process.resolved != record.artefact {
+                Handoff::Start
+            } else {
+                Handoff::Kept(format!(
+                    "{unit} came back when the resolver of {} did not serve with its ports free",
+                    record.artefact
+                ))
+            },
+        );
     }
-    Ok(match published {
-        Some((state, by, written)) if *by == pid && *written > since => Handoff::Restore {
-            pid,
-            scopes,
-            detail: format!(
+    if serving_now(record.since) {
+        return Ok(Handoff::Complete);
+    }
+    let restore = |detail: String| Handoff::Restore {
+        scopes: record.scopes.clone(),
+        artefact: record.artefact.clone(),
+        detail,
+    };
+    Ok(match (published, not_running) {
+        (Some((state, pid, written)), _) if written > record.since && state != "starting" => {
+            restore(format!(
                 "the resolver in pid {pid} published {state} after {unit} stepped aside"
-            ),
-        },
-        _ => Handoff::Waiting(format!(
-            "{unit} stepped aside for the resolver in pid {pid}, which has not published since"
+            ))
+        }
+        (_, Some(reason)) if stopped => restore(format!("{unit} stepped aside, but {reason}")),
+        (_, Some(reason)) => Handoff::Waiting(format!(
+            "{unit} stepped aside and {reason} while it restarts; its resolver has not answered"
+        )),
+        (_, None) => Handoff::Waiting(format!(
+            "{unit} stepped aside for the resolver in {}, which has not served yet",
+            process.unit
         )),
     })
 }
 
-/// Retire `unit` for the replacement `pid` and record the scopes withdrawn.
+/// Retire `unit` for the replacement `process` and record the scopes withdrawn.
+///
+/// Recorded twice: before the bootout, so the scopes survive a failure half
+/// way, and after it, so the handoff's time follows the old unit's last
+/// word. The old unit publishes into the same state file until it is booted
+/// out, and none of that may read as the new resolver's answer.
 pub async fn start_handoff(
     target: &ComputeTarget,
     unit: &str,
-    pid: u32,
+    process: &RunningProgram,
     runner: &Runner,
 ) -> Result<(String, String), DeployError> {
     let scopes: Vec<String> = label_autostart(target, unit, runner)
@@ -101,89 +143,146 @@ pub async fn start_handoff(
         .into_iter()
         .filter_map(|(scope, enabled)| enabled.then_some(scope))
         .collect();
-    let (state, detail) = retire_label(target, unit, runner).await?;
-    write_record(target, unit, pid, "handed_over", &scopes, runner).await?;
-    let state = if state == "retired" {
-        "handed_over".to_string()
-    } else {
-        state
-    };
+    let artefact = &process.resolved;
+    write_record(target, unit, "handed_over", &scopes, artefact, runner).await?;
+    let (_, detail) = retire_label(target, unit, runner).await?;
+    write_record(target, unit, "handed_over", &scopes, artefact, runner).await?;
     Ok((
-        state,
-        format!("{detail}; the resolver in pid {pid} takes its ports"),
+        "handed_over".to_string(),
+        format!("{detail}; the resolver in {} takes its ports", process.unit),
     ))
 }
 
-/// Give the withdrawn autostart back and mark the pid refused.
+/// Give the withdrawn autostart back and mark `artefact` refused.
 pub async fn restore_handoff(
     target: &ComputeTarget,
     unit: &str,
-    pid: u32,
+    artefact: &str,
     scopes: &[String],
     runner: &Runner,
 ) -> Result<(), DeployError> {
     for scope in scopes {
         set_label_autostart(target, unit, scope, true, runner).await?;
     }
-    write_record(target, unit, pid, "refused", scopes, runner).await
+    write_record(target, unit, "refused", scopes, artefact, runner).await
 }
 
-/// `(pid, epoch, state, scopes)` of the host's record for `unit`.
-async fn read_record(
+/// `(state, pid, written epoch)` the resolver last published on `target`, as
+/// the replacement's own Stado reads it.
+async fn read_published(
     target: &ComputeTarget,
-    unit: &str,
+    program: &str,
     runner: &Runner,
-) -> Result<Option<(u32, i64, String, Vec<String>)>, DeployError> {
-    let script = format!(
-        "f=\"$HOME/.stado/role-handoffs/{}\"\nif [ -f \"$f\" ]; then printf 'STADO_ROLE_HANDOFF\\t%s\\n' \"$(/usr/bin/head -n 1 \"$f\")\"; fi\n",
-        record_name(unit)?
-    );
-    let output = host_channel::run_script(target, &script, runner).await?;
-    if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "the handoff record could not be read",
-        )));
+) -> Result<Option<(String, u32, i64)>, DeployError> {
+    if program.is_empty() {
+        return Ok(None);
     }
+    let script = format!(
+        "p=\"{}\"\nif [ -x \"$p\" ]; then \"$p\" service serve-roles --resolver-state 2>/dev/null || true; fi\n",
+        quote_unit_path(program)?
+    );
+    let output = run(
+        target,
+        &script,
+        "the resolver state could not be read",
+        runner,
+    )
+    .await?;
     Ok(output
-        .stdout
         .lines()
         .find_map(|line| match host_channel::marker_fields(line).as_slice() {
-            ["STADO_ROLE_HANDOFF", pid, since, state, scopes] => Some((
-                pid.trim().parse().ok()?,
-                since.trim().parse().ok()?,
+            ["STADO_RESOLVER_STATE", state, pid, written] => Some((
                 (*state).trim().to_string(),
-                scopes
-                    .split(',')
-                    .filter(|scope| !scope.is_empty())
-                    .map(str::to_string)
-                    .collect(),
+                pid.trim().parse().ok()?,
+                written.trim().parse().ok()?,
             )),
             _ => None,
         }))
 }
 
+async fn read_record(
+    target: &ComputeTarget,
+    unit: &str,
+    runner: &Runner,
+) -> Result<Option<Record>, DeployError> {
+    let script = format!(
+        "f=\"$HOME/.stado/role-handoffs/{}\"\nif [ -f \"$f\" ]; then printf 'STADO_ROLE_HANDOFF\\t%s\\n' \"$(/usr/bin/head -n 1 \"$f\")\"; fi\n",
+        record_name(unit)?
+    );
+    let output = run(
+        target,
+        &script,
+        "the handoff record could not be read",
+        runner,
+    )
+    .await?;
+    let Some(line) = output
+        .lines()
+        .find(|line| line.starts_with("STADO_ROLE_HANDOFF\t"))
+    else {
+        return Ok(None);
+    };
+    // A record that exists and cannot be read holds scopes only it knows:
+    // refusing keeps them, where reading it as absent would start a new
+    // handoff over it and lose them.
+    let parsed = match host_channel::marker_fields(line).as_slice() {
+        ["STADO_ROLE_HANDOFF", since, state, scopes, artefact, "end"] => {
+            since.trim().parse().ok().map(|since| Record {
+                since,
+                state: (*state).trim().to_string(),
+                scopes: scopes
+                    .split(',')
+                    .filter(|scope| !scope.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                artefact: (*artefact).trim().to_string(),
+            })
+        }
+        _ => None,
+    };
+    parsed.map(Some).ok_or_else(|| {
+        DeployError(format!(
+            "{}: the handoff record ~/.stado/role-handoffs/{unit} cannot be read: {line:?}",
+            target.name
+        ))
+    })
+}
+
 async fn write_record(
     target: &ComputeTarget,
     unit: &str,
-    pid: u32,
     state: &str,
     scopes: &[String],
+    artefact: &str,
     runner: &Runner,
 ) -> Result<(), DeployError> {
     let name = record_name(unit)?;
     let script = format!(
-        "d=\"$HOME/.stado/role-handoffs\"\n/bin/mkdir -p \"$d\" && printf '%s\\t%s\\t%s\\t%s\\n' '{pid}' \"$(/bin/date +%s)\" '{state}' '{}' > \"$d/{name}.tmp\" && /bin/mv \"$d/{name}.tmp\" \"$d/{name}\"\n",
-        scopes.join(",")
+        "d=\"$HOME/.stado/role-handoffs\"\n/bin/mkdir -p \"$d\" && printf '%s\\t%s\\t%s\\t%s\\tend\\n' \"$(/bin/date +%s)\" '{state}' '{}' \"{}\" > \"$d/{name}.tmp\" && /bin/mv \"$d/{name}.tmp\" \"$d/{name}\"\n",
+        scopes.join(","),
+        quote_unit_path(artefact)?
     );
-    let output = host_channel::run_script(target, &script, runner).await?;
+    run(
+        target,
+        &script,
+        "the handoff record could not be written",
+        runner,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn run(
+    target: &ComputeTarget,
+    script: &str,
+    failure: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let output = host_channel::run_script(target, script, runner).await?;
     if output.ok() {
-        Ok(())
+        Ok(output.stdout)
     } else {
-        Err(DeployError(host_channel::last_error_line(
-            &output,
-            "the handoff record could not be written",
-        )))
+        Err(DeployError(host_channel::last_error_line(&output, failure)))
     }
 }
 

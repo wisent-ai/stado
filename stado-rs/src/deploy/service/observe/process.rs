@@ -29,11 +29,6 @@ pub struct RunningProgram {
     /// a unit that is not stado, when nothing runs, or when that Stado
     /// cannot answer.
     pub serve_roles: Vec<String>,
-    /// What the resolver published on that host, as `(state, pid, written
-    /// epoch)`, read beside the roles when the process runs the resolver
-    /// role; `None` when nothing was published or the host's Stado predates
-    /// the reader.
-    pub resolver_state: Option<(String, u32, i64)>,
 }
 
 impl RunningProgram {
@@ -123,13 +118,6 @@ fn parse_process(stdout: &str) -> RunningProgram {
         }
         if let ["STADO_SERVE_ROLES", roles] = host_channel::marker_fields(line).as_slice() {
             program.serve_roles = roles.split_whitespace().map(str::to_string).collect();
-        }
-        if let ["STADO_RESOLVER_STATE", state, pid, written] =
-            host_channel::marker_fields(line).as_slice()
-        {
-            if let (Ok(pid), Ok(written)) = (pid.trim().parse(), written.trim().parse()) {
-                program.resolver_state = Some(((*state).trim().to_string(), pid, written));
-            }
         }
     }
     program

@@ -22,8 +22,7 @@ struct ServeLine {
 /// Print `STADO_SERVE_ROLES` and the role options process `pid` was started
 /// with. A process that is not `stado serve` has no roles and prints the
 /// marker with nothing after it; a vector `serve` would refuse is an error,
-/// never a guess. A process that runs the resolver role also prints what the
-/// resolver published here, which is what proves that role serves.
+/// never a guess.
 pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
     let argv = crate::deploy::service::process_arguments(pid).map_err(CmdError::click)?;
     let roles = if argv.get(1).map(String::as_str) == Some("serve") {
@@ -37,12 +36,17 @@ pub(crate) fn print_roles(pid: u32) -> Result<(), CmdError> {
         Vec::new()
     };
     println!("STADO_SERVE_ROLES\t{}", roles.join(" "));
-    if roles.contains(&"--resolver") {
-        if let Some(line) = crate::cli::resolver::readiness_marker() {
-            println!("{line}");
-        }
-    }
     Ok(())
+}
+
+/// Print `STADO_RESOLVER_STATE` with what the resolver last published on this
+/// host: the proof a resolver role serves, read whether or not a replacement
+/// process runs, because a handoff has to be judged after that process died.
+/// Nothing when no resolver has published.
+pub(crate) fn print_resolver_state() {
+    if let Some(line) = crate::cli::resolver::readiness_marker() {
+        println!("{line}");
+    }
 }
 
 /// The option that switches on each role `args` runs, in the words the

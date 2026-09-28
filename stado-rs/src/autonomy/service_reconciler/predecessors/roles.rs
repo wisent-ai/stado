@@ -23,8 +23,13 @@ pub(in crate::autonomy::service_reconciler) async fn taken_over(
     runner: &Runner,
 ) -> Option<String> {
     let unit = declared.unit_id();
-    for (running, entry) in replacements {
-        if running.host != declared.host {
+    for super::Replacement {
+        service: running,
+        entry,
+        active,
+    } in replacements
+    {
+        if !active || running.host != declared.host {
             continue;
         }
         let Some(role) = entry

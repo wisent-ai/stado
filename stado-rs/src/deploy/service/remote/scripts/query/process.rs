@@ -75,14 +75,12 @@ fi
 printf 'STADO_PROCESS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$declared\" \"$resolved\" \"$running\" \"$started\" \"$declared_written\" \"$running_written\"
 # The roles a stado process runs come from its kernel argument vector, read
 # by the host's own Stado; a rendered ps line cannot separate an option from
-# words inside another option's value. A resolver role also reports what the
-# resolver published, the only proof that it serves. Only a unit whose
-# declared program is stado is asked, and a Stado without the probe answers
-# nothing.
+# words inside another option's value. Only a unit whose declared program is
+# stado is asked, and a Stado without the probe answers nothing.
 case \"$declared\" in
   */stado)
     if [ -n \"$pid\" ] && [ -x \"$declared\" ]; then
-      \"$declared\" service serve-roles --pid \"$pid\" 2>/dev/null | /usr/bin/grep -E '^STADO_(SERVE_ROLES|RESOLVER_STATE)' || true
+      \"$declared\" service serve-roles --pid \"$pid\" 2>/dev/null | /usr/bin/grep '^STADO_SERVE_ROLES' || true
     fi
     ;;
 esac

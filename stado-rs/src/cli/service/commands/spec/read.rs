@@ -256,11 +256,18 @@ pub enum ReadCommands {
     },
 
     /// The `stado serve` roles process PID runs on this host, from its kernel
-    /// argument vector. Asked over the host channel before a role's old unit
-    /// is retired; not an operator command.
+    /// argument vector, or with --resolver-state what the resolver last
+    /// published here. Asked over the host channel before a role's old unit
+    /// is retired or handed over; not an operator command.
     #[command(name = "serve-roles", hide = true)]
     ServeRoles {
+        #[arg(
+            long,
+            required_unless_present = "resolver_state",
+            conflicts_with = "resolver_state"
+        )]
+        pid: Option<u32>,
         #[arg(long)]
-        pid: u32,
+        resolver_state: bool,
     },
 }

@@ -9,6 +9,8 @@
 //! units in the fleet's namespace that nothing declares at all. Last,
 //! [`standby`] boots out every standby unit the pass's sweep found serving.
 
+use std::collections::BTreeSet;
+
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, ServiceStatus, STATE_ACTIVE};
 use crate::deploy::Runner;
@@ -23,26 +25,45 @@ mod strays;
 
 pub(super) use roles::taken_over;
 
-/// A running catalog service and its catalog entry, for each one whose entry
+/// A declared catalog service and its catalog entry, for each one whose entry
 /// names retired or role units: the replacements a pass retires predecessors
 /// for, and asks about before repairing a role unit.
-pub(super) type Replacement = (
-    service::ManagedService,
-    crate::deploy::service_catalog::CatalogService,
-);
+pub(super) struct Replacement {
+    pub(super) service: service::ManagedService,
+    pub(super) entry: crate::deploy::service_catalog::CatalogService,
+    /// Whether the pass found it running. A stopped one retires nothing; a
+    /// listener handoff under way for it is undone.
+    pub(super) active: bool,
+}
 
-/// The replacements among `statuses`: one row per declared service that is
-/// running and whose catalog entry names at least one retired or role unit.
+/// The replacements among `statuses`, running or not.
 pub(super) fn replacements(statuses: &[ServiceStatus]) -> Vec<Replacement> {
     statuses
         .iter()
-        .filter(|status| status.state == STATE_ACTIVE)
         .filter_map(|status| {
             let entry = crate::deploy::service_catalog::lookup(&status.service.name)
                 .ok()
                 .flatten()?;
-            (!entry.retired_units.is_empty() || !entry.role_units.is_empty())
-                .then(|| (status.service.clone(), entry))
+            (!entry.retired_units.is_empty() || !entry.role_units.is_empty()).then(|| Replacement {
+                service: status.service.clone(),
+                entry,
+                active: status.state == STATE_ACTIVE,
+            })
+        })
+        .collect()
+}
+
+/// `(host, unit)` for every unit the registry declares, under its unit id
+/// and its name: a handoff is started only for a unit the pass can repair.
+pub(super) fn declared_units(statuses: &[ServiceStatus]) -> BTreeSet<(String, String)> {
+    statuses
+        .iter()
+        .flat_map(|status| {
+            let host = status.service.host.clone();
+            [
+                (host.clone(), status.service.unit_id().to_string()),
+                (host, status.service.name.clone()),
+            ]
         })
         .collect()
 }
@@ -55,6 +76,7 @@ pub(super) fn replacements(statuses: &[ServiceStatus]) -> Vec<Replacement> {
 /// proven to run is recorded `kept` and left running.
 pub(super) async fn retire(
     replacements: &[Replacement],
+    declared: &BTreeSet<(String, String)>,
     findings: &[crate::cli::service_verify::Finding],
     policy: &AutonomyPolicy,
     runner: &Runner,
@@ -62,7 +84,19 @@ pub(super) async fn retire(
     summary: &mut ServiceReconcileSummary,
 ) -> Result<Vec<ServiceReconcileOutcome>, StorageError> {
     let mut outcomes = Vec::new();
-    for (running, entry) in replacements {
+    for Replacement {
+        service: running,
+        entry,
+        active,
+    } in replacements
+    {
+        let handoffs = entry
+            .role_units
+            .iter()
+            .any(|role| role.readiness.as_deref() == Some(service::RESOLVER_STATE));
+        if !active && !handoffs {
+            continue;
+        }
         let host = &running.host;
         let row = |unit: &str, classification: &str, changed: bool, detail: String| {
             ServiceReconcileOutcome {
@@ -106,9 +140,14 @@ pub(super) async fn retire(
                 continue;
             }
         };
-        for retirement in
-            service::retire_catalog_predecessors(&target, entry, running, runner).await
-        {
+        let may_hand_over = |unit: &str| declared.contains(&(host.clone(), unit.to_string()));
+        let retirements = if *active {
+            service::retire_catalog_predecessors(&target, entry, running, &may_hand_over, runner)
+                .await
+        } else {
+            service::recover_handoffs(&target, entry, running, runner).await
+        };
+        for retirement in retirements {
             let (classification, changed) = match retirement.state.as_str() {
                 "retired" => ("retired", true),
                 "handed_over" => ("handed_over", true),
