@@ -13,6 +13,12 @@ use crate::cli::host::{
 };
 use crate::cli::CmdError;
 
+mod hosts;
+mod withdraw;
+
+pub(crate) use hosts::{fleet_hosts, this_host};
+pub(super) use withdraw::withdraw_publisher;
+
 /// Bytes of randomness in a minted publisher bearer; the same width the
 /// verifier reconciliation mints (`openssl rand -hex 32`).
 const BEARER_BYTES: usize = 32;
@@ -269,38 +275,5 @@ pub(super) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
                  (stado release catalog declare-publisher {product} --owner {owner} \
                  --client {client}): {error}"
             ))
-        })
-}
-
-/// The vault owner and this host, as registry target names.
-pub(super) async fn fleet_hosts() -> Result<(String, String), CmdError> {
-    let client = this_host().await?;
-    let owner = vault_owner().await?;
-    Ok((owner, client))
-}
-
-/// This host's registry target, as `stado resolver` identifies it.
-pub(crate) async fn this_host() -> Result<String, CmdError> {
-    let store = std::sync::Arc::new(crate::targets::RegistryStore::open().await?);
-    let (bootstrap, _, _) = crate::cli::resolver::read_local_snapshot(&store)
-        .await
-        .map_err(CmdError::click)?;
-    crate::cli::resolver::current_target(&bootstrap).map_err(CmdError::click)
-}
-
-/// The host that owns the fleet vault: the registry's `skarbiec` active host,
-/// the same answer `stado credentials vault` gives. It used to be read from
-/// this machine's local vault file's replication bonds, which named this host
-/// the owner once its local copy was retired and replicated nothing; grants
-/// were then minted against a vault nobody reads ("lukasz-macbook declares no
-/// vault authority").
-async fn vault_owner() -> Result<String, CmdError> {
-    crate::cli::directory::active_host("skarbiec")
-        .await?
-        .ok_or_else(|| {
-            CmdError::click(
-                "cannot tell which host owns the vault: the service directory places no \
-                 skarbiec active host",
-            )
         })
 }

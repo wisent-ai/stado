@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado release catalog withdraw-publisher <product> [--target HOST]…`:** removes a retired product's `release_api.publishers.<product>` from the vault owner, this host and every named API target, then reconciles each host's release verifier on the vault owner. It refuses while the release catalog still holds the product, and leaves the vault item in place so a returning product re-declares without a new bearer. `catalog audit` now names this command for a declared publisher the catalog does not hold; until now nothing but a per-host `config unset` could withdraw one.
+
 - **`stado web smoke [--path P]…`, a post-build test every web product can declare:** it extracts the tarball `stado web build` staged under `WISENT_OUTPUT_DIR/dist`, runs its `bin/start-web` launcher the way `stado web deploy` does on a free loopback port, waits until the site listens or the launcher exits, and requires each path (default `/`) to answer 2xx with a body (3xx passes as a redirect). A launcher that exits first, or a page that answers an error, is refused with the tail of the launcher's output (`smoke.log`). Most web products declared no test, so their handed-off work could never qualify.
 
 - **`stado release catalog enroll` also writes the product's release-catalog entry:** enrolment declared the publisher and the build secrets and checked the post-build tests, but left the catalog entry to a separate `catalog sync`, so an enrolled product stayed `absent` in `stado release catalog audit` and the daily batch never built it. Enrolment now ends with the registration `catalog sync --root <checkout>` performs.

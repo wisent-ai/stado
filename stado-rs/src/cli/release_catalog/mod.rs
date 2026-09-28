@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use chrono::Utc;
@@ -11,6 +10,7 @@ use crate::release_pipeline::{
 use super::CmdError;
 
 mod adopt;
+mod audit;
 mod central;
 mod checkout;
 mod enroll;
@@ -87,6 +87,19 @@ enum CatalogCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Withdraw a retired product's release publisher declaration from the
+    /// vault owner, this host and every --target, then reconcile each host's
+    /// release verifier. Refuses while the release catalog still holds the
+    /// product. The vault item stays, so a returning product re-declares.
+    WithdrawPublisher {
+        /// The product, as its release manifest named it.
+        product: String,
+        /// Further hosts that serve the release API; repeat for several.
+        #[arg(long = "target")]
+        targets: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Add an application checkout to the release pipeline: write its
     /// release manifest and scripts from what its project states, declare its
     /// publisher, register it. Without --apply only the plan is printed.
@@ -148,81 +161,6 @@ pub(crate) async fn publish_entry(
         .await?;
     }
     Ok(entry)
-}
-
-/// The human-readable form of one audit: the tally on stdout, then every
-/// refusal on stderr, so a shell pipeline keeps the tally alone.
-fn print_audit(entries: &[ReleaseCatalogEntry], failures: &[String]) {
-    println!(
-        "catalog products={} failures={}",
-        entries.len(),
-        failures.len()
-    );
-    for failure in failures {
-        eprintln!("catalog refusal: {failure}");
-    }
-}
-
-async fn audit(json: bool) -> Result<(), CmdError> {
-    let publishers = crate::config::release_api_publishers().map_err(|problems| {
-        CmdError::click(format!(
-            "release catalog audit refused invalid release_api.publishers: {}",
-            problems.join("; ")
-        ))
-    })?;
-    let mut products = BTreeSet::new();
-    let mut entries = Vec::new();
-    let mut failures = Vec::new();
-    for product in publishers.keys() {
-        let uri = catalog_uri(product);
-        // A publisher declared for a product the catalog never received is a
-        // product nothing builds: say which, and the command that registers
-        // it, instead of the object store's bare 404.
-        if matches!(super::storage::fetch_object_versioned(&uri).await, Ok(None)) {
-            failures.push(format!(
-                "{product}: release_api.publishers declares it but the release catalog holds no \
-                 entry for it, so nothing builds it; register its checkout with `stado release \
-                 catalog enroll <checkout>`, or for a retired product withdraw the declaration \
-                 with `stado config unset release_api.publishers.{product}` on every host that \
-                 holds it"
-            ));
-            continue;
-        }
-        match super::storage::fetch_object(&uri).await.and_then(|bytes| {
-            let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
-            release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
-            if uri != catalog_uri(&entry.product) {
-                return Err(CmdError::click(
-                    "catalog entry product disagrees with object coordinate",
-                ));
-            }
-            Ok(entry)
-        }) {
-            Ok(entry) if products.insert(entry.product.clone()) => entries.push(entry),
-            Ok(entry) => failures.push(format!("duplicate catalog product {}", entry.product)),
-            Err(error) => failures.push(format!("{uri}: {error}")),
-        }
-    }
-    if entries.is_empty() {
-        failures.push("release catalog is silent: it contains no explicit product entries".into());
-    }
-    let report = serde_json::json!({
-        "catalog": "stado://system/release-catalog/",
-        "products": entries,
-        "failures": failures,
-    });
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print_audit(&entries, &failures);
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(CmdError::click(
-            "release catalog audit refused malformed, duplicate, or silent entries",
-        ))
-    }
 }
 
 /// `catalog enroll`: the enrollment `build submit` runs, for one checkout's
@@ -290,7 +228,7 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
                 "catalog sync requires exactly one of --root or --catalog",
             )),
         },
-        CatalogCommands::Audit { json } => audit(json).await,
+        CatalogCommands::Audit { json } => audit::audit(json).await,
         CatalogCommands::Enroll { checkout, json } => enroll_checkout(&checkout, json).await,
         CatalogCommands::DeclarePublisher {
             product,
@@ -302,6 +240,11 @@ pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
         } => {
             publisher::declare_publisher(&product, &owner, &client, &targets, &reloads, json).await
         }
+        CatalogCommands::WithdrawPublisher {
+            product,
+            targets,
+            json,
+        } => publisher::withdraw_publisher(&product, &targets, json).await,
         CatalogCommands::Adopt(args) => adopt::run(args).await,
     }
 }
