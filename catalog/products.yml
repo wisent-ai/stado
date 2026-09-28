@@ -507,14 +507,18 @@ products:
     # are handed over (readiness: resolver-state), not retired on the flag.
     role_units:
     # The unit this process ran under before it took every role. It runs the
-    # same program on the same port, so it is never retired unconditionally:
-    # the process started as com.wisent.stado with --api retires it before
-    # binding, and only when it serves the same storage root; ensure and the
-    # reconciler retire it only where that live process runs --api.
+    # same program on the same port, so no flag check retires it: only the
+    # process started as com.wisent.stado retires it, as that unit's main
+    # process, after its API store is prepared on the same storage root and
+    # before it binds; that takeover records itself on the host, and the
+    # record is what keeps the reconciler from repairing the old unit
+    # (readiness: api-takeover), for `serve --api` and `dashboard` alike.
     - unit: com.wisent.always-on.stado-object-api
       flag: --api
+      readiness: api-takeover
     - unit: com.wisent.always-on.stado-object-api.service
       flag: --api
+      readiness: api-takeover
     - unit: com.wisent.stado-resolver
       flag: --resolver
       readiness: resolver-state

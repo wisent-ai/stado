@@ -8,12 +8,19 @@
 //! predecessors runs inside that old process. So once the API's store is
 //! prepared and before it binds, each such unit this host still loads is
 //! booted out and its autostart withdrawn, provided it serves the same root.
-//! Ensure and the reconciler retire them only as role units, where the live
-//! replacement is proven to run `--api`.
+//! `stado serve --api` and `stado dashboard` both run it. Nothing else
+//! retires these units: a flag in a live argument vector proves neither a
+//! bound listener nor the same root. Each retirement is recorded on the host
+//! as `taken_over`, and that record is what keeps ensure and the reconciler
+//! from repairing the old unit afterwards, see [`taken_over`].
 
 use crate::deploy::service::*;
 
-use super::{retirement, PredecessorRetirement};
+use super::{record, retirement, PredecessorRetirement};
+
+/// The handoff record state of an API listener unit this host's Stado
+/// process retired at API start.
+const TAKEN_OVER: &str = "taken_over";
 
 /// The unit the init system started this process under: launchd names the
 /// job in `XPC_SERVICE_NAME`, systemd in the process's own cgroup path.
@@ -73,9 +80,44 @@ async fn take_over_retired(
             });
             continue;
         }
-        retirements.push(retirement(&target, retired, runner).await);
+        let retired = retirement(&target, retired, runner).await;
+        if retired.state != "failed" {
+            let pid = std::process::id().to_string();
+            if let Err(error) =
+                record::write_record(&target, &retired.unit, TAKEN_OVER, &[], &pid, runner).await
+            {
+                retirements.push(PredecessorRetirement {
+                    detail: format!(
+                        "{}; its takeover could not be recorded, so the reconciler would \
+                         repair it: {error}",
+                        retired.detail
+                    ),
+                    state: "failed".to_string(),
+                    unit: retired.unit,
+                });
+                continue;
+            }
+        }
+        retirements.push(retired);
     }
     Ok(retirements)
+}
+
+/// The takeover this host's Stado process recorded for API listener unit
+/// `unit`: the pid that retired it and since when. `None` when none was
+/// recorded, or the record cannot be read, so the unit is still repaired.
+pub(super) async fn taken_over(
+    target: &ComputeTarget,
+    unit: &str,
+    runner: &Runner,
+) -> Option<String> {
+    let record = record::read_record(target, unit, runner).await.ok()??;
+    (record.state == TAKEN_OVER).then(|| {
+        format!(
+            "pid {} retired it at API start on the same storage root (epoch {})",
+            record.artefact, record.since
+        )
+    })
 }
 
 /// The local backend word a predecessor must name to serve the same root.

@@ -62,7 +62,9 @@ pub struct RoleUnit {
     pub flag: String,
     /// `resolver-state` when the old unit holds the listener the role binds,
     /// so the flag proves nothing until the resolver publishes `serving`:
-    /// the unit is handed over, see `service::handoff`.
+    /// the unit is handed over, see `service::handoff`. `api-takeover` when
+    /// the old unit holds the API listener: only the host Stado process
+    /// retires it at API start, see `service::takeover`.
     #[serde(default)]
     pub readiness: Option<String>,
 }
@@ -115,17 +117,25 @@ pub fn is_host_unit(unit: &str) -> Result<bool, String> {
     Ok(unit == HOST_PRODUCT || unit == label || unit.strip_suffix(".service") == Some(&label))
 }
 
-/// The flag that switches on the object API listener of a Stado process.
-pub const API_FLAG: &str = "--api";
+/// The readiness of a role unit that holds the object API listener.
+pub const API_TAKEOVER: &str = "api-takeover";
+
+/// Whether `role`'s unit holds the object API listener, so nothing but the
+/// host Stado process's own takeover at API start may retire it: a flag in
+/// a live argument vector proves neither a bound listener nor the same
+/// storage root, and `stado dashboard` serves the API without that flag.
+pub fn api_role(role: &RoleUnit) -> bool {
+    role.readiness.as_deref() == Some(API_TAKEOVER)
+}
 
 /// The units whose work is `entry`'s API listener role: they hold the port
-/// that listener binds, so only a process that runs that role and serves the
-/// same store may retire them.
+/// that listener binds, so only a process that serves the same store and
+/// is about to bind it may retire them.
 pub fn api_predecessors(entry: &CatalogService) -> Vec<&str> {
     entry
         .role_units
         .iter()
-        .filter(|role| role.flag == API_FLAG)
+        .filter(|role| api_role(role))
         .map(|role| role.unit.as_str())
         .collect()
 }

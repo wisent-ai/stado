@@ -32,7 +32,9 @@ pub struct PredecessorRetirement {
 /// [`role_process`] proves `running`, the replacement's unit on this host,
 /// runs its role; otherwise it is `kept`, because it is still doing that work.
 /// A role that shares the old unit's listener is not retired here at all: it
-/// is handed over by the reconciler, under the unit's lease, see [`handoff`].
+/// is handed over by the reconciler, under the unit's lease, see [`handoff`];
+/// the API listener's units are `kept` here too, because only the host Stado
+/// process retires them, at API start, see [`takeover`].
 ///
 /// The unit file itself stays where it is: [`set_label_autostart`] records the
 /// init system's own disabled override, which outlives the file and is what
@@ -48,11 +50,22 @@ pub async fn retire_catalog_predecessors(
     for unit in &replacement.retired_units {
         retirements.push(retirement(target, unit, runner).await);
     }
-    for role in replacement
-        .role_units
-        .iter()
-        .filter(|role| !listener_role(role))
-    {
+    for role in &replacement.role_units {
+        if listener_role(role) {
+            continue;
+        }
+        if crate::deploy::service_catalog::api_role(role) {
+            retirements.push(PredecessorRetirement {
+                unit: role.unit.clone(),
+                state: "kept".to_string(),
+                detail: format!(
+                    "it holds the API listener: only {} retires it, when it starts the API \
+                     on the same storage root",
+                    running.unit_id()
+                ),
+            });
+            continue;
+        }
         retirements.push(
             match role_process(target, running, &role.flag, runner).await {
                 Ok((_, None)) => retirement(target, &role.unit, runner).await,
@@ -73,9 +86,10 @@ pub async fn retire_catalog_predecessors(
 }
 
 /// Whether `role`'s unit is out of the way on `target` and must not be
-/// repaired: the replacement runs the role, or, for a role that shares its
+/// repaired: the replacement runs the role; for a role that shares its
 /// listener, the listener was acquired or the unit stepped aside and the
-/// resolver has not answered yet. `stopped` says the registry holds the
+/// resolver has not answered yet; for the API listener, the host Stado
+/// process recorded its takeover. `stopped` says the registry holds the
 /// replacement stopped. The detail when it is; `None` otherwise, including
 /// when that cannot be established.
 pub async fn role_retired(
@@ -87,6 +101,9 @@ pub async fn role_retired(
 ) -> Option<String> {
     if listener_role(role) {
         return listener::listener_retired(target, running, role, stopped, runner).await;
+    }
+    if crate::deploy::service_catalog::api_role(role) {
+        return takeover::taken_over(target, &role.unit, runner).await;
     }
     let (_, not_running) = role_process(target, running, &role.flag, runner)
         .await
