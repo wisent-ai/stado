@@ -223,6 +223,7 @@ products:
     kind: stado-release
     repository: wisent-ai/weles
     manifest: .wisent-release.json
+    release_product: weles-worker
   - surface: desktop
     kind: desktop-release
     repository: wisent-ai/weles-desktop
