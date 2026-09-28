@@ -40,6 +40,62 @@ fn supabase(source: &Path, arguments: &[&str], token: &str, password: &str) -> R
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+/// Run the Supabase CLI against the local stack, answering its combined
+/// output; a failure carries that output, which names the migration file and
+/// statement Postgres refused.
+fn local(source: &Path, arguments: &[&str]) -> Result<()> {
+    let output = Command::new("supabase")
+        .args(arguments)
+        .current_dir(source)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| {
+            format!(
+                "cannot run supabase {} (the runner needs the Supabase CLI and Docker)",
+                arguments.join(" ")
+            )
+        })?;
+    if !output.status.success() {
+        bail!(
+            "supabase {} failed with {}: {}{}",
+            arguments.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// `stado product supabase verify`: the post-build test of a supabase-source
+/// platform. It unpacks the staged `release/supabase-source.tar` exactly as
+/// the delivery will, starts a scratch local database from its config (the
+/// Supabase CLI applies every migration in order on start, with the auth,
+/// storage and extension schemas production has), and stops it again without
+/// keeping a volume. A migration Postgres refuses fails the test with the
+/// CLI's own report, so a schema that cannot apply never qualifies.
+pub fn verify() -> Result<i32> {
+    let output = output_dir()?;
+    let bundle = output.join("release").join(BUNDLE);
+    if !bundle.is_file() {
+        bail!(
+            "{} is not staged; the supabase-source build writes it",
+            bundle.display()
+        );
+    }
+    let work = output.join(format!("supabase-verify-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&work)?;
+    safe_unpack(&bundle, &work)?;
+    let source = work.join("source");
+    let started = local(&source, &["db", "start"]);
+    let stopped = local(&source, &["stop", "--no-backup"]);
+    fs::remove_dir_all(&work)?;
+    started?;
+    stopped?;
+    println!("every migration in {BUNDLE} applied to a scratch database");
+    Ok(0)
+}
+
 pub fn deliver() -> Result<i32> {
     let archive = PathBuf::from(required("WISENT_RELEASE_ARCHIVE")?);
     let digest = required("WISENT_RELEASE_SHA256")?;

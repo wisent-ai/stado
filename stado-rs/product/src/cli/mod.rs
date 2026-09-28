@@ -61,6 +61,7 @@ pub fn augment(command: Command) -> Command {
         .subcommand(native::source_bundle())
         .subcommand(native::python())
         .subcommand(native::npm())
+        .subcommand(native::supabase())
         .subcommand(native::deliver())
         .subcommand(
             Command::new("linkage")
@@ -180,6 +181,14 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         {
             "pack" => crate::release_steps::run_npm_pack(),
             other => anyhow::bail!("unknown npm release operation {other}"),
+        },
+        "supabase" => match arguments
+            .get_one::<String>("operation")
+            .context("supabase release operation is missing")?
+            .as_str()
+        {
+            "verify" => crate::release_steps::run_supabase_verify(),
+            other => anyhow::bail!("unknown supabase release operation {other}"),
         },
         "python" => crate::release_steps::run_python(
             arguments

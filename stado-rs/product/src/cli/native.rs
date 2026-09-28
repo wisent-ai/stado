@@ -79,6 +79,21 @@ pub fn npm() -> Command {
         )
 }
 
+pub fn supabase() -> Command {
+    Command::new("supabase")
+        .about("Release steps of a Supabase schema product")
+        .arg(
+            Arg::new("operation")
+                .required(true)
+                .value_parser(["verify"])
+                .help(
+                    "verify: the post-build test of a supabase-source platform; applies every \
+             migration of $WISENT_OUTPUT_DIR/release/supabase-source.tar to a scratch local \
+             database (supabase db start, Supabase CLI and Docker on the runner) and stops it",
+                ),
+        )
+}
+
 pub fn deliver() -> Command {
     Command::new("deliver")
         .about("Release deliveries to hosting providers, run by a manifest's deliveries")
