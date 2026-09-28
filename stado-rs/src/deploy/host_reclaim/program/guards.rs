@@ -144,7 +144,7 @@ local_evidence() {
 # 0 named, 1 named by no unit, 2 when a unit scope could not be read: grep's
 # own error status, so an unreadable definition never reads as absence.
 unit_named() {
-  for units in /Library/LaunchDaemons "$HOME/Library/LaunchAgents" /etc/systemd/system "$HOME/.config/systemd/user"; do
+  for units in @UNIT_DIRECTORIES@; do
     [ -d "$units" ] || continue
     /usr/bin/grep -rqsF -- "$1" "$units"
     case $? in

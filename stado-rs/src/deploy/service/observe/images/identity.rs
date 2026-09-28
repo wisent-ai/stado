@@ -14,6 +14,12 @@ pub(crate) const LAUNCHD_UNIT_DIRECTORIES: [&str; 3] = [
     "/Library/LaunchAgents",
 ];
 
+/// The two directories this fleet writes systemd units into: system units
+/// through `sudo tee` (bootstrap, stream, storage reconcile) and user units
+/// through the service deploy and ensure scripts.
+pub(crate) const SYSTEMD_UNIT_DIRECTORIES: [&str; 2] =
+    ["/etc/systemd/system", "$HOME/.config/systemd/user"];
+
 /// How long the file a unit declares must have been in place before a
 /// process executing some other image counts as stale.
 ///

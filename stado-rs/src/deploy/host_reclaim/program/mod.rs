@@ -12,6 +12,7 @@ use crate::deploy::artifact_install::SERVICES_ROOT;
 use crate::deploy::host_recovery::WC_CANDIDATES;
 use crate::deploy::products;
 use crate::deploy::shlex_quote;
+use crate::deploy::service::{LAUNCHD_UNIT_DIRECTORIES, SYSTEMD_UNIT_DIRECTORIES};
 use crate::providers::local::disk_cleanup::chromium_clones;
 
 use super::{
@@ -45,6 +46,7 @@ const LOCAL_EVIDENCE_ROOT_MARK: &str = "@LOCAL_EVIDENCE_ROOT@";
 const LOCAL_TERMINALITY_GRACE_MARK: &str = "@LOCAL_TERMINALITY_GRACE_SECONDS@";
 const BUILD_CACHE_ROOTS_MARK: &str = "@BUILD_CACHE_ROOTS@";
 const BUILD_CACHE_DEPTH_MARK: &str = "@BUILD_CACHE_DEPTH@";
+const UNIT_DIRECTORIES_MARK: &str = "@UNIT_DIRECTORIES@";
 
 /// How deep below a declared root a build tool's own `CACHEDIR.TAG` is looked
 /// for. Six levels reaches `<checkouts>/<repo>/<crate>/target` and the nested
@@ -84,6 +86,19 @@ fn superseded_words() -> String {
         .iter()
         .flat_map(|product| product.superseded_roots.iter())
         .map(|root| format!("\"{root}\""))
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+/// Every directory this fleet installs launchd or systemd units into, as
+/// double-quoted shell words so `$HOME` expands on the target. Taken from the
+/// lists the service observers walk, so a unit Stado can install is a unit
+/// reclamation reads before it removes the program that unit runs.
+fn unit_directory_words() -> String {
+    LAUNCHD_UNIT_DIRECTORIES
+        .iter()
+        .chain(SYSTEMD_UNIT_DIRECTORIES.iter())
+        .map(|directory| format!("\"{directory}\""))
         .collect::<Vec<String>>()
         .join(" ")
 }
@@ -169,6 +184,7 @@ pub(super) fn remote_script_with_stado(
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
         .replace(CLONE_PREFIX_MARK, chromium_clones::CLONE_ENTRY_PREFIX)
         .replace(SUPERSEDED_ROOTS_MARK, &superseded_words())
+        .replace(UNIT_DIRECTORIES_MARK, &unit_directory_words())
         .replace(
             TARGET_FREE_KB_MARK,
             &target_free_gb
