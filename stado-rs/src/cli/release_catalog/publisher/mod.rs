@@ -31,8 +31,9 @@ pub(super) fn publisher_declaration(product: &str) -> (String, Value) {
 }
 
 /// A fresh bearer: two random UUIDs' bytes, hex encoded, so no shell and no
-/// argument vector ever carries it.
-fn mint_bearer() -> String {
+/// argument vector ever carries it. `stado credentials token mint
+/// --store-item` writes one into its item the same way.
+pub(crate) fn mint_bearer() -> String {
     let mut bytes = Vec::with_capacity(BEARER_BYTES);
     while bytes.len() < BEARER_BYTES {
         bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());

@@ -124,9 +124,11 @@ final class HostVaultBearerStore: ObservableObject {
                 && receipt.skarbiec.tokenFile?.hasSuffix("/.stado/\(tokenFileName)") == true
         }
         if let storeItem = request.storeItem {
-            return receipt.status == "token_minted"
-                && receipt.storedItem?.item == storeItem
-                && receipt.storedItem?.after.state == "active"
+            // Stado writes the bearer into the item first (reported as
+            // stored_item when the item was new) and registers that value.
+            return receipt.status == "token_registered"
+                && receipt.tokenSource?.item == storeItem
+                && receipt.tokenSource?.field == "token"
         }
         return receipt.status == "token_minted"
     }

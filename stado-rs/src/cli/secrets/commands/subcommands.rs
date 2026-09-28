@@ -95,9 +95,9 @@ pub enum CredentialTokenCommands {
         /// vault owner, so the consumer's file and the registered bearer agree.
         #[arg(long, conflicts_with = "raw_token")]
         token_file_name: Option<String>,
-        /// Store a newly minted bearer as the `token` field of this owner-vault
-        /// item (kind `token`), so a product's `<product>-model-router` item
-        /// exists without the bearer passing through a shell.
+        /// Store a fresh bearer as the `token` field of this owner-vault item
+        /// (kind `token`) when the item is absent, then register the item's
+        /// value; a repeated run registers the same stored bearer.
         #[arg(long, conflicts_with_all = ["token_item", "raw_token", "token_file_name"])]
         store_item: Option<String>,
         #[arg(long)]

@@ -9,12 +9,16 @@ use crate::cli::host::machine::releases::release_component;
 use crate::cli::host::secrets::vault::mirror::read::remote_skarbiec_json_at;
 use crate::cli::host::secrets::vault::vault_word;
 
+/// The field of a `--store-item` item that holds the bearer.
+const STORED_FIELD: &str = "token";
+
 /// Mint a bounded bearer, or register an existing owner-vault field on TARGET.
 ///
 /// Existing-bearer bytes stay on the target and never enter argv or the report.
 /// `raw_token` exposes only a newly generated bearer for a secret-store pipe;
 /// `token_file_name` instead persists and reuses it on the target;
-/// `store_item` writes it as that owner-vault item's `token` field.
+/// `store_item` stores a fresh bearer in that owner-vault item's `token`
+/// field when the item is absent, then registers the item's value.
 #[allow(clippy::too_many_arguments)]
 pub async fn vault_token_mint(
     target: &str,
@@ -85,10 +89,31 @@ pub async fn vault_token_mint(
     if replace_capabilities {
         arguments.push(String::from("--replace-capabilities"));
     }
-    let token_source = token_item.map(|item| (item, token_field));
+    // --store-item writes the bearer into the owner-vault item first and then
+    // registers that stored value, so a failed or repeated run never leaves a
+    // registered bearer that no item holds: a retry finds the item and
+    // registers the same value again.
+    let mut stored = None;
+    if let Some(item) = store_item {
+        if crate::cli::host::vault_item_state(target, item).await? == "absent" {
+            // The canonical item envelope Skarbiec's `set-json` accepts, the
+            // same one the release publisher writes for its own bearer.
+            let payload = json!({
+                "schema": "skarbiec.item.v2",
+                "kind": "token",
+                "fields": { "token": crate::cli::release_catalog::fresh_bearer() },
+                "context": { "consumer": consumer, "audience": audience },
+            })
+            .to_string();
+            stored =
+                Some(crate::cli::host::write_vault_item(target, item, "token", &payload).await?);
+        }
+    }
+    let token_source = token_item
+        .map(|item| (item, token_field))
+        .or(store_item.map(|item| (item, STORED_FIELD)));
     let (resolved, mut report) =
         remote_skarbiec_json_at(target, &arguments, None, token_source, token_file_name).await?;
-    let mut stored = None;
     if token_source.is_none() && token_file_name.is_none() {
         let token = report
             .get("token")
@@ -103,19 +128,6 @@ pub async fn vault_token_mint(
         if raw_token {
             println!("{token}");
             return Ok(());
-        }
-        if let Some(item) = store_item {
-            // The canonical item envelope Skarbiec's `set-json` accepts, the
-            // same one the release publisher writes for its own bearer.
-            let payload = json!({
-                "schema": "skarbiec.item.v2",
-                "kind": "token",
-                "fields": { "token": token },
-                "context": { "consumer": consumer, "audience": audience },
-            })
-            .to_string();
-            stored =
-                Some(crate::cli::host::write_vault_item(target, item, "token", &payload).await?);
         }
     }
     if let Some(object) = report.as_object_mut() {
