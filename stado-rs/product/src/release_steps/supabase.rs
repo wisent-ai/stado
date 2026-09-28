@@ -67,6 +67,26 @@ fn local(source: &Path, arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Give the unpacked scratch copy its own `project_id`. The local stack names
+/// its containers and volumes after it, so two verifications of one product on
+/// one worker, or a developer's own local stack of that product, would
+/// otherwise share and stop each other's database.
+fn isolate(source: &Path) -> Result<()> {
+    let config = source.join("supabase/config.toml");
+    let text = fs::read_to_string(&config)
+        .with_context(|| format!("the bundle holds no {}", config.display()))?;
+    let scratch = format!("verify-{}", uuid::Uuid::new_v4().simple());
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| match line.trim_start().starts_with("project_id") {
+            true => format!("project_id = \"{scratch}\""),
+            false => line.to_owned(),
+        })
+        .collect();
+    fs::write(&config, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
 /// `stado product supabase verify`: the post-build test of a supabase-source
 /// platform. It unpacks the staged `release/supabase-source.tar` exactly as
 /// the delivery will, starts a scratch local database from its config (the
@@ -87,7 +107,7 @@ pub fn verify() -> Result<i32> {
     fs::create_dir_all(&work)?;
     safe_unpack(&bundle, &work)?;
     let source = work.join("source");
-    let started = local(&source, &["db", "start"]);
+    let started = isolate(&source).and_then(|()| local(&source, &["db", "start"]));
     let stopped = local(&source, &["stop", "--no-backup"]);
     fs::remove_dir_all(&work)?;
     started?;
