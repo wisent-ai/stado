@@ -158,6 +158,18 @@ impl Client {
             transaction: Some(Arc::new(transaction)),
         })
     }
+
+    /// Run SeaORM work — entity queries, a transaction, a migrator — on the
+    /// connection and wait for its answer, for a product whose tables are
+    /// SeaORM entities but whose callers are synchronous. `work` answers the
+    /// product's own result; only a stopped task is this crate's error.
+    pub fn run<T, F>(&self, work: impl FnOnce(DatabaseConnection) -> F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: Future<Output = T> + Send + 'static,
+    {
+        wait(&self.runtime, work(self.connection.clone())).ok_or_else(stopped)
+    }
 }
 
 impl Run for Client {

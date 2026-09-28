@@ -41,6 +41,19 @@ each statement; on a multi-threaded Tokio worker it leaves the worker for the
 wait. `Error::is_unique_violation` says an insert hit a unique constraint, and
 `Row::json` gives a whole row as a JSON object.
 
+A product whose tables are SeaORM entities but whose callers are synchronous
+hands its entity work to the same client with `run`, and runs its migrator
+the same way; it keeps no runtime or connection thread of its own:
+
+```rust
+let client = Client::connect(&FleetDatabase::for_product("jeden", "JEDEN_STADO_HOME")?)?;
+client.run(|db| async move { Migrator::up(&db, None).await })??;
+let row = client.run(move |db| async move { value::Entity::find_by_id(key).one(&db).await })??;
+```
+
+`run` answers the closure's own result inside `sync::Result`; its only error
+of its own is a task that stopped before answering.
+
 ## What `connect` does
 
 1. `stado database resolve <product> --consumer <product> --json` names the
