@@ -7,8 +7,11 @@
 //! - `decide` is the fleet's versioning rule (AutoVersion SPEC v0.1.0), and
 //!   `conformance` proves it against AutoVersion's shared fixtures;
 //! - `semver-at-least` compares a declared version with the required one;
-//! - `unreachable-modules` finds `.rs` files no `mod` declaration reaches.
+//! - `unreachable-modules` finds `.rs` files no `mod` declaration reaches;
+//! - `app-surface`, `app-baseline` and `app-check` are the same gate for an
+//!   application bundle, read from the sources its release step names.
 
+mod app;
 mod baseline;
 mod conformance;
 mod modules;
@@ -78,6 +81,29 @@ pub enum VersionGateCommands {
         known: Option<PathBuf>,
         #[arg(long)]
         json: bool,
+    },
+    /// Print `{"surface": [...]}` of an application tree, read from the
+    /// sources named: Info.plist identity and URL schemes, Package.swift
+    /// executable products, appended path literals of Swift files.
+    AppSurface {
+        #[command(flatten)]
+        tree: app::AppTree,
+    },
+    /// Write an application's released-surface.json from the newest version
+    /// tag origin serves (or the working revision while there is none);
+    /// with --stdout, print it instead. Needs git history.
+    AppBaseline {
+        #[command(flatten)]
+        tree: app::AppTree,
+        #[arg(long)]
+        stdout: bool,
+    },
+    /// An application's whole version gate, as a release quality step: the
+    /// rule against AutoVersion's fixtures, the baseline against the handoff's
+    /// provenance record, and the Info.plist version against the change.
+    AppCheck {
+        #[command(flatten)]
+        tree: app::AppTree,
     },
 }
 
@@ -198,5 +224,8 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
             modules::Outcome::Findings => Err(negative()),
             modules::Outcome::Unreadable(detail) => Err(CmdError::usage(detail)),
         },
+        VersionGateCommands::AppSurface { tree } => app::surface(tree),
+        VersionGateCommands::AppBaseline { tree, stdout } => app::baseline(tree, stdout),
+        VersionGateCommands::AppCheck { tree } => app::check(tree),
     }
 }
