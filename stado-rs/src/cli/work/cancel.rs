@@ -213,3 +213,29 @@ pub(crate) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<
 
     Err(CmdError::click(format!("Job {job_id} not found")))
 }
+
+/// Cancel `job_id` only while no host has claimed it, for callers that decided
+/// from a queued read (a waiting release, a superseded run, a silent pinned
+/// host). The move out of `queue/` is fenced on the generation just read, so a
+/// claim that lands in between makes it lose instead of following the job
+/// into `running/`, and no cancellation marker is written, because the
+/// coordinator reaps a running job that has one. `cancel_in_store` follows a
+/// claimed job on purpose, for an operator who asked to stop it; these
+/// callers never did, and following the claim there would cancel a build
+/// while its agent writes the result. Answers whether the job was cancelled.
+pub(crate) async fn cancel_queued_in_store(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<bool, CmdError> {
+    let Some(mut job) = store.read_job("queue", job_id).await? else {
+        return Ok(false);
+    };
+    job.state = job_state::CANCELLED.into();
+    job.completed_at = Some(utcnow());
+    job.error = Some("cancelled".into());
+    match store.move_job(&job, "queue", "cancelled").await {
+        Ok(()) => Ok(true),
+        Err(crate::queue::StorageError::StorageConflict(_)) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}

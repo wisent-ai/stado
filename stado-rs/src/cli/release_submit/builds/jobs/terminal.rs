@@ -50,12 +50,14 @@ pub(crate) async fn terminal_within(
                 // A product release runs on the same publisher runner as a
                 // Stado release. Holding that runner while maintenance keeps
                 // this job queued prevents the release that can resume the
-                // fleet from ever starting.
-                cancel::cancel_in_store(store, id).await?;
-                return Err(CmdError::click(format!(
-                    "cancelled queued release job {id} because the queue is paused ({})",
-                    queue_control.pause_summary()
-                )));
+                // fleet from ever starting. A host that claimed it meanwhile
+                // keeps it, and the wait goes on to its result.
+                if cancel::cancel_queued_in_store(store, id).await? {
+                    return Err(CmdError::click(format!(
+                        "cancelled queued release job {id} because the queue is paused ({})",
+                        queue_control.pause_summary()
+                    )));
+                }
             }
             if grace.is_some_and(|grace| started.elapsed() >= grace) {
                 let host = if queued.pinned_host.is_empty() {
@@ -63,14 +65,15 @@ pub(crate) async fn terminal_within(
                 } else {
                     queued.pinned_host.clone()
                 };
-                cancel::cancel_in_store(store, id).await?;
-                return Err(CmdError::click(format!(
-                    "no host claimed optional release job {id} within {}s; it was {} on {host}. \
-                     The host's own decline is in its agent log: read it with `stado service \
-                     logs <unit> --host <host>`",
-                    started.elapsed().as_secs(),
-                    queued.state
-                )));
+                if cancel::cancel_queued_in_store(store, id).await? {
+                    return Err(CmdError::click(format!(
+                        "no host claimed optional release job {id} within {}s; it was {} on {host}. \
+                         The host's own decline is in its agent log: read it with `stado service \
+                         logs <unit> --host <host>`",
+                        started.elapsed().as_secs(),
+                        queued.state
+                    )));
+                }
             }
         }
         tokio::time::sleep(Duration::from_secs(3)).await

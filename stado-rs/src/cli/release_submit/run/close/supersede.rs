@@ -9,7 +9,7 @@
 //! by then a newer run exists. The run says which one replaced it.
 
 use crate::cli::release_submit::run::state::save;
-use crate::cli::work::cancel::cancel_in_store;
+use crate::cli::work::cancel::cancel_queued_in_store;
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_pipeline::{PlatformRunState, ReleaseRun, ReleaseRunState};
@@ -83,15 +83,10 @@ pub(crate) async fn supersede_older(
             if platform.state == PlatformRunState::Failed || platform.job_id.is_empty() {
                 continue;
             }
-            // Only a build nobody has started is cancelled; a running build
-            // ends on its own and `newer_than` refuses its publication.
-            if store
-                .read_job("queue", &platform.job_id)
-                .await
-                .map_err(|error| CmdError::click(error.to_string()))?
-                .is_some()
-            {
-                cancel_in_store(store, &platform.job_id).await?;
+            // Only a build nobody has started is cancelled; a running build,
+            // including one claimed between the read and the cancel, ends on
+            // its own and `newer_than` refuses its publication.
+            if cancel_queued_in_store(store, &platform.job_id).await? {
                 platform.state = PlatformRunState::Failed;
                 platform.failure = Some(reason.clone());
             }

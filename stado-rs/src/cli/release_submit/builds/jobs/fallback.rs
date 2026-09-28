@@ -41,7 +41,9 @@ async fn silent_pinned_host(store: &JobStorage, job_id: &str) -> Result<Option<S
 
 /// Cancel a still-queued build job whose pinned host is silent, and say why,
 /// so the caller records the platform failed and places it again elsewhere.
-/// `None` when the job is running, terminal, unpinned, or its host is live.
+/// `None` when the job is running, terminal, unpinned, or its host is live,
+/// and when a host claims it between the read and the cancel: a claimed job
+/// is left to run.
 pub(crate) async fn release_silent_placement(
     store: &JobStorage,
     job_id: &str,
@@ -49,13 +51,9 @@ pub(crate) async fn release_silent_placement(
     let Some(host) = silent_pinned_host(store, job_id).await? else {
         return Ok(None);
     };
-    let facade = crate::machine::MachineFacade::new()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    facade
-        .cancel_job(job_id)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !crate::cli::work::cancel::cancel_queued_in_store(store, job_id).await? {
+        return Ok(None);
+    }
     Ok(Some(format!(
         "build job {job_id} was queued on {host}, which publishes no capacity within {}s; \
          it was cancelled and the platform is placed on another host",
