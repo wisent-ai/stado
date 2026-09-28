@@ -49,7 +49,7 @@ final class StadoFirstUseJourney: ObservableObject {
             let (_, progress) = try await client.start(evidenceRevision: evidenceRevision)
             currentScreen = await client.currentScreen
             status = progress.status
-            try? await client.flush()
+            await flushEvents(client)
         } catch {
             errorMessage = "Stado could not load its signed first-use journey. \(error.localizedDescription)"
         }
@@ -65,6 +65,16 @@ final class StadoFirstUseJourney: ObservableObject {
         }
     }
 
+    /// Send the queued first-use events. A refused send keeps them queued and
+    /// is said, without undoing the step it follows.
+    private func flushEvents(_ client: JourneyClient) async {
+        do {
+            try await client.flush()
+        } catch {
+            errorMessage = "Stado couldn’t send its first-use events: \(error.localizedDescription)"
+        }
+    }
+
     func dismissError() { errorMessage = nil }
 
     func replay() async -> WisentMutationOutcome {
@@ -75,7 +85,7 @@ final class StadoFirstUseJourney: ObservableObject {
             try await client.reset(evidenceRevision: evidenceRevision)
             errorMessage = nil
             await refresh()
-            try? await client.flush()
+            await flushEvents(client)
             return .succeeded("Started. The walkthrough is on screen.")
         } catch {
             return .failed(Self.replayFailure(error))
