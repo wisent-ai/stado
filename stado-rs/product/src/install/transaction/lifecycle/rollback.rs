@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     catalog::text,
-    common::{lock, now, Runtime},
+    common::{now, Runtime},
     install::{plan::Placement, services},
     state::{self, ProductState},
 };
@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 
 pub fn rollback(runtime: &Runtime, product: &Value, surface: &str) -> Result<ProductState> {
     let id = text(product, "id")?;
-    let _writer = lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
+    let _writer =
+        runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
     let _ownership = ownership::writer(runtime)?;
     let mut current = ProductState::load(runtime, id, surface)?
         .context("product surface has no recorded installation")?;

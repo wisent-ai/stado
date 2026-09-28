@@ -7,7 +7,7 @@ mod sweep;
 mod transaction;
 use crate::{
     catalog,
-    common::{checked, emit, lock, now, Arguments, Runtime},
+    common::{checked, emit, now, Arguments, Runtime},
     source,
     state::{self, ProductState},
 };
@@ -46,7 +46,8 @@ pub fn perform(
     }
     stack.push(node);
     let result = (|| {
-        let _writer = lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
+        let _writer =
+            runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
         let existing = ProductState::load(runtime, id, surface)?;
         let plan = if let Some(incomplete) = existing
             .as_ref()
@@ -276,6 +277,9 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
         return sweep::run(arguments, runtime);
     }
     let args = Arguments::from_matches(arguments);
+    let mut runtime = runtime.clone();
+    runtime.wait_for_writer = args.has("--wait");
+    let runtime = &runtime;
     if args.positional.len() != 1 {
         bail!("{action} requires exactly one product");
     }

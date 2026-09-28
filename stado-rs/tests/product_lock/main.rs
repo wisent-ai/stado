@@ -8,6 +8,7 @@
 //! needed on 2026-09-27 and did not get from "another writer owns".
 
 use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -72,6 +73,7 @@ fn a_refused_lock_names_its_recorded_holder() {
         )),
         "{message}"
     );
+    assert!(message.contains("rerun with --wait"), "{message}");
     assert!(
         message.contains("product rollback tama --surface cli"),
         "{message}"
@@ -81,4 +83,48 @@ fn a_refused_lock_names_its_recorded_holder() {
         "the second rollback ran past the lock: {message}"
     );
     held.unlock().unwrap();
+}
+
+#[test]
+fn wait_runs_after_the_holder_releases_the_lock() {
+    let home = home("wait");
+    let lock = home.join(".stado/products/tama/cli.lock");
+    fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let held = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .unwrap();
+    held.lock_exclusive().unwrap();
+    let mut waiting = Command::new(env!("CARGO_BIN_EXE_stado"))
+        .env("HOME", &home)
+        .args(["product", "rollback", "tama", "--surface", "cli", "--wait"])
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("start a waiting rollback");
+    // The rollback's own "waiting for" line proves it reached the held lock
+    // and blocked on it; only then does the holder let go.
+    let mut stderr = BufReader::new(waiting.stderr.take().expect("piped stderr"));
+    let expected = format!("waiting for {}", lock.display());
+    let mut before = String::new();
+    loop {
+        let mut line = String::new();
+        let read = stderr.read_line(&mut line).expect("read stderr");
+        assert!(read > 0, "the rollback ended without waiting: {before}");
+        if line.starts_with(&expected) {
+            break;
+        }
+        before.push_str(&line);
+    }
+    held.unlock().unwrap();
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).expect("read the rest");
+    let status = waiting.wait().expect("the waiting rollback ends");
+    assert!(!status.success(), "{rest}");
+    assert!(
+        rest.contains("no recorded installation"),
+        "the waiting rollback did not run after the lock was released: {rest}"
+    );
 }

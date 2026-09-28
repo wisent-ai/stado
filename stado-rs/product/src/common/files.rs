@@ -74,6 +74,17 @@ pub fn sha256(path: &Path) -> Result<String> {
 /// command line and since when — because "another writer owns" alone left two
 /// sessions installing Stado unable to tell a running install from a stuck one.
 pub fn lock(path: &Path) -> Result<File> {
+    take(path, false)
+}
+
+/// Take the exclusive lock at `path`, blocking until the current holder
+/// releases it. For an operator who asked (`--wait`) to run after a
+/// concurrent install of the same surface rather than be refused by it.
+pub fn lock_waiting(path: &Path) -> Result<File> {
+    take(path, true)
+}
+
+fn take(path: &Path, wait: bool) -> Result<File> {
     fs::create_dir_all(path.parent().context("lock has no parent")?)?;
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -84,11 +95,16 @@ pub fn lock(path: &Path) -> Result<File> {
     }
     let mut file = options.open(path)?;
     if let Err(error) = file.try_lock_exclusive() {
-        // The io::Error stays the source, so a caller that treats WouldBlock
-        // as "busy" (the reconciliation sweep) still recognizes it.
         let holder = holder(path);
-        return Err(anyhow::Error::new(error)
-            .context(format!("another writer owns {}; {holder}", path.display())));
+        if !wait {
+            // The io::Error stays the source, so a caller that treats
+            // WouldBlock as "busy" (the reconciliation sweep) still recognizes it.
+            return Err(anyhow::Error::new(error)
+                .context(format!("another writer owns {}; {holder}", path.display())));
+        }
+        eprintln!("waiting for {}: {holder}", path.display());
+        file.lock_exclusive()
+            .with_context(|| format!("waiting for {} failed", path.display()))?;
     }
     let record = serde_json::json!({
         "pid": std::process::id(),

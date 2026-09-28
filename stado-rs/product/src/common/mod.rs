@@ -4,7 +4,7 @@ mod process;
 
 use anyhow::{bail, Context, Result};
 pub use archive::{copy_tree, file_members, platform, relative, unpack};
-pub use files::{atomic_json, atomic_write, lock, sha256};
+pub use files::{atomic_json, atomic_write, lock, lock_waiting, sha256};
 pub use process::{capture, checked};
 use serde_json::Value;
 use std::{
@@ -26,6 +26,9 @@ pub struct Runtime {
     pub output: PathBuf,
     pub(crate) embedded_catalog: bool,
     pub(crate) checkouts: Arc<Mutex<Option<crate::source::WorkspaceIndex>>>,
+    /// `--wait`: a surface writer lock held by another process is waited for
+    /// instead of refused.
+    pub wait_for_writer: bool,
 }
 
 impl Runtime {
@@ -46,7 +49,20 @@ impl Runtime {
             output,
             embedded_catalog,
             checkouts: Arc::new(Mutex::new(None)),
+            wait_for_writer: false,
         })
+    }
+
+    /// The exclusive writer lock of one product surface, waited for when the
+    /// operator asked for `--wait`, refused otherwise.
+    pub fn surface_lock(&self, path: &std::path::Path) -> Result<std::fs::File> {
+        if self.wait_for_writer {
+            lock_waiting(path)
+        } else {
+            lock(path).context(
+                "another process is changing this product surface; rerun with --wait to run after it",
+            )
+        }
     }
 }
 

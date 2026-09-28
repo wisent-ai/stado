@@ -14,6 +14,14 @@ pub fn installation(action: &'static str, about: &'static str) -> Command {
         .arg(surface(true))
         .arg(value("host", "Stado host for a service surface"))
         .arg(flag("json", "Print lifecycle state and observed readiness"));
+    let command = if action == "status" {
+        command
+    } else {
+        command.arg(flag(
+            "wait",
+            "Wait for another process installing this surface to finish instead of refusing",
+        ))
+    };
     if action == "install" || action == "update" {
         command
             .arg(

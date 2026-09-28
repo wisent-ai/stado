@@ -1,7 +1,7 @@
 use super::super::{backup, backup_fingerprints, ownership, remove_path};
 use crate::{
     catalog::text,
-    common::{lock, now, Runtime},
+    common::{now, Runtime},
     install::services,
     state::{self, ProductState},
 };
@@ -15,7 +15,8 @@ pub fn remove(
     host: Option<&str>,
 ) -> Result<ProductState> {
     let id = text(product, "id")?;
-    let _writer = lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
+    let _writer =
+        runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
     let _ownership = ownership::writer(runtime)?;
     let mut current = ProductState::load(runtime, id, surface)?
         .context("product surface has no recorded installation")?;
