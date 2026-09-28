@@ -61,9 +61,15 @@ pub(in crate::cli::service_verify) async fn remote_findings(
     host: &str,
     declared: &[(String, String)],
 ) -> Vec<Finding> {
-    let runner = crate::deploy::production_runner();
-    let unverified = |detail: String| -> Vec<Finding> {
-        declared
+    match remote_rows(host).await {
+        // A standby row is a declaration, not evidence: identical on every
+        // machine, and this sweep already read it out of the directory. Taking
+        // the probe's copy as well would print the same address twice for a
+        // row that has no vantage to be probed from. A remote stado older than
+        // the flag sends no such rows and reports every one of its own as
+        // probed, which is what it did.
+        Ok(rows) => rows.into_iter().filter(|row| row.probed).collect(),
+        Err(detail) => declared
             .iter()
             .map(|(service, endpoint)| Finding {
                 service: service.clone(),
@@ -73,27 +79,27 @@ pub(in crate::cli::service_verify) async fn remote_findings(
                 detail: detail.clone(),
                 probed: true,
             })
-            .collect()
-    };
-    let output = match probe_remote(host, &runner).await {
-        Ok(output) => output,
-        Err(detail) => return unverified(detail),
-    };
-    let parsed: Value = match serde_json::from_str(output.trim()) {
-        Ok(parsed) => parsed,
-        Err(error) => return unverified(format!("probe returned no usable JSON: {error}")),
-    };
-    let Some(rows) = parsed.as_array() else {
-        return unverified("probe returned no usable JSON: not an array".to_string());
-    };
-    rows.iter()
-        // A standby row is a declaration, not evidence: identical on every
-        // machine, and this sweep already read it out of the directory. Taking
-        // the probe's copy as well would print the same address twice for a
-        // row that has no vantage to be probed from. A remote stado older than
-        // the flag sends no such rows and reports every one of its own as
-        // probed, which is what it did.
-        .filter(|row| row.get("probed").and_then(Value::as_bool).unwrap_or(true))
+            .collect(),
+    }
+}
+
+/// Every row the remote host's own `service verify --local` answered,
+/// standby listings included, or the reason no answer could be read. A caller
+/// that must tell "the host said nothing is there" from "the host could not be
+/// asked" uses this instead of [`remote_findings`], which folds the second
+/// into `unverified` rows.
+pub(in crate::cli::service_verify) async fn remote_rows(
+    host: &str,
+) -> Result<Vec<Finding>, String> {
+    let runner = crate::deploy::production_runner();
+    let output = probe_remote(host, &runner).await?;
+    let parsed: Value = serde_json::from_str(output.trim())
+        .map_err(|error| format!("probe returned no usable JSON: {error}"))?;
+    let rows = parsed
+        .as_array()
+        .ok_or_else(|| "probe returned no usable JSON: not an array".to_string())?;
+    Ok(rows
+        .iter()
         .map(|row| Finding {
             service: field(row, "service"),
             host: host.to_string(),
@@ -105,9 +111,9 @@ pub(in crate::cli::service_verify) async fn remote_findings(
                 _ => UNVERIFIED,
             },
             detail: field(row, "detail"),
-            probed: true,
+            probed: row.get("probed").and_then(Value::as_bool).unwrap_or(true),
         })
-        .collect()
+        .collect())
 }
 
 fn field(row: &Value, key: &str) -> String {

@@ -101,6 +101,9 @@ mod verdicts;
 use crate::cli::CmdError;
 use crate::targets::load_registry_auto;
 
+pub(crate) use crate::cli::service_verify::checks::recheck::{
+    standby_still_serving, StandbyRecheck,
+};
 pub(crate) use crate::cli::service_verify::finding::Finding;
 
 use crate::cli::service_verify::checks::local::local_findings;
@@ -234,74 +237,6 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
     judge_ownership(&registry, &mut findings).await;
     record_observations(&findings);
     Ok(findings)
-}
-
-/// Is `host` still a standby for `service`, with the declared `unit` serving
-/// on the standby address, judged now from the registry authority itself?
-///
-/// The service reconciler asks this while it holds the unit's mutation lease,
-/// so a sweep that is minutes old never stops a unit. The document is read
-/// from the authority, uncached, with no last-known-good or bundled copy: a
-/// copy of any age can name a host that has since been promoted, so an
-/// authority that does not answer is a refusal. A host promoted to the active
-/// one, a standby address withdrawn, another unit declared for it there, or a
-/// port now held by another job each answer `Err` with the reason, and
-/// nothing is stopped. This host is probed directly; another through its own
-/// `service verify --local`, the one vantage from which a standby's owner can
-/// be judged.
-pub(crate) async fn standby_still_serving(service: &str, host: &str, unit: &str) -> StandbyRecheck {
-    let registry = match crate::targets::fetch_registry_authoritative().await {
-        Ok(registry) => registry,
-        Err(error) => {
-            return StandbyRecheck::Unjudged(format!(
-                "the registry authority did not answer: {error}"
-            ))
-        }
-    };
-    if registry.service_unit(service, host) != Some(unit) {
-        return StandbyRecheck::Settled(format!(
-            "the registry no longer declares {unit} for {service} on {host}"
-        ));
-    }
-    let Some(directory) = registry.service_directory.as_ref() else {
-        return StandbyRecheck::Settled("the registry declares no service directory".to_string());
-    };
-    let standby = directory.services.get(service).is_some_and(|declared| {
-        declared.active_host != host && declared.standby.contains_key(host)
-    });
-    if !standby {
-        return StandbyRecheck::Settled(format!("{host} is no longer a standby for {service}"));
-    }
-    let me = registry
-        .lookup_self(&crate::providers::vast::system_hostname())
-        .ok()
-        .flatten()
-        .map(|target| target.name.clone());
-    let rows = if me.as_deref() == Some(host) {
-        serving_standbys(&registry, directory, host).await
-    } else {
-        remote_findings(host, &[]).await
-    };
-    let serving = rows
-        .iter()
-        .any(|row| row.service == service && row.state == crate::observations::STANDBY_SERVING);
-    if serving {
-        StandbyRecheck::Serving
-    } else {
-        StandbyRecheck::Settled(format!(
-            "{host}'s standby unit {unit} for {service} no longer holds its port"
-        ))
-    }
-}
-
-/// What [`standby_still_serving`] found under the reconciler's lease.
-pub(crate) enum StandbyRecheck {
-    /// Still a standby, and its declared unit still holds the port.
-    Serving,
-    /// Nothing to stop any more: promoted, withdrawn, redeclared or silent.
-    Settled(String),
-    /// The authority did not answer, so nothing may be concluded.
-    Unjudged(String),
 }
 
 /// `service verify`: sweep the whole directory from every declared vantage.

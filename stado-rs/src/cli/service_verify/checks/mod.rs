@@ -1,6 +1,7 @@
 //! Which declarations are checked, from where, and at what address.
 
 pub(in crate::cli::service_verify) mod local;
+pub(in crate::cli::service_verify) mod recheck;
 pub(in crate::cli::service_verify) mod standby;
 
 use std::collections::BTreeSet;

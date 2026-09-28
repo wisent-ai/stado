@@ -76,6 +76,19 @@ pub(in crate::cli::service_verify) async fn serving_standbys(
             continue;
         };
         let (state, detail) = probe(&service.verification().kind, &endpoint.url).await;
+        if state == UNVERIFIED {
+            // The probe could not run, which is not silence: say so in place
+            // of the plain listing, so nothing reads it as a standby at rest.
+            findings.push(Finding {
+                service: name.clone(),
+                host: me.to_string(),
+                endpoint: endpoint.url.clone(),
+                state: UNVERIFIED,
+                detail: format!("{STANDBY_DETAIL}; the probe could not run: {detail}"),
+                probed: false,
+            });
+            continue;
+        }
         if state != OBSERVED {
             continue;
         }
