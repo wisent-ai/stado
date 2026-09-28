@@ -29,14 +29,12 @@ pub(crate) struct BoundaryVerdict {
     /// the two answers apart that need opposite responses: `validation did not
     /// settle within N seconds` is arithmetic against the item budget, while
     /// `item set mismatch` or `missing or empty` is a credential answer, and a
-    /// credential answer is not fixed by restarting the process. On
-    /// 2026-09-03 that distinction was unreachable for a live closed boundary:
-    /// `/healthz` publishes booleans by design, the process holding the
-    /// verdict logged no boundary line, and the doctor's remedy named
-    /// `stado service logs com.wisent.always-on.stado-object-api`, which on
-    /// that host answers `no unit file ... in the daemon or agent
-    /// directories`. A remedy naming an unreadable artefact is worse than
-    /// none.
+    /// credential answer is not fixed by restarting the process. That
+    /// distinction was unreachable for a live closed boundary: `/healthz`
+    /// publishes booleans by design, the process holding the verdict logged
+    /// no boundary line, and the doctor's remedy named a `stado service logs`
+    /// unit that host did not have a unit file for. A remedy naming an
+    /// unreadable artefact is worse than none.
     pub(crate) last_error: Option<String>,
     /// When that verdict was reached, in wall-clock terms, for the operator
     /// document. `attempted_at` above is monotonic and deliberately so — it

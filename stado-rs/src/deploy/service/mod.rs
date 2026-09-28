@@ -79,7 +79,7 @@ mod tests {
             action: action.to_string(),
             domain: DOMAIN_SYSTEM.to_string(),
             pid: "4242".to_string(),
-            path: "/Library/LaunchDaemons/com.wisent.always-on.stado-object-api.plist".to_string(),
+            path: "/Library/LaunchDaemons/com.wisent.stado.plist".to_string(),
             report: RemoteReport {
                 postcondition: "unit is loaded and running".to_string(),
                 postcondition_state: if postcondition_met {
@@ -94,9 +94,8 @@ mod tests {
 
     /// A converged pass is a success. It was added as one — a drifted unit
     /// file rewritten and kicked in place, without the window `bootout` then
-    /// `bootstrap` leaves — and `succeeded()` never admitted it, so the stado
-    /// 0.13.11 release submission failed with `could not ensure
-    /// com.wisent.always-on.stado-object-api: converged:
+    /// `bootstrap` leaves — and `succeeded()` never admitted it, so a release
+    /// submission failed with `could not ensure <unit>: converged:
     /// /Library/LaunchDaemons/…` after that ensure had done exactly what it
     /// was asked to do.
     #[test]

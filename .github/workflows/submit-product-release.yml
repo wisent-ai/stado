@@ -75,31 +75,29 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          # Two things were wrong with asking `registry self` for this. The name
-          # `stado-object-api` is declared by nothing — the registry calls the
-          # unit `com.wisent.always-on.stado-object-api` and the shipped service
-          # catalog calls the product `stado` — and the host is not this runner:
-          # the object service is placed on the always-on mac and this machine
-          # reaches it through the resolver. So the step refused with "nothing
-          # declares what stado-object-api runs on lukasz-macbook" and no
-          # product release could be submitted at all.
-          #
-          # Both facts come out of the declaration instead: the one registry row
-          # whose unit is the canonical object API names its own host.
-          declaration="$(
+          # The object service is the host Stado process, placed on the
+          # always-on mac and reached from this runner through the resolver.
+          # Which registry row runs it comes out of the catalog: the unit the
+          # `stado` product declares, or on a host that has not taken over yet
+          # a unit it retired. That row names its own host, and ensuring the
+          # product there starts the process under its own unit, which retires
+          # the old one before it binds.
+          catalog="$RUNNER_TEMP/service-catalog.json"
+          "$stado_bin" product catalog --output "$catalog"
+          host="$(
             "$stado_bin" service list --json |
-              jq -er '
-                [ .[] | select(.label == "com.wisent.always-on.stado-object-api") ]
+              jq -er --slurpfile catalog "$catalog" '
+                ($catalog[0].services[] | select(.name == "stado")) as $stado
+                | ([$stado.unit] + ($stado.retired_units // [])) as $units
+                | [ .[] | select(.label as $label | $units | index($label)) | .host ]
+                | unique
                 | if length == 1 then .[0] else
-                    error("expected exactly one declared object API unit, got \(length)")
+                    error("expected the host Stado process on exactly one host, got \(length)")
                   end
-                | "\(.host)\t\(.label)"
               '
           )"
-          host="${declaration%%$'\t'*}"
-          unit="${declaration##*$'\t'}"
-          test -n "$host" && test -n "$unit"
-          "$stado_bin" service ensure "$unit" \
+          test -n "$host"
+          "$stado_bin" service ensure stado \
             --host "$host" \
             --as-daemon \
             --reason "product release submission requires the canonical object store"

@@ -489,8 +489,8 @@ products:
     cli jak i aplikacje desktopowa".'
   service:
     installable: true
-    unit: com.wisent.always-on.stado-object-api
-    program: $HOME/.stado/services/com.wisent.always-on.stado-object-api/current/$STADO_PLATFORM/stado
+    unit: com.wisent.stado
+    program: $HOME/.stado/bin/stado
     args:
     - serve
     - --api
@@ -501,7 +501,13 @@ products:
     env:
       WC_STORAGE_BACKEND: local
       WC_LOCAL_STORAGE_PATH: $HOME/.stado/local-storage
-    summary: The core object API for registry, queue and release state.
+    summary: The one Stado process per host; serves the object API for registry, queue and release state.
+    # The unit this process ran under before it took every role. It runs the
+    # same program on the same port, so the process started as
+    # com.wisent.stado boots it out before binding.
+    retired_units:
+    - com.wisent.always-on.stado-object-api
+    - com.wisent.always-on.stado-object-api.service
     # The old resolver unit and the process's resolver bind the same ports, so
     # the flag proves nothing until the resolver publishes serving: its units
     # are handed over (readiness: resolver-state), not retired on the flag.

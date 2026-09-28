@@ -686,16 +686,23 @@ jobs:
             done
             return 1
           }
-          # The object API is a system LaunchDaemon. It does not inherit HOME
-          # or the runner's Stado config, so reconcile its checked-in unit
-          # contract before touching verifier grants.
+          # The object API is the host Stado process, a system LaunchDaemon.
+          # It does not inherit HOME or the runner's Stado config, so reconcile
+          # its checked-in unit contract before touching verifier grants.
           # Recovery is idempotent: after a lost transport acknowledgement its
           # own healthy-and-identical postcondition makes the retry read-only.
+          # It installs the unit under the label the host's Stado catalog
+          # declares, and that process retires the label it replaced.
           retry_command "$stado_bin" host recover-object-api \
             charless-mac-mini --json \
             > "$RUNNER_TEMP/object-api-recovery.json"
+          "$stado_bin" product catalog --output "$RUNNER_TEMP/service-catalog.json"
+          host_unit="$(
+            jq -er '.services[] | select(.name == "stado") | .unit' \
+              "$RUNNER_TEMP/service-catalog.json"
+          )"
           "$stado_bin" service env \
-            com.wisent.always-on.stado-object-api \
+            "$host_unit" \
             --host charless-mac-mini --json \
             > "$RUNNER_TEMP/object-api-environment.json"
           jq -e '
@@ -785,12 +792,12 @@ jobs:
             # sole in-place restart, prove the managed unit and dependency
             # route this job is about to disturb.
             "$stado_bin" service show \
-              com.wisent.always-on.stado-object-api \
+              "$host_unit" \
               --host charless-mac-mini --json \
               > "$RUNNER_TEMP/object-service-before-restart.json"
-            jq -e '
+            jq -e --arg unit "$host_unit" '
               length == 1 and
-              .[0].unit == "com.wisent.always-on.stado-object-api" and
+              .[0].unit == $unit and
               .[0].host == "charless-mac-mini" and
               .[0].status == "runs" and
               (.[0].detail | contains("dashboard --bind 127.0.0.1 --port 8765"))
@@ -806,7 +813,7 @@ jobs:
 
             restart_status=0
             "$stado_bin" service restart \
-              com.wisent.always-on.stado-object-api \
+              "$host_unit" \
               --host charless-mac-mini --json \
               > "$RUNNER_TEMP/object-service-restart.json" ||
               restart_status=$?

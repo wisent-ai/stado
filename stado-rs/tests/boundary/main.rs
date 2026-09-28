@@ -1,11 +1,11 @@
 //! Authorization-boundary recovery on the object plane.
 //!
-//! On 2026-08-19 `com.wisent.always-on.stado-object-api` — which is
-//! `stado dashboard --bind 127.0.0.1 --port 8765` — answered
-//! `503 {"error":"object authorization unavailable"}` to the whole fleet
-//! because one bad vault read at startup shut the `object` boundary and
-//! nothing ever revalidated it. Clearing it needed a privileged LaunchDaemon
-//! restart, which is exactly what the product's own recovery path cannot do.
+//! The host Stado process — `stado dashboard --bind 127.0.0.1 --port 8765`
+//! — once answered `503 {"error":"object authorization unavailable"}` to the
+//! whole fleet because one bad vault read at startup shut the `object`
+//! boundary and nothing ever revalidated it. Clearing it needed a privileged
+//! LaunchDaemon restart, which is exactly what the product's own recovery
+//! path cannot do.
 //!
 //! Every case here runs that command as its own process against a real
 //! Skarbiec broker, and asserts what the listener served and what it

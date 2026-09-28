@@ -3,9 +3,11 @@ use crate::deploy::service::*;
 mod handoff;
 mod listener;
 mod record;
+mod takeover;
 
 pub use handoff::*;
 pub use listener::{hand_over_role, listener_role, listener_standing};
+pub use takeover::take_over_on_start;
 
 /// What retiring one catalog-retired unit on one host did.
 #[derive(Debug, Clone, serde::Serialize)]

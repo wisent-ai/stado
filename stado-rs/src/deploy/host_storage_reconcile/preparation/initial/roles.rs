@@ -30,8 +30,9 @@ pub(in crate::deploy::host_storage_reconcile) fn service_role(
     label: &str,
     command: &str,
 ) -> &'static str {
-    const OBJECT_API_LABEL: &str = "com.wisent.always-on.stado-object-api";
-    if label == OBJECT_API_LABEL {
+    // The compiled catalog is validated before anything runs, so an error
+    // here only means no unit is the host process.
+    if crate::deploy::service_catalog::runs_host_process(label) == Ok(true) {
         return "object-api";
     }
     let tokens = command_tokens(command);

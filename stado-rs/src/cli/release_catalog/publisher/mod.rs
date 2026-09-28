@@ -15,6 +15,7 @@ use crate::cli::CmdError;
 
 mod hosts;
 mod input;
+mod reload;
 mod withdraw;
 
 pub(crate) use hosts::{fleet_hosts, this_host};
@@ -67,30 +68,7 @@ pub(super) async fn declare_publisher(
     reloads: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let reloads = reloads
-        .iter()
-        .map(|pair| {
-            pair.split_once('=')
-                .map(|(host, service)| (host.to_string(), service.to_string()))
-                .ok_or_else(|| {
-                    CmdError::usage(format!("--reload takes HOST=SERVICE, not {pair:?}"))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    // A reload refreshes the publisher table inside a running process. A
-    // unit some product retired no longer holds that table: its work runs in
-    // the replacing product's one process, so reloading it would refresh
-    // nothing the release API reads, or restart a unit that should not run.
-    for (_, service) in &reloads {
-        if let Some(replacement) =
-            crate::deploy::service_catalog::retired_by(service).map_err(CmdError::click)?
-        {
-            return Err(CmdError::usage(format!(
-                "--reload {service}: {}",
-                crate::deploy::service_catalog::retired_sentence(service, &replacement)
-            )));
-        }
-    }
+    let reloads = reload::reload_targets(reloads)?;
     vault_word("product", product)?;
     let (item, declared) = publisher_declaration(product);
     let consumer = crate::config::skarbiec_consumer().to_string();

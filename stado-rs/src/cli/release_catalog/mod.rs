@@ -84,9 +84,10 @@ enum CatalogCommands {
         /// Further hosts that serve the release API; repeat for several.
         #[arg(long = "target")]
         targets: Vec<String>,
-        /// HOST=SERVICE: a managed unit whose process caches the publisher
-        /// table for its lifetime, reconciled after the declaration lands
-        /// on that host; repeat for several.
+        /// HOST=SERVICE: the host Stado process on HOST, whose release API
+        /// caches the publisher table for its lifetime, reconciled after the
+        /// declaration lands on that host; repeat for several hosts. Any
+        /// other unit, a retired one included, is refused.
         #[arg(long = "reload")]
         reloads: Vec<String>,
         #[arg(long)]

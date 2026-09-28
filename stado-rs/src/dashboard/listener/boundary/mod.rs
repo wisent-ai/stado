@@ -114,8 +114,8 @@ impl Dashboard {
     ///
     /// This is the recovery half of the startup sweep. Before it, a boundary
     /// closed by one slow or reset read stayed closed until a privileged unit
-    /// restart — and for `com.wisent.always-on.stado-object-api` that restart
-    /// is exactly the thing the fleet cannot do for itself.
+    /// restart — and for the host Stado process that restart is exactly the
+    /// thing the fleet cannot do for itself.
     async fn recover_boundary(&self, boundary: Boundary) -> bool {
         match self.claim_boundary_recheck(boundary) {
             Recheck::Ready => return true,

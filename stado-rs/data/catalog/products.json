@@ -23,6 +23,12 @@
       },
       "units": [
         {
+          "label": "com.wisent.stado"
+        },
+        {
+          "label": "com.wisent.stado.service"
+        },
+        {
           "label": "com.wisent.always-on.stado-object-api.service"
         },
         {

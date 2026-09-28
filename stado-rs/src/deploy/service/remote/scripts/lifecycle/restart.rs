@@ -156,10 +156,9 @@ fi
 /// Scoped to the unit's whole declared argv, through `stado_unit_pids`. It used
 /// to sweep every process whose executable was the unit's program, and on a host
 /// where one binary runs the object API, the resolver, the agent and the beacon
-/// that is a sweep of the control plane: `stado service restart
-/// com.wisent.always-on.stado-object-api --host control-host` on
-/// 2026-08-19 TERMed eight processes, among them the host's resolver holding
-/// 17600/17601/17612/17621, and reported one unit restarted.
+/// that is a sweep of the control plane: a restart of the host Stado unit
+/// TERMed eight processes, among them the host's resolver holding its
+/// listeners, and reported one unit restarted.
 pub(crate) const DISOWNED_SWEEP: &str = "  sweep_argv=$(stado_unit_argv \"$unit_path\")
   left=\"\"
   still=\"\"

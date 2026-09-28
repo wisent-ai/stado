@@ -67,10 +67,9 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 /// `com.wisent.compute.service.stado-local-control-plane` on the always-on mac
 /// with `PATH` as its only variable, and eleven consecutive ticks reaped no
 /// expired lease and dispatched nothing while 55 pinned jobs sat in the store
-/// it could not see. The catalog-backed units on the same host
-/// (`com.wisent.always-on.stado-object-api`) carried `HOME`, `STADO_CONFIG` and
-/// the storage keys, so one installer produced a working unit and the other did
-/// not.
+/// it could not see. The catalog-backed host Stado unit on the same host
+/// carried `HOME`, `STADO_CONFIG` and the storage keys, so one installer
+/// produced a working unit and the other did not.
 ///
 /// Both values ride the [`REMOTE_HOME_PLACEHOLDER`] the remote installer
 /// substitutes, so the account is the host's answer and never this machine's.

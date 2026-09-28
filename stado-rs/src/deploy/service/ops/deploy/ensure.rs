@@ -53,12 +53,10 @@ impl EnsureOutcome {
     /// a drifted unit file rewritten and activated through the guarded
     /// init-system lifecycle — but this set was never widened to admit it, so
     /// every converged pass was reported as
-    /// a failure naming the unit path it had just settled on. That is what
-    /// stopped the stado 0.13.11 release submission: its "Ensure the declared
-    /// object service" step converged
-    /// `com.wisent.always-on.stado-object-api` on charless-mac-mini and then
-    /// failed with `could not ensure …: converged: /Library/LaunchDaemons/…`,
-    /// so no product release could be submitted at all.
+    /// a failure naming the unit path it had just settled on, and a release
+    /// submission whose "Ensure the declared object service" step converged
+    /// the host Stado unit then failed with `could not ensure …: converged:
+    /// /Library/LaunchDaemons/…`, so no product release could be submitted.
     pub fn succeeded(&self) -> bool {
         matches!(
             self.action.as_str(),

@@ -8,12 +8,9 @@
 # repairs only the same-root listener using the host's canonical delivered Stado.
 set -euo pipefail
 
-label="com.wisent.always-on.stado-object-api"
-plist="/Library/LaunchDaemons/$label.plist"
 program="$HOME/.stado/bin/stado"
 config="${STADO_CONFIG:-$HOME/.config/stado/config.json}"
 work="$HOME/.stado/work/object-api-recovery"
-log="$HOME/.stado/logs/$label.log"
 
 if [ "$(/usr/bin/uname -s)" != "Darwin" ]; then
   printf 'unsupported_os %s\n' "$(/usr/bin/uname -s)" >&2
@@ -24,12 +21,21 @@ if [ ! -x "$program" ]; then
   exit 66
 fi
 
-# Where the stores are and how the object route is addressed: the environment
-# first for the stores, then the host config, then the managed defaults. The
-# host's own Stado reads them; this program only carries the answer.
+# Where the stores are, how the object route is addressed, and which launchd
+# label the host Stado process runs under: the environment first for the
+# stores, then the host config, then the managed defaults, and the label from
+# the catalog compiled into the host's own Stado. This program only carries
+# the answer.
 coordinates=$("$program" host object-api-local paths --config "$config")
-IFS=$'\t' read -r store backup_store object_url object_namespace object_token_file \
+IFS=$'\t' read -r store backup_store object_url object_namespace object_token_file label \
   <<< "$coordinates"
+if [ -z "$label" ]; then
+  printf 'host_stado_names_no_unit %s: deliver the current Stado to this host first\n' \
+    "$program" >&2
+  exit 71
+fi
+plist="/Library/LaunchDaemons/$label.plist"
+log="$HOME/.stado/logs/$label.log"
 if [ ! -d "$store" ] || [ ! -r "$store/registry.json" ]; then
   printf 'local_store_missing %s\n' "$store" >&2
   exit 67

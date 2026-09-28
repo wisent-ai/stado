@@ -57,8 +57,8 @@
     },
     {
       "name": "stado",
-      "summary": "The core object API for registry, queue and release state.",
-      "unit": "com.wisent.always-on.stado-object-api",
+      "summary": "The one Stado process per host, serving the object API for registry, queue and release state.",
+      "unit": "com.wisent.stado",
       "repair": [
         {
           "name": "host",

@@ -175,7 +175,7 @@ struct DatabasePushForm: View {
                     .textFieldStyle(.roundedBorder)
             }
             LabeledContent("Unit serving the database plane") {
-                TextField("com.wisent.always-on.stado-object-api", text: $service)
+                TextField("com.wisent.stado", text: $service)
                     .textFieldStyle(.roundedBorder)
             }
             HStack {

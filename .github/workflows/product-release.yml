@@ -132,9 +132,15 @@ jobs:
           if ! wait_for_channel; then
             # Older object API processes load verifier grants only at startup.
             # The declared service operation preserves the unit and Stado waits
-            # for the real authenticated channel below before publication.
+            # for the real authenticated channel below before publication. The
+            # unit is the host Stado process the catalog declares.
+            "$stado_bin" product catalog --output "$RUNNER_TEMP/service-catalog.json"
+            host_unit="$(
+              jq -er '.services[] | select(.name == "stado") | .unit' \
+                "$RUNNER_TEMP/service-catalog.json"
+            )"
             "$stado_bin" service restart \
-              com.wisent.always-on.stado-object-api \
+              "$host_unit" \
               --host charless-mac-mini --json || true
             # The restart can close its own host transport before returning a
             # receipt. Only the authenticated write/read postcondition below

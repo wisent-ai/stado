@@ -91,6 +91,41 @@ pub fn retired_by(unit: &str) -> Result<Option<CatalogService>, String> {
         .find(|entry| entry.retired_units.iter().any(|retired| retired == unit)))
 }
 
+/// The product whose one process per host serves the object API, the release
+/// API and every role the catalog folded into it.
+const HOST_PRODUCT: &str = "stado";
+
+/// The catalog entry of that host Stado process.
+pub fn host_process() -> Result<CatalogService, String> {
+    lookup(HOST_PRODUCT)?
+        .ok_or_else(|| format!("the compiled product catalog declares no {HOST_PRODUCT} service"))
+}
+
+/// The launchd label the host Stado process runs under; systemd runs it as
+/// the same name with `.service` appended.
+pub fn host_unit() -> Result<String, String> {
+    let entry = host_process()?;
+    Ok(entry.unit.unwrap_or(entry.name))
+}
+
+/// Whether `unit` names the host Stado process: its product name, its launchd
+/// label, or its systemd unit.
+pub fn is_host_unit(unit: &str) -> Result<bool, String> {
+    let label = host_unit()?;
+    Ok(unit == HOST_PRODUCT || unit == label || unit.strip_suffix(".service") == Some(&label))
+}
+
+/// Whether `unit` runs the host Stado process on some host: its own unit, or
+/// a label that process ran under before and still runs under wherever the
+/// process started under its own unit has not yet taken over.
+pub fn runs_host_process(unit: &str) -> Result<bool, String> {
+    Ok(is_host_unit(unit)?
+        || host_process()?
+            .retired_units
+            .iter()
+            .any(|retired| retired == unit))
+}
+
 /// The sentence every refusal to deploy or repair a retired unit prints.
 pub fn retired_sentence(unit: &str, replacement: &CatalogService) -> String {
     format!(

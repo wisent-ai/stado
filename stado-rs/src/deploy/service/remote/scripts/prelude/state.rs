@@ -7,12 +7,11 @@ use crate::deploy::service::*;
 /// `stado_unit_pids` is the one that had to change. It used to be
 /// `pgrep -f "^$program"` against the unit's program path, and on a host
 /// where every Stado service runs one binary that pattern is every service:
-/// on 2026-08-19 a unit-scoped `stado service restart
-/// com.wisent.always-on.stado-object-api --host control-host` ended
-/// eight processes — the object API, the host's resolver holding
-/// 17600/17601/17612/17621, and a bare agent — because every one of them runs
-/// `/Users/charles/.stado/bin/stado`, and it reported `restarted` with a met
-/// postcondition afterwards. `KeepAlive` brought them back; one non-KeepAlive
+/// a unit-scoped `stado service restart` of the host Stado unit ended eight
+/// processes — the object API, the host's resolver holding its listeners, and
+/// a bare agent — because every one of them runs `$HOME/.stado/bin/stado`, and
+/// it reported `restarted` with a met postcondition afterwards. `KeepAlive`
+/// brought them back; one non-KeepAlive
 /// sibling would have stayed down. The distinguishing fact is the argv the
 /// unit declares (`dashboard --bind 127.0.0.1 --port 8765` against `resolver
 /// serve --target <host>`), so the whole argv is matched, and where launchd

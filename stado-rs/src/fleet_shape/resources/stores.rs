@@ -138,9 +138,10 @@ pub async fn health_disagreement() -> Option<Finding> {
             closed.len(),
             closed.join(", ")
         ),
-        command: "stado service logs com.wisent.always-on.stado-object-api --host <host> names \
-                  why the boundary is closed; a credential answer is not fixed by restarting the \
-                  process"
-            .to_string(),
+        command: format!(
+            "stado service logs {} --host <host> names why the boundary is closed; a \
+             credential answer is not fixed by restarting the process",
+            crate::deploy::service_catalog::host_unit().unwrap_or_else(|error| error)
+        ),
     })
 }

@@ -5,7 +5,7 @@ if [ "$(/usr/bin/uname -s)" != Darwin ]; then
   printf 'unsupported_os\n' >&2
   exit 65
 fi
-label=com.wisent.always-on.stado-object-api
+label=@LABEL@
 plist="/Library/LaunchDaemons/$label.plist"
 program="$HOME/.stado/bin/stado"
 store=@PRIMARY@
@@ -81,8 +81,11 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
     let port = writer
         .listener_port
         .ok_or_else(|| DeployError("captured object API port is absent".to_string()))?;
-    let unit = object_api_unit(primary, backup, config, port)?;
+    // The unit restored is the one the fence captured writing, under its own
+    // label, whichever label the host's Stado process ran under then.
+    let unit = object_api_unit(&writer.label, primary, backup, config, port)?;
     let body = ROLLBACK_OBJECT_API_SCRIPT
+        .replace("@LABEL@", &shlex_quote(&writer.label))
         .replace("@PRIMARY@", &shlex_quote(primary))
         .replace(
             "@BACKUP_BACKEND@",
@@ -98,6 +101,7 @@ pub(in crate::deploy::host_storage_reconcile) fn object_recovery_script(
 /// base64-encoded XML: the worker renders it on the host it runs on, for the
 /// account it runs as.
 fn object_api_unit(
+    label: &str,
     primary: &str,
     backup: Option<&str>,
     config: &str,
@@ -110,7 +114,6 @@ fn object_api_unit(
         .flatten()
         .map(|user| user.name)
         .ok_or_else(|| DeployError("the managed account has no user name".to_string()))?;
-    let label = "com.wisent.always-on.stado-object-api";
     let log = format!("{home}/.stado/logs/{label}.log");
     let text = |value: &str| Plist::String(value.to_string());
     let mut environment = Dictionary::new();

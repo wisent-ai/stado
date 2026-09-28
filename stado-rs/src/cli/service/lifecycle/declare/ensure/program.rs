@@ -42,11 +42,10 @@ pub(super) fn canonical_managed_unit(name: &str, target: &str) -> Result<Option<
             if label != name && bare != requested && leaf != requested {
                 continue;
             }
-            // A product declares a unit once per init system:
-            // `com.wisent.always-on.stado-object-api` for launchd and
-            // `com.wisent.always-on.stado-object-api.service` for systemd are
-            // one unit. Compared whole, they refused `service ensure` for the
-            // object API with "more than one unit identity" on 2026-09-27.
+            // A product declares a unit once per init system: `com.wisent.stado`
+            // for launchd and `com.wisent.stado.service` for systemd are one
+            // unit. Compared whole, they refused `service ensure` for the host
+            // Stado process with "more than one unit identity".
             if matched.as_deref().is_some_and(|existing| existing != bare) {
                 return Err(CmdError::click(format!(
                     "managed product declarations give {name} more than one unit identity"

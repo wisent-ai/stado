@@ -9,7 +9,6 @@ use super::manager::read_json;
 use super::Launch;
 use crate::deploy::host_storage_reconcile_host::{checked, expand_home};
 
-const OBJECT_API_LABEL: &str = "com.wisent.always-on.stado-object-api";
 const FENCE_SCHEMA: &str = "stado.storage-root-fence.v5";
 
 /// The single value following `name` in an argument list.
@@ -77,6 +76,18 @@ fn native_object_arguments(service: &Value) -> Result<Vec<String>, String> {
     Ok(words.into_iter().skip(1).collect())
 }
 
+/// The declared services whose label `matches` accepts.
+fn labelled(services: &[Value], matches: fn(&str) -> Result<bool, String>) -> Vec<&Value> {
+    services
+        .iter()
+        .filter(|service| {
+            service["label"]
+                .as_str()
+                .is_some_and(|label| matches(label) == Ok(true))
+        })
+        .collect()
+}
+
 pub(super) fn captured_release_api(launch: &Launch, target: &Value) -> Result<String, String> {
     if let Some(fence) = read_json(&format!("{}/lifecycle-fence.json", launch.work))? {
         if fence["schema"].as_str() != Some(FENCE_SCHEMA)
@@ -95,10 +106,14 @@ pub(super) fn captured_release_api(launch: &Launch, target: &Value) -> Result<St
     let services = target["services"]
         .as_array()
         .ok_or_else(|| "captured target declares no service inventory".to_string())?;
-    let object_apis: Vec<&Value> = services
-        .iter()
-        .filter(|service| service["label"].as_str() == Some(OBJECT_API_LABEL))
-        .collect();
+    // The host Stado process under its own unit; on a host where that unit
+    // has not taken over yet, under the label it ran under before.
+    let own = labelled(services, crate::deploy::service_catalog::is_host_unit);
+    let object_apis = if own.is_empty() {
+        labelled(services, crate::deploy::service_catalog::runs_host_process)
+    } else {
+        own
+    };
     let [object_api] = object_apis.as_slice() else {
         return Err("captured target must declare exactly one canonical object API".to_string());
     };

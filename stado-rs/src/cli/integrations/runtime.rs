@@ -98,6 +98,11 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         ));
     }
     identity::validate(&args)?;
+    // A renamed predecessor holds the listeners this process binds and runs
+    // the only reconciler that would otherwise retire it.
+    crate::deploy::service::take_over_on_start()
+        .await
+        .map_err(|error| CmdError::click(format!("serve {error}")))?;
     let mutates_worker_environment =
         args.run_worker && (args.worker.auto || args.worker.target.is_none());
     let mut supervisor = supervisor::Supervisor::new();

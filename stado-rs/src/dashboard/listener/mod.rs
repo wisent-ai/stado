@@ -152,6 +152,10 @@ pub async fn serve(
     let port = port.unwrap_or_else(config::dashboard_port);
     let port = u16::try_from(port)
         .map_err(|_| DashboardError::Other(format!("dashboard port out of range: {port}")))?;
+    // Under the host Stado unit, a renamed predecessor holds this port.
+    crate::deploy::service::take_over_on_start()
+        .await
+        .map_err(|error| DashboardError::Other(format!("dashboard {error}")))?;
     let store = JobStorage::for_server().await?;
     Dashboard::new(store)
         .with_enrollment_only(enrollment_only)
