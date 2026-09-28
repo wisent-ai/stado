@@ -219,7 +219,7 @@ pub(crate) async fn url(path: &str, query: &[String]) -> Result<(), CmdError> {
     for pair in query {
         let (key, value) = pair
             .split_once('=')
-            .ok_or_else(|| CmdError::click(format!("--query {pair:?} is not KEY=VALUE")))?;
+            .ok_or_else(|| CmdError::usage(format!("--query {pair:?} is not KEY=VALUE")))?;
         address.query_pairs_mut().append_pair(key, value);
     }
     println!("{address}");

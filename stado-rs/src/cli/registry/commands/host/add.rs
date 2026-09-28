@@ -22,10 +22,10 @@ pub async fn host_add(
 ) -> Result<(), CmdError> {
     let name = targets::normalize_hostname(host);
     if name.is_empty() {
-        return Err(CmdError::click("HOST must not be empty"));
+        return Err(CmdError::usage("HOST must not be empty"));
     }
     if ssh.trim().is_empty() {
-        return Err(CmdError::click("--ssh must not be empty"));
+        return Err(CmdError::usage("--ssh must not be empty"));
     }
     let location = targets::registry_location();
     let (mut document, expected_generation) = fetch_versioned_document().await?;

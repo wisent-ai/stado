@@ -86,7 +86,7 @@ pub(crate) async fn deploy(options: DeployOptions<'_>) -> Result<(), CmdError> {
             (installed.program_path.clone(), Some(installed))
         }
         (Some(_), Some(_)) => {
-            return Err(CmdError::click("--from and --from-artifact are exclusive"))
+            return Err(CmdError::usage("--from and --from-artifact are exclusive"))
         }
     };
     let from = from.as_str();

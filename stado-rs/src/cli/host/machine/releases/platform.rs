@@ -9,14 +9,14 @@ pub async fn verify_release_platform(
     json_output: bool,
 ) -> Result<(), CmdError> {
     if !repo.starts_with("https://") {
-        return Err(CmdError::click("--repo must be an https:// clone URL"));
+        return Err(CmdError::usage("--repo must be an https:// clone URL"));
     }
     if revision.len() != 40
         || !revision
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
-        return Err(CmdError::click("--ref must be a full lowercase Git commit"));
+        return Err(CmdError::usage("--ref must be a full lowercase Git commit"));
     }
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await

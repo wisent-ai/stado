@@ -27,7 +27,7 @@ pub(crate) async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdE
         as_json,
     } = options;
     if ttl_seconds == 0 {
-        return Err(CmdError::click("--ttl-seconds must be positive"));
+        return Err(CmdError::usage("--ttl-seconds must be positive"));
     }
     let capabilities = capabilities.join(",");
     let audience = audience.unwrap_or(consumer);
@@ -117,15 +117,15 @@ pub(crate) async fn token_file_sync(options: TokenFileSyncOptions<'_>) -> Result
         as_json,
     } = options;
     if item.trim().is_empty() {
-        return Err(CmdError::click("--item must name a Skarbiec item"));
+        return Err(CmdError::usage("--item must name a Skarbiec item"));
     }
     if field.trim().is_empty() {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "--field must name a string field in the Skarbiec item",
         ));
     }
     if token_file.trim().is_empty() {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "--token-file must be a file path on the target, absolute or rooted at $HOME",
         ));
     }

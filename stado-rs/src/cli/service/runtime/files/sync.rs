@@ -22,7 +22,7 @@ pub(crate) async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdErr
     } = options;
     let source = std::path::Path::new(source_file);
     if !source.is_absolute() {
-        return Err(CmdError::click("--source-file must be absolute"));
+        return Err(CmdError::usage("--source-file must be absolute"));
     }
     let metadata = std::fs::symlink_metadata(source)
         .map_err(|error| CmdError::click(format!("cannot read {source_file}: {error}")))?;

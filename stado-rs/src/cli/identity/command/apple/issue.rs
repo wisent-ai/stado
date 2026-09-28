@@ -16,13 +16,13 @@ pub async fn issue_apple_capabilities(
     json_output: bool,
 ) -> Result<(), CmdError> {
     if uuid::Uuid::parse_str(&authorization_id).is_err() {
-        return Err(CmdError::click("--authorization-id must be a UUID"));
+        return Err(CmdError::usage("--authorization-id must be a UUID"));
     }
     if agent.trim().is_empty() || agent.trim() != agent {
-        return Err(CmdError::click("--agent must be a non-empty exact name"));
+        return Err(CmdError::usage("--agent must be a non-empty exact name"));
     }
     if !(60..=3600).contains(&ttl_seconds) {
-        return Err(CmdError::click("--ttl-seconds must be between 60 and 3600"));
+        return Err(CmdError::usage("--ttl-seconds must be between 60 and 3600"));
     }
     let registry = load_registry_auto()
         .await

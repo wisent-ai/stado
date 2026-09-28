@@ -23,7 +23,7 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
     validate_env_key(key)?;
     let source = std::path::Path::new(value_file);
     if !source.is_absolute() {
-        return Err(CmdError::click("--value-file must be absolute"));
+        return Err(CmdError::usage("--value-file must be absolute"));
     }
     let metadata = std::fs::symlink_metadata(source)
         .map_err(|error| CmdError::click(format!("cannot read {value_file}: {error}")))?;

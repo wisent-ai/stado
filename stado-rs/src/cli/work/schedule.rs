@@ -206,7 +206,7 @@ pub async fn resume(schedule_id: &str) -> Result<(), CmdError> {
 /// the caller-retained token, regardless of its next run time.
 pub async fn run(schedule_id: &str, retry_token: &str, json: bool) -> Result<(), CmdError> {
     if retry_token.trim().is_empty() {
-        return Err(CmdError::click("--retry-token must not be empty"));
+        return Err(CmdError::usage("--retry-token must not be empty"));
     }
     let store = JobStorage::new().await?;
     if read_schedule(&store, schedule_id).await?.is_none() {

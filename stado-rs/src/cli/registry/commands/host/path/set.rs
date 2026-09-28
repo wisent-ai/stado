@@ -51,16 +51,16 @@ pub async fn host_path_set(
     let path = path.trim();
     let destination = ssh.trim();
     if path.is_empty() {
-        return Err(CmdError::click("PATH must not be empty"));
+        return Err(CmdError::usage("PATH must not be empty"));
     }
     if destination.is_empty() {
-        return Err(CmdError::click("--ssh must not be empty"));
+        return Err(CmdError::usage("--ssh must not be empty"));
     }
     if priority == Some(0) {
-        return Err(CmdError::click("--priority starts at 1"));
+        return Err(CmdError::usage("--priority starts at 1"));
     }
     if path == targets::PRIMARY_SSH_CONNECTION && priority.is_some() {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "the primary path is always preferred and does not take --priority",
         ));
     }

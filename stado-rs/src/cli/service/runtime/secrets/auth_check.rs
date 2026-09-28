@@ -34,8 +34,8 @@ pub(crate) async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdE
     } = options;
     let repair_target = if repair {
         Some((
-            variable.ok_or_else(|| CmdError::click("--repair requires --variable"))?,
-            env_file.ok_or_else(|| CmdError::click("--repair requires --env-file"))?,
+            variable.ok_or_else(|| CmdError::usage("--repair requires --variable"))?,
+            env_file.ok_or_else(|| CmdError::usage("--repair requires --env-file"))?,
         ))
     } else {
         None

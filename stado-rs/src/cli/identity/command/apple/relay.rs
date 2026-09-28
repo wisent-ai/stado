@@ -17,10 +17,10 @@ pub async fn relay_apple_challenge(
     json_output: bool,
 ) -> Result<(), CmdError> {
     if identity.trim().is_empty() {
-        return Err(CmdError::click("an Apple account identity is required"));
+        return Err(CmdError::usage("an Apple account identity is required"));
     }
     if uuid::Uuid::parse_str(&authorization_id).is_err() {
-        return Err(CmdError::click("--authorization-id must be a UUID"));
+        return Err(CmdError::usage("--authorization-id must be a UUID"));
     }
     let registry = load_registry_auto()
         .await

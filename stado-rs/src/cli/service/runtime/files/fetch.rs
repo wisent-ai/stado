@@ -26,7 +26,7 @@ pub(crate) async fn file_fetch(options: FileFetchOptions<'_>) -> Result<(), CmdE
     } = options;
     if let Some(destination) = dest_file {
         if !std::path::Path::new(destination).is_absolute() {
-            return Err(CmdError::click("--dest-file must be absolute"));
+            return Err(CmdError::usage("--dest-file must be absolute"));
         }
     }
     let services = declared_matching(name, Some(host)).await?;

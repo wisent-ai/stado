@@ -100,10 +100,10 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         None
     } else {
         let parsed = chrono::DateTime::parse_from_rfc3339(&deadline_at)
-            .map_err(|error| CmdError::click(format!("--deadline-at must be RFC 3339: {error}")))?;
+            .map_err(|error| CmdError::usage(format!("--deadline-at must be RFC 3339: {error}")))?;
         let parsed = parsed.with_timezone(&chrono::Utc);
         if parsed <= chrono::Utc::now() {
-            return Err(CmdError::click("--deadline-at must be in the future"));
+            return Err(CmdError::usage("--deadline-at must be in the future"));
         }
         Some(parsed.to_rfc3339())
     };

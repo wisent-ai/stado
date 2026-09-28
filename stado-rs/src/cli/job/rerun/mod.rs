@@ -18,7 +18,7 @@ use self::spec_rows::spec_rows;
 /// identical spec under a deterministic durable run and print `old -> new`.
 pub(super) async fn rerun(job_id: &str, retry_token: &str, json: bool) -> Result<(), CmdError> {
     if retry_token.trim().is_empty() {
-        return Err(CmdError::click("--retry-token must not be empty"));
+        return Err(CmdError::usage("--retry-token must not be empty"));
     }
     let facade = MachineFacade::new().await.map_err(cmd_error)?;
     // lookup_job probes machine::JOB_PREFIXES, which is the same six

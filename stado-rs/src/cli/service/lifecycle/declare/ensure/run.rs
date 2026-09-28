@@ -73,7 +73,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         .map_err(click)?;
     let host = target.name.clone();
     if options.as_launch_agent && !target.release_platform.starts_with("darwin") {
-        return Err(CmdError::click("--as-launch-agent is Darwin-only"));
+        return Err(CmdError::usage("--as-launch-agent is Darwin-only"));
     }
 
     // Resolve the operator-facing name against both declarations that may
