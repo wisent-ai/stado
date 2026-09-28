@@ -12,6 +12,8 @@ stado-rs/Cargo.lock
 # pack's release tooling reads .wisent-release.json and
 # platform-entitlements.json by that exact path from other repositories.
 .
-# The crate root. Cargo requires Cargo.toml, Cargo.lock and build.rs here by
-# name, and the release Dockerfile is addressed as stado-rs/Dockerfile.
-stado-rs
+# The crate root's own file count. Cargo requires Cargo.toml, Cargo.lock and
+# build.rs here by name, and the release Dockerfile is addressed as
+# stado-rs/Dockerfile. Written `stado-rs/.` so the sources below it are still
+# audited: the bare `stado-rs` excluded every file of the crate from the scan.
+stado-rs/.
