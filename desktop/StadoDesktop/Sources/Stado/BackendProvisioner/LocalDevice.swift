@@ -67,10 +67,15 @@ extension BackendProvisioner {
         await onUpdate(.init(phase: "Starting Stado", detail: "Installing the per-user control-plane service", fraction:
             0.45))
         let domain = "gui/\(getuid())"
-        _ = try? await run("/bin/launchctl", ["bootout", "\(domain)/\(label)"])
+        let target = "\(domain)/\(label)"
         do {
+            // A unit an earlier install left loaded is booted out first; a
+            // refused bootout of a loaded unit is a failure, not a no-op.
+            if try await runStatus("/bin/launchctl", ["print", target]) == 0 {
+                try await run("/bin/launchctl", ["bootout", target])
+            }
             try await run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
-            try await run("/bin/launchctl", ["kickstart", "-k", "\(domain)/\(label)"])
+            try await run("/bin/launchctl", ["kickstart", "-k", target])
         } catch {
             throw BackendProvisioningError.commandFailed(error.localizedDescription)
         }

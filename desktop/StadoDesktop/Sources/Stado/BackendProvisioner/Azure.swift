@@ -29,7 +29,7 @@ extension BackendProvisioner {
         await onUpdate(.init(phase: "Preparing Microsoft Azure", detail: "Selecting subscription \(subscription)", fraction:
             0.1))
         try await run(az.path, ["account", "set", "--subscription", subscription])
-        _ = try? await run(az.path, ["extension", "add", "--name", "containerapp", "--upgrade", "--yes"])
+        try await run(az.path, ["extension", "add", "--name", "containerapp", "--upgrade", "--yes"])
         try await run(az.path, [
             "provider", "register",
             "--namespace", "Microsoft.App",
