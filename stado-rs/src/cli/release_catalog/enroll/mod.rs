@@ -209,7 +209,7 @@ fn secret_references(
 
 /// Required platforms whose manifest names no post-build test, so none of
 /// their builds can ever qualify a task.
-fn untested_platforms(manifest: &ReleasePipelineManifest) -> Vec<String> {
+pub(super) fn untested_platforms(manifest: &ReleasePipelineManifest) -> Vec<String> {
     manifest
         .platforms
         .iter()

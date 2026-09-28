@@ -16,6 +16,8 @@ mod checkout;
 mod enroll;
 mod publisher;
 
+pub(crate) use publisher::mint_bearer as fresh_bearer;
+
 use central::sync_catalog;
 use checkout::sync;
 pub(crate) use enroll::{enroll, missing_programs_refusal, missing_step_programs};
@@ -55,7 +57,10 @@ enum CatalogCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Audit Stado's catalog without contacting repository hosts.
+    /// Audit Stado's catalog without contacting repository hosts: every declared
+    /// publisher must have a catalog entry, and every catalogued release must
+    /// declare post-build tests on each required platform, or its builds never
+    /// qualify a task. Exits nonzero and names each finding on any refusal.
     Audit {
         #[arg(long)]
         json: bool,
