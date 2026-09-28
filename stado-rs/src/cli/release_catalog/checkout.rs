@@ -65,7 +65,14 @@ pub(super) async fn sync(root: &Path, json: bool) -> Result<(), CmdError> {
         )));
     }
     let mut entries = Vec::new();
-    for (_, (manifest, bytes)) in declarations {
+    for (name, (manifest, bytes)) in declarations {
+        // The catalog entry is written with the product's own publisher
+        // bearer. A product this host declares no publisher for answered
+        // Skarbiec's 403 with a hint to rebind Stado's grant, which is not the
+        // cause (weles-client, most-desktop and three more on 2026-09-28);
+        // `enroll`, `build submit` and `release submit` declare it first, and
+        // so does this.
+        super::publisher::ensure_publisher(&name).await?;
         entries.push(publish_entry(manifest, release_control::sha256_bytes(&bytes), None).await?);
     }
     if json {
