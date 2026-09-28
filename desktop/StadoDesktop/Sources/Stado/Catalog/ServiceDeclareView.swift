@@ -28,6 +28,8 @@ struct ServiceDeclareView: View {
     @State private var capability = ""
     @State private var isDeclaring = false
     @State private var catalogEntries: [WisentCatalogEntry] = []
+    @State private var catalogLoaded = false
+    @State private var catalogProblem: String?
     @State private var deployingCatalogName: String?
     @State private var errorMessage: String?
 
@@ -79,8 +81,14 @@ struct ServiceDeclareView: View {
                 title: "Preconfigured Wisent services",
                 detail: "Ready to run with nothing to fill in: pick the host above the form, press the service, and the unit is rendered from the declaration this build ships. The same list is `stado service catalog`."
             ) {
-                if catalogEntries.isEmpty {
+                if let catalogProblem {
+                    WisentErrorBanner(title: "The catalog could not be read", detail: catalogProblem)
+                } else if !catalogLoaded {
                     Text("Reading the catalog…")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.secondary)
+                } else if catalogEntries.isEmpty {
+                    Text("`stado service catalog` lists no preconfigured services.")
                         .font(WisentTypeScale.caption())
                         .foregroundStyle(WisentDesign.secondary)
                 } else {
@@ -208,11 +216,17 @@ struct ServiceDeclareView: View {
     private struct EnsureOutcome: Decodable, Sendable {}
 
     private func loadCatalog() async {
-        guard catalogEntries.isEmpty else { return }
-        catalogEntries = (try? await cli.json(
-            CatalogEnvelope.self,
-            arguments: ["service", "catalog", "--json"]
-        ))?.services ?? []
+        guard !catalogLoaded else { return }
+        do {
+            catalogEntries = try await cli.json(
+                CatalogEnvelope.self,
+                arguments: ["service", "catalog", "--json"]
+            ).services
+            catalogProblem = nil
+            catalogLoaded = true
+        } catch {
+            catalogProblem = error.localizedDescription
+        }
     }
 
     /// One preconfigured deployment: `stado service ensure <name> --host
