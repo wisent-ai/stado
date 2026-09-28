@@ -62,6 +62,11 @@ if [ -n \"$pid\" ]; then
     if [ -f \"$resolved\" ]; then declared_written=$(/usr/bin/stat -f %m \"$resolved\" 2>/dev/null); fi
     if [ -f \"$running\" ]; then running_written=$(/usr/bin/stat -f %m \"$running\" 2>/dev/null); fi
   else
+    # procps prints only the executable's name for comm; the kernel's own
+    # link names the file the process executes, and ends in ' (deleted)'
+    # when that file was replaced, which then matches no declaration.
+    image=$(/usr/bin/readlink \"/proc/$pid/exe\" 2>/dev/null)
+    if [ -n \"$image\" ]; then running=\"$image\"; fi
     started=$(/usr/bin/date -d \"$lstart\" +%s 2>/dev/null)
     if [ -f \"$resolved\" ]; then declared_written=$(/usr/bin/stat -c %Y \"$resolved\" 2>/dev/null); fi
     if [ -f \"$running\" ]; then running_written=$(/usr/bin/stat -c %Y \"$running\" 2>/dev/null); fi
