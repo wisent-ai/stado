@@ -67,7 +67,7 @@ pub use crate::cli::host::machine::users::runners::cron;
 pub use crate::cli::host::machine::users::runners::gpu_power_limit;
 pub use crate::cli::host::secrets::apple::{apple_profile, AppleProfileArgs};
 pub use crate::cli::host::secrets::vault::consolidate::consolidate as consolidate_grants;
-pub use crate::cli::host::secrets::vault::consolidate::revoke_retired;
+pub use crate::cli::host::secrets::vault::consolidate::revoke::revoke_retired;
 pub use crate::cli::host::secrets::vault::grants::grant_item_read;
 pub use crate::cli::host::secrets::vault::grants::grant_show;
 pub use crate::cli::host::secrets::vault::item::delete::delete_vault_item;
