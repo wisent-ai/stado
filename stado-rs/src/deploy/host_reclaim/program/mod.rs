@@ -11,8 +11,8 @@ use std::sync::LazyLock;
 use crate::deploy::artifact_install::SERVICES_ROOT;
 use crate::deploy::host_recovery::WC_CANDIDATES;
 use crate::deploy::products;
-use crate::deploy::shlex_quote;
 use crate::deploy::service::{LAUNCHD_UNIT_DIRECTORIES, SYSTEMD_UNIT_DIRECTORIES};
+use crate::deploy::shlex_quote;
 use crate::providers::local::disk_cleanup::chromium_clones;
 
 use super::{
