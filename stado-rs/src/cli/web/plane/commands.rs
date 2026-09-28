@@ -172,6 +172,16 @@ pub(crate) enum WebCommands {
         #[arg(long)]
         root: Option<String>,
     },
+    /// Start the artifact `stado web build` staged the way `stado web deploy`
+    /// starts it, on a free loopback port, and require each path to answer
+    /// with a success and a body: the post-build test a web product declares
+    /// in its `.wisent-release.json` `tests`.
+    Smoke {
+        /// A path the site must answer, e.g. `/` or `/docs`. Repeatable;
+        /// absent, `/` alone.
+        #[arg(long = "path")]
+        paths: Vec<String>,
+    },
     /// A product hosted on Vercel: its prebuilt build on a release worker,
     /// and its production deploy as a manifest delivery.
     #[command(subcommand)]

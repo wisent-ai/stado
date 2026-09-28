@@ -23,7 +23,7 @@ mod payload;
 mod steps;
 mod tooling;
 
-pub(crate) use steps::{build, quality};
+pub(crate) use steps::{build, quality, smoke};
 
 /// The platform key a web product declares in `.wisent-release.json`. Both
 /// steps refuse any other value: the recipe that invoked us is the web one, so
