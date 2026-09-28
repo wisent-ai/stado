@@ -150,4 +150,17 @@ pub enum EnvironmentCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Host primitive used by `env set`/`env unset` on a systemd unit: set
+    /// (with --value-b64) or remove one `Environment=` key in the file.
+    #[command(name = "unit-env-local", hide = true)]
+    UnitEnvLocal {
+        #[arg(long)]
+        path_b64: String,
+        #[arg(long)]
+        key_b64: String,
+        #[arg(long)]
+        value_b64: Option<String>,
+        #[arg(long)]
+        uid: u32,
+    },
 }

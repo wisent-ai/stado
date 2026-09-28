@@ -91,5 +91,14 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
             })
             .await
         }
+        EnvironmentCommands::UnitEnvLocal {
+            path_b64,
+            key_b64,
+            value_b64,
+            uid,
+        } => {
+            crate::deploy::service::unit_env_local(&path_b64, &key_b64, value_b64.as_deref(), uid);
+            Ok(())
+        }
     }
 }
