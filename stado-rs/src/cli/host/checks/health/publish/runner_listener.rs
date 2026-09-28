@@ -8,10 +8,13 @@
 //! GitHub refused its runner version, so every deploy they serve queued and
 //! `stado service list` called them healthy.
 //!
-//! A unit is a runner when the directory its program lives in (or the parent
-//! of a `bin/` directory) holds GitHub's `.runner` registration file. For
-//! such a unit the beacon asks the process table for that root's listener and,
-//! when none runs, publishes `failed` with the newest runner log's last lines.
+//! A unit is a runner when its program's directory (or the parent of a `bin/`
+//! directory), or one directory directly inside it, holds GitHub's `.runner`
+//! registration file. The second shape is wisent-backend's release runner:
+//! its launcher `reconcile-release-runner.sh` sits in the runner root and the
+//! registered install is `vendor-<version>-layout-<n>/` beneath it. For such a
+//! unit the beacon asks the process table for each install's listener and,
+//! when none runs, publishes `failed` with each install's newest log lines.
 
 use std::path::{Path, PathBuf};
 
@@ -22,38 +25,65 @@ use crate::deploy::service::{STATE_ACTIVE, STATE_FAILED};
 /// Lines of the newest runner log carried in the detail.
 const LOG_TAIL_LINES: usize = 5;
 
-/// The install root of the runner a unit program belongs to, when it is one.
-/// `Err` carries a registration file the host would not let this account read.
-fn runner_root(program: &str) -> Result<Option<PathBuf>, String> {
+/// Whether `directory` holds a `.runner` registration file.
+fn registered(directory: &Path) -> Result<bool, String> {
+    let registration = directory.join(".runner");
+    registration
+        .try_exists()
+        .map_err(|error| format!("{} could not be read: {error}", registration.display()))
+}
+
+/// Every registered runner install a unit program belongs to: the program's
+/// own root and the directories directly inside it. Empty when the unit is
+/// not a runner; `Err` names the directory or registration the host would not
+/// let this account read.
+fn runner_installs(program: &str) -> Result<Vec<PathBuf>, String> {
     let path = Path::new(program);
     let Some(mut root) = path.parent() else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     if root.file_name().is_some_and(|name| name == "bin") {
         let Some(parent) = root.parent() else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
         root = parent;
     }
-    let registration = root.join(".runner");
-    match registration.try_exists() {
-        Ok(true) => Ok(Some(root.to_path_buf())),
-        Ok(false) => Ok(None),
-        Err(error) => Err(format!(
-            "{} could not be read: {error}",
-            registration.display()
-        )),
+    if registered(root)? {
+        return Ok(vec![root.to_path_buf()]);
     }
+    let entries = std::fs::read_dir(root)
+        .map_err(|error| format!("{} could not be listed: {error}", root.display()))?;
+    let mut installs = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("{} could not be listed: {error}", root.display()))?;
+        let candidate = entry.path();
+        if candidate.is_dir() && registered(&candidate)? {
+            installs.push(candidate);
+        }
+    }
+    installs.sort();
+    Ok(installs)
 }
 
-/// Whether the process table holds this root's `bin/Runner.Listener`.
-fn listener_running(root: &Path) -> Result<bool, String> {
-    let listener = root.join("bin").join("Runner.Listener");
-    let listener = listener.to_string_lossy();
+/// Whether the process table holds any of these installs' `bin/Runner.Listener`.
+fn listener_running(installs: &[PathBuf]) -> Result<bool, String> {
+    let listeners: Vec<String> = installs
+        .iter()
+        .map(|install| {
+            install
+                .join("bin")
+                .join("Runner.Listener")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
     let table = crate::deploy::service::process_table()?;
     Ok(table.iter().any(|(_, _, argv)| {
-        argv.strip_prefix(listener.as_ref())
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        listeners.iter().any(|listener| {
+            argv.strip_prefix(listener.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        })
     }))
 }
 
@@ -103,28 +133,36 @@ pub(super) fn apply(entry: &mut Map<String, Value>, program: Option<&str>) {
     let Some(program) = program.filter(|program| Path::new(program).is_absolute()) else {
         return;
     };
-    let root = match runner_root(program) {
-        Ok(Some(root)) => root,
-        Ok(None) => return,
+    let installs = match runner_installs(program) {
+        Ok(installs) if installs.is_empty() => return,
+        Ok(installs) => installs,
         Err(detail) => {
             add_detail(
                 entry,
-                format!("whether this runner can take jobs is unread: {detail}"),
+                format!("whether this unit is a GitHub runner could not be read: {detail}"),
             );
             return;
         }
     };
-    match listener_running(&root) {
+    match listener_running(&installs) {
         Ok(true) => {}
         Ok(false) => {
             entry.insert("state".to_string(), Value::String(STATE_FAILED.to_string()));
+            let listeners: Vec<String> = installs
+                .iter()
+                .map(|install| format!("{}/bin/Runner.Listener", install.display()))
+                .collect();
+            let tails: Vec<String> = installs
+                .iter()
+                .map(|install| newest_log_tail(install.as_path()))
+                .collect();
             add_detail(
                 entry,
                 format!(
-                    "the unit runs, but no {}/bin/Runner.Listener is running, so GitHub delivers \
-                     this runner no jobs; {}",
-                    root.display(),
-                    newest_log_tail(&root)
+                    "the unit runs, but no {} is running, so GitHub delivers this runner no \
+                     jobs; {}",
+                    listeners.join(" or "),
+                    tails.join("; ")
                 ),
             );
         }
