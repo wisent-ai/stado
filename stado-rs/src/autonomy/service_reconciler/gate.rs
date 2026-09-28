@@ -117,5 +117,6 @@ impl<'a> MutationGate<'a> {
             self.policy.limits.circuit_breaker_cooldown_seconds,
         )
         .await
+        .map(|_| ())
     }
 }

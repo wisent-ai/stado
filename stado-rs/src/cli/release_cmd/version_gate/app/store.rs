@@ -108,7 +108,8 @@ fn published(root: &Path, sources: &AppSources) -> Read<Option<(String, String, 
         if slots(&version).len() != SLOTS {
             return Err(format!("tag {tag} carries version {version}, which is not a major.minor.patch triple, so the rule cannot advance it; name the next version deliberately"));
         }
-        return Ok(Some((tag, version, surface::of(&load, sources)?)));
+        let surface = surface::of(&load, sources)?;
+        return Ok(Some((tag, version, surface)));
     }
     Ok(None)
 }
