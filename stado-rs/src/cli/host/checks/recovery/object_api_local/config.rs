@@ -91,10 +91,12 @@ fn config(path: &Path) -> Result<Option<Value>, String> {
         .map_err(|error| format!("object API recovery refused: {}: {error}", path.display()))
 }
 
-/// `STORE\tBACKUP_STORE\tOBJECT_URL\tNAMESPACE\tTOKEN_FILE\tLABEL`: the
-/// environment wins for the stores, then the config, then the managed
+/// `STORE\tBACKUP_STORE\tOBJECT_URL\tNAMESPACE\tTOKEN_FILE\tLABEL\tRETIRED`:
+/// the environment wins for the stores, then the config, then the managed
 /// defaults. `LABEL` is the host Stado unit the compiled catalog declares, the
-/// one launchd label recovery installs and restarts.
+/// one launchd label recovery installs and restarts; `RETIRED` the
+/// comma-separated labels it replaced, whose loaded route recovery reads
+/// before that unit takes over from them.
 pub(super) fn paths(config_path: &Path) -> Result<String, String> {
     let home = home();
     let document = config(config_path)?.unwrap_or(Value::Null);
@@ -120,7 +122,9 @@ pub(super) fn paths(config_path: &Path) -> Result<String, String> {
         "" => home.join(".stado/queue-object-api-token"),
         value => absolute(value, &home),
     };
-    let label = crate::deploy::service_catalog::host_unit()?;
+    let host = crate::deploy::service_catalog::host_process()?;
+    let label = host.unit.clone().unwrap_or_else(|| host.name.clone());
+    let retired = host.retired_units.join(",");
     Ok([
         real(&store, &home).display().to_string(),
         real(&backup, &home).display().to_string(),
@@ -128,6 +132,7 @@ pub(super) fn paths(config_path: &Path) -> Result<String, String> {
         or("/storage/stado/namespace", OBJECT_API_NAMESPACE.to_string()),
         token.display().to_string(),
         label,
+        retired,
     ]
     .join("\t"))
 }

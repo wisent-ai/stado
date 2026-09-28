@@ -98,6 +98,25 @@ elif [ "$declared_served_backend" != "-" ]; then
   source_root=$declared_served_root
   source_legacy=$declared_legacy
 fi
+# While the host Stado unit is not loaded, a label it replaced may still be
+# serving. The unit about to start retires that label, so its loaded route is
+# the authority being handed over and must be the same root.
+if [ "$loaded" -eq 0 ] && [ -n "$retired_labels" ]; then
+  host_label=$label
+  IFS=',' read -r -a predecessors <<< "$retired_labels"
+  for predecessor in "${predecessors[@]}"; do
+    label=$predecessor
+    capture_loaded_route
+    if [ "$loaded" -eq 1 ]; then
+      source_backend=$loaded_served_backend
+      source_root=$loaded_served_root
+      source_legacy=$loaded_legacy
+      break
+    fi
+  done
+  label=$host_label
+  loaded=0
+fi
 if [ "$source_backend" != local ] || [ "$source_root" != "$store" ] ||
   [ "$source_legacy" != no ]; then
   printf 'storage_root_handoff_required backend=%s source=%s declared=%s; use stado host storage-root-reconcile for the authority transaction\n' \

@@ -27,27 +27,149 @@ fn own_unit() -> Option<String> {
     })
 }
 
-/// Retire, on this host, every unit the catalog lists as retired by the
-/// product this process runs as, when the init system started it under that
-/// product's unit. A process started any other way, or under a label the
-/// catalog does not own, retires nothing: an old unit restarting must not boot
-/// anything out, itself included.
+/// Retire, on this host, every unit the catalog lists as retired by the host
+/// Stado process, when this process is that unit's own main process. Both
+/// the launchd label and the cgroup are inherited by children, so the name
+/// alone proves nothing: the init system must also bind the unit to this
+/// pid. A process started any other way, a child of any unit, or an old unit
+/// restarting retires nothing.
 async fn take_over_retired(runner: &Runner) -> Result<Vec<PredecessorRetirement>, DeployError> {
     let Some(unit) = own_unit() else {
         return Ok(Vec::new());
     };
-    let Some(entry) = crate::deploy::service_catalog::lookup(&unit).map_err(DeployError)? else {
-        return Ok(Vec::new());
-    };
+    let entry = crate::deploy::service_catalog::host_process().map_err(DeployError)?;
     if entry.unit.as_deref() != Some(unit.as_str()) || entry.retired_units.is_empty() {
+        return Ok(Vec::new());
+    }
+    let owner = unit_state(&unit).as_ref().and_then(UnitState::main_pid);
+    if owner != Some(std::process::id()) {
+        eprintln!(
+            "[stado] {unit} names pid {owner:?} as its main process, not this pid {}; \
+             its predecessors are left to that process",
+            std::process::id()
+        );
         return Ok(Vec::new());
     }
     let target = this_host()?;
     let mut retirements = Vec::with_capacity(entry.retired_units.len());
     for retired in &entry.retired_units {
+        // A predecessor serving another storage root is an authority change,
+        // which only `stado host storage-root-reconcile` may make.
+        if let Some(refusal) = unit_state(retired).and_then(|state| state.other_root()) {
+            retirements.push(PredecessorRetirement {
+                unit: retired.clone(),
+                state: "failed".to_string(),
+                detail: format!(
+                    "{refusal}; moving the object store is `stado host storage-root-reconcile`, \
+                     not a takeover"
+                ),
+            });
+            continue;
+        }
         retirements.push(retirement(&target, retired, runner).await);
     }
     Ok(retirements)
+}
+
+/// Storage settings a predecessor must share with this process before it
+/// may be retired: which backend serves objects and from which root.
+const STORAGE_KEYS: [&str; 2] = ["WC_STORAGE_BACKEND", "WC_LOCAL_STORAGE_PATH"];
+
+/// What the init system reports for one loaded unit: launchd's `print`, or
+/// systemd's `MainPID` and `Environment` properties.
+struct UnitState {
+    text: String,
+    systemd: bool,
+}
+
+impl UnitState {
+    fn main_pid(&self) -> Option<u32> {
+        let prefix = if self.systemd { "MainPID=" } else { "pid = " };
+        self.text.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(prefix)
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|pid| *pid != u32::MIN)
+        })
+    }
+
+    /// One environment variable the unit starts its process with.
+    fn variable(&self, key: &str) -> Option<String> {
+        if self.systemd {
+            let environment = self
+                .text
+                .lines()
+                .find_map(|line| line.strip_prefix("Environment="))?;
+            return environment
+                .split_whitespace()
+                .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
+                .map(str::to_string);
+        }
+        self.text.lines().find_map(|line| {
+            let (name, value) = line.trim().split_once(" => ")?;
+            (name == key).then(|| value.trim().to_string())
+        })
+    }
+
+    /// Why this unit serves a different storage route than this process,
+    /// comparing canonical paths; `None` when it serves the same one.
+    fn other_root(&self) -> Option<String> {
+        let canonical = |value: String| {
+            std::fs::canonicalize(&value)
+                .map(|path| path.display().to_string())
+                .unwrap_or(value)
+        };
+        STORAGE_KEYS.iter().find_map(|key| {
+            let theirs = self.variable(key).map(canonical);
+            let ours = std::env::var(key).ok().map(canonical);
+            (theirs != ours)
+                .then(|| format!("it runs with {key}={theirs:?}, this process with {ours:?}"))
+        })
+    }
+}
+
+/// The loaded state of `unit`: launchd's system domain, then this account's
+/// GUI domain; systemd's system manager, then this account's user manager.
+/// `None` when none of them holds it.
+fn unit_state(unit: &str) -> Option<UnitState> {
+    let run = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    if cfg!(target_os = "macos") {
+        let label = unit.strip_suffix(".service").unwrap_or(unit);
+        let system = format!("system/{label}");
+        let user = format!("gui/{}/{label}", nix::unistd::getuid());
+        return run("/usr/bin/sudo", &["-n", "/bin/launchctl", "print", &system])
+            .or_else(|| run("/bin/launchctl", &["print", &user]))
+            .map(|text| UnitState {
+                text,
+                systemd: false,
+            });
+    }
+    let service = if unit.ends_with(".service") {
+        unit.to_string()
+    } else {
+        format!("{unit}.service")
+    };
+    let properties = "--property=LoadState,MainPID,Environment";
+    run(
+        "/usr/bin/sudo",
+        &["-n", "/bin/systemctl", "show", properties, &service],
+    )
+    .filter(|text| text.lines().any(|line| line == "LoadState=loaded"))
+    .or_else(|| {
+        run("/bin/systemctl", &["--user", "show", properties, &service])
+            .filter(|text| text.lines().any(|line| line == "LoadState=loaded"))
+    })
+    .map(|text| UnitState {
+        text,
+        systemd: true,
+    })
 }
 
 /// [`take_over_retired`] with the production runner, as every API listener

@@ -17,8 +17,9 @@ use crate::cli::{CmdError, CLICK_ERROR_CODE};
 
 #[derive(Subcommand)]
 pub enum ObjectApiLocalCommands {
-    /// `STORE\tBACKUP_STORE\tOBJECT_URL\tNAMESPACE\tTOKEN_FILE\tLABEL` for this
-    /// host; LABEL is the launchd label of the host Stado process.
+    /// `STORE\tBACKUP_STORE\tOBJECT_URL\tNAMESPACE\tTOKEN_FILE\tLABEL\tRETIRED`
+    /// for this host; LABEL is the launchd label of the host Stado process and
+    /// RETIRED the comma-separated labels it replaced.
     Paths {
         #[arg(long)]
         config: PathBuf,

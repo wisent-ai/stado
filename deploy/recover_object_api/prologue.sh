@@ -28,7 +28,7 @@ fi
 # the answer.
 coordinates=$("$program" host object-api-local paths --config "$config")
 IFS=$'\t' read -r store backup_store object_url object_namespace object_token_file label \
-  <<< "$coordinates"
+  retired_labels <<< "$coordinates"
 if [ -z "$label" ]; then
   printf 'host_stado_names_no_unit %s: deliver the current Stado to this host first\n' \
     "$program" >&2
