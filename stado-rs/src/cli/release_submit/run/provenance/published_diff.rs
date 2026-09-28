@@ -46,8 +46,17 @@ fn is_ancestor(root: &Path, ancestor: &str, commit: &str) -> Result<bool, CmdErr
 }
 
 /// The newest published tag below `commit`, as `(tag, commit)`, or `None`
-/// when `origin` serves no tag on the candidate's history.
+/// when `origin` serves no tag on the candidate's history. A checkout with no
+/// `origin` remote has published nothing, so it has no baseline either; asking
+/// `git ls-remote` there refused every release of such a checkout, including
+/// the isolated source Stado's own release journey builds.
 fn baseline(root: &Path, commit: &str) -> Result<Option<(String, String)>, CmdError> {
+    if !git_text(root, &["remote"])?
+        .lines()
+        .any(|remote| remote == super::REMOTE)
+    {
+        return Ok(None);
+    }
     let mut newest: Option<(String, String)> = None;
     for (tag, sha) in origin_tag_commits(root)? {
         if sha == commit {
