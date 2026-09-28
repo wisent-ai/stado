@@ -275,9 +275,25 @@ pub async fn advance_slot(
             return Ok(SlotOutcome::Running(slot));
         }
     }
-    write_status(store, &job_id, &status).await?;
+    // The terminal writes are retried the same way. Returning their storage
+    // error ended the agent loop, and the restarted loop no longer held this
+    // slot, so a job that had finished and written its receipt stayed
+    // `running` in the queue for good: on 2026-09-27 tama 0.1.14's passed
+    // build (job-6151c580) was left so through one object API 502 and then
+    // cancelled by `release resume`.
+    if let Err(error) = write_status(store, &job_id, &status).await {
+        log_fn(&format!(
+            "terminal status write failed for {job_id}; retaining running state for retry: {error}"
+        ));
+        return Ok(SlotOutcome::Running(slot));
+    }
     let to_prefix = job.state.clone();
-    store.move_job(&job, "running", &to_prefix).await?;
+    if let Err(error) = store.move_job(&job, "running", &to_prefix).await {
+        log_fn(&format!(
+            "terminal transition to {to_prefix} failed for {job_id}; retaining running state for retry: {error}"
+        ));
+        return Ok(SlotOutcome::Running(slot));
+    }
     // Mirror to job.output_uri if set. Runs for both COMPLETED and
     // FAILED so debugging logs and partial artifacts also land at
     // the caller's project URI. Failure here is logged, not raised
