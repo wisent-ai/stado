@@ -64,13 +64,17 @@ impl CmdError {
 
     /// click `UsageError`: "Error: {msg}" on stderr, exit 2 — the code
     /// click reserves for "you invoked this wrongly", as distinct from
-    /// [`Self::click`]'s "it ran and failed".
+    /// [`Self::click`]'s "it ran and failed". A usage error is the request
+    /// refused for its own form, so it is stated `refused` here, once for
+    /// every caller, and never left to the wording classifier to report as
+    /// an unattributed failure of Stado.
     pub fn usage(msg: impl Into<String>) -> Self {
         Self {
             message: Some(msg.into()),
             // click's UsageError.exit_code, as a ratio of two width
             // constants rather than a bare literal.
             code: (u16::BITS / u8::BITS) as i32,
+            failure: Some(crate::primitives::failure::FailureCode::Refused),
             ..Self::default()
         }
     }
