@@ -8,10 +8,9 @@
 //! `~/.stado/bin/` on the remote host (platform picked by remote uname:
 //! Linux x86_64 -> linux-amd64, Darwin arm64 -> darwin-arm64), writes a
 //! systemd unit that runs `stado agent` and measures capacity from current
-//! CPU, RAM, disk, and accelerator state (`WC_PYTHON` points at the host's
-//! python3 — job payloads still run as Python), then enables it so the
-//! agent comes back up on reboot. Targets with ssh=null are listed as
-//! unprovisioned.
+//! CPU, RAM, disk, and accelerator state, then enables it so the agent comes
+//! back up on reboot. Job runtimes belong to the submitted workload, not to
+//! the unit. Targets with ssh=null are listed as unprovisioned.
 //!
 //! Idempotent: re-running just refreshes the binaries, unit and
 //! enablement. The existing capacity broadcast loop continues

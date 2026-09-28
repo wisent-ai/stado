@@ -6,7 +6,7 @@ use crate::deploy::DeployError;
 
 /// `pub(super)` for [`super::env::build_env`], which asks the same question of
 /// the same configuration to decide whether a coordinator unit carries the
-/// agent's PATH and WC_PYTHON.
+/// agent's PATH.
 pub(super) fn local_control_plane_configured() -> bool {
     crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
         == Some(crate::capabilities::StorageAdapter::Local)

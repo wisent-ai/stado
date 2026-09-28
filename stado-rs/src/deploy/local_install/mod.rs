@@ -6,9 +6,8 @@
 //! `stado coordinator` (for runtime=daemon coordinators) so it persists
 //! across reboots without sudo or ssh. Units ExecStart the release
 //! binaries in `~/.stado/bin/` (populated from the exact immutable release
-//! exposed by the public Stado API, by [`artifact::ensure_bins`] when missing)
-//! and the agent unit exports WC_PYTHON so the Rust agent's Python probes
-//! and job payloads use the host's job-environment interpreter.
+//! exposed by the public Stado API, by [`artifact::ensure_bins`] when missing).
+//! Job runtimes belong to the submitted workload, not to the unit.
 //!
 //! Darwin: launchd plist at ~/Library/LaunchAgents/<label>.plist
 //!         loaded with `launchctl bootstrap gui/<uid> <plist>`.
@@ -40,7 +39,6 @@ use self::activation::commands::current_uid;
 use self::activation::daemon::account_of;
 use self::activation::execute_plan;
 use self::artifact::{ensure_bins, Bins};
-use self::unit::env::default_wc_python;
 use self::unit::plan;
 
 pub use self::unit::render::daemon_plist_text;
@@ -195,8 +193,7 @@ pub async fn install_local(
         None
     };
     let bins = Bins::resolve(&home);
-    let wc_python = default_wc_python();
-    let install_plan = plan(name, kind, os, &home, &bins, "", &wc_python, daemon.clone())?;
+    let install_plan = plan(name, kind, os, &home, &bins, "", daemon.clone())?;
     if dry_run {
         for line in install_plan.dry_run_lines() {
             echo(&line);
@@ -208,16 +205,7 @@ pub async fn install_local(
         // The host unit replaces this machine's separate Stado units; the
         // merge reads them all before anything is written.
         let component_plan = |component: &str, _label: &str| {
-            plan(
-                name,
-                component,
-                os,
-                &home,
-                &bins,
-                "",
-                &wc_python,
-                daemon.clone(),
-            )
+            plan(name, component, os, &home, &bins, "", daemon.clone())
         };
         return unit::host::install(install_plan, &home, &component_plan, runner, echo).await;
     }

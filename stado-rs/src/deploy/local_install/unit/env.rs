@@ -1,38 +1,14 @@
 //! The environment a rendered unit exports, in Python dict insertion order:
-//! the interpreter the agent's Python probes and job payloads run under, the
-//! Skarbiec connection metadata, and the process inputs an installed service
-//! reads its backend routing out of.
+//! the Skarbiec connection metadata and the process inputs an installed
+//! service reads its backend routing out of.
 
 use std::path::Path;
 
 use super::exec::local_control_plane_configured;
 
-/// The python.org 3.12 framework interpreter the fleet's mac minis install
-/// the job environment (wisent, transformers, ...) into.
-pub const FRAMEWORK_PYTHON: &str =
-    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12";
-
-/// The WC_PYTHON value baked into agent units: the Rust agent's Python
-/// probes (smoketest, CUDA probe, fleet flush) and the job payloads still
-/// run as Python, so the unit must point at the interpreter that has the
-/// job environment installed. Operator override via $WC_PYTHON first, then
-/// [`FRAMEWORK_PYTHON`] when present, else plain `python3`.
-pub fn default_wc_python() -> String {
-    if let Ok(value) = std::env::var("WC_PYTHON") {
-        if !value.trim().is_empty() {
-            return value;
-        }
-    }
-    if Path::new(FRAMEWORK_PYTHON).is_file() {
-        return FRAMEWORK_PYTHON.to_string();
-    }
-    "python3".to_string()
-}
-
 /// Explicit inputs used by the provider-neutral unit renderer.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EnvInputs<'a> {
-    pub wc_python: &'a str,
     pub path: Option<&'a str>,
 }
 
@@ -95,13 +71,10 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
         ));
     }
     // The host carries the workload grant separately from its control-plane
-    // grant. Job payloads still inherit the declared interpreter and PATH.
+    // grant. Job payloads inherit PATH; their runtime is the workload's own.
     let runs_local_agent = matches!(kind, "agent" | "host")
         || (kind == "coordinator" && local_control_plane_configured());
     if runs_local_agent {
-        if !inputs.wc_python.is_empty() {
-            env.push(("WC_PYTHON".to_string(), inputs.wc_python.to_string()));
-        }
         let path = inputs
             .path
             .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
@@ -123,15 +96,9 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
 
 /// [`build_env`] with the provider-neutral process inputs used by installed
 /// services. Backend routing comes only from `STADO_CONFIG`.
-pub fn install_env(
-    _home: &Path,
-    kind: &str,
-    _hf_token: &str,
-    wc_python: &str,
-) -> Vec<(String, String)> {
+pub fn install_env(_home: &Path, kind: &str, _hf_token: &str) -> Vec<(String, String)> {
     let path = std::env::var("PATH").ok();
     let inputs = EnvInputs {
-        wc_python,
         path: path.as_deref(),
     };
     let mut env = build_env(kind, &inputs);

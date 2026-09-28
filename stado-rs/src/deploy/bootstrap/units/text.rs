@@ -18,7 +18,6 @@ fn environment_lines(environment: &[(&'static str, String)]) -> String {
 pub fn agent_unit_text(
     name: &str,
     stado_bin: &str,
-    wc_python: &str,
     user: &str,
     environment: &[(&'static str, String)],
 ) -> String {
@@ -31,7 +30,6 @@ pub fn agent_unit_text(
          \n\
          [Service]\n\
          Type=simple\nEnvironment=PYTHONUNBUFFERED=1\n\
-         Environment=WC_PYTHON={wc_python}\n\
          {environment}\
          ExecStart={stado_bin} agent --target {name}\n\
          Restart=on-failure\n\
@@ -52,7 +50,7 @@ pub fn watchdog_unit_text(name: &str, watchdog_bin: &str, user: &str) -> String 
          Wants=network-online.target\n\
          \n\
          [Service]\n\
-         Type=simple\nEnvironment=PYTHONUNBUFFERED=1\n\
+         Type=simple\n\
          ExecStart={watchdog_bin}\n\
          Restart=on-failure\n\
          RestartSec=30\n\

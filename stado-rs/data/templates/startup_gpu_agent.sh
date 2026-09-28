@@ -142,7 +142,6 @@ _wc_install_agent_binary() {
     echo "Installed stado $RELEASE_VERSION ($RELEASE_PLATFORM) -> /opt/wisent-agent/bin/stado"
 }
 _wc_install_agent_binary
-export WC_PYTHON="$RUNTIME_ROOT/.venv/bin/python"
 
 # Run until idle. Machine deletion is deliberately not a guest-script action:
 # the scheduler owns the provider lease and cleans it up through the selected

@@ -147,7 +147,6 @@ _wc_install_agent_binary() {
     echo "Installed stado $RELEASE_VERSION ($RELEASE_PLATFORM) -> /opt/wisent-agent/bin/stado"
 }
 _wc_install_agent_binary
-export WC_PYTHON="$RUNTIME_ROOT/.venv/bin/python"
 
 # Run until idle. The scheduler owns the provider lease and cleans the machine
 # up through the Azure provider adapter after capacity disappears.

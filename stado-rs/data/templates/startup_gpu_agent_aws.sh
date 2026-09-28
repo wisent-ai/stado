@@ -132,7 +132,6 @@ _wc_install_agent_binary() {
     echo "Installed stado $RELEASE_VERSION ($RELEASE_PLATFORM) -> $WORK/bin/stado"
 }
 _wc_install_agent_binary
-export WC_PYTHON="$RUNTIME_ROOT/.venv/bin/python"
 
 set +e
 "$AGENT_BIN" agent --kind "${PROVIDER_KIND}" --gpu-type "${ACCEL_TYPE}" --idle-shutdown

@@ -5,9 +5,10 @@ use crate::deploy::shlex_quote;
 
 /// Remote install script BODY (fed as the remote command argument, not
 /// stdin). Downloads release artifacts over HTTPS, checksum-verifies them,
-/// then prints the platform, the job-runtime Python path and the installed
-/// Stado path as the final three stdout lines. Public HTTPS keeps bootstrap
-/// independent of any cloud CLI or object-store locator.
+/// then prints the platform and the installed Stado path as the final two
+/// stdout lines. Public HTTPS keeps bootstrap independent of any cloud CLI
+/// or object-store locator. Verification is POSIX tools only: a host being
+/// bootstrapped has no Stado yet and needs no interpreter.
 ///
 /// [`remote_install_script`] binds the exact version and public Stado API
 /// origin. The remote consumes only canonical `stado://releases/...` objects
@@ -38,44 +39,39 @@ for name in "$manifest_name" "$archive_name"; do
     "$release_api/api/release/object" \
     -o "$tmp/$name"
 done
-python3 - "$tmp" "$release_version" "$platform" <<'PY'
-import hashlib, json, os, pathlib, sys, tarfile
-root, version, platform = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-manifest = json.loads((root / f"release-manifest-{platform}.json").read_text())
-if set(manifest) != {"product", "version", "platform", "source_commit", "sha256"}:
-    raise SystemExit("release manifest has unexpected fields")
-if (manifest["product"], manifest["version"], manifest["platform"]) != ("stado", version, platform):
-    raise SystemExit("release manifest identity mismatch")
-if not isinstance(manifest["source_commit"], str) or len(manifest["source_commit"]) not in (40, 64):
-    raise SystemExit("release manifest source commit is invalid")
-if any(character not in "0123456789abcdefABCDEF" for character in manifest["source_commit"]):
-    raise SystemExit("release manifest source commit is invalid")
-if not isinstance(manifest["sha256"], str) or len(manifest["sha256"]) != 64:
-    raise SystemExit("release manifest digest is invalid")
-if any(character not in "0123456789abcdef" for character in manifest["sha256"]):
-    raise SystemExit("release manifest digest is invalid")
-archive = root / f"stado-v{version}-{platform}.tar.gz"
-if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest["sha256"]:
-    raise SystemExit("release archive digest mismatch")
-required = {"stado", "stado-fix", "stado-watchdog"}
-with tarfile.open(archive, "r:gz") as bundle:
-    members = bundle.getmembers()
-    for name in required:
-        matches = [member for member in members if member.name == name and member.isfile()]
-        if len(matches) != 1:
-            raise SystemExit(f"release archive has invalid member {name}")
-        source = bundle.extractfile(matches[0])
-        if source is None:
-            raise SystemExit(f"release archive cannot read member {name}")
-        destination = root / name
-        destination.write_bytes(source.read())
-        os.chmod(destination, 0o755)
-PY
+# One JSON string field of the manifest, or nothing.
+field() {
+  tr -d '\n\r' < "$tmp/$manifest_name" \
+    | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"
+}
+fail() { echo "$1" >&2; exit 1; }
+keys=$(tr -d '\n\r' < "$tmp/$manifest_name" | grep -o '"[a-z_]*"[[:space:]]*:' | tr -d ' :"' | sort | tr '\n' ' ')
+[ "$keys" = "platform product sha256 source_commit version " ] || fail "release manifest has unexpected fields"
+[ "$(field product)" = stado ] && [ "$(field version)" = "$release_version" ] && [ "$(field platform)" = "$platform" ] \
+  || fail "release manifest identity mismatch"
+commit=$(field source_commit)
+case "$commit" in *[!0-9a-fA-F]*|"") fail "release manifest source commit is invalid" ;; esac
+[ "${#commit}" = 40 ] || [ "${#commit}" = 64 ] || fail "release manifest source commit is invalid"
+digest=$(field sha256)
+case "$digest" in *[!0-9a-f]*|"") fail "release manifest digest is invalid" ;; esac
+[ "${#digest}" = 64 ] || fail "release manifest digest is invalid"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$tmp/$archive_name" | cut -d' ' -f1)
+else
+  actual=$(shasum -a 256 "$tmp/$archive_name" | cut -d' ' -f1)
+fi
+[ "$actual" = "$digest" ] || fail "release archive digest mismatch"
+mkdir "$tmp/out"
 for name in stado stado-fix stado-watchdog; do
-  mv "$tmp/$name" "$BIN_DIR/$name"
+  [ "$(tar -tzf "$tmp/$archive_name" | grep -cx "$name")" = 1 ] || fail "release archive has invalid member $name"
+done
+tar -xzf "$tmp/$archive_name" -C "$tmp/out" stado stado-fix stado-watchdog
+for name in stado stado-fix stado-watchdog; do
+  { [ -f "$tmp/out/$name" ] && [ ! -L "$tmp/out/$name" ]; } || fail "release archive has invalid member $name"
+  chmod 755 "$tmp/out/$name"
+  mv "$tmp/out/$name" "$BIN_DIR/$name"
 done
 echo "$platform"
-python3 -c 'import sys; sys.stdout.write(sys.executable + "\n")'
 echo "$BIN_DIR/stado"
 "#;
 
@@ -93,7 +89,3 @@ pub fn remote_install_script(api_url: &str, version: &str) -> String {
 /// as the dry-run placeholder.
 pub const WC_BIN_DEFAULT: &str = "$HOME/.stado/bin/stado";
 
-/// Default WC_PYTHON used when the remote install prints no python path,
-/// and as the dry-run placeholder. Matches the agent's own default
-/// (`providers::local::python_bin`).
-pub const WC_PYTHON_DEFAULT: &str = "python3";

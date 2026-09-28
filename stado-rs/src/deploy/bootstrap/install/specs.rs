@@ -41,15 +41,24 @@ pub fn installed_spec(ssh_target: &str, expected_version: &str) -> CommandSpec {
          set -- $(\"$stado_bin\" --version)\n\
          [ \"${{1:-}}\" = stado ] || {{ echo \"installed stado version is invalid\" >&2; exit 1; }}\n\
          actual_version=\"${{2:-}}\"\n\
-         python3 -c 'import sys; s=sys.argv[1].split(\".\"); assert len(s) == 3 and all(x.isdigit() for x in s)' \
-           \"$actual_version\" >/dev/null 2>&1 || {{ echo \"installed stado version is invalid\" >&2; exit 1; }}\n\
+         case \"$actual_version\" in\n\
+           *[!0-9.]*|.*|*.|*..*) echo \"installed stado version is invalid\" >&2; exit 1 ;;\n\
+         esac\n\
+         IFS=. read -r a1 a2 a3 extra <<EOF\n\
+$actual_version\n\
+EOF\n\
+         [ -n \"$a3\" ] && [ -z \"$extra\" ] || {{ echo \"installed stado version is invalid\" >&2; exit 1; }}\n\
          if [ \"$actual_version\" != \"$expected_version\" ]; then\n\
            marked_version=\"$(cat \"$marker\" 2>/dev/null || true)\"\n\
            [ \"$actual_version\" = \"$marked_version\" ] || {{ \
              echo \"installed stado candidate lacks its release marker\" >&2; exit 1; }}\n\
-           python3 -c 'import sys; p=lambda value: tuple(map(int, value.split(\".\"))); raise SystemExit(0 if p(sys.argv[1]) > p(sys.argv[2]) else 1)' \
-             \"$actual_version\" \"$expected_version\" || {{ \
-             echo \"release-marked stado is not newer than registry desired\" >&2; exit 1; }}\n\
+           IFS=. read -r e1 e2 e3 extra <<EOF\n\
+$expected_version\n\
+EOF\n\
+           [ \"$a1\" -gt \"$e1\" ] \
+             || {{ [ \"$a1\" -eq \"$e1\" ] && [ \"$a2\" -gt \"$e2\" ]; }} \
+             || {{ [ \"$a1\" -eq \"$e1\" ] && [ \"$a2\" -eq \"$e2\" ] && [ \"$a3\" -gt \"$e3\" ]; }} \
+             || {{ echo \"release-marked stado is not newer than registry desired\" >&2; exit 1; }}\n\
          fi\n\
          case \"$(uname -s)-$(uname -m)\" in\n\
            Linux-x86_64) platform=linux-amd64 ;;\n\
@@ -57,7 +66,6 @@ pub fn installed_spec(ssh_target: &str, expected_version: &str) -> CommandSpec {
            *) echo \"unsupported platform: $(uname -s) $(uname -m)\" >&2; exit 1 ;;\n\
          esac\n\
          echo \"$platform\"\n\
-         python3 -c 'import sys; sys.stdout.write(sys.executable + \"\\n\")'\n\
          echo \"$stado_bin\"",
         shlex_quote(expected_version)
     );

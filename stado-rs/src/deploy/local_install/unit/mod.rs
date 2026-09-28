@@ -110,12 +110,6 @@ impl InstallPlan {
 }
 
 /// Build the [`InstallPlan`] for one (name, kind) pair.
-///
-/// Eight arguments, one over the lint's threshold, because `daemon` is the
-/// eighth and the seven before it are each a separate fact about the host this
-/// unit is being rendered for. Collapsing them into a struct would move the
-/// same list one indirection away without removing a single caller decision.
-#[allow(clippy::too_many_arguments)]
 pub fn plan(
     name: &str,
     kind: &str,
@@ -123,7 +117,6 @@ pub fn plan(
     home: &Path,
     bins: &Bins,
     hf_token: &str,
-    wc_python: &str,
     daemon: Option<String>,
 ) -> Result<InstallPlan, DeployError> {
     Ok(InstallPlan {
@@ -136,7 +129,7 @@ pub fn plan(
             label(kind, name)
         },
         exec_args: exec_args_for(bins, kind, name)?,
-        env: install_env(home, kind, hf_token, wc_python),
+        env: install_env(home, kind, hf_token),
         daemon,
         startup: None,
     })
