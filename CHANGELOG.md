@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`declare-publisher --reload HOST=UNIT` refuses a retired unit:** a reload refreshes the publisher table inside a running process, and a unit the service catalog lists under some product's `retired_units` no longer runs that work — its product's one process does. The command now stops before touching the vault with the same sentence `service deploy` prints for a retired unit, naming the process to use instead.
+
 - **`withdraw-publisher` from a host that reads the vault owner skips that host's verifier repair, as `declare-publisher` does:** `stado release catalog withdraw-publisher wisent-images` on lukasz-macbook removed the declaration from both hosts and then failed `release item grant reconciliation failed: token file does not match the consumer's recorded bearer`, because the repair reconciled lukasz-macbook's retired local vault copy. A host that declares no `secrets.skarbiec.vault_file` reads the owner's vault, which the owner's own repair covers; the report says `not needed: reads the vault on the owner`.
 
 - **A catalog installation may name the release product its manifest publishes:** `stado product update weles --surface service --host charless-mac-mini` refused `release manifest product does not match weles`, because Weles publishes its releases as `weles-worker` while its catalog id is `weles`, and `weles-worker` alone is `no catalogued product`. A `stado-release` installation now accepts `release_product`, and the Weles service installation declares `weles-worker`; the check still names both when they disagree.
