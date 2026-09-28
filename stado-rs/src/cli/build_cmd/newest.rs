@@ -32,9 +32,10 @@ pub struct BuildNewestArgs {
     #[arg(long = "product", conflicts_with = "queued")]
     products: Vec<String>,
     /// Build only the products with handed-off work no build has taken yet
-    /// (`stado release changes list` state `queued`). This is the daily batch:
-    /// agents hand work off and compile nothing, and a schedule runs
-    /// `stado build newest --queued` over the workspace once a day.
+    /// (`stado release changes list` state `queued`). This is the one batch:
+    /// agents hand work off and compile nothing, and Oko's control pass runs
+    /// `stado build newest --queued` over the workspace once every open task
+    /// and defect carries its repair, then judges the result.
     #[arg(long)]
     queued: bool,
     /// Read what would be built and why the rest is skipped, without
