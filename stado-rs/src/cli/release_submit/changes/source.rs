@@ -44,19 +44,27 @@ pub(super) fn contains(root: &Path, older: &str, newer: &str) -> Result<bool, Cm
     }
 }
 
+/// Oko's two kinds of assigned work, as its ids spell them: a transcript task
+/// and a registered fleet defect (Oko's `defectEndPrefix`). A defect's repair
+/// reaches a release the same way a task's does.
+const WORK_ID_SHAPES: [(&str, usize); 2] = [("task-", 16), ("defect-", 8)];
+
+fn is_work_id(work: &str) -> bool {
+    WORK_ID_SHAPES.iter().any(|(prefix, digits)| {
+        work.strip_prefix(prefix)
+            .is_some_and(|hex| hex.len() == *digits && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+    })
+}
+
 pub(super) fn prepare(
     root: &Path,
     commit: &str,
     task: &str,
     session: &str,
 ) -> Result<Change, CmdError> {
-    if task.len() != 21
-        || !task.starts_with("task-")
-        || !task[5..].bytes().all(|b| b.is_ascii_hexdigit())
-        || session.trim().is_empty()
-    {
+    if !is_work_id(task) || session.trim().is_empty() {
         return Err(CmdError::click(
-            "a pending change requires task-<16 hex digits> and a session",
+            "a pending change requires an Oko work id (task-<16 hex digits> or defect-<8 hex digits>) and a session",
         ));
     }
     let root = root.canonicalize().map_err(|error| {
