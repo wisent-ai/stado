@@ -25,11 +25,24 @@ use crate::cli::CmdError;
 /// Where the record sits inside the source archive.
 pub(crate) const PUBLISHED_DIFF_PATH: &str = ".wisent-provenance/published-diff.json";
 
-/// Whether `ancestor` is reachable from `commit`: their merge base is
-/// `ancestor` itself.
+/// Whether `ancestor` is reachable from `commit`, by `git merge-base
+/// --is-ancestor`: status 0 is yes, 1 is no (including a tag on unrelated
+/// history, which is simply not below the candidate), anything else is a
+/// failure that refuses the snapshot.
 fn is_ancestor(root: &Path, ancestor: &str, commit: &str) -> Result<bool, CmdError> {
-    let base = git_text(root, &["merge-base", ancestor, commit])?;
-    Ok(base.trim() == ancestor)
+    let answer = std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, commit])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .current_dir(root)
+        .output()?;
+    match answer.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(CmdError::click(format!(
+            "git merge-base --is-ancestor {ancestor} {commit} failed: {}",
+            String::from_utf8_lossy(&answer.stderr).trim()
+        ))),
+    }
 }
 
 /// The newest published tag below `commit`, as `(tag, commit)`, or `None`
