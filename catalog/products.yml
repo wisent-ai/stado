@@ -502,11 +502,16 @@ products:
       WC_STORAGE_BACKEND: local
       WC_LOCAL_STORAGE_PATH: $HOME/.stado/local-storage
     summary: The core object API for registry, queue and release state.
-    # The resolver is not a role unit yet: the old unit and the process's
-    # resolver bind the same ports, so the new one cannot serve until the old
-    # one is gone, and an enabled flag is no proof it will. Its move needs a
-    # coordinated listener handoff judged by the resolver's published state.
+    # The old resolver unit and the process's resolver bind the same ports, so
+    # the flag proves nothing until the resolver publishes serving: its units
+    # are handed over (readiness: resolver-state), not retired on the flag.
     role_units:
+    - unit: com.wisent.stado-resolver
+      flag: --resolver
+      readiness: resolver-state
+    - unit: com.wisent.stado-resolver.service
+      flag: --resolver
+      readiness: resolver-state
     - unit: com.wisent.stado.release-agent
       flag: --release-interval-seconds
     - unit: com.wisent.compute.service.stado-release-agent

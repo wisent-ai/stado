@@ -111,7 +111,10 @@ pub(super) async fn retire(
         {
             let (classification, changed) = match retirement.state.as_str() {
                 "retired" => ("retired", true),
+                "handed_over" => ("handed_over", true),
+                "restored" => ("restored", true),
                 "kept" => ("kept", false),
+                "awaiting_resolver" => ("awaiting_resolver", false),
                 "absent" => continue,
                 _ => ("repair_failed", false),
             };

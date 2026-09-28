@@ -209,3 +209,17 @@ pub(super) fn published_state() -> Option<PublishedState> {
     let body = std::fs::read_to_string(state_path()?).ok()?;
     serde_json::from_str(&body).ok()
 }
+
+/// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it and
+/// when (epoch), for the host-side question whether a resolver role took
+/// over its old unit's ports; `None` when no resolver has published.
+pub(crate) fn readiness_marker() -> Option<String> {
+    let state = published_state()?;
+    let written = chrono::DateTime::parse_from_rfc3339(&state.updated_at).ok()?;
+    Some(format!(
+        "STADO_RESOLVER_STATE\t{}\t{}\t{}",
+        state.state,
+        state.pid,
+        written.timestamp()
+    ))
+}

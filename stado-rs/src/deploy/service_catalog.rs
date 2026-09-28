@@ -60,6 +60,11 @@ pub struct CatalogService {
 pub struct RoleUnit {
     pub unit: String,
     pub flag: String,
+    /// `resolver-state` when the old unit holds the listener the role binds,
+    /// so the flag proves nothing until the resolver publishes `serving`:
+    /// the unit is handed over, see `service::handoff`.
+    #[serde(default)]
+    pub readiness: Option<String>,
 }
 
 /// Every shipped entry, in the catalog's order.

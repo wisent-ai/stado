@@ -229,11 +229,18 @@ pub fn validate(document: &Value) -> Result<()> {
                 let flag = role["flag"]
                     .as_str()
                     .filter(|flag| flag.strip_prefix("--").is_some_and(|name| !name.is_empty()));
-                let (Some(unit), Some(_)) = (unit, flag) else {
+                let (Some(unit), Some(flag)) = (unit, flag) else {
                     bail!(
                         "{id}.service.role_units: expected {{unit: <label>, flag: --<argument>}}"
                     );
                 };
+                // Only the resolver publishes the state a listener handoff reads.
+                let readiness = role.get("readiness");
+                if readiness.is_some_and(|value| {
+                    value.as_str() != Some("resolver-state") || flag != "--resolver"
+                }) {
+                    bail!("{id}.service.role_units: {unit}: readiness is resolver-state, for --resolver only");
+                }
                 if let Some(owner) = retired_units.insert(unit, id) {
                     bail!("{id}.service.role_units: {unit} is already retired by {owner}");
                 }
