@@ -49,36 +49,6 @@ fn emit(line: String) {
     let _ = writeln!(out, "{line}");
 }
 
-fn emit_namespaces(label: &str, root: &Path) {
-    let names = std::fs::read_dir(root.join("ecosystem")).map(|entries| {
-        let mut names: Vec<String> = entries
-            .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
-    });
-    match names {
-        Ok(names) => {
-            for name in &names {
-                emit(format!(
-                    "STADO_BACKUP_NAMESPACE\t{label}\t{}",
-                    hex::encode(name)
-                ));
-            }
-            emit(format!(
-                "STADO_BACKUP_NAMESPACES_END\t{label}\t{}",
-                names.len()
-            ));
-        }
-        Err(error) => emit(format!(
-            "STADO_BACKUP_NAMESPACES_ERROR\t{label}\t{}",
-            one_line(&error.to_string())
-        )),
-    }
-}
-
 /// Size metadata of every object under each namespace of the replica; false
 /// when anything could not be read.
 fn inventory(pass: &LocalPass) -> bool {
@@ -185,9 +155,13 @@ fn exact(pass: &LocalPass) {
 }
 
 /// Classify every replica file against its primary address and, under
-/// reclaim with apply, unlink the twins this pass just proved.
-fn classify(pass: &LocalPass) {
+/// reclaim with apply, unlink the twins this pass just proved. False when any
+/// part of the replica could not be read: the pass then reports each failure
+/// and emits no completion marker, so nothing downstream treats a partial
+/// walk as the whole replica.
+fn classify(pass: &LocalPass) -> bool {
     let (mut deleted, mut deleted_bytes, mut refused) = (0u64, 0u64, 0u64);
+    let failures = std::cell::RefCell::new(Vec::<String>::new());
     walk(
         &pass.backup,
         &mut |path| {
@@ -202,6 +176,9 @@ fn classify(pass: &LocalPass) {
             };
             let backup = identity(path, false);
             if backup.state == "absent" || backup.state == "unreadable" {
+                failures
+                    .borrow_mut()
+                    .push(format!("{name}: local-backup entry is {}", backup.state));
                 return;
             }
             let size = backup.size.clone();
@@ -244,18 +221,35 @@ fn classify(pass: &LocalPass) {
                 }
             }
         },
-        &mut |_| {},
-        &mut |_| {},
+        &mut |path| {
+            failures.borrow_mut().push(format!(
+                "{}: a linked directory was not walked",
+                path.display()
+            ))
+        },
+        &mut |detail| failures.borrow_mut().push(detail),
     );
     emit(format!(
         "STADO_BACKUP_RECLAIM_END\t{deleted}\t{deleted_bytes}\t{refused}"
     ));
+    let failures = failures.into_inner();
+    for failure in &failures {
+        emit(format!(
+            "STADO_BACKUP_AUDIT_UNAVAILABLE\tlocal-backup walk: {}",
+            one_line(failure)
+        ));
+    }
+    if !failures.is_empty() {
+        return false;
+    }
     emit("STADO_BACKUP_AUDIT_END\tclassified".into());
+    true
 }
 
 /// The whole host half, in the order the operator side reads it. False when
-/// the pass was refused before anything was read, so the caller exits
-/// nonzero and the remote program stops before its pruning epilogue.
+/// the pass was refused or could not read everything it walked, so the
+/// caller exits nonzero and the remote program stops before its pruning
+/// epilogue.
 pub fn run(pass: &LocalPass) -> bool {
     if let Some(detail) = roots::overlapping(&pass.backup, &pass.primary) {
         emit(format!(
@@ -264,22 +258,21 @@ pub fn run(pass: &LocalPass) -> bool {
         ));
         return false;
     }
-    emit_namespaces("local_storage", &pass.primary);
-    emit_namespaces("local_backup", &pass.backup);
+    roots::emit_namespaces("local_storage", &pass.primary);
+    roots::emit_namespaces("local_backup", &pass.backup);
     let complete = inventory(pass);
     if !pass.inventory_namespaces.is_empty() && pass.objects.is_empty() {
         if complete {
             emit("STADO_BACKUP_AUDIT_END\tinventory".into());
         }
-        return true;
+        return complete;
     }
     if !pass.objects.is_empty() {
         exact(pass);
         if complete {
             emit("STADO_BACKUP_AUDIT_END\texact".into());
         }
-        return true;
+        return complete;
     }
-    classify(pass);
-    true
+    classify(pass)
 }

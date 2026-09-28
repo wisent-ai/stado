@@ -83,7 +83,8 @@ pub(super) fn metadata_path(root: &Path, relative: &str) -> PathBuf {
 /// Every non-directory entry under `root`, directories in name order, files
 /// in name order within each directory. A symbolic link to a directory is not
 /// descended into and not listed; it is reported through `skipped`. An
-/// unreadable directory is reported through `failed`.
+/// unreadable directory, or an entry of one that cannot be read, is reported
+/// through `failed`, so the caller knows the walk did not see everything.
 pub(super) fn walk(
     root: &Path,
     visit: &mut dyn FnMut(&Path),
@@ -99,7 +100,17 @@ pub(super) fn walk(
     };
     let mut directories = Vec::new();
     let mut files = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failed(format!(
+                    "{}: an entry could not be read: {error}",
+                    root.display()
+                ));
+                continue;
+            }
+        };
         let path = entry.path();
         match entry.file_type() {
             Ok(kind) if kind.is_dir() => directories.push(path),

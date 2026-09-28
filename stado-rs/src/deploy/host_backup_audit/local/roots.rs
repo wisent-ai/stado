@@ -1,6 +1,43 @@
-//! Whether the two stores can be compared at all.
+//! The two stores as wholes: whether they can be compared at all, and which
+//! namespaces each holds.
 
 use std::path::Path;
+
+use super::{emit, one_line};
+
+/// Every namespace directory under a store's `ecosystem/`, or the reason it
+/// could not be listed completely.
+pub(super) fn emit_namespaces(label: &str, root: &Path) {
+    let listed = std::fs::read_dir(root.join("ecosystem")).and_then(|entries| {
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
+    });
+    match listed {
+        Ok(names) => {
+            for name in &names {
+                emit(format!(
+                    "STADO_BACKUP_NAMESPACE\t{label}\t{}",
+                    hex::encode(name)
+                ));
+            }
+            emit(format!(
+                "STADO_BACKUP_NAMESPACES_END\t{label}\t{}",
+                names.len()
+            ));
+        }
+        Err(error) => emit(format!(
+            "STADO_BACKUP_NAMESPACES_ERROR\t{label}\t{}",
+            one_line(&error.to_string())
+        )),
+    }
+}
 
 /// Why the replica and the primary store cannot be compared, if they cannot.
 /// Both are resolved through every symbolic link first: a replica that is,
