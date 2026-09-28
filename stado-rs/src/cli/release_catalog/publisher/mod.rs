@@ -14,9 +14,11 @@ use crate::cli::host::{
 use crate::cli::CmdError;
 
 mod hosts;
+mod input;
 mod withdraw;
 
 pub(crate) use hosts::{fleet_hosts, this_host};
+pub(super) use input::pin_input;
 pub(super) use withdraw::withdraw_publisher;
 
 /// Bytes of randomness in a minted publisher bearer; the same width the
