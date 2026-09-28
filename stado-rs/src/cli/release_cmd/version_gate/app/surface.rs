@@ -249,6 +249,9 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
         let helpers = &sources.tuist_helpers;
         names.extend(super::tuist::surface(load, project, helpers)?);
     }
+    if let Some(table) = &sources.command_table {
+        names.extend(super::cargo::commands(load, table)?);
+    }
     for source in &sources.appended_paths {
         for name in appended(source, &text(load, source)?)? {
             names.insert(format!("harness-path:{name}"));
@@ -258,12 +261,15 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
 }
 
 /// The version the Info.plist declares, else the Tuist project's marketing
-/// version, else the package.json's `version`.
+/// version, else the Cargo.toml's package version, else the package.json's.
 pub(super) fn declared_version(load: Loader, sources: &AppSources) -> Read<String> {
     let source = sources.version_source();
     if sources.info_plist.is_none() {
         if let Some(project) = &sources.tuist_project {
             return super::tuist::declared_version(load, project);
+        }
+        if let Some(manifest) = &sources.cargo_toml {
+            return super::cargo::declared_version(load, manifest);
         }
     }
     let declared = match &sources.info_plist {

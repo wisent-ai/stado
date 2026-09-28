@@ -5,6 +5,7 @@
 //! step its `.wisent-release.json` declares.
 
 mod baseline;
+mod cargo;
 mod check;
 mod store;
 mod surface;
@@ -21,7 +22,7 @@ use crate::cli::CmdError;
 pub struct AppSources {
     /// The bundle's Info.plist: `bundle-id:` and every `url-scheme:`; its
     /// CFBundleShortVersionString is the declared version
-    #[arg(long, required_unless_present_any = ["package_json", "tuist_project"])]
+    #[arg(long, required_unless_present_any = ["package_json", "tuist_project", "cargo_toml"])]
     pub info_plist: Option<String>,
     /// A package.json: `package:`, every `export:` key and every `bin:`
     /// command; its `version` is the declared version when no Info.plist is named
@@ -57,6 +58,15 @@ pub struct AppSources {
     /// also compares against the version the App Store serves
     #[arg(long)]
     pub app_store_tags: Option<String>,
+    /// A Rust binary's advertised command table, `FILE:TABLE` for
+    /// `static TABLE: &[...] = &[ ... ];`: every `name: "..."` row is a
+    /// `command:` name
+    #[arg(long, requires = "cargo_toml")]
+    pub command_table: Option<String>,
+    /// A Cargo.toml whose `[package]` version is the declared version when
+    /// no Info.plist or Tuist project is named
+    #[arg(long)]
+    pub cargo_toml: Option<String>,
 }
 
 impl AppSources {
@@ -65,8 +75,9 @@ impl AppSources {
         self.info_plist
             .as_deref()
             .or(self.tuist_project.as_deref())
+            .or(self.cargo_toml.as_deref())
             .or(self.package_json.as_deref())
-            .expect("clap requires an Info.plist, a Tuist project or a package.json")
+            .expect("clap requires an Info.plist, a Tuist project, a Cargo.toml or a package.json")
     }
 }
 
