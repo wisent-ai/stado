@@ -11,8 +11,9 @@ pub use admission::submit;
 
 use crate::cli::release_cmd;
 use crate::cli::release_submit::builds::jobs::platforms::{
-    adopt_build, enqueue_platforms, reconcile_published, refresh_build,
+    adopt_build, enqueue_platforms, reconcile_published,
 };
+use crate::cli::release_submit::builds::jobs::terminal::refresh_build;
 use crate::cli::release_submit::deliver::deliveries::run_deliveries;
 use crate::cli::release_submit::publish::artifact::publish;
 use crate::cli::release_submit::publish::promotion::reconcile;
