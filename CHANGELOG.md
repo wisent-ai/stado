@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado release catalog enroll` also writes the product's release-catalog entry:** enrolment declared the publisher and the build secrets and checked the post-build tests, but left the catalog entry to a separate `catalog sync`, so an enrolled product stayed `absent` in `stado release catalog audit` and the daily batch never built it. Enrolment now ends with the registration `catalog sync --root <checkout>` performs.
+
 - **A declared unit running a replaced binary is restarted, not refused, when its image can no longer be read:** after `stado release install-local` replaces a program, a launchd unit that is not a queue agent and still executes the old inode — `stado release agent` under `com.wisent.compute.service.stado-release-agent` — has no readable image, and the post-install reconcile refused `the kernel image for … is unreadable`. Every `fleet-macbook` delivery of stado 0.22.11 on 2026-09-28 stopped there, and the next delivery met the same agent again. That unit is now restarted onto the installed inode and verified, as one whose readable image differs already was.
 
 - **A release build that wrote its staged files into the checkout is refused as that:** when a stage-map path is missing from `WISENT_OUTPUT_DIR` but present in `WISENT_SOURCE_DIR`, the build worker names both directories and says the build wrote into its checkout, instead of reporting only that the staged path is not there. las's `release/build-package.sh` port wrote `<source>/dist/las.tgz` this way and its release could not be packaged.
