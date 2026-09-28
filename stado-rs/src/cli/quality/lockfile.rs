@@ -39,7 +39,9 @@ fn workspaces(tree: &Path) -> Vec<PathBuf> {
 
 /// Refuse the first workspace in `tree` whose committed lock does not resolve
 /// its manifest, naming the manifest (relative to the checkout) and what cargo
-/// said; the tree is resolved, never compiled.
+/// said; the tree is resolved, never compiled. Cargo runs from the workspace,
+/// because it reads `.cargo/config.toml` from its working directory, not from
+/// `--manifest-path` (a product's git-fetch-with-cli for private sources).
 pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdError> {
     for workspace in workspaces(tree) {
         let manifest = workspace.join("Cargo.toml");
@@ -60,6 +62,7 @@ pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), 
                 "--manifest-path",
             ])
             .arg(&manifest)
+            .current_dir(&workspace)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .output()
