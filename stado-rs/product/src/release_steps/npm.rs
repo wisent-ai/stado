@@ -43,12 +43,18 @@ pub fn pack() -> Result<i32> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "tgz"))
         .collect();
     let [artifact] = packed.as_slice() else {
-        bail!("npm pack produced {} artifacts; exactly one is required", packed.len());
+        bail!(
+            "npm pack produced {} artifacts; exactly one is required",
+            packed.len()
+        );
     };
     let package = release.join(PACKAGE);
     fs::rename(artifact, &package)?;
     let digest = crate::common::sha256(&package)?;
-    fs::write(release.join(format!("{PACKAGE}.sha256")), format!("{digest}\n"))?;
+    fs::write(
+        release.join(format!("{PACKAGE}.sha256")),
+        format!("{digest}\n"),
+    )?;
     println!("staged {} ({digest})", package.display());
     Ok(0)
 }
@@ -73,12 +79,24 @@ pub fn deliver() -> Result<i32> {
         safe_unpack(&archive, &work)?;
         let package = match find(&work, PACKAGE)?.as_slice() {
             [package] => package.clone(),
-            found => bail!("the release holds {} {PACKAGE} (one is required)", found.len()),
+            found => bail!(
+                "the release holds {} {PACKAGE} (one is required)",
+                found.len()
+            ),
         };
         let userconfig = work.join("npmrc");
-        fs::write(&userconfig, "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n")?;
+        fs::write(
+            &userconfig,
+            "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n",
+        )?;
         let published = Command::new("npm")
-            .args(["publish", "--access", "public", "--ignore-scripts", "--json"])
+            .args([
+                "publish",
+                "--access",
+                "public",
+                "--ignore-scripts",
+                "--json",
+            ])
             .arg(&package)
             .env("NPM_CONFIG_USERCONFIG", &userconfig)
             .env("NPM_TOKEN", &token)

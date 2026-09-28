@@ -55,7 +55,11 @@ fn a_package_is_packed_once_with_its_digest_and_no_scripts() {
         .unwrap();
     let expected = String::from_utf8_lossy(&listed.stdout);
     assert_eq!(digest.trim(), expected.split_whitespace().next().unwrap());
-    let members = Command::new("tar").arg("-tzf").arg(&package).output().unwrap();
+    let members = Command::new("tar")
+        .arg("-tzf")
+        .arg(&package)
+        .output()
+        .unwrap();
     let members = String::from_utf8_lossy(&members.stdout);
     assert!(members.contains("package/index.js"), "{members}");
     assert!(

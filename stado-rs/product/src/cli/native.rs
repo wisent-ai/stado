@@ -68,10 +68,15 @@ pub fn python() -> Command {
 pub fn npm() -> Command {
     Command::new("npm")
         .about("Release steps of an npm package")
-        .arg(Arg::new("operation").required(true).value_parser(["pack"]).help(
-            "pack: npm pack --ignore-scripts of the checkout into \
+        .arg(
+            Arg::new("operation")
+                .required(true)
+                .value_parser(["pack"])
+                .help(
+                    "pack: npm pack --ignore-scripts of the checkout into \
              $WISENT_OUTPUT_DIR/release/npm-package.tgz, with npm-package.tgz.sha256",
-        ))
+                ),
+        )
 }
 
 pub fn deliver() -> Command {
