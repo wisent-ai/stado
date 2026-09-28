@@ -31,17 +31,15 @@ printf '%s\n' "${rendering:-idle (nothing rendering yet)}"
 printf 'PORTS\t'
 ss -ltn 2>/dev/null | awk '$4 ~ /:479[89][0-9]$/ { printf "%s ", $4 }' || true
 printf '\n'
-printf 'PAIRED_CLIENTS\t'
+# The state file travels back whole, base64 on one line; Stado counts the
+# paired devices itself, so the host needs no interpreter to read JSON.
+printf 'PAIRED_CLIENTS_STATE\t'
 state=/root/.config/sunshine/sunshine_state.json
 if [ -r "$state" ]; then
-  /usr/bin/python3 -c '
-import json, sys
-document = json.load(open(sys.argv[1]))
-clients = document.get("root", document).get("devices") or []
-print(len(clients))
-' "$state" 2>/dev/null || printf 'unreadable\n'
+  base64 -w0 "$state" 2>/dev/null || printf 'unreadable'
+  printf '\n'
 else
-  printf '0\n'
+  printf 'absent\n'
 fi
 printf 'LIBRARY\t'
 df -Ph "LIBRARY_DIR" 2>/dev/null | awk 'NR==2 { print $1, $4 " available" }' || printf 'absent\n'
@@ -60,12 +58,34 @@ fi
     .replace("DISPLAY_NUMBER", DISPLAY);
     let output = host_channel::run_script(target, &script, runner).await?;
     let mut body = report(target, &output, "reported");
+    let mut fields = parse_fields(&output.stdout);
+    let state = fields.remove("paired_clients_state");
+    fields.insert("paired_clients".to_string(), paired_clients(state.as_ref()));
     if let Some(map) = body.as_object_mut() {
-        map.insert(
-            "fields".to_string(),
-            Value::Object(parse_fields(&output.stdout)),
-        );
+        map.insert("fields".to_string(), Value::Object(fields));
         map.insert("client_port".to_string(), Value::from(SUNSHINE_HTTPS_PORT));
     }
     Ok(body)
+}
+
+/// How many devices Sunshine has paired, from its state file as the host
+/// sent it: `0` without a file, `unreadable` when it cannot be decoded.
+fn paired_clients(state: Option<&Value>) -> Value {
+    use base64::Engine as _;
+    let Some(encoded) = state.and_then(Value::as_str) else {
+        return Value::from("unreadable");
+    };
+    if encoded == "absent" {
+        return Value::from("0");
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .map(|document| {
+            let root = document.get("root").unwrap_or(&document);
+            let count = root["devices"].as_array().map_or(0, Vec::len);
+            Value::from(count.to_string())
+        })
+        .unwrap_or_else(|| Value::from("unreadable"))
 }
