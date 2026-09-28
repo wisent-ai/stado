@@ -68,12 +68,7 @@ fn the_preview_names_every_file_and_writes_none() {
     let out = adopt(dir.path(), &repo, &[]);
     assert!(out.status.success(), "preview: {}", text(&out.stderr));
     let printed = text(&out.stdout);
-    for name in [
-        ".wisent-release.json",
-        "release/build.sh",
-        "release/quality.sh",
-        "release/archive-tree.py",
-    ] {
+    for name in [".wisent-release.json", "release/build.sh", "release/quality.sh"] {
         assert!(
             printed.contains(&format!("would write {name}")),
             "{name} missing from: {printed}"

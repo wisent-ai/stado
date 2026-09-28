@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **`stado release catalog adopt --kind ios-xcode` writes no Python:** it wrote `release/archive-tree.py` into every adopted checkout and a `build.sh` that ran it with `python3`, although `stado product tree-archive` already packs the `.xcarchive` reproducibly. The build template now calls `stado product tree-archive` and writes `SOURCE_REVISION` from `WISENT_SOURCE_COMMIT` (a worker's source is an unpacked snapshot with no `.git`), and adopt writes three files instead of four. The unrun `tests/source-identity/test_source_identity.py` is removed with it.
+
 - **`declare-publisher --reload HOST=UNIT` refuses a retired unit:** a reload refreshes the publisher table inside a running process, and a unit the service catalog lists under some product's `retired_units` no longer runs that work — its product's one process does. The command now stops before touching the vault with the same sentence `service deploy` prints for a retired unit, naming the process to use instead.
 
 - **`withdraw-publisher` from a host that reads the vault owner skips that host's verifier repair, as `declare-publisher` does:** `stado release catalog withdraw-publisher wisent-images` on lukasz-macbook removed the declaration from both hosts and then failed `release item grant reconciliation failed: token file does not match the consumer's recorded bearer`, because the repair reconciled lukasz-macbook's retired local vault copy. A host that declares no `secrets.skarbiec.vault_file` reads the owner's vault, which the owner's own repair covers; the report says `not needed: reads the vault on the owner`.

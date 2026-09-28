@@ -84,8 +84,8 @@ xcodebuild -exportArchive \
 ipa=("$exported"/*.ipa)
 [[ ${#ipa[@]} -eq 1 ]]
 cp "${ipa[0]}" "$dist/{{APP}}.ipa"
-python3 "$WISENT_SOURCE_DIR/release/archive-tree.py" "$archive" "$dist/{{APP}}.xcarchive.tar.gz"
-git -C "$WISENT_SOURCE_DIR" rev-parse HEAD > "$dist/SOURCE_REVISION"
+stado product tree-archive --source "$archive" --output "$dist/{{APP}}.xcarchive.tar.gz"
+printf '%s\n' "${WISENT_SOURCE_COMMIT:?Stado source commit is required}" > "$dist/SOURCE_REVISION"
 ipa_sha="$(shasum -a 256 "$dist/{{APP}}.ipa" | cut -d ' ' -f 1)"
 archive_sha="$(shasum -a 256 "$dist/{{APP}}.xcarchive.tar.gz" | cut -d ' ' -f 1)"
 printf '{"build_number":%s,"ipa_sha256":"%s","schema_version":1,"version":"%s","xcarchive_sha256":"%s"}\n' \

@@ -22,7 +22,6 @@ mod xcode;
 const MANIFEST: &str = include_str!("templates/manifest.json");
 const BUILD: &str = include_str!("templates/build.sh");
 const QUALITY: &str = include_str!("templates/quality.sh");
-const ARCHIVE_TREE: &str = include_str!("templates/archive-tree.py");
 
 #[derive(Clone, Copy, ValueEnum)]
 pub(super) enum Kind {
@@ -156,11 +155,6 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
         Planned {
             path: checkout.join("release/quality.sh"),
             text: fill(QUALITY, &values),
-            executable: true,
-        },
-        Planned {
-            path: checkout.join("release/archive-tree.py"),
-            text: ARCHIVE_TREE.to_string(),
             executable: true,
         },
     ];
