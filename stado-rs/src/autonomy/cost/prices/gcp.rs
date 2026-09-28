@@ -92,17 +92,30 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 .and_then(Value::as_str)
                 .unwrap_or("GCP SKU")
                 .to_string();
-            let lowered_description = description.to_ascii_lowercase();
-            if [
-                "commitment",
-                "committed use",
-                "reservation",
-                "sole tenancy",
-                "custom instance",
-            ]
-            .iter()
-            .any(|excluded| lowered_description.contains(excluded))
+            // The SKU's own category says how it is bought: OnDemand and
+            // Preemptible (Spot) are hourly prices a job can take; Commit1Yr,
+            // Commit3Yr and every other usage type are commitments or
+            // reservations and are not quoted. Sole-tenant nodes are their own
+            // resource group.
+            let category = sku.get("category");
+            let usage_type = category
+                .and_then(|category| category.get("usageType"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let purchase_option = match usage_type {
+                "OnDemand" => "on_demand",
+                "Preemptible" => "spot",
+                _ => continue,
+            };
+            if category
+                .and_then(|category| category.get("resourceGroup"))
+                .and_then(Value::as_str)
+                == Some("SoleTenancy")
             {
+                continue;
+            }
+            let lowered_description = description.to_ascii_lowercase();
+            if lowered_description.contains("custom instance") {
                 continue;
             }
             let regions: Vec<Option<String>> = sku
@@ -132,13 +145,7 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
                     region,
                     machine_type: machine.clone(),
                     accelerator_type: accelerator.clone(),
-                    purchase_option: if description.to_ascii_lowercase().contains("spot")
-                        || description.to_ascii_lowercase().contains("preemptible")
-                    {
-                        "spot".to_string()
-                    } else {
-                        "on_demand".to_string()
-                    },
+                    purchase_option: purchase_option.to_string(),
                     unit: "hour".to_string(),
                     hourly_usd: rate,
                     currency: "USD".to_string(),
