@@ -214,54 +214,8 @@ pub fn commit(
         remove_path(runtime, path)?;
     }
     ownership::verify(&state)?;
-    rerecord_siblings(runtime, &siblings, &state, &plan)?;
+    ownership::rerecord_siblings(runtime, &siblings, &state, &plan.placements)?;
     Ok(state)
-}
-
-/// A sibling surface installed from the same recipe owned some of the paths
-/// this install just replaced: its receipt now names this install's source
-/// revision and the new fingerprints of those paths, so its own verification
-/// and its next update read what is on disk.
-fn rerecord_siblings(
-    runtime: &Runtime,
-    siblings: &[ProductState],
-    state: &ProductState,
-    plan: &Prepared,
-) -> Result<()> {
-    for sibling in siblings {
-        let touched: Vec<&Placement> = plan
-            .placements
-            .iter()
-            .filter(|placement| sibling.installed_paths.contains(&placement.destination))
-            .collect();
-        if touched.is_empty() {
-            continue;
-        }
-        let mut updated = sibling.clone();
-        let mut fingerprints = updated
-            .extra
-            .get("placement_fingerprints")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        for placement in touched {
-            fingerprints.insert(
-                placement.destination.to_string_lossy().into_owned(),
-                placement.fingerprint()?,
-            );
-        }
-        updated.extra.insert(
-            "placement_fingerprints".to_owned(),
-            Value::Object(fingerprints),
-        );
-        updated.extra.insert(
-            "replaced_by".to_owned(),
-            json!({"surface": state.surface, "source_revision": state.source_revision, "at": now()}),
-        );
-        updated.source_revision = state.source_revision.clone();
-        updated.save(runtime)?;
-    }
-    Ok(())
 }
 
 pub fn backup(runtime: &Runtime, product: &str, paths: &[PathBuf]) -> Result<Vec<Backup>> {

@@ -87,6 +87,51 @@ pub fn shared_for_install(
     Ok((strict, siblings))
 }
 
+/// A sibling surface installed from the same recipe owned some of the paths
+/// this install just replaced: its receipt now names this install's source
+/// revision and the new fingerprints of those paths, so its own verification
+/// and its next update read what is on disk.
+pub fn rerecord_siblings(
+    runtime: &Runtime,
+    siblings: &[state::ProductState],
+    installed: &state::ProductState,
+    placements: &[Placement],
+) -> Result<()> {
+    for sibling in siblings {
+        let touched: Vec<&Placement> = placements
+            .iter()
+            .filter(|placement| sibling.installed_paths.contains(&placement.destination))
+            .collect();
+        if touched.is_empty() {
+            continue;
+        }
+        let mut updated = sibling.clone();
+        let mut fingerprints = updated
+            .extra
+            .get("placement_fingerprints")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for placement in touched {
+            fingerprints.insert(
+                placement.destination.to_string_lossy().into_owned(),
+                placement.fingerprint()?,
+            );
+        }
+        updated.extra.insert(
+            "placement_fingerprints".to_owned(),
+            Value::Object(fingerprints),
+        );
+        updated.extra.insert(
+            "replaced_by".to_owned(),
+            json!({"surface": installed.surface, "source_revision": installed.source_revision, "at": crate::common::now()}),
+        );
+        updated.source_revision = installed.source_revision.clone();
+        updated.save(runtime)?;
+    }
+    Ok(())
+}
+
 pub fn overlaps(path: &Path, shared: &BTreeSet<PathBuf>) -> bool {
     let physical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     shared.iter().any(|other| {
