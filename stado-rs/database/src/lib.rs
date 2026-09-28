@@ -91,9 +91,14 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
             format!("{}#pooler_url is not a Postgres URL: {error}", found.item),
         )
     })?;
+    // The pooler Stado hands out runs in transaction mode, where a named
+    // statement prepared on one server connection collides with the next
+    // client's (`prepared statement "sqlx_s_1" already exists`); with no
+    // statement cache sqlx prepares each statement unnamed.
     let options = options
         .ssl_mode(PgSslMode::VerifyFull)
-        .ssl_root_cert_from_pem(found.ca_certificate.into_bytes());
+        .ssl_root_cert_from_pem(found.ca_certificate.into_bytes())
+        .statement_cache_capacity(0);
     let pool = PgPoolOptions::new()
         .connect_with(options)
         .await
