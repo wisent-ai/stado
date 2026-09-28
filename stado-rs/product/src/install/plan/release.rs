@@ -1,4 +1,4 @@
-use super::plan::{Placement, Prepared};
+use super::{Placement, Prepared};
 use crate::{
     catalog::text,
     common::{atomic_json, checked, file_members, platform, sha256, stado, unpack, Runtime},

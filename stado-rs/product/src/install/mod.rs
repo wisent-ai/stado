@@ -1,7 +1,5 @@
 pub mod plan;
-mod planning;
 mod recipes;
-mod release;
 mod services;
 pub mod status;
 mod sweep;
@@ -49,8 +47,8 @@ pub fn perform(
         let _writer =
             runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
         let existing = ProductState::load(runtime, id, surface)?;
-        let plan = planning::select(
-            &planning::Request {
+        let plan = plan::planning::select(
+            &plan::planning::Request {
                 runtime,
                 product,
                 selected,

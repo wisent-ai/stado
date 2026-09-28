@@ -208,7 +208,7 @@ pub fn verify(state: &state::ProductState) -> Result<()> {
 /// with install and remove both refusing; `code_identities` records them.
 pub fn verify_content(state: &state::ProductState) -> Result<()> {
     if let Some(receipt) = &state.release {
-        super::super::release::verify_files(receipt)?;
+        super::super::plan::release::verify_files(receipt)?;
     }
     if let Some(fingerprints) = state
         .extra

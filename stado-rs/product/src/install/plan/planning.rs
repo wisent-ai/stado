@@ -9,13 +9,14 @@
 //! now stands on another commit. Resuming such a plan would repeat whatever it
 //! got wrong on every attempt, with a rollback as the only way on.
 
-use super::{plan::Prepared, recipes, release};
+use super::{release, Prepared};
+use crate::install::recipes;
 use crate::{common::Runtime, source, state::ProductState};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::{path::PathBuf, process::Command};
 
-pub(super) struct Request<'a> {
+pub(in super::super) struct Request<'a> {
     pub runtime: &'a Runtime,
     pub product: &'a Value,
     pub selected: &'a Value,
@@ -25,7 +26,10 @@ pub(super) struct Request<'a> {
     pub id: &'a str,
 }
 
-pub(super) fn select(request: &Request, existing: Option<&ProductState>) -> Result<Prepared> {
+pub(in super::super) fn select(
+    request: &Request,
+    existing: Option<&ProductState>,
+) -> Result<Prepared> {
     let Some(incomplete) = existing.filter(|state| state.status == "installing") else {
         if existing
             .is_some_and(|state| state.status == "removing" || state.status == "rolling_back")

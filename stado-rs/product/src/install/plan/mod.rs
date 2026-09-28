@@ -1,3 +1,10 @@
+//! What an installation places: the files and their destinations, which plan
+//! a new or unfinished installation selects, and a pinned release prepared
+//! as such a plan.
+
+pub(super) mod planning;
+pub(super) mod release;
+
 use crate::common::{copy_tree, sha256};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
