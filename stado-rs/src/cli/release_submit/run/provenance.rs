@@ -88,6 +88,53 @@ fn remote_commit(root: &Path, tag: &str) -> Result<String, CmdError> {
         })
 }
 
+/// For every tag `origin` serves: the commit it serves (the peeled row of an
+/// annotated tag) and the version that commit's tree declares, read with the
+/// product's own `version_source` from the manifest at `commit`. A tag whose
+/// tree cannot be read here, or declares no version in that source, carries
+/// `null`, so a gate can tell "not established" from a version. This is what
+/// lets a gate without git compare baselines by the versions the tagged
+/// artifacts declare, not by how their tags are spelled: a floating tag such
+/// as `v1` names no version, and a moved one names a different commit.
+fn origin_tag_versions(root: &Path, commit: &str) -> Result<Value, CmdError> {
+    use crate::release_pipeline::{declared_version, ProductManifest};
+
+    let manifest = committed_file(root, commit, crate::release_pipeline::PRODUCT_MANIFEST)?;
+    let source = match serde_json::from_slice::<ProductManifest>(&manifest) {
+        Ok(ProductManifest::Release(release)) => Some(release.version_source),
+        _ => None,
+    };
+    let listing = git_text(root, &["ls-remote", "--tags", REMOTE])?;
+    let mut commits = std::collections::BTreeMap::<String, String>::new();
+    for (sha, reference) in listing
+        .lines()
+        .filter_map(|line| line.split_once(char::is_whitespace))
+    {
+        let Some(name) = reference.trim().strip_prefix("refs/tags/") else {
+            continue;
+        };
+        match name.strip_suffix(PEELED) {
+            Some(tag) => {
+                commits.insert(tag.to_string(), sha.to_string());
+            }
+            None => {
+                commits.entry(name.to_string()).or_insert_with(|| sha.to_string());
+            }
+        }
+    }
+    let mut tags = serde_json::Map::new();
+    for (tag, sha) in commits {
+        let version = source.as_ref().and_then(|source| {
+            declared_version(source, |path| {
+                committed_file(root, &sha, path).map_err(|error| error.to_string())
+            })
+            .ok()
+        });
+        tags.insert(tag, json!({ "commit": sha, "version": version }));
+    }
+    Ok(Value::Object(tags))
+}
+
 /// The provenance record to archive, or `None` when the commit holds no
 /// baseline. Every record lists the tags `origin` serves; a `git-archive:`
 /// baseline's tag is also resolved here and must be served at the same commit.
@@ -101,6 +148,7 @@ pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdEr
         "origin_tags": origin_tags(root)?,
         "verified_against": REMOTE,
         "source_commit": commit,
+        "origin_tag_versions": origin_tag_versions(root, commit)?,
     });
     let Some(tag) = marker.strip_prefix(TIER) else {
         return Ok(Some(serde_json::to_vec_pretty(&document)?));
