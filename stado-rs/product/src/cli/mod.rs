@@ -60,6 +60,7 @@ pub fn augment(command: Command) -> Command {
         .subcommand(native::cargo())
         .subcommand(native::source_bundle())
         .subcommand(native::python())
+        .subcommand(native::npm())
         .subcommand(native::deliver())
         .subcommand(
             Command::new("linkage")
@@ -166,6 +167,14 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
             };
             crate::release_steps::run_tree_archive(&path("source")?, &path("output")?)
         }
+        "npm" => match arguments
+            .get_one::<String>("operation")
+            .context("npm release operation is missing")?
+            .as_str()
+        {
+            "pack" => crate::release_steps::run_npm_pack(),
+            other => anyhow::bail!("unknown npm release operation {other}"),
+        },
         "python" => crate::release_steps::run_python(
             arguments
                 .get_one::<String>("operation")

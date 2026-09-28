@@ -65,6 +65,15 @@ pub fn python() -> Command {
         .arg(Arg::new("name").long("name").help("zipapp: the application's file name, ending in .pyz"))
 }
 
+pub fn npm() -> Command {
+    Command::new("npm")
+        .about("Release steps of an npm package")
+        .arg(Arg::new("operation").required(true).value_parser(["pack"]).help(
+            "pack: npm pack --ignore-scripts of the checkout into \
+             $WISENT_OUTPUT_DIR/release/npm-package.tgz, with npm-package.tgz.sha256",
+        ))
+}
+
 pub fn deliver() -> Command {
     Command::new("deliver")
         .about("Release deliveries to hosting providers, run by a manifest's deliveries")
@@ -117,6 +126,10 @@ pub fn deliver() -> Command {
                     "Refuse unless this archive path carries a valid Developer ID signature",
                 )),
         )
+        .subcommand(Command::new("npm").about(
+            "Publish the verified release's npm-package.tgz unchanged (NPM_TOKEN), running no \
+             package scripts; writes npm-receipt.json",
+        ))
         .subcommand(
             Command::new("render")
                 .about(

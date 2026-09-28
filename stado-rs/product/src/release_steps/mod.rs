@@ -11,6 +11,9 @@
 //!   `release/source-bundle.tar`, with each file's digest in
 //!   `output/build-metadata.json` inside it, and `release/SOURCE_REVISION`
 //!   from `WISENT_SOURCE_COMMIT` when the build request carries one.
+//! - `stado product npm pack` / `deliver npm` (module `npm`): `npm pack` of the
+//!   checkout as `release/npm-package.tgz`, published unchanged from the
+//!   verified release with `NPM_TOKEN`.
 //! - `stado product python build` / `deliver-pypi` (module `python`): a Python
 //!   package's wheel and sdist in `release/python-distributions.tar`, and
 //!   their upload to PyPI from the verified release archive.
@@ -19,6 +22,7 @@ mod crx3;
 mod deliver;
 mod linkage;
 mod mirror;
+mod npm;
 mod python;
 mod sparkle;
 mod supabase;
@@ -37,6 +41,7 @@ use sha2::{Digest, Sha256};
 pub use crx3::{run as run_crx3, Request as Crx3Request};
 pub use deliver::run as run_deliver;
 pub use linkage::run as run_linkage;
+pub use npm::pack as run_npm_pack;
 pub use python::run as run_python;
 pub use tree_archive::run as run_tree_archive;
 

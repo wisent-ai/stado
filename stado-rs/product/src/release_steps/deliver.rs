@@ -37,6 +37,7 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
                 .get_one::<String>("signed-binary")
                 .map(String::as_str),
         ),
+        "npm" => super::npm::deliver(),
         "render" => render(&text("service-name")?),
         "sparkle" => super::sparkle::deliver(),
         "supabase" => super::supabase::deliver(),
