@@ -14,12 +14,15 @@
 //! the snapshot: an archive must not carry a baseline whose source nobody can
 //! find.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde_json::{json, Value};
 
-use super::source::{committed_file, git_text};
+use crate::cli::release_submit::run::source::{committed_file, git_text};
 use crate::cli::CmdError;
+
+pub(in crate::cli::release_submit) mod published_diff;
 
 /// Where the verified record sits inside the source archive.
 pub(crate) const PROVENANCE_PATH: &str = ".wisent-provenance/baseline.json";
@@ -88,24 +91,11 @@ fn remote_commit(root: &Path, tag: &str) -> Result<String, CmdError> {
         })
 }
 
-/// For every tag `origin` serves: the commit it serves (the peeled row of an
-/// annotated tag) and the version that commit's tree declares, read with the
-/// product's own `version_source` from the manifest at `commit`. A tag whose
-/// tree cannot be read here, or declares no version in that source, carries
-/// `null`, so a gate can tell "not established" from a version. This is what
-/// lets a gate without git compare baselines by the versions the tagged
-/// artifacts declare, not by how their tags are spelled: a floating tag such
-/// as `v1` names no version, and a moved one names a different commit.
-fn origin_tag_versions(root: &Path, commit: &str) -> Result<Value, CmdError> {
-    use crate::release_pipeline::{declared_version, ProductManifest};
-
-    let manifest = committed_file(root, commit, crate::release_pipeline::PRODUCT_MANIFEST)?;
-    let source = match serde_json::from_slice::<ProductManifest>(&manifest) {
-        Ok(ProductManifest::Release(release)) => Some(release.version_source),
-        _ => None,
-    };
+/// The commit `origin` serves for every tag, from one listing: the peeled
+/// row of an annotated tag, else the one row of a lightweight tag.
+fn origin_tag_commits(root: &Path) -> Result<BTreeMap<String, String>, CmdError> {
     let listing = git_text(root, &["ls-remote", "--tags", REMOTE])?;
-    let mut commits = std::collections::BTreeMap::<String, String>::new();
+    let mut commits = BTreeMap::<String, String>::new();
     for (sha, reference) in listing
         .lines()
         .filter_map(|line| line.split_once(char::is_whitespace))
@@ -122,6 +112,26 @@ fn origin_tag_versions(root: &Path, commit: &str) -> Result<Value, CmdError> {
             }
         }
     }
+    Ok(commits)
+}
+
+/// For every tag `origin` serves: the commit it serves (the peeled row of an
+/// annotated tag) and the version that commit's tree declares, read with the
+/// product's own `version_source` from the manifest at `commit`. A tag whose
+/// tree cannot be read here, or declares no version in that source, carries
+/// `null`, so a gate can tell "not established" from a version. This is what
+/// lets a gate without git compare baselines by the versions the tagged
+/// artifacts declare, not by how their tags are spelled: a floating tag such
+/// as `v1` names no version, and a moved one names a different commit.
+fn origin_tag_versions(root: &Path, commit: &str) -> Result<Value, CmdError> {
+    use crate::release_pipeline::{declared_version, ProductManifest};
+
+    let manifest = committed_file(root, commit, crate::release_pipeline::PRODUCT_MANIFEST)?;
+    let source = match serde_json::from_slice::<ProductManifest>(&manifest) {
+        Ok(ProductManifest::Release(release)) => Some(release.version_source),
+        _ => None,
+    };
+    let commits = origin_tag_commits(root)?;
     let mut tags = serde_json::Map::new();
     for (tag, sha) in commits {
         let version = source.as_ref().and_then(|source| {
