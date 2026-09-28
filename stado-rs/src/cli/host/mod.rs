@@ -33,6 +33,7 @@ pub use crate::cli::host::files::remove::remove_run_directory;
 pub use crate::cli::host::files::remove::RemoveFileOutcome;
 pub use crate::cli::host::files::remove_local::remove_file_local;
 pub use crate::cli::host::files::retire::local::retire_file_local;
+pub use crate::cli::host::checks::recovery::run_locked::run_locked;
 pub use crate::cli::host::files::retire::remote::retire_file_outcome;
 pub use crate::cli::host::files::retire::RetireFileOutcome;
 pub use crate::cli::host::files::retire::RetireFileRequest;

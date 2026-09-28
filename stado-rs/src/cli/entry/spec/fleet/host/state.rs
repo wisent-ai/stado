@@ -171,6 +171,14 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Run PROGRAM on this host under an exclusive, non-blocking flock of
+    /// LOCK; the fixed recovery programs' lock holder.
+    #[command(name = "run-locked", hide = true)]
+    RunLocked {
+        lock: String,
+        #[arg(last = true)]
+        program: Vec<String>,
+    },
     #[command(name = "storage-root-reconcile-worker", hide = true)]
     StorageRootReconcileWorker {
         target: String,

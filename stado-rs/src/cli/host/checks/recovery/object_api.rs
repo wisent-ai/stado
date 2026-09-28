@@ -29,30 +29,15 @@ async fn recover_object_api_on_target(
 ) -> Result<String, CmdError> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
+    // The program reaches bash on stdin; the host's Stado holds the
+    // storage-root transaction's flock for as long as it runs.
     let script = format!(
         r#"set -eu
-/usr/bin/python3 - <<'PY'
-import base64, fcntl, os, subprocess, sys
-work = os.path.join(os.path.expanduser("~"), ".stado", "recovery")
-os.makedirs(work, mode=0o700, exist_ok=True)
-descriptor = os.open(
-    os.path.join(work, "storage-root-reconcile.lock"),
-    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-    0o600,
-)
-with os.fdopen(descriptor, "a") as lock:
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise SystemExit("storage authority recovery is already running on this host")
-    result = subprocess.run(
-        ["/bin/bash"],
-        input=base64.b64decode("{}"),
-        pass_fds=(lock.fileno(),),
-        check=False,
-    )
-    sys.exit(result.returncode)
-PY"#,
+if [ "$(uname)" = Linux ]; then decode=--decode; else decode=-D; fi
+stado="$HOME/.stado/bin/stado"
+[ -x "$stado" ] || stado="$(command -v stado)"
+printf '%s' '{}' | /usr/bin/base64 "$decode" |
+  "$stado" host run-locked "$HOME/.stado/recovery/storage-root-reconcile.lock" -- /bin/bash"#,
         STANDARD.encode(RECOVERY_PROGRAM),
     );
     let recovered = crate::deploy::host_channel::run_script_with_timeout(
