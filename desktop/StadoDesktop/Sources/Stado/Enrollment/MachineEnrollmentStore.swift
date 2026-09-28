@@ -50,6 +50,9 @@ final class MachineEnrollmentStore: ObservableObject {
     /// shown instead of a frozen button: `ingress up` waits for a tunnel and
     /// for DNS and legitimately takes up to a minute.
     @Published var entranceBusy: String?
+    /// Why the last `fleet ingress status` / `config show` read failed, so the
+    /// entrance section says what went wrong instead of "Reading" forever.
+    @Published var entranceReadProblem: String?
     /// Whether the configuration names a permanent enrollment address
     /// (`enrollment.url`). Nil until read. When false and no ingress stands,
     /// an online mint can only fall to the offline mode — the screen says so

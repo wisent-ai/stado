@@ -16,18 +16,33 @@ extension MachineEnrollmentStore {
     /// call here.
     func refreshEntrance() async {
         guard isConfigured else { return }
-        if let result = try? await run(["fleet", "ingress", "status", "--json"]),
-           result.ok,
-           let status: FleetIngressStatus = Self.decode(from: result.standardOutput) {
+        do {
+            let result = try await run(["fleet", "ingress", "status", "--json"])
+            guard result.ok else {
+                entranceReadProblem = "stado fleet ingress status refused: \(result.message)"
+                return
+            }
+            guard let status: FleetIngressStatus = Self.decode(from: result.standardOutput) else {
+                entranceReadProblem = "stado fleet ingress status --json printed a document this build cannot read."
+                return
+            }
             ingress = status
-        }
-        if enrollmentURLConfigured == nil,
-           let result = try? await run(["config", "show"]),
-           result.ok,
-           let document = try? JSONSerialization.jsonObject(with: Data(result.standardOutput.utf8)) as? [String: Any],
-           let resolved = document["resolved"] as? [String: Any] {
+            entranceReadProblem = nil
+            guard enrollmentURLConfigured == nil else { return }
+            let config = try await run(["config", "show"])
+            guard config.ok else {
+                entranceReadProblem = "stado config show refused: \(config.message)"
+                return
+            }
+            guard let document = try JSONSerialization.jsonObject(with: Data(config.standardOutput.utf8)) as? [String: Any],
+                  let resolved = document["resolved"] as? [String: Any] else {
+                entranceReadProblem = "stado config show printed no resolved configuration."
+                return
+            }
             let configured = (resolved["enrollment_url"] as? String) ?? ""
             enrollmentURLConfigured = !configured.isEmpty
+        } catch {
+            entranceReadProblem = Self.describe(error)
         }
     }
 

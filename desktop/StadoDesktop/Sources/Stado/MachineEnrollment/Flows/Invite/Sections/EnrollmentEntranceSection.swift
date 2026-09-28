@@ -26,6 +26,8 @@ struct EnrollmentEntranceSection: View {
                     standing(ingress)
                 } else if store.ingress != nil {
                     absent
+                } else if let problem = store.entranceReadProblem {
+                    EnrollmentNote(title: "The entrance could not be read", detail: problem)
                 } else {
                     EnrollmentNote(
                         title: "Reading",

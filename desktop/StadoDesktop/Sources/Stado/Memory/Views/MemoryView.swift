@@ -56,6 +56,15 @@ struct MemoryView: View {
                     }
                 )
             }
+            if let message = fleetStore.memoryPoliciesProblem {
+                WisentErrorBanner(
+                    title: "Declared memory policies unavailable",
+                    detail: message,
+                    action: WisentAction("Retry", symbol: "arrow.clockwise") {
+                        Task { await fleetStore.refresh() }
+                    }
+                )
+            }
 
             WisentMutationBar(outcome: fleetStore.mutation) { fleetStore.clearMutation() }
 
