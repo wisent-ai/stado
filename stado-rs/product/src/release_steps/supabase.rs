@@ -103,7 +103,7 @@ fn isolate(source: &Path) -> Result<String> {
 
 /// The Supabase project directory inside an unpacked bundle: `project_dir`
 /// relative to its `source/` root, refused when it would leave that root.
-fn project(unpacked: &Path, project_dir: &str) -> Result<PathBuf> {
+fn bundle_project_dir(unpacked: &Path, project_dir: &str) -> Result<PathBuf> {
     let relative = Path::new(project_dir);
     if relative.is_absolute()
         || relative
@@ -135,7 +135,7 @@ pub fn verify(project_dir: &str) -> Result<i32> {
     fs::create_dir_all(&work)?;
     let result = (|| -> Result<()> {
         safe_unpack(&bundle, &work)?;
-        let source = project(&work, project_dir)?;
+        let source = bundle_project_dir(&work, project_dir)?;
         // Only a database this run named can be stopped: until the scratch
         // project_id is written, nothing was started and nothing is stopped.
         let scratch = isolate(&source)?;
@@ -183,7 +183,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         let unpacked = work.join("bundle");
         fs::create_dir_all(&unpacked)?;
         safe_unpack(&bundle, &unpacked)?;
-        let source = project(&unpacked, project_dir)?;
+        let source = bundle_project_dir(&unpacked, project_dir)?;
         supabase(
             &source,
             &["link", "--project-ref", &project],
