@@ -36,9 +36,10 @@ enum CatalogCommands {
     /// read (declared for and granted to the workload agent), for a service
     /// its rollout policy (created from runtime.port when absent) and its own
     /// consumer with exactly `runtime.grants` and its bearer on every rollout
-    /// target, and a check that every required platform
-    /// declares post-build tests. `build submit` and `release submit` run the
-    /// same steps before their first write.
+    /// target, a check that every required platform declares post-build
+    /// tests, and the product's entry in the release catalog the daily batch
+    /// builds from. `build submit` and `release submit` run the same steps
+    /// before their first write.
     Enroll {
         /// The product checkout whose `.wisent-release.json` is read.
         checkout: PathBuf,
@@ -212,7 +213,9 @@ async fn audit(json: bool) -> Result<(), CmdError> {
 }
 
 /// `catalog enroll`: the enrollment `build submit` runs, for one checkout's
-/// manifest as it is in the working tree, reported step by step.
+/// manifest as it is in the working tree, reported step by step, and then the
+/// product's catalog entry, which is what the daily batch builds from: an
+/// enrolled product the catalog does not hold is never built.
 async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), CmdError> {
     let path = checkout.join(release_pipeline::PRODUCT_MANIFEST);
     let bytes = std::fs::read(&path)
@@ -243,7 +246,8 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
             println!("{}: {step}", manifest.product);
         }
     }
-    untested_refusal(&manifest.product, &enrollment.untested)
+    untested_refusal(&manifest.product, &enrollment.untested)?;
+    sync(checkout, json).await
 }
 
 /// The refusal for required platforms without post-build tests: their builds
