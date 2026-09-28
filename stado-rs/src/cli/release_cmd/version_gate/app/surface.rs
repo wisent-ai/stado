@@ -266,7 +266,8 @@ pub(super) fn declared_version(load: Loader, sources: &AppSources) -> Read<Strin
     let source = sources.version_source();
     if sources.info_plist.is_none() {
         if let Some(project) = &sources.tuist_project {
-            return super::tuist::declared_version(load, project);
+            let helpers = &sources.tuist_helpers;
+            return super::tuist::declared_version(load, project, helpers);
         }
         if let Some(manifest) = &sources.cargo_toml {
             return super::cargo::declared_version(load, manifest);

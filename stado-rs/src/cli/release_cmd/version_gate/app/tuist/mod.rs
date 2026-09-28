@@ -82,6 +82,8 @@ pub(super) struct Target {
     bundle_id: String,
     info: Dictionary,
     entitlements: Dictionary,
+    /// The one `.marketingVersion("...")` a shipping target's own text sets.
+    version: String,
 }
 
 fn targets_array(manifest: &str, origin: &str) -> Read<Vec<char>> {
@@ -136,6 +138,7 @@ fn one_target(piece: &[char], project: &Project, origin: &str) -> Read<Target> {
         bundle_id,
         info: Dictionary::new(),
         entitlements: Dictionary::new(),
+        version: String::new(),
     };
     if !shipping {
         return Ok(declared);
@@ -154,6 +157,21 @@ fn one_target(piece: &[char], project: &Project, origin: &str) -> Read<Target> {
     if let Some(text) = labels.get("entitlements") {
         declared.entitlements = target::entitlements(text, project, &at)?;
     }
+    // The version is the one this target's own settings stamp, wherever the
+    // target is declared (the manifest or a helper file).
+    let own = text::string(&body[opening..end]);
+    let versions = MARKETING_VERSION
+        .captures_iter(&own)
+        .map(|found| found["version"].to_string())
+        .collect::<BTreeSet<_>>();
+    let [version] = versions.iter().collect::<Vec<_>>()[..] else {
+        return Err(format!(
+            "{at} stamps {MARKETING_VERSION_VARIABLE} but its own settings set {} distinct .marketingVersion(...) values ({}), expected {EXACTLY_ONE}, so the version it carries is unknown.",
+            versions.len(),
+            versions.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    };
+    declared.version = version.clone();
     Ok(declared)
 }
 
@@ -183,10 +201,10 @@ fn manifest_text(load: Loader, manifest: &str) -> Read<String> {
     String::from_utf8(load(manifest)?).map_err(|error| format!("{manifest}: not UTF-8 ({error})"))
 }
 
-/// The surface of one tree, wherever its bytes come from: `manifest` is the
-/// repository-relative `Project.swift`, `helpers` the files its `.member`
-/// targets are declared in.
-pub(crate) fn surface(load: Loader, manifest: &str, helpers: &[String]) -> Read<Vec<String>> {
+/// Every shipping target of one tree, wherever its bytes come from:
+/// `manifest` is the repository-relative `Project.swift`, `helpers` the files
+/// its `.member` targets are declared in.
+fn shipping(load: Loader, manifest: &str, helpers: &[String]) -> Read<Vec<Target>> {
     let text = manifest_text(load, manifest)?;
     let project = Project {
         load,
@@ -196,11 +214,17 @@ pub(crate) fn surface(load: Loader, manifest: &str, helpers: &[String]) -> Read<
             .unwrap_or_default(),
         helpers,
     };
+    Ok(parse_targets(&text, &project, manifest)?
+        .into_iter()
+        .filter(|declared| target::ships(&declared.product) == Some(true))
+        .collect())
+}
+
+/// The surface of one tree.
+pub(crate) fn surface(load: Loader, manifest: &str, helpers: &[String]) -> Read<Vec<String>> {
     let mut names = BTreeSet::new();
-    for declared in parse_targets(&text, &project, manifest)? {
-        if target::ships(&declared.product) == Some(true) {
-            names.extend(names::target_names(&declared, manifest)?);
-        }
+    for declared in shipping(load, manifest, helpers)? {
+        names.extend(names::target_names(&declared, manifest)?);
     }
     if names.is_empty() {
         return Err(format!(
@@ -210,21 +234,24 @@ pub(crate) fn surface(load: Loader, manifest: &str, helpers: &[String]) -> Read<
     Ok(names.into_iter().collect())
 }
 
-/// The one marketing version the manifest declares.
-pub(crate) fn declared_version(load: Loader, manifest: &str) -> Read<String> {
-    let text = manifest_text(load, manifest)?;
-    let versions = MARKETING_VERSION
-        .captures_iter(&text)
-        .map(|found| found["version"].to_string())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    match versions.as_slice() {
-        [version] => Ok(version.clone()),
+/// The one marketing version every shipping target sets. The App Store
+/// refuses an extension whose version differs from its app's, so targets
+/// that disagree are refused by name rather than one of them being chosen.
+pub(crate) fn declared_version(load: Loader, manifest: &str, helpers: &[String]) -> Read<String> {
+    let targets = shipping(load, manifest, helpers)?;
+    let versions = targets
+        .iter()
+        .map(|declared| declared.version.as_str())
+        .collect::<BTreeSet<_>>();
+    match versions.iter().collect::<Vec<_>>()[..] {
+        [version] => Ok(version.to_string()),
         _ => Err(format!(
-            "{manifest}: found {} distinct marketing versions ({}), expected {EXACTLY_ONE}, so the version an artifact carries would be ambiguous.",
-            versions.len(),
-            versions.join(", ")
+            "{manifest}: its shipping targets set different marketing versions ({}), so the version the artifact carries is ambiguous; every shipping target must set the same one",
+            targets
+                .iter()
+                .map(|declared| format!("{}={}", declared.name, declared.version))
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
     }
 }
