@@ -5,13 +5,16 @@
 //! enough on a host where one is still loaded: it keeps running beside its
 //! replacement, outside every release and review path. Each pass therefore
 //! boots such a unit out and withdraws its autostart on every host that runs
-//! the product replacing it.
+//! the product replacing it, and then does the same for [`strays`]: failing
+//! units in the fleet's namespace that nothing declares at all.
 
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, ServiceStatus, STATE_ACTIVE};
 use crate::deploy::Runner;
 
 use super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
+
+mod strays;
 
 /// The hosts and catalog entries whose predecessors a pass must retire: one
 /// row per declared service that is running and whose catalog entry names at
@@ -31,8 +34,9 @@ pub(super) fn replacements(
         .collect()
 }
 
-/// Retire each replacement's predecessors on its host. Report mode and the
-/// emergency pause record the plan and touch nothing, as for every repair.
+/// Retire each replacement's predecessors on its host, then every failing
+/// undeclared fleet unit on the local hosts. Report mode and the emergency
+/// pause record the plan and touch nothing, as for every repair.
 pub(super) async fn retire(
     replacements: &[(String, crate::deploy::service_catalog::CatalogService)],
     policy: &AutonomyPolicy,
@@ -97,5 +101,6 @@ pub(super) async fn retire(
             ));
         }
     }
+    outcomes.extend(strays::retire_strays(policy, runner, summary).await);
     outcomes
 }

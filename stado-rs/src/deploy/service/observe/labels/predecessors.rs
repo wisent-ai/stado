@@ -27,7 +27,7 @@ pub async fn retire_catalog_predecessors(
 ) -> Vec<PredecessorRetirement> {
     let mut retirements = Vec::with_capacity(replacement.retired_units.len());
     for unit in &replacement.retired_units {
-        retirements.push(match retire_one(target, unit, runner).await {
+        retirements.push(match retire_label(target, unit, runner).await {
             Ok((state, detail)) => PredecessorRetirement {
                 unit: unit.clone(),
                 state,
@@ -43,7 +43,9 @@ pub async fn retire_catalog_predecessors(
     retirements
 }
 
-async fn retire_one(
+/// Retire one exact label on `target`: boot it out and withdraw its
+/// autostart in every scope. `absent` when the host holds neither.
+pub async fn retire_label(
     target: &ComputeTarget,
     unit: &str,
     runner: &Runner,
