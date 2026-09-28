@@ -10,6 +10,9 @@ use crate::targets::ComputeTarget;
 /// self-delivery for.
 const OBJECT_API_SERVICE: &str = "stado-object-api";
 
+/// The route a target reads a release object through.
+const RELEASE_ROUTE: &str = "/api/release/object";
+
 /// A loopback release origin on a remote host is trusted only when
 /// `stado route open` recorded that exact directory route endpoint there. The
 /// marker is not proof that the tunnel is still alive—the subsequent fetch
@@ -71,8 +74,20 @@ pub async fn resolve_release_request(
     let target = host_channel::resolve_target(&registry, target_name)?.clone();
     let platform = products::managed_platform(&target.release_platform)?;
     product.platform(platform)?;
-    let release_api = crate::cli::storage::release_api_origin()
-        .map_err(|error| DeployError(error.to_string()))?;
+    // The origin the registry declares for public release reads is the one a
+    // target can reach without a bearer; the configured API origin answers
+    // only while an edge still forwards the route, and on 2026-09-22 the
+    // stado.wisent.com edge stopped. A fleet that declares no such origin
+    // keeps its configured one.
+    let declared = serde_json::Value::Object(registry.extra.clone());
+    let release_api = match crate::public_origin::publishing(&declared, RELEASE_ROUTE) {
+        Ok(origin) => origin.origin(),
+        Err(_) if crate::public_origin::declarations(&declared).is_empty() => {
+            crate::cli::storage::release_api_origin()
+                .map_err(|error| DeployError(error.to_string()))?
+        }
+        Err(refusal) => return Err(DeployError(refusal)),
+    };
     let identity = catalog_identity(product, version, platform).await?;
     let local_target = registry
         .lookup_self(&crate::providers::vast::system_hostname())
