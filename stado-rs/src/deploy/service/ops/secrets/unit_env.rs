@@ -44,7 +44,19 @@ pub async fn set_unit_env_key_on_host(
 }
 stado="$HOME/.stado/bin/stado"
 [ -x "$stado" ] || stado="$(command -v stado)"
-if ! changed=$(stado_unit_env_writer "$stado" service unit-env-local --path-b64 '@ENV_PATH_B64@' --key-b64 '@KEY_B64@' @VALUE_ARG@ --uid "$service_uid" 2>&1); then
+# The service account may not reach this account's home. It gets its own
+# readable copy of the same Stado for this one edit, removed right after.
+staged=''
+if ! stado_unit_env_writer /bin/sh -c '[ -x "$1" ]' sh "$stado" 2>/dev/null; then
+  staged=$(/bin/mktemp -d /tmp/stado-unit-env.XXXXXX) || { say '@ACTION@_failed' 'cannot stage Stado for the unit account'; exit 1; }
+  /bin/chmod 755 "$staged" && /bin/cp "$stado" "$staged/stado" && /bin/chmod 755 "$staged/stado" \
+    || { /bin/rm -rf "$staged"; say '@ACTION@_failed' 'cannot stage Stado for the unit account'; exit 1; }
+  stado="$staged/stado"
+fi
+written=0
+changed=$(stado_unit_env_writer "$stado" service unit-env-local --path-b64 '@ENV_PATH_B64@' --key-b64 '@KEY_B64@' @VALUE_ARG@ --uid "$service_uid" 2>&1) || written=$?
+[ -z "$staged" ] || /bin/rm -rf "$staged"
+if [ "$written" != 0 ]; then
   say '@ACTION@_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"
   exit 1
 fi
