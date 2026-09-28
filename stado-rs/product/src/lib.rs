@@ -8,6 +8,7 @@
 
 mod cargo;
 pub mod catalog;
+pub mod changelog;
 pub mod cli;
 pub mod common;
 mod creation;

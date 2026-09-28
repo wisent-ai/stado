@@ -5,7 +5,7 @@ pub(crate) mod registry;
 use crate::common::Runtime;
 use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, Command};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn value(name: &'static str, help: &'static str) -> Arg {
     Arg::new(name).long(name).help(help).num_args(1)
@@ -86,6 +86,12 @@ pub fn augment(command: Command) -> Command {
         )
         .subcommand(native::swift())
         .subcommand(native::documentation())
+        .subcommand(
+            Command::new("changelog")
+                .about("Move CHANGELOG.md's Unreleased entries into changelog/ as the given release, in the version-bump commit")
+                .arg(clap::Arg::new("version").long("version").required(true).help("The release the entries go out in"))
+                .arg(clap::Arg::new("root").long("root").default_value(".").help("The repository checkout")),
+        )
 }
 
 /// Run one parsed `stado product` invocation as `build`, returning its exit status.
@@ -188,6 +194,16 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
                 .context("documentation operation is missing")?;
             crate::documentation::run(&action, arguments, &runtime)
         }
+        "changelog" => crate::changelog::run(
+            Path::new(
+                arguments
+                    .get_one::<String>("root")
+                    .context("changelog root is missing")?,
+            ),
+            arguments
+                .get_one::<String>("version")
+                .context("changelog version is missing")?,
+        ),
         _ => unreachable!("Clap admitted an undeclared product command"),
     }
 }

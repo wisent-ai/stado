@@ -6,8 +6,8 @@ a file that stops receiving entries: the length gate refuses every write to a
 file past 300 lines, and this one had reached 414. Two product fixes on
 2026-09-08 could not be recorded at all until it was split.
 
-When a release goes out, move its section into the newest file under
-`changelog/`, and start a new range file when that one nears the limit.
+The version-bump commit moves them with `stado product changelog --version V`;
+`stado build submit` refuses a revision whose Unreleased section still holds entries.
 
 ## Released
 
@@ -16,6 +16,8 @@ When a release goes out, move its section into the newest file under
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **Released changelog entries move out of `CHANGELOG.md` by command, and a release refuses to go out without the move:** `stado product changelog --version V [--root DIR]` moves every entry under `## Unreleased` into `changelog/` as section `## V`, appended to the newest range file (renamed to `<first>-V.md`, its `## Released` link updated) while it stays under 300 lines, otherwise into a new `changelog/V.md` linked first. `stado build submit` refuses a revision whose `CHANGELOG.md` keeps range files and still holds Unreleased entries, naming the count and the command. A repository with no `changelog/` range files is not affected.
 
 - **The release-catalog ownership repair runs in the host's Stado, not Python:** `deploy/release/repair_release_store.sh` was a `python3` program. It is removed; the repair now runs the hidden `stado host release-store-repair-local --config … --product …` on the host, with the same bounded path set (object, metadata and lock plus their parents in the primary and a local backup store), the same refusals (`invalid_product`, unresolved or out-of-home or symlinked store root, `refused_symlink`, `refused_wrong_type`, `refused_foreign_owner`, `postcondition_failed`), the same `sudo -n chown -h` for a root-owned node, and the same output lines.
 
