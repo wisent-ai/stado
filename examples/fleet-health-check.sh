@@ -11,7 +11,7 @@ stado registry beacon-age
 # TARGET, so walk every registry host. `|| true`: one down host must not
 # stop the sweep — its verdict is the point.
 stado registry pull \
-  | python3 -c 'import json,sys; [print(t["name"]) for t in json.load(sys.stdin).get("targets", [])]' \
+  | jq -r '.targets[].name' \
   | while IFS= read -r target; do
       stado host ping "$target" --json || true
     done

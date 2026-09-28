@@ -65,7 +65,7 @@ mkdir -p "$_wc_agent_grant_dir"
 chmod u=rwx,go= "$_wc_agent_grant_dir"
 while [ ! -s "$_wc_agent_grant_file" ]; do
     echo "Waiting for Azure protected-settings agent grant..."
-    python3 -c 'import time; time.sleep(True)'
+    sleep 1
 done
 
 
