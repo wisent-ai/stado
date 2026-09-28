@@ -17,7 +17,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::CmdError;
 use crate::credential_store::owner;
 
-use super::super::owner_vault::{self, Owner};
+use super::owner_vault::{self, Owner};
 use super::{answer, call, item_fields, pooler, token};
 
 /// Characters a masked key is shown with; a masked value stored as a

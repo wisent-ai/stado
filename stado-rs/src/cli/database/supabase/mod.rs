@@ -4,6 +4,7 @@
 
 pub(super) mod adopt;
 pub(super) mod create;
+mod owner_vault;
 
 use serde_json::{json, Value};
 

@@ -16,7 +16,6 @@ use super::resolver::read_local_snapshot;
 use super::CmdError;
 
 mod commands;
-mod owner_vault;
 mod reads;
 mod supabase;
 mod verbs;

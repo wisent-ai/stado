@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 
-use super::super::owner_vault;
+use super::owner_vault;
 use super::{call, field, item_fields, pooler, provider, text, TOKEN_ITEM};
 
 const RUNNING: &str = "ACTIVE_HEALTHY";
