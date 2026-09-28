@@ -160,3 +160,22 @@ pub async fn reap_expired_leases(
     }
     Ok(summary)
 }
+
+/// The same expiry decision for named running jobs only, without the
+/// fleet-wide listing, index repair and sentinel sweep: what a worker runs
+/// for the jobs it finished itself, whose running documents it knows by id.
+/// A job that is not running, or whose lease is still live, is left alone,
+/// exactly as in [`reap_expired_leases`].
+pub async fn reap_named(
+    store: &JobStorage,
+    job_ids: &[String],
+    log: &dyn Fn(&str),
+) -> Result<ReaperSummary, StorageError> {
+    let now = Utc::now();
+    let lease_ttl_seconds = config::HEARTBEAT_STALE_MINUTES * 60;
+    let mut summary = ReaperSummary::default();
+    for job_id in job_ids.iter().filter(|job_id| !job_id.is_empty()) {
+        reap_one(store, job_id, lease_ttl_seconds, now, log, &mut summary).await?;
+    }
+    Ok(summary)
+}

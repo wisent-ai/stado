@@ -200,13 +200,7 @@ pub(super) async fn advance_slots(
             return Err(ReleaseHandoff(detail).into());
         }
     }
-    super::reap::reap_when_idle(
-        store,
-        slots.is_empty(),
-        Duration::from_secs(constants::AGENT_CLAIM_STORE_BUDGET_S),
-        log_fn,
-    )
-    .await;
+    super::reap::reap_when_idle(store, slots.is_empty(), log_fn).await;
     // The janitor's bounded cleanup pass runs on its own task
     // ([`crate::providers::local::agent::janitor`]); this tick only reads
     // passes that have already finished. Awaiting the pass here is what made a
