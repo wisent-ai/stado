@@ -1,9 +1,20 @@
 //! Finite authority commands share native SSH authentication, not a local process.
 
+use std::time::Duration;
+
 use anyhow::{bail, Context, Result};
 use russh::ChannelMsg;
 
 use crate::deploy::host_access::native;
+
+/// Tuning constant: seconds one authority command may take from connect to
+/// its last byte. The snapshot it carries is at most 1 MiB. Unbounded, one
+/// SSH channel that stopped answering held the resolver's refresh for good
+/// on 2026-09-28: the generation froze at 99 while the authority published
+/// 100, and the route consumer-add had just declared was never bound
+/// (defect 27755222). A read past this bound fails like any transport
+/// refusal, and the refresh loop backs off onto a fresh session.
+const AUTHORITY_COMMAND_SECONDS: u64 = 60;
 
 pub(crate) struct Output {
     pub(crate) stdout: Vec<u8>,
@@ -13,6 +24,17 @@ pub(crate) struct Output {
 }
 
 pub(crate) async fn execute(destination: &str, command: &str, limit: usize) -> Result<Output> {
+    let bound = Duration::from_secs(AUTHORITY_COMMAND_SECONDS);
+    match tokio::time::timeout(bound, run(destination, command, limit)).await {
+        Ok(result) => result,
+        Err(_) => bail!(
+            "authority command on {destination} gave no complete answer within \
+             {AUTHORITY_COMMAND_SECONDS}s"
+        ),
+    }
+}
+
+async fn run(destination: &str, command: &str, limit: usize) -> Result<Output> {
     let session = native::connect(destination).await?;
     let mut channel = session
         .channel_open_session()
