@@ -19,9 +19,9 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{json, Value};
 
-use super::baseline::{git, remote_tags, run, REMOTE};
-use super::surface::{self, Read};
-use super::AppSources;
+use super::super::surface::{self, Read};
+use super::super::AppSources;
+use super::{git, remote_tags, run, REMOTE};
 
 const TAG_NAMESPACE: &str = "appstore/";
 /// What the tagging workflow must still say for a tag to outrank HEAD.
@@ -51,7 +51,7 @@ fn slots(version: &str) -> Vec<u64> {
 }
 
 /// `left` compared with `right` slot by slot, a missing slot counting as zero.
-pub(super) fn order(left: &str, right: &str) -> Ordering {
+pub(in super::super) fn order(left: &str, right: &str) -> Ordering {
     let (mut left, mut right) = (slots(left), slots(right));
     let width = left.len().max(right.len());
     left.resize(width, u64::default());
@@ -150,7 +150,7 @@ fn bundle(committed: &Value) -> Read<String> {
 /// The version the App Store serves for the baseline's bundle. The answer's
 /// content is read, never an exit status: no egress, a rate-limit page and
 /// "not on sale" look alike by status, and the entry must name the bundle back.
-pub(super) fn live_version(committed: &Value) -> Read<String> {
+pub(in super::super) fn live_version(committed: &Value) -> Read<String> {
     let bundle = bundle(committed)?;
     let output = Command::new("curl")
         .args(["-sS", &format!("{LOOKUP}{bundle}")])
@@ -185,7 +185,7 @@ fn newest_tag(record: &Value) -> Option<String> {
 
 /// Refuse a baseline that misstates where it came from or that a newer
 /// version on sale supersedes. `record` is the verified provenance record.
-pub(super) fn provenance(
+pub(in super::super) fn provenance(
     record: &Value,
     marker: &str,
     released: &str,

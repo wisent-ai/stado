@@ -10,8 +10,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::super::{conformance, rule};
-use super::baseline::{newest, version_of};
-use super::store;
+use super::baseline::{newest, store, version_of};
 use super::surface::{self, Read};
 use super::AppSources;
 

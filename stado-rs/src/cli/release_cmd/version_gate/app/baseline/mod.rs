@@ -4,6 +4,8 @@
 //! tag's blobs; else `head:<sha>` with the version the Info.plist declares,
 //! only while `origin` serves no version tag.
 
+pub(super) mod store;
+
 use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
@@ -101,7 +103,7 @@ pub(super) fn remote_tags(root: &Path) -> Read<Vec<(String, String)>> {
 /// the App Store reads its `appstore/*` tags instead of version tags.
 pub(super) fn build(root: &Path, sources: &AppSources) -> Read<Value> {
     if let Some(workflow) = &sources.app_store_tags {
-        return super::store::build(root, sources, workflow);
+        return store::build(root, sources, workflow);
     }
     let tags = remote_tags(root)?;
     if let Some(tag) = newest(tags.iter().map(|(name, _)| name.as_str())) {

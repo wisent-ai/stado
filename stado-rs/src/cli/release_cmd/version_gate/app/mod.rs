@@ -8,7 +8,6 @@ mod baseline;
 mod cargo;
 mod check;
 mod javascript;
-mod store;
 mod surface;
 mod tuist;
 
