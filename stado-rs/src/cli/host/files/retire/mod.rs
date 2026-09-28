@@ -43,7 +43,7 @@ impl RetireFileOutcome {
 }
 
 fn retire_refused(message: impl Into<String>) -> CmdError {
-    CmdError::click(format!("space file retire refused: {}", message.into()))
+    CmdError::refused(format!("space file retire refused: {}", message.into()))
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -78,7 +78,9 @@ pub(super) async fn plan_redelivery(
         .deliveries
         .iter()
         .find(|delivery| delivery.name == args.delivery)
-        .ok_or_else(|| CmdError::click(format!("delivery {:?} is not declared", args.delivery)))?;
+        .ok_or_else(|| {
+            CmdError::refused(format!("delivery {:?} is not declared", args.delivery))
+        })?;
     let original = run
         .deliveries
         .get(&delivery.name)

@@ -24,7 +24,7 @@ const OWNER_ONLY: u32 = 0o600;
 const PRIVATE_BITS: u32 = 0o077;
 
 fn refused(detail: impl std::fmt::Display) -> CmdError {
-    CmdError::click(format!("token custody refused: {detail}"))
+    CmdError::refused(format!("token custody refused: {detail}"))
 }
 
 fn token_bytes(data: &[u8]) -> Result<Vec<u8>, CmdError> {

@@ -209,7 +209,7 @@ fn recipe_for_this_host(
     // rustfmt reads the same source and writes the same bytes on every
     // platform. A product built only for Linux is still formatted here.
     platforms.values().next().ok_or_else(|| {
-        CmdError::click("the manifest declares no platform, so it declares no gates".to_string())
+        CmdError::refused("the manifest declares no platform, so it declares no gates".to_string())
     })
 }
 
