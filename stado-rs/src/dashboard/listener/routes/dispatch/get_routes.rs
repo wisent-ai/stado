@@ -64,6 +64,12 @@ impl Dashboard {
             }
             return self.get_object(request, query).await;
         }
+        if path == super::super::sparkle::APPCAST_PATH {
+            return self.get_appcast(query).await;
+        }
+        if path == super::super::sparkle::ARCHIVE_PATH {
+            return self.get_sparkle_archive(query).await;
+        }
         if path == "/api/object" {
             return self.get_object(request, query).await;
         }

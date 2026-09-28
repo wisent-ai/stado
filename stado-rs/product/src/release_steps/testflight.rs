@@ -4,6 +4,7 @@
 //! byk- and wisent-ios.
 
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -11,8 +12,25 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
 
-use super::sparkle::member;
 use super::{output_dir, required, RECORD_SCHEMA};
+
+/// The bytes of the one regular file named `basename` in the gzipped release.
+fn member(archive: &PathBuf, basename: &str) -> Result<Vec<u8>> {
+    let mut bundle = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(archive)?));
+    for entry in bundle.entries()? {
+        let mut entry = entry?;
+        let named = entry.path()?.file_name().and_then(|name| name.to_str()) == Some(basename);
+        if named && entry.header().entry_type().is_file() {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            return Ok(bytes);
+        }
+    }
+    bail!(
+        "the release archive {} holds no {basename}",
+        archive.display()
+    )
+}
 
 pub fn deliver(ipa_name: &str) -> Result<i32> {
     if !ipa_name.ends_with(".ipa") || ipa_name.contains('/') {

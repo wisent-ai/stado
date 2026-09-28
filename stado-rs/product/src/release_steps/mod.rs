@@ -24,7 +24,6 @@ mod linkage;
 mod mirror;
 mod npm;
 mod python;
-mod sparkle;
 mod supabase;
 mod testflight;
 mod tree_archive;

@@ -205,3 +205,51 @@ fn print_row(row: &Value) {
         println!("  origin:      {problem}");
     }
 }
+
+/// `stado web origin url PATH [--query KEY=VALUE]...`: the public URL of
+/// `PATH` on the one declared origin that publishes it, so a product stamps
+/// the address its clients read from the declaration instead of a hostname
+/// written into its own scripts. Refused when no origin publishes the path,
+/// or when several do and the choice would be arbitrary.
+pub(crate) async fn url(path: &str, query: &[String]) -> Result<(), CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let origins = public_origin::declarations(&document);
+    let publishing: Vec<&PublicOrigin> = origins
+        .iter()
+        .filter(|origin| origin.paths.iter().any(|published| published == path))
+        .collect();
+    let origin = match publishing.as_slice() {
+        [origin] => origin,
+        [] => {
+            return Err(CmdError::click(format!(
+                "no declared public origin publishes {path}; declared: {}. Add the path with \
+                 `stado web origin declare <name> ... --path {path}` and converge it",
+                origins
+                    .iter()
+                    .map(|origin| format!("{} ({})", origin.name, origin.paths.join(",")))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )))
+        }
+        several => {
+            return Err(CmdError::click(format!(
+                "{path} is published by several declared origins ({}); remove it from all but one",
+                several
+                    .iter()
+                    .map(|origin| origin.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
+        }
+    };
+    let mut address = url::Url::parse(&format!("{}{path}", origin.origin()))
+        .map_err(|error| CmdError::click(format!("{}{path}: {error}", origin.origin())))?;
+    for pair in query {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| CmdError::click(format!("--query {pair:?} is not KEY=VALUE")))?;
+        address.query_pairs_mut().append_pair(key, value);
+    }
+    println!("{address}");
+    Ok(())
+}

@@ -18,10 +18,17 @@ impl Dashboard {
     pub(crate) async fn do_get(&self, request: &Request) -> Response {
         let path_no_query = request.path.split('?').next().unwrap_or("");
         // The immutable release channel is the recovery root for every other
-        // boundary, so its exact read-only route must not consult host trust or
+        // boundary, so its exact read-only routes must not consult host trust or
         // Skarbiec-backed authorization. Namespace validation remains in
         // `get_routes`; no list, mutation, or other object route enters here.
-        if path_no_query == "/api/release/object" {
+        // The desktop update channel reads only those same published bytes.
+        if [
+            "/api/release/object",
+            super::super::sparkle::APPCAST_PATH,
+            super::super::sparkle::ARCHIVE_PATH,
+        ]
+        .contains(&path_no_query)
+        {
             return match self.get_routes(request).await {
                 Ok(response) => response,
                 Err(error) => dashboard_error_response(error),

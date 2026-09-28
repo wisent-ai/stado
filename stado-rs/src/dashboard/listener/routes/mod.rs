@@ -1,10 +1,11 @@
 //! The routing table: the integration group and the method gates
-//! ([`dispatch`]), the object data plane ([`object`]), and the control plane
-//! ([`control`]).
+//! ([`dispatch`]), the object data plane ([`object`]), the control plane
+//! ([`control`]), and the desktop update channel ([`sparkle`]).
 
 mod control;
 mod dispatch;
 mod object;
+mod sparkle;
 
 use serde_json::json;
 

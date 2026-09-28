@@ -157,6 +157,19 @@ pub(crate) enum OriginCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Print the public URL of PATH on the one declared origin that
+    /// publishes it, with each `--query KEY=VALUE` appended URL-encoded.
+    ///
+    /// A desktop release stamps its Sparkle feed with
+    /// `stado web origin url /api/release/appcast --query product=<product>`.
+    /// Refused when no declared origin publishes PATH, or when several do.
+    Url {
+        /// Absolute path an origin publishes, such as `/api/release/appcast`.
+        path: String,
+        /// A query parameter to append; repeatable.
+        #[arg(long = "query")]
+        query: Vec<String>,
+    },
 }
 
 pub(crate) async fn dispatch(command: OriginCommands) -> Result<(), CmdError> {
@@ -188,5 +201,6 @@ pub(crate) async fn dispatch(command: OriginCommands) -> Result<(), CmdError> {
         OriginCommands::Converge { name, apply, json } => {
             converge::converge(&name, apply, json).await
         }
+        OriginCommands::Url { path, query } => report::url(&path, &query).await,
     }
 }
