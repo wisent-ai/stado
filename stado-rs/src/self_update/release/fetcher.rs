@@ -44,6 +44,9 @@ fn release_coordinates_error(api_url: &str, version: &str, platform: &str) -> Op
     None
 }
 
+/// The state the release route answers for an object it does not hold.
+const ABSENT_STATE: &str = "absent";
+
 /// Public HTTPS Stado object-route fetcher bound to one exact configured
 /// version and platform.
 pub struct HttpReleaseFetcher {
@@ -107,7 +110,27 @@ impl ReleaseFetcher for HttpReleaseFetcher {
             .map_err(|error| SelfUpdateError::Fetch(format!("{endpoint}: {error}")))?;
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
+            // Only the release route's own answer means the object is absent:
+            // `{"state":"absent",...}`. Anything else at 404 is a host that
+            // does not serve the route at all (stado.wisent.com has answered
+            // its site's HTML 404 page since 2026-09-22), and reading that as
+            // "no such release" would report a missing version instead of a
+            // wrong api.url.
+            let body = response
+                .bytes()
+                .await
+                .map_err(|error| SelfUpdateError::Fetch(format!("{endpoint}: {error}")))?;
+            let absent = serde_json::from_slice::<serde_json::Value>(&body)
+                .is_ok_and(|answer| answer["state"] == ABSENT_STATE);
+            if absent {
+                return Ok(None);
+            }
+            return Err(SelfUpdateError::Fetch(format!(
+                "{endpoint} -> HTTP {status} without the release route's absent answer, so {} \
+                 does not serve /api/release/object; set api.url to the scheme and host of \
+                 `stado web origin url /api/release/object`",
+                self.api_url
+            )));
         }
         if !status.is_success() {
             return Err(SelfUpdateError::Fetch(format!(
