@@ -172,10 +172,7 @@ impl Host {
             .args(args)
             .env_clear()
             .env("HOME", &self.home)
-            .env(
-                "STADO_RELEASE_PROXY_SOCKET",
-                self.native.path().join("proxy.sock"),
-            )
+            .env("STADO_RELEASE_PROXY_SOCKET", self.proxy_socket())
             .env("PATH", SYSTEM_PATH)
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_PROVIDERS", "local")
@@ -188,6 +185,12 @@ impl Host {
         self.command(args)
             .output()
             .expect("the built stado binary runs")
+    }
+
+    /// The release-proxy owner socket a `stado serve` of this host binds once
+    /// its release-proxy component is up, which is after the API listens.
+    pub fn proxy_socket(&self) -> PathBuf {
+        self.native.path().join("proxy.sock")
     }
 
     /// Where a `resolver serve` process publishes what it holds.

@@ -121,6 +121,11 @@ fn finite_proxy_commands_share_the_host_pid_and_stop_only_their_listener() {
     let args: Vec<&str> = arguments.iter().map(String::as_str).collect();
     let mut service = Serving::start(&host, &args);
     assert!(wait_listening(policy.upstream), "{}", service.said());
+    assert!(
+        wait_until(|| host.proxy_socket().exists()),
+        "the host never bound its release-proxy owner socket: {}",
+        service.said()
+    );
     let (reservation, port) = held_port();
     let bind = format!("127.0.0.1:{port}");
     let state = host.root.path().join("proxy.json");
@@ -215,6 +220,14 @@ fn another_listener_is_refused_without_stopping_the_host() {
     let args: Vec<&str> = arguments.iter().map(String::as_str).collect();
     let mut service = Serving::start(&host, &args);
     assert!(wait_listening(policy.upstream), "{}", service.said());
+    // The refusal this checks names the occupied bind only once the host's
+    // release-proxy owner is up; before that the command answers that the
+    // owner socket is missing, which on a loaded builder failed a release.
+    assert!(
+        wait_until(|| host.proxy_socket().exists()),
+        "the host never bound its release-proxy owner socket: {}",
+        service.said()
+    );
     let (occupied, port) = held_port();
     let bind = format!("127.0.0.1:{port}");
     let state = host.root.path().join("occupied-proxy.json");
