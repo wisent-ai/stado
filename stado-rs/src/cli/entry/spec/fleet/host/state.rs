@@ -238,6 +238,18 @@ pub(crate) enum HostStateCommands {
         #[arg(long, default_value = "")]
         inventory_namespaces_hex: String,
     },
+    /// The host half of `stado host storage-root-reconcile`: one phase on
+    /// this host's two local storage roots. Prints the marker line the
+    /// transaction worker reads; the owner token and the inherited lock
+    /// descriptor arrive in STADO_RECONCILE_OWNER_TOKEN and
+    /// STADO_RECONCILE_LOCK_FD.
+    #[command(name = "storage-root-reconcile-local", hide = true)]
+    StorageRootReconcileLocal {
+        #[arg(long)]
+        phase: String,
+        #[arg(long)]
+        transaction: String,
+    },
     #[command(name = "storage-root-reconcile-worker", hide = true)]
     StorageRootReconcileWorker {
         target: String,

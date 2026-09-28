@@ -137,31 +137,12 @@ fn source_revision() -> String {
     checkout_revision().unwrap_or_else(|| UNKNOWN_REVISION.to_string())
 }
 
-fn compile_python(source: &Path, out_dir: &Path) {
-    println!("cargo:rerun-if-changed={}", source.display());
-    let cache = out_dir.join("python-cache");
-    std::fs::create_dir_all(&cache).expect("create the Python compilation cache");
-    let output = Command::new("python3")
-        .args(["-m", "py_compile"])
-        .arg(source)
-        .env("PYTHONPYCACHEPREFIX", &cache)
-        .output()
-        .expect("run the Python compiler for the embedded reconciliation program");
-    if !output.status.success() {
-        panic!(
-            "embedded reconciliation Python did not compile:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
 fn main() {
     let out_dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
     let out_dir = Path::new(&out_dir);
     // The join program a joining machine runs lives as ordinal-prefixed
-    // fragments, for the same reason the reconciliation program below does: a
-    // single 496-line file could not be edited under this repository's
-    // 300-line limit. Sorted order is assembly order and the directory
+    // fragments: a single 496-line file could not be edited under this
+    // repository's 300-line limit. Sorted order is assembly order and the directory
     // listing is the only list, so adding a fragment needs no edit here. The
     // bytes written are exactly the concatenation, which is what
     // `GET /join.sh` serves and what `fleet ingress up` compares against.
@@ -181,33 +162,6 @@ fn main() {
         .map(|path| std::fs::read_to_string(path).expect("read a join program fragment"))
         .collect::<String>();
     std::fs::write(out_dir.join("join.sh"), script).expect("write the embedded join script");
-    // The embedded reconciliation program lives as contiguous fragments that
-    // `deploy::host_storage_reconcile` assembles with
-    // `concat!(include_str!(...))`. The directory listing is the only list of
-    // fragments: zero-padded ordinal prefixes make sorted order the assembly
-    // order, so adding a fragment needs no edit here. Every fragment begins at
-    // a top-level statement, so compiling each one alone proves the assembled
-    // program parses.
-    let fragments = Path::new("src")
-        .join("deploy")
-        .join("host_storage_reconcile_program");
-    println!("cargo:rerun-if-changed={}", fragments.display());
-    let mut fragment_files = std::fs::read_dir(&fragments)
-        .expect("read the embedded reconciliation program directory")
-        .map(|entry| {
-            entry
-                .expect("read an embedded reconciliation program fragment")
-                .path()
-        })
-        .collect::<Vec<_>>();
-    fragment_files.sort();
-    assert!(
-        !fragment_files.is_empty(),
-        "the embedded reconciliation program has no fragments"
-    );
-    for fragment in &fragment_files {
-        compile_python(fragment, out_dir);
-    }
     // Always set, in every build context, so the crate can read it with
     // `env!` and no consumer needs a fallback of its own.
     println!("cargo:rustc-env={REVISION_OVERRIDE}={}", source_revision());

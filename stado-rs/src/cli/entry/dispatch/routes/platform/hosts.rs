@@ -118,6 +118,10 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                 ))
             }
         }
+        HostStateCommands::StorageRootReconcileLocal { phase, transaction } => {
+            crate::deploy::host_storage_reconcile_program::run(&phase, &transaction);
+            Ok(())
+        }
         HostStateCommands::StorageRootReconcileWorker {
             target,
             target_config,

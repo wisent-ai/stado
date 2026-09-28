@@ -1,29 +1,28 @@
 use super::*;
 
+/// One phase of the host program, run by the transaction's own tool (the
+/// binary this operator staged, so both sides are one revision). A host
+/// that never launched the transaction has no tool; its reads go to the
+/// installed Stado, which answers them from the same program.
 pub(in crate::deploy::host_storage_reconcile) fn bind_remote_script(
     phase: &str,
     transaction: &str,
 ) -> String {
-    let mut script = String::with_capacity(REMOTE_PYTHON.len() + 512);
-    script.push_str("set -u\nSTADO_RECONCILE_PHASE=");
-    script.push_str(&shlex_quote(phase));
-    script.push_str(" STADO_RECONCILE_TX=");
-    script.push_str(&shlex_quote(transaction));
-    script.push_str(" STADO_RECONCILE_OWNER_TOKEN=");
-    script.push_str(&shlex_quote(
-        RESIDENT_OWNER_TOKEN.get().map(String::as_str).unwrap_or(""),
-    ));
-    script.push_str(" STADO_RECONCILE_LOCK_FD=");
-    script.push_str(&shlex_quote(
-        &RESIDENT_LOCK_FD.get().copied().unwrap_or(-1).to_string(),
-    ));
-    script.push_str(" /usr/bin/python3 - 2>&1 <<'STADO_RECONCILE_EOF'\n");
-    script.push_str(REMOTE_PYTHON);
-    if !REMOTE_PYTHON.ends_with('\n') {
-        script.push('\n');
-    }
-    script.push_str("STADO_RECONCILE_EOF\n");
-    script
+    let owner_token = RESIDENT_OWNER_TOKEN.get().map(String::as_str).unwrap_or("");
+    let lock_fd = RESIDENT_LOCK_FD.get().copied().unwrap_or(-1).to_string();
+    format!(
+        r#"set -u
+tool="$HOME/.stado/recovery/storage-root-reconcile/"{transaction_path}/transaction-tool
+[ -x "$tool" ] || tool="$HOME/.stado/bin/stado"
+STADO_RECONCILE_OWNER_TOKEN={owner_token} STADO_RECONCILE_LOCK_FD={lock_fd} \
+  "$tool" host storage-root-reconcile-local --phase {phase} --transaction {transaction} 2>&1
+"#,
+        transaction_path = shlex_quote(transaction),
+        owner_token = shlex_quote(owner_token),
+        lock_fd = shlex_quote(&lock_fd),
+        phase = shlex_quote(phase),
+        transaction = shlex_quote(transaction),
+    )
 }
 
 pub(in crate::deploy::host_storage_reconcile) fn remote_failure_detail(
