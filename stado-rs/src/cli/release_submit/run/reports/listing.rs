@@ -213,8 +213,19 @@ pub(crate) async fn matching_runs(
         if let Some(state) = &state {
             run["phase"] = Value::String(state.phase().to_owned());
         }
-        if run["required_leg_failed"].as_bool() == Some(true) {
-            run["phase"] = Value::String("failed".into());
+        // A required leg whose job already ended failed decides the run the
+        // way submit will on its next pass. State and phase are derived
+        // together, so the CLI line (which prints `state`), the JSON and the
+        // Desktop console (which read `phase`) all say failed; the stored
+        // word is kept as `recorded_state` for whoever resumes the run.
+        let unfinished = state
+            .as_ref()
+            .is_some_and(|state| !state.finished() && !state.published());
+        if unfinished && run["required_leg_failed"].as_bool() == Some(true) {
+            let failed = crate::release_pipeline::ReleaseRunState::Failed;
+            run["recorded_state"] = run["state"].clone();
+            run["state"] = serde_json::to_value(&failed).expect("a run state serializes");
+            run["phase"] = Value::String(failed.phase().to_owned());
             continue;
         }
         let live = state.is_some_and(|state| !state.finished() && !state.published());
