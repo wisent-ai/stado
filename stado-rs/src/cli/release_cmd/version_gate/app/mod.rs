@@ -19,8 +19,12 @@ use crate::cli::CmdError;
 pub struct AppSources {
     /// The bundle's Info.plist: `bundle-id:` and every `url-scheme:`; its
     /// CFBundleShortVersionString is the declared version
+    #[arg(long, required_unless_present = "package_json")]
+    pub info_plist: Option<String>,
+    /// A package.json: `package:`, every `export:` key and every `bin:`
+    /// command; its `version` is the declared version when no Info.plist is named
     #[arg(long)]
-    pub info_plist: String,
+    pub package_json: Option<String>,
     /// A Package.swift whose executable products are `product:` names
     #[arg(long)]
     pub products: Option<String>,
@@ -28,6 +32,16 @@ pub struct AppSources {
     /// `harness-path:` names; repeatable
     #[arg(long = "appended-paths")]
     pub appended_paths: Vec<String>,
+}
+
+impl AppSources {
+    /// The file the declared version is read from.
+    pub fn version_source(&self) -> &str {
+        self.info_plist
+            .as_deref()
+            .or(self.package_json.as_deref())
+            .expect("clap requires an Info.plist or a package.json")
+    }
 }
 
 #[derive(Args)]

@@ -157,12 +157,12 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
     println!("{change} since {released} requires {required}; declared {declared}; removed {:?}; added {:?}", verdict.removed, verdict.added);
     if declared == released {
         if change != "internal" {
-            return Err(format!("what a user of the app holds changed ({change}) but {} still declares {released}; declare {required}", sources.info_plist));
+            return Err(format!("what a user of the app holds changed ({change}) but {} still declares {released}; declare {required}", sources.version_source()));
         }
     } else if declared != required {
         return Err(format!(
             "{} declares {declared}, but a {change} change since {released} requires {required}",
-            sources.info_plist
+            sources.version_source()
         ));
     }
     Ok(())

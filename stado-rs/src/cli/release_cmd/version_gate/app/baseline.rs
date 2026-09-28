@@ -122,7 +122,7 @@ pub(super) fn build(root: &Path, sources: &AppSources) -> Read<Value> {
     let load = surface::tree(root);
     Ok(json!({
         "version": surface::declared_version(&load, sources)?,
-        "source": format!("head:{sha} {REMOTE} serves no version tag, so nothing has been released and the version is the one {} declares", sources.info_plist),
+        "source": format!("head:{sha} {REMOTE} serves no version tag, so nothing has been released and the version is the one {} declares", sources.version_source()),
         "surface": surface::of(&load, sources)?,
     }))
 }

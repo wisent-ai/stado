@@ -110,10 +110,45 @@ fn bundle_names(load: Loader, path: &str) -> Read<Vec<String>> {
     Ok(names)
 }
 
+/// A package.json's contract: its name (`package:`), every entry point it
+/// exports (`export:`) and every command it installs (`bin:`).
+fn package_names(load: Loader, path: &str) -> Read<Vec<String>> {
+    let document: serde_json::Value = serde_json::from_slice(&load(path)?)
+        .map_err(|error| format!("{path}: not JSON ({error})"))?;
+    let name = document["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("{path}: declares no package name"))?;
+    let mut names = vec![format!("package:{name}")];
+    match &document["exports"] {
+        serde_json::Value::String(_) => names.push("export:.".to_string()),
+        serde_json::Value::Object(map) => {
+            names.extend(map.keys().map(|key| format!("export:{key}")))
+        }
+        serde_json::Value::Null => {}
+        _ => return Err(format!("{path}: exports is neither a path nor a map")),
+    }
+    match &document["bin"] {
+        serde_json::Value::String(_) => {
+            let command = name.rsplit('/').next().unwrap_or(name);
+            names.push(format!("bin:{command}"));
+        }
+        serde_json::Value::Object(map) => names.extend(map.keys().map(|key| format!("bin:{key}"))),
+        serde_json::Value::Null => {}
+        _ => return Err(format!("{path}: bin is neither a path nor a map")),
+    }
+    Ok(names)
+}
+
 /// The surface of one tree, wherever its bytes come from.
 pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
     let mut names = BTreeSet::new();
-    names.extend(bundle_names(load, &sources.info_plist)?);
+    if let Some(plist) = &sources.info_plist {
+        names.extend(bundle_names(load, plist)?);
+    }
+    if let Some(package) = &sources.package_json {
+        names.extend(package_names(load, package)?);
+    }
     if let Some(manifest) = &sources.products {
         for name in products(manifest, &text(load, manifest)?)? {
             names.insert(format!("product:{name}"));
@@ -127,14 +162,19 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
     Ok(names.into_iter().collect())
 }
 
-/// The version the Info.plist declares.
+/// The version the Info.plist declares, else the package.json's `version`.
 pub(super) fn declared_version(load: Loader, sources: &AppSources) -> Read<String> {
-    non_empty(info(load, &sources.info_plist)?.get(KEY_SHORT_VERSION)).ok_or_else(|| {
-        format!(
-            "{}: {KEY_SHORT_VERSION} is missing or empty",
-            sources.info_plist
-        )
-    })
+    let source = sources.version_source();
+    let declared = match &sources.info_plist {
+        Some(plist) => non_empty(info(load, plist)?.get(KEY_SHORT_VERSION)),
+        None => serde_json::from_slice::<serde_json::Value>(&load(source)?)
+            .map_err(|error| format!("{source}: not JSON ({error})"))?["version"]
+            .as_str()
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+            .map(str::to_string),
+    };
+    declared.ok_or_else(|| format!("{source}: declares no version"))
 }
 
 /// Reads repository-relative paths from the tree at `root`.
