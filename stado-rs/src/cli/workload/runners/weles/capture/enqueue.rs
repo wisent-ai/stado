@@ -11,7 +11,9 @@ pub(crate) async fn run_weles_capture(
     json_output: bool,
 ) -> Result<(), CmdError> {
     // Parsing validates the entire plan before the admission endpoint is
-    // resolved or contacted. Enqueue is therefore all-or-nothing.
+    // resolved or contacted, so a malformed plan starts no capture. Execution
+    // is not atomic: captures run one by one, each finished one stays in the
+    // batch record, and the first failure stops the batch there.
     let plan = crate::deploy::weles_capture::parse_plan(plan_path, target, None)
         .map_err(|error| CmdError::usage(error.to_string()))?;
     let admission = crate::deploy::weles_capture::resolve_admission(target)
