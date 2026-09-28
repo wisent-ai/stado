@@ -502,6 +502,23 @@ products:
       WC_STORAGE_BACKEND: local
       WC_LOCAL_STORAGE_PATH: $HOME/.stado/local-storage
     summary: The core object API for registry, queue and release state.
+    role_units:
+    - unit: com.wisent.stado-resolver
+      flag: --resolver
+    - unit: com.wisent.stado-resolver.service
+      flag: --resolver
+    - unit: com.wisent.stado.release-agent
+      flag: --release-interval-seconds
+    - unit: com.wisent.compute.service.stado-release-agent
+      flag: --release-interval-seconds
+    - unit: com.wisent.compute.service.stado-local-control-plane
+      flag: --control-plane
+    - unit: com.wisent.host-health-beacon
+      flag: --health-interval-seconds
+    - unit: com.wisent.compute.service.stado-agent-mini
+      flag: --worker
+    - unit: wisent-compute-agent.service
+      flag: --worker
 - id: lem
   name: Lem
   status: active

@@ -139,6 +139,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             args: unit.args.clone(),
             env: unit.env.clone(),
             retired_units: Vec::new(),
+            role_units: Vec::new(),
         };
         let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
@@ -322,7 +323,8 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         error
     })?;
 
-    predecessors::retire_after_ensure(&target, catalog_entry.as_ref(), &runner).await?;
+    predecessors::retire_after_ensure(&target, catalog_entry.as_ref(), &record.args, &runner)
+        .await?;
     Ok(EnsureReceipt {
         host,
         name: record.name.clone(),

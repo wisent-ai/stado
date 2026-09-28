@@ -22,7 +22,7 @@ mod strays;
 
 /// The hosts and catalog entries whose predecessors a pass must retire: one
 /// row per declared service that is running and whose catalog entry names at
-/// least one retired unit.
+/// least one retired unit, or a role unit whose flag that host's unit carries.
 pub(super) fn replacements(
     statuses: &[ServiceStatus],
 ) -> Vec<(String, crate::deploy::service_catalog::CatalogService)> {
@@ -32,7 +32,8 @@ pub(super) fn replacements(
         .filter_map(|status| {
             let entry = crate::deploy::service_catalog::lookup(&status.service.name)
                 .ok()
-                .flatten()?;
+                .flatten()?
+                .retiring_on(&status.service.args);
             (!entry.retired_units.is_empty()).then(|| (status.service.host.clone(), entry))
         })
         .collect()

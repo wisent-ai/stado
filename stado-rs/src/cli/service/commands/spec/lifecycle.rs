@@ -207,8 +207,11 @@ pub enum LifecycleCommands {
     /// them is then booted out on the same host and its autostart withdrawn in
     /// every launchd domain or systemd manager that still enables it, and
     /// stderr names what was retired. A unit that cannot be retired fails the
-    /// command after the service itself is running. The autonomy reconciler
-    /// does the same on every pass for each running catalog service.
+    /// command after the service itself is running. A catalog `role_units`
+    /// entry is retired the same way, but only when the ensured unit's
+    /// arguments carry that entry's flag, so a unit whose role this host's
+    /// process does not run keeps running. The autonomy reconciler does the
+    /// same on every pass for each running catalog service.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,

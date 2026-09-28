@@ -45,6 +45,40 @@ pub struct CatalogService {
     /// a retired unit brought back runs beside the process that replaced it.
     #[serde(default)]
     pub retired_units: Vec<String>,
+    /// Units whose work moved into a role of this product's one process. A
+    /// role runs only where the host's unit arguments switch it on, so each is
+    /// retired only on a host whose unit carries its flag: retiring it
+    /// anywhere else would stop work nothing has taken over.
+    #[serde(default)]
+    pub role_units: Vec<RoleUnit>,
+}
+
+/// One unit replaced by a role of the product process, and the argument that
+/// switches that role on.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoleUnit {
+    pub unit: String,
+    pub flag: String,
+}
+
+impl CatalogService {
+    /// This entry with the role units whose flag `args` carries added to the
+    /// units retired beside it, for the host whose unit runs with `args`.
+    pub fn retiring_on(&self, args: &[String]) -> CatalogService {
+        let mut entry = self.clone();
+        for role in &self.role_units {
+            let switched_on = args.iter().any(|arg| {
+                arg == &role.flag
+                    || arg
+                        .strip_prefix(role.flag.as_str())
+                        .is_some_and(|rest| rest.starts_with('='))
+            });
+            if switched_on && !entry.retired_units.contains(&role.unit) {
+                entry.retired_units.push(role.unit.clone());
+            }
+        }
+        entry
+    }
 }
 
 /// Every shipped entry, in the catalog's order.

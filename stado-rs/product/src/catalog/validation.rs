@@ -222,6 +222,22 @@ pub fn validate(document: &Value) -> Result<()> {
                     }
                 }
             }
+            // Units a role of the one process replaced where the host switches
+            // that role on: retired by the same rules, keyed by their flag.
+            for role in service["role_units"].as_array().into_iter().flatten() {
+                let unit = role["unit"].as_str().filter(|unit| unit_label(unit));
+                let flag = role["flag"]
+                    .as_str()
+                    .filter(|flag| flag.strip_prefix("--").is_some_and(|name| !name.is_empty()));
+                let (Some(unit), Some(_)) = (unit, flag) else {
+                    bail!(
+                        "{id}.service.role_units: expected {{unit: <label>, flag: --<argument>}}"
+                    );
+                };
+                if let Some(owner) = retired_units.insert(unit, id) {
+                    bail!("{id}.service.role_units: {unit} is already retired by {owner}");
+                }
+            }
         }
     }
     for (id, target) in targets {
