@@ -155,10 +155,8 @@ pub fn release(
         } else {
             member.to_owned()
         });
-        if binary || nested_helper {
-            if !source.is_file() {
-                bail!("CLI stage member must be a regular file under bin/: {member}");
-            }
+        if (binary || nested_helper) && !source.is_file() {
+            bail!("CLI stage member must be a regular file under bin/: {member}");
         }
         if binary {
             placements.push(Placement {
