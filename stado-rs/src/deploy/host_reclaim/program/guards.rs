@@ -2,8 +2,8 @@
 //! the guards that decide whether a candidate may be taken at all.
 //!
 //! `reclaim` is here because it is the only place anything is removed, and
-//! `held`, `process_absent`, `stale` and `stale_minutes` are here because
-//! every stage below asks them rather than carrying its own answer.
+//! `held`, `unit_named`, `process_absent`, `stale` and `stale_minutes` are
+//! here because every stage below asks them rather than carrying its own answer.
 
 /// `set -u` through `reclaim()`, the first segment of the remote program.
 pub(super) const GUARDS: &str = r#"set -u
@@ -137,11 +137,25 @@ local_evidence() {
   return 1
 }
 
-# The only place anything is removed. A held path is skipped silently -- it is
-# not a failure, it is the rule -- and in dry-run mode the path is reported
-# without being touched, so a preview names exactly what an apply would take.
+# A path a unit definition on this host names is an installed service program,
+# not scratch, wherever it lives: the unit runs it again on its next start,
+# so it is kept while the service is down or crash-looping and no process
+# names it. Units are read once per candidate from every init scope.
+unit_named() {
+  for units in /Library/LaunchDaemons "$HOME/Library/LaunchAgents" /etc/systemd/system "$HOME/.config/systemd/user"; do
+    [ -d "$units" ] || continue
+    /usr/bin/grep -rqsF -- "$1" "$units" && return 0
+  done
+  return 1
+}
+
+# The only place anything is removed. A held or unit-named path is skipped
+# silently -- it is not a failure, it is the rule -- and in dry-run mode the
+# path is reported without being touched, so a preview names exactly what an
+# apply would take.
 reclaim() {
   if held "$1"; then return 1; fi
+  if unit_named "$1"; then return 1; fi
   if [ "$apply" = 1 ]; then
     /bin/rm -rf -- "$1" 2>/dev/null || return 1
   fi

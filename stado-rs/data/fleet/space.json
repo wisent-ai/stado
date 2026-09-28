@@ -9,7 +9,7 @@
     },
     {
       "name": "build_scratch",
-      "description": "Stale release-build work beneath $HOME/.stado/build-work.",
+      "description": "Stale release-build work beneath $HOME/.stado/build-work; a tree a launchd or systemd unit on the host names is a service's program and is kept.",
       "roots": ["~/.stado/build-work"]
     },
     {
