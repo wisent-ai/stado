@@ -73,8 +73,15 @@ extension DeploymentSetupView {
         do {
             try await provision(deployment: deployment, target: target)
         } catch {
-            await deploymentStore.markFailed(deploymentID: deployment.id)
-            errorMessage = Self.describe(error)
+            let provisioningFailure = Self.describe(error)
+            do {
+                try await deploymentStore.markFailed(deploymentID: deployment.id)
+                errorMessage = provisioningFailure
+            } catch {
+                errorMessage = provisioningFailure
+                    + " Stado could not record this deployment as failed, so the registry still lists it as provisioning: "
+                    + Self.describe(error)
+            }
             isProvisioning = false
         }
     }

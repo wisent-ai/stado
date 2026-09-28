@@ -115,22 +115,17 @@ final class DeploymentStore: ObservableObject {
         return deployment
     }
 
-    func markFailed(deploymentID: String) async {
-        guard let identity else { return }
-        do {
-            let deployment = try await client.updateDeployment(
-                id: deploymentID,
-                endpoint: nil,
-                status: .failed,
-                region: nil,
-                identity: identity
-            )
-            replace(deployment)
-        } catch {
-            return
-        }
+    func markFailed(deploymentID: String) async throws {
+        guard let identity else { throw DeploymentStoreError.notAuthenticated }
+        let deployment = try await client.updateDeployment(
+            id: deploymentID,
+            endpoint: nil,
+            status: .failed,
+            region: nil,
+            identity: identity
+        )
+        replace(deployment)
     }
-
 
     private func reconcileSelection() {
         guard let selectedDeploymentID else { return }
