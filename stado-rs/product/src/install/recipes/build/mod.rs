@@ -1,3 +1,4 @@
+mod evidence;
 mod inputs;
 pub mod manifest;
 mod mounts;
@@ -35,9 +36,7 @@ pub fn release(
     root: &Path,
 ) -> Result<Prepared> {
     let id = text(product, "id")?;
-    let evidence = root
-        .join(".wisent-output/install")
-        .join(uuid::Uuid::new_v4().to_string());
+    let evidence = evidence::directory(root)?;
     let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
     let revision = recorded["revision"]
         .as_str()
@@ -210,9 +209,7 @@ pub fn desktop(
     if !cfg!(target_os = "macos") {
         bail!("desktop bundle installation requires macOS");
     }
-    let evidence = root
-        .join(".wisent-output/install")
-        .join(uuid::Uuid::new_v4().to_string());
+    let evidence = evidence::directory(root)?;
     let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
     let document = if recipe["kind"] == "desktop-release" {
         manifest::load(root, text(recipe, "manifest")?)?
