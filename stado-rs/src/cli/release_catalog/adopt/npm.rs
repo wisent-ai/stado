@@ -42,9 +42,9 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
             "{PACKAGE} names the package {name:?}, but the product is {product}; pass --product {unscoped}"
         )));
     }
-    let version = package["version"].as_str().ok_or_else(|| {
-        CmdError::click(format!("{} declares no version", path.display()))
-    })?;
+    let version = package["version"]
+        .as_str()
+        .ok_or_else(|| CmdError::click(format!("{} declares no version", path.display())))?;
     let shipped: Vec<&str> = package["files"]
         .as_array()
         .into_iter()
@@ -64,7 +64,13 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         )));
     }
     let bundle = format!("{product}-source.tar");
-    let mut build = vec!["stado", "product", "source-bundle", "--name", bundle.as_str()];
+    let mut build = vec![
+        "stado",
+        "product",
+        "source-bundle",
+        "--name",
+        bundle.as_str(),
+    ];
     let locks = LOCKS.iter().filter(|lock| checkout.join(lock).is_file());
     for include in [PACKAGE].iter().chain(locks).chain(shipped.iter()) {
         build.extend(["--include", *include]);
@@ -100,7 +106,10 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
     let text = serde_json::to_string_pretty(&manifest)
         .map_err(|error| CmdError::click(error.to_string()))?
         + "\n";
-    eprintln!("{product}: {PACKAGE} version {version}, ships {}", shipped.join(" "));
+    eprintln!(
+        "{product}: {PACKAGE} version {version}, ships {}",
+        shipped.join(" ")
+    );
     Ok(vec![Planned {
         path: checkout.join(PRODUCT_MANIFEST),
         text,

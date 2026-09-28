@@ -141,7 +141,9 @@ fn origin_tag_commits(root: &Path) -> Result<BTreeMap<String, String>, CmdError>
                 commits.insert(tag.to_string(), sha.to_string());
             }
             None => {
-                commits.entry(name.to_string()).or_insert_with(|| sha.to_string());
+                commits
+                    .entry(name.to_string())
+                    .or_insert_with(|| sha.to_string());
             }
         }
     }

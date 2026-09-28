@@ -82,9 +82,19 @@ pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdEr
     };
     let diff = git_text(
         root,
-        &["diff", "--unified=0", "--no-color", "--no-renames", &base, commit],
+        &[
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-renames",
+            &base,
+            commit,
+        ],
     )?;
-    let names = git_text(root, &["diff", "--name-only", "--no-renames", &base, commit])?;
+    let names = git_text(
+        root,
+        &["diff", "--name-only", "--no-renames", &base, commit],
+    )?;
     let paths = names.lines().map(str::to_owned).collect::<Vec<_>>();
     let document = json!({
         "baseline_tag": tag,
