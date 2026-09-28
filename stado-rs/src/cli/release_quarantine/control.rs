@@ -28,7 +28,7 @@ pub(crate) fn resolve_target<'a>(
     let policy = control
         .products
         .get(product)
-        .ok_or_else(|| CmdError::click(format!("unknown release product {product:?}")))?;
+        .ok_or_else(|| crate::cli::release_cmd::unknown_release_product(control, product))?;
     let name = match target {
         Some(named) => named.to_string(),
         None => {

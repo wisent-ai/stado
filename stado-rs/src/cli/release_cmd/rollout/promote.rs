@@ -31,7 +31,7 @@ pub(in crate::cli::release_cmd) async fn promote(
         let mut control = release_control::control(&document)?
             .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
         let policy = control.products.get(&args.product).ok_or_else(|| {
-            CmdError::click(format!("unknown release product {:?}", args.product))
+            crate::cli::release_cmd::unknown_release_product(&control, &args.product)
         })?;
         let mut artifacts = BTreeMap::new();
         let mut revisions = BTreeSet::new();
