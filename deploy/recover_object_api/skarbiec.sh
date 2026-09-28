@@ -10,105 +10,8 @@ reconcile_skarbiec_bootstrap() {
   if [ ! -r "$release_registry" ]; then
     release_registry="$store/registry.json"
   fi
-  plan=$(
-    /usr/bin/python3 - "$release_registry" "$host" "$account" "$HOME" <<'PY'
-import json, os, sys
-
-path, host, account, home = sys.argv[1:]
-with open(path, encoding="utf-8") as handle:
-    document = json.load(handle)
-products = ((document.get("release_control") or {}).get("products") or {})
-policy = products.get("skarbiec")
-if not isinstance(policy, dict):
-    print("absent")
-    raise SystemExit
-strategy = policy.get("strategy") or {}
-if strategy.get("kind") != "blue-green":
-    raise SystemExit("skarbiec bootstrap refused: release strategy is not blue-green")
-targets = policy.get("targets") or {}
-target_name = host if host in targets else None
-if target_name is None:
-    matches = [
-        name
-        for name, target in targets.items()
-        if isinstance(target, dict)
-        and target.get("run_as_user") == account
-        and os.path.abspath(os.path.expanduser(target.get("home") or "")) == home
-    ]
-    if len(matches) != 1:
-        raise SystemExit(
-            "skarbiec bootstrap refused: registry does not identify this host exactly"
-        )
-    target_name = matches[0]
-target = targets[target_name]
-state_dir = target.get("state_dir") or ""
-stable_bind = target.get("stable_bind") or ""
-readiness_path = target.get("readiness_path") or ""
-legacy_plist = target.get("legacy_launchd_plist") or ""
-legacy_label = target.get("legacy_launchd_label") or ""
-candidate_ports = target.get("candidate_ports") or []
-timeout = strategy.get("readiness_timeout_seconds")
-required = (state_dir, stable_bind, readiness_path)
-if not all(isinstance(value, str) and value for value in required):
-    raise SystemExit("skarbiec bootstrap refused: release target is incomplete")
-legacy_values = (legacy_plist, legacy_label)
-if not all(isinstance(value, str) for value in legacy_values):
-    raise SystemExit("skarbiec bootstrap refused: legacy plist and label must be strings")
-legacy_configured = all(bool(value) for value in legacy_values)
-if legacy_configured != any(bool(value) for value in legacy_values):
-    raise SystemExit(
-        "skarbiec bootstrap refused: legacy plist and label must be declared together"
-    )
-checked = required + (legacy_values if legacy_configured else ())
-if any(any(character in value for character in "\t\r\n") for value in checked):
-    raise SystemExit("skarbiec bootstrap refused: release target contains control characters")
-host_part, separator, port_text = stable_bind.partition(":")
-if host_part != "127.0.0.1" or separator != ":":
-    raise SystemExit("skarbiec bootstrap refused: stable bind is not loopback")
-try:
-    stable_port = int(port_text)
-except ValueError:
-    stable_port = 0
-if not 1 <= stable_port <= 65535:
-    raise SystemExit("skarbiec bootstrap refused: stable bind port is invalid")
-if not readiness_path.startswith("/") or any(character.isspace() for character in readiness_path):
-    raise SystemExit("skarbiec bootstrap refused: readiness path is invalid")
-if legacy_configured and (
-    not all(
-        character.isascii() and (character.isalnum() or character in ".-_")
-        for character in legacy_label
-    )
-    or legacy_plist != f"/Library/LaunchDaemons/{legacy_label}.plist"
-):
-    raise SystemExit("skarbiec bootstrap refused: legacy launchd identity is invalid")
-if (
-    not isinstance(candidate_ports, list)
-    or len(candidate_ports) != 2
-    or any(not isinstance(port, int) or not 1 <= port <= 65535 for port in candidate_ports)
-):
-    raise SystemExit("skarbiec bootstrap refused: candidate ports are invalid")
-if not isinstance(timeout, int) or not 1 <= timeout <= 600:
-    raise SystemExit("skarbiec bootstrap refused: readiness timeout is invalid")
-state_dir = os.path.abspath(os.path.expanduser(state_dir))
-if legacy_configured:
-    legacy_plist = os.path.abspath(os.path.expanduser(legacy_plist))
-else:
-    legacy_plist = legacy_label = "-"
-fields = (
-    "managed",
-    target_name,
-    os.path.join(state_dir, "skarbiec.json"),
-    os.path.join(state_dir, "skarbiec-proxy.json"),
-    stable_bind,
-    ",".join(str(port) for port in candidate_ports),
-    readiness_path,
-    legacy_plist,
-    legacy_label,
-    str(timeout),
-)
-print("\t".join(fields))
-PY
-  )
+  plan=$("$program" host object-api-local skarbiec-plan --registry "$release_registry" \
+    --host "$host" --account "$account")
   IFS=$'\t' read -r managed target_name release_state proxy_state stable_bind \
     candidate_ports readiness_path legacy_plist legacy_label readiness_timeout <<< "$plan"
   if [ "$managed" = absent ]; then
@@ -120,18 +23,8 @@ PY
     return 1
   fi
 
-  ownership=$(
-    /usr/bin/python3 - "$release_state" "$target_name" <<'PY'
-import json, sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    state = json.load(handle)
-if state.get("product") != "skarbiec" or state.get("target") != sys.argv[2]:
-    raise SystemExit("skarbiec bootstrap refused: release state identity differs")
-owned = [state.get(field) for field in ("active", "candidate", "previous")]
-print("owned" if any(record is not None for record in owned) or state.get("proxy_pid") is not None else "unowned")
-PY
-  )
+  ownership=$("$program" host object-api-local skarbiec-ownership --state "$release_state" \
+    --target "$target_name")
   if [ "$ownership" = owned ]; then
     if /usr/bin/curl --silent --show-error --fail --max-time 3 \
       "http://$stable_bind$readiness_path" >/dev/null 2>&1; then
@@ -142,19 +35,8 @@ PY
     return 1
   fi
 
-  upstream=$(
-    /usr/bin/python3 - "$proxy_state" "$candidate_ports" <<'PY'
-import json, sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    state = json.load(handle)
-upstream = state.get("upstream")
-allowed = {f"127.0.0.1:{port}" for port in sys.argv[2].split(",")}
-if upstream not in allowed:
-    raise SystemExit("skarbiec bootstrap refused: proxy upstream is not a declared candidate")
-print(upstream)
-PY
-  )
+  upstream=$("$program" host object-api-local skarbiec-upstream --state "$proxy_state" \
+    --ports "$candidate_ports")
   if /usr/bin/curl --silent --show-error --fail --max-time 3 \
     "http://$upstream$readiness_path" >/dev/null 2>&1; then
     printf 'skarbiec_bootstrap active_handoff upstream=%s\n' "$upstream"
@@ -163,46 +45,8 @@ PY
 
   processes="$work/skarbiec-release-proxies.txt"
   /bin/ps axww -o pid= -o command= > "$processes"
-  match=$(
-    /usr/bin/python3 - "$processes" "$proxy_state" "$stable_bind" <<'PY'
-import os, shlex, sys
-
-matches = []
-with open(sys.argv[1], encoding="utf-8", errors="replace") as handle:
-    for line in handle:
-        fields = line.strip().split(maxsplit=1)
-        if len(fields) != 2 or not fields[0].isdigit():
-            continue
-        try:
-            argv = shlex.split(fields[1])
-        except ValueError:
-            continue
-        expected = [
-            "release",
-            "proxy",
-            "--state",
-            sys.argv[2],
-            "--bind",
-            sys.argv[3],
-        ]
-        if (
-            len(argv) == 7
-            and argv[1:] == expected
-            and os.path.basename(argv[0]) == "stado"
-            and os.path.isfile(argv[0])
-            and os.access(argv[0], os.X_OK)
-        ):
-            matches.append((int(fields[0]), argv[0]))
-if not matches:
-    print("none")
-elif len(matches) == 1:
-    print(f"exact\t{matches[0][0]}\t{matches[0][1]}")
-else:
-    raise SystemExit(
-        f"skarbiec bootstrap refused: {len(matches)} exact release proxies found"
-    )
-PY
-  )
+  match=$("$program" host object-api-local skarbiec-proxy-match --processes "$processes" \
+    --state "$proxy_state" --bind "$stable_bind")
   IFS=$'\t' read -r match_kind proxy_pid proxy_executable <<< "$match"
   if [ "$match_kind" = none ]; then
     printf 'skarbiec_bootstrap no_exact_orphan\n'

@@ -7,11 +7,10 @@ use crate::cli::host::machine::config::remote::{remote_config_output, RemoteConf
 use crate::cli::host::machine::config::write_host_config;
 
 /// The recovery program this command sends, assembled from its four
-/// fragments in exactly this order: the prologue and its readers, the
-/// Skarbiec bootstrap reconciliation, the route inspection, and the recovery
-/// itself. The text a host receives is byte-for-byte the program the
-/// fragments spell out; they are separate files because a single 819-line
-/// one could not be edited under this repository's 300-line limit.
+/// fragments in exactly this order: the prologue, the Skarbiec bootstrap
+/// reconciliation, the route inspection, and the recovery itself. The shell
+/// keeps the launchd, sudo and curl steps; every reader of JSON, plist and
+/// process state it needs is the host's own `stado host object-api-local`.
 const RECOVERY_PROGRAM: &str = concat!(
     include_str!("../../../../../../deploy/recover_object_api/prologue.sh"),
     include_str!("../../../../../../deploy/recover_object_api/skarbiec.sh"),

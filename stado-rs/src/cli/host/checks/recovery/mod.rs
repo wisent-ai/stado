@@ -2,6 +2,7 @@
 
 pub(in crate::cli::host) mod link;
 pub(in crate::cli::host) mod object_api;
+pub(in crate::cli::host) mod object_api_local;
 pub(in crate::cli::host) mod release_store;
 pub(in crate::cli::host) mod run_locked;
 pub(in crate::cli::host) mod skarbiec;

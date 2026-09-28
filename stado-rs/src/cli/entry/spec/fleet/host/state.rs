@@ -202,6 +202,10 @@ pub(crate) enum HostStateCommands {
         #[arg(last = true)]
         program: Vec<String>,
     },
+    /// The host half of the object-API recovery: its readers of this host's
+    /// config, launchd definitions, route and Skarbiec release state.
+    #[command(name = "object-api-local", hide = true, subcommand)]
+    ObjectApiLocal(crate::cli::host::ObjectApiLocalCommands),
     /// Return one release-catalog coordinate in this host's local stores to
     /// the managed account; the host half of the release-store repair.
     #[command(name = "release-store-repair-local", hide = true)]

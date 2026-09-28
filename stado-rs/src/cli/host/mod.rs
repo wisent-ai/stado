@@ -27,6 +27,9 @@ pub use crate::cli::host::checks::probes::vitals::exec;
 pub use crate::cli::host::checks::probes::vitals::ping;
 pub use crate::cli::host::checks::probes::vitals::uptime;
 pub use crate::cli::host::checks::recovery::link::report::link;
+pub use crate::cli::host::checks::recovery::object_api_local::{
+    dispatch as object_api_local, ObjectApiLocalCommands,
+};
 pub use crate::cli::host::checks::recovery::release_store::release_store_repair_local;
 pub use crate::cli::host::checks::recovery::run_locked::run_locked;
 pub use crate::cli::host::files::forwarding::deliver;

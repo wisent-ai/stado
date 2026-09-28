@@ -1,9 +1,3 @@
-    if any(character in field for character in "\t\r\n"):
-        raise SystemExit("object API recovery refused: route contains control characters")
-print("\t".join(field if field else "-" for field in fields))
-PY
-}
-
 capture_loaded_route() {
   loaded=0
   loaded_backend=-
@@ -63,16 +57,7 @@ loaded_ready_for_root() {
 }
 
 same=0
-if /usr/bin/python3 - "$staged" "$plist" <<'PY'
-import plistlib, sys
-try:
-    with open(sys.argv[1], "rb") as expected, open(sys.argv[2], "rb") as actual:
-        same = plistlib.load(expected) == plistlib.load(actual)
-except (OSError, plistlib.InvalidFileException):
-    same = False
-raise SystemExit(0 if same else 1)
-PY
-then same=1; fi
+if "$program" host object-api-local plist-equal "$staged" "$plist"; then same=1; fi
 
 declared_backend=-
 declared_primary_root=-
