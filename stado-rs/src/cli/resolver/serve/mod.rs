@@ -217,12 +217,11 @@ async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Resu
                     "stado resolver refresh failed, attempt {attempt}, next in {}s: {error}",
                     delay.as_secs()
                 );
-                publish(&PublishedState::backing_off(
-                    &state.local_target,
-                    attempt,
-                    &error,
-                    delay,
-                ));
+                // The listeners stay bound through a failed refresh.
+                publish(
+                    &PublishedState::backing_off(&state.local_target, attempt, &error, delay)
+                        .bound(),
+                );
                 tokio::time::sleep(delay).await;
             }
         }

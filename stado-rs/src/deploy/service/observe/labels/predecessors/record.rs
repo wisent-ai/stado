@@ -12,13 +12,26 @@ pub(super) struct Record {
     pub(super) artefact: String,
 }
 
-/// `(state, pid, written epoch)` the resolver last published on `target`, as
-/// the replacement's own Stado reads it.
+/// What the resolver last published on a host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Published {
+    /// Registry health: `serving`, `starting`, `backing_off` or `failed`.
+    pub(super) state: String,
+    pub(super) pid: u32,
+    /// When it was written, epoch seconds.
+    pub(super) written: i64,
+    /// Whether `pid` held its listeners bound when it wrote this, whatever
+    /// the registry's health: the one signal of who owns the ports.
+    pub(super) listening: bool,
+}
+
+/// What the resolver last published on `target`, as the replacement's own
+/// Stado reads it.
 pub(super) async fn read_published(
     target: &ComputeTarget,
     program: &str,
     runner: &Runner,
-) -> Result<Option<(String, u32, i64)>, DeployError> {
+) -> Result<Option<Published>, DeployError> {
     if program.is_empty() {
         return Ok(None);
     }
@@ -36,11 +49,12 @@ pub(super) async fn read_published(
     Ok(output
         .lines()
         .find_map(|line| match host_channel::marker_fields(line).as_slice() {
-            ["STADO_RESOLVER_STATE", state, pid, written] => Some((
-                (*state).trim().to_string(),
-                pid.trim().parse().ok()?,
-                written.trim().parse().ok()?,
-            )),
+            ["STADO_RESOLVER_STATE", state, pid, written, listening] => Some(Published {
+                state: (*state).trim().to_string(),
+                pid: pid.trim().parse().ok()?,
+                written: written.trim().parse().ok()?,
+                listening: listening.trim() == "1",
+            }),
             _ => None,
         }))
 }

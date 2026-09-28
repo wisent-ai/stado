@@ -103,6 +103,11 @@ pub(crate) struct PublishedState {
     /// The slug only: the underlying sentence names a path and the
     /// authority's own words, and this file is read by another process.
     pub(super) last_good_refusal: Option<String>,
+    /// Whether the process that wrote this holds its listeners bound. Kept
+    /// apart from `state`, which is the registry's health: a failed refresh
+    /// publishes `backing_off` while every port stays bound, and a reader
+    /// asking who owns the ports must not read that as "not listening".
+    pub(super) listening: bool,
 }
 
 impl PublishedState {
@@ -132,6 +137,7 @@ impl PublishedState {
             store_version: Some(store_version.to_string()),
             loaded_at: Some(loaded_at.to_string()),
             last_good_refusal: last_good_refusal.map(str::to_string),
+            listening: true,
             ..Self::default()
         }
     }
@@ -159,6 +165,12 @@ impl PublishedState {
             reason: Some(reason.to_string()),
             ..Self::default()
         }
+    }
+
+    /// The same state, written by a process whose listeners are bound.
+    pub(crate) fn bound(mut self) -> Self {
+        self.listening = true;
+        self
     }
 }
 
@@ -210,16 +222,18 @@ pub(super) fn published_state() -> Option<PublishedState> {
     serde_json::from_str(&body).ok()
 }
 
-/// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it and
-/// when (epoch), for the host-side question whether a resolver role took
-/// over its old unit's ports; `None` when no resolver has published.
+/// `STADO_RESOLVER_STATE`, the published state, the pid that wrote it, when
+/// (epoch) and whether that pid holds its listeners bound (`1`/`0`), for the
+/// host-side question whether a resolver role took over its old unit's ports;
+/// `None` when no resolver has published.
 pub(crate) fn readiness_marker() -> Option<String> {
     let state = published_state()?;
     let written = chrono::DateTime::parse_from_rfc3339(&state.updated_at).ok()?;
     Some(format!(
-        "STADO_RESOLVER_STATE\t{}\t{}\t{}",
+        "STADO_RESOLVER_STATE\t{}\t{}\t{}\t{}",
         state.state,
         state.pid,
-        written.timestamp()
+        written.timestamp(),
+        u8::from(state.listening)
     ))
 }

@@ -5,8 +5,10 @@
 //! While the old unit holds them the new resolver's bind fails, and the
 //! supervisor ends the whole `stado serve` over it, so the replacement comes
 //! and goes with a new pid each time. A switched-on flag proves nothing; the
-//! proof is the resolver's own published state, `serving`, written after the
-//! old unit stepped aside by the replacement's current pid.
+//! proof is the resolver's own published word that its listeners are bound,
+//! written after the old unit stepped aside. That word is kept apart from the
+//! registry's health: a failed refresh publishes `backing_off` with the
+//! listeners still bound, so `serving` alone would miss an acquisition.
 //!
 //! The host keeps one record per unit in `~/.stado/role-handoffs/<unit>`,
 //! keyed by the unit and not by a pid, because the replacement's pid does not
@@ -15,18 +17,19 @@
 //!
 //! - No record, and the replacement runs the role: the unit steps aside
 //!   (`handed_over`). Only a caller that can bring the unit back starts one.
-//! - The resolver published `serving`, by the pid the replacement runs now,
-//!   after the record was written: the listener is acquired. The record says
-//!   `acquired` until the old unit's retirement is confirmed, which is retried
-//!   every pass, and `complete` after it.
+//! - The resolver published its listeners bound after the record was written:
+//!   the listener is acquired. The record says `acquired` until the old
+//!   unit's retirement is confirmed, which is retried every pass, and
+//!   `complete` after it.
 //! - `complete`: the unit stays retired. Registry health after that is the
 //!   resolver's own business: a `backing_off` over a failed refresh keeps its
 //!   listeners bound, and bringing the old unit back beside it would only
 //!   collide with them.
-//! - `handed_over`, and it published anything else since, or the registry
-//!   holds the replacement stopped: the listener was never acquired, so the
-//!   withdrawn scopes are restored and the record is marked `refused` for that
-//!   artefact, so the declared unit is repaired.
+//! - `handed_over`, and it published anything since without its listeners
+//!   (other than `starting`), or the registry holds the replacement stopped:
+//!   the listener was never acquired, so the withdrawn scopes are restored and
+//!   the record is marked `refused` for that artefact, so the declared unit is
+//!   repaired.
 //! - `handed_over` with nothing published since, or the replacement between
 //!   two restarts: the resolver has not answered; the unit stays out.
 //! - `refused`: kept until a different replacement artefact is installed, or
@@ -81,16 +84,24 @@ pub async fn handoff_standing(
     let record = read_record(target, unit, runner).await?;
     let published = read_published(target, &process.declared, runner).await?;
     let current: Option<u32> = process.pid.trim().parse().ok();
-    let serving_now = |since: i64| {
-        not_running.is_none()
-            && published.as_ref().is_some_and(|(state, pid, written)| {
-                state == "serving" && Some(*pid) == current && *written > since
-            })
+    // Before any handoff the old unit may be the one listening, so only the
+    // replacement's own pid counts.
+    let listening_now = not_running.is_none()
+        && published
+            .as_ref()
+            .is_some_and(|seen| seen.listening && Some(seen.pid) == current);
+    // After the old unit stepped aside, anything that bound the ports is the
+    // replacement's resolver, even a pid that has restarted since: the
+    // listener was acquired, whatever the registry's health says.
+    let acquired_since = |since: i64| {
+        published
+            .as_ref()
+            .is_some_and(|seen| seen.listening && seen.written > since)
     };
     let Some(record) = record else {
         return Ok(match not_running {
             Some(reason) => Handoff::Kept(reason.to_string()),
-            None if serving_now(i64::MIN) => Handoff::Complete,
+            None if listening_now => Handoff::Complete,
             None => Handoff::Start,
         });
     };
@@ -105,7 +116,7 @@ pub async fn handoff_standing(
     if record.state == "acquired" {
         return Ok(Handoff::Complete);
     }
-    if serving_now(record.since) {
+    if acquired_since(record.since) {
         return Ok(Handoff::Complete);
     }
     if record.state == "refused" {
@@ -126,9 +137,11 @@ pub async fn handoff_standing(
         detail,
     };
     Ok(match (published, not_running) {
-        (Some((state, pid, written)), _) if written > record.since && state != "starting" => {
+        (Some(seen), _) if seen.written > record.since && seen.state != "starting" => {
             restore(format!(
-                "the resolver in pid {pid} published {state} after {unit} stepped aside"
+                "the resolver in pid {} published {} without its listeners after {unit} \
+                 stepped aside",
+                seen.pid, seen.state
             ))
         }
         (_, Some(reason)) if stopped => restore(format!("{unit} stepped aside, but {reason}")),
