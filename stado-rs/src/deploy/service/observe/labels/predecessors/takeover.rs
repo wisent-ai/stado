@@ -28,12 +28,16 @@ fn own_unit() -> Option<String> {
 }
 
 /// Retire, on this host, every unit the catalog lists as retired by the host
-/// Stado process, when this process is that unit's own main process. Both
-/// the launchd label and the cgroup are inherited by children, so the name
-/// alone proves nothing: the init system must also bind the unit to this
-/// pid. A process started any other way, a child of any unit, or an old unit
-/// restarting retires nothing.
-async fn take_over_retired(runner: &Runner) -> Result<Vec<PredecessorRetirement>, DeployError> {
+/// Stado process, when this process is that unit's own main process and is
+/// about to serve the object API from `served_root`. Both the launchd label
+/// and the cgroup are inherited by children, so the name alone proves
+/// nothing: the init system must also bind the unit to this pid. A process
+/// started any other way, a child of any unit, or an old unit restarting
+/// retires nothing.
+async fn take_over_retired(
+    served_root: Option<&str>,
+    runner: &Runner,
+) -> Result<Vec<PredecessorRetirement>, DeployError> {
     let Some(unit) = own_unit() else {
         return Ok(Vec::new());
     };
@@ -55,7 +59,7 @@ async fn take_over_retired(runner: &Runner) -> Result<Vec<PredecessorRetirement>
     for retired in &entry.retired_units {
         // A predecessor serving another storage root is an authority change,
         // which only `stado host storage-root-reconcile` may make.
-        if let Some(refusal) = unit_state(retired).and_then(|state| state.other_root()) {
+        if let Some(refusal) = unit_state(retired).and_then(|state| state.other_root(served_root)) {
             retirements.push(PredecessorRetirement {
                 unit: retired.clone(),
                 state: "failed".to_string(),
@@ -71,9 +75,8 @@ async fn take_over_retired(runner: &Runner) -> Result<Vec<PredecessorRetirement>
     Ok(retirements)
 }
 
-/// Storage settings a predecessor must share with this process before it
-/// may be retired: which backend serves objects and from which root.
-const STORAGE_KEYS: [&str; 2] = ["WC_STORAGE_BACKEND", "WC_LOCAL_STORAGE_PATH"];
+/// The local backend word a predecessor must name to serve the same root.
+const LOCAL_BACKEND: &str = "local";
 
 /// What the init system reports for one loaded unit: launchd's `print`, or
 /// systemd's `MainPID` and `Environment` properties.
@@ -111,20 +114,34 @@ impl UnitState {
         })
     }
 
-    /// Why this unit serves a different storage route than this process,
-    /// comparing canonical paths; `None` when it serves the same one.
-    fn other_root(&self) -> Option<String> {
-        let canonical = |value: String| {
-            std::fs::canonicalize(&value)
+    /// Why this unit is not proven to serve `served_root`, the local root this
+    /// process is about to serve, comparing canonical paths; `None` when it
+    /// serves exactly that root. A process with no local root, or a unit that
+    /// does not declare its backend and root, is unproven, never the same.
+    fn other_root(&self, served_root: Option<&str>) -> Option<String> {
+        let canonical = |value: &str| {
+            std::fs::canonicalize(value)
                 .map(|path| path.display().to_string())
-                .unwrap_or(value)
+                .unwrap_or_else(|_| value.to_string())
         };
-        STORAGE_KEYS.iter().find_map(|key| {
-            let theirs = self.variable(key).map(canonical);
-            let ours = std::env::var(key).ok().map(canonical);
-            (theirs != ours)
-                .then(|| format!("it runs with {key}={theirs:?}, this process with {ours:?}"))
-        })
+        let Some(ours) = served_root.map(canonical) else {
+            return Some(
+                "this process serves no local store, so the route it takes over \
+                         cannot be proven the same"
+                    .to_string(),
+            );
+        };
+        let backend = self.variable("WC_STORAGE_BACKEND");
+        let theirs = self
+            .variable("WC_LOCAL_STORAGE_PATH")
+            .map(|path| canonical(&path));
+        (backend.as_deref() != Some(LOCAL_BACKEND) || theirs.as_deref() != Some(ours.as_str()))
+            .then(|| {
+                format!(
+                    "it runs with WC_STORAGE_BACKEND={backend:?} WC_LOCAL_STORAGE_PATH={theirs:?}, \
+                     this process serves {ours}"
+                )
+            })
     }
 }
 
@@ -172,12 +189,14 @@ fn unit_state(unit: &str) -> Option<UnitState> {
     })
 }
 
-/// [`take_over_retired`] with the production runner, as every API listener
-/// runs it before binding: each outcome goes to stderr, where the unit's log
-/// keeps it, and a unit that stays loaded is the error the process exits
-/// with, because it holds what the process is about to bind.
-pub async fn take_over_on_start() -> Result<(), String> {
-    let retirements = take_over_retired(&crate::deploy::production_runner())
+/// [`take_over_retired`] with the production runner, run by an API listener
+/// once its storage is prepared and before it binds, with the local root that
+/// storage serves (`None` for a store with no local root). Each outcome goes
+/// to stderr, where the unit's log keeps it, and a unit that stays loaded is
+/// the error the process exits with, because it holds what the process is
+/// about to bind.
+pub async fn take_over_on_start(served_root: Option<&str>) -> Result<(), String> {
+    let retirements = take_over_retired(served_root, &crate::deploy::production_runner())
         .await
         .map_err(|error| format!("could not retire this process's predecessors: {error}"))?;
     let mut failed = Vec::new();

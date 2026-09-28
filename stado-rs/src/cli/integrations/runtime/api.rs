@@ -25,6 +25,12 @@ impl PreparedApi {
             None => JobStorage::for_server().await,
         }
         .map_err(|error| CmdError::click(format!("API storage preparation failed: {error}")))?;
+        // Under the host Stado unit, a renamed predecessor holds this port and
+        // runs the only reconciler that would otherwise retire it; it is
+        // retired only when it serves the very root this store serves.
+        crate::deploy::service::take_over_on_start(store.local_storage_path())
+            .await
+            .map_err(|error| CmdError::click(format!("serve {error}")))?;
         let listener = crate::dashboard::PreparedListener::bind(&bind, port)
             .await
             .map_err(|error| {
