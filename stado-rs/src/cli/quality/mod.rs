@@ -18,6 +18,11 @@
 //! committed tree an install would build, exported beside the checkout, so the
 //! verdict a source install will reach can be read before an install is
 //! handed to anyone: the checkout is not written, and a refusal names the gate.
+//! Before the gates it asks cargo whether each committed `Cargo.lock` resolves
+//! its manifest ([`lockfile`]), the question the install's `--locked` build
+//! would otherwise answer only after it had started.
+
+mod lockfile;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -133,6 +138,7 @@ pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
 }
 
 fn check_tree(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdError> {
+    lockfile::check(tree, checkout, revision)?;
     let declared = format_gates(Some(&tree.to_string_lossy()))?;
     for gate in &declared.gates {
         println!("stado quality check: {}", gate.argv.join(" "));
@@ -147,7 +153,7 @@ fn check_tree(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdErr
         })?;
     }
     println!(
-        "stado quality check: {} passes its formatting gates at {revision} of {}",
+        "stado quality check: {} resolves its locks and passes its formatting gates at {revision} of {}",
         declared.product,
         checkout.display()
     );

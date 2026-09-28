@@ -92,8 +92,9 @@ pub(crate) enum QualityCommands {
         #[arg(long)]
         root: Option<String>,
     },
-    /// Run the declared `fmt` gate exactly as the release build runs it,
-    /// writing nothing.
+    /// Check that each committed Cargo.lock resolves its manifest (cargo
+    /// metadata --locked, no compile), then run the declared `fmt` gate
+    /// exactly as the release build runs it, writing nothing.
     Check {
         /// The checkout to check; the working directory by default.
         #[arg(long)]
