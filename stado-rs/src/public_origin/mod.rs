@@ -144,6 +144,38 @@ pub fn declaration(document: &Value, name: &str) -> Option<PublicOrigin> {
         .find(|origin| origin.name == name)
 }
 
+/// The one declaration that publishes `path`, or the sentence that says why
+/// there is none to choose: nothing publishes it, or several do and picking
+/// one would be arbitrary. Every public address a product hands out is read
+/// through this, so none of them names a hostname the registry does not.
+pub fn publishing(document: &Value, path: &str) -> Result<PublicOrigin, String> {
+    let origins = declarations(document);
+    let mut publishing = origins
+        .iter()
+        .filter(|origin| origin.paths.iter().any(|published| published == path));
+    match (publishing.next(), publishing.next()) {
+        (Some(origin), None) => Ok(origin.clone()),
+        (None, _) => Err(format!(
+            "no declared public origin publishes {path}; declared: {}. Add the path with \
+             `stado web origin declare <name> ... --path {path}` and converge it",
+            origins
+                .iter()
+                .map(|origin| format!("{} ({})", origin.name, origin.paths.join(",")))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+        (Some(_), Some(_)) => Err(format!(
+            "{path} is published by several declared origins ({}); remove it from all but one",
+            origins
+                .iter()
+                .filter(|origin| origin.paths.iter().any(|published| published == path))
+                .map(|origin| origin.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 fn parse_row(row: &Value) -> Option<PublicOrigin> {
     let row = row.as_object()?;
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_string);

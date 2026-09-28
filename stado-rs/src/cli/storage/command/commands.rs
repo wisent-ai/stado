@@ -42,7 +42,8 @@ pub enum StorageCommands {
     /// Delete a product object through the provider-neutral Stado namespace.
     /// Release objects are immutable and cannot be deleted.
     Rm(StorageRmArgs),
-    /// Print the gateway URL; only stado://releases/... is bearer-free.
+    /// Print an object's URL: a release object's on the declared public
+    /// origin, bearer-free; any other through the configured API.
     Url(StorageUrlArgs),
 }
 
@@ -60,6 +61,6 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
         StorageCommands::Objects(args) => objects(&args).await,
         StorageCommands::AbortUpload(args) => abort_upload(&args).await,
         StorageCommands::Rm(args) => rm(&args).await,
-        StorageCommands::Url(args) => object_url(&args),
+        StorageCommands::Url(args) => object_url(&args).await,
     }
 }

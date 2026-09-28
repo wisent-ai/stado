@@ -213,35 +213,7 @@ fn print_row(row: &Value) {
 /// or when several do and the choice would be arbitrary.
 pub(crate) async fn url(path: &str, query: &[String]) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
-    let origins = public_origin::declarations(&document);
-    let publishing: Vec<&PublicOrigin> = origins
-        .iter()
-        .filter(|origin| origin.paths.iter().any(|published| published == path))
-        .collect();
-    let origin = match publishing.as_slice() {
-        [origin] => origin,
-        [] => {
-            return Err(CmdError::click(format!(
-                "no declared public origin publishes {path}; declared: {}. Add the path with \
-                 `stado web origin declare <name> ... --path {path}` and converge it",
-                origins
-                    .iter()
-                    .map(|origin| format!("{} ({})", origin.name, origin.paths.join(",")))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )))
-        }
-        several => {
-            return Err(CmdError::click(format!(
-                "{path} is published by several declared origins ({}); remove it from all but one",
-                several
-                    .iter()
-                    .map(|origin| origin.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )))
-        }
-    };
+    let origin = public_origin::publishing(&document, path).map_err(CmdError::click)?;
     let mut address = url::Url::parse(&format!("{}{path}", origin.origin()))
         .map_err(|error| CmdError::click(format!("{}{path}: {error}", origin.origin())))?;
     for pair in query {

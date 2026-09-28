@@ -44,14 +44,30 @@ pub(in crate::cli::storage) async fn rm(args: &StorageRmArgs) -> Result<(), CmdE
     Ok(())
 }
 
-pub(in crate::cli::storage) fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
+/// The route every release object is publicly read through.
+const RELEASE_ROUTE: &str = "/api/release/object";
+
+/// A release object's address is the declared public origin that publishes
+/// [`RELEASE_ROUTE`], because that is the only one a client outside this
+/// deployment can read without a bearer; the configured API origin is where
+/// this machine talks to Stado, which on 2026-09-22 stopped forwarding the
+/// route at all. Every other namespace is read through the configured API
+/// with a bearer.
+pub(in crate::cli::storage) async fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(&args.uri)?;
-    let base_url = configured_api_origin()?
-        .ok_or_else(|| CmdError::click("STADO_API_URL is required to render an object URL"))?;
-    let route = if object.namespace() == "releases" {
-        "/api/release/object"
+    let (base_url, route) = if object.namespace() == "releases" {
+        let document = crate::cli::registry::fetch_document().await?;
+        let origin = crate::public_origin::publishing(&document, RELEASE_ROUTE)
+            .map_err(CmdError::click)?
+            .origin();
+        let base_url = url::Url::parse(&origin).map_err(|error| {
+            CmdError::click(format!("declared public origin {origin}: {error}"))
+        })?;
+        (base_url, RELEASE_ROUTE)
     } else {
-        "/api/object"
+        let base_url = configured_api_origin()?
+            .ok_or_else(|| CmdError::click("STADO_API_URL is required to render an object URL"))?;
+        (base_url, "/api/object")
     };
     let uri = object.to_string();
     let url = object_api_endpoint(&base_url, route, &[("uri", &uri)])?;
