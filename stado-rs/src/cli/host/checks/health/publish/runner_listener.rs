@@ -8,13 +8,19 @@
 //! GitHub refused its runner version, so every deploy they serve queued and
 //! `stado service list` called them healthy.
 //!
-//! A unit is a runner when its program's directory (or the parent of a `bin/`
-//! directory), or one directory directly inside it, holds GitHub's `.runner`
-//! registration file. The second shape is wisent-backend's release runner:
-//! its launcher `reconcile-release-runner.sh` sits in the runner root and the
-//! registered install is `vendor-<version>-layout-<n>/` beneath it. For such a
-//! unit the beacon asks the process table for each install's listener and,
-//! when none runs, publishes `failed` with each install's newest log lines.
+//! The runner install is taken from the unit's own launch chain, never from
+//! what happens to sit near its program:
+//! - the program's directory (or the parent of its `bin/`) holds GitHub's
+//!   `.runner` registration, as for `runsvc.sh` and `start-runner.sh`; or
+//! - the unit's running process works in a registered directory inside the
+//!   program's directory. wisent-backend's release runner is this shape:
+//!   `reconcile-release-runner.sh` sits in the runner root, selects
+//!   `vendor-<version>-layout-<n>/`, changes into it and `exec`s `run.sh`, so
+//!   the unit's pid works in exactly the install it selected.
+//!
+//! For such a unit the beacon asks the process table for that install's
+//! listener and, when none runs, publishes `failed` with the newest runner
+//! log's last lines.
 
 use std::path::{Path, PathBuf};
 
@@ -33,24 +39,56 @@ fn registered(directory: &Path) -> Result<bool, String> {
         .map_err(|error| format!("{} could not be read: {error}", registration.display()))
 }
 
-/// Every registered runner install a unit program belongs to: the program's
-/// own root and the directories directly inside it. Empty when the unit is
-/// not a runner; `Err` names the directory or registration the host would not
-/// let this account read.
-fn runner_installs(program: &str) -> Result<Vec<PathBuf>, String> {
+/// The directory a process works in.
+#[cfg(target_os = "linux")]
+fn process_cwd(pid: &str) -> Result<PathBuf, String> {
+    let link = format!("/proc/{pid}/cwd");
+    std::fs::read_link(&link).map_err(|error| format!("{link} could not be read: {error}"))
+}
+
+/// The directory a process works in.
+#[cfg(not(target_os = "linux"))]
+fn process_cwd(pid: &str) -> Result<PathBuf, String> {
+    let output = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-a", "-p", pid, "-d", "cwd", "-Fn"])
+        .output()
+        .map_err(|error| format!("lsof did not run for pid {pid}: {error}"))?;
+    let listing = String::from_utf8_lossy(&output.stdout);
+    listing
+        .lines()
+        .find_map(|line| line.strip_prefix('n'))
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            format!(
+                "lsof named no working directory for pid {pid} (exit {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        })
+}
+
+/// The registered runner install this unit launches, when it launches one.
+/// `Err` names the registration or process the host would not let this
+/// account read.
+fn runner_install(program: &str, pid: Option<&str>) -> Result<Option<PathBuf>, String> {
     let path = Path::new(program);
     let Some(mut root) = path.parent() else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     if root.file_name().is_some_and(|name| name == "bin") {
         let Some(parent) = root.parent() else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
         root = parent;
     }
     if registered(root)? {
-        return Ok(vec![root.to_path_buf()]);
+        return Ok(Some(root.to_path_buf()));
     }
+    let Some(pid) = pid.filter(|pid| pid.parse::<u32>().is_ok_and(|pid| pid > 0)) else {
+        return Ok(None);
+    };
+    // Only a program directory that holds registered installs can launch one;
+    // everywhere else the unit's working directory is not asked for at all.
     let entries = std::fs::read_dir(root)
         .map_err(|error| format!("{} could not be listed: {error}", root.display()))?;
     let mut installs = Vec::new();
@@ -62,28 +100,24 @@ fn runner_installs(program: &str) -> Result<Vec<PathBuf>, String> {
             installs.push(candidate);
         }
     }
-    installs.sort();
-    Ok(installs)
+    if installs.is_empty() {
+        return Ok(None);
+    }
+    // Which of them this unit runs is what its process works in.
+    let cwd = process_cwd(pid)?;
+    Ok(installs
+        .into_iter()
+        .find(|install| *install == cwd || install.canonicalize().is_ok_and(|real| real == cwd)))
 }
 
-/// Whether the process table holds any of these installs' `bin/Runner.Listener`.
-fn listener_running(installs: &[PathBuf]) -> Result<bool, String> {
-    let listeners: Vec<String> = installs
-        .iter()
-        .map(|install| {
-            install
-                .join("bin")
-                .join("Runner.Listener")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
+/// Whether the process table holds this install's `bin/Runner.Listener`.
+fn listener_running(install: &Path) -> Result<bool, String> {
+    let listener = install.join("bin").join("Runner.Listener");
+    let listener = listener.to_string_lossy();
     let table = crate::deploy::service::process_table()?;
     Ok(table.iter().any(|(_, _, argv)| {
-        listeners.iter().any(|listener| {
-            argv.strip_prefix(listener.as_str())
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-        })
+        argv.strip_prefix(listener.as_ref())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
     }))
 }
 
@@ -126,16 +160,16 @@ fn add_detail(entry: &mut Map<String, Value>, sentence: String) {
 
 /// Correct an `active` entry for a runner unit whose listener is not running.
 /// Any other entry, and a unit that is not a runner, is left as it is.
-pub(super) fn apply(entry: &mut Map<String, Value>, program: Option<&str>) {
+pub(super) fn apply(entry: &mut Map<String, Value>, program: Option<&str>, pid: Option<&str>) {
     if entry.get("state").and_then(Value::as_str) != Some(STATE_ACTIVE) {
         return;
     }
     let Some(program) = program.filter(|program| Path::new(program).is_absolute()) else {
         return;
     };
-    let installs = match runner_installs(program) {
-        Ok(installs) if installs.is_empty() => return,
-        Ok(installs) => installs,
+    let install = match runner_install(program, pid) {
+        Ok(Some(install)) => install,
+        Ok(None) => return,
         Err(detail) => {
             add_detail(
                 entry,
@@ -144,25 +178,17 @@ pub(super) fn apply(entry: &mut Map<String, Value>, program: Option<&str>) {
             return;
         }
     };
-    match listener_running(&installs) {
+    match listener_running(&install) {
         Ok(true) => {}
         Ok(false) => {
             entry.insert("state".to_string(), Value::String(STATE_FAILED.to_string()));
-            let listeners: Vec<String> = installs
-                .iter()
-                .map(|install| format!("{}/bin/Runner.Listener", install.display()))
-                .collect();
-            let tails: Vec<String> = installs
-                .iter()
-                .map(|install| newest_log_tail(install.as_path()))
-                .collect();
             add_detail(
                 entry,
                 format!(
-                    "the unit runs, but no {} is running, so GitHub delivers this runner no \
-                     jobs; {}",
-                    listeners.join(" or "),
-                    tails.join("; ")
+                    "the unit runs, but no {}/bin/Runner.Listener is running, so GitHub delivers \
+                     this runner no jobs; {}",
+                    install.display(),
+                    newest_log_tail(&install)
                 ),
             );
         }

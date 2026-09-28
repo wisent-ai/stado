@@ -94,7 +94,11 @@ pub async fn collect_beacon(publish: bool) -> Result<(), CmdError> {
             Ok(state) => {
                 let mut entry = unit_entry(&state);
                 if let Value::Object(fields) = &mut entry {
-                    super::runner_listener::apply(fields, state.program.as_deref());
+                    super::runner_listener::apply(
+                        fields,
+                        state.program.as_deref(),
+                        state.pid.as_deref(),
+                    );
                 }
                 entry
             }
