@@ -13,7 +13,7 @@ use super::*;
 /// that shares its unit's listener is not touched here: the reconciler hands
 /// it over under the unit's lease and can repair it if the role does not
 /// take, so this command only says so. The API listener's units are kept
-/// too: only the host Stado process retires them, when it starts the API.
+/// until the host Stado process records its takeover, and retired after.
 pub(super) async fn retire_after_ensure(
     target: &crate::targets::ComputeTarget,
     entry: Option<&crate::deploy::service_catalog::CatalogService>,

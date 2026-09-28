@@ -33,8 +33,8 @@ pub struct PredecessorRetirement {
 /// runs its role; otherwise it is `kept`, because it is still doing that work.
 /// A role that shares the old unit's listener is not retired here at all: it
 /// is handed over by the reconciler, under the unit's lease, see [`handoff`];
-/// the API listener's units are `kept` here too, because only the host Stado
-/// process retires them, at API start, see [`takeover`].
+/// the API listener's units are retired here only once the host Stado process
+/// recorded its takeover, and `kept` until then, see [`takeover`].
 ///
 /// The unit file itself stays where it is: [`set_label_autostart`] records the
 /// init system's own disabled override, which outlives the file and is what
@@ -54,15 +54,22 @@ pub async fn retire_catalog_predecessors(
         if listener_role(role) {
             continue;
         }
+        // An API listener unit is retired only once the host Stado process
+        // recorded its takeover; from then on every pass enforces it, so a
+        // retirement that failed once, or a unit a repair brought back, is
+        // retired again until it holds. Without a record it is left alone.
         if crate::deploy::service_catalog::api_role(role) {
-            retirements.push(PredecessorRetirement {
-                unit: role.unit.clone(),
-                state: "kept".to_string(),
-                detail: format!(
-                    "it holds the API listener: only {} retires it, when it starts the API \
-                     on the same storage root",
-                    running.unit_id()
-                ),
+            retirements.push(match record::taken_over(target, &role.unit, runner).await {
+                Some(_) => retirement(target, &role.unit, runner).await,
+                None => PredecessorRetirement {
+                    unit: role.unit.clone(),
+                    state: "kept".to_string(),
+                    detail: format!(
+                        "it holds the API listener: only {} retires it, when it starts the API \
+                         on the same storage root",
+                        running.unit_id()
+                    ),
+                },
             });
             continue;
         }
