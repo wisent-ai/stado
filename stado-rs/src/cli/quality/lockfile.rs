@@ -60,8 +60,8 @@ pub(super) fn check(tree: &Path, checkout: &Path, revision: &str) -> Result<(), 
                 "--format-version",
                 "1",
                 "--manifest-path",
+                "Cargo.toml",
             ])
-            .arg(&manifest)
             .current_dir(&workspace)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
