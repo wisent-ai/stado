@@ -90,13 +90,25 @@ pub fn prepare(
     if bin.is_dir() {
         for entry in fs::read_dir(&bin)? {
             let entry = entry?;
-            if !entry.file_type()?.is_file() {
+            let destination = runtime.home.join(".stado/bin").join(entry.file_name());
+            let kind = entry.file_type()?;
+            // A directory beside the executables is a resource they read (a
+            // SwiftPM `<Package>_<Target>.bundle`, found next to the executable
+            // by Bundle.module): placed whole, with no link on PATH.
+            if kind.is_dir() {
+                placements.push(Placement {
+                    source: entry.path(),
+                    destination,
+                    symbolic: false,
+                });
+                continue;
+            }
+            if !kind.is_file() {
                 bail!(
-                    "release bin member must be a regular executable: {}",
+                    "release bin member must be a regular executable or a resource directory: {}",
                     entry.path().display()
                 );
             }
-            let destination = runtime.home.join(".stado/bin").join(entry.file_name());
             add_binary(&entry.path(), &destination, &mut placements, runtime)?;
         }
     } else {

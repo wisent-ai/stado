@@ -160,10 +160,15 @@ pub fn release(
         } else {
             member.to_owned()
         });
-        if (binary || nested_helper) && !source.is_file() {
-            bail!("CLI stage member must be a regular file under bin/: {member}");
+        // A directory directly under bin/ is a resource the commands beside it
+        // read (a SwiftPM `<Package>_<Target>.bundle`, which Bundle.module finds
+        // next to the executable): it is placed at the same path, whole, and
+        // gets no link on PATH.
+        let resource_directory = binary && !root_binary && source.is_dir();
+        if (binary || nested_helper) && !resource_directory && !source.is_file() {
+            bail!("CLI stage member must be a regular file under bin/, or a resource directory beside one: {member}");
         }
-        if binary {
+        if binary && !resource_directory {
             placements.push(Placement {
                 source: destination.clone(),
                 destination: runtime
