@@ -38,6 +38,11 @@ pub fn installation(action: &'static str, about: &'static str) -> Command {
                 )
                 .requires("release-version"),
             )
+            .arg(flag(
+                "check-arguments",
+                "Check this command line (required pairs such as --release-version with \
+                 --source-commit, the product and the surface) and exit without installing",
+            ))
     } else {
         command
     }

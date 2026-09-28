@@ -250,6 +250,15 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
     };
     let document = catalog::current(runtime)?;
     let product = catalog::product(&document, &args.positional[0])?;
+    if args.has("--check-arguments") {
+        emit(&serde_json::json!({
+            "action": action,
+            "product": args.positional[0],
+            "surface": surface,
+            "arguments": "accepted",
+        }))?;
+        return Ok(0);
+    }
     let report = match action {
         "status" => status::inspect(runtime, product, surface, host)?,
         "install" | "update" => serde_json::to_value(perform(
