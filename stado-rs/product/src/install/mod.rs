@@ -1,4 +1,5 @@
 pub mod plan;
+mod planning;
 mod recipes;
 mod release;
 mod services;
@@ -8,7 +9,6 @@ mod transaction;
 use crate::{
     catalog,
     common::{checked, emit, now, Arguments, Runtime},
-    source,
     state::{self, ProductState},
 };
 use anyhow::{bail, Context, Result};
@@ -49,91 +49,18 @@ pub fn perform(
         let _writer =
             runtime.surface_lock(&state::path(runtime, id, surface)?.with_extension("lock"))?;
         let existing = ProductState::load(runtime, id, surface)?;
-        let plan = if let Some(incomplete) = existing
-            .as_ref()
-            .filter(|state| state.status == "installing")
-        {
-            if incomplete.recipe != *selected || incomplete.host.as_deref() != host {
-                bail!("unfinished installation is bound to another recipe or host; roll it back first");
-            }
-            if let Some((version, revision)) = pin {
-                let accepted = incomplete
-                    .release
-                    .as_ref()
-                    .context("unfinished installation was not an exact release")?;
-                if accepted["coordinate"]["version"] != version
-                    || accepted["coordinate"]["source_revision"] != revision
-                {
-                    // The files may already be the requested release: a fleet
-                    // delivery (`stado release install-local`) installed
-                    // Stado 0.22.8 on 2026-09-26 over a CLI install of 0.22.7
-                    // that stopped in its after-install step, and from then on
-                    // install refused the new coordinate while rollback
-                    // refused bytes that were neither 0.22.7 nor its backup.
-                    // When every placement already holds the requested
-                    // release, the unfinished record is superseded, not lost:
-                    // it becomes this installation's `previous`.
-                    let replacement = release::prepare(product, version, revision, runtime)?;
-                    if !already_placed(&replacement)? {
-                        bail!("unfinished installation is bound to another release coordinate; roll it back first");
-                    }
-                    let mut superseded = incomplete.clone();
-                    superseded.status = "superseded".to_owned();
-                    superseded.save(runtime)?;
-                    eprintln!(
-                        "{id}: the unfinished installation of {} is superseded: every file it \
-                         placed already holds {version} ({revision})",
-                        accepted["coordinate"]["version"]
-                    );
-                    replacement
-                } else {
-                    serde_json::from_value(
-                        incomplete
-                            .extra
-                            .get("prepared")
-                            .cloned()
-                            .context("interrupted installation has no retained artifact plan")?,
-                    )?
-                }
-            } else {
-                serde_json::from_value(
-                    incomplete
-                        .extra
-                        .get("prepared")
-                        .cloned()
-                        .context("interrupted installation has no retained artifact plan")?,
-                )?
-            }
-        } else {
-            if existing
-                .as_ref()
-                .is_some_and(|state| state.status == "removing" || state.status == "rolling_back")
-            {
-                bail!("finish the recorded removal or rollback before installing");
-            }
-            if let Some((version, revision)) = pin {
-                release::prepare(product, version, revision, runtime)?
-            } else {
-                let repository = selected["repository"]
-                    .as_str()
-                    .or(product["repository"].as_str())
-                    .context("installation has no source repository")?;
-                let root = source::checkout(runtime, repository)?;
-                if source::git(&root, &["status", "--porcelain", "--untracked-files=no"])?
-                    .is_empty()
-                {
-                    let ancestor = crate::common::capture(
-                        Command::new("git")
-                            .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
-                            .current_dir(&root),
-                    )?;
-                    if ancestor.status.success() {
-                        source::advance(&root, false)?;
-                    }
-                }
-                recipes::prepare(runtime, product, selected, surface, &root)?
-            }
-        };
+        let plan = planning::select(
+            &planning::Request {
+                runtime,
+                product,
+                selected,
+                surface,
+                host,
+                pin,
+                id,
+            },
+            existing.as_ref(),
+        )?;
         let mut dependencies = Vec::new();
         if let Some(declared) = product.get("dependencies") {
             for dependency in declared
@@ -344,23 +271,4 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
     };
     emit(&report)?;
     Ok(0)
-}
-
-/// Whether every placement of `plan` already holds exactly what it would
-/// place: the same bytes for a file, the same target for a link.
-fn already_placed(plan: &plan::Prepared) -> Result<bool> {
-    for placement in &plan.placements {
-        let holds = if placement.symbolic {
-            std::fs::read_link(&placement.destination).ok().as_deref()
-                == Some(placement.source.as_path())
-        } else {
-            placement.destination.is_file()
-                && crate::common::sha256(&placement.destination)?
-                    == crate::common::sha256(&placement.source)?
-        };
-        if !holds {
-            return Ok(false);
-        }
-    }
-    Ok(!plan.placements.is_empty())
 }
