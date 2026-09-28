@@ -28,5 +28,5 @@ mod resolution;
 
 pub use discovery::binary;
 pub use host_authority::authority;
-pub use items::{delete_item, item_exists, read_string, store_json, write_item};
+pub use items::{delete_item, item_exists, read_document, read_string, store_json, write_item};
 pub use resolution::{candidates_present, vault, VAULT_CANDIDATE_TAILS};

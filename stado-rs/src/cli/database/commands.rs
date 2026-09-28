@@ -75,6 +75,52 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Bring a declared database's credential item in line with its hosted
+    /// Supabase project.
+    ///
+    /// Rewrites `<name>-database` from the management API: coordinates,
+    /// pooler, the revealed API keys (legacy `anon_key` and
+    /// `service_role_key`, every named key as `publishable_key_<name>` or
+    /// `secret_key_<name>`) and an active custom hostname as `custom_url`.
+    /// Fields another owner put on the item stay, and the password is kept
+    /// from the item or read from --password-file. Without NAME, every
+    /// declared database whose item records a Supabase `project_ref` is
+    /// adopted again, so a rotated key lands. Runs on the owner vault host;
+    /// --check writes nothing and exits non-zero when an item differs.
+    Adopt {
+        /// Declared database to adopt; every Supabase-backed one when omitted.
+        name: Option<String>,
+        /// The Supabase project ref, when the item does not record it yet.
+        #[arg(long, requires = "name")]
+        project_ref: Option<String>,
+        /// File whose whole content is the database password.
+        #[arg(long, requires = "name")]
+        password_file: Option<String>,
+        /// Report drift and write nothing; exit non-zero on drift.
+        #[arg(long)]
+        check: bool,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make a host's database declarations equal to this machine's.
+    ///
+    /// Reads HOST's config file whole (its `config show` omits the block),
+    /// writes this machine's `database_api` there through `host config-set`
+    /// when the two differ, and reconciles --service so the running process
+    /// reads it. --check writes nothing and exits non-zero on a difference.
+    Push {
+        host: String,
+        /// The registry-managed unit on HOST that serves the database plane.
+        #[arg(long)]
+        service: String,
+        /// Report the difference and write nothing; exit non-zero on it.
+        #[arg(long)]
+        check: bool,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove a database declaration from the Stado configuration.
     Remove {
         name: String,

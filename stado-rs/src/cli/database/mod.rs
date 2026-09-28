@@ -16,9 +16,9 @@ use super::resolver::read_local_snapshot;
 use super::CmdError;
 
 mod commands;
-mod create;
 mod owner_vault;
 mod reads;
+mod supabase;
 mod verbs;
 mod writes;
 
@@ -49,7 +49,29 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             anchor,
             accept_monthly_usd,
             json,
-        } => create::create(&name, &anchor, &consumers, accept_monthly_usd, json).await,
+        } => supabase::create::create(&name, &anchor, &consumers, accept_monthly_usd, json).await,
+        DatabaseCommands::Adopt {
+            name,
+            project_ref,
+            password_file,
+            check,
+            json,
+        } => {
+            supabase::adopt::adopt(
+                name.as_deref(),
+                project_ref.as_deref(),
+                password_file.as_deref(),
+                check,
+                json,
+            )
+            .await
+        }
+        DatabaseCommands::Push {
+            host,
+            service,
+            check,
+            json,
+        } => writes::push(&host, &service, check, json).await,
         DatabaseCommands::Grant {
             name,
             consumers,

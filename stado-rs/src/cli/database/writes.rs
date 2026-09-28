@@ -97,3 +97,67 @@ pub(super) fn report_mutation(json_output: bool, report: Value) -> Result<(), Cm
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }
+
+/// This machine's `database_api` block, as its config file holds it.
+fn local_block() -> Result<Value, CmdError> {
+    let path = crate::config_file::config_path()
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
+    let document: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)
+        .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
+    document
+        .get("database_api")
+        .cloned()
+        .ok_or_else(|| CmdError::click(format!("{} declares no database_api", path.display())))
+}
+
+/// Make HOST's `database_api` block equal to this machine's, then reconcile
+/// SERVICE so its running process reads it. HOST's copy is read whole from
+/// its config file: `config show` prints the resolved struct without it.
+/// With `check`, nothing is written and a difference is a refusal.
+pub(super) async fn push(
+    host: &str,
+    service: &str,
+    check: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let local = local_block()?;
+    let target = crate::deploy::host_channel::canonical_target(host)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let fetched = crate::deploy::service_file_fetch::fetch_file(
+        &target,
+        "$HOME/.config/stado/config.json",
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if fetched.integrity != crate::deploy::service_file_fetch::INTEGRITY_VERIFIED {
+        return Err(CmdError::click(format!(
+            "{host}'s config file did not arrive intact: {}",
+            fetched.integrity
+        )));
+    }
+    let remote: Value = serde_json::from_slice(&fetched.content)
+        .map_err(|error| CmdError::click(format!("{host}'s config file: {error}")))?;
+    let agrees = remote.get("database_api") == Some(&local);
+    let status = match (agrees, check) {
+        (true, _) => "in agreement",
+        (false, true) => "would push",
+        (false, false) => {
+            crate::cli::host::write_host_config(host, "database_api", &local.to_string()).await?;
+            crate::cli::service::reconcile_after_config_change(service, host).await?;
+            "pushed"
+        }
+    };
+    report_mutation(
+        json_output,
+        json!({ "host": host, "service": service, "database_api": status }),
+    )?;
+    if check && !agrees {
+        return Err(CmdError::click(format!(
+            "{host}'s database_api differs from this machine's"
+        )));
+    }
+    Ok(())
+}

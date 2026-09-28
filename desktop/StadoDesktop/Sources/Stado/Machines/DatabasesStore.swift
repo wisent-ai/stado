@@ -164,6 +164,43 @@ final class DatabasesStore: ObservableObject {
         await mutate(Self.consumerArguments("revoke", name: name, consumers: consumers))
     }
 
+    /// `stado database adopt [NAME] --json`: every Supabase-backed item, or
+    /// one, rewritten from its project.
+    nonisolated static func adoptArguments(name: String?) -> [String] {
+        ["database", "adopt"] + (name.map { [$0] } ?? []) + ["--json"]
+    }
+
+    nonisolated static func pushArguments(host: String, service: String) -> [String] {
+        ["database", "push", host, "--service", service, "--json"]
+    }
+
+    /// The items adopt wrote or found current, one sentence each; a refusal
+    /// (not the owner vault host, a project the token cannot see) is the
+    /// problem banner.
+    @Published private(set) var adoption: [String] = []
+
+    func adopt(name: String?) async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        do {
+            let rows = try await cli.json([AdoptionRow].self, arguments: Self.adoptArguments(name: name))
+            adoption = rows.map { "\($0.item): \($0.status)" }
+            problem = nil
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+
+    func push(host: String, service: String) async -> Bool {
+        await mutate(Self.pushArguments(host: host, service: service))
+    }
+
+    private struct AdoptionRow: Codable {
+        let item: String
+        let status: String
+    }
+
     /// Every mutation command answers a small receipt object; its shape is
     /// irrelevant here, only that the command spoke valid JSON at all.
     private struct MutationReceipt: Codable {}

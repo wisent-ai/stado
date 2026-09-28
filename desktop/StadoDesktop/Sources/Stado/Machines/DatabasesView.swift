@@ -17,6 +17,7 @@ struct DatabasesView: View {
     /// database can be named, so re-opening the sheet is always fresh.
     @State private var isDeclaring = false
     @State private var isCreating = false
+    @State private var isPushing = false
     @State private var pendingRemoval: DatabaseRow?
     @State private var consumerEditor: ConsumerEdit?
 
@@ -30,6 +31,10 @@ struct DatabasesView: View {
                     isDeclaring = true
                 },
                 WisentAction("Create…", symbol: "cylinder.split.1x2") { isCreating = true },
+                WisentAction("Adopt all", symbol: "arrow.triangle.2.circlepath", isEnabled: !store.isRefreshing) {
+                    Task { await store.adopt(name: nil) }
+                },
+                WisentAction("Push…", symbol: "arrow.up.doc") { isPushing = true },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
                     Task { await store.refresh() }
                 },
@@ -39,7 +44,15 @@ struct DatabasesView: View {
         ) {
             VStack(spacing: 0) {
                 if let problem = store.problem {
-                    WisentErrorBanner(title: "The database list did not answer", detail: problem)
+                    WisentErrorBanner(title: "The database plane refused", detail: problem)
+                }
+                if !store.adoption.isEmpty {
+                    Text(store.adoption.joined(separator: "\n"))
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, WisentDesign.Space.x4)
+                        .padding(.vertical, WisentDesign.Space.x2)
                 }
                 if store.rows.isEmpty {
                     WisentEmptyPanel(
@@ -60,6 +73,7 @@ struct DatabasesView: View {
             DatabaseDeclareForm(store: store)
         }
         .sheet(isPresented: $isCreating) { DatabaseCreateForm(store: store) }
+        .sheet(isPresented: $isPushing) { DatabasePushForm(store: store) }
         .sheet(item: $consumerEditor) { edit in
             DatabaseConsumerForm(edit: edit, store: store)
         }
@@ -139,6 +153,9 @@ struct DatabasesView: View {
                         Button("Revoke consumers…") {
                             consumerEditor = ConsumerEdit(database: row.database, grant: false)
                         }
+                        Button("Adopt from Supabase") {
+                            Task { await store.adopt(name: row.database) }
+                        }
                         Divider()
                         Button("Remove…", role: .destructive) {
                             pendingRemoval = row
@@ -214,84 +231,5 @@ private struct DatabaseConsumerForm: View {
         }
         .padding(WisentDesign.Space.x6)
         .frame(width: 460)
-    }
-}
-
-/// The declare form: name, engine, scopes and initial consumers. Every field
-/// maps onto one `stado database declare` invocation; the CLI remains the
-/// validator, this form only assembles its arguments.
-private struct DatabaseDeclareForm: View {
-    @ObservedObject var store: DatabasesStore
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var name = ""
-    @State private var engine = "postgres"
-    @State private var readScope = true
-    @State private var writeScope = false
-    @State private var consumersText = ""
-    @State private var isSubmitting = false
-
-    private var nameIsValid: Bool {
-        !name.isEmpty
-            && name == name.trimmingCharacters(in: .whitespaces)
-            && name.allSatisfy { $0.isLowercase || $0.isNumber || $0 == "-" }
-    }
-
-    private var scopes: [String] {
-        var values: [String] = []
-        if readScope { values.append("read") }
-        if writeScope { values.append("write") }
-        return values
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
-            Text("Declare a database")
-                .font(WisentTypeScale.section())
-                .foregroundStyle(WisentDesign.ink)
-            Text("Writes database_api.databases into the Stado configuration through stado database declare. Provision the credential item <name>-database with stado secrets put.")
-                .font(WisentTypeScale.caption())
-                .foregroundStyle(WisentDesign.muted)
-
-            LabeledContent("Name (lowercase, digits, dashes)") {
-                TextField("echo", text: $name)
-                    .textFieldStyle(.roundedBorder)
-            }
-            Picker("Engine", selection: $engine) {
-                Text("postgres").tag("postgres")
-                Text("sqlite").tag("sqlite")
-            }
-            .pickerStyle(.segmented)
-            HStack(spacing: WisentDesign.Space.x5) {
-                Toggle("read", isOn: $readScope)
-                Toggle("write", isOn: $writeScope)
-            }
-            LabeledContent("Consumers (comma-separated)") {
-                TextField("echo-desktop", text: $consumersText)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Declare") {
-                    isSubmitting = true
-                    Task {
-                        let consumers = consumersText.split(separator: ",").map(String.init)
-                        let declared = await store.declare(
-                            name: name,
-                            engine: engine,
-                            scopes: scopes,
-                            consumers: consumers
-                        )
-                        if declared { dismiss() }
-                        isSubmitting = false
-                    }
-                }
-                .disabled(!nameIsValid || scopes.isEmpty || isSubmitting)
-            }
-        }
-        .padding(WisentDesign.Space.x6)
-        .frame(width: 480)
     }
 }

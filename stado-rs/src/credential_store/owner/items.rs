@@ -133,6 +133,32 @@ pub fn read_string(id: &str, field: &str) -> Result<String, SkarbiecError> {
     Ok(value)
 }
 
+/// The whole item document (`fields`, `context`, …) from the resolved owner
+/// vault, or none when the vault holds no such item. A rewrite that must keep
+/// fields another owner put on the item reads them here.
+pub fn read_document(id: &str) -> Result<Option<Value>, SkarbiecError> {
+    if !item_exists(id)? {
+        return Ok(None);
+    }
+    let output = std::process::Command::new(binary()?)
+        .arg("get")
+        .arg(id)
+        .env("SKARBIEC_VAULT_FILE", vault()?)
+        .env_remove("SKARBIEC_UNLOCK")
+        .env_remove("SKARBIEC_UNLOCK_FILE")
+        .output()
+        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    if !output.status.success() {
+        return Err(SkarbiecError::Deployment(format!(
+            "skarbiec could not read {id}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map(Some)
+        .map_err(|error| SkarbiecError::Deployment(format!("{id} is not valid JSON: {error}")))
+}
+
 /// Write one item into the resolved owner vault.
 pub fn write_item(
     id: &str,
