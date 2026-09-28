@@ -84,7 +84,7 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             .into_iter()
             .flatten()
         {
-            let Some(rate) = gcp_sku_hourly_rate(sku) else {
+            let Some((rate, unit)) = gcp_sku_hourly_rate(sku) else {
                 continue;
             };
             let description = sku
@@ -146,7 +146,7 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
                     machine_type: machine.clone(),
                     accelerator_type: accelerator.clone(),
                     purchase_option: purchase_option.to_string(),
-                    unit: "hour".to_string(),
+                    unit: unit.to_string(),
                     hourly_usd: rate,
                     currency: "USD".to_string(),
                     source: "GCP Cloud Billing Catalog API".to_string(),
@@ -170,15 +170,21 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
     source
 }
 
-fn gcp_sku_hourly_rate(sku: &Value) -> Option<f64> {
+/// The SKU's hourly price and the unit it is priced in: `hour` for a price per
+/// instance, core or accelerator hour, `gib_hour` for a price per GiB of
+/// memory per hour. The unit comes from the SKU's `usageUnit`, which is how a
+/// core price and a memory price of one machine family are told apart.
+fn gcp_sku_hourly_rate(sku: &Value) -> Option<(f64, &'static str)> {
     let expression = sku.pointer("/pricingInfo/0/pricingExpression")?;
     let usage_unit = expression
         .get("usageUnit")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if !matches!(usage_unit, "h" | "hour" | "GiBy.h" | "GBy.h") {
-        return None;
-    }
+    let unit = match usage_unit {
+        "h" | "hour" => "hour",
+        "GiBy.h" | "GBy.h" => "gib_hour",
+        _ => return None,
+    };
     let price = expression.pointer("/tieredRates/0/unitPrice")?;
     let units = price
         .get("units")
@@ -195,5 +201,5 @@ fn gcp_sku_hourly_rate(sku: &Value) -> Option<f64> {
         .unwrap_or_default();
     let decimal_base = (u8::BITS + (u16::BITS / u8::BITS)) as f64;
     let nanos_exponent = (u8::BITS + true as u32) as i32;
-    Some(units + nanos / decimal_base.powi(nanos_exponent))
+    Some((units + nanos / decimal_base.powi(nanos_exponent), unit))
 }

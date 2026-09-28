@@ -79,19 +79,19 @@ impl PriceBook {
     ) -> Option<PriceQuote> {
         let (family, cores, memory_gb, accelerator_count) = gcp_machine_shape(machine_type)?;
         let family_key = normalized(family);
+        // The family is named only in the SKU description; whether a SKU
+        // prices a core hour or a GiB-hour of memory is its usage unit.
         let core = self.cheapest_gcp_quote(region, purchase, |quote| {
-            let description = normalized(&quote.description);
             quote.machine_type.is_none()
                 && quote.accelerator_type.is_none()
-                && description.contains(&family_key)
-                && description.contains("core")
+                && quote.unit == "hour"
+                && normalized(&quote.description).contains(&family_key)
         })?;
         let memory = self.cheapest_gcp_quote(region, purchase, |quote| {
-            let description = normalized(&quote.description);
             quote.machine_type.is_none()
                 && quote.accelerator_type.is_none()
-                && description.contains(&family_key)
-                && (description.contains("ram") || description.contains("memory"))
+                && quote.unit == "gib_hour"
+                && normalized(&quote.description).contains(&family_key)
         })?;
         let accelerator = self.cheapest_gcp_quote(region, purchase, |quote| {
             quote.accelerator_type.as_deref() == Some(accelerator_type)
