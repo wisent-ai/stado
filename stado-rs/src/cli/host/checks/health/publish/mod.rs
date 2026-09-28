@@ -1,6 +1,8 @@
 mod collect;
+mod relay;
 
 pub use collect::collect_beacon;
+pub use relay::{beacon_coordinates, beacon_stale};
 
 use std::io::Read;
 

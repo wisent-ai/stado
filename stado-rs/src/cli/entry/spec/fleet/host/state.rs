@@ -62,6 +62,25 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         publish: bool,
     },
+    /// The health API this host addresses and the Skarbiec endpoint the
+    /// registry declares for HOST, tab separated; what the beacon scripts
+    /// configure the publisher with.
+    #[command(name = "beacon-coordinates", hide = true)]
+    BeaconCoordinates {
+        #[arg(long)]
+        host: String,
+    },
+    /// The registry targets with no beacon younger than --fresh-seconds in
+    /// the store at --api-url, space separated; the relay's work list.
+    #[command(name = "beacon-stale", hide = true)]
+    BeaconStale {
+        #[arg(long)]
+        api_url: String,
+        #[arg(long)]
+        token_file: String,
+        #[arg(long)]
+        fresh_seconds: f64,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Run TARGET's own registry-authorized cleanup pass and report what it

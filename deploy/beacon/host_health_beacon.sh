@@ -54,28 +54,21 @@ if [ -n "$STADO_BIN" ] && declared_units=$("$STADO_BIN" host beacon-units 2>/dev
     done
 fi
 
-# The same coordinates the macOS collector derives, for the same reason: the
-# health API is the store this host already addresses, and Skarbiec's endpoint
-# is in the service directory. A host that waits for a timer's environment
-# publishes nothing when run any other way, and its silence reads as a dead
-# machine.
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || printf /usr/bin/python3)}"
-READ_STORE_URL='import json,pathlib
-p = pathlib.Path.home() / ".config" / "stado" / "config.json"
-print(json.loads(p.read_text()).get("storage", {}).get("stado", {}).get("url", "") if p.is_file() else "")'
-READ_SKARBIEC='import json,sys
-host = sys.argv[1]
-text = sys.stdin.read().strip()
-doc = json.loads(text) if text else {}
-service = doc.get("service_directory", {}).get("services", {}).get("skarbiec", {})
-print(service.get("endpoints", {}).get(host, {}).get("url", ""))'
+# The same coordinates the macOS collector reads, from the same place: the
+# product answers with the store this host addresses and the Skarbiec endpoint
+# the service directory declares for it. A host that waits for a timer's
+# environment publishes nothing when run any other way, and its silence reads
+# as a dead machine. An installed Stado that predates `beacon-coordinates`
+# answers nothing, and the host collects for a relay below.
 if [ -n "$STADO_BIN" ]; then
-    export STADO_HOST_HEALTH_API_URL="${STADO_HOST_HEALTH_API_URL:-$("$PYTHON_BIN" -c "$READ_STORE_URL")}"
+    coordinates=$("$STADO_BIN" host beacon-coordinates --host "$HOST_SLUG" 2>/dev/null || true)
+    declared_api=${coordinates%%	*}
+    declared_skarbiec=${coordinates#*	}
+    [ "$declared_skarbiec" != "$coordinates" ] || declared_skarbiec=''
+    export STADO_HOST_HEALTH_API_URL="${STADO_HOST_HEALTH_API_URL:-$declared_api}"
 fi
 
 if [ -n "$STADO_BIN" ] && [ -z "${STADO_HOST_HEALTH_API_TOKEN_FILE:-}" ]; then
-    declared_skarbiec=$("$STADO_BIN" registry pull 2>/dev/null \
-        | "$PYTHON_BIN" -c "$READ_SKARBIEC" "$HOST_SLUG" || true)
     export STADO_HOST_HEALTH_SKARBIEC_URL="${declared_skarbiec:-${STADO_HOST_HEALTH_SKARBIEC_URL:-}}"
     export STADO_HOST_HEALTH_SKARBIEC_CONSUMER="${STADO_HOST_HEALTH_SKARBIEC_CONSUMER:-stado-host-health-beacon}"
     export STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-$HOME/.stado/host-health-beacon-skarbiec-token}"

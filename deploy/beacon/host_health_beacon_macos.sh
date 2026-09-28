@@ -24,34 +24,23 @@ STADO_BIN="${STADO_BIN:-$HOME/.stado/bin/stado}"
 # lookup and a python parse of `registry pull` -- and every one of those
 # turned a read it was not allowed to make into the word `inactive`.
 HOST_SLUG=$(/bin/hostname -s | /usr/bin/tr '[:upper:]' '[:lower:]')
-# jq is not on every managed host, and a beacon that dies for want of it is a
-# host that reads as dead. python3 ships with macOS and is already what the
-# operator helpers use.
-READ_NAMES='import json,sys
-for entry in json.load(sys.stdin).get("targets", []):
-    print(entry.get("name"))'
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || printf /usr/bin/python3)}"
 
 # Publishing needs the health API, a Skarbiec to mint the bearer against, and
 # the consumer grant this host holds. All three are already declared -- the API
 # is the store this host is configured to address, and Skarbiec's endpoint is
-# in the service directory -- so read them rather than restate them, and let a
-# host that genuinely lacks one fail with its name.
-READ_STORE_URL='import json,pathlib
-p = pathlib.Path.home() / ".config" / "stado" / "config.json"
-print(json.loads(p.read_text()).get("storage", {}).get("stado", {}).get("url", "") if p.is_file() else "")'
-READ_SKARBIEC='import json,sys
-host = sys.argv[1]
-doc = json.load(sys.stdin)
-service = doc.get("service_directory", {}).get("services", {}).get("skarbiec", {})
-print(service.get("endpoints", {}).get(host, {}).get("url", ""))'
-export STADO_HOST_HEALTH_API_URL="${STADO_HOST_HEALTH_API_URL:-$("$PYTHON_BIN" -c "$READ_STORE_URL")}"
+# in the service directory -- so the product reads them rather than this
+# script restating them, and a host that genuinely lacks one fails with its
+# name. An installed Stado that predates `beacon-coordinates` answers nothing,
+# and the environment this unit was installed with stands.
+coordinates=$("$STADO_BIN" host beacon-coordinates --host "$HOST_SLUG" 2>/dev/null || true)
+declared_api=${coordinates%%	*}
+declared_skarbiec=${coordinates#*	}
+[ "$declared_skarbiec" != "$coordinates" ] || declared_skarbiec=''
+export STADO_HOST_HEALTH_API_URL="${STADO_HOST_HEALTH_API_URL:-$declared_api}"
 # The registry wins over whatever the login environment carries: this host had
 # `STADO_HOST_HEALTH_SKARBIEC_URL` pointing at the Weles vault's adapter, for a
 # consumer that adapter does not serve, so every publish failed with a refused
 # connection while the declared endpoint sat one port away.
-declared_skarbiec=$("$STADO_BIN" registry pull 2>/dev/null \
-    | "$PYTHON_BIN" -c "$READ_SKARBIEC" "$HOST_SLUG")
 export STADO_HOST_HEALTH_SKARBIEC_URL="${declared_skarbiec:-${STADO_HOST_HEALTH_SKARBIEC_URL:-}}"
 export STADO_HOST_HEALTH_SKARBIEC_CONSUMER="${STADO_HOST_HEALTH_SKARBIEC_CONSUMER:-stado-host-health-beacon}"
 export STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-$HOME/.stado/host-health-beacon-skarbiec-token}"
@@ -92,43 +81,22 @@ printf 'host_health_beacon: api=%s skarbiec=%s collector=%s\n' \
 # as the relay kept winning. Ask what the fleet already knows about each host's
 # beacon age, and relay only for the ones nobody is reporting.
 this_target=$("$STADO_BIN" registry self | { IFS="$(printf '\t')" read -r name _rest || true; printf '%s' "$name"; })
-relay_targets=${WC_BEACON_RELAY_TARGETS:-$("$STADO_BIN" registry pull | "$PYTHON_BIN" -c "$READ_NAMES")}
 # Seconds after which a reader calls a host health document stale. A host inside
 # this window is reporting for itself and must not be spoken over.
 READ_FRESH_SECONDS="${WC_BEACON_RELAY_FRESH_SECONDS:-180}"
-RELAY_TOKEN=$(/bin/cat "${STADO_HOST_HEALTH_API_TOKEN_FILE:-$HOME/.stado/wisent-queue-object-api-token}" 2>/dev/null || printf '')
-# Which hosts is nobody reporting? Ask the store this beacon publishes to, not
-# `registry beacon-age`: that command reads through the CLI's storage layer,
-# which falls back to a same-disk mirror when the fleet endpoint hiccups and then
-# reports hours-old ages for documents that are seconds old. A relay driven off
-# those numbers speaks over healthy hosts with a thinner unit list than they
-# publish for themselves. A target and its beacon file are also spelled
-# differently on a machine named twice, so try the name and every hostname the
-# registry declares for it.
-READ_STALE='import datetime, json, sys, urllib.parse, urllib.request
-base, token, limit = sys.argv[1].rstrip("/"), sys.argv[2], float(sys.argv[3])
-document = json.load(sys.stdin)
-now = datetime.datetime.now(datetime.timezone.utc)
-def age(slug):
-    uri = "stado://probierz/host_health/%s.json" % slug
-    url = "%s/api/object?uri=%s" % (base, urllib.parse.quote(uri, safe=""))
-    request = urllib.request.Request(url, headers={"Authorization": "Bearer %s" % token})
-    try:
-        body = json.load(urllib.request.urlopen(request, timeout=10))
-        stamp = (body.get("reported_at") or "").replace("Z", "+00:00")
-        return (now - datetime.datetime.fromisoformat(stamp)).total_seconds()
-    except Exception:
-        return None
-stale = []
-for entry in document.get("targets", []):
-    name = entry.get("name") or ""
-    spellings = [name] + [h.lower().removesuffix(".local") for h in entry.get("hostnames", []) or []]
-    ages = [value for value in (age(slug) for slug in dict.fromkeys(spellings)) if value is not None]
-    if not ages or min(ages) >= limit:
-        stale.append(name)
-print(" ".join(stale))'
-stale_targets=$("$STADO_BIN" registry pull 2>/dev/null \
-    | "$PYTHON_BIN" -c "$READ_STALE" "$STADO_HOST_HEALTH_API_URL" "$RELAY_TOKEN" "$READ_FRESH_SECONDS" 2>/dev/null || printf '')
+# Which hosts is nobody reporting? The product asks the store this beacon
+# publishes to, not `registry beacon-age`: that command reads through the CLI's
+# storage layer, which falls back to a same-disk mirror when the fleet endpoint
+# hiccups and then reports hours-old ages for documents that are seconds old. A
+# relay driven off those numbers speaks over healthy hosts with a thinner unit
+# list than they publish for themselves. A target and its beacon file are also
+# spelled differently on a machine named twice, so it tries the name and every
+# hostname the registry declares for it. With no override, the targets it
+# names are the relay's work list.
+stale_targets=$("$STADO_BIN" host beacon-stale --api-url "$STADO_HOST_HEALTH_API_URL" \
+    --token-file "${STADO_HOST_HEALTH_API_TOKEN_FILE:-$HOME/.stado/wisent-queue-object-api-token}" \
+    --fresh-seconds "$READ_FRESH_SECONDS" 2>/dev/null || printf '')
+relay_targets=${WC_BEACON_RELAY_TARGETS:-$stale_targets}
 for relay in $relay_targets; do
     [ "$relay" != "$this_target" ] || continue
     # Reporting for itself: leave it alone.
