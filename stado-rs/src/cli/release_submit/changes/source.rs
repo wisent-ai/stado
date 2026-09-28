@@ -91,9 +91,10 @@ pub(super) fn prepare(
         &root,
         &["ls-remote", "--exit-code", "origin", "refs/heads/main"],
     )?;
-    let head = remote.split_whitespace().next().ok_or_else(|| {
-        CmdError::refused(format!("{repository} has no main branch on origin"))
-    })?;
+    let head = remote
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| CmdError::refused(format!("{repository} has no main branch on origin")))?;
     if !contains(&root, &commit, head)? {
         return Err(CmdError::refused(format!(
             "{commit} is not on {repository} origin/main ({head}); push it to main first, or fetch so this checkout holds origin's main"
