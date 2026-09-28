@@ -203,6 +203,20 @@ struct StadoFirstUseRoot: View {
                 StadoOnboardingView(journey: journey, fleetStore: fleetStore)
             }
         }
+        // On the root, so a failure after the journey hands over to the
+        // console (an unsent event, a completion that could not be stored)
+        // stays visible instead of leaving with the onboarding view.
+        .alert(
+            "Stado first use",
+            isPresented: Binding(
+                get: { journey.errorMessage != nil },
+                set: { if !$0 { journey.dismissError() } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(journey.errorMessage ?? "")
+        }
         .task {
             await auth.start()
             await deploymentStore.load(identity: auth.identity)
@@ -287,17 +301,6 @@ private struct StadoOnboardingView: View {
         .background(WisentCanvasBackground())
         .task(id: journey.currentScreen?.screenId) {
             await journey.expose()
-        }
-        .alert(
-            "Stado onboarding is unavailable",
-            isPresented: Binding(
-                get: { journey.errorMessage != nil },
-                set: { if !$0 { journey.dismissError() } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(journey.errorMessage ?? "Unknown error")
         }
     }
 }

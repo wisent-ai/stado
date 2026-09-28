@@ -3,6 +3,10 @@ import Foundation
 // MARK: - This device
 
 extension BackendProvisioner {
+    /// The exit status `launchctl print` gives for a service launchd does not
+    /// hold (`Could not find service`, EX_NOTFOUND in launchd's own codes).
+    static let launchdServiceNotFound: Int32 = 113
+
     func provisionLocal(
         deployment: StadoDeployment,
         onUpdate: UpdateHandler
@@ -69,10 +73,20 @@ extension BackendProvisioner {
         let domain = "gui/\(getuid())"
         let target = "\(domain)/\(label)"
         do {
-            // A unit an earlier install left loaded is booted out first; a
-            // refused bootout of a loaded unit is a failure, not a no-op.
-            if try await runStatus("/bin/launchctl", ["print", target]) == 0 {
+            // A unit an earlier install left loaded is booted out first. launchctl
+            // print answers 0 for a loaded unit and its service-not-found status
+            // for an absent one; any other answer is a failed read, refused here
+            // before bootstrap with what launchctl said.
+            let probe = try await runStatus("/bin/launchctl", ["print", target])
+            switch probe.status {
+            case 0:
                 try await run("/bin/launchctl", ["bootout", target])
+            case Self.launchdServiceNotFound:
+                break
+            default:
+                throw BackendProvisioningError.commandFailed(
+                    "launchctl print \(target) exited \(probe.status): \(probe.error)"
+                )
             }
             try await run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
             try await run("/bin/launchctl", ["kickstart", "-k", target])

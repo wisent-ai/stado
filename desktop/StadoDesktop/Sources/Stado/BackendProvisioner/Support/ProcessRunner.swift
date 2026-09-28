@@ -21,18 +21,23 @@ extension BackendProvisioner {
         }.value
     }
 
-    /// The exit status of a command whose answer is the status itself, such
-    /// as whether launchd holds a unit. Throws only when it cannot start.
-    func runStatus(_ executable: String, _ arguments: [String]) async throws -> Int32 {
+    /// A command whose exit status is itself the answer, such as whether
+    /// launchd holds a unit: the status and what it wrote to stderr. Throws
+    /// only when it cannot start.
+    func runStatus(_ executable: String, _ arguments: [String]) async throws -> (status: Int32, error: String) {
         try await Task.detached(priority: .utility) {
             let process = Process()
+            let errors = Pipe()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
             process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
+            process.standardError = errors
             try process.run()
+            let errorData = errors.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            return process.terminationStatus
+            let detail = String(data: errorData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return (process.terminationStatus, detail)
         }.value
     }
 
