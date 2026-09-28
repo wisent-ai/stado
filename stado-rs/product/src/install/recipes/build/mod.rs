@@ -140,7 +140,12 @@ pub fn release(
         // gets no link on PATH.
         let nested_helper = member.starts_with("bin/") && member_path.components().count() > 2;
         let binary = (member.starts_with("bin/") && !nested_helper) || root_binary;
-        if !binary && !nested_helper && !member.starts_with(&format!("share/{id}/")) {
+        // A product's share directory is staged either as its members
+        // (`share/<id>/…`) or as the one directory `share/<id>`; the release
+        // archive places both, so a source install places both too.
+        let shared = format!("share/{id}");
+        let share_member = member == shared || member.starts_with(&format!("{shared}/"));
+        if !binary && !nested_helper && !share_member {
             continue;
         }
         let source = manifest::inside(&output, source_name).with_context(|| {

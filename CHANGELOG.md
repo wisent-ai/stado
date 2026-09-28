@@ -17,6 +17,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- **A source install places a product's whole `share/<id>` directory:** a stage map member naming the directory itself (`"stage/share/tama": "share/tama"`) was skipped by `stado product install|update --surface cli` built from source, which placed only `bin/`, retired `~/.stado/share/<id>` and left the install incomplete when the product's `after_install` needed it (`tama hooks release`: "holds no hook release"). The member `share/<id>` is now placed at `~/.stado/share/<id>` exactly as members below it are, as the release-archive install already did.
+
 - **A source install of Stado recycles the units still running the image it replaced:** `stado product install|update stado --surface cli` built from source skipped its `after_install` reconcile ("no verified release archive"), so the object API and other resident units kept executing the replaced binary after every source install. An `after_install` option whose value is `{release_archive}` or `{release_archive_sha256}` is now left out when there is no archive, and `stado release converge-local-readers` without `--archive/--sha256` writes the installed release marker and recycles the units on the replaced image; service-local readers keep their own release until a release install, which still passes the archive.
 
 - **`stado config get KEY` prints one resolved value:** the same map `stado config show` prints under `resolved`, one key at a time — a string bare, a list or object as JSON — and a key that resolves to nothing is refused by name. Scripts that parsed `config show` with a JSON reader (Brama's launcher used `python3`) read the value directly.
