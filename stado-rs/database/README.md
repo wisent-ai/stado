@@ -18,6 +18,29 @@ let connection: sea_orm::DatabaseConnection = stado_database::connect(&database)
 Tables are SeaORM entities in the product; the schema changes through a
 `sea-orm-migration` migrator the product runs at startup.
 
+## Synchronous code
+
+A command-line tool, or a service whose row operations are plain functions,
+uses `stado_database::sync::Client` instead of writing a client of its own:
+
+```rust
+use stado_database::{params, sync::{Client, OptionalExtension}};
+
+let client = Client::connect(&stado_database::FleetDatabase::for_product("grant-cli", "GRANT_FLEET_HOME")?)?;
+client.execute("UPDATE sources SET last_synced_at = $1 WHERE id = $2", params![now, id])?;
+let name: Option<String> = client
+    .query_row("SELECT name FROM sources WHERE id = $1", [id], |row| row.get("name"))
+    .optional()?;
+let transaction = client.transaction()?;
+transaction.execute("DELETE FROM watches WHERE id = $1", [id])?;
+transaction.commit()?; // dropped without commit, it rolls back
+```
+
+The client runs the SeaORM connection on a runtime of its own and waits for
+each statement; on a multi-threaded Tokio worker it leaves the worker for the
+wait. `Error::is_unique_violation` says an insert hit a unique constraint, and
+`Row::json` gives a whole row as a JSON object.
+
 ## What `connect` does
 
 1. `stado database resolve <product> --consumer <product> --json` names the

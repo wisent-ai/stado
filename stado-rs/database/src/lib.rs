@@ -12,6 +12,7 @@
 //! never writes its own connector, row mapper or SQL client again.
 
 mod resolve;
+pub mod sync;
 
 use std::path::PathBuf;
 
