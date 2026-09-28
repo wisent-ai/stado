@@ -1,10 +1,10 @@
 use crate::{
-    common::{atomic_json, checked, relative, sha256, unpack, Runtime},
+    common::{atomic_json, checked, relative, sha256, stado, unpack, Runtime},
     source,
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
+use std::{collections::BTreeMap, fs, path::Path};
 
 pub fn materialise(
     runtime: &Runtime,
@@ -29,13 +29,30 @@ pub fn materialise(
     let mut receipts = Vec::new();
     for (key, entry) in declared {
         let uri = entry["uri"].as_str().context("release input has no URI")?;
-        let coordinate = uri
-            .strip_prefix("stado://sources/")
-            .with_context(|| format!("input {key}: unsupported canonical source URI {uri}"))?;
-        let parts: Vec<_> = coordinate.split('/').collect();
         let digest = entry["sha256"]
             .as_str()
             .context("release input has no SHA-256")?;
+        let mount = mounts
+            .remove(&key)
+            .context("validated input mount is missing")?;
+        fs::create_dir_all(mount.parent().context("input mount has no parent")?)?;
+        // A published release of another product (`stado://releases/<product>/
+        // <version>/<platform>/<archive>`) is immutable and has no checkout to
+        // stand in for it: it is always fetched and held to its declared digest,
+        // exactly as the release worker does.
+        if uri.starts_with("stado://releases/") {
+            let (resolved, receipt) = fetch_verified(&key, uri, digest, &entry, directory, &mount)?;
+            receipts.push(receipt);
+            environment.insert(
+                super::mounts::environment_name(&key),
+                resolved.to_string_lossy().into_owned(),
+            );
+            continue;
+        }
+        let coordinate = uri.strip_prefix("stado://sources/").with_context(|| {
+            format!("input {key}: {uri} is neither stado://sources/ nor stado://releases/")
+        })?;
+        let parts: Vec<_> = coordinate.split('/').collect();
         if parts.len() < 3
             || parts[parts.len() - 2] != digest
             || digest.len() != 64
@@ -60,10 +77,6 @@ pub fn materialise(
         } else {
             scope.to_owned()
         };
-        let mount = mounts
-            .remove(&key)
-            .context("validated input mount is missing")?;
-        fs::create_dir_all(mount.parent().context("input mount has no parent")?)?;
         let resolved = match source::checkout(runtime, &format!("wisent-ai/{repository}")) {
             Ok(checkout) => {
                 #[cfg(unix)]
@@ -76,26 +89,9 @@ pub fn materialise(
                 checkout
             }
             Err(error) if error.is::<source::MissingCheckout>() => {
-                let archive_name = parts.last().unwrap();
-                let archive_name = relative(Path::new(archive_name))?;
-                let downloads = directory.join(".downloads").join(&key);
-                fs::create_dir_all(&downloads)?;
-                let fetched = downloads.join(archive_name);
-                checked(Command::new("stado").args(["storage", "get", uri]).arg(&fetched))
-                    .with_context(|| format!("input {key}: no canonical checkout and the object store did not serve {uri}"))?;
-                let actual = sha256(&fetched)?;
-                if actual != digest {
-                    bail!("input {key}: {uri} served SHA-256 {actual}; the manifest declares {digest}");
-                }
-                let resolved = if entry["extract"].as_bool().unwrap_or(false) {
-                    fs::create_dir_all(&mount)?;
-                    unpack(&fetched, &mount)?;
-                    mount.clone()
-                } else {
-                    fs::copy(&fetched, &mount)?;
-                    mount.parent().unwrap().to_path_buf()
-                };
-                receipts.push(json!({"input": key, "kind": "verified-archive", "uri": uri, "sha256": actual, "mount": mount}));
+                let (resolved, receipt) =
+                    fetch_verified(&key, uri, digest, &entry, directory, &mount)?;
+                receipts.push(receipt);
                 resolved
             }
             Err(error) => return Err(error),
@@ -107,4 +103,43 @@ pub fn materialise(
     }
     atomic_json(&directory.join("inputs.json"), &json!(receipts))?;
     Ok(environment)
+}
+
+/// Fetch one declared input archive from the object store, refuse it unless it
+/// has the declared SHA-256, and mount it: unpacked when `extract` is set,
+/// otherwise copied to the mount path. Returns what the build sees and the
+/// receipt that records it.
+fn fetch_verified(
+    key: &str,
+    uri: &str,
+    digest: &str,
+    entry: &Value,
+    directory: &Path,
+    mount: &Path,
+) -> Result<(std::path::PathBuf, Value)> {
+    let archive_name = uri
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .with_context(|| format!("input {key}: {uri} names no archive"))?;
+    let archive_name = relative(Path::new(archive_name))?;
+    let downloads = directory.join(".downloads").join(key);
+    fs::create_dir_all(&downloads)?;
+    let fetched = downloads.join(archive_name);
+    checked(stado().args(["storage", "get", uri]).arg(&fetched))
+        .with_context(|| format!("input {key}: the object store did not serve {uri}"))?;
+    let actual = sha256(&fetched)?;
+    if actual != digest {
+        bail!("input {key}: {uri} served SHA-256 {actual}; the manifest declares {digest}");
+    }
+    let resolved = if entry["extract"].as_bool().unwrap_or(false) {
+        fs::create_dir_all(mount)?;
+        unpack(&fetched, mount)?;
+        mount.to_path_buf()
+    } else {
+        fs::copy(&fetched, mount)?;
+        mount.parent().unwrap().to_path_buf()
+    };
+    let receipt = json!({"input": key, "kind": "verified-archive", "uri": uri, "sha256": actual, "mount": mount});
+    Ok((resolved, receipt))
 }
