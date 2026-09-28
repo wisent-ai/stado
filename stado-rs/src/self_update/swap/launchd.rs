@@ -80,18 +80,26 @@ pub(super) async fn recycle_launchd(
                 ));
                 continue;
             }
-            return Err(format!(
-                "{context}: the kernel image for {} pid {pid} is unreadable",
-                unit.label
-            ));
+            // Any other declared unit whose image is gone is executing the
+            // program this install replaced, the same case as a readable image
+            // that differs below, so it is restarted onto the installed inode.
+            // Refusing it failed every fleet-macbook delivery of stado 0.22.11
+            // on 2026-09-28: `stado release agent` ran the replaced binary,
+            // the refusal left it there, and the next delivery met it again.
         }
-        let selected = running.and_then(|running| {
-            installed_images.iter().find(|(path, installed)| {
-                (declared_program == Some(path.as_str())
-                    || running.path.trim_end_matches(" (deleted)") == path)
-                    && !running.is_same_file(installed)
+        let selected = if directly_declared && running.is_none() {
+            installed_images
+                .iter()
+                .find(|(path, _)| declared_program == Some(path.as_str()))
+        } else {
+            running.and_then(|running| {
+                installed_images.iter().find(|(path, installed)| {
+                    (declared_program == Some(path.as_str())
+                        || running.path.trim_end_matches(" (deleted)") == path)
+                        && !running.is_same_file(installed)
+                })
             })
-        });
+        };
         let Some((program, installed)) = selected else {
             continue;
         };
