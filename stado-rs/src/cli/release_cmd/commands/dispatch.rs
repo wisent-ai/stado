@@ -103,6 +103,7 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Provenance(args) => {
             crate::cli::host::provenance(&args.host, args.json).await
         }
+        ReleaseCommands::VersionGate(command) => super::super::version_gate::dispatch(command),
     }
 }
 

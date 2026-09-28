@@ -6,6 +6,7 @@ mod fetch;
 mod local;
 mod publication;
 mod rollout;
+mod version_gate;
 
 pub use commands::dispatch::dispatch;
 pub use commands::{

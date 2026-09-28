@@ -125,6 +125,11 @@ pub enum ReleaseCommands {
     HostState(ReleaseHostStateArgs),
     /// Attest the source and bytes of the release artifacts a host carries.
     Provenance(ReleaseProvenanceArgs),
+    /// The pull-request version gate's steps: the advertised surface, the
+    /// published baseline, the versioning rule and the module reachability
+    /// check `.github/workflows/version-check.yml` runs.
+    #[command(name = "version-gate", subcommand)]
+    VersionGate(super::version_gate::VersionGateCommands),
 }
 
 /// Set or remove one managed-version declaration for a registry host.
