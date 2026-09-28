@@ -12,10 +12,10 @@ use crate::cli::CmdError;
 
 const API: &str = "https://api.supabase.com/v1";
 const TOKEN_ITEM: &str = "SUPABASE_ACCESS_TOKEN";
-const PROVIDER: &str = include_str!("supabase-pricing.json");
+const PROVIDER: &str = include_str!("provider/supabase-pricing.json");
 /// Supabase Root 2021 CA, as Supabase publishes it for verifying its
 /// database and pooler certificates.
-const SUPABASE_ROOT_CA: &str = include_str!("supabase-root-ca.pem");
+const SUPABASE_ROOT_CA: &str = include_str!("provider/supabase-root-ca.pem");
 
 fn provider() -> Value {
     serde_json::from_str(PROVIDER).expect("supabase-pricing.json is valid JSON")
