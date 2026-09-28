@@ -44,7 +44,7 @@ pub(crate) async fn withdraw_publisher(
     }
     let (owner, _) = fleet_hosts().await?;
     let here = this_host().await?;
-    let mut hosts = vec![owner.clone(), here];
+    let mut hosts = vec![owner.clone(), here.clone()];
     hosts.extend(targets.iter().cloned());
     hosts.sort();
     hosts.dedup();
@@ -70,8 +70,17 @@ pub(crate) async fn withdraw_publisher(
     }
     // The reconciliation reads the authoritative publisher items from the
     // vault on the machine it runs on, so it runs on the owner for every host,
-    // as `declare-publisher` does for a client that holds no vault.
+    // as `declare-publisher` does for a client that holds no vault. This host,
+    // when it declares no vault of its own, reads the owner's vault through
+    // its route: the owner's own reconciliation covers it, and repairing it
+    // would reconcile its retired local copy, whose grant no longer matches
+    // the bearer this host holds (lukasz-macbook, 2026-09-28).
+    let here_reads_owner = crate::config::skarbiec_vault_file().trim().is_empty();
     for host in &hosts {
+        if here_reads_owner && host == &here && host != &owner {
+            report.push(json!({ "step": "verifier", "host": host, "repair": "not needed: reads the vault on the owner", "owner": owner }));
+            continue;
+        }
         let arguments = [
             "repair",
             "stado",
