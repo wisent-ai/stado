@@ -116,6 +116,17 @@ pub enum CredentialTokenCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Vault-owner primitive used by `mint --token-item`: register ITEM#FIELD
+    /// with `skarbiec grant issue` and keep it at STADO_TOKEN_DESTINATION.
+    #[command(name = "register-item-local", hide = true)]
+    RegisterItemLocal {
+        skarbiec: String,
+        item: String,
+        field: String,
+        /// The `grant issue …` arguments Skarbiec receives.
+        #[arg(last = true)]
+        arguments: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]

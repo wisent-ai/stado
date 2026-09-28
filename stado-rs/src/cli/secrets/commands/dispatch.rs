@@ -161,6 +161,12 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 )
                 .await
             }
+            CredentialTokenCommands::RegisterItemLocal {
+                skarbiec,
+                item,
+                field,
+                arguments,
+            } => super::host::register_item_local(&skarbiec, &item, &field, &arguments),
         },
         SecretsCommands::Vaults { host, json } => super::host::vaults(host, json).await,
         SecretsCommands::AcquisitionScopes { command } => match command {

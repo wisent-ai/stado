@@ -111,16 +111,20 @@ fi
         invocation.push(environment.as_str());
     }
     let token_file = token_file.or(item_destination);
+    let owner_stado = format!("{home}/.stado/bin/stado");
     let output = if let Some((item, field)) = token_source {
-        invocation.extend(["/usr/bin/python3", "-", skarbiec.as_str(), item, field]);
+        invocation.extend([
+            owner_stado.as_str(),
+            "credentials",
+            "token",
+            "register-item-local",
+            skarbiec.as_str(),
+            item,
+            field,
+            "--",
+        ]);
         invocation.extend(arguments.iter().map(String::as_str));
-        crate::deploy::host_channel::run_program_with_stdin(
-            &resolved,
-            &invocation,
-            include_str!("../../../../../host_payloads/vault_token/from_item.py"),
-            &runner,
-        )
-        .await
+        crate::deploy::host_channel::run_program(&resolved, &invocation, &runner).await
     } else {
         invocation.push(skarbiec.as_str());
         invocation.extend(arguments.iter().map(String::as_str));
