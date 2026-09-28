@@ -23,6 +23,10 @@ mod signing;
 mod source;
 mod state;
 
+/// The committed tree of a revision as plain files, the tree an install
+/// builds; `stado quality check` reads its gates there too.
+pub use source::export as export_committed_source;
+
 use std::sync::OnceLock;
 
 /// The Stado build executing these operations.

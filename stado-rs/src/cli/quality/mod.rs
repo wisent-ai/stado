@@ -14,9 +14,10 @@
 //! that declares no formatting gate is told so rather than guessed at, and the
 //! command never invents a formatter the manifest does not name.
 //!
-//! `stado quality check` runs the same gate exactly as declared, so the check
-//! a release build will run can be read from a checkout before an install is
-//! handed to anyone: nothing is written, and a refusal names the gate.
+//! `stado quality check` runs the same gate exactly as declared over the
+//! committed tree an install would build, exported beside the checkout, so the
+//! verdict a source install will reach can be read before an install is
+//! handed to anyone: the checkout is not written, and a refusal names the gate.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -98,28 +99,95 @@ pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Run the declared formatting gates as the release build runs them, writing
-/// nothing; the first refusal is returned with the gate that refused.
+/// Run the declared formatting gates over the committed tree an install of
+/// the checkout at `root` would build, writing nothing to the checkout; the
+/// first refusal is returned with the gate that refused.
+///
+/// `stado product install|update` exports the committed revision and runs its
+/// quality there, so an uncommitted edit neither fails nor rescues it. The
+/// check reads that same tree: `origin/main` when the tracked tree is clean
+/// and behind it (the install advances to it), `HEAD` otherwise.
 pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
-    let declared = format_gates(root)?;
+    let checkout = match root {
+        Some(path) => PathBuf::from(path),
+        None => std::env::current_dir().map_err(|error| {
+            CmdError::click(format!("cannot read the working directory: {error}"))
+        })?,
+    };
+    let revision = built_revision(&checkout)?;
+    let scratch = checkout
+        .join(".wisent-output")
+        .join("quality")
+        .join(format!(
+            "{}-{}",
+            std::process::id(),
+            &revision[..12.min(revision.len())]
+        ));
+    stado_product::export_committed_source(&checkout, &revision, &scratch)
+        .map_err(|error| CmdError::click(format!("cannot export {revision}: {error:#}")))?;
+    let verdict = check_tree(&scratch, &checkout, &revision);
+    std::fs::remove_dir_all(&scratch).map_err(|error| {
+        CmdError::click(format!("cannot remove {}: {error}", scratch.display()))
+    })?;
+    verdict
+}
+
+fn check_tree(tree: &Path, checkout: &Path, revision: &str) -> Result<(), CmdError> {
+    let declared = format_gates(Some(&tree.to_string_lossy()))?;
     for gate in &declared.gates {
         println!("stado quality check: {}", gate.argv.join(" "));
-        run(&gate.argv, &declared.root).map_err(|error| {
+        run(&gate.argv, tree).map_err(|error| {
             CmdError::click(format!(
-                "stado quality check: gate {:?} of {} refuses {}: {error}; \
+                "stado quality check: gate {:?} of {} refuses {revision} of {}: {error}; \
                  `stado quality format` writes what it reads",
                 gate.name,
                 declared.product,
-                declared.root.display()
+                checkout.display()
             ))
         })?;
     }
     println!(
-        "stado quality check: {} passes its formatting gates in {}",
+        "stado quality check: {} passes its formatting gates at {revision} of {}",
         declared.product,
-        declared.root.display()
+        checkout.display()
     );
     Ok(())
+}
+
+/// The revision an install of `checkout` builds: `origin/main` after a fetch
+/// when the tracked tree is clean and `HEAD` is contained in it, else `HEAD`.
+fn built_revision(checkout: &Path) -> Result<String, CmdError> {
+    let head = git(checkout, &["rev-parse", "HEAD"])?;
+    let dirty = !git(checkout, &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    if dirty {
+        return Ok(head);
+    }
+    git(checkout, &["fetch", "--quiet", "origin", "main"])?;
+    let main = git(checkout, &["rev-parse", "origin/main"])?;
+    let contained = Command::new("git")
+        .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
+        .current_dir(checkout)
+        .status()
+        .map_err(|error| CmdError::click(format!("cannot run git merge-base: {error}")))?
+        .success();
+    Ok(if contained { main } else { head })
+}
+
+fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(checkout)
+        .output()
+        .map_err(|error| CmdError::click(format!("cannot run git {}: {error}", args.join(" "))))?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "git {} in {} failed: {}",
+            args.join(" "),
+            checkout.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// The recipe this host can actually run, or the refusal that says why not.
