@@ -6,7 +6,6 @@
 //! (`WISENT_SOURCE_COMMIT`) and marker being checked.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::Value;
 
@@ -17,28 +16,12 @@ use super::AppSources;
 
 const BASELINE: &str = "released-surface.json";
 const VERIFIED_BASELINE: &str = ".wisent-provenance/baseline.json";
-const FIXTURES_URL: &str =
-    "https://raw.githubusercontent.com/lbartoszcze/AutoVersion/v0.1.0/FIXTURES.md";
 const REGENERATE: &str = "Regenerate it with `stado release version-gate app-baseline`.";
 
 fn read_json(path: &Path) -> Read<Value> {
     let text =
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
     serde_json::from_str(&text).map_err(|error| format!("{}: not JSON ({error})", path.display()))
-}
-
-fn fixtures() -> Read<String> {
-    let output = Command::new("curl")
-        .args(["-fsSL", FIXTURES_URL])
-        .output()
-        .map_err(|error| format!("curl could not start: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "{FIXTURES_URL} could not be read: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    String::from_utf8(output.stdout).map_err(|error| format!("{FIXTURES_URL}: not UTF-8 ({error})"))
 }
 
 /// The provenance record, refused unless complete and bound to this source.
@@ -121,7 +104,7 @@ fn provenance(root: &Path, marker: &str, released: &str) -> Read<()> {
 
 /// The whole gate for the tree at `root`.
 pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
-    if !conformance::run(&fixtures()?)? {
+    if !conformance::run(&conformance::pinned()?)? {
         return Err("this port does not reproduce AutoVersion's fixtures".into());
     }
     let load = surface::tree(root);
@@ -159,9 +142,14 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
         if change != "internal" {
             return Err(format!("what a user of the app holds changed ({change}) but {} still declares {released}; declare {required}", sources.version_source()));
         }
-    } else if declared != required {
+    } else if !rule::semver_at_least(&declared, &required)? {
+        // A declared version may run ahead of the required one: builds that
+        // were cut and never published (a cancelled or superseded Stado run)
+        // consumed version numbers without releasing them. What it may never
+        // do is fall short of what the change requires — the same rule
+        // Stado's own version check applies.
         return Err(format!(
-            "{} declares {declared}, but a {change} change since {released} requires {required}",
+            "{} declares {declared}, but a {change} change since {released} requires at least {required}",
             sources.version_source()
         ));
     }

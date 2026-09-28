@@ -4,10 +4,32 @@
 //! case must yield exactly the recorded class, next version, removed and
 //! added names; every `refuse` case exactly the recorded refusal. A port that
 //! misses one is not a port of the rule, and its verdicts are not trusted.
+//! `pinned` reads the fixtures at the one tag this port follows, so a caller
+//! (a product's workflow, `app-check`) never spells the coordinate itself.
+
+use std::process::Command;
 
 use serde_json::Value;
 
 use super::rule::decide;
+
+const FIXTURES_URL: &str =
+    "https://raw.githubusercontent.com/lbartoszcze/AutoVersion/v0.1.0/FIXTURES.md";
+
+/// AutoVersion's FIXTURES.md at the tag this port follows.
+pub(super) fn pinned() -> Result<String, String> {
+    let output = Command::new("curl")
+        .args(["-fsSL", FIXTURES_URL])
+        .output()
+        .map_err(|error| format!("curl could not start: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{FIXTURES_URL} could not be read: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|error| format!("{FIXTURES_URL}: not UTF-8 ({error})"))
+}
 
 fn names(value: &Value) -> Vec<String> {
     value

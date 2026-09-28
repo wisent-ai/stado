@@ -64,10 +64,11 @@ pub enum VersionGateCommands {
         json: bool,
     },
     /// Reproduce every case of AutoVersion's FIXTURES.md with this port;
-    /// fails when any class, next version or refusal differs.
+    /// fails when any class, next version or refusal differs. Without
+    /// --fixtures, the file at the tag this port follows is read.
     Conformance {
         #[arg(long)]
-        fixtures: PathBuf,
+        fixtures: Option<PathBuf>,
     },
     /// Succeed when ACTUAL is a valid SemVer at least MINIMUM; a lower one
     /// fails, and an invalid one is refused with the usage status.
@@ -200,8 +201,11 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
             Ok(())
         }
         VersionGateCommands::Conformance { fixtures } => {
-            let text = std::fs::read_to_string(&fixtures)
-                .map_err(|error| CmdError::usage(format!("{}: {error}", fixtures.display())))?;
+            let text = match fixtures {
+                Some(fixtures) => std::fs::read_to_string(&fixtures)
+                    .map_err(|error| CmdError::usage(format!("{}: {error}", fixtures.display())))?,
+                None => conformance::pinned().map_err(CmdError::click)?,
+            };
             match conformance::run(&text) {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(negative()),
