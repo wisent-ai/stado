@@ -11,6 +11,7 @@ use crate::cli::CmdError;
 pub(super) mod converge;
 pub(super) mod install;
 pub(super) mod restore;
+mod retain;
 
 pub use restore::ReleaseRestoreLocalArgs;
 
