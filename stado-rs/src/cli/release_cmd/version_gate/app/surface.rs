@@ -110,8 +110,56 @@ fn bundle_names(load: Loader, path: &str) -> Read<Vec<String>> {
     Ok(names)
 }
 
+/// Whether an `exports` target resolves to anything: a path, or a condition
+/// map or fallback array with at least one path in it. `null` (and anything
+/// else) blocks the entry point in Node, so it is not part of the contract.
+fn reachable(target: &serde_json::Value) -> bool {
+    match target {
+        serde_json::Value::String(path) => !path.is_empty(),
+        serde_json::Value::Object(map) => map.values().any(reachable),
+        serde_json::Value::Array(items) => items.iter().any(reachable),
+        _ => false,
+    }
+}
+
+/// The entry points `exports` opens (or `main`, when there is no `exports`).
+/// A map whose keys all start with "." is a subpath map; one without any is a
+/// condition map for the root; Node refuses a mix, and so does this.
+fn export_names(document: &serde_json::Value, path: &str) -> Read<Vec<String>> {
+    let exports = &document["exports"];
+    let root = || vec![".".to_string()];
+    match exports {
+        serde_json::Value::Null => Ok(match &document["main"] {
+            serde_json::Value::String(main) if !main.is_empty() => root(),
+            _ => Vec::new(),
+        }),
+        serde_json::Value::Object(map) => {
+            let subpaths = map.keys().filter(|key| key.starts_with('.')).count();
+            if subpaths == map.len() {
+                Ok(map
+                    .iter()
+                    .filter(|(_, target)| reachable(target))
+                    .map(|(key, _)| key.clone())
+                    .collect())
+            } else if subpaths == 0 {
+                Ok(if reachable(exports) {
+                    root()
+                } else {
+                    Vec::new()
+                })
+            } else {
+                Err(format!(
+                    "{path}: exports mixes subpaths and conditions, which Node refuses"
+                ))
+            }
+        }
+        other if reachable(other) => Ok(root()),
+        _ => Ok(Vec::new()),
+    }
+}
+
 /// A package.json's contract: its name (`package:`), every entry point it
-/// exports (`export:`) and every command it installs (`bin:`).
+/// opens (`export:`) and every command it installs (`bin:`).
 fn package_names(load: Loader, path: &str) -> Read<Vec<String>> {
     let document: serde_json::Value = serde_json::from_slice(&load(path)?)
         .map_err(|error| format!("{path}: not JSON ({error})"))?;
@@ -120,22 +168,23 @@ fn package_names(load: Loader, path: &str) -> Read<Vec<String>> {
         .filter(|name| !name.is_empty())
         .ok_or_else(|| format!("{path}: declares no package name"))?;
     let mut names = vec![format!("package:{name}")];
-    match &document["exports"] {
-        serde_json::Value::String(_) => names.push("export:.".to_string()),
-        serde_json::Value::Object(map) => {
-            names.extend(map.keys().map(|key| format!("export:{key}")))
-        }
-        serde_json::Value::Null => {}
-        _ => return Err(format!("{path}: exports is neither a path nor a map")),
-    }
+    names.extend(
+        export_names(&document, path)?
+            .into_iter()
+            .map(|key| format!("export:{key}")),
+    );
     match &document["bin"] {
-        serde_json::Value::String(_) => {
+        serde_json::Value::String(target) if !target.is_empty() => {
             let command = name.rsplit('/').next().unwrap_or(name);
             names.push(format!("bin:{command}"));
         }
-        serde_json::Value::Object(map) => names.extend(map.keys().map(|key| format!("bin:{key}"))),
+        serde_json::Value::Object(map) => names.extend(
+            map.iter()
+                .filter(|(_, target)| target.as_str().is_some_and(|target| !target.is_empty()))
+                .map(|(key, _)| format!("bin:{key}")),
+        ),
         serde_json::Value::Null => {}
-        _ => return Err(format!("{path}: bin is neither a path nor a map")),
+        _ => return Err(format!("{path}: bin is neither a path nor a map of paths")),
     }
     Ok(names)
 }
