@@ -3,5 +3,6 @@
 
 pub(in crate::cli::host) mod forwarding;
 pub(in crate::cli::host) mod remove;
+pub(in crate::cli::host) mod remove_local;
 pub(in crate::cli::host) mod retire;
 pub(in crate::cli::host) mod storage;

@@ -177,6 +177,15 @@ pub enum SpaceFileCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Device-local primitive used by the target-resolving remove command:
+    /// prints one `STADO_REMOVE_FILE` report line.
+    #[command(name = "remove-local", hide = true)]
+    RemoveLocal {
+        path: String,
+        /// The approved account's home, whose managed areas bound the removal.
+        #[arg(long)]
+        home: String,
+    },
 }
 
 pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
@@ -257,6 +266,10 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
                 },
                 json,
             ),
+            SpaceFileCommands::RemoveLocal { path, home } => {
+                host::remove_file_local(&path, &home);
+                Ok(())
+            }
         },
         SpaceCommands::Relocate {
             target,

@@ -63,16 +63,15 @@ pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFile
     let script = format!(
         r#"set -u
 path={quoted}
+stado="$HOME/.stado/bin/stado"
+[ -x "$stado" ] || stado="$(command -v stado)"
 case "$path" in
   /Library/LaunchDaemons/com.wisent.*.plist|/etc/systemd/system/com.wisent.*.service)
-    set -- /usr/bin/sudo -n python3 - "$path" "$HOME" ;;
-  *) set -- python3 - "$path" "$HOME" ;;
+    set -- /usr/bin/sudo -n "$stado" ;;
+  *) set -- "$stado" ;;
 esac
-"$@" <<'STADO_REMOVE_FILE_PROGRAM'
-{program}
-STADO_REMOVE_FILE_PROGRAM
-"#,
-        program = include_str!("../../../host_payloads/remove_file/operation.py"),
+"$@" space file remove-local "$path" --home "$HOME"
+"#
     );
     let output = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
