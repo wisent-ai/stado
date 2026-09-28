@@ -12,7 +12,9 @@
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, ServiceStatus, STATE_ACTIVE};
 use crate::deploy::Runner;
+use crate::queue::StorageError;
 
+use super::gate::MutationGate;
 use super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
 
 mod standby;
@@ -38,15 +40,17 @@ pub(super) fn replacements(
 
 /// Retire each replacement's predecessors on its host, then every failing
 /// undeclared fleet unit on the local hosts, then stop every standby unit
-/// `findings` shows serving. Report mode and the emergency pause record the
-/// plan and touch nothing, as for every repair.
+/// `findings` shows serving, through the pass's mutation gate. Report mode
+/// and the emergency pause record the plan and touch nothing, as for every
+/// repair.
 pub(super) async fn retire(
     replacements: &[(String, crate::deploy::service_catalog::CatalogService)],
     findings: &[crate::cli::service_verify::Finding],
     policy: &AutonomyPolicy,
     runner: &Runner,
+    gate: &mut MutationGate<'_>,
     summary: &mut ServiceReconcileSummary,
-) -> Vec<ServiceReconcileOutcome> {
+) -> Result<Vec<ServiceReconcileOutcome>, StorageError> {
     let mut outcomes = Vec::new();
     for (host, entry) in replacements {
         let row = |unit: &str, classification: &str, changed: bool, detail: String| {
@@ -106,6 +110,6 @@ pub(super) async fn retire(
         }
     }
     outcomes.extend(strays::retire_strays(policy, runner, summary).await);
-    outcomes.extend(standby::stop_serving_standbys(findings, policy, runner, summary).await);
-    outcomes
+    outcomes.extend(standby::stop_serving_standbys(findings, policy, runner, gate, summary).await?);
+    Ok(outcomes)
 }

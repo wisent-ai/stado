@@ -135,7 +135,9 @@ pub(in crate::cli::service_verify) async fn port_verdicts(
         .into_iter()
         .find(|target| target.name == host)
     else {
-        return Err(format!("{host} is not a registry target, so the port's owner was not judged"));
+        return Err(format!(
+            "{host} is not a registry target, so the port's owner was not judged"
+        ));
     };
     let Some(declared) = crate::deploy::service::declared_services(target)
         .into_iter()
@@ -145,16 +147,14 @@ pub(in crate::cli::service_verify) async fn port_verdicts(
             "{unit} is not declared on this host, so the port's owner was not judged"
         ));
     };
-    let report = crate::deploy::service_serving::read_serving(
-        target,
-        unit,
-        &declared.path,
-        &[port],
-        runner,
-    )
-    .await
-    .map_err(|error| format!("the port's owner could not be read: {error}"))?;
-    Ok((unit.to_string(), crate::deploy::service_serving::port_verdicts(&report)))
+    let report =
+        crate::deploy::service_serving::read_serving(target, unit, &declared.path, &[port], runner)
+            .await
+            .map_err(|error| format!("the port's owner could not be read: {error}"))?;
+    Ok((
+        unit.to_string(),
+        crate::deploy::service_serving::port_verdicts(&report),
+    ))
 }
 
 /// The loopback port a blue-green rollout declares as this service's stable

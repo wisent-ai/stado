@@ -140,7 +140,10 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
     // this host found serving, which no directory read can produce.
     if let Some(directory) = registry.service_directory.as_ref() {
         let mut standby = standby_findings(directory, Some(me.as_str()));
-        merge_serving(&mut standby, serving_standbys(&registry, directory, &me).await);
+        merge_serving(
+            &mut standby,
+            serving_standbys(&registry, directory, &me).await,
+        );
         findings.extend(standby);
     }
     record_observations(&findings);
@@ -203,7 +206,10 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
     // probed row. A host holding nothing but a standby address is visited too,
     // because that is exactly the host a serving copy hides on.
     let mut serving = Vec::new();
-    if let Some(local) = me.as_deref().filter(|name| host.map_or(true, |only| only == *name)) {
+    if let Some(local) = me
+        .as_deref()
+        .filter(|name| host.map_or(true, |only| only == *name))
+    {
         serving.extend(serving_standbys(&registry, directory, local).await);
     }
     let standby_only: std::collections::BTreeSet<String> = standby
@@ -221,14 +227,51 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
     serving.extend(serving_rows);
     // Keep the serving rows, and this host's standby rows whose answer came
     // from an owner other than the standby unit (unprobed, with that detail).
-    serving.retain(|finding| {
-        finding.state == crate::observations::STANDBY_SERVING || !finding.probed
-    });
+    serving
+        .retain(|finding| finding.state == crate::observations::STANDBY_SERVING || !finding.probed);
     merge_serving(&mut standby, serving);
     findings.extend(standby);
     judge_ownership(&registry, &mut findings).await;
     record_observations(&findings);
     Ok(findings)
+}
+
+/// Is `host` still a standby for `service`, with its own declared unit
+/// serving on the standby address, judged now from a fresh registry read?
+///
+/// The service reconciler asks this while it holds the unit's mutation lease,
+/// so a sweep that is minutes old never stops a unit: a host promoted to the
+/// active one since, a standby address withdrawn, or a port now held by
+/// another job each answer `Err` with the reason, and nothing is stopped.
+/// This host is probed directly; another through its own `service verify
+/// --local`, the one vantage from which a standby's owner can be judged.
+pub(crate) async fn standby_still_serving(service: &str, host: &str) -> Result<(), String> {
+    let registry = load_registry_auto().await.map_err(|exc| exc.to_string())?;
+    let directory = registry
+        .service_directory
+        .as_ref()
+        .ok_or("the registry declares no service directory")?;
+    let declared = directory
+        .services
+        .get(service)
+        .ok_or_else(|| format!("the service directory no longer declares {service}"))?;
+    if declared.active_host == host || !declared.standby.contains_key(host) {
+        return Err(format!("{host} is no longer a standby for {service}"));
+    }
+    let me = registry
+        .lookup_self(&crate::providers::vast::system_hostname())
+        .ok()
+        .flatten()
+        .map(|target| target.name.clone());
+    let rows = if me.as_deref() == Some(host) {
+        serving_standbys(&registry, directory, host).await
+    } else {
+        remote_findings(host, &[]).await
+    };
+    rows.iter()
+        .find(|row| row.service == service && row.state == crate::observations::STANDBY_SERVING)
+        .map(|_| ())
+        .ok_or_else(|| format!("{host}'s standby unit for {service} no longer holds its port"))
 }
 
 /// `service verify`: sweep the whole directory from every declared vantage.

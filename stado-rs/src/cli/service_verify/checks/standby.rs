@@ -79,7 +79,9 @@ pub(in crate::cli::service_verify) async fn serving_standbys(
         if state != OBSERVED {
             continue;
         }
-        let port = url::Url::parse(&endpoint.url).ok().and_then(|url| url.port());
+        let port = url::Url::parse(&endpoint.url)
+            .ok()
+            .and_then(|url| url.port());
         let owner = match port {
             Some(port) => port_verdicts(registry, name, me, port, &runner).await,
             None => Err(format!("{} names no port to judge", endpoint.url)),

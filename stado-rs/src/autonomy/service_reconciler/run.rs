@@ -8,6 +8,7 @@ use crate::deploy::service;
 use crate::queue::{JobStorage, StorageError};
 
 use super::endpoint::{endpoint_states, EndpointState};
+use super::gate::MutationGate;
 use super::receipts::{
     alert_transitions, persist_report, ServiceReconcileOutcome, ServiceReconcileReport,
     ServiceReconcileSummary,
@@ -17,11 +18,10 @@ use super::repair::{
 };
 use super::{LATEST_REPORT, SCHEMA_VERSION};
 
-/// The two classification words the pass records from an `else` branch. The
-/// recorded strings are unchanged; the write gate requires that a word an
+/// The classification word the pass records from an `else` branch. The
+/// recorded string is unchanged; the write gate requires that a word an
 /// `else` branch stores be named once outside it.
 const UNKNOWN_EVIDENCE: &str = "unknown";
-const LEASE_BLOCKED: &str = "lease_blocked";
 
 pub async fn reconcile(
     store: &JobStorage,
@@ -47,7 +47,7 @@ pub async fn reconcile(
         ..ServiceReconcileSummary::default()
     };
     let mut outcomes = Vec::new();
-    let mut mutations = usize::default();
+    let mut gate = MutationGate::new(store, policy, &decision_id);
     let replacements = super::predecessors::replacements(&statuses);
 
     for status in statuses {
@@ -157,21 +157,6 @@ pub async fn reconcile(
             outcomes.push(outcome);
             continue;
         }
-        if mutations >= policy.limits.max_actions_per_tick {
-            outcome.classification = "action_limit".to_string();
-            outcome.detail = "service action limit reached for this autonomy tick".to_string();
-            summary.blocked += 1;
-            outcomes.push(outcome);
-            continue;
-        }
-        let control = crate::autonomy::storage::load_control(store).await?;
-        if control.emergency_paused || control.circuit_open_at(Utc::now()) {
-            outcome.classification = "control_blocked".to_string();
-            outcome.detail = "autonomy pause or circuit breaker became active".to_string();
-            summary.blocked += 1;
-            outcomes.push(outcome);
-            continue;
-        }
         let target = match crate::deploy::host_channel::canonical_target(&status.service.host).await
         {
             Ok(target) => target,
@@ -183,51 +168,27 @@ pub async fn reconcile(
                 continue;
             }
         };
-        let lease_subject = format!(
-            "service:{}:{}",
-            status.service.host,
-            status.service.unit_id()
-        );
-        let Some(lease) = crate::autonomy::storage::acquire_placement_lease(
-            store,
-            &lease_subject,
-            &decision_id,
-            "service-reconciler",
-            policy.limits.decision_ttl_seconds,
-            Utc::now(),
-        )
-        .await?
-        else {
-            outcome.classification = LEASE_BLOCKED.to_string();
-            outcome.detail = "another reconciler owns this service mutation".to_string();
-            summary.blocked += 1;
-            outcomes.push(outcome);
-            continue;
+        let (subject, lease) = match gate
+            .admit(&status.service.host, status.service.unit_id())
+            .await?
+        {
+            Ok(admitted) => admitted,
+            Err(refusal) => {
+                outcome.classification = refusal.classification.to_string();
+                outcome.detail = refusal.detail;
+                summary.blocked += 1;
+                outcomes.push(outcome);
+                continue;
+            }
         };
-        mutations += 1;
-        let mut result = match planned_action {
+        let result = match planned_action {
             "beacon_repair" => reconcile_beacon(&status, &target, &runner).await,
             "adopt" => reconcile_observed(&status, &target, &runner).await,
             "ensure" => reconcile_unreachable(&status, &target, &runner).await,
             "host_probe" => reconcile_undeclared(&status, &target, &runner).await,
             _ => unreachable!(),
         };
-        match crate::autonomy::storage::release_placement_lease(store, &lease_subject, &lease.token)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                result = Err(
-                    "service action finished, but mutation lease ownership changed before release"
-                        .to_string(),
-                );
-            }
-            Err(error) => {
-                result = Err(format!(
-                    "service action finished, but mutation lease release failed: {error}"
-                ));
-            }
-        }
+        let result = gate.release(&subject, &lease, result).await;
         match result {
             Ok((action, changed, detail)) => {
                 outcome.classification = "reconciled".to_string();
@@ -237,14 +198,7 @@ pub async fn reconcile(
                 if changed {
                     summary.changed += 1;
                 }
-                crate::autonomy::storage::record_mutation_outcome(
-                    store,
-                    true,
-                    None,
-                    policy.limits.circuit_breaker_failures,
-                    policy.limits.circuit_breaker_cooldown_seconds,
-                )
-                .await?;
+                gate.record(None).await?;
             }
             Err(error) => {
                 outcome.classification = if error.starts_with("endpoint responds")
@@ -265,21 +219,22 @@ pub async fn reconcile(
                 // incomplete declarations and starved every healthy repair
                 // behind them, fifteen minutes per tick, forever.
                 if outcome.classification == "repair_failed" {
-                    crate::autonomy::storage::record_mutation_outcome(
-                        store,
-                        false,
-                        Some(&error),
-                        policy.limits.circuit_breaker_failures,
-                        policy.limits.circuit_breaker_cooldown_seconds,
-                    )
-                    .await?;
+                    gate.record(Some(&error)).await?;
                 }
             }
         }
         outcomes.push(outcome);
     }
     outcomes.extend(
-        super::predecessors::retire(&replacements, &findings, policy, &runner, &mut summary).await,
+        super::predecessors::retire(
+            &replacements,
+            &findings,
+            policy,
+            &runner,
+            &mut gate,
+            &mut summary,
+        )
+        .await?,
     );
 
     let report = ServiceReconcileReport {

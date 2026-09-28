@@ -8,10 +8,11 @@
 //!
 //! [`endpoint`] folds the sweep into the endpoint-side fact, [`repair`] holds
 //! one repair per kind of evidence that a declaration is wrong, [`receipts`]
-//! holds the report and what is done with it, and [`run`] is the pass that
-//! puts a row through the one shared mutation gate.
+//! holds the report and what is done with it, [`gate`] is the one shared
+//! mutation gate, and [`run`] is the pass that puts a row through it.
 
 mod endpoint;
+mod gate;
 mod predecessors;
 mod receipts;
 mod reconcilers;
