@@ -262,7 +262,14 @@ async fn ensure_workload_secrets(
     for host in &hosts {
         host_grant::declare_on_host(host, &missing).await?;
     }
-    if client != owner {
+    // A client that holds no vault of its own reads the owner's through
+    // secrets.skarbiec.url, so its agent bearer already lives there; copying
+    // it asks the client for a vault authority it does not have, and
+    // `catalog enroll most-desktop` on lukasz-macbook refused with
+    // `lukasz-macbook declares no vault authority` after declaring the
+    // publisher. `declare_publisher` skips the same copy for the same client.
+    let client_reads_owner = crate::config::skarbiec_vault_file().trim().is_empty();
+    if client != owner && !client_reads_owner {
         vault_token_sync(
             &client,
             &owner,
