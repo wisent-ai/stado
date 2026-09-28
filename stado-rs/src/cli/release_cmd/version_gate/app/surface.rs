@@ -245,6 +245,10 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
             names.insert(format!("product:{name}"));
         }
     }
+    if let Some(project) = &sources.tuist_project {
+        let helpers = &sources.tuist_helpers;
+        names.extend(super::tuist::surface(load, project, helpers)?);
+    }
     for source in &sources.appended_paths {
         for name in appended(source, &text(load, source)?)? {
             names.insert(format!("harness-path:{name}"));
@@ -253,9 +257,15 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
     Ok(names.into_iter().collect())
 }
 
-/// The version the Info.plist declares, else the package.json's `version`.
+/// The version the Info.plist declares, else the Tuist project's marketing
+/// version, else the package.json's `version`.
 pub(super) fn declared_version(load: Loader, sources: &AppSources) -> Read<String> {
     let source = sources.version_source();
+    if sources.info_plist.is_none() {
+        if let Some(project) = &sources.tuist_project {
+            return super::tuist::declared_version(load, project);
+        }
+    }
     let declared = match &sources.info_plist {
         Some(plist) => non_empty(info(load, plist)?.get(KEY_SHORT_VERSION)),
         None => serde_json::from_slice::<serde_json::Value>(&load(source)?)

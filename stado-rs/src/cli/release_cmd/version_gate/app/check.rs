@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use super::super::{conformance, rule};
 use super::baseline::{newest, version_of};
+use super::store;
 use super::surface::{self, Read};
 use super::AppSources;
 
@@ -118,7 +119,27 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
         .as_str()
         .and_then(|source| source.split_whitespace().next())
         .unwrap_or_default();
-    provenance(root, marker, released)?;
+    // An app sold on the App Store is measured against its appstore/* tag
+    // and the version the store serves; any other against its version tag.
+    let live = match &sources.app_store_tags {
+        Some(_) => {
+            let live = store::live_version(&committed)?;
+            let record = verified_record(root, marker)?;
+            store::provenance(
+                &record,
+                marker,
+                released,
+                &declared,
+                &live,
+                sources.version_source(),
+            )?;
+            Some(live)
+        }
+        None => {
+            provenance(root, marker, released)?;
+            None
+        }
+    };
     let published = committed["surface"]
         .as_array()
         .into_iter()
@@ -138,6 +159,11 @@ pub(super) fn check(root: &Path, sources: &AppSources) -> Read<()> {
         .map_err(|refusal| refusal.to_string())?;
     let (change, required) = (verdict.change.name(), verdict.next);
     println!("{change} since {released} requires {required}; declared {declared}; removed {:?}; added {:?}", verdict.removed, verdict.added);
+    if let Some(live) = &live {
+        if store::order(&required, live) != std::cmp::Ordering::Greater {
+            return Err(format!("a {change} change since {released} requires {required}, but the App Store already serves {live}. Tag the published version and run `stado release version-gate app-baseline`; nothing below can be trusted until then."));
+        }
+    }
     if declared == released {
         if change != "internal" {
             return Err(format!("what a user of the app holds changed ({change}) but {} still declares {released}; declare {required}", sources.version_source()));

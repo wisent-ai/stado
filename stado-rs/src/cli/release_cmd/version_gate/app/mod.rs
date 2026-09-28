@@ -6,7 +6,9 @@
 
 mod baseline;
 mod check;
+mod store;
 mod surface;
+mod tuist;
 
 use std::path::PathBuf;
 
@@ -19,7 +21,7 @@ use crate::cli::CmdError;
 pub struct AppSources {
     /// The bundle's Info.plist: `bundle-id:` and every `url-scheme:`; its
     /// CFBundleShortVersionString is the declared version
-    #[arg(long, required_unless_present = "package_json")]
+    #[arg(long, required_unless_present_any = ["package_json", "tuist_project"])]
     pub info_plist: Option<String>,
     /// A package.json: `package:`, every `export:` key and every `bin:`
     /// command; its `version` is the declared version when no Info.plist is named
@@ -39,6 +41,22 @@ pub struct AppSources {
     /// `harness-path:` names; repeatable
     #[arg(long = "appended-paths")]
     pub appended_paths: Vec<String>,
+    /// A Tuist Project.swift: every shipping target's bundle identifiers, URL
+    /// schemes, localizations, quick actions, extension points and
+    /// entitlements; its one `.marketingVersion("...")` is the declared
+    /// version when no Info.plist is named
+    #[arg(long)]
+    pub tuist_project: Option<String>,
+    /// A Swift file declaring `static let <member>: Target = .target(...)`
+    /// for a `.member` entry of the project's `targets:`; repeatable
+    #[arg(long = "tuist-helper", requires = "tuist_project")]
+    pub tuist_helpers: Vec<String>,
+    /// The app is sold on the App Store, and this workflow writes its
+    /// `appstore/<version>(<build>)` tags once App Store Connect reports a
+    /// version for sale: the baseline is the newest such tag, and app-check
+    /// also compares against the version the App Store serves
+    #[arg(long)]
+    pub app_store_tags: Option<String>,
 }
 
 impl AppSources {
@@ -46,8 +64,9 @@ impl AppSources {
     pub fn version_source(&self) -> &str {
         self.info_plist
             .as_deref()
+            .or(self.tuist_project.as_deref())
             .or(self.package_json.as_deref())
-            .expect("clap requires an Info.plist or a package.json")
+            .expect("clap requires an Info.plist, a Tuist project or a package.json")
     }
 }
 

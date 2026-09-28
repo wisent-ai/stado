@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use super::surface::{self, Read};
 use super::AppSources;
 
-const REMOTE: &str = "origin";
+pub(super) const REMOTE: &str = "origin";
 const PEELED: &str = "^{}";
 
 /// A version tag: `v1.2.3`, optionally with a pre-release suffix.
@@ -22,7 +22,7 @@ static VERSION_TAG: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^v?(?P<core>[0-9]+(?:\.[0-9]+)*)(?P<pre>[-+].*)?$").expect("valid")
 });
 
-fn run(root: &Path, arguments: &[&str]) -> Read<Vec<u8>> {
+pub(super) fn run(root: &Path, arguments: &[&str]) -> Read<Vec<u8>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -39,7 +39,7 @@ fn run(root: &Path, arguments: &[&str]) -> Read<Vec<u8>> {
     Ok(output.stdout)
 }
 
-fn git(root: &Path, arguments: &[&str]) -> Read<String> {
+pub(super) fn git(root: &Path, arguments: &[&str]) -> Read<String> {
     run(root, arguments).map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
 }
 
@@ -74,7 +74,7 @@ pub(super) fn newest<'a>(names: impl Iterator<Item = &'a str>) -> Option<String>
 }
 
 /// Tag names and the commit each names, as `origin` serves them.
-fn remote_tags(root: &Path) -> Read<Vec<(String, String)>> {
+pub(super) fn remote_tags(root: &Path) -> Read<Vec<(String, String)>> {
     let listing = git(root, &["ls-remote", "--tags", REMOTE])?;
     let mut found: Vec<(String, String)> = Vec::new();
     for line in listing.lines() {
@@ -97,8 +97,12 @@ fn remote_tags(root: &Path) -> Read<Vec<(String, String)>> {
     Ok(found)
 }
 
-/// The baseline document the best reachable artifact yields.
+/// The baseline document the best reachable artifact yields; an app sold on
+/// the App Store reads its `appstore/*` tags instead of version tags.
 pub(super) fn build(root: &Path, sources: &AppSources) -> Read<Value> {
+    if let Some(workflow) = &sources.app_store_tags {
+        return super::store::build(root, sources, workflow);
+    }
     let tags = remote_tags(root)?;
     if let Some(tag) = newest(tags.iter().map(|(name, _)| name.as_str())) {
         let remote = &tags
