@@ -211,7 +211,7 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
     let mut serving = Vec::new();
     if let Some(local) = me
         .as_deref()
-        .filter(|name| host.map_or(true, |only| only == *name))
+        .filter(|name| host.is_none_or(|only| only == *name))
     {
         serving.extend(serving_standbys(&registry, directory, local).await);
     }

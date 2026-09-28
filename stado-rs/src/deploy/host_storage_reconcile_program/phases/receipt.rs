@@ -145,7 +145,7 @@ pub(super) fn every_writer(fence: &Value, wanted: &str) -> bool {
     fence
         .get("writers")
         .and_then(Value::as_array)
-        .map_or(true, |writers| {
+        .is_none_or(|writers| {
             writers
                 .iter()
                 .all(|writer| writer.get("status").and_then(Value::as_str) == Some(wanted))

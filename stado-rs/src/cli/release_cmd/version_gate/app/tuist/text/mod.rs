@@ -46,14 +46,10 @@ pub(crate) fn trimmed(text: &[char]) -> &[char] {
 }
 
 pub(crate) fn starts(text: &[char], index: usize, pattern: &str) -> bool {
-    let mut at = index;
-    for expected in pattern.chars() {
-        if text.get(at) != Some(&expected) {
-            return false;
-        }
-        at += STEP;
-    }
-    true
+    pattern
+        .chars()
+        .enumerate()
+        .all(|(offset, expected)| text.get(index + offset * STEP) == Some(&expected))
 }
 
 pub(crate) fn find(text: &[char], from: usize, pattern: &str) -> Option<usize> {

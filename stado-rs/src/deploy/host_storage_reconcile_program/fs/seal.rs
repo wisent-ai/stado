@@ -21,9 +21,12 @@ const SEALED_DIRECTORY: u32 = 0o500;
 /// The permission bits `stat.S_IMODE` keeps.
 const MODE_BITS: u32 = 0o7777;
 
+/// One directory with its child directories and its files.
+type Listing = (String, Vec<String>, Vec<String>);
+
 /// Every directory under `root` with its child directories and files,
 /// children before parents; links to directories are listed, not entered.
-fn bottom_up(root: &str) -> Step<Vec<(String, Vec<String>, Vec<String>)>> {
+fn bottom_up(root: &str) -> Step<Vec<Listing>> {
     let mut order = Vec::new();
     let mut pending = vec![root.to_string()];
     while let Some(directory) = pending.pop() {
