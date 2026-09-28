@@ -13,6 +13,10 @@
 //! the gate reads: the checking argv with its `--check` removed. A product
 //! that declares no formatting gate is told so rather than guessed at, and the
 //! command never invents a formatter the manifest does not name.
+//!
+//! `stado quality check` runs the same gate exactly as declared, so the check
+//! a release build will run can be read from a checkout before an install is
+//! handed to anyone: nothing is written, and a refusal names the gate.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,7 +33,14 @@ const FORMAT_GATE: &str = "fmt";
 /// The argument that makes a formatter report instead of write.
 const CHECK_FLAG: &str = "--check";
 
-pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
+/// The product named by the manifest at `root` and its formatting gates.
+struct FormatGates {
+    product: String,
+    root: PathBuf,
+    gates: Vec<QualityGate>,
+}
+
+fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> {
     let root = match root {
         Some(path) => PathBuf::from(path),
         None => std::env::current_dir().map_err(|error| {
@@ -39,7 +50,7 @@ pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
     let manifest_path = root.join(MANIFEST);
     let bytes = std::fs::read(&manifest_path).map_err(|error| {
         CmdError::click(format!(
-            "cannot read {}: {error}; `stado quality format` runs the formatting a product \
+            "cannot read {}: {error}; `stado quality` runs the formatting a product \
              declares, so it needs the product's own manifest",
             manifest_path.display()
         ))
@@ -48,31 +59,65 @@ pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
         release_pipeline::parse_product_manifest(&bytes).map_err(CmdError::click)?
     else {
         return Err(CmdError::click(format!(
-            "{} declares releases:false, so it declares no quality gate to apply",
+            "{} declares releases:false, so it declares no quality gate",
             manifest_path.display()
         )));
     };
     let recipe = recipe_for_this_host(&manifest.platforms)?;
-    let gates: Vec<&QualityGate> = recipe
+    let gates: Vec<QualityGate> = recipe
         .quality
         .iter()
         .filter(|gate| gate.name == FORMAT_GATE || gate.argv.iter().any(|arg| arg == FORMAT_GATE))
+        .cloned()
         .collect();
     if gates.is_empty() {
         return Err(CmdError::click(format!(
-            "{} declares no formatting gate for this platform; there is nothing to apply",
+            "{} declares no formatting gate for this platform",
             manifest_path.display()
         )));
     }
-    for gate in gates {
+    Ok(FormatGates {
+        product: manifest.product.clone(),
+        root,
+        gates,
+    })
+}
+
+pub async fn format(root: Option<&str>) -> Result<(), CmdError> {
+    let declared = format_gates(root)?;
+    for gate in &declared.gates {
         let argv = writing_argv(&gate.argv);
         println!("stado quality format: {}", argv.join(" "));
-        run(&argv, &root)?;
+        run(&argv, &declared.root)?;
     }
     println!(
         "stado quality format: {} formatted in {}",
-        manifest.product,
-        root.display()
+        declared.product,
+        declared.root.display()
+    );
+    Ok(())
+}
+
+/// Run the declared formatting gates as the release build runs them, writing
+/// nothing; the first refusal is returned with the gate that refused.
+pub async fn check(root: Option<&str>) -> Result<(), CmdError> {
+    let declared = format_gates(root)?;
+    for gate in &declared.gates {
+        println!("stado quality check: {}", gate.argv.join(" "));
+        run(&gate.argv, &declared.root).map_err(|error| {
+            CmdError::click(format!(
+                "stado quality check: gate {:?} of {} refuses {}: {error}; \
+                 `stado quality format` writes what it reads",
+                gate.name,
+                declared.product,
+                declared.root.display()
+            ))
+        })?;
+    }
+    println!(
+        "stado quality check: {} passes its formatting gates in {}",
+        declared.product,
+        declared.root.display()
     );
     Ok(())
 }

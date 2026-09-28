@@ -26,7 +26,7 @@ pub(crate) enum WorkCommands {
     /// Download job results.
     Results { job_id: String, output_dir: String },
 
-    /// Apply the formatting this product's own quality gate checks.
+    /// Read or apply the formatting this product's own quality gate checks.
     #[command(subcommand)]
     Quality(QualityCommands),
 
@@ -83,12 +83,19 @@ pub(crate) struct AgentOptions {
     pub vast_max_duration_s: i64,
 }
 
-/// The gates a product declares, applied rather than only read.
+/// The formatting gates a product declares, read or applied from a checkout.
 #[derive(Subcommand)]
 pub(crate) enum QualityCommands {
     /// Format this checkout the way its declared `fmt` gate reads it.
     Format {
         /// The checkout to format; the working directory by default.
+        #[arg(long)]
+        root: Option<String>,
+    },
+    /// Run the declared `fmt` gate exactly as the release build runs it,
+    /// writing nothing.
+    Check {
+        /// The checkout to check; the working directory by default.
         #[arg(long)]
         root: Option<String>,
     },
