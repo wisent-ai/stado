@@ -85,16 +85,16 @@ pub(in crate::cli::service_verify) async fn serving_standbys(
             None => Err(format!("{} names no port to judge", endpoint.url)),
         };
         let (state, probed, detail) = match owner {
-            Ok(verdicts) if verdicts.iter().any(|v| v.verdict == PORT_SERVED_BY_UNIT) => (
+            Ok((unit, verdicts)) if verdicts.iter().any(|v| v.verdict == PORT_SERVED_BY_UNIT) => (
                 STANDBY_SERVING,
                 true,
                 format!(
                     "{detail}; {me} is a standby for {name}, which is active on {}, and its own \
-                     unit holds this port, so a second copy is serving beside it",
+                     unit {unit} holds this port, so a second copy is serving beside it",
                     service.active_host
                 ),
             ),
-            Ok(verdicts) => {
+            Ok((unit, verdicts)) => {
                 let holder = verdicts
                     .iter()
                     .find(|v| v.verdict == PORT_SERVED_BY_OTHER)
@@ -104,7 +104,7 @@ pub(in crate::cli::service_verify) async fn serving_standbys(
                     false,
                     format!(
                         "{STANDBY_DETAIL}; something answered ({detail}) whose owner is not the \
-                         standby unit: {}",
+                         standby unit {unit}: {}",
                         holder.unwrap_or_else(|| "owner could not be established".to_string())
                     ),
                 )
