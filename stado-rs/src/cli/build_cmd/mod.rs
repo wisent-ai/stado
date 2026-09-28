@@ -8,7 +8,6 @@
 //! for consuming a build that has not passed.
 
 mod newest;
-mod progress;
 mod record;
 mod report;
 mod submit;
