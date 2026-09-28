@@ -6,11 +6,13 @@
 //! recovered from. When that marker is `git-archive:<tag>`, only a checkout
 //! can prove the tag exists at `origin` and names the commit the checkout
 //! resolves it to; the release build reads an archive of files. So the
-//! snapshot verifies the tag here and adds one file to the archive, at
-//! `PROVENANCE_PATH`, recording the tag, its commit and its tree as `origin`
-//! serves them. A tag `origin` does not serve, or serves at another commit,
-//! refuses the snapshot: an archive must not carry a baseline whose source
-//! nobody can find.
+//! snapshot adds one file to the archive, at `PROVENANCE_PATH`, recording the
+//! marker and every tag `origin` serves (so the gate can tell whether a newer
+//! tag than its baseline exists, or a `head:` baseline ignores one), and for
+//! a `git-archive:` baseline the tag's commit and tree as `origin` serves
+//! them. A tag `origin` does not serve, or serves at another commit, refuses
+//! the snapshot: an archive must not carry a baseline whose source nobody can
+//! find.
 
 use std::path::Path;
 
@@ -26,18 +28,35 @@ const TIER: &str = "git-archive:";
 const REMOTE: &str = "origin";
 const PEELED: &str = "^{}";
 
-/// The tag a committed baseline names, when it names one.
-fn baseline_tag(root: &Path, commit: &str) -> Result<Option<String>, CmdError> {
+/// The committed baseline's marker, when the commit holds a baseline.
+fn baseline_marker(root: &Path, commit: &str) -> Result<Option<String>, CmdError> {
     let Ok(bytes) = committed_file(root, commit, BASELINE) else {
         return Ok(None);
     };
     let document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CmdError::click(format!("{BASELINE} at {commit} is not JSON: {error}")))?;
-    let marker = document["source"]
-        .as_str()
-        .and_then(|source| source.split_whitespace().next())
-        .unwrap_or_default();
-    Ok(marker.strip_prefix(TIER).map(str::to_string))
+    Ok(Some(
+        document["source"]
+            .as_str()
+            .and_then(|source| source.split_whitespace().next())
+            .unwrap_or_default()
+            .to_string(),
+    ))
+}
+
+/// Every tag name `origin` serves, sorted, so a gate without git history can
+/// tell whether a newer published tag than its baseline exists, and whether a
+/// `head:` baseline ignores one.
+fn origin_tags(root: &Path) -> Result<Vec<String>, CmdError> {
+    let listing = git_text(root, &["ls-remote", "--tags", REMOTE])?;
+    let mut names = listing
+        .lines()
+        .filter_map(|line| line.split_once("refs/tags/"))
+        .map(|(_, name)| name.trim().trim_end_matches(PEELED).to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 /// The commit `origin` serves for `tag`: the peeled row of an annotated tag,
@@ -69,11 +88,22 @@ fn remote_commit(root: &Path, tag: &str) -> Result<String, CmdError> {
         })
 }
 
-/// The provenance record to archive, or `None` when the committed baseline
-/// names no git tag.
+/// The provenance record to archive, or `None` when the commit holds no
+/// baseline. Every record lists the tags `origin` serves; a `git-archive:`
+/// baseline's tag is also resolved here and must be served at the same commit.
 pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdError> {
-    let Some(tag) = baseline_tag(root, commit)? else {
+    let Some(marker) = baseline_marker(root, commit)? else {
         return Ok(None);
+    };
+    let mut document = json!({
+        "baseline": BASELINE,
+        "marker": marker.clone(),
+        "origin_tags": origin_tags(root)?,
+        "verified_against": REMOTE,
+        "source_commit": commit,
+    });
+    let Some(tag) = marker.strip_prefix(TIER) else {
+        return Ok(Some(serde_json::to_vec_pretty(&document)?));
     };
     let local = git_text(
         root,
@@ -90,7 +120,7 @@ pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdEr
         ))
     })?;
     let local = local.trim().to_string();
-    let remote = remote_commit(root, &tag)?;
+    let remote = remote_commit(root, tag)?;
     if remote != local {
         return Err(CmdError::click(format!(
             "tag {tag} is {local} here and {remote} at {REMOTE}; the baseline would describe a \
@@ -98,13 +128,8 @@ pub(crate) fn record(root: &Path, commit: &str) -> Result<Option<Vec<u8>>, CmdEr
         )));
     }
     let tree = git_text(root, &["rev-parse", &format!("{local}^{{tree}}")])?;
-    let document = json!({
-        "baseline": BASELINE,
-        "tag": tag,
-        "commit": local,
-        "tree": tree.trim(),
-        "verified_against": REMOTE,
-        "source_commit": commit,
-    });
+    document["tag"] = json!(tag);
+    document["commit"] = json!(local);
+    document["tree"] = json!(tree.trim());
     Ok(Some(serde_json::to_vec_pretty(&document)?))
 }
