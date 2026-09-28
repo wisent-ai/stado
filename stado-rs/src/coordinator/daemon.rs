@@ -78,6 +78,7 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
     let secrets = secrets_from_skarbiec()
         .await
         .map_err(|err| err.to_string())?;
+    let mut replication = Replication::default();
     loop {
         if invocation != Invocation::Hosted
             && !config::stado_api_url().is_empty()
@@ -157,15 +158,7 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
         {
             log(&format!("fleet queue namespace record failed: {exc}"));
         }
-        match crate::queue::copy::replicate_configured_backup().await {
-            Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
-            Ok(Some(report)) => log(&format!(
-                "disaster-recovery replication incomplete: {} object(s) failed",
-                report.failed()
-            )),
-            Ok(None) => {}
-            Err(exc) => log(&format!("disaster-recovery replication failed: {exc}")),
-        }
+        replication.advance();
         // The standing shape checks, on the interval this loop already has, so
         // that "is what is declared what is running" is answered without
         // anyone typing a command. Every finding carries its own subject,
@@ -192,8 +185,71 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
             }
         }
         if invocation == Invocation::Once {
+            // One tick is one whole pass, replication included.
+            replication.finish();
             return Ok(0);
         }
         tokio::time::sleep(Duration::from_secs(interval)).await;
+    }
+}
+
+type ReplicationOutcome = Result<Option<crate::queue::copy::CopyReport>, String>;
+
+/// Disaster-recovery replication, one pass at a time, on its own thread.
+///
+/// It used to be awaited inside the loop, between one tick and the next. On
+/// charless-mac-mini on 2026-09-28 a pass that failed 32004 objects took
+/// most of half an hour, so the lease reaper at the head of the tick ran
+/// that rarely: a build whose agent restarted stayed `running` and its
+/// release never published (2bab068e). The pass now runs beside the tick;
+/// the loop reports a finished pass and starts the next, and never waits,
+/// except a single `Once` tick, which waits for its own pass.
+#[derive(Default)]
+struct Replication {
+    running: Option<std::thread::JoinHandle<ReplicationOutcome>>,
+}
+
+impl Replication {
+    fn advance(&mut self) {
+        if let Some(pass) = self.running.take_if(|pass| pass.is_finished()) {
+            report(pass.join());
+        }
+        if self.running.is_some() {
+            return;
+        }
+        let started = std::thread::Builder::new()
+            .name("stado-dr-replication".into())
+            .spawn(|| -> ReplicationOutcome {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| format!("creating the replication runtime: {error}"))?;
+                runtime
+                    .block_on(crate::queue::copy::replicate_configured_backup())
+                    .map_err(|error| error.to_string())
+            });
+        match started {
+            Ok(pass) => self.running = Some(pass),
+            Err(error) => log(&format!("disaster-recovery replication not started: {error}")),
+        }
+    }
+
+    fn finish(&mut self) {
+        if let Some(pass) = self.running.take() {
+            report(pass.join());
+        }
+    }
+}
+
+fn report(outcome: std::thread::Result<ReplicationOutcome>) {
+    match outcome {
+        Ok(Ok(Some(report))) if report.is_clean() => log("disaster-recovery replication clean"),
+        Ok(Ok(Some(report))) => log(&format!(
+            "disaster-recovery replication incomplete: {} object(s) failed",
+            report.failed()
+        )),
+        Ok(Ok(None)) => {}
+        Ok(Err(exc)) => log(&format!("disaster-recovery replication failed: {exc}")),
+        Err(_) => log("disaster-recovery replication panicked"),
     }
 }
