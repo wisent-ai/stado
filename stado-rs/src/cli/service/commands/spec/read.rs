@@ -179,10 +179,11 @@ pub enum ReadCommands {
     /// the directory's addresses answer, from the machines that must call
     /// them -- the one question every other check in this binary skips.
     /// States are `observed`, `unreachable`, `misowned` for a port a different
-    /// declared unit is holding, `standby_serving` for a standby host that
-    /// answers on its standby address (a second copy beside the active host,
-    /// probed from that standby host itself), and `unverified` for a probe
-    /// that could not run or a standby address that stays silent as declared;
+    /// declared unit is holding, `standby_serving` for a standby host whose
+    /// own declared unit answers on its standby address (a second copy beside
+    /// the active host, probed and owner-checked from that standby host), and
+    /// `unverified` for a probe that could not run or a standby address that
+    /// is silent or answered by some other listener;
     /// the last is never folded into the others.
     ///
     /// `misowned` exists because an answer was once the whole of `observed`'s

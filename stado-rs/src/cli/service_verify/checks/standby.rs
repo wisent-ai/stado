@@ -2,11 +2,13 @@
 //! and dialled only from the standby host itself, where an answer means a
 //! second copy is serving.
 
+use crate::deploy::service_serving::{PORT_SERVED_BY_OTHER, PORT_SERVED_BY_UNIT};
 use crate::observations::{OBSERVED, STANDBY_SERVING, UNVERIFIED};
-use crate::targets::ServiceDirectory;
+use crate::targets::{Registry, ServiceDirectory};
 
 use crate::cli::service_verify::finding::STANDBY_DETAIL;
 use crate::cli::service_verify::probe::probe;
+use crate::cli::service_verify::verdicts::ownership::port_verdicts;
 use crate::cli::service_verify::Finding;
 
 /// Every standby address the directory declares, as a row of its own.
@@ -55,13 +57,19 @@ pub(in crate::cli::service_verify) fn standby_findings(
 /// The standby addresses THIS host holds that answer, probed from this host.
 ///
 /// Silence is the declared state and yields no row; [`standby_findings`]
-/// already lists the address. An answer is the failure the listing alone
-/// hides: a standby that serves keeps its own copy of the service's state, so
-/// what the active host writes never reaches it and the two copies diverge.
+/// already lists the address. An answer alone proves only that something is
+/// listening, so the port's owner is read the way `judge_ownership` reads it:
+/// held by the unit the registry declares for the service on this host, it is
+/// `standby_serving`, a second copy keeping its own state beside the active
+/// host. Held by another job, or by an owner that cannot be established, it
+/// stays an unprobed standby row whose detail says what answered, because an
+/// unrelated listener is not a second copy of the service.
 pub(in crate::cli::service_verify) async fn serving_standbys(
+    registry: &Registry,
     directory: &ServiceDirectory,
     me: &str,
 ) -> Vec<Finding> {
+    let runner = crate::deploy::production_runner();
     let mut findings = Vec::new();
     for (name, service) in &directory.services {
         let Some(endpoint) = service.standby.get(me) else {
@@ -71,17 +79,49 @@ pub(in crate::cli::service_verify) async fn serving_standbys(
         if state != OBSERVED {
             continue;
         }
+        let port = url::Url::parse(&endpoint.url).ok().and_then(|url| url.port());
+        let owner = match port {
+            Some(port) => port_verdicts(registry, name, me, port, &runner).await,
+            None => Err(format!("{} names no port to judge", endpoint.url)),
+        };
+        let (state, probed, detail) = match owner {
+            Ok(verdicts) if verdicts.iter().any(|v| v.verdict == PORT_SERVED_BY_UNIT) => (
+                STANDBY_SERVING,
+                true,
+                format!(
+                    "{detail}; {me} is a standby for {name}, which is active on {}, and its own \
+                     unit holds this port, so a second copy is serving beside it",
+                    service.active_host
+                ),
+            ),
+            Ok(verdicts) => {
+                let holder = verdicts
+                    .iter()
+                    .find(|v| v.verdict == PORT_SERVED_BY_OTHER)
+                    .map(|v| format!("held by {}", v.holder_cell()));
+                (
+                    UNVERIFIED,
+                    false,
+                    format!(
+                        "{STANDBY_DETAIL}; something answered ({detail}) whose owner is not the \
+                         standby unit: {}",
+                        holder.unwrap_or_else(|| "owner could not be established".to_string())
+                    ),
+                )
+            }
+            Err(unjudged) => (
+                UNVERIFIED,
+                false,
+                format!("{STANDBY_DETAIL}; something answered ({detail}), {unjudged}"),
+            ),
+        };
         findings.push(Finding {
             service: name.clone(),
             host: me.to_string(),
             endpoint: endpoint.url.clone(),
-            state: STANDBY_SERVING,
-            detail: format!(
-                "{detail}; {me} is a standby for {name}, which is active on {}, so this is a \
-                 second copy serving beside it",
-                service.active_host
-            ),
-            probed: true,
+            state,
+            detail,
+            probed,
         });
     }
     findings

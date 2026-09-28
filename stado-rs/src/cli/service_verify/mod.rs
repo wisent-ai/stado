@@ -140,7 +140,7 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
     // this host found serving, which no directory read can produce.
     if let Some(directory) = registry.service_directory.as_ref() {
         let mut standby = standby_findings(directory, Some(me.as_str()));
-        merge_serving(&mut standby, serving_standbys(directory, &me).await);
+        merge_serving(&mut standby, serving_standbys(&registry, directory, &me).await);
         findings.extend(standby);
     }
     record_observations(&findings);
@@ -204,7 +204,7 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
     // because that is exactly the host a serving copy hides on.
     let mut serving = Vec::new();
     if let Some(local) = me.as_deref().filter(|name| host.map_or(true, |only| only == *name)) {
-        serving.extend(serving_standbys(directory, local).await);
+        serving.extend(serving_standbys(&registry, directory, local).await);
     }
     let standby_only: std::collections::BTreeSet<String> = standby
         .iter()
@@ -219,7 +219,11 @@ pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> 
         .partition(|finding| finding.state == crate::observations::STANDBY_SERVING);
     findings = other;
     serving.extend(serving_rows);
-    serving.retain(|finding| finding.state == crate::observations::STANDBY_SERVING);
+    // Keep the serving rows, and this host's standby rows whose answer came
+    // from an owner other than the standby unit (unprobed, with that detail).
+    serving.retain(|finding| {
+        finding.state == crate::observations::STANDBY_SERVING || !finding.probed
+    });
     merge_serving(&mut standby, serving);
     findings.extend(standby);
     judge_ownership(&registry, &mut findings).await;

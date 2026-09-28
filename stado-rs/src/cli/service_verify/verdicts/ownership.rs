@@ -74,50 +74,14 @@ pub(in crate::cli::service_verify) async fn judge_ownership(
             );
             continue;
         }
-        let Some(unit) = registry.service_unit(&finding.service, &finding.host) else {
-            finding.detail = format!(
-                "{}; the registry names no unit for it on this host, so the port's owner was \
-                 not judged",
-                finding.detail
-            );
-            continue;
-        };
-        let Some(target) = registry
-            .local_targets()
-            .into_iter()
-            .find(|target| target.name == finding.host)
-        else {
-            continue;
-        };
-        let Some(declared) = crate::deploy::service::declared_services(target)
-            .into_iter()
-            .find(|found| found.unit_id() == unit)
-        else {
-            finding.detail = format!(
-                "{}; {unit} is not declared on this host, so the port's owner was not judged",
-                finding.detail
-            );
-            continue;
-        };
-        let report = match crate::deploy::service_serving::read_serving(
-            target,
-            unit,
-            &declared.path,
-            &[port],
-            &runner,
-        )
-        .await
-        {
-            Ok(report) => report,
-            Err(error) => {
-                finding.detail = format!(
-                    "{}; the port's owner could not be read: {error}",
-                    finding.detail
-                );
+        let judged = port_verdicts(registry, &finding.service, &finding.host, port, &runner).await;
+        let verdicts = match judged {
+            Ok(verdicts) => verdicts,
+            Err(unjudged) => {
+                finding.detail = format!("{}; {unjudged}", finding.detail);
                 continue;
             }
         };
-        let verdicts = crate::deploy::service_serving::port_verdicts(&report);
         let Some(taken) = verdicts.iter().find(|verdict| {
             verdict.verdict == crate::deploy::service_serving::PORT_SERVED_BY_OTHER
         }) else {
@@ -147,6 +111,49 @@ pub(in crate::cli::service_verify) async fn judge_ownership(
             taken.holder_cell()
         );
     }
+}
+
+/// Who holds `port` on `host`, judged against the unit the registry declares
+/// for `service` there, through the same reader `service serving` uses. The
+/// error is the sentence saying why ownership was not judged.
+pub(in crate::cli::service_verify) async fn port_verdicts(
+    registry: &Registry,
+    service: &str,
+    host: &str,
+    port: u16,
+    runner: &crate::deploy::Runner,
+) -> Result<Vec<crate::deploy::service_serving::PortVerdict>, String> {
+    let Some(unit) = registry.service_unit(service, host) else {
+        return Err(
+            "the registry names no unit for it on this host, so the port's owner was not judged"
+                .to_string(),
+        );
+    };
+    let Some(target) = registry
+        .local_targets()
+        .into_iter()
+        .find(|target| target.name == host)
+    else {
+        return Err(format!("{host} is not a registry target, so the port's owner was not judged"));
+    };
+    let Some(declared) = crate::deploy::service::declared_services(target)
+        .into_iter()
+        .find(|found| found.unit_id() == unit)
+    else {
+        return Err(format!(
+            "{unit} is not declared on this host, so the port's owner was not judged"
+        ));
+    };
+    let report = crate::deploy::service_serving::read_serving(
+        target,
+        unit,
+        &declared.path,
+        &[port],
+        runner,
+    )
+    .await
+    .map_err(|error| format!("the port's owner could not be read: {error}"))?;
+    Ok(crate::deploy::service_serving::port_verdicts(&report))
 }
 
 /// The loopback port a blue-green rollout declares as this service's stable
