@@ -87,7 +87,24 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     }
     let runs = crate::cli::release_submit::recent_runs(args.product.as_deref(), RUN_WINDOW).await?;
     if reports.is_empty() && runs.is_empty() {
-        return Err(CmdError::click("no matching release product"));
+        // The request names nothing Stado holds: a refusal of the request,
+        // with what is configured, never an unattributed failure.
+        let refused = crate::primitives::failure::FailureCode::Refused;
+        return Err(match args.product.as_deref() {
+            Some(product) if !control.products.contains_key(product) => {
+                crate::cli::release_cmd::unknown_release_product(&control, product)
+            }
+            Some(product) => CmdError::click(format!(
+                "release control holds {product:?} with no rollout target, and none of the newest \
+                 {RUN_WINDOW} release runs is its"
+            ))
+            .stating(refused),
+            None => CmdError::click(format!(
+                "release control has no rollout target and there is no release run among the \
+                 newest {RUN_WINDOW}"
+            ))
+            .stating(refused),
+        });
     }
     if args.json {
         println!(
@@ -169,7 +186,8 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
             args.product.as_deref().unwrap_or("*"),
             crate::cli::release_submit::VERSION_SCAN_WINDOW,
             known.join("\n  ")
-        )));
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused));
     }
     if args.json {
         println!(
