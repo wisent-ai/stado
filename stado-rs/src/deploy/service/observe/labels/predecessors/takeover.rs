@@ -1,13 +1,15 @@
-//! A catalog product's one process takes its place on the host when it
-//! starts under its own unit.
+//! The host Stado process takes the API listener over from the units that
+//! held it before, when it starts under its own unit to serve the API.
 //!
-//! A unit the catalog retired can hold the very listeners its replacement
-//! binds: a product whose unit was renamed runs the same program under the
-//! old label. The replacement could then never come up beside it, and nothing
-//! else would retire it, because the reconciler that retires predecessors runs
-//! inside that old process. So before the process binds anything, every unit
-//! the catalog retired for it that this host still loads is booted out and its
-//! autostart withdrawn, the promise `retired_sentence` makes.
+//! The units whose role is the API listener (`role_units` with `--api`) hold
+//! the very port the replacement binds: a unit that was renamed runs the same
+//! program under the old label. The replacement could never come up beside
+//! it, and nothing else would retire it, because the reconciler that retires
+//! predecessors runs inside that old process. So once the API's store is
+//! prepared and before it binds, each such unit this host still loads is
+//! booted out and its autostart withdrawn, provided it serves the same root.
+//! Ensure and the reconciler retire them only as role units, where the live
+//! replacement is proven to run `--api`.
 
 use crate::deploy::service::*;
 
@@ -27,8 +29,8 @@ fn own_unit() -> Option<String> {
     })
 }
 
-/// Retire, on this host, every unit the catalog lists as retired by the host
-/// Stado process, when this process is that unit's own main process and is
+/// Retire, on this host, every API listener predecessor of the host Stado
+/// process, when this process is that unit's own main process and is
 /// about to serve the object API from `served_root`. Both the launchd label
 /// and the cgroup are inherited by children, so the name alone proves
 /// nothing: the init system must also bind the unit to this pid. A process
@@ -42,7 +44,8 @@ async fn take_over_retired(
         return Ok(Vec::new());
     };
     let entry = crate::deploy::service_catalog::host_process().map_err(DeployError)?;
-    if entry.unit.as_deref() != Some(unit.as_str()) || entry.retired_units.is_empty() {
+    let predecessors = crate::deploy::service_catalog::api_predecessors(&entry);
+    if entry.unit.as_deref() != Some(unit.as_str()) || predecessors.is_empty() {
         return Ok(Vec::new());
     }
     let owner = unit_state(&unit).as_ref().and_then(UnitState::main_pid);
@@ -55,13 +58,13 @@ async fn take_over_retired(
         return Ok(Vec::new());
     }
     let target = this_host()?;
-    let mut retirements = Vec::with_capacity(entry.retired_units.len());
-    for retired in &entry.retired_units {
+    let mut retirements = Vec::with_capacity(predecessors.len());
+    for retired in predecessors {
         // A predecessor serving another storage root is an authority change,
         // which only `stado host storage-root-reconcile` may make.
         if let Some(refusal) = unit_state(retired).and_then(|state| state.other_root(served_root)) {
             retirements.push(PredecessorRetirement {
-                unit: retired.clone(),
+                unit: retired.to_string(),
                 state: "failed".to_string(),
                 detail: format!(
                     "{refusal}; moving the object store is `stado host storage-root-reconcile`, \

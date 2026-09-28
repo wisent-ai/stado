@@ -502,16 +502,19 @@ products:
       WC_STORAGE_BACKEND: local
       WC_LOCAL_STORAGE_PATH: $HOME/.stado/local-storage
     summary: The one Stado process per host; serves the object API for registry, queue and release state.
-    # The unit this process ran under before it took every role. It runs the
-    # same program on the same port, so the process started as
-    # com.wisent.stado boots it out before binding.
-    retired_units:
-    - com.wisent.always-on.stado-object-api
-    - com.wisent.always-on.stado-object-api.service
     # The old resolver unit and the process's resolver bind the same ports, so
     # the flag proves nothing until the resolver publishes serving: its units
     # are handed over (readiness: resolver-state), not retired on the flag.
     role_units:
+    # The unit this process ran under before it took every role. It runs the
+    # same program on the same port, so it is never retired unconditionally:
+    # the process started as com.wisent.stado with --api retires it before
+    # binding, and only when it serves the same storage root; ensure and the
+    # reconciler retire it only where that live process runs --api.
+    - unit: com.wisent.always-on.stado-object-api
+      flag: --api
+    - unit: com.wisent.always-on.stado-object-api.service
+      flag: --api
     - unit: com.wisent.stado-resolver
       flag: --resolver
       readiness: resolver-state

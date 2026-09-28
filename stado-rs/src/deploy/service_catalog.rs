@@ -115,15 +115,26 @@ pub fn is_host_unit(unit: &str) -> Result<bool, String> {
     Ok(unit == HOST_PRODUCT || unit == label || unit.strip_suffix(".service") == Some(&label))
 }
 
+/// The flag that switches on the object API listener of a Stado process.
+pub const API_FLAG: &str = "--api";
+
+/// The units whose work is `entry`'s API listener role: they hold the port
+/// that listener binds, so only a process that runs that role and serves the
+/// same store may retire them.
+pub fn api_predecessors(entry: &CatalogService) -> Vec<&str> {
+    entry
+        .role_units
+        .iter()
+        .filter(|role| role.flag == API_FLAG)
+        .map(|role| role.unit.as_str())
+        .collect()
+}
+
 /// Whether `unit` runs the host Stado process on some host: its own unit, or
 /// a label that process ran under before and still runs under wherever the
 /// process started under its own unit has not yet taken over.
 pub fn runs_host_process(unit: &str) -> Result<bool, String> {
-    Ok(is_host_unit(unit)?
-        || host_process()?
-            .retired_units
-            .iter()
-            .any(|retired| retired == unit))
+    Ok(is_host_unit(unit)? || api_predecessors(&host_process()?).contains(&unit))
 }
 
 /// The sentence every refusal to deploy or repair a retired unit prints.

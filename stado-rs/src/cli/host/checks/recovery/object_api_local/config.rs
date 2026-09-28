@@ -95,8 +95,8 @@ fn config(path: &Path) -> Result<Option<Value>, String> {
 /// the environment wins for the stores, then the config, then the managed
 /// defaults. `LABEL` is the host Stado unit the compiled catalog declares, the
 /// one launchd label recovery installs and restarts; `RETIRED` the
-/// comma-separated labels it replaced, whose loaded route recovery reads
-/// before that unit takes over from them.
+/// comma-separated labels whose role was its API listener, whose loaded route
+/// recovery reads before that unit takes over from them.
 pub(super) fn paths(config_path: &Path) -> Result<String, String> {
     let home = home();
     let document = config(config_path)?.unwrap_or(Value::Null);
@@ -124,7 +124,7 @@ pub(super) fn paths(config_path: &Path) -> Result<String, String> {
     };
     let host = crate::deploy::service_catalog::host_process()?;
     let label = host.unit.clone().unwrap_or_else(|| host.name.clone());
-    let retired = host.retired_units.join(",");
+    let retired = crate::deploy::service_catalog::api_predecessors(&host).join(",");
     Ok([
         real(&store, &home).display().to_string(),
         real(&backup, &home).display().to_string(),
