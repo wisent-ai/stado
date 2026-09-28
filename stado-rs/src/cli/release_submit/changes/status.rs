@@ -1,7 +1,9 @@
 use super::{failure, Change, ChangeStatus};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
-use crate::release_pipeline::{BuildReceipt, BuildRun, BuildRunState, ProductManifest, StepStatus};
+use crate::release_pipeline::{
+    BuildReceipt, BuildRun, BuildRunState, PlatformRunState, ProductManifest, StepStatus,
+};
 use futures::StreamExt;
 use std::collections::HashMap;
 
@@ -93,9 +95,17 @@ async fn batch_observation(
     if batch.iter().any(|change| change.product != run.product) {
         return Err(CmdError::click("build batch product mismatch"));
     }
-    if matches!(run.state, BuildRunState::Passed | BuildRunState::Failed)
-        && matches!(observation.state.as_str(), "passed" | "failed")
-    {
+    // Settled means nothing it is built from can change: the run is terminal
+    // and no platform, optional ones included, is still building. The
+    // observation's own state is not the test: a build that passed without
+    // declared post-build tests reads `awaiting_tests` for good, and leaving
+    // those out left half of all batches re-read on every list.
+    let settled = matches!(run.state, BuildRunState::Passed | BuildRunState::Failed)
+        && run
+            .platforms
+            .values()
+            .all(|platform| platform.state != PlatformRunState::Submitted);
+    if settled {
         let _ = store
             .create_text_if_absent(&kept_path, &serde_json::to_string(&observation)?)
             .await;
