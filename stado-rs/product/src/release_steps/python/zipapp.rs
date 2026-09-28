@@ -9,7 +9,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-use super::{output_dir, required};
+use super::super::{output_dir, required};
 
 /// What a packaged directory never carries: interpreter caches, and the
 /// host-setup files that live beside the agent's modules but are not part of

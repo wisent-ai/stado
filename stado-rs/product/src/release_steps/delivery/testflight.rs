@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde_json::{json, Value};
 
-use super::{output_dir, required, RECORD_SCHEMA};
+use super::super::{output_dir, required, RECORD_SCHEMA};
 
 /// The bytes of the one regular file named `basename` in the gzipped release.
 fn member(archive: &PathBuf, basename: &str) -> Result<Vec<u8>> {

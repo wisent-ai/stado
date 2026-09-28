@@ -14,6 +14,8 @@ use serde_json::json;
 
 use super::{archive_entry, output_dir, required, ARCHIVE_EPOCH};
 
+mod zipapp;
+
 /// The bundle a build stages and a delivery looks for inside the release.
 const BUNDLE: &str = "python-distributions.tar";
 /// PyPI's upload endpoint.
@@ -36,7 +38,7 @@ pub fn run(operation: &str, arguments: &clap::ArgMatches) -> Result<i32> {
                     .cloned()
                     .with_context(|| format!("zipapp requires --{name}"))
             };
-            super::zipapp::build(&packages, &text("module")?, &text("name")?, &python())
+            zipapp::build(&packages, &text("module")?, &text("name")?, &python())
         }
         other => bail!("unknown Python release operation {other}"),
     }

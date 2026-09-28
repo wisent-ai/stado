@@ -19,15 +19,12 @@
 //!   their upload to PyPI from the verified release archive.
 
 mod crx3;
-mod deliver;
+mod delivery;
 mod linkage;
-mod mirror;
 mod npm;
 mod python;
 mod supabase;
-mod testflight;
 mod tree_archive;
-mod zipapp;
 
 use std::fs;
 use std::io::Read;
@@ -38,7 +35,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 pub use crx3::{run as run_crx3, Request as Crx3Request};
-pub use deliver::run as run_deliver;
+pub use delivery::run as run_deliver;
 pub use linkage::run as run_linkage;
 pub use npm::pack as run_npm_pack;
 pub use python::run as run_python;

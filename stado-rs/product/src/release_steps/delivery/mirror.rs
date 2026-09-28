@@ -15,7 +15,7 @@ use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
-use super::{output_dir, required, RECORD_SCHEMA};
+use super::super::{output_dir, required, RECORD_SCHEMA};
 
 const API: &str = "https://api.github.com/repos";
 const UPLOADS: &str = "https://uploads.github.com/repos";

@@ -19,6 +19,9 @@ use sha1::{Digest, Sha1};
 use super::python::{find, safe_unpack};
 use super::{output_dir, required};
 
+mod mirror;
+mod testflight;
+
 const RENDER_API: &str = "https://api.render.com/v1";
 const VERCEL_API: &str = "https://api.vercel.com";
 
@@ -30,7 +33,7 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
             .with_context(|| format!("--{name} is required"))
     };
     match action {
-        "github-mirror" => super::mirror::deliver(
+        "github-mirror" => mirror::deliver(
             &text("repository")?,
             &text("title")?,
             arguments
@@ -44,7 +47,7 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
                 .get_one::<String>("project-dir")
                 .map_or(".", String::as_str),
         ),
-        "testflight" => super::testflight::deliver(&text("ipa")?),
+        "testflight" => testflight::deliver(&text("ipa")?),
         "vercel-files" => vercel_files(
             &text("bundle")?,
             &text("team-id")?,
