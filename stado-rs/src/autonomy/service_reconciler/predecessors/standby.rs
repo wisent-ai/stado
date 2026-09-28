@@ -1,4 +1,4 @@
-//! A standby unit found serving, booted out on its own host.
+//! A standby unit found serving, stopped on its own host.
 //!
 //! A standby host is by the registry's definition not running the service: it
 //! holds an address it would serve on after a move. `service verify` dials
@@ -6,22 +6,26 @@
 //! unit the registry declares there holds the port, which is a second copy
 //! keeping its own state beside the active host (for Skarbiec, a vault that
 //! takes writes the owner never sees). Reporting it left the copy running, so
-//! each pass now boots that one declared unit out of its host's init system.
+//! each pass now stops that one declared managed service.
 //!
-//! The sweep only nominates. Every boot-out goes through the pass's mutation
-//! gate (action limit, live pause and circuit breaker, the unit's lease), and
-//! under that lease the registry is read from its authority, uncached, and
-//! the standby probed again: a host promoted to the active one since the
-//! sweep, a withdrawn standby address or a port now held by another job stops
-//! nothing, and an authority that does not answer stops nothing either.
+//! The sweep only nominates. Every stop goes through the pass's mutation gate
+//! (action limit, live pause and circuit breaker, the unit's lease), and under
+//! that lease the registry is read from its authority, uncached, and the
+//! standby probed again: a host promoted to the active one since the sweep, a
+//! withdrawn standby address or a port now held by another job stops nothing,
+//! and an authority that does not answer stops nothing either.
 //!
-//! Only the boot-out is done. The unit file and its autostart stay, because a
-//! move to this host starts the same unit, and a unit that comes back at login
-//! is found by the next sweep and booted out again.
+//! The stop is the managed-service stop a fenced cutover uses
+//! (`service::stop_service`): the declaration's own unit file decides the
+//! domain (a system LaunchDaemon, a per-user agent, a systemd unit), and the
+//! unit stays enabled and registered, so a move to this host still starts it.
+//! A copy that comes back at login is found by the next sweep and stopped
+//! again. A system LaunchDaemon needs the host account's password, which this
+//! pass does not hold, so such a stop is a `repair_failed` naming that.
 
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::cli::service_verify::{Finding, StandbyRecheck};
-use crate::deploy::service::{self, BootoutScope};
+use crate::deploy::service::{self, ManagedService};
 use crate::deploy::Runner;
 use crate::queue::StorageError;
 
@@ -50,16 +54,21 @@ fn row(
 
 /// What the re-check under the lease found and what was done.
 enum Stop {
-    /// The unit was booted out; whether anything was loaded, and the detail.
-    Stopped(bool, String),
+    /// The managed service was stopped; the host's report.
+    Stopped(String),
     /// The standby no longer serves, or is no longer a standby: nothing to do.
     Resolved(String),
     /// The registry authority did not answer, so nothing was concluded.
     Unjudged(String),
 }
 
-/// Re-check the standby under its lease, then boot its declared unit out.
-async fn stop_one(finding: &Finding, unit: &str, runner: &Runner) -> Result<Stop, String> {
+/// Re-check the standby under its lease, then stop its declared service.
+async fn stop_one(
+    finding: &Finding,
+    declared: &ManagedService,
+    runner: &Runner,
+) -> Result<Stop, String> {
+    let unit = declared.unit_id();
     let recheck =
         crate::cli::service_verify::standby_still_serving(&finding.service, &finding.host, unit);
     match recheck.await {
@@ -78,14 +87,16 @@ async fn stop_one(finding: &Finding, unit: &str, runner: &Runner) -> Result<Stop
     let target = crate::deploy::host_channel::canonical_target(&finding.host)
         .await
         .map_err(|error| error.to_string())?;
-    let (state, detail) = service::bootout_label(&target, unit, BootoutScope::Any, runner)
+    let report = service::stop_service(&target, declared, runner)
         .await
         .map_err(|error| error.to_string())?;
-    if state == "refused" || state == "failed" {
-        return Err(format!("standby unit {unit} {state}: {detail}"));
+    if !report.postcondition_held() {
+        return Err(format!("standby service {unit}: {}", report.failure()));
     }
-    let detail = format!("{}; standby unit {unit} {state}: {detail}", finding.detail);
-    Ok(Stop::Stopped(state != "absent", detail))
+    Ok(Stop::Stopped(format!(
+        "{}; standby service {unit} {} in {} ({})",
+        finding.detail, report.status, report.unit, report.domain
+    )))
 }
 
 /// Boot out the declared unit of every standby the sweep found serving.
@@ -129,9 +140,27 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
             outcomes.push(row(finding, "", "repair_failed", false, detail));
             continue;
         };
+        let declared = registry
+            .local_targets()
+            .into_iter()
+            .find(|target| target.name == finding.host)
+            .and_then(|target| {
+                service::declared_services(target)
+                    .into_iter()
+                    .find(|found| found.unit_id() == unit)
+            });
+        let Some(declared) = declared else {
+            summary.failures += 1;
+            let detail = format!(
+                "{}; {} declares no managed service {unit}, so nothing was stopped",
+                finding.detail, finding.host
+            );
+            outcomes.push(row(finding, unit, "repair_failed", false, detail));
+            continue;
+        };
         summary.planned += 1;
         if plan_only {
-            let detail = format!("{}; boot-out not executed in this mode", finding.detail);
+            let detail = format!("{}; stop not executed in this mode", finding.detail);
             outcomes.push(row(finding, unit, "planned", false, detail));
             continue;
         }
@@ -149,14 +178,12 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
                 continue;
             }
         };
-        let result = stop_one(finding, unit, runner).await;
+        let result = stop_one(finding, &declared, runner).await;
         match gate.release(&subject, &lease, result).await {
-            Ok(Stop::Stopped(changed, detail)) => {
-                if changed {
-                    summary.changed += 1;
-                }
+            Ok(Stop::Stopped(detail)) => {
+                summary.changed += 1;
                 gate.record(None).await?;
-                outcomes.push(row(finding, unit, "stopped", changed, detail));
+                outcomes.push(row(finding, unit, "stopped", true, detail));
             }
             // A re-check that finds nothing to stop ran no host command, so it
             // is neither a change nor a failure the circuit breaker counts.
