@@ -72,9 +72,10 @@ pub(in crate::cli::release_cmd) async fn active_binary(
     release_control::validate_registry_contract(&document).map_err(CmdError::click)?;
     let control = release_control::control(&document)?
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
-    let policy = control.products.get(&args.product).ok_or_else(|| {
-        crate::cli::release_cmd::unknown_release_product(&control, &args.product)
-    })?;
+    let policy = control
+        .products
+        .get(&args.product)
+        .ok_or_else(|| crate::cli::release_cmd::unknown_release_product(&control, &args.product))?;
     let Some(target) = policy.targets.get(target_name) else {
         return declared_binary(&args.product, target_entry, target_name, args.json).await;
     };
@@ -219,7 +220,10 @@ pub(in crate::cli::release_cmd) async fn rollback(
     let mut control = release_control::control(&document)?
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
     if !control.products.contains_key(&args.product) {
-        return Err(crate::cli::release_cmd::unknown_release_product(&control, &args.product));
+        return Err(crate::cli::release_cmd::unknown_release_product(
+            &control,
+            &args.product,
+        ));
     }
     let policy = control
         .products
