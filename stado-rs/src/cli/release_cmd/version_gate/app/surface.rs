@@ -252,6 +252,7 @@ pub(super) fn of(load: Loader, sources: &AppSources) -> Read<Vec<String>> {
     if let Some(table) = &sources.command_table {
         names.extend(super::cargo::commands(load, table)?);
     }
+    names.extend(super::javascript::surface(load, sources)?);
     for source in &sources.appended_paths {
         for name in appended(source, &text(load, source)?)? {
             names.insert(format!("harness-path:{name}"));

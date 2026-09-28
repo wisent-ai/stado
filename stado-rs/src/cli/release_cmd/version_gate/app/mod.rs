@@ -7,6 +7,7 @@
 mod baseline;
 mod cargo;
 mod check;
+mod javascript;
 mod store;
 mod surface;
 mod tuist;
@@ -67,6 +68,18 @@ pub struct AppSources {
     /// no Info.plist or Tuist project is named
     #[arg(long)]
     pub cargo_toml: Option<String>,
+    /// Read the named exports of every module the package.json's `exports`
+    /// maps a subpath to as `api:` names
+    #[arg(long, requires = "package_json")]
+    pub js_exports: bool,
+    /// A JavaScript file whose `USAGE` literal lists the CLI's commands under
+    /// `commands:`: each is a `cmd:` name
+    #[arg(long)]
+    pub usage_commands: Option<String>,
+    /// A JavaScript file whose `TOOLS` array lists an MCP server's tools:
+    /// each `name:` string is an `mcp:` name
+    #[arg(long)]
+    pub mcp_tools: Option<String>,
 }
 
 impl AppSources {
