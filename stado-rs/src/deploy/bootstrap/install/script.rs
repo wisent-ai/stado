@@ -88,4 +88,3 @@ pub fn remote_install_script(api_url: &str, version: &str) -> String {
 /// Default stado path used when the remote install prints nothing, and
 /// as the dry-run placeholder.
 pub const WC_BIN_DEFAULT: &str = "$HOME/.stado/bin/stado";
-

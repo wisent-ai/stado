@@ -7,7 +7,6 @@ use std::process::{Command, Output};
 
 use serde_json::json;
 
-
 use crate::support::{blob_names, on_disk};
 use crate::ENV_LOCK;
 

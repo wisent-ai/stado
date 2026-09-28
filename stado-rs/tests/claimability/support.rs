@@ -7,7 +7,6 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
-
 /// The real job's id, command and submitter, so a sentence about `2c4a47aa`
 /// in a test is a sentence about the job the operator stared at.
 pub(crate) const JOB_ID: &str = "2c4a47aa";

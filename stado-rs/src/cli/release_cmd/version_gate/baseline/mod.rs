@@ -21,7 +21,8 @@ pub(super) use channel::Refusal;
 use channel::{release_base, state, surface_from_release};
 
 static TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$").expect("static")
+    Regex::new(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
+        .expect("static")
 });
 static CARGO_VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?m)^version\s*=\s*"([^"]+)"\s*$"#).expect("static"));
@@ -35,7 +36,12 @@ fn git(args: &[&str]) -> Result<String, Refusal> {
         .output()
         .map_err(|error| format!("git: {error}"))?;
     if !output.status.success() {
-        return Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim()).into());
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -47,7 +53,13 @@ fn version_order(left: &str, right: &str) -> Ordering {
         let found = TAG.captures(tag)?;
         let number = |index| found[index].parse::<u64>().ok();
         let pre = found.get(4).map(|m| m.as_str().to_string());
-        Some((number(1)?, number(2)?, number(3)?, pre.is_none(), pre.unwrap_or_default()))
+        Some((
+            number(1)?,
+            number(2)?,
+            number(3)?,
+            pre.is_none(),
+            pre.unwrap_or_default(),
+        ))
     };
     key(left).cmp(&key(right))
 }
@@ -61,7 +73,9 @@ fn tag_of(reference: &str) -> &str {
 /// ranked blind could pick a baseline that is not the newest.
 fn visible_versions() -> Result<Vec<String>, Refusal> {
     if git(&["rev-parse", "--is-shallow-repository"])?.trim() == "true" {
-        return Err("repository is shallow; release tags are not fully visible".to_string().into());
+        return Err("repository is shallow; release tags are not fully visible"
+            .to_string()
+            .into());
     }
     let local: std::collections::BTreeSet<String> = git(&["tag", "--list", "v*"])?
         .lines()
@@ -71,7 +85,10 @@ fn visible_versions() -> Result<Vec<String>, Refusal> {
     let remote_listing = git(&["ls-remote", "--tags", "origin"])?;
     let mut missing: Vec<&str> = remote_listing
         .lines()
-        .filter_map(|line| line.split_once('\t').map(|(_, reference)| tag_of(reference)))
+        .filter_map(|line| {
+            line.split_once('\t')
+                .map(|(_, reference)| tag_of(reference))
+        })
         .filter(|tag| TAG.is_match(tag) && !local.contains(*tag))
         .collect();
     missing.sort();
@@ -116,12 +133,18 @@ pub(super) fn best(stado: &Path, output: Option<&Path>) -> Result<String, Refusa
     let platform = native_platform()?;
     let mut partial: Vec<String> = Vec::new();
     for version in &versions {
-        let marker = state(stado, &format!("{}/release.json", release_base(version, platform)))?;
+        let marker = state(
+            stado,
+            &format!("{}/release.json", release_base(version, platform)),
+        )?;
         verdict(&marker)?;
         if marker != "present" {
             continue;
         }
-        let archive = state(stado, &format!("{}/release.tar.gz", release_base(version, platform)))?;
+        let archive = state(
+            stado,
+            &format!("{}/release.tar.gz", release_base(version, platform)),
+        )?;
         verdict(&archive)?;
         if archive != "present" {
             partial.push(format!("{version}/{platform}"));
@@ -129,7 +152,11 @@ pub(super) fn best(stado: &Path, output: Option<&Path>) -> Result<String, Refusa
             continue;
         }
         if !partial.is_empty() {
-            eprintln!("baseline built from {version}; skipped {} half-published coordinate(s): {}", partial.len(), partial.join(", "));
+            eprintln!(
+                "baseline built from {version}; skipped {} half-published coordinate(s): {}",
+                partial.len(),
+                partial.join(", ")
+            );
         }
         if let Some(output) = output {
             let root = tempfile::Builder::new()
@@ -147,14 +174,18 @@ pub(super) fn best(stado: &Path, output: Option<&Path>) -> Result<String, Refusa
         format!("; skipped {} half-published coordinate(s) whose manifest is present and archive absent, which immutability makes permanent: {}", partial.len(), partial.join(", "))
     };
     let Some(current) = current else {
-        return Err(format!("release channel contains no complete verified Stado release{partial_note}").into());
+        return Err(format!(
+            "release channel contains no complete verified Stado release{partial_note}"
+        )
+        .into());
     };
     if !partial.is_empty() {
         eprintln!("release channel holds no whole release{partial_note}. Bootstrapping the baseline from the candidate binary, as it does on an empty channel.");
     }
     if let Some(output) = output {
-        let commands = super::surface::of_binary(stado)
-            .map_err(|error| format!("candidate binary advertised an invalid bootstrap command surface: {error}"))?;
+        let commands = super::surface::of_binary(stado).map_err(|error| {
+            format!("candidate binary advertised an invalid bootstrap command surface: {error}")
+        })?;
         let document = serde_json::json!({ "version": current, "source": BOOTSTRAP_SOURCE, "surface": commands });
         write_document(output, &document)?;
     }

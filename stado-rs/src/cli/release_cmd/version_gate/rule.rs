@@ -114,7 +114,11 @@ impl Version {
             (Change::Additive, false) => (self.major, self.minor + SLOT_STEP, SLOT_RESET),
             _ => (self.major, self.minor, self.patch + SLOT_STEP),
         };
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 }
 

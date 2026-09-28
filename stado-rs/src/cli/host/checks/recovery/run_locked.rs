@@ -35,7 +35,8 @@ pub fn run_locked(lock: &str, program: &[String]) -> Result<(), CmdError> {
         .custom_flags(nix::libc::O_NOFOLLOW)
         .open(lock)
         .map_err(|error| CmdError::click(format!("{}: {error}", lock.display())))?;
-    let locked = unsafe { nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) };
+    let locked =
+        unsafe { nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) };
     if locked != 0 {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() == Some(nix::libc::EWOULDBLOCK) {
@@ -53,6 +54,8 @@ pub fn run_locked(lock: &str, program: &[String]) -> Result<(), CmdError> {
     match status.code() {
         Some(0) => Ok(()),
         Some(code) => std::process::exit(code),
-        None => Err(CmdError::click(format!("{command} ended by a signal: {status}"))),
+        None => Err(CmdError::click(format!(
+            "{command} ended by a signal: {status}"
+        ))),
     }
 }

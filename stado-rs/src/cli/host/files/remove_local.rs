@@ -20,10 +20,7 @@ const USER_ROOTS: [&str; 3] = ["Library/LaunchAgents", ".stado", ".config/system
 const UNIT_PREFIX: &str = "com.wisent.";
 
 fn report(status: &str, detail: &str) {
-    println!(
-        "STADO_REMOVE_FILE\t{}",
-        serde_json::json!([status, detail])
-    );
+    println!("STADO_REMOVE_FILE\t{}", serde_json::json!([status, detail]));
 }
 
 fn privileged(parent: &str, name: &str) -> bool {
@@ -45,7 +42,8 @@ fn open_parent(parent: &str) -> Result<libc::c_int, (bool, std::io::Error)> {
         return Err((false, std::io::Error::last_os_error()));
     }
     for component in parent.split('/').filter(|piece| !piece.is_empty()) {
-        let name = c_name(component).ok_or((false, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
+        let name =
+            c_name(component).ok_or((false, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
         let next = unsafe { libc::openat(descriptor, name.as_ptr(), flags) };
         let error = std::io::Error::last_os_error();
         unsafe { libc::close(descriptor) };
@@ -60,7 +58,12 @@ fn open_parent(parent: &str) -> Result<libc::c_int, (bool, std::io::Error)> {
 fn stat_at(descriptor: libc::c_int, name: &CString) -> std::io::Result<libc::stat> {
     let mut found = std::mem::MaybeUninit::<libc::stat>::uninit();
     let result = unsafe {
-        libc::fstatat(descriptor, name.as_ptr(), found.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW)
+        libc::fstatat(
+            descriptor,
+            name.as_ptr(),
+            found.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
     };
     if result == 0 {
         Ok(unsafe { found.assume_init() })
@@ -74,7 +77,10 @@ fn not_found(error: &std::io::Error) -> bool {
 }
 
 fn link_or_file(error: &std::io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR))
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ELOOP) | Some(libc::ENOTDIR)
+    )
 }
 
 /// The status and detail of one guarded removal.
@@ -84,8 +90,14 @@ fn remove(path: &str, home: &str) -> (&'static str, String) {
         .iter()
         .any(|root| path.starts_with(&format!("{home}/{root}/")));
     let target = Path::new(path);
-    let parent = target.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-    let name = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let parent = target
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     let privileged = privileged(&parent, &name);
     if !user_owned && !privileged {
         return ("refused", "outside the managed areas".into());
@@ -118,7 +130,10 @@ fn remove(path: &str, home: &str) -> (&'static str, String) {
             Ok(found) => found,
             Err(error) if not_found(&error) => return ("absent", String::new()),
             Err(error) => {
-                return ("failed", format!("inspect the selected file without following links: {error}"))
+                return (
+                    "failed",
+                    format!("inspect the selected file without following links: {error}"),
+                )
             }
         };
         let kind = before.st_mode & libc::S_IFMT;
@@ -150,7 +165,10 @@ fn remove(path: &str, home: &str) -> (&'static str, String) {
                 "failed",
                 format!("verify file absence through the held parent directory: {error}"),
             ),
-            Ok(_) => ("failed", "the selected file was recreated after removal".into()),
+            Ok(_) => (
+                "failed",
+                "the selected file was recreated after removal".into(),
+            ),
         }
     })();
     unsafe { libc::close(descriptor) };

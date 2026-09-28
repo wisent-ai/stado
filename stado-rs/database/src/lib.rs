@@ -42,7 +42,12 @@ impl FleetDatabase {
             .or_else(|| std::env::var_os("HOME"))
             .filter(|home| !home.is_empty())
             .map(PathBuf::from)
-            .ok_or_else(|| Error::new("locate Stado", format!("neither {home_variable} nor HOME is set")))?;
+            .ok_or_else(|| {
+                Error::new(
+                    "locate Stado",
+                    format!("neither {home_variable} nor HOME is set"),
+                )
+            })?;
         Ok(Self {
             name: product.to_owned(),
             directory_consumer: product.to_owned(),
@@ -79,10 +84,12 @@ impl Error {
 /// a SeaORM connection to it over TLS verified against the provider's root.
 pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Error> {
     let found = resolve::credentials(database).await?;
-    let options: PgConnectOptions = found
-        .pooler_url
-        .parse()
-        .map_err(|error| Error::new("read pooler_url", format!("{}#pooler_url is not a Postgres URL: {error}", found.item)))?;
+    let options: PgConnectOptions = found.pooler_url.parse().map_err(|error| {
+        Error::new(
+            "read pooler_url",
+            format!("{}#pooler_url is not a Postgres URL: {error}", found.item),
+        )
+    })?;
     let options = options
         .ssl_mode(PgSslMode::VerifyFull)
         .ssl_root_cert_from_pem(found.ca_certificate.into_bytes());
@@ -92,7 +99,10 @@ pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Err
         .map_err(|error| {
             Error::new(
                 "connect",
-                format!("connecting to {} through {}#pooler_url failed: {error}", database.name, found.item),
+                format!(
+                    "connecting to {} through {}#pooler_url failed: {error}",
+                    database.name, found.item
+                ),
             )
         })?;
     Ok(SqlxPostgresConnector::from_sqlx_postgres_pool(pool))

@@ -31,7 +31,9 @@ fn token_bytes(data: &[u8]) -> Result<Vec<u8>, CmdError> {
     let text = std::str::from_utf8(data).map_err(refused)?;
     let token = text.trim_end_matches(['\r', '\n']);
     if token.is_empty() || token.len() > TOKEN_LIMIT || token.chars().any(char::is_whitespace) {
-        return Err(refused("token file must contain one bounded non-whitespace token"));
+        return Err(refused(
+            "token file must contain one bounded non-whitespace token",
+        ));
     }
     Ok(token.as_bytes().to_vec())
 }
@@ -45,12 +47,18 @@ fn token_path(value: &str) -> Result<PathBuf, CmdError> {
         .map(|rest| home.join(rest))
         .unwrap_or_else(|| PathBuf::from(value));
     if !expanded.is_absolute() {
-        return Err(refused("token file must be an absolute or home-relative path"));
+        return Err(refused(
+            "token file must be an absolute or home-relative path",
+        ));
     }
-    let name = expanded.file_name().ok_or_else(|| refused("token file names no file"))?;
+    let name = expanded
+        .file_name()
+        .ok_or_else(|| refused("token file names no file"))?;
     let parent = fs::canonicalize(expanded.parent().unwrap_or(Path::new("/"))).map_err(refused)?;
     if !parent.starts_with(&home) {
-        return Err(refused("token file must resolve inside the host account's home"));
+        return Err(refused(
+            "token file must resolve inside the host account's home",
+        ));
     }
     Ok(parent.join(name))
 }
@@ -69,13 +77,20 @@ fn read_token(path: &Path) -> Result<Option<Vec<u8>>, CmdError> {
     let metadata = file.metadata().map_err(refused)?;
     let euid = unsafe { nix::libc::geteuid() };
     if !metadata.is_file() || metadata.uid() != euid || metadata.mode() & PRIVATE_BITS != 0 {
-        return Err(refused("token file must be an owner-controlled regular file"));
+        return Err(refused(
+            "token file must be an owner-controlled regular file",
+        ));
     }
     let mut data = Vec::new();
     let bound = (TOKEN_LIMIT + "\r\n".len() + 1) as u64;
-    file.by_ref().take(bound).read_to_end(&mut data).map_err(refused)?;
+    file.by_ref()
+        .take(bound)
+        .read_to_end(&mut data)
+        .map_err(refused)?;
     if data.len() as u64 >= bound {
-        return Err(refused("token file exceeds the bounded token and line ending"));
+        return Err(refused(
+            "token file exceeds the bounded token and line ending",
+        ));
     }
     token_bytes(&data).map(Some)
 }
@@ -90,24 +105,35 @@ fn grant_at(vault: &str, consumer: &str) -> Result<(String, Value), CmdError> {
         .to_string();
     let grant = document["tokens"][consumer].clone();
     if !grant.is_object() {
-        return Err(refused(format!("declared vault has no grant for {consumer}")));
+        return Err(refused(format!(
+            "declared vault has no grant for {consumer}"
+        )));
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(refused)?
         .as_secs();
-    if !grant["expires_at"].as_u64().is_some_and(|expiry| expiry > now) {
-        return Err(refused(format!("declared grant for {consumer} is expired or has no expiry")));
+    if !grant["expires_at"]
+        .as_u64()
+        .is_some_and(|expiry| expiry > now)
+    {
+        return Err(refused(format!(
+            "declared grant for {consumer} is expired or has no expiry"
+        )));
     }
     if !grant["capabilities"].is_array() {
-        return Err(refused(format!("declared grant for {consumer} has no capability set")));
+        return Err(refused(format!(
+            "declared grant for {consumer} has no capability set"
+        )));
     }
     Ok((owner, grant))
 }
 
 fn verify_token(token: &[u8], grant: &Value) -> Result<(), CmdError> {
     if Some(hex::encode(Sha256::digest(token)).as_str()) != grant["hash"].as_str() {
-        return Err(refused("token file does not match the declared consumer grant"));
+        return Err(refused(
+            "token file does not match the declared consumer grant",
+        ));
     }
     Ok(())
 }
@@ -123,7 +149,9 @@ fn export(vault: &str, consumer: &str, file: &str) -> Result<Value, CmdError> {
 }
 
 fn write_atomically(path: &Path, token: &[u8]) -> Result<(), CmdError> {
-    let parent = path.parent().ok_or_else(|| refused("token file has no parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| refused("token file has no parent"))?;
     let staged = parent.join(format!(".stado-token-sync-{}", std::process::id()));
     let written = (|| -> std::io::Result<()> {
         let mut output = fs::OpenOptions::new()
@@ -142,9 +170,17 @@ fn write_atomically(path: &Path, token: &[u8]) -> Result<(), CmdError> {
     written.map_err(refused)
 }
 
-fn install(vault: &str, consumer: &str, file: &str, check: bool, shared: bool) -> Result<Value, CmdError> {
+fn install(
+    vault: &str,
+    consumer: &str,
+    file: &str,
+    check: bool,
+    shared: bool,
+) -> Result<Value, CmdError> {
     let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input).map_err(refused)?;
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(refused)?;
     let source: Value = serde_json::from_str(&input).map_err(refused)?;
     // A host that reads the owner's vault through its resolver route has no
     // authoritative copy; the owner's grant, verified at export, is the one.
@@ -165,7 +201,9 @@ fn install(vault: &str, consumer: &str, file: &str, check: bool, shared: bool) -
     let path = token_path(file)?;
     let current = read_token(&path)?;
     if check && current.as_deref() != Some(token.as_slice()) {
-        return Err(refused("destination token file is missing or does not match the declared consumer grant"));
+        return Err(refused(
+            "destination token file is missing or does not match the declared consumer grant",
+        ));
     }
     let changed = current.as_deref() != Some(token.as_slice());
     if changed {
@@ -177,9 +215,17 @@ fn install(vault: &str, consumer: &str, file: &str, check: bool, shared: bool) -
     let delivered = read_token(&path)?.ok_or_else(|| refused("delivered token file vanished"))?;
     verify_token(&delivered, &grant)?;
     if current_grant()? != (owner, grant.clone()) {
-        return Err(refused("destination grant changed after token delivery; delivered bearer is not verified"));
+        return Err(refused(
+            "destination grant changed after token delivery; delivered bearer is not verified",
+        ));
     }
-    let status = if check { "token_checked" } else if changed { "token_synced" } else { "token_unchanged" };
+    let status = if check {
+        "token_checked"
+    } else if changed {
+        "token_synced"
+    } else {
+        "token_unchanged"
+    };
     Ok(json!({
         "status": status,
         "changed": changed,
@@ -198,7 +244,12 @@ fn install(vault: &str, consumer: &str, file: &str, check: bool, shared: bool) -
 }
 
 /// Run one custody operation and print its JSON result.
-pub fn custody_local(operation: &str, vault: &str, consumer: &str, file: &str) -> Result<(), CmdError> {
+pub fn custody_local(
+    operation: &str,
+    vault: &str,
+    consumer: &str,
+    file: &str,
+) -> Result<(), CmdError> {
     let result = match operation {
         "export" => export(vault, consumer, file)?,
         "install" | "check" | "install-shared" | "check-shared" => install(

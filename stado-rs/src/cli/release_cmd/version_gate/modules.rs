@@ -44,8 +44,14 @@ fn resolve(path: &Path) -> PathBuf {
 }
 
 fn read_known(path: Option<&Path>, crate_dir: &Path) -> Result<Vec<String>, String> {
-    let Some(path) = path else { return Ok(Vec::new()) };
-    let resolved = if path.is_absolute() { path.to_path_buf() } else { crate_dir.join(path) };
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        crate_dir.join(path)
+    };
     let text = fs::read_to_string(&resolved)
         .map_err(|_| format!("error: {} is not a file", resolved.display()))?;
     Ok(text
@@ -98,7 +104,10 @@ fn reachable(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
             .unwrap_or_default();
         for found in MOD_DECLARATION.captures_iter(&text) {
             let name = &found[1];
-            for candidate in [directory.join(format!("{name}.rs")), directory.join(name).join("mod.rs")] {
+            for candidate in [
+                directory.join(format!("{name}.rs")),
+                directory.join(name).join("mod.rs"),
+            ] {
                 if candidate.is_file() && !seen.contains(&candidate) {
                     stack.push(candidate);
                 }
@@ -109,7 +118,9 @@ fn reachable(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
 }
 
 fn every_rs(directory: &Path, into: &mut BTreeSet<PathBuf>) {
-    let Ok(entries) = fs::read_dir(directory) else { return };
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -128,19 +139,35 @@ pub(super) fn check(crate_dir: &Path, known: Option<&Path>, as_json: bool) -> Ou
     }
     let mut every = BTreeSet::new();
     every_rs(&source, &mut every);
-    let roots: Vec<PathBuf> = crate_roots(&crate_dir).iter().map(|root| resolve(root)).collect();
+    let roots: Vec<PathBuf> = crate_roots(&crate_dir)
+        .iter()
+        .map(|root| resolve(root))
+        .collect();
     if roots.is_empty() {
-        return Outcome::Unreadable(format!("error: {} declares no crate root", crate_dir.display()));
+        return Outcome::Unreadable(format!(
+            "error: {} declares no crate root",
+            crate_dir.display()
+        ));
     }
     let seen: BTreeSet<PathBuf> = reachable(&roots).iter().map(|path| resolve(path)).collect();
     let known: BTreeSet<PathBuf> = match read_known(known, &crate_dir) {
-        Ok(entries) => entries.iter().map(|entry| resolve(&crate_dir.join(entry))).collect(),
+        Ok(entries) => entries
+            .iter()
+            .map(|entry| resolve(&crate_dir.join(entry)))
+            .collect(),
         Err(detail) => return Outcome::Unreadable(detail),
     };
     let stale: Vec<&PathBuf> = known.iter().filter(|path| !every.contains(*path)).collect();
-    let orphans: Vec<&PathBuf> =
-        every.iter().filter(|path| !seen.contains(*path) && !known.contains(*path)).collect();
-    let relative = |path: &Path| path.strip_prefix(&crate_dir).unwrap_or(path).display().to_string();
+    let orphans: Vec<&PathBuf> = every
+        .iter()
+        .filter(|path| !seen.contains(*path) && !known.contains(*path))
+        .collect();
+    let relative = |path: &Path| {
+        path.strip_prefix(&crate_dir)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    };
     if as_json {
         let report = serde_json::json!({
             "crate": crate_dir.display().to_string(),
@@ -151,7 +178,10 @@ pub(super) fn check(crate_dir: &Path, known: Option<&Path>, as_json: bool) -> Ou
             "stale": stale.iter().map(|path| relative(path)).collect::<Vec<_>>(),
             "unreachable": orphans.iter().map(|path| relative(path)).collect::<Vec<_>>(),
         });
-        println!("{}", serde_json::to_string_pretty(&report).expect("report serialises"));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("report serialises")
+        );
     } else {
         println!("{} .rs files under {}", every.len(), relative(&source));
         let names: Vec<String> = roots.iter().map(|path| relative(path)).collect();

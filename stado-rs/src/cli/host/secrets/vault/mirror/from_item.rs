@@ -29,7 +29,11 @@ fn invoke(skarbiec: &str, arguments: &[String]) -> Result<Value, CmdError> {
         .map_err(|error| CmdError::click(format!("skarbiec {verb} could not start: {error}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let detail = if stderr.is_empty() { format!("exit status {}", output.status) } else { stderr };
+        let detail = if stderr.is_empty() {
+            format!("exit status {}", output.status)
+        } else {
+            stderr
+        };
         return Err(CmdError::click(format!("skarbiec {verb} failed: {detail}")));
     }
     serde_json::from_slice(&output.stdout).map_err(|error| {
@@ -53,7 +57,10 @@ fn owner_only_write(path: &Path, text: &str) -> Result<(), CmdError> {
 /// because whoever reads it would lose access silently.
 fn persist(destination: &Path, token: &str) -> Result<(), CmdError> {
     if fs::symlink_metadata(destination).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        return Err(CmdError::click(format!("{} must not be a symlink", destination.display())));
+        return Err(CmdError::click(format!(
+            "{} must not be a symlink",
+            destination.display()
+        )));
     }
     if destination.exists() {
         let held = fs::read_to_string(destination)
@@ -82,9 +89,16 @@ fn persist(destination: &Path, token: &str) -> Result<(), CmdError> {
     linked.map_err(|error| CmdError::click(format!("{}: {error}", destination.display())))
 }
 
-fn register(skarbiec: &str, item: &str, field: &str, arguments: &[String]) -> Result<Value, CmdError> {
+fn register(
+    skarbiec: &str,
+    item: &str,
+    field: &str,
+    arguments: &[String],
+) -> Result<Value, CmdError> {
     if arguments.get(..2) != Some(&["grant".to_string(), "issue".to_string()]) {
-        return Err(CmdError::usage("an existing vault field can only supply grant issue"));
+        return Err(CmdError::usage(
+            "an existing vault field can only supply grant issue",
+        ));
     }
     let source = invoke(skarbiec, &["get".to_string(), item.to_string()])?;
     let token = source

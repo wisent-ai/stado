@@ -2,10 +2,7 @@
 //! watermark is withheld, swap alone is not enough to withhold one that has
 //! headroom, and a host under its watermark is healthy.
 
-use crate::constants::{
-    NEVER_OVER_LOW_MB, NEVER_OVER_TARGET_MB,
-    UNREACHABLE_SWAP_PCT,
-};
+use crate::constants::{NEVER_OVER_LOW_MB, NEVER_OVER_TARGET_MB, UNREACHABLE_SWAP_PCT};
 use crate::harness::{declare, run_pass, setup, stado, stderr, TARGET};
 
 #[test]

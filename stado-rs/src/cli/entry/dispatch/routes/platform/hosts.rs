@@ -62,9 +62,11 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
         } => host::gpu_power_limit(&target, watts, json).await,
         HostStateCommands::Uptime { target, json } => host::uptime(&target, json).await,
         HostStateCommands::Ping { target, json } => host::ping(&target, json).await,
-        HostStateCommands::Gates { host: target, json, require_disk } => {
-            host::gates(&target, json, require_disk).await
-        }
+        HostStateCommands::Gates {
+            host: target,
+            json,
+            require_disk,
+        } => host::gates(&target, json, require_disk).await,
         HostStateCommands::Link { target, json } => host::link(&target, json).await,
         HostStateCommands::UnitLog {
             target,

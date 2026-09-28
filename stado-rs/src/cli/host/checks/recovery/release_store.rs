@@ -50,12 +50,18 @@ fn store_paths(config: &Path) -> Result<Vec<String>, CmdError> {
         .map_err(|error| refuse(format!("{}: {error}", config.display())))
         .and_then(|text| serde_json::from_str(&text).map_err(|error| refuse(error.to_string())))?;
     let storage = document.get("storage").cloned().unwrap_or(Value::Null);
-    let text = |value: Option<&Value>| value.and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+    let text = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     let primary = env("WC_LOCAL_STORAGE_PATH")
         .or_else(|| text(storage.pointer("/local/path")))
         .ok_or_else(|| refuse("store_root unresolved; nothing repaired".into()))?;
     let mut paths = vec![primary];
-    let backend = env("WC_BACKUP_STORAGE_BACKEND").or_else(|| text(storage.pointer("/backup/backend")));
+    let backend =
+        env("WC_BACKUP_STORAGE_BACKEND").or_else(|| text(storage.pointer("/backup/backend")));
     if backend.as_deref() == Some("local") {
         paths.push(
             env("WC_BACKUP_LOCAL_STORAGE_PATH")
@@ -81,7 +87,11 @@ fn inspect(path: &Path, directory: bool, uid: u32) -> Result<Option<std::fs::Met
         return Err(refuse(format!("refused_wrong_type {}", path.display())));
     }
     if observed.uid() != 0 && observed.uid() != uid {
-        return Err(refuse(format!("refused_foreign_owner uid={} {}", observed.uid(), path.display())));
+        return Err(refuse(format!(
+            "refused_foreign_owner uid={} {}",
+            observed.uid(),
+            path.display()
+        )));
     }
     Ok(Some(observed))
 }
@@ -95,7 +105,11 @@ fn name_of(command: &str, argument: &str) -> Result<String, CmdError> {
 }
 
 pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), CmdError> {
-    if product.is_empty() || !product.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) {
+    if product.is_empty()
+        || !product
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
         return Err(refuse(format!("invalid_product {product}")));
     }
     let paths = store_paths(Path::new(config))?;
@@ -121,13 +135,22 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
             continue;
         }
         if !root.starts_with(&managed_home) || root == managed_home {
-            return Err(refuse(format!("store_root outside managed home: {}; nothing repaired", root.display())));
+            return Err(refuse(format!(
+                "store_root outside managed home: {}; nothing repaired",
+                root.display()
+            )));
         }
         if std::fs::canonicalize(&root).ok().as_deref() != Some(root.as_path()) && root.exists() {
-            return Err(refuse(format!("store_root has a symlinked component: {}; nothing repaired", root.display())));
+            return Err(refuse(format!(
+                "store_root has a symlinked component: {}; nothing repaired",
+                root.display()
+            )));
         }
         if !root.is_dir() {
-            return Err(refuse(format!("store_root unresolved: {}; nothing repaired", root.display())));
+            return Err(refuse(format!(
+                "store_root unresolved: {}; nothing repaired",
+                root.display()
+            )));
         }
         roots.push(root.clone());
         let files = [
@@ -140,7 +163,9 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
             remember(&mut nodes, root.clone(), true);
             let components: Vec<&str> = relative.split('/').collect();
             for index in 1..=components.len() {
-                let path = components[..index].iter().fold(root.clone(), |path, part| path.join(part));
+                let path = components[..index]
+                    .iter()
+                    .fold(root.clone(), |path, part| path.join(part));
                 remember(&mut nodes, path, index < components.len());
             }
         }
@@ -148,12 +173,16 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
     // No mutation until the complete, bounded set in both stores is known.
     for path in &order {
         let observed = inspect(path, nodes[path], uid)?;
-        let owner = observed.map_or("absent".to_string(), |meta| format!("uid={} gid={}", meta.uid(), meta.gid()));
+        let owner = observed.map_or("absent".to_string(), |meta| {
+            format!("uid={} gid={}", meta.uid(), meta.gid())
+        });
         println!("observed {owner} {}", path.display());
     }
     let mut repaired = 0;
     for path in &order {
-        let Some(observed) = inspect(path, nodes[path], uid)? else { continue };
+        let Some(observed) = inspect(path, nodes[path], uid)? else {
+            continue;
+        };
         if observed.uid() == uid {
             continue;
         }
@@ -170,10 +199,20 @@ pub fn release_store_repair_local(config: &str, product: &str) -> Result<(), Cmd
     }
     for path in &order {
         let directory = nodes[path];
-        let Some(observed) = inspect(path, directory, uid)? else { continue };
-        let access = if directory { nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK } else { nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::R_OK };
+        let Some(observed) = inspect(path, directory, uid)? else {
+            continue;
+        };
+        let access = if directory {
+            nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK
+        } else {
+            nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::R_OK
+        };
         if observed.uid() != uid || nix::unistd::access(path, access).is_err() {
-            return Err(refuse(format!("postcondition_failed owner_uid={} {}", observed.uid(), path.display())));
+            return Err(refuse(format!(
+                "postcondition_failed owner_uid={} {}",
+                observed.uid(),
+                path.display()
+            )));
         }
     }
     println!(

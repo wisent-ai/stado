@@ -35,7 +35,10 @@ async fn run(
 ) -> Result<String, Error> {
     let stado = database.home.join(".stado/bin/stado");
     if !stado.is_file() {
-        return Err(Error::new(step, format!("Stado is not installed at {}", stado.display())));
+        return Err(Error::new(
+            step,
+            format!("Stado is not installed at {}", stado.display()),
+        ));
     }
     let operation = format!("stado {}", arguments.join(" "));
     let mut command = Command::new(&stado);
@@ -52,7 +55,10 @@ async fn run(
         .map_err(|error| Error::new(step, format!("{operation} could not start: {error}")))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::new(step, format!("{operation} exited {}: {}", output.status, detail.trim())));
+        return Err(Error::new(
+            step,
+            format!("{operation} exited {}: {}", output.status, detail.trim()),
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -64,7 +70,13 @@ async fn answer<T: DeserializeOwned>(
 ) -> Result<T, Error> {
     let output = run(database, step, arguments, None).await?;
     serde_json::from_str(&output).map_err(|error| {
-        Error::new(step, format!("stado {} answered unreadable JSON: {error}", arguments.join(" ")))
+        Error::new(
+            step,
+            format!(
+                "stado {} answered unreadable JSON: {error}",
+                arguments.join(" ")
+            ),
+        )
     })
 }
 
@@ -80,17 +92,34 @@ fn decoded(output: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-async fn field(database: &FleetDatabase, route: &str, item: &str, field: &str) -> Result<String, Error> {
+async fn field(
+    database: &FleetDatabase,
+    route: &str,
+    item: &str,
+    field: &str,
+) -> Result<String, Error> {
     let environment = [
         ("HOME", database.home.display().to_string()),
         ("PATH", std::env::var("PATH").unwrap_or_default()),
         ("TMPDIR", std::env::temp_dir().display().to_string()),
         ("STADO_CREDENTIALS_ADMIN_URL", route.to_owned()),
-        ("STADO_CREDENTIALS_ADMIN_CONSUMER", database.credential_consumer.clone()),
-        ("STADO_CREDENTIALS_ADMIN_TOKEN_FILE", database.token_file().display().to_string()),
+        (
+            "STADO_CREDENTIALS_ADMIN_CONSUMER",
+            database.credential_consumer.clone(),
+        ),
+        (
+            "STADO_CREDENTIALS_ADMIN_TOKEN_FILE",
+            database.token_file().display().to_string(),
+        ),
     ];
     let arguments = ["secrets", "get", item, "--field", field];
-    let output = run(database, "read credential field", &arguments, Some(&environment)).await?;
+    let output = run(
+        database,
+        "read credential field",
+        &arguments,
+        Some(&environment),
+    )
+    .await?;
     decoded(&output).ok_or_else(|| {
         Error::new(
             "read credential field",
@@ -106,7 +135,14 @@ pub(crate) async fn credentials(database: &FleetDatabase) -> Result<Credentials,
     let resolution: Resolution = answer(
         database,
         "resolve database",
-        &["database", "resolve", &database.name, "--consumer", &database.directory_consumer, "--json"],
+        &[
+            "database",
+            "resolve",
+            &database.name,
+            "--consumer",
+            &database.directory_consumer,
+            "--json",
+        ],
     )
     .await?;
     let route: Route = answer(

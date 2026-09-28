@@ -5,15 +5,13 @@
 use serde_json::json;
 
 use stado::monitor::host_silence::{
-    observe_beacon_age_at, recent_refusals_at, recent_silences, record_refusal,
-
-    refusal_summary_at, summarize_refusals, READER_CLI, READER_RESOLVER,
-    REASON_AUTHORITY_UNREACHABLE, REASON_BEACON_STALE, REASON_DIRECTORY_CACHE_STALE,
+    observe_beacon_age_at, recent_refusals_at, recent_silences, record_refusal, refusal_summary_at,
+    summarize_refusals, READER_CLI, READER_RESOLVER, REASON_AUTHORITY_UNREACHABLE,
+    REASON_BEACON_STALE, REASON_DIRECTORY_CACHE_STALE,
 };
 
 use crate::support::{
-    at, blob_names, on_disk, refusal, seed_refusal, store, AUTHORITY_SENTENCE, HOST,
-    STALE_SENTENCE,
+    at, blob_names, on_disk, refusal, seed_refusal, store, AUTHORITY_SENTENCE, HOST, STALE_SENTENCE,
 };
 
 // ---------------------------------------------------------------------------

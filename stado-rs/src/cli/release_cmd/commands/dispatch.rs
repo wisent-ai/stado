@@ -119,7 +119,12 @@ fn active_dir(product: &str, relative: &str) {
     let directory = std::fs::read(&state)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|state| state.pointer("/active/release_dir")?.as_str().map(str::to_string))
+        .and_then(|state| {
+            state
+                .pointer("/active/release_dir")?
+                .as_str()
+                .map(str::to_string)
+        })
         .filter(|directory| !directory.is_empty());
     if let Some(directory) = directory {
         println!("{directory}/{relative}");

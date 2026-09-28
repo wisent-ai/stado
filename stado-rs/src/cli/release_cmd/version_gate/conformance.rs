@@ -12,7 +12,13 @@ use super::rule::decide;
 fn names(value: &Value) -> Vec<String> {
     value
         .as_array()
-        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -23,7 +29,9 @@ fn cases(text: &str) -> Result<Value, String> {
         return Ok(value);
     }
     let mut blocks = text.split("```");
-    let block = blocks.nth(1).ok_or("the fixtures file has no fenced block")?;
+    let block = blocks
+        .nth(1)
+        .ok_or("the fixtures file has no fenced block")?;
     let body = block.split_once('\n').map_or(block, |(_, rest)| rest);
     serde_json::from_str(body).map_err(|error| format!("the fenced fixtures are not JSON: {error}"))
 }
@@ -51,7 +59,10 @@ pub(super) fn run(text: &str) -> Result<bool, String> {
     let mut failures = 0;
     let mut total = 0;
     for group in ["classify", "refuse"] {
-        for case in fixtures[group].as_array().ok_or(format!("the fixtures declare no `{group}` list"))? {
+        for case in fixtures[group]
+            .as_array()
+            .ok_or(format!("the fixtures declare no `{group}` list"))?
+        {
             total += 1;
             let observed = outcome(case);
             let name = case["name"].as_str().unwrap_or("unnamed case");
@@ -59,7 +70,10 @@ pub(super) fn run(text: &str) -> Result<bool, String> {
                 println!("OK   {name}");
             } else {
                 failures += 1;
-                println!("FAIL {name}: expected {}, observed {observed}", case["expect"]);
+                println!(
+                    "FAIL {name}: expected {}, observed {observed}",
+                    case["expect"]
+                );
             }
         }
     }

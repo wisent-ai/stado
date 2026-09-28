@@ -33,7 +33,11 @@ pub(super) fn release_base(version: &str, platform: &str) -> String {
 /// the exit status the fleet reserves for retryable failures.
 fn refusal(output: &Output, when_silent: String) -> Refusal {
     let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let detail = if detail.is_empty() { when_silent } else { detail };
+    let detail = if detail.is_empty() {
+        when_silent
+    } else {
+        detail
+    };
     if output.status.code() == Some(retry_exit_code()) {
         Refusal::Unavailable(detail)
     } else {
@@ -58,7 +62,11 @@ pub(super) fn state(stado: &Path, uri: &str) -> Result<String, Refusal> {
     }
     let document: Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| format!("storage stat returned invalid JSON for {uri}"))?;
-    Ok(document.get("state").and_then(Value::as_str).unwrap_or("").to_string())
+    Ok(document
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string())
 }
 
 fn get(stado: &Path, uri: &str, destination: &Path) -> Result<(), Refusal> {
@@ -78,7 +86,12 @@ fn hex_of(value: &str, lengths: &[usize]) -> bool {
 /// `release-manifest-<platform>.json`: `/docs/primitives/release` names
 /// `release.json` as the commit marker written last. A required subset of
 /// fields is checked, not an exact set, so an additive field is compatible.
-pub(super) fn manifest(stado: &Path, version: &str, platform: &str, root: &Path) -> Result<(Value, String), Refusal> {
+pub(super) fn manifest(
+    stado: &Path,
+    version: &str,
+    platform: &str,
+    root: &Path,
+) -> Result<(Value, String), Refusal> {
     let uri = format!("{}/release.json", release_base(version, platform));
     let destination = root.join(format!("release-{platform}.json"));
     get(stado, &uri, &destination)?;
@@ -86,7 +99,14 @@ pub(super) fn manifest(stado: &Path, version: &str, platform: &str, root: &Path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .ok_or_else(|| format!("release channel returned invalid JSON for {uri}"))?;
-    let required = ["artifact_bytes", "artifact_sha256", "platform", "product", "source_revision", "version"];
+    let required = [
+        "artifact_bytes",
+        "artifact_sha256",
+        "platform",
+        "product",
+        "source_revision",
+        "version",
+    ];
     if !value.is_object() || required.iter().any(|field| value.get(field).is_none()) {
         return Err(format!("signed release manifest is missing required fields: {uri}").into());
     }
@@ -97,7 +117,10 @@ pub(super) fn manifest(stado: &Path, version: &str, platform: &str, root: &Path)
     if !hex_of(&text("artifact_sha256"), &[64]) {
         return Err(format!("release manifest digest is invalid: {uri}").into());
     }
-    if !value["artifact_bytes"].as_u64().is_some_and(|size| size > 0) {
+    if !value["artifact_bytes"]
+        .as_u64()
+        .is_some_and(|size| size > 0)
+    {
         return Err(format!("release manifest artifact size is invalid: {uri}").into());
     }
     if !hex_of(&text("source_revision"), &[40, 64]) {
@@ -121,12 +144,17 @@ pub(super) fn surface_from_release(
     let archive = root.join("release.tar.gz");
     get(stado, &archive_uri, &archive)?;
     let payload = std::fs::read(&archive).map_err(|error| format!("{archive_uri}: {error}"))?;
-    let expected = manifest["artifact_sha256"].as_str().unwrap_or("").to_ascii_lowercase();
+    let expected = manifest["artifact_sha256"]
+        .as_str()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if hex::encode(Sha256::digest(&payload)) != expected {
         return Err(format!("release archive differs from its manifest: {archive_uri}").into());
     }
     if Some(payload.len() as u64) != manifest["artifact_bytes"].as_u64() {
-        return Err(format!("release archive is not the size its manifest binds: {archive_uri}").into());
+        return Err(
+            format!("release archive is not the size its manifest binds: {archive_uri}").into(),
+        );
     }
     let extracted = root.join("release");
     crate::release_control::safe_extract_archive(&payload, &extracted)
@@ -135,7 +163,9 @@ pub(super) fn surface_from_release(
     if !binary.is_file() {
         return Err(format!("release archive contains no stado binary: {archive_uri}").into());
     }
-    let mut mode = std::fs::metadata(&binary).map_err(|error| error.to_string())?.permissions();
+    let mut mode = std::fs::metadata(&binary)
+        .map_err(|error| error.to_string())?
+        .permissions();
     mode.set_mode(mode.mode() | 0o100);
     std::fs::set_permissions(&binary, mode).map_err(|error| error.to_string())?;
     let commands = super::super::surface::of_binary(&binary).map_err(|error| {

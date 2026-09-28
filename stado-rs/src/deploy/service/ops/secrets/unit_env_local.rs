@@ -50,13 +50,22 @@ fn unquote(word: &str) -> String {
 
 fn target_path(raw: &str) -> Result<PathBuf, String> {
     match raw.strip_prefix("$HOME/") {
-        Some(rest) => Ok(PathBuf::from(std::env::var("HOME").map_err(|_| fail("HOME is not set"))?).join(rest)),
+        Some(rest) => Ok(PathBuf::from(
+            std::env::var("HOME").map_err(|_| fail("HOME is not set"))?,
+        )
+        .join(rest)),
         None => Ok(PathBuf::from(raw)),
     }
 }
 
 fn identity(meta: &fs::Metadata) -> (u64, u64, i64, i64, u64) {
-    (meta.dev(), meta.ino(), meta.mtime(), meta.mtime_nsec(), meta.size())
+    (
+        meta.dev(),
+        meta.ino(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.size(),
+    )
 }
 
 /// The file's logical entries: a line ending in `\` continues into the next.
@@ -123,13 +132,21 @@ fn rewrite(original: &str, key: &str, value: Option<&str>) -> String {
         if at > 0 && !output[at - 1].ends_with('\n') {
             output[at - 1].push('\n');
         }
-        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%");
+        let escaped = value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%");
         output.insert(at, format!("Environment=\"{key}={escaped}\"\n"));
     }
     output.concat()
 }
 
-fn update(raw_path: &str, key: &str, value: Option<&str>, uid: u32) -> Result<&'static str, String> {
+fn update(
+    raw_path: &str,
+    key: &str,
+    value: Option<&str>,
+    uid: u32,
+) -> Result<&'static str, String> {
     let path = target_path(raw_path)?;
     for component in path.ancestors() {
         if fs::symlink_metadata(component).is_ok_and(|meta| meta.file_type().is_symlink()) {
@@ -138,7 +155,9 @@ fn update(raw_path: &str, key: &str, value: Option<&str>, uid: u32) -> Result<&'
     }
     let before = fs::metadata(&path).map_err(fail)?;
     if !before.is_file() || before.uid() != uid {
-        return Err(fail("unit environment file must be regular and owned by the service account"));
+        return Err(fail(
+            "unit environment file must be regular and owned by the service account",
+        ));
     }
     let original = fs::read_to_string(&path).map_err(fail)?;
     let updated = rewrite(&original, key, value);
@@ -150,7 +169,9 @@ fn update(raw_path: &str, key: &str, value: Option<&str>, uid: u32) -> Result<&'
     };
     let empty_dropin = value.is_none()
         && path.extension().is_some_and(|ext| ext == "conf")
-        && updated.lines().all(|line| line.trim().is_empty() || line.trim() == "[Service]");
+        && updated
+            .lines()
+            .all(|line| line.trim().is_empty() || line.trim() == "[Service]");
     if empty_dropin {
         if !unchanged_since(&path) {
             return Err(fail("unit environment file changed during the update"));
@@ -158,11 +179,19 @@ fn update(raw_path: &str, key: &str, value: Option<&str>, uid: u32) -> Result<&'
         fs::remove_file(&path).map_err(fail)?;
         return Ok("changed");
     }
-    let parent = path.parent().ok_or_else(|| fail("unit environment file has no parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| fail("unit environment file has no parent"))?;
     let temporary = parent.join(format!(".stado-unit-env.{}", std::process::id()));
     let written = (|| -> Result<(), String> {
-        let mut stream = fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(fail)?;
-        stream.set_permissions(fs::Permissions::from_mode(before.mode() & 0o7777)).map_err(fail)?;
+        let mut stream = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(fail)?;
+        stream
+            .set_permissions(fs::Permissions::from_mode(before.mode() & 0o7777))
+            .map_err(fail)?;
         std::os::unix::fs::fchown(&stream, Some(before.uid()), Some(before.gid())).map_err(fail)?;
         stream.write_all(updated.as_bytes()).map_err(fail)?;
         stream.sync_all().map_err(fail)?;

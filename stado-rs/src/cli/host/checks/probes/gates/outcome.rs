@@ -108,6 +108,9 @@ pub(super) fn disk_outcome(
             gates.host
         )));
     }
-    println!("{} disk meets {name}: {free:.2} >= {threshold} GiB", gates.host);
+    println!(
+        "{} disk meets {name}: {free:.2} >= {threshold} GiB",
+        gates.host
+    );
     Ok(())
 }

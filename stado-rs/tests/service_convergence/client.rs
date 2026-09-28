@@ -4,11 +4,10 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::thread;
 use std::net::TcpStream;
 use std::process::Output;
+use std::thread;
 use std::time::{Duration, Instant};
-
 
 use crate::fixture::{Answer, DashboardFixture};
 use crate::helpers::mint_verifier;
@@ -43,7 +42,13 @@ impl DashboardFixture {
         }
     }
 
-    pub(crate) fn request(&self, method: &str, target: &str, bearer: Option<&str>, body: &str) -> Answer {
+    pub(crate) fn request(
+        &self,
+        method: &str,
+        target: &str,
+        bearer: Option<&str>,
+        body: &str,
+    ) -> Answer {
         let mut stream = TcpStream::connect_timeout(&self.address, Duration::from_secs(5))
             .expect("connect to real dashboard");
         stream

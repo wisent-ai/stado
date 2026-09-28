@@ -27,7 +27,11 @@ pub enum VersionGateCommands {
     /// Print `{"surface": [...]}`: the top-level commands BINARY advertises
     /// in `help`, or those in a saved help text.
     Surface {
-        #[arg(long, conflicts_with = "help_text", required_unless_present = "help_text")]
+        #[arg(
+            long,
+            conflicts_with = "help_text",
+            required_unless_present = "help_text"
+        )]
         binary: Option<PathBuf>,
         #[arg(long)]
         help_text: Option<PathBuf>,
@@ -84,8 +88,18 @@ fn surface_file(path: &std::path::Path) -> Result<Vec<String>, CmdError> {
         .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
     document["surface"]
         .as_array()
-        .and_then(|names| names.iter().map(|name| name.as_str().map(str::to_string)).collect())
-        .ok_or_else(|| CmdError::click(format!("{}: `surface` is not a list of names", path.display())))
+        .and_then(|names| {
+            names
+                .iter()
+                .map(|name| name.as_str().map(str::to_string))
+                .collect()
+        })
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: `surface` is not a list of names",
+                path.display()
+            ))
+        })
 }
 
 /// A negative answer the workflow branches on: exit 1 with nothing more to
@@ -108,22 +122,35 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
             println!("{}", surface::document(&commands));
             Ok(())
         }
-        VersionGateCommands::Baseline { stado, output } => match baseline::best(&stado, output.as_deref()) {
-            Ok(answer) => {
-                println!("{answer}");
-                Ok(())
+        VersionGateCommands::Baseline { stado, output } => {
+            match baseline::best(&stado, output.as_deref()) {
+                Ok(answer) => {
+                    println!("{answer}");
+                    Ok(())
+                }
+                Err(baseline::Refusal::Invalid(detail)) => Err(CmdError::click(detail)),
+                Err(baseline::Refusal::Unavailable(detail)) => Err(CmdError {
+                    // The channel's own retryable answer; the entry point exits
+                    // with the fleet's retry status, never as a verdict.
+                    failure: Some(FailureCode::InfraDown),
+                    ..CmdError::click(format!("the release channel cannot answer now: {detail}"))
+                }),
             }
-            Err(baseline::Refusal::Invalid(detail)) => Err(CmdError::click(detail)),
-            Err(baseline::Refusal::Unavailable(detail)) => Err(CmdError {
-                // The channel's own retryable answer; the entry point exits
-                // with the fleet's retry status, never as a verdict.
-                failure: Some(FailureCode::InfraDown),
-                ..CmdError::click(format!("the release channel cannot answer now: {detail}"))
-            }),
-        },
-        VersionGateCommands::Decide { current, published_surface, candidate_surface, breaking, json } => {
-            let answer = rule::decide(&current, &surface_file(&published_surface)?, &surface_file(&candidate_surface)?, breaking)
-                .map_err(|refusal| CmdError::click(refusal.to_string()))?;
+        }
+        VersionGateCommands::Decide {
+            current,
+            published_surface,
+            candidate_surface,
+            breaking,
+            json,
+        } => {
+            let answer = rule::decide(
+                &current,
+                &surface_file(&published_surface)?,
+                &surface_file(&candidate_surface)?,
+                breaking,
+            )
+            .map_err(|refusal| CmdError::click(refusal.to_string()))?;
             let document = serde_json::json!({
                 "current": answer.current,
                 "change": answer.change.name(),
@@ -132,9 +159,17 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
                 "added": answer.added,
             });
             if json {
-                println!("{}", serde_json::to_string_pretty(&document).expect("decision serialises"));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&document).expect("decision serialises")
+                );
             } else {
-                println!("{} {} -> {}", answer.change.name(), answer.current, answer.next);
+                println!(
+                    "{} {} -> {}",
+                    answer.change.name(),
+                    answer.current,
+                    answer.next
+                );
             }
             Ok(())
         }
@@ -147,17 +182,21 @@ pub fn dispatch(command: VersionGateCommands) -> Result<(), CmdError> {
                 Err(detail) => Err(CmdError::usage(detail)),
             }
         }
-        VersionGateCommands::SemverAtLeast { actual, minimum } => match rule::semver_at_least(&actual, &minimum) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(negative()),
-            Err(detail) => Err(CmdError::usage(detail)),
-        },
-        VersionGateCommands::UnreachableModules { crate_dir, known, json } => {
-            match modules::check(&crate_dir, known.as_deref(), json) {
-                modules::Outcome::Clean => Ok(()),
-                modules::Outcome::Findings => Err(negative()),
-                modules::Outcome::Unreadable(detail) => Err(CmdError::usage(detail)),
+        VersionGateCommands::SemverAtLeast { actual, minimum } => {
+            match rule::semver_at_least(&actual, &minimum) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(negative()),
+                Err(detail) => Err(CmdError::usage(detail)),
             }
         }
+        VersionGateCommands::UnreachableModules {
+            crate_dir,
+            known,
+            json,
+        } => match modules::check(&crate_dir, known.as_deref(), json) {
+            modules::Outcome::Clean => Ok(()),
+            modules::Outcome::Findings => Err(negative()),
+            modules::Outcome::Unreadable(detail) => Err(CmdError::usage(detail)),
+        },
     }
 }
