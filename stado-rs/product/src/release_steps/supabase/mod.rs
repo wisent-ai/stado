@@ -82,46 +82,77 @@ fn local(source: &Path, arguments: &[&str]) -> Result<()> {
 
 /// Give the unpacked scratch copy its own `project_id` and its own host ports
 /// and answer the id. The local stack names its containers and volumes after
-/// the id and binds every `*port` key of `config.toml` on the host, so two
-/// verifications on one worker, or a developer's own local stack of any
-/// product, would otherwise share a database or refuse to start on a taken
-/// port. A config without exactly one `project_id` line is refused: the CLI
-/// would fall back to a shared default name, and the cleanup would stop a
-/// database this run never started.
+/// the id and binds every `*port` key of `config.toml` on the host (a key the
+/// config omits takes the CLI's fixed default, `db.port` 54322 among them),
+/// so two verifications on one worker, or a developer's own local stack of
+/// any product, would otherwise share a database or refuse to start on a
+/// taken port. Every declared integer `*port` gets a free port, and
+/// `db.port`, the one `supabase db start` binds, is set even when omitted. A
+/// config without a string `project_id` is refused: the CLI would fall back
+/// to a shared default name, and the cleanup would stop a database this run
+/// never started.
 fn isolate(source: &Path) -> Result<String> {
     let config = source.join("supabase/config.toml");
     let text = fs::read_to_string(&config)
         .with_context(|| format!("the bundle holds no {}", config.display()))?;
-    let scratch = format!("verify-{}", uuid::Uuid::new_v4().simple());
-    let mut replaced = 0;
-    // Held until the config is written, so every port handed out is distinct.
-    let mut reserved = Vec::new();
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        let (key, value) = line.split_once('=').unwrap_or((line, ""));
-        let key = key.trim();
-        if key == "project_id" {
-            replaced += 1;
-            lines.push(format!("project_id = \"{scratch}\""));
-        } else if key.ends_with("port") && value.trim().parse::<u16>().is_ok() {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .context("cannot reserve a free host port for the scratch database")?;
-            lines.push(format!("{key} = {}", listener.local_addr()?.port()));
-            reserved.push(listener);
-        } else {
-            lines.push(line.to_owned());
-        }
-    }
-    if replaced != 1 {
+    let mut table: toml::Table = text
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", config.display()))?;
+    if !matches!(table.get("project_id"), Some(toml::Value::String(_))) {
         bail!(
-            "{} declares {replaced} project_id lines (one is required to give the scratch \
-             database its own name)",
+            "{} declares no project_id string (one is required to give the scratch database \
+             its own name)",
             config.display()
         );
     }
-    fs::write(&config, lines.join("\n") + "\n")?;
+    let scratch = format!("verify-{}", uuid::Uuid::new_v4().simple());
+    table.insert("project_id".into(), toml::Value::String(scratch.clone()));
+    // Held until the config is written, so every port handed out is distinct.
+    let mut reserved = Vec::new();
+    reassign_ports(&mut table, &mut reserved)?;
+    let db = table
+        .entry("db")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(db) = db.as_table_mut() else {
+        bail!(
+            "{} declares db as something other than a table",
+            config.display()
+        );
+    };
+    if !matches!(db.get("port"), Some(toml::Value::Integer(_))) {
+        db.insert(
+            "port".into(),
+            toml::Value::Integer(free_port(&mut reserved)?),
+        );
+    }
+    fs::write(&config, toml::to_string(&table)?)?;
     drop(reserved);
     Ok(scratch)
+}
+
+/// Give every integer value whose key ends in `port`, at any depth, a free
+/// host port.
+fn reassign_ports(
+    table: &mut toml::Table,
+    reserved: &mut Vec<std::net::TcpListener>,
+) -> Result<()> {
+    for (key, value) in table.iter_mut() {
+        match value {
+            toml::Value::Table(inner) => reassign_ports(inner, reserved)?,
+            toml::Value::Integer(port) if key.ends_with("port") => *port = free_port(reserved)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// A port the host has free now, kept reserved by its listener in `reserved`.
+fn free_port(reserved: &mut Vec<std::net::TcpListener>) -> Result<i64> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .context("cannot reserve a free host port for the scratch database")?;
+    let port = listener.local_addr()?.port();
+    reserved.push(listener);
+    Ok(i64::from(port))
 }
 
 /// The Supabase project directory inside an unpacked bundle: `project_dir`
