@@ -65,9 +65,8 @@ final class StadoFirstUseJourney: ObservableObject {
         }
     }
 
-    func dismissError() {
-        errorMessage = nil
-    }
+    func dismissError() { errorMessage = nil }
+
     func replay() async -> WisentMutationOutcome {
         guard let client else {
             return .failed("The walkthrough did not load in this session, so there is nothing to show.")
