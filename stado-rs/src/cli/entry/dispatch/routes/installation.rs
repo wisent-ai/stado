@@ -8,13 +8,6 @@ use crate::cli::*;
 
 pub(crate) async fn dispatch(command: InstallationCommands) -> Result<(), CmdError> {
     match command {
-        InstallationCommands::PackageRoot => {
-            // Python prints the installed package source root; the Rust
-            // equivalent is the crate data directory (profiles, templates,
-            // registry) used by desktop provisioning.
-            println!("{}", crate::data_dir().display());
-            Ok(())
-        }
         InstallationCommands::Onboarding {
             reset,
             import_registry,

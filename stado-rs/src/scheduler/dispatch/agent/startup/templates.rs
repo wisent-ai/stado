@@ -6,10 +6,8 @@
 /// Per-provider agent startup-script templates, baked into the binary at
 /// compile time exactly like the bundled compute-target registry
 /// ([`crate::targets::load_bundled_registry`]). `data/templates/` stays
-/// the single source of truth for the text; reading them back through
-/// `crate::data_dir()` only ever worked on the build machine, because
-/// that path is `CARGO_MANIFEST_DIR` frozen at compile time and an
-/// installed `~/.stado/bin/stado` has no `data/` directory beside it.
+/// the single source of truth for the text; an installed
+/// `~/.stado/bin/stado` has no `data/` directory beside it to read back.
 ///
 /// Each launches `stado agent --kind <provider> --gpu-type <accel>
 /// --idle-shutdown` after verifying and extracting the deployment-selected

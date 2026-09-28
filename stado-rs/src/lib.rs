@@ -61,13 +61,3 @@ pub mod stream;
 pub mod targets;
 pub mod transcripts;
 pub mod watchdog;
-
-/// Root of the source tree's `data/` directory for build-time tooling.
-///
-/// `CARGO_MANIFEST_DIR` is frozen at compile time and must never be used to
-/// resolve installed runtime assets. Runtime registry, startup templates, and
-/// profiles are embedded with `include_str!`; the remaining callers are the
-/// operator-facing package-root command and test-only source fixtures.
-pub fn data_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data")
-}

@@ -202,7 +202,7 @@ pub async fn enroll(
     println!("registered '{name}', verified as '{hostname}' (generation {generation})");
     if bootstrap {
         if let Err(exc) =
-            crate::cli::setup::bootstrap::run(Some(name.to_string()), false, false).await
+            crate::cli::setup::bootstrap::run(Some(name.to_string()), false, false, false).await
         {
             // The rollback's own expected generation: the re-read here is what
             // the removal is computed from, so it is also what the removal is

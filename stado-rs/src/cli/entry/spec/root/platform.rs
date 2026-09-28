@@ -92,6 +92,11 @@ pub(crate) enum PlatformCommands {
         /// Install on THIS machine (launchd/systemd --user) instead of via SSH.
         #[arg(long)]
         local: bool,
+        /// Print the verified installer of this Stado release (bash) and do
+        /// nothing else; it downloads, checks and installs `stado`,
+        /// `stado-fix` and `stado-watchdog` into `~/.stado/bin`.
+        #[arg(long, conflicts_with_all = ["target", "dry_run", "local"])]
+        print_install_script: bool,
     },
 
     /// Vast.ai marketplace host-listing (rent our idle GPU).

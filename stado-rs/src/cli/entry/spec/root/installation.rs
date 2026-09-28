@@ -11,10 +11,6 @@ use crate::cli::*;
 /// changes no command line.
 #[derive(Subcommand)]
 pub(crate) enum InstallationCommands {
-    /// Print the installed crate data root for desktop provisioning.
-    #[command(name = "package-root", hide = true)]
-    PackageRoot,
-
     /// Show the CLI first-use walkthrough or import an existing registry-v2 file.
     Onboarding {
         /// Discard recorded progress and evidence, then show the walkthrough again.

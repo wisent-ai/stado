@@ -3,7 +3,7 @@
 //! Port of `stado/cli.py` (click) to clap derive. The full command tree is
 //! declared and every branch dispatches to its Rust implementation.
 //!
-//! Implemented and wired to the library: `package-root`, `capabilities`,
+//! Implemented and wired to the library: `capabilities`,
 //! `submit`, `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
 //! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`, `resources`,
 //! `install-disk-cleanup`, `bootstrap`, `recovery`, the complete `host`,
