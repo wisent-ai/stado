@@ -12,11 +12,13 @@
 //! what happens to sit near its program:
 //! - the program's directory (or the parent of its `bin/`) holds GitHub's
 //!   `.runner` registration, as for `runsvc.sh` and `start-runner.sh`; or
+//! - the launcher names its install in `.stado-runner-install` beside itself.
+//!   wisent-backend's release runner is this shape: `reconcile-release-runner.sh`
+//!   sits in the runner root, selects `vendor-<version>-layout-<n>/`, records
+//!   it there, changes into it and `exec`s `run.sh`. The record outlives the
+//!   wrapper, which exits 0 when the listener stops for good; or
 //! - the unit's running process works in a registered directory inside the
-//!   program's directory. wisent-backend's release runner is this shape:
-//!   `reconcile-release-runner.sh` sits in the runner root, selects
-//!   `vendor-<version>-layout-<n>/`, changes into it and `exec`s `run.sh`, so
-//!   the unit's pid works in exactly the install it selected.
+//!   program's directory, for a launcher that keeps no such record.
 //!
 //! For such a unit the beacon asks the process table for that install's
 //! listener and, when none runs, publishes `failed` with the newest runner
@@ -30,6 +32,9 @@ use crate::deploy::service::{STATE_ACTIVE, STATE_FAILED};
 
 /// Lines of the newest runner log carried in the detail.
 const LOG_TAIL_LINES: usize = 5;
+
+/// The file a runner launcher writes beside itself naming the install it ran.
+const INSTALL_MARKER: &str = ".stado-runner-install";
 
 /// Whether `directory` holds a `.runner` registration file.
 fn registered(directory: &Path) -> Result<bool, String> {
@@ -83,6 +88,27 @@ fn runner_install(program: &str, pid: Option<&str>) -> Result<Option<PathBuf>, S
     }
     if registered(root)? {
         return Ok(Some(root.to_path_buf()));
+    }
+    // A launcher that selects an install records it, so a unit whose wrapper
+    // already exited (run.sh returns 0 when the listener stops for good) is
+    // still tied to the install it ran.
+    let marker = root.join(INSTALL_MARKER);
+    match std::fs::read_to_string(&marker) {
+        Ok(text) => {
+            let chosen = PathBuf::from(text.trim());
+            return if chosen.starts_with(root) && chosen != root {
+                Ok(Some(chosen))
+            } else {
+                Err(format!(
+                    "{} names {}, which is not an install inside {}",
+                    marker.display(),
+                    chosen.display(),
+                    root.display()
+                ))
+            };
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("{} could not be read: {error}", marker.display())),
     }
     let Some(pid) = pid.filter(|pid| pid.parse::<u32>().is_ok_and(|pid| pid > 0)) else {
         return Ok(None);
