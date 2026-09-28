@@ -1,4 +1,5 @@
-//! The receipt report for one `weles-capture` batch.
+//! The receipt report for one `weles-capture` batch, read from the record the
+//! enqueue wrote to Stado storage.
 
 use serde_json::{json, Value};
 
@@ -10,13 +11,7 @@ pub(crate) async fn weles_capture_status(
     batch: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let admission = crate::deploy::weles_capture::resolve_admission(target)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let channel = crate::deploy::weles_capture::open_channel(&admission)
-        .await
-        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
-    let batch_status = crate::deploy::weles_capture::status(&channel, batch)
+    let batch_status = crate::deploy::weles_capture::status(batch)
         .await
         .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
     let states = batch_status.captures;
@@ -28,8 +23,6 @@ pub(crate) async fn weles_capture_status(
             "target": target,
             "batch": batch,
             "action": crate::deploy::weles_capture::CAPTURE_ACTION,
-            "endpoint": admission.declared_url,
-            "transport": channel.transport(),
             "artifacts_unreachable": batch_status.artifacts_unreachable,
             "actions": states.iter().map(|state| json!({
                 "action_id": state.action_id,
@@ -80,7 +73,7 @@ pub(crate) async fn weles_capture_status(
     }
     if states.is_empty() {
         return Err(CmdError::click(format!(
-            "{target}: no {} action carries batch {batch}; enqueue it with `stado workload run weles-capture`",
+            "{target}: the record of batch {batch} holds no {} run; enqueue it with `stado workload run weles-capture`",
             crate::deploy::weles_capture::CAPTURE_ACTION
         )));
     }

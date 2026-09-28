@@ -2,6 +2,7 @@
 //! states this command reports, and the refusals a batch id earns.
 
 mod batch;
+mod record;
 
 use serde_json::{json, Value};
 
@@ -25,11 +26,14 @@ pub struct Enqueued {
 /// The old admission API and its database queue were removed from Weles.
 /// Returning only after each run finishes means an accepted row already has a
 /// final run id and its artifacts have either been uploaded or the command has
-/// failed with the worker's exact reason.
+/// failed with the worker's exact reason. After every run the batch's record
+/// in Stado storage is rewritten, so a batch stopped halfway still reports the
+/// runs it finished and the refusal that stopped it.
 pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, DeployError> {
     let mut accepted = Vec::with_capacity(plan.captures.len());
+    let mut receipts = Vec::with_capacity(plan.captures.len());
     for capture in &plan.captures {
-        let payload = channel
+        let outcome = channel
             .call(
                 RUN_ROUTE,
                 &json!({
@@ -39,34 +43,58 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
                     "timeout_ms": REQUEST_DEADLINE.as_millis(),
                 }),
             )
-            .await?;
-        let run_id = payload
-            .get("run_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                DeployError(
-                    "the Weles API completed the capture and returned no run id".to_string(),
-                )
-            })?;
-        accepted.push(Enqueued {
-            action_id: run_id.to_string(),
+            .await
+            .and_then(|payload| {
+                payload
+                    .get("run_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        DeployError(
+                            "the Weles API completed the capture and returned no run id"
+                                .to_string(),
+                        )
+                    })
+            });
+        let receipt = |run_id: String, state: &str, error: Option<String>| record::Receipt {
+            run_id,
             site_slug: capture.site_slug.clone(),
             axis: capture.axis.clone(),
             artifact_prefix: capture.artifact_prefix.clone(),
-        });
+            state: state.to_string(),
+            error,
+        };
+        match outcome {
+            Ok(run_id) => {
+                receipts.push(receipt(run_id.clone(), STATE_DONE, None));
+                record::write(&plan.batch, &receipts).await?;
+                accepted.push(Enqueued {
+                    action_id: run_id,
+                    site_slug: capture.site_slug.clone(),
+                    axis: capture.axis.clone(),
+                    artifact_prefix: capture.artifact_prefix.clone(),
+                });
+            }
+            Err(error) => {
+                receipts.push(receipt(
+                    String::new(),
+                    STATE_FAILED,
+                    Some(error.to_string()),
+                ));
+                record::write(&plan.batch, &receipts).await?;
+                return Err(error);
+            }
+        }
     }
     Ok(accepted)
 }
 
-/// The four states this command reports.
-pub const STATE_QUEUED: &str = "queued";
-pub const STATE_RUNNING: &str = "running";
+/// The two states a finished synchronous run is recorded as.
 pub const STATE_DONE: &str = "done";
 pub const STATE_FAILED: &str = "failed";
 
-/// One enqueued capture as the worker's action log and the object store
-/// describe it now.
+/// One capture as Stado's batch record and the object store describe it now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureState {
     pub action_id: String,
@@ -79,20 +107,7 @@ pub struct CaptureState {
     pub artifacts: Vec<String>,
 }
 
-/// Translate the action log's own status word.
-///
-/// Weles writes `queued` on enqueue, `running` on claim and `completed` or
-/// `failed` when it records the result. Only `completed` is renamed, and a
-/// word this table does not know is passed through verbatim: folding an
-/// unrecognised status into one of ours would be a verdict nobody measured.
-fn capture_state(status: &str) -> String {
-    if status == "completed" {
-        return STATE_DONE.to_string();
-    }
-    status.to_string()
-}
-
-/// One batch as the worker's action log and the object store describe it.
+/// One batch as Stado's batch record and the object store describe it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchStatus {
     pub captures: Vec<CaptureState>,

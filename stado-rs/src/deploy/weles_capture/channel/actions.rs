@@ -1,9 +1,9 @@
 //! The browser and runtime invocations one open channel carries: the `/run`
-//! body, the account binding that keys the profile, and the action log.
+//! body and the account binding that keys the profile.
 
 use serde_json::{json, Value};
 
-use super::super::{QUERY_LIMIT, QUERY_ROUTE, RUN_ROUTE, RUN_TIMEOUT};
+use super::super::{RUN_ROUTE, RUN_TIMEOUT};
 use super::Channel;
 use crate::deploy::DeployError;
 
@@ -107,35 +107,6 @@ pub async fn run_action(
         .ok_or_else(|| {
             DeployError("the Weles API completed the action and returned no run id".to_string())
         })
-}
-
-/// Read the newest recorded row for one fixed action.
-pub async fn latest_action_log(
-    channel: &Channel,
-    action: &str,
-) -> Result<Option<Value>, DeployError> {
-    let data = match channel
-        .call(
-            QUERY_ROUTE,
-            &json!({ "action": action, "limit": QUERY_LIMIT }),
-        )
-        .await
-    {
-        Ok(data) => data,
-        Err(error)
-            if error
-                .0
-                .contains("refused /v1/echo/action-logs/query with 404 Not Found") =>
-        {
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
-    let logs = data
-        .get("logs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| DeployError("the Weles admission API returned no action log".to_string()))?;
-    Ok(logs.first().cloned())
 }
 
 #[cfg(test)]

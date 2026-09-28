@@ -70,168 +70,129 @@ pub async fn bootstrap_developer_id(
     let finish = replace(DEVELOPER_ID_FINISH, &[("__WORK_DIR__", shlex_quote(&work))]);
     let mut finish_output =
         host_channel::run_script(&target, &finish, &production_runner()).await?;
+    // A completed Account Holder run downloads its certificate to
+    // `{work}/certificate.cer`, which the finish script above reads, so a run
+    // interrupted after the certificate was issued is already recovered there.
     if !finish_output.ok() {
         let admission = weles_capture::resolve_admission(&target.name).await?;
         let channel = weles_capture::open_channel(&admission).await?;
-        if let Some(row) =
-            weles_capture::latest_action_log(&channel, APPLE_DEVELOPER_ID_ACTION).await?
-        {
-            let prior_certificate = row
-                .pointer("/params/apple_certificate_path")
-                .or_else(|| row.pointer("/params/certificate_path"))
-                .and_then(Value::as_str);
-            if matches!(
-                row.get("status").and_then(Value::as_str),
-                Some("completed" | "succeeded")
-            ) {
-                if let Some(prior_certificate) = prior_certificate {
-                    let home_prefix = format!("{remote_home}/");
-                    let relative = prior_certificate.strip_prefix(&home_prefix);
-                    if relative.is_some_and(|value| {
-                        !value.is_empty()
-                            && value.split('/').all(|component| {
-                                !component.is_empty() && !matches!(component, "." | "..")
-                            })
-                    }) {
-                        let recover = format!(
-                            "set -eu\ncp -- {} {}/certificate.cer\n",
-                            shlex_quote(prior_certificate),
-                            shlex_quote(&work),
-                        );
-                        let recovered =
-                            host_channel::run_script(&target, &recover, &production_runner())
-                                .await?;
-                        if recovered.ok() {
-                            finish_output =
-                                host_channel::run_script(&target, &finish, &production_runner())
-                                    .await?;
-                        }
-                    }
-                }
-            }
-        }
-        if finish_output.ok() {
-            // The interrupted Account Holder run had already issued the certificate.
-        } else {
-            let guard_id = uuid::Uuid::new_v4().to_string();
-            let execution_agent = "weles-worker";
-            // Resolved once: all three references must live in the same
-            // broker state the worker's socket is served from, and that
-            // broker is the host's, never this machine's.
-            let broker = host_capability::resolve(
-                &target,
-                &weles_browser_task::weles_api_broker_files(),
-                &production_runner(),
-            )
-            .await?;
-            // The agent is not a label to choose. Skarbiec verifies the
-            // redeemer's signature against the workload public key its vault
-            // registered for the agent NAMED IN THE CAPABILITY, and the
-            // acquisition catalog registers one consumer per coordinate. The
-            // constant `weles-worker` this command used to name is registered
-            // nowhere, which is why every redemption answered `no live vault
-            // token registers a workload public key` — the same refusal
-            // `weles_browser_task::scope_consumer` was written for after runs
-            // 18e7cc47 and 47d89182 hit it.
-            let routes = host_capability::routes(&target, &broker, &production_runner()).await?;
-            let scopes = weles_browser_task::host_scopes(
-                &target,
-                weles_browser_task::REGISTERED_SCOPES_FILE,
-                &production_runner(),
-            )
-            .await?;
-            let registered_agent = |resource: &str| -> Result<String, DeployError> {
-                let routed = weles_browser_task::routed_item(&routes, resource)?;
-                weles_browser_task::scope_consumer(&scopes, &routed.item, &routed.field)
-                    .map(str::to_string)
-                    .ok_or_else(|| {
-                        DeployError(format!(
-                            "{}: {} registers no identity for {}/{}, so a capability for \
-                             {resource} could only name an agent this host's vault does not \
-                             know and its broker would deny at fill time",
-                            target.name,
-                            weles_browser_task::REGISTERED_SCOPES_FILE,
-                            routed.item,
-                            routed.field
-                        ))
-                    })
-            };
-            let email_resource = "origin:https://idmsa.apple.com/email";
-            let password_resource = "origin:https://idmsa.apple.com/password";
-            let email_agent = registered_agent(email_resource)?;
-            let password_agent = registered_agent(password_resource)?;
-            let email = issue_apple_capability(
-                &target,
-                &broker,
-                &email_agent,
-                "weles.browser.fill",
-                email_resource,
-                &guard_id,
-                &production_runner(),
-            )
-            .await?;
-            let password = issue_apple_capability(
-                &target,
-                &broker,
-                &password_agent,
-                "weles.browser.fill",
-                password_resource,
-                &guard_id,
-                &production_runner(),
-            )
-            .await?;
-            // A challenge resource routes to no vault field by design - its
-            // value is written later, by the relay - so no catalog row can
-            // name it. It still needs an agent the vault registers, and the
-            // password consumer is the one this run has already proven is
-            // registered against the worker's workload key.
-            let two_factor = issue_apple_capability(
-                &target,
-                &broker,
-                &password_agent,
-                "weles.apple.2fa",
-                &format!("challenge:apple/{guard_id}"),
-                &guard_id,
-                &production_runner(),
-            )
-            .await?;
-            let _action_id = weles_capture::run_action(
-                &channel,
-                APPLE_DEVELOPER_ID_ACTION,
-                json!({
-                    // `login_item`, because that is the key Weles reads.
-                    // dispatch.js resolves `params.login_item ?? params.vault_login_item`
-                    // into WELES_LOGIN_ITEM and has never looked at `account_item`,
-                    // so this parameter arrived, was ignored, and the trajectory
-                    // refused with "invalid Apple account item" before opening a
-                    // browser — every time, since the day it was written.
-                    "login_item": account_item,
-                    "apple_csr_path": format!("{work}/request.csr"),
-                    "apple_certificate_path": format!("{work}/certificate.cer"),
-                    "system_consent": "account-holder-2fa",
-                    "apple_auth_guard_id": guard_id,
-                    "apple_execution_host": target.name,
-                    "apple_execution_agent": execution_agent,
-                    "apple_login_capabilities": {
-                        "email": email,
-                        "password": password,
-                        "two_factor": {
-                            "mode": "capability",
-                            "capability": two_factor,
-                        },
+        let guard_id = uuid::Uuid::new_v4().to_string();
+        let execution_agent = "weles-worker";
+        // Resolved once: all three references must live in the same
+        // broker state the worker's socket is served from, and that
+        // broker is the host's, never this machine's.
+        let broker = host_capability::resolve(
+            &target,
+            &weles_browser_task::weles_api_broker_files(),
+            &production_runner(),
+        )
+        .await?;
+        // The agent is not a label to choose. Skarbiec verifies the
+        // redeemer's signature against the workload public key its vault
+        // registered for the agent NAMED IN THE CAPABILITY, and the
+        // acquisition catalog registers one consumer per coordinate. The
+        // constant `weles-worker` this command used to name is registered
+        // nowhere, which is why every redemption answered `no live vault
+        // token registers a workload public key` — the same refusal
+        // `weles_browser_task::scope_consumer` was written for after runs
+        // 18e7cc47 and 47d89182 hit it.
+        let routes = host_capability::routes(&target, &broker, &production_runner()).await?;
+        let scopes = weles_browser_task::host_scopes(
+            &target,
+            weles_browser_task::REGISTERED_SCOPES_FILE,
+            &production_runner(),
+        )
+        .await?;
+        let registered_agent = |resource: &str| -> Result<String, DeployError> {
+            let routed = weles_browser_task::routed_item(&routes, resource)?;
+            weles_browser_task::scope_consumer(&scopes, &routed.item, &routed.field)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    DeployError(format!(
+                        "{}: {} registers no identity for {}/{}, so a capability for \
+                         {resource} could only name an agent this host's vault does not \
+                         know and its broker would deny at fill time",
+                        target.name,
+                        weles_browser_task::REGISTERED_SCOPES_FILE,
+                        routed.item,
+                        routed.field
+                    ))
+                })
+        };
+        let email_resource = "origin:https://idmsa.apple.com/email";
+        let password_resource = "origin:https://idmsa.apple.com/password";
+        let email_agent = registered_agent(email_resource)?;
+        let password_agent = registered_agent(password_resource)?;
+        let email = issue_apple_capability(
+            &target,
+            &broker,
+            &email_agent,
+            "weles.browser.fill",
+            email_resource,
+            &guard_id,
+            &production_runner(),
+        )
+        .await?;
+        let password = issue_apple_capability(
+            &target,
+            &broker,
+            &password_agent,
+            "weles.browser.fill",
+            password_resource,
+            &guard_id,
+            &production_runner(),
+        )
+        .await?;
+        // A challenge resource routes to no vault field by design - its
+        // value is written later, by the relay - so no catalog row can
+        // name it. It still needs an agent the vault registers, and the
+        // password consumer is the one this run has already proven is
+        // registered against the worker's workload key.
+        let two_factor = issue_apple_capability(
+            &target,
+            &broker,
+            &password_agent,
+            "weles.apple.2fa",
+            &format!("challenge:apple/{guard_id}"),
+            &guard_id,
+            &production_runner(),
+        )
+        .await?;
+        let _action_id = weles_capture::run_action(
+            &channel,
+            APPLE_DEVELOPER_ID_ACTION,
+            json!({
+                // `login_item`, because that is the key Weles reads.
+                // dispatch.js resolves `params.login_item ?? params.vault_login_item`
+                // into WELES_LOGIN_ITEM and has never looked at `account_item`,
+                // so this parameter arrived, was ignored, and the trajectory
+                // refused with "invalid Apple account item" before opening a
+                // browser — every time, since the day it was written.
+                "login_item": account_item,
+                "apple_csr_path": format!("{work}/request.csr"),
+                "apple_certificate_path": format!("{work}/certificate.cer"),
+                "system_consent": "account-holder-2fa",
+                "apple_auth_guard_id": guard_id,
+                "apple_execution_host": target.name,
+                "apple_execution_agent": execution_agent,
+                "apple_login_capabilities": {
+                    "email": email,
+                    "password": password,
+                    "two_factor": {
+                        "mode": "capability",
+                        "capability": two_factor,
                     },
-                }),
-            )
-            .await?;
-            finish_output =
-                host_channel::run_script(&target, &finish, &production_runner()).await?;
-            if !finish_output.ok() {
-                return Err(DeployError(format!(
-                    "{}: Developer ID bundle export failed: {}",
-                    target.name,
-                    command_failure(&finish_output, "remote certificate export failed")
-                )));
-            }
+                },
+            }),
+        )
+        .await?;
+        finish_output = host_channel::run_script(&target, &finish, &production_runner()).await?;
+        if !finish_output.ok() {
+            return Err(DeployError(format!(
+                "{}: Developer ID bundle export failed: {}",
+                target.name,
+                command_failure(&finish_output, "remote certificate export failed")
+            )));
         }
     }
 

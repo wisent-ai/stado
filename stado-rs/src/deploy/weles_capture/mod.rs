@@ -25,10 +25,10 @@
 //!   [`host_channel::ssh_options`](super::host_channel::ssh_options) and holds the ssh process for the length of
 //!   one command, so nothing survives the call on either side. The remote port
 //!   comes from the service directory, never from an operator argument.
-//! - **Status needs no memory of the enqueue.** Each action carries its own
-//!   `artifact_prefix` in its params, so the state report is assembled from the
-//!   worker's action log plus one storage listing. It answers the same on any
-//!   control-plane host, including one that never ran the enqueue.
+//! - **Status is Stado's own record.** The enqueue writes the run id and
+//!   outcome of every capture to `stado://weles-captures/<batch>/batch-record.json`,
+//!   so the state report is that record plus one storage listing. It answers
+//!   the same on any control-plane host and never asks the Weles host.
 
 use std::time::Duration;
 
@@ -42,8 +42,7 @@ mod plan;
 mod receipts;
 
 pub use channel::{
-    checked_account_id, latest_action_log, observe_action_payload, open_channel, resolve_admission,
-    run_action,
+    checked_account_id, observe_action_payload, open_channel, resolve_admission, run_action,
 };
 pub use diagnostics::{image_diagnostics, run_diagnostic_file, run_diagnostics};
 pub use plan::parse_plan;
@@ -78,8 +77,6 @@ const ADMISSION_TOKEN_ITEM: &str = "echo-weles-api";
 const ADMISSION_TOKEN_FIELD: &str = "token";
 
 const RUN_ROUTE: &str = "/run";
-const QUERY_ROUTE: &str = "/v1/echo/action-logs/query";
-const QUERY_LIMIT: usize = 5000;
 const MAX_STEPS: usize = 100;
 
 /// Weles executes browser trajectories synchronously. Planning and running one

@@ -12,7 +12,7 @@ use crate::targets::ComputeTarget;
 use forward::{await_forward, free_loopback_port};
 use token::{read_token, Token};
 
-pub use actions::{checked_account_id, latest_action_log, observe_action_payload, run_action};
+pub use actions::{checked_account_id, observe_action_payload, run_action};
 
 /// Where one host's Weles admission API listens, as the service directory
 /// declares it.
