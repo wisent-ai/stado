@@ -139,16 +139,12 @@ pub(crate) fn committed_file(root: &Path, commit: &str, path: &str) -> Result<Ve
 /// The committed tree as one gzip tar of its regular files.
 ///
 /// `git archive` also writes one entry per directory and a pax global header
-/// naming the commit. Neither carries anything: Git tracks no empty
-/// directory, every extractor in this product creates a file's parents
-/// itself, and the commit is recorded on the object and in the run. What
-/// they did carry was a count - 975 directories at `07fd9ba7`, against a
-/// worker bound of 4,096 entries - and on 2026-09-10 they were what pushed
-/// the 0.20.9 snapshot past the bound every installed worker enforced, so a
-/// tree of 3,255 files was refused as an archive of 4,230 entries. A
-/// snapshot is its files. Anything that is not a file or a directory -
-/// a symlink, a device - is refused here, as every extractor refuses it,
-/// rather than dropped on the way.
+/// naming the commit. Neither carries anything (Git tracks no empty
+/// directory, every extractor creates a file's parents, and the commit is
+/// recorded on the object and in the run), but each counts against the
+/// workers' archive entry bound, so a snapshot is its files alone. Anything
+/// that is not a file or a directory - a symlink, a device - is refused here,
+/// as every extractor refuses it, rather than dropped on the way.
 pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
     let tar = git(root, &["archive", "--format=tar", commit])?;
     let mut gz = GzBuilder::new()
