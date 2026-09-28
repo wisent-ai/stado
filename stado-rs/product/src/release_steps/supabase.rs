@@ -67,24 +67,38 @@ fn local(source: &Path, arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Give the unpacked scratch copy its own `project_id`. The local stack names
-/// its containers and volumes after it, so two verifications of one product on
-/// one worker, or a developer's own local stack of that product, would
-/// otherwise share and stop each other's database.
-fn isolate(source: &Path) -> Result<()> {
+/// Give the unpacked scratch copy its own `project_id` and answer it. The
+/// local stack names its containers and volumes after it, so two
+/// verifications of one product on one worker, or a developer's own local
+/// stack of that product, would otherwise share and stop each other's
+/// database. A config without exactly one `project_id` line is refused: the
+/// CLI would fall back to a shared default name, and the cleanup would stop
+/// a database this run never started.
+fn isolate(source: &Path) -> Result<String> {
     let config = source.join("supabase/config.toml");
     let text = fs::read_to_string(&config)
         .with_context(|| format!("the bundle holds no {}", config.display()))?;
     let scratch = format!("verify-{}", uuid::Uuid::new_v4().simple());
+    let mut replaced = 0;
     let lines: Vec<String> = text
         .lines()
         .map(|line| match line.trim_start().starts_with("project_id") {
-            true => format!("project_id = \"{scratch}\""),
+            true => {
+                replaced += 1;
+                format!("project_id = \"{scratch}\"")
+            }
             false => line.to_owned(),
         })
         .collect();
+    if replaced != 1 {
+        bail!(
+            "{} declares {replaced} project_id lines (one is required to give the scratch \
+             database its own name)",
+            config.display()
+        );
+    }
     fs::write(&config, lines.join("\n") + "\n")?;
-    Ok(())
+    Ok(scratch)
 }
 
 /// `stado product supabase verify`: the post-build test of a supabase-source
@@ -105,13 +119,24 @@ pub fn verify() -> Result<i32> {
     }
     let work = output.join(format!("supabase-verify-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&work)?;
-    safe_unpack(&bundle, &work)?;
-    let source = work.join("source");
-    let started = isolate(&source).and_then(|()| local(&source, &["db", "start"]));
-    let stopped = local(&source, &["stop", "--no-backup"]);
-    fs::remove_dir_all(&work)?;
-    started?;
-    stopped?;
+    let result = (|| -> Result<()> {
+        safe_unpack(&bundle, &work)?;
+        let source = work.join("source");
+        // Only a database this run named can be stopped: until the scratch
+        // project_id is written, nothing was started and nothing is stopped.
+        let scratch = isolate(&source)?;
+        let started = local(&source, &["db", "start"]);
+        let stopped = local(
+            &source,
+            &["stop", "--no-backup", "--project-id", scratch.as_str()],
+        );
+        started?;
+        stopped
+    })();
+    let removed = fs::remove_dir_all(&work)
+        .with_context(|| format!("cannot remove the scratch copy {}", work.display()));
+    result?;
+    removed?;
     println!("every migration in {BUNDLE} applied to a scratch database");
     Ok(0)
 }
