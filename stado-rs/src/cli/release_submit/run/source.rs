@@ -28,6 +28,12 @@ fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, CmdError> {
     }
     Ok(o.stdout)
 }
+
+/// `git` output as text.
+pub(crate) fn git_text(root: &Path, args: &[&str]) -> Result<String, CmdError> {
+    String::from_utf8(git(root, args)?)
+        .map_err(|_| CmdError::click(format!("git {} answered non-UTF-8", args.join(" "))))
+}
 pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<String, CmdError> {
     let commit = match requested {
         Some(commit) => commit.to_owned(),
@@ -107,6 +113,10 @@ pub(crate) fn committed_file(root: &Path, commit: &str, path: &str) -> Result<Ve
     git(root, &["show", &format!("{commit}:{path}")])
 }
 
+/// Permission bits of the provenance record added to a snapshot: owner
+/// read-write, everyone else read, as `git archive` writes a regular file.
+const PROVENANCE_MODE: u32 = 0o644;
+
 /// The committed tree as one gzip tar of its regular files.
 ///
 /// `git archive` also writes one entry per directory and a pax global header
@@ -144,6 +154,18 @@ pub(crate) fn snapshot(root: &Path, commit: &str) -> Result<Vec<u8>, CmdError> {
             }
             let mut header = entry.header().clone();
             files.append_data(&mut header, &path, &mut entry)?;
+        }
+        if let Some(provenance) = super::provenance::record(root, commit)? {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(provenance.len() as u64);
+            header.set_mode(PROVENANCE_MODE);
+            header.set_mtime(u64::default());
+            header.set_cksum();
+            files.append_data(
+                &mut header,
+                super::provenance::PROVENANCE_PATH,
+                &provenance[..],
+            )?;
         }
         files.finish()?;
     }
