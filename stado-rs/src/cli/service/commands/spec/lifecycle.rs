@@ -202,6 +202,13 @@ pub enum LifecycleCommands {
     /// replacement executable and complete rendered plist, then reloads that
     /// definition once and verifies launchd's readback and running executable.
     /// An unreadable retained definition is refused without touching the job.
+    ///
+    /// When the service catalog lists `retired_units` for the service, each of
+    /// them is then booted out on the same host and its autostart withdrawn in
+    /// every launchd domain or systemd manager that still enables it, and
+    /// stderr names what was retired. A unit that cannot be retired fails the
+    /// command after the service itself is running. The autonomy reconciler
+    /// does the same on every pass for each running catalog service.
     Ensure {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,

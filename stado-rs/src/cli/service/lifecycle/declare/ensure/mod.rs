@@ -8,6 +8,7 @@
 use super::*;
 
 mod audit;
+mod predecessors;
 pub(crate) mod program;
 pub(crate) mod run;
 

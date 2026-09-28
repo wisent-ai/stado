@@ -12,6 +12,7 @@
 //! puts a row through the one shared mutation gate.
 
 mod endpoint;
+mod predecessors;
 mod receipts;
 mod reconcilers;
 mod repair;

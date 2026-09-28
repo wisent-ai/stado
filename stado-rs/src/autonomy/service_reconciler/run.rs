@@ -48,6 +48,7 @@ pub async fn reconcile(
     };
     let mut outcomes = Vec::new();
     let mut mutations = usize::default();
+    let replacements = super::predecessors::replacements(&statuses);
 
     for status in statuses {
         let is_beacon = status.service.unit_id().contains("host-health-beacon")
@@ -277,6 +278,8 @@ pub async fn reconcile(
         }
         outcomes.push(outcome);
     }
+    let retired = super::predecessors::retire(&replacements, policy, &runner, &mut summary).await;
+    outcomes.extend(retired);
 
     let report = ServiceReconcileReport {
         schema_version: SCHEMA_VERSION,

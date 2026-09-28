@@ -17,6 +17,8 @@ When a release goes out, move its section into the newest file under
 
 ## Unreleased
 
+- **A unit the catalog lists under a service's `retired_units` is taken down wherever that service runs, not only refused:** `stado service ensure` (and so `stado product install --surface service`) boots each retired unit out on the host it just ensured and withdraws its autostart in every launchd domain or systemd manager that still enables it, and the autonomy reconciler does the same on each pass for every running catalog service. Before this, `retired_units` only stopped Stado from starting such a unit again; on lukasz-macbook the hand-made hourly `com.wisent.transcript-lake-secret-scrub` launch agent, retired in the catalog since 2026-09-27, kept running beside Transcript Lake.
+
 - **The coordinator's disaster-recovery replication runs beside the tick instead of inside it:** each pass runs on its own thread, one at a time, and the loop reports a finished pass and starts the next without waiting (a single `--once` tick still waits for its pass). On charless-mac-mini on 2026-09-28 a pass that failed 32004 objects held the loop for most of half an hour, so the lease reaper ran that rarely and a build whose agent restarted stayed `running` with its release unpublished.
 
 - **`stado release active-binary` answers a host-declared program without a delivery receipt as `declared`, with its reported digest and path, instead of refusing:** the vault owner on charless-mac-mini runs Skarbiec under its own declaration and was never delivered by a release, so the attestation added for Weles refused it and weles-admission stayed down. Weles now checks the file's digest against that answer itself; a receipt that names other bytes is still refused.
