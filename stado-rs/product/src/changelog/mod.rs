@@ -18,6 +18,10 @@ use std::{fs, path::Path};
 const LINE_LIMIT: usize = 300;
 pub const CHANGELOG: &str = "CHANGELOG.md";
 const RANGE_DIRECTORY: &str = "changelog";
+/// Names the files of one release whose entries alone pass the limit, e.g.
+/// `changelog/0.22.16-part-2.md`. A part is filled to the limit, so a later
+/// release never grows or renames one.
+const PART_MARK: &str = "-part-";
 const RELEASED: &str = "## Released";
 const UNRELEASED: &str = "## Unreleased";
 const RANGE_PREAMBLE: &str = "Released entries, moved out of `CHANGELOG.md` so that file stays editable.\nThe current entries live there; this file is history and does not grow.\n";
@@ -68,9 +72,10 @@ pub fn run(root: &Path, version: &str) -> Result<i32> {
     let directory = root.join(RANGE_DIRECTORY);
     let (link_before, link_after, written) = match newest_range(&text) {
         Some((line, name, first))
-            if fs::read_to_string(directory.join(&name))?.lines().count()
-                + section.lines().count()
-                < LINE_LIMIT =>
+            if !name.contains(PART_MARK)
+                && fs::read_to_string(directory.join(&name))?.lines().count()
+                    + section.lines().count()
+                    < LINE_LIMIT =>
         {
             let old = directory.join(&name);
             let range = fs::read_to_string(&old)?;
@@ -89,13 +94,36 @@ pub fn run(root: &Path, version: &str) -> Result<i32> {
             (line, link, renamed)
         }
         newest => {
-            let name = format!("{version}.md");
-            let body = format!("# Changelog {version}\n\n{RANGE_PREAMBLE}\n{section}");
-            crate::common::atomic_write(&directory.join(&name), body.as_bytes())?;
-            let link = format!("- [{version}]({RANGE_DIRECTORY}/{name})");
+            let parts = split_entries(version, &entries);
+            let count = parts.len();
+            let mut links = Vec::with_capacity(count);
+            let mut first_name = String::new();
+            for (index, part) in parts.iter().enumerate() {
+                let (name, title) = if count == 1 {
+                    (format!("{version}.md"), version.to_owned())
+                } else {
+                    let number = index + 1;
+                    (
+                        format!("{version}{PART_MARK}{number}.md"),
+                        format!("{version} (part {number} of {count})"),
+                    )
+                };
+                let body =
+                    format!("# Changelog {title}\n\n{RANGE_PREAMBLE}\n## {version}\n\n{part}\n");
+                crate::common::atomic_write(&directory.join(&name), body.as_bytes())?;
+                links.push(format!("- [{title}]({RANGE_DIRECTORY}/{name})"));
+                if first_name.is_empty() {
+                    first_name = name;
+                }
+            }
+            let link = links.join("\n");
             match newest {
-                Some((line, _, _)) => (line.clone(), format!("{link}\n{line}"), name),
-                None => (RELEASED.to_owned(), format!("{RELEASED}\n\n{link}"), name),
+                Some((line, _, _)) => (line.clone(), format!("{link}\n{line}"), first_name),
+                None => (
+                    RELEASED.to_owned(),
+                    format!("{RELEASED}\n\n{link}"),
+                    first_name,
+                ),
             }
         }
     };
@@ -112,4 +140,33 @@ pub fn run(root: &Path, version: &str) -> Result<i32> {
         "range_file": directory.join(written),
     }))?;
     Ok(0)
+}
+
+/// The entries of one release cut into parts that each fit a range file
+/// under the limit. An entry — a line opening with `- ` or a heading, with
+/// the indented lines under it — is never split across parts.
+fn split_entries(version: &str, entries: &str) -> Vec<String> {
+    let header =
+        format!("# Changelog {version} (part 0 of 0)\n\n{RANGE_PREAMBLE}\n## {version}\n\n");
+    let budget = LINE_LIMIT.saturating_sub(header.lines().count() + 1);
+    let mut blocks: Vec<Vec<&str>> = Vec::new();
+    for line in entries.lines() {
+        match blocks.last_mut() {
+            Some(block) if !(line.starts_with("- ") || line.starts_with('#')) => block.push(line),
+            _ => blocks.push(vec![line]),
+        }
+    }
+    let mut parts: Vec<Vec<&str>> = vec![Vec::new()];
+    for block in blocks {
+        let current = parts.last_mut().expect("parts starts with one part");
+        if !current.is_empty() && current.len() + block.len() > budget {
+            parts.push(block);
+        } else {
+            current.extend(block);
+        }
+    }
+    parts
+        .into_iter()
+        .map(|part| part.join("\n").trim().to_owned())
+        .collect()
 }
