@@ -10,16 +10,17 @@
 //!
 //! The sweep only nominates. Every boot-out goes through the pass's mutation
 //! gate (action limit, live pause and circuit breaker, the unit's lease), and
-//! under that lease the registry is read again and the standby probed again:
-//! a host promoted to the active one since the sweep, a withdrawn standby
-//! address or a port now held by another job stops nothing.
+//! under that lease the registry is read from its authority, uncached, and
+//! the standby probed again: a host promoted to the active one since the
+//! sweep, a withdrawn standby address or a port now held by another job stops
+//! nothing, and an authority that does not answer stops nothing either.
 //!
 //! Only the boot-out is done. The unit file and its autostart stay, because a
 //! move to this host starts the same unit, and a unit that comes back at login
 //! is found by the next sweep and booted out again.
 
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
-use crate::cli::service_verify::Finding;
+use crate::cli::service_verify::{Finding, StandbyRecheck};
 use crate::deploy::service::{self, BootoutScope};
 use crate::deploy::Runner;
 use crate::queue::StorageError;
@@ -53,17 +54,26 @@ enum Stop {
     Stopped(bool, String),
     /// The standby no longer serves, or is no longer a standby: nothing to do.
     Resolved(String),
+    /// The registry authority did not answer, so nothing was concluded.
+    Unjudged(String),
 }
 
 /// Re-check the standby under its lease, then boot its declared unit out.
 async fn stop_one(finding: &Finding, unit: &str, runner: &Runner) -> Result<Stop, String> {
-    let service_name = &finding.service;
-    if let Err(reason) =
-        crate::cli::service_verify::standby_still_serving(service_name, &finding.host).await
-    {
-        return Ok(Stop::Resolved(format!(
-            "re-checked under the lease: {reason}"
-        )));
+    let recheck =
+        crate::cli::service_verify::standby_still_serving(&finding.service, &finding.host, unit);
+    match recheck.await {
+        StandbyRecheck::Serving => {}
+        StandbyRecheck::Settled(reason) => {
+            return Ok(Stop::Resolved(format!(
+                "re-checked under the lease: {reason}"
+            )))
+        }
+        StandbyRecheck::Unjudged(reason) => {
+            return Ok(Stop::Unjudged(format!(
+                "not stopped, re-check under the lease was refused: {reason}"
+            )))
+        }
     }
     let target = crate::deploy::host_channel::canonical_target(&finding.host)
         .await
@@ -95,13 +105,15 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
     if serving.is_empty() {
         return Ok(outcomes);
     }
-    let registry = match crate::targets::fetch_registry_or_last_good().await {
-        Ok((registry, _)) => registry,
+    // The unit a destructive action names comes from the authority itself;
+    // a cached or last-known-good copy may name a host promoted since.
+    let registry = match crate::targets::fetch_registry_authoritative().await {
+        Ok(registry) => registry,
         Err(error) => {
             for finding in serving {
-                summary.failures += 1;
-                let detail = format!("registry unreadable, standby not stopped: {error}");
-                outcomes.push(row(finding, "", "repair_failed", false, detail));
+                summary.blocked += 1;
+                let detail = format!("registry authority did not answer, not stopped: {error}");
+                outcomes.push(row(finding, "", "stop_unjudged", false, detail));
             }
             return Ok(outcomes);
         }
@@ -150,6 +162,10 @@ pub(in crate::autonomy::service_reconciler) async fn stop_serving_standbys(
             // is neither a change nor a failure the circuit breaker counts.
             Ok(Stop::Resolved(detail)) => {
                 outcomes.push(row(finding, unit, "resolved", false, detail));
+            }
+            Ok(Stop::Unjudged(detail)) => {
+                summary.blocked += 1;
+                outcomes.push(row(finding, unit, "stop_unjudged", false, detail));
             }
             Err(error) => {
                 summary.failures += 1;

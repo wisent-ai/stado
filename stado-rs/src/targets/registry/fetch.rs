@@ -126,6 +126,16 @@ pub async fn fetch_registry_remote() -> Result<Registry, RegistryFetchError> {
             return Ok(registry.clone());
         }
     }
+    fetch_registry_authoritative().await
+}
+
+/// The canonical registry read from the authority now, never from the
+/// in-process cache, the last-known-good copy or the bundled file; a
+/// successful read refreshes the cache. For a caller about to take a
+/// destructive decision from the document (stopping a unit because this
+/// host is only a standby): the error is the refusal, because a copy of any
+/// age can name a host that has since been promoted.
+pub async fn fetch_registry_authoritative() -> Result<Registry, RegistryFetchError> {
     let fetched = fetch_registry_remote_uncached().await;
     if let Ok(registry) = &fetched {
         *REGISTRY_CACHE.lock().expect("registry cache lock") =
