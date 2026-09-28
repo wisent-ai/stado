@@ -140,22 +140,38 @@ local_evidence() {
 # A path a unit definition on this host names is an installed service program,
 # not scratch, wherever it lives: the unit runs it again on its next start,
 # so it is kept while the service is down or crash-looping and no process
-# names it. Units are read once per candidate from every init scope.
+# names it. Units are read once per candidate from every init scope. Answers
+# 0 named, 1 named by no unit, 2 when a unit scope could not be read: grep's
+# own error status, so an unreadable definition never reads as absence.
 unit_named() {
   for units in /Library/LaunchDaemons "$HOME/Library/LaunchAgents" /etc/systemd/system "$HOME/.config/systemd/user"; do
     [ -d "$units" ] || continue
-    /usr/bin/grep -rqsF -- "$1" "$units" && return 0
+    /usr/bin/grep -rqsF -- "$1" "$units"
+    case $? in
+      0) return 0 ;;
+      1) ;;
+      *) return 2 ;;
+    esac
   done
   return 1
 }
 
 # The only place anything is removed. A held or unit-named path is skipped
-# silently -- it is not a failure, it is the rule -- and in dry-run mode the
-# path is reported without being touched, so a preview names exactly what an
-# apply would take.
+# silently -- it is not a failure, it is the rule. A path whose unit scopes
+# could not be read is kept and reported as refused, since absence was never
+# proven. In dry-run mode the path is reported without being touched, so a
+# preview names exactly what an apply would take.
 reclaim() {
   if held "$1"; then return 1; fi
-  if unit_named "$1"; then return 1; fi
+  unit_named "$1"
+  case $? in
+    1) ;;
+    0) return 1 ;;
+    *)
+      printf 'STADO_RECLAIM_REFUSED\t%s\t%s\t%s\n' "$2" "$1" 'unit definitions could not be read; retained'
+      return 1
+      ;;
+  esac
   if [ "$apply" = 1 ]; then
     /bin/rm -rf -- "$1" 2>/dev/null || return 1
   fi
