@@ -87,6 +87,13 @@ pub fn shared_for_install(
     Ok((strict, siblings))
 }
 
+/// Whether a sibling surface records `path` among its installed files.
+pub fn sibling_owns(siblings: &[state::ProductState], path: &Path) -> bool {
+    siblings
+        .iter()
+        .any(|sibling| sibling.installed_paths.iter().any(|owned| owned == path))
+}
+
 /// A sibling surface installed from the same recipe owned some of the paths
 /// this install just replaced: its receipt now names this install's source
 /// revision and the new fingerprints of those paths, so its own verification

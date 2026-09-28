@@ -123,9 +123,7 @@ pub fn commit(
                     .filter(|path| {
                         !selected.contains(*path)
                             && !ownership::overlaps(path, &shared)
-                            && !siblings
-                                .iter()
-                                .any(|sibling| sibling.installed_paths.contains(*path))
+                            && !ownership::sibling_owns(&siblings, path)
                     })
                     .cloned()
                     .collect()
