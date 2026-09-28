@@ -141,14 +141,14 @@ async fn declared_binary(
             row.version
         )));
     }
-    // Attested, not merely declared: the signed release of that version, and
-    // the receipt its delivery left on this host, must both name these bytes.
-    // Weles refuses a Skarbiec with no signed release digests, so a
-    // `declared` answer kept weles-admission down on charless-mac-mini on
-    // 2026-09-27 even after this command stopped refusing.
+    // Attested when it can be: the signed release of that version, and the
+    // receipt its delivery left on this host, both name these bytes. A
+    // program the host runs under its own declaration with no delivery on
+    // this host (the vault owner on charless-mac-mini) is answered as
+    // `declared` with its reported digest and path, and the caller checks the
+    // bytes itself: refusing it kept weles-admission down (641f08db). A
+    // receipt that names other bytes is still refused.
     let platform = target.release_platform.as_str();
-    let artifact =
-        crate::cli::release_cmd::verified_artifact_for_submit(product, declared, platform).await?;
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| {
@@ -160,17 +160,29 @@ async fn declared_binary(
         .join(declared)
         .join(platform)
         .join("release-receipt.json");
-    let receipt: serde_json::Value = std::fs::read(&receipt_path)
+    let receipt: Option<serde_json::Value> = std::fs::read(&receipt_path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{target_name} runs {product} {declared} at {}, and no delivery receipt at {} \
-                 attests it; deliver the release to this host so it records one",
-                row.path,
-                receipt_path.display()
-            ))
-        })?;
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let Some(receipt) = receipt else {
+        if as_json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "state": "declared",
+                    "product": product,
+                    "target": target_name,
+                    "version": declared,
+                    "sha256": row.sha256,
+                    "path": row.path,
+                }))?
+            );
+        } else {
+            println!("{}", row.path);
+        }
+        return Ok(());
+    };
+    let artifact =
+        crate::cli::release_cmd::verified_artifact_for_submit(product, declared, platform).await?;
     let archive = receipt["sha256"].as_str().unwrap_or_default();
     let installed = receipt["artifact_sha256"].as_str().unwrap_or_default();
     if archive != artifact.artifact_sha256 || installed != row.sha256 {
