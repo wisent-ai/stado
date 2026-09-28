@@ -22,27 +22,47 @@ pub fn load(root: &Path, name: &str) -> Result<Value> {
         .with_context(|| format!("reading release manifest {}", path.display()))
 }
 
+/// Reads the version a release manifest's `version_source` declares, with the
+/// same three kinds the release pipeline accepts (`json`, `regex`, `text`), so
+/// every product the fleet can release can also be installed from source.
 pub fn version(root: &Path, document: &Value) -> Result<String> {
     let source = &document["version_source"];
-    if source["kind"] != "regex" {
-        bail!("release manifest has no supported regex version_source");
-    }
+    let kind = text(source, "kind")?;
     let path = inside(root, text(source, "path")?)?;
-    let pattern = regex::Regex::new(text(source, "pattern")?)?;
-    let content = fs::read_to_string(&path)?;
-    let version = pattern
-        .captures(&content)
-        .and_then(|m| m.name("version"))
-        .map(|v| v.as_str().to_owned())
-        .with_context(|| {
-            format!(
-                "release version pattern did not capture version in {}",
-                path.display()
-            )
-        })?;
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("reading version source {}", path.display()))?;
+    let version = match kind {
+        "json" => {
+            let pointer = text(source, "pointer")?;
+            let parsed: Value = serde_json::from_str(&content)
+                .with_context(|| format!("version source {} is not JSON", path.display()))?;
+            parsed
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .with_context(|| {
+                    format!(
+                        "version source {} pointer {pointer:?} is not a string",
+                        path.display()
+                    )
+                })?
+        }
+        "regex" => regex::Regex::new(text(source, "pattern")?)?
+            .captures(&content)
+            .and_then(|m| m.name("version"))
+            .map(|v| v.as_str().to_owned())
+            .with_context(|| {
+                format!(
+                    "release version pattern did not capture version in {}",
+                    path.display()
+                )
+            })?,
+        "text" => content.trim().to_owned(),
+        other => bail!("release manifest version_source kind {other:?} is not json, regex or text"),
+    };
     if version.is_empty() {
         bail!(
-            "release version pattern returned an empty version in {}",
+            "release version source returned an empty version in {}",
             path.display()
         );
     }
