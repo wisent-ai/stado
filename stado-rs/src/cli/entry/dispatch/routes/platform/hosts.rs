@@ -110,8 +110,13 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                 reclaim: reclaim == "yes",
                 apply: reclaim == "yes" && apply == "yes",
             };
-            crate::deploy::host_backup_audit::local::run(&pass);
-            Ok(())
+            if crate::deploy::host_backup_audit::local::run(&pass) {
+                Ok(())
+            } else {
+                Err(crate::cli::CmdError::click(
+                    "the backup audit was refused before reading either store",
+                ))
+            }
         }
         HostStateCommands::StorageRootReconcileWorker {
             target,

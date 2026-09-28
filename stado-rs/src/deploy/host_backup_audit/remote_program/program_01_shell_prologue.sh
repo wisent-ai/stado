@@ -29,4 +29,10 @@ printf 'STADO_BACKUP_FREE\t%s\t%s\n' 'before' "$(free_kb)"
   --reclaim '@RECLAIM@' \
   --apply '@APPLY@' \
   --objects-hex '@OBJECTS_HEX@' \
-  --inventory-namespaces-hex '@INVENTORY_NAMESPACES_HEX@'
+  --inventory-namespaces-hex '@INVENTORY_NAMESPACES_HEX@' || {
+  # A refused or failed pass prunes nothing: the epilogue below deletes
+  # emptied directories under the replica root and runs only after a pass
+  # that completed.
+  printf 'STADO_BACKUP_AUDIT_UNAVAILABLE\t%s\n' 'the pass did not complete; nothing was pruned'
+  exit 0
+}

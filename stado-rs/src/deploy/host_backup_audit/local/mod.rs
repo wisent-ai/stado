@@ -253,14 +253,16 @@ fn classify(pass: &LocalPass) {
     emit("STADO_BACKUP_AUDIT_END\tclassified".into());
 }
 
-/// The whole host half, in the order the operator side reads it.
-pub fn run(pass: &LocalPass) {
+/// The whole host half, in the order the operator side reads it. False when
+/// the pass was refused before anything was read, so the caller exits
+/// nonzero and the remote program stops before its pruning epilogue.
+pub fn run(pass: &LocalPass) -> bool {
     if let Some(detail) = roots::overlapping(&pass.backup, &pass.primary) {
         emit(format!(
             "STADO_BACKUP_AUDIT_UNAVAILABLE\t{}",
             one_line(&detail)
         ));
-        return;
+        return false;
     }
     emit_namespaces("local_storage", &pass.primary);
     emit_namespaces("local_backup", &pass.backup);
@@ -269,14 +271,15 @@ pub fn run(pass: &LocalPass) {
         if complete {
             emit("STADO_BACKUP_AUDIT_END\tinventory".into());
         }
-        return;
+        return true;
     }
     if !pass.objects.is_empty() {
         exact(pass);
         if complete {
             emit("STADO_BACKUP_AUDIT_END\texact".into());
         }
-        return;
+        return true;
     }
     classify(pass);
+    true
 }
