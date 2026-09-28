@@ -36,7 +36,7 @@ pub(crate) async fn store_vault_item(
     payload: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let report = write_vault_item(target, item, item_type, payload).await?;
+    let report = write_vault_item(target, item, item_type, payload, false).await?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -55,11 +55,17 @@ pub(crate) async fn store_vault_item(
 /// Write one item and return its encrypted-record report (target, item, kind,
 /// before and after state and revision) instead of printing it, for a caller
 /// whose own output is a single JSON document.
+///
+/// With `if_absent` the owner's Skarbiec creates the item only when no live
+/// item has that id (`set-json --if-absent`, decided and written under one
+/// vault generation, so of two concurrent creators only one writes); an
+/// existing item is left as it is and reported with `created: false`.
 pub(crate) async fn write_vault_item(
     target: &str,
     item: &str,
     item_type: &str,
     payload: &str,
+    if_absent: bool,
 ) -> Result<Value, CmdError> {
     vault_word("vault item", item)?;
     vault_word("credential type", item_type)?;
@@ -91,7 +97,7 @@ pub(crate) async fn write_vault_item(
     let tool_path = skarbiec_tool_path(&home);
     let vault_environment = format!("SKARBIEC_VAULT_FILE={vault}");
     let gnupg_environment = format!("GNUPGHOME={gnupg_home}");
-    let invocation = [
+    let mut invocation = vec![
         "/usr/bin/env",
         tool_path.as_str(),
         gnupg_environment.as_str(),
@@ -102,6 +108,9 @@ pub(crate) async fn write_vault_item(
         "--type",
         item_type,
     ];
+    if if_absent {
+        invocation.push("--if-absent");
+    }
 
     let before = read_vault_phase(&resolved, &vault, item, &runner)
         .await
@@ -121,10 +130,16 @@ pub(crate) async fn write_vault_item(
             crate::deploy::host_channel::last_error_line(&stored, "remote command failed")
         )));
     }
+    // A Skarbiec older than `--if-absent` answers without `created`; its
+    // write is taken as a creation, which is what it did.
+    let created = serde_json::from_str::<Value>(&stored.stdout)
+        .ok()
+        .and_then(|answer| answer.get("created").and_then(Value::as_bool))
+        .unwrap_or(true);
     let after = read_vault_phase(&resolved, &vault, item, &runner)
         .await
         .map_err(CmdError::click)?;
-    if after.state != "active" || after.revision == before.revision {
+    if created && (after.state != "active" || after.revision == before.revision) {
         return Err(CmdError::click(format!(
             "{}: {item} write was not visible in the encrypted vault",
             resolved.name
@@ -132,6 +147,7 @@ pub(crate) async fn write_vault_item(
     }
 
     Ok(json!({
+        "created": created,
         "target": resolved.name,
         "item": item,
         "kind": item_type,

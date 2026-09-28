@@ -89,24 +89,26 @@ pub async fn vault_token_mint(
     if replace_capabilities {
         arguments.push(String::from("--replace-capabilities"));
     }
-    // --store-item writes the bearer into the owner-vault item first and then
-    // registers that stored value, so a failed or repeated run never leaves a
-    // registered bearer that no item holds: a retry finds the item and
-    // registers the same value again.
+    // --store-item creates the item on the owner only when it is absent
+    // (`set-json --if-absent`, one vault generation, so of two concurrent runs
+    // only one writes) and then registers whatever value the item holds. A
+    // failed, repeated or concurrent run therefore never leaves a registered
+    // bearer that no item holds, nor overwrites a bearer already registered.
     let mut stored = None;
     if let Some(item) = store_item {
-        if crate::cli::host::vault_item_state(target, item).await? == "absent" {
-            // The canonical item envelope Skarbiec's `set-json` accepts, the
-            // same one the release publisher writes for its own bearer.
-            let payload = json!({
-                "schema": "skarbiec.item.v2",
-                "kind": "token",
-                "fields": { "token": crate::cli::release_catalog::fresh_bearer() },
-                "context": { "consumer": consumer, "audience": audience },
-            })
-            .to_string();
-            stored =
-                Some(crate::cli::host::write_vault_item(target, item, "token", &payload).await?);
+        // The canonical item envelope Skarbiec's `set-json` accepts, the same
+        // one the release publisher writes for its own bearer.
+        let payload = json!({
+            "schema": "skarbiec.item.v2",
+            "kind": "token",
+            "fields": { "token": crate::cli::release_catalog::fresh_bearer() },
+            "context": { "consumer": consumer, "audience": audience },
+        })
+        .to_string();
+        let report =
+            crate::cli::host::write_vault_item(target, item, "token", &payload, true).await?;
+        if report["created"].as_bool() == Some(true) {
+            stored = Some(report);
         }
     }
     let token_source = token_item
