@@ -21,9 +21,9 @@ impl<'a> Row<'a> {
         T: TryGetable,
     {
         let column = index.to_string();
-        self.0
-            .try_get_by::<T, I>(index)
-            .map_err(|error| Error::Conversion(format!("column {column} could not be read: {error}")))
+        self.0.try_get_by::<T, I>(index).map_err(|error| {
+            Error::Conversion(format!("column {column} could not be read: {error}"))
+        })
     }
 
     /// One column as the first JSON value its stored type decodes to.

@@ -70,9 +70,21 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         package.version, binaries
     );
     Ok(vec![
-        Planned { path: checkout.join(PRODUCT_MANIFEST), text, executable: false },
-        Planned { path: checkout.join("release/build.sh"), text: fill(CARGO_BUILD, &values), executable: true },
-        Planned { path: checkout.join("release/test.sh"), text: fill(CARGO_TEST, &values), executable: true },
+        Planned {
+            path: checkout.join(PRODUCT_MANIFEST),
+            text,
+            executable: false,
+        },
+        Planned {
+            path: checkout.join("release/build.sh"),
+            text: fill(CARGO_BUILD, &values),
+            executable: true,
+        },
+        Planned {
+            path: checkout.join("release/test.sh"),
+            text: fill(CARGO_TEST, &values),
+            executable: true,
+        },
     ])
 }
 
@@ -91,7 +103,13 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
         )));
     }
     let output = std::process::Command::new("cargo")
-        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
         .arg(&manifest)
         .output()
         .map_err(|error| CmdError::click(format!("cargo metadata could not start: {error}")))?;
@@ -102,8 +120,9 @@ pub(super) fn read(checkout: &Path) -> Result<Package, CmdError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let metadata: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| CmdError::click(format!("cargo metadata answered unreadable JSON: {error}")))?;
+    let metadata: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        CmdError::click(format!("cargo metadata answered unreadable JSON: {error}"))
+    })?;
     let root = std::fs::canonicalize(&manifest)?;
     let package = metadata["packages"]
         .as_array()

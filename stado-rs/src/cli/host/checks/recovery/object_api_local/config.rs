@@ -47,7 +47,10 @@ pub(super) fn real(value: &str, home: &Path) -> PathBuf {
     let mut prefix = path.clone();
     let mut tail = Vec::new();
     while !prefix.exists() {
-        match (prefix.file_name().map(|name| name.to_os_string()), prefix.parent()) {
+        match (
+            prefix.file_name().map(|name| name.to_os_string()),
+            prefix.parent(),
+        ) {
             (Some(name), Some(parent)) => {
                 tail.push(name);
                 prefix = parent.to_path_buf();
@@ -71,13 +74,18 @@ fn env(name: &str) -> Option<String> {
 }
 
 pub(super) fn text<'a>(document: &'a Value, pointer: &str) -> &'a str {
-    document.pointer(pointer).and_then(Value::as_str).unwrap_or("")
+    document
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 /// The host config, or `None` when it cannot be read at all; a readable
 /// file that is not JSON is a refusal.
 fn config(path: &Path) -> Result<Option<Value>, String> {
-    let Ok(bytes) = std::fs::read(path) else { return Ok(None) };
+    let Ok(bytes) = std::fs::read(path) else {
+        return Ok(None);
+    };
     serde_json::from_slice(&bytes)
         .map(Some)
         .map_err(|error| format!("object API recovery refused: {}: {error}", path.display()))
@@ -100,7 +108,11 @@ pub(super) fn paths(config_path: &Path) -> Result<String, String> {
         .unwrap_or_else(|| home.join(".stado/local-backup").display().to_string());
     let or = |pointer: &str, default: String| {
         let value = text(&document, pointer);
-        if value.is_empty() { default } else { value.to_string() }
+        if value.is_empty() {
+            default
+        } else {
+            value.to_string()
+        }
     };
     let token = match text(&document, "/storage/stado/token_file") {
         "" => home.join(".stado/queue-object-api-token"),
@@ -145,21 +157,48 @@ pub(super) fn render(installed: &Path, staged: &Path, wanted: &Definition) -> Re
         ("PATH", LAUNCHD_PATH.to_string()),
         ("STADO_CONFIG", wanted.config.to_string()),
         ("GNUPGHOME", format!("{home}/.gnupg")),
-        ("SKARBIEC_VAULT_FILE", format!("{home}/.stado/skarbiec.vault.json")),
-        ("WC_OBJECT_SKARBIEC_TOKEN_FILE", format!("{home}/.stado/stado-object-api-verifier-skarbiec-token")),
-        ("WC_RELEASE_SKARBIEC_TOKEN_FILE", format!("{home}/.stado/stado-release-api-verifier-skarbiec-token")),
+        (
+            "SKARBIEC_VAULT_FILE",
+            format!("{home}/.stado/skarbiec.vault.json"),
+        ),
+        (
+            "WC_OBJECT_SKARBIEC_TOKEN_FILE",
+            format!("{home}/.stado/stado-object-api-verifier-skarbiec-token"),
+        ),
+        (
+            "WC_RELEASE_SKARBIEC_TOKEN_FILE",
+            format!("{home}/.stado/stado-release-api-verifier-skarbiec-token"),
+        ),
         ("WC_STORAGE_BACKEND", "local".to_string()),
         ("WC_LOCAL_STORAGE_PATH", wanted.store.to_string()),
         ("WC_BACKUP_STORAGE_BACKEND", "local".to_string()),
-        ("WC_BACKUP_LOCAL_STORAGE_PATH", wanted.backup_store.to_string()),
+        (
+            "WC_BACKUP_LOCAL_STORAGE_PATH",
+            wanted.backup_store.to_string(),
+        ),
     ];
     for (key, value) in owned {
         environment.insert(key.to_string(), Plist::String(value));
     }
-    let arguments = [wanted.program, "dashboard", "--bind", "127.0.0.1", "--port", OBJECT_API_PORT];
+    let arguments = [
+        wanted.program,
+        "dashboard",
+        "--bind",
+        "127.0.0.1",
+        "--port",
+        OBJECT_API_PORT,
+    ];
     let settings: [(&str, Plist); 8] = [
         ("Label", Plist::String(wanted.label.to_string())),
-        ("ProgramArguments", Plist::Array(arguments.iter().map(|arg| Plist::String(arg.to_string())).collect())),
+        (
+            "ProgramArguments",
+            Plist::Array(
+                arguments
+                    .iter()
+                    .map(|arg| Plist::String(arg.to_string()))
+                    .collect(),
+            ),
+        ),
         ("EnvironmentVariables", Plist::Dictionary(environment)),
         ("RunAtLoad", Plist::Boolean(true)),
         ("KeepAlive", Plist::Boolean(true)),
@@ -194,11 +233,18 @@ fn truthy(value: &Value) -> bool {
 /// The running server's own operator state says its object boundary is
 /// ready and carries no error.
 pub(super) fn boundary_ready(state: &Path) -> bool {
-    let Some(document) = std::fs::read(state).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()) else {
+    let Some(document) = std::fs::read(state)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
         return false;
     };
-    let boundary = document.pointer("/boundaries/object").cloned().unwrap_or(Value::Null);
-    boundary.get("ready") == Some(&Value::Bool(true)) && !boundary.get("last_error").is_some_and(truthy)
+    let boundary = document
+        .pointer("/boundaries/object")
+        .cloned()
+        .unwrap_or(Value::Null);
+    boundary.get("ready") == Some(&Value::Bool(true))
+        && !boundary.get("last_error").is_some_and(truthy)
 }
 
 pub(super) fn dictionary(value: Option<Plist>) -> Dictionary {

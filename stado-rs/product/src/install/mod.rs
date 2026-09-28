@@ -229,7 +229,11 @@ pub fn perform(
                     let mut index = 0;
                     while index < words.len() {
                         let is_option = words[index].starts_with("--");
-                        if is_option && words.get(index + 1).is_some_and(|value| is_placeholder(value)) {
+                        if is_option
+                            && words
+                                .get(index + 1)
+                                .is_some_and(|value| is_placeholder(value))
+                        {
                             index += 2;
                             continue;
                         }

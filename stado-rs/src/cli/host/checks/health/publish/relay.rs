@@ -48,7 +48,11 @@ async fn beacon_age(client: &reqwest::Client, base: &str, token: &str, slug: &st
     Some((Utc::now() - reported.with_timezone(&Utc)).num_milliseconds() as f64 / 1000.0)
 }
 
-pub async fn beacon_stale(api_url: &str, token_file: &str, fresh_seconds: f64) -> Result<(), CmdError> {
+pub async fn beacon_stale(
+    api_url: &str,
+    token_file: &str,
+    fresh_seconds: f64,
+) -> Result<(), CmdError> {
     let base = api_url.trim_end_matches('/');
     let token = std::fs::read_to_string(token_file)
         .map(|text| text.trim().to_string())
@@ -56,12 +60,25 @@ pub async fn beacon_stale(api_url: &str, token_file: &str, fresh_seconds: f64) -
     let document = crate::cli::registry::fetch_document().await?;
     let client = crate::cli::storage::fleet_https_client()?;
     let mut stale = Vec::new();
-    for target in document.get("targets").and_then(Value::as_array).into_iter().flatten() {
+    for target in document
+        .get("targets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         let name = target.get("name").and_then(Value::as_str).unwrap_or("");
         let mut spellings = vec![name.to_string()];
-        for hostname in target.get("hostnames").and_then(Value::as_array).into_iter().flatten() {
+        for hostname in target
+            .get("hostnames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             let hostname = hostname.as_str().unwrap_or("").to_lowercase();
-            let slug = hostname.strip_suffix(".local").unwrap_or(&hostname).to_string();
+            let slug = hostname
+                .strip_suffix(".local")
+                .unwrap_or(&hostname)
+                .to_string();
             if !spellings.contains(&slug) {
                 spellings.push(slug);
             }

@@ -10,97 +10,39 @@
 //! are here, with `params!` binding values of mixed types.
 
 mod bind;
+mod error;
 mod row;
 
-use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, QueryResult, SqlErr,
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, QueryResult,
     Statement as SeaStatement, TransactionTrait,
 };
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
 
 pub use bind::{Bind, NullOf, Params, Values};
+pub use error::{Error, OptionalExtension, Result};
 pub use row::Row;
 
 use crate::FleetDatabase;
 
-#[derive(Debug)]
-pub enum Error {
-    /// A statement that must answer one row answered none.
-    NoRows,
-    Database(DbErr),
-    /// A stored value does not fit the Rust type it is read as.
-    Conversion(String),
-}
-
-impl Error {
-    /// The statement hit a unique constraint: the row already exists.
-    pub fn is_unique_violation(&self) -> bool {
-        matches!(self, Self::Database(error) if matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))))
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoRows => formatter.write_str("the fleet database answered no row"),
-            Self::Database(error) => write!(formatter, "the fleet database refused: {error}"),
-            Self::Conversion(detail) => formatter.write_str(detail),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Database(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
-impl From<DbErr> for Error {
-    fn from(error: DbErr) -> Self {
-        Self::Database(error)
-    }
-}
-
-impl From<std::num::TryFromIntError> for Error {
-    fn from(error: std::num::TryFromIntError) -> Self {
-        Self::Conversion(format!("a stored integer does not fit: {error}"))
-    }
-}
-
-pub type Result<T, E = Error> = std::result::Result<T, E>;
-
-/// Turns "no row" into `None` for statements whose row may be absent.
-pub trait OptionalExtension<T> {
-    fn optional(self) -> Result<Option<T>>;
-}
-
-impl<T> OptionalExtension<T> for Result<T> {
-    fn optional(self) -> Result<Option<T>> {
-        match self {
-            Ok(value) => Ok(Some(value)),
-            Err(Error::NoRows) => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-}
-
 /// Run `work` on `runtime` and wait for its answer; `None` if the task
 /// stopped without one.
-fn wait<T: Send + 'static>(runtime: &Runtime, work: impl Future<Output = T> + Send + 'static) -> Option<T> {
+fn wait<T: Send + 'static>(
+    runtime: &Runtime,
+    work: impl Future<Output = T> + Send + 'static,
+) -> Option<T> {
     let (sender, receiver) = std::sync::mpsc::channel();
     runtime.spawn(async move {
         let _ = sender.send(work.await);
     });
     let receive = move || receiver.recv().ok();
     match Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => tokio::task::block_in_place(receive),
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(receive)
+        }
         _ => receive(),
     }
 }
@@ -133,26 +75,39 @@ impl Client {
             .thread_name("stado-database")
             .enable_all()
             .build()
-            .map_err(|error| crate::Error::new("connect", format!("the database runtime could not start: {error}")))?;
+            .map_err(|error| {
+                crate::Error::new(
+                    "connect",
+                    format!("the database runtime could not start: {error}"),
+                )
+            })?;
         let fleet = database.clone();
-        let connection = wait(&runtime, async move { crate::connect(&fleet).await })
-            .ok_or_else(|| crate::Error::new("connect", "the connecting task stopped before it answered"))??;
-        Ok(Self { runtime, connection })
+        let connection =
+            wait(&runtime, async move { crate::connect(&fleet).await }).ok_or_else(|| {
+                crate::Error::new("connect", "the connecting task stopped before it answered")
+            })??;
+        Ok(Self {
+            runtime,
+            connection,
+        })
     }
 
     /// Several statements without parameters, as a schema file holds them.
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
         let connection = self.connection.clone();
         let sql = sql.to_owned();
-        wait(&self.runtime, async move { connection.execute_unprepared(&sql).await.map(drop) })
-            .ok_or_else(stopped)??;
+        wait(&self.runtime, async move {
+            connection.execute_unprepared(&sql).await.map(drop)
+        })
+        .ok_or_else(stopped)??;
         Ok(())
     }
 
     /// A transaction: committed by `commit`, rolled back when dropped without it.
     pub fn transaction(&self) -> Result<Tx<'_>> {
         let connection = self.connection.clone();
-        let transaction = wait(&self.runtime, async move { connection.begin().await }).ok_or_else(stopped)??;
+        let transaction =
+            wait(&self.runtime, async move { connection.begin().await }).ok_or_else(stopped)??;
         Ok(Tx {
             client: self,
             transaction: Some(Arc::new(transaction)),
@@ -175,12 +130,19 @@ impl Client {
 impl Run for Client {
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
         let connection = self.connection.clone();
-        Ok(wait(&self.runtime, async move { connection.query_all(statement).await }).ok_or_else(stopped)??)
+        Ok(wait(&self.runtime, async move {
+            connection.query_all(statement).await
+        })
+        .ok_or_else(stopped)??)
     }
 
     fn exec(&self, statement: SeaStatement) -> Result<u64> {
         let connection = self.connection.clone();
-        let done = wait(&self.runtime, async move { connection.execute(statement).await }).ok_or_else(stopped)??;
+        let done = wait(
+            &self.runtime,
+            async move { connection.execute(statement).await },
+        )
+        .ok_or_else(stopped)??;
         Ok(done.rows_affected())
     }
 }
@@ -199,14 +161,20 @@ impl Tx<'_> {
     }
 
     fn owned(&mut self) -> Option<DatabaseTransaction> {
-        self.transaction.take().and_then(|held| Arc::try_unwrap(held).ok())
+        self.transaction
+            .take()
+            .and_then(|held| Arc::try_unwrap(held).ok())
     }
 
     pub fn commit(mut self) -> Result<()> {
         let transaction = self
             .owned()
             .ok_or_else(|| Error::Conversion("the transaction is still in use".to_owned()))?;
-        wait(&self.client.runtime, async move { transaction.commit().await }).ok_or_else(stopped)??;
+        wait(
+            &self.client.runtime,
+            async move { transaction.commit().await },
+        )
+        .ok_or_else(stopped)??;
         Ok(())
     }
 }
@@ -214,7 +182,10 @@ impl Tx<'_> {
 impl Drop for Tx<'_> {
     fn drop(&mut self) {
         if let Some(transaction) = self.owned() {
-            let _ = wait(&self.client.runtime, async move { transaction.rollback().await });
+            let _ = wait(
+                &self.client.runtime,
+                async move { transaction.rollback().await },
+            );
         }
     }
 }
@@ -222,13 +193,18 @@ impl Drop for Tx<'_> {
 impl Run for Tx<'_> {
     fn rows(&self, statement: SeaStatement) -> Result<Vec<QueryResult>> {
         let transaction = self.held()?;
-        Ok(wait(&self.client.runtime, async move { transaction.query_all(statement).await }).ok_or_else(stopped)??)
+        Ok(wait(&self.client.runtime, async move {
+            transaction.query_all(statement).await
+        })
+        .ok_or_else(stopped)??)
     }
 
     fn exec(&self, statement: SeaStatement) -> Result<u64> {
         let transaction = self.held()?;
-        let done = wait(&self.client.runtime, async move { transaction.execute(statement).await })
-            .ok_or_else(stopped)??;
+        let done = wait(&self.client.runtime, async move {
+            transaction.execute(statement).await
+        })
+        .ok_or_else(stopped)??;
         Ok(done.rows_affected())
     }
 }
@@ -270,7 +246,11 @@ pub struct Statement<'r, R: ?Sized> {
 }
 
 impl<R: Run> Statement<'_, R> {
-    pub fn query_map<T, F>(&mut self, params: impl Params, mut map: F) -> Result<std::vec::IntoIter<Result<T>>>
+    pub fn query_map<T, F>(
+        &mut self,
+        params: impl Params,
+        mut map: F,
+    ) -> Result<std::vec::IntoIter<Result<T>>>
     where
         F: FnMut(&Row<'_>) -> Result<T>,
     {

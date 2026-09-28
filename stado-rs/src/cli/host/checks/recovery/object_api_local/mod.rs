@@ -109,14 +109,28 @@ fn answer(result: Result<String, String>) -> Result<(), CmdError> {
 }
 
 fn verdict(holds: bool) -> Result<(), CmdError> {
-    if holds { Ok(()) } else { Err(CmdError::silent(CLICK_ERROR_CODE)) }
+    if holds {
+        Ok(())
+    } else {
+        Err(CmdError::silent(CLICK_ERROR_CODE))
+    }
 }
 
 pub fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
     use ObjectApiLocalCommands as C;
     match command {
         C::Paths { config: path } => answer(config::paths(&path)),
-        C::RenderPlist { staged, installed, label, program, store, backup_store, account, log, config: path } => {
+        C::RenderPlist {
+            staged,
+            installed,
+            label,
+            program,
+            store,
+            backup_store,
+            account,
+            log,
+            config: path,
+        } => {
             let wanted = config::Definition {
                 label: &label,
                 program: &program,
@@ -130,16 +144,30 @@ pub fn dispatch(command: ObjectApiLocalCommands) -> Result<(), CmdError> {
         }
         C::PlistEqual { left, right } => verdict(config::same(&left, &right)),
         C::BoundaryReady { state } => verdict(config::boundary_ready(&state)),
-        C::Route { mode, source, config: path, expected, runtime } => answer(route::inspect(&route::Inspection {
+        C::Route {
+            mode,
+            source,
+            config: path,
+            expected,
+            runtime,
+        } => answer(route::inspect(&route::Inspection {
             mode: &mode,
             source: &source,
             default_config: &path,
             expected: &expected,
             runtime: &runtime,
         })),
-        C::SkarbiecPlan { registry, host, account } => answer(skarbiec::plan(&registry, &host, &account)),
+        C::SkarbiecPlan {
+            registry,
+            host,
+            account,
+        } => answer(skarbiec::plan(&registry, &host, &account)),
         C::SkarbiecOwnership { state, target } => answer(skarbiec::ownership(&state, &target)),
         C::SkarbiecUpstream { state, ports } => answer(skarbiec::upstream(&state, &ports)),
-        C::SkarbiecProxyMatch { processes, state, bind } => answer(skarbiec::proxy_match(&processes, &state, &bind)),
+        C::SkarbiecProxyMatch {
+            processes,
+            state,
+            bind,
+        } => answer(skarbiec::proxy_match(&processes, &state, &bind)),
     }
 }

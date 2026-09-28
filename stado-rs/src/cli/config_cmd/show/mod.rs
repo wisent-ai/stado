@@ -62,7 +62,9 @@ pub(super) fn get(key: &str) -> Result<(), CmdError> {
     match resolved().get(key) {
         Some(Value::String(text)) if !text.is_empty() => println!("{text}"),
         Some(Value::Null) | Some(Value::String(_)) | None => {
-            return Err(CmdError::click(format!("configuration resolves no value for {key}")));
+            return Err(CmdError::click(format!(
+                "configuration resolves no value for {key}"
+            )));
         }
         Some(other) => println!("{other}"),
     }
