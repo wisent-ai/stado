@@ -99,7 +99,7 @@ pub(super) fn prepare(
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&manifest).map_err(super::failure)?
     else {
-        return Err(CmdError::click("product declares releases:false"));
+        return Err(CmdError::refused("product declares releases:false"));
     };
     let identity = serde_json::to_vec(&(&repository, &manifest.product, task, &commit))?;
     Ok(Change {

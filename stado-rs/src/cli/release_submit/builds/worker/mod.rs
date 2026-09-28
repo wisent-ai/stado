@@ -44,7 +44,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     let ProductManifest::Release(manifest) =
         release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)?
     else {
-        return Err(CmdError::click("worker manifest declares releases:false"));
+        return Err(CmdError::refused("worker manifest declares releases:false"));
     };
     if manifest.product != request.product || !manifest.platforms.contains_key(&request.platform) {
         return Err(CmdError::click("worker request disagrees with manifest"));

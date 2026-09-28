@@ -55,6 +55,13 @@ impl CmdError {
         }
     }
 
+    /// A rule refused the request: printed like [`Self::click`], and stated
+    /// as `refused` so the operator line names a refusal instead of an
+    /// unattributed failure. Use it wherever the message states the rule.
+    pub fn refused(msg: impl Into<String>) -> Self {
+        Self::click(msg).stating(crate::primitives::failure::FailureCode::Refused)
+    }
+
     /// click `UsageError`: "Error: {msg}" on stderr, exit 2 — the code
     /// click reserves for "you invoked this wrongly", as distinct from
     /// [`Self::click`]'s "it ran and failed".

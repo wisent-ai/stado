@@ -26,17 +26,6 @@ impl CoordinateClaim {
     }
 }
 
-/// A refusal this product decided, not an unattributable failure.
-///
-/// One version can only ever mean one build, and a publisher that arrives
-/// with a second source revision is refused by that rule. Reported as
-/// `unknown`, the same refusal used to read as "your request or credentials",
-/// which sends a release operator to inspect a credential for a decision the
-/// release channel made on its own declared terms.
-fn refused(message: String) -> CmdError {
-    CmdError::click(message).stating(crate::primitives::failure::FailureCode::Refused)
-}
-
 /// Bind one immutable version and its platform coordinate to exactly one source
 /// revision before any artifact is written.
 ///
@@ -153,7 +142,7 @@ async fn require_existing_platform_claims_agree(
         if !held.describes(&claim.product, &claim.version, &coordinate.platform)
             || held.source_revision != claim.source_revision
         {
-            return Err(refused(format!(
+            return Err(CmdError::refused(format!(
                 "{}/{} already carries platform {} from source revision {}; this publisher \
                  carries {}. A version's platforms are one build: publish a new version",
                 claim.product,
@@ -177,13 +166,13 @@ fn judge_existing_version_claim(
             CmdError::click(format!("{uri} is not a version revision record: {error}"))
         })?;
     if !held.describes(&claim.product, &claim.version) {
-        return Err(refused(format!(
+        return Err(CmdError::refused(format!(
             "{uri} attests {}/{} and not {}/{}",
             held.product, held.version, claim.product, claim.version
         )));
     }
     if held.source_revision != claim.source_revision {
-        return Err(refused(format!(
+        return Err(CmdError::refused(format!(
             "{}/{} already attests source revision {}, and this publisher carries {}. \
              Release objects are immutable: publish a new version",
             claim.product, claim.version, held.source_revision, claim.source_revision
@@ -204,13 +193,13 @@ fn judge_existing_claim(
             ))
         })?;
     if !held.describes(&claim.product, &claim.version, &claim.platform) {
-        return Err(refused(format!(
+        return Err(CmdError::refused(format!(
             "{uri} attests {}/{}/{} and not {}/{}/{}",
             held.product, held.version, held.platform, claim.product, claim.version, claim.platform
         )));
     }
     if held.source_revision != claim.source_revision {
-        return Err(refused(format!(
+        return Err(CmdError::refused(format!(
             "{}/{}/{} already attests source revision {}, and this publisher carries {}. \
              Release objects are immutable, so one version can never mean two builds: publish a \
              new version instead of writing a second build into this coordinate",

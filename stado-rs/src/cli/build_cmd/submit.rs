@@ -49,7 +49,7 @@ pub(crate) fn read_source(
     let product =
         release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)?;
     let ProductManifest::Release(manifest) = product.clone() else {
-        return Err(CmdError::click("product declares releases:false"));
+        return Err(CmdError::refused("product declares releases:false"));
     };
     let declared = release_pipeline::declared_version(&manifest.version_source, |path| {
         committed_file(&root, &commit, path).map_err(|error| error.to_string())
