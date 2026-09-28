@@ -34,5 +34,5 @@ async fn registry_target(target: &str) -> Result<ComputeTarget, CmdError> {
         .iter()
         .find(|candidate| candidate.name == target)
         .cloned()
-        .ok_or_else(|| CmdError::click(format!("unknown registry target: {target}")))
+        .ok_or_else(|| CmdError::refused(format!("unknown registry target: {target}")))
 }

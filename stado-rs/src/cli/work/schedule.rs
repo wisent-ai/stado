@@ -143,6 +143,11 @@ pub async fn list(json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// The caller named a schedule the store does not hold.
+fn unknown_schedule(schedule_id: &str) -> CmdError {
+    CmdError::refused(format!("schedule {schedule_id} not found"))
+}
+
 /// `schedule show ID`: print a schedule's full JSON.
 pub async fn show(schedule_id: &str) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
@@ -150,7 +155,7 @@ pub async fn show(schedule_id: &str) -> Result<(), CmdError> {
         .await?
         .filter(|schedule| !schedule.deleted)
     else {
-        return Err(CmdError::click(format!("schedule {schedule_id} not found")));
+        return Err(unknown_schedule(schedule_id));
     };
     println!("{}", s.to_json());
     Ok(())
@@ -164,7 +169,7 @@ pub async fn rm(schedule_id: &str) -> Result<(), CmdError> {
         println!("deleted schedule {schedule_id}");
         Ok(())
     } else {
-        Err(CmdError::click(format!("schedule {schedule_id} not found")))
+        Err(unknown_schedule(schedule_id))
     }
 }
 
@@ -172,7 +177,7 @@ pub async fn rm(schedule_id: &str) -> Result<(), CmdError> {
 async fn set_enabled(schedule_id: &str, enabled: bool) -> Result<Schedule, CmdError> {
     let store = JobStorage::new().await?;
     let Some(s) = read_schedule(&store, schedule_id).await? else {
-        return Err(CmdError::click(format!("schedule {schedule_id} not found")));
+        return Err(unknown_schedule(schedule_id));
     };
     let next_due = if enabled {
         Some(isoformat_utc(
@@ -184,7 +189,7 @@ async fn set_enabled(schedule_id: &str, enabled: bool) -> Result<Schedule, CmdEr
     };
     schedules::set_schedule_enabled(&store, schedule_id, enabled, next_due.as_deref())
         .await?
-        .ok_or_else(|| CmdError::click(format!("schedule {schedule_id} not found")))
+        .ok_or_else(|| unknown_schedule(schedule_id))
 }
 
 /// `schedule pause ID`: disable a schedule without deleting it.
@@ -210,7 +215,7 @@ pub async fn run(schedule_id: &str, retry_token: &str, json: bool) -> Result<(),
     }
     let store = JobStorage::new().await?;
     if read_schedule(&store, schedule_id).await?.is_none() {
-        return Err(CmdError::click(format!("schedule {schedule_id} not found")));
+        return Err(unknown_schedule(schedule_id));
     }
     let job = schedules::fire_schedule_now(&store, schedule_id, retry_token, Utc::now())
         .await?

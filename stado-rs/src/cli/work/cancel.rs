@@ -219,7 +219,7 @@ pub(crate) async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<
         return Ok(());
     }
 
-    Err(CmdError::click(format!("Job {job_id} not found")))
+    Err(CmdError::refused(format!("Job {job_id} not found")))
 }
 
 /// Cancel `job_id` only while no host has claimed it, for callers that decided

@@ -199,7 +199,7 @@ async fn explain(decision_id: &str) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let decision = crate::autonomy::storage::load_decision(&store, decision_id)
         .await?
-        .ok_or_else(|| CmdError::click(format!("decision not found: {decision_id}")))?;
+        .ok_or_else(|| CmdError::refused(format!("decision not found: {decision_id}")))?;
     println!("{}", serde_json::to_string_pretty(&decision)?);
     Ok(())
 }

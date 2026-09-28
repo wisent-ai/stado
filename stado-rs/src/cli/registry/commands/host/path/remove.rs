@@ -39,12 +39,12 @@ fn print_host_path_remove_receipt(
 pub async fn host_path_remove(host: &str, path: &str, json_output: bool) -> Result<(), CmdError> {
     let path = path.trim();
     if path == targets::PRIMARY_SSH_CONNECTION {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "the primary path cannot be removed; replace it with `registry host path set`",
         ));
     }
     if path.is_empty() {
-        return Err(CmdError::click("PATH must not be empty"));
+        return Err(CmdError::usage("PATH must not be empty"));
     }
 
     let (mut document, expected_generation) = fetch_versioned_document().await?;

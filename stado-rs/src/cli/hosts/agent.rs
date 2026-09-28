@@ -97,9 +97,9 @@ pub(crate) async fn apply_registry_target(
         let t = local_agent::lookup_auto(target)
             .await
             .map_err(|e| CmdError::click(e.to_string()))?
-            .ok_or_else(|| CmdError::click(format!("target '{target}' not found in registry")))?;
+            .ok_or_else(|| CmdError::refused(format!("target '{target}' not found in registry")))?;
         if !crate::capabilities::ProviderId::Local.matches(&t.kind) {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::refused(format!(
                 "target '{target}' kind={}, expected local",
                 t.kind
             )));

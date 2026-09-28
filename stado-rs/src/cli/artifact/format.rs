@@ -47,12 +47,12 @@ pub(super) fn parse_labels(values: &[String]) -> Result<Vec<(String, String)>, C
     let mut labels = Vec::new();
     for value in values {
         let Some((key, item)) = value.split_once('=') else {
-            return Err(CmdError::click(format!(
+            return Err(CmdError::usage(format!(
                 "label must be KEY=VALUE: '{value}'"
             )));
         };
         if key.is_empty() {
-            return Err(CmdError::click("label key cannot be empty"));
+            return Err(CmdError::usage("label key cannot be empty"));
         }
         labels.push((key.to_string(), item.to_string()));
     }

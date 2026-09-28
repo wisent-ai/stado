@@ -192,9 +192,9 @@ async fn adopt(args: &AdoptArgs) -> Result<(), CmdError> {
         .resources
         .iter()
         .find(|resource| resource.resource_id == args.resource_id)
-        .ok_or_else(|| CmdError::click(format!("resource not found: {}", args.resource_id)))?;
+        .ok_or_else(|| CmdError::refused(format!("resource not found: {}", args.resource_id)))?;
     if resource.source_revision.as_deref() != Some(args.expect_revision.as_str()) {
-        return Err(CmdError::click(
+        return Err(CmdError::refused(
             "resource revision changed or is unavailable; refresh inventory and review again",
         ));
     }

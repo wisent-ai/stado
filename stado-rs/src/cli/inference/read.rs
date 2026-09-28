@@ -15,7 +15,7 @@ async fn document_and_deployment(name: &str) -> Result<(Value, Deployment), CmdE
         .deployments
         .into_iter()
         .find(|deployment| deployment.name == name)
-        .ok_or_else(|| CmdError::click(format!("unknown inference deployment '{name}'")))?;
+        .ok_or_else(|| CmdError::refused(format!("unknown inference deployment '{name}'")))?;
     Ok((document, deployment))
 }
 

@@ -44,7 +44,7 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
     require_build_id(build_id)?;
     let mut build = load_build(build_id)
         .await?
-        .ok_or_else(|| CmdError::click(format!("build {build_id} does not exist")))?;
+        .ok_or_else(|| CmdError::refused(format!("build {build_id} does not exist")))?;
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;

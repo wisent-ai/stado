@@ -40,9 +40,9 @@ pub async fn redeliver(args: &ReleaseRedeliverArgs) -> Result<(), CmdError> {
 
     let mut run = load(&args.run_id)
         .await?
-        .ok_or_else(|| CmdError::click(format!("release run {} does not exist", args.run_id)))?;
+        .ok_or_else(|| CmdError::refused(format!("release run {} does not exist", args.run_id)))?;
     if run.product != args.product {
-        return Err(CmdError::click("release run belongs to another product"));
+        return Err(CmdError::refused("release run belongs to another product"));
     }
 
     let mut loaded = load_redelivery_transaction(&store, &transaction_path).await?;

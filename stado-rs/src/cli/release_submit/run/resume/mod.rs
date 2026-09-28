@@ -39,7 +39,7 @@ pub(crate) async fn finish_run(run_id: &str, json: bool) -> Result<(), CmdError>
     }
     let run = load(&args.run_id)
         .await?
-        .ok_or_else(|| CmdError::click(format!("release run {} does not exist", args.run_id)))?;
+        .ok_or_else(|| CmdError::refused(format!("release run {} does not exist", args.run_id)))?;
     if run.run_id != args.run_id
         || identity(
             &run.product,

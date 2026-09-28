@@ -14,7 +14,7 @@ use crate::targets;
 fn registry_host_index(document: &Value, host: &str) -> Result<(usize, String), CmdError> {
     let name = targets::normalize_hostname(host);
     if name.is_empty() {
-        return Err(CmdError::click("HOST must not be empty"));
+        return Err(CmdError::usage("HOST must not be empty"));
     }
     let entries = document
         .get("targets")
@@ -30,6 +30,6 @@ fn registry_host_index(document: &Value, host: &str) -> Result<(usize, String), 
                 .as_deref()
                 == Some(name.as_str())
         })
-        .ok_or_else(|| CmdError::click(format!("registry target {name:?} not found")))?;
+        .ok_or_else(|| CmdError::refused(format!("registry target {name:?} not found")))?;
     Ok((index, name))
 }

@@ -61,9 +61,9 @@ pub(in crate::cli::release_cmd) async fn active_binary(
         .targets
         .iter()
         .find(|target| target.name == target_name)
-        .ok_or_else(|| CmdError::click(format!("unknown registry target {target_name:?}")))?;
+        .ok_or_else(|| CmdError::refused(format!("unknown registry target {target_name:?}")))?;
     if !crate::deploy::host_channel::target_is_this_host(target_entry) {
-        return Err(CmdError::click(format!(
+        return Err(CmdError::refused(format!(
             "target {target_name:?} is not this host; active-binary resolves local release state only"
         )));
     }

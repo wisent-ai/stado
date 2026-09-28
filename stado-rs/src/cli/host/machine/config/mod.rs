@@ -51,7 +51,7 @@ pub(crate) async fn write_host_config(
     value: &str,
 ) -> Result<String, CmdError> {
     if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "configuration key must be a non-empty dotted name",
         ));
     }
@@ -85,7 +85,7 @@ pub async fn config_unset(
     reload_service: Option<&str>,
 ) -> Result<(), CmdError> {
     if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
-        return Err(CmdError::click(
+        return Err(CmdError::usage(
             "configuration key must be a non-empty dotted name",
         ));
     }

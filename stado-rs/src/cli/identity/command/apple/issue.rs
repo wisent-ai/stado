@@ -31,7 +31,7 @@ pub async fn issue_apple_capabilities(
         .targets
         .iter()
         .find(|target| target.name == target_name)
-        .ok_or_else(|| CmdError::click(format!("unknown target {target_name}")))?;
+        .ok_or_else(|| CmdError::refused(format!("unknown target {target_name}")))?;
     let runner = crate::deploy::production_runner();
     let broker = crate::deploy::host_capability::resolve(
         target,

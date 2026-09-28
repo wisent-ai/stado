@@ -16,7 +16,7 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
         .iter()
         .find(|deployment| deployment.name == name)
         .cloned()
-        .ok_or_else(|| CmdError::click(format!("unknown inference deployment '{name}'")))?;
+        .ok_or_else(|| CmdError::refused(format!("unknown inference deployment '{name}'")))?;
     let previous = current.previous.as_deref().cloned().ok_or_else(|| {
         CmdError::click(format!(
             "inference deployment '{name}' has no rollback generation"
@@ -84,7 +84,7 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
         .iter()
         .find(|deployment| deployment.name == name)
         .cloned()
-        .ok_or_else(|| CmdError::click(format!("unknown inference deployment '{name}'")))?;
+        .ok_or_else(|| CmdError::refused(format!("unknown inference deployment '{name}'")))?;
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
