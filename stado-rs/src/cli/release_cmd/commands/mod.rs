@@ -80,6 +80,10 @@ pub enum ReleaseCommands {
     /// Resolve the exact policy-derived executable of the active signed release.
     #[command(name = "active-binary")]
     ActiveBinary(ReleaseActiveBinaryArgs),
+    /// Print `<active.release_dir>/RELATIVE` from this host's release-state
+    /// record of PRODUCT, or nothing when it records no active release.
+    #[command(name = "active-dir", hide = true)]
+    ActiveDir { product: String, relative: String },
     /// Read a release candidate's own stdout/stderr off the target host.
     Logs(crate::cli::release_evidence::ReleaseLogsArgs),
     /// One verdict over desired state, the candidate, quarantine and the

@@ -135,10 +135,8 @@ if [ -e "$version_dir" ]; then
   }
   rm -rf "$incoming"
 else
-  /usr/bin/python3 - "$incoming" "$version_dir" <<'PY'
-import os, sys
-os.rename(sys.argv[1], sys.argv[2])
-PY
+  # $version_dir does not exist, so this is one rename(2) of the directory.
+  /bin/mv "$incoming" "$version_dir"
 fi
 
 if [ -L "$root/current" ] &&
@@ -156,10 +154,9 @@ if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
   /bin/mv "$root/current" "$root/current.before-$version.$$"
 fi
 /bin/ln -s "$version_dir" "$link"
-/usr/bin/python3 - "$link" "$root/current" <<'PY'
-import os, sys
-os.replace(sys.argv[1], sys.argv[2])
-PY
+# -h: when `current` is a symlink to a directory, replace the link itself with
+# one rename(2) instead of moving the new link into the old version.
+/bin/mv -fh "$link" "$root/current"
 trap - EXIT
 rm -f "$archive"
 printf '%s\n' "$version_dir"

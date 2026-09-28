@@ -47,16 +47,9 @@ pub struct AccountProgram {
     pub timeout_seconds: u64,
 }
 
-/// Where the release agent records each product's rollout, home-relative.
-const RELEASE_STATE_DIRECTORY: &str = ".stado/release-state";
-/// Prints `<active.release_dir>/<argv[2]>` for the state document in
-/// `argv[1]`, or nothing when the document names no active release. Fixed
-/// source: the two arguments are compile-time constants of this module.
-const RELEASE_DIRECTORY_READER: &str = "import json,sys\n\
-    state=json.load(open(sys.argv[1]))\n\
-    active=state.get('active') or {}\n\
-    directory=active.get('release_dir') or ''\n\
-    print(f\"{directory}/{sys.argv[2]}\" if directory else '')\n";
+/// The host's Stado prints `<active.release_dir>/RELATIVE` from the release
+/// agent's record of a product, or nothing when it records no active release.
+const RELEASE_DIRECTORY_READER: &str = "\"$HOME/.stado/bin/stado\" release active-dir";
 
 /// Every program in the table that the managed account owns.
 pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
@@ -155,13 +148,10 @@ pub fn account_script(account: &AccountProgram, arguments: &[&str]) -> String {
         // every Weles release with "does not advertise the login_item
         // selector", a gate the served release removed on 9 September.
         script.push_str(&format!(
-            "state=\"$HOME\"/{state}\n\
-             if [ -r \"$state\" ]; then\n\
-             \x20 released=$(/usr/bin/python3 -S -c {reader} \"$state\" {relative} || true)\n\
-             \x20 [ -z \"$released\" ] || [ ! -x \"$released\" ] || program=\"$released\"\n\
-             fi\n",
-            state = shlex_quote(&format!("{RELEASE_STATE_DIRECTORY}/{product}.json")),
-            reader = shlex_quote(RELEASE_DIRECTORY_READER),
+            "released=$({reader} {product} {relative} 2>/dev/null || true)\n\
+             [ -z \"$released\" ] || [ ! -x \"$released\" ] || program=\"$released\"\n",
+            reader = RELEASE_DIRECTORY_READER,
+            product = shlex_quote(product),
             relative = shlex_quote(relative),
         ));
     }

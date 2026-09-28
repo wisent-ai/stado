@@ -46,6 +46,10 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         }
         ReleaseCommands::Status(args) => status(&args).await,
         ReleaseCommands::ActiveBinary(args) => active_binary(&args).await,
+        ReleaseCommands::ActiveDir { product, relative } => {
+            active_dir(&product, &relative);
+            Ok(())
+        }
         ReleaseCommands::Logs(args) => crate::cli::release_evidence::dispatch_logs(&args).await,
         ReleaseCommands::Doctor(args) => crate::cli::release_evidence::dispatch_doctor(&args).await,
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
@@ -99,5 +103,24 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Provenance(args) => {
             crate::cli::host::provenance(&args.host, args.json).await
         }
+    }
+}
+
+/// The release agent's own record of the active release directory; a missing
+/// or unreadable record prints nothing, which callers read as "not recorded".
+fn active_dir(product: &str, relative: &str) {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let state = std::path::Path::new(&home)
+        .join(".stado/release-state")
+        .join(format!("{product}.json"));
+    let directory = std::fs::read(&state)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|state| state.pointer("/active/release_dir")?.as_str().map(str::to_string))
+        .filter(|directory| !directory.is_empty());
+    if let Some(directory) = directory {
+        println!("{directory}/{relative}");
     }
 }
