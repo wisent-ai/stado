@@ -3,9 +3,9 @@
 pub(in crate::cli::host) mod consolidate;
 pub(in crate::cli::host) mod grants;
 pub(in crate::cli::host) mod item;
+pub(in crate::cli::host) mod mint;
 pub(in crate::cli::host) mod mirror;
 pub(in crate::cli::host) mod rebind;
-pub(in crate::cli::host) mod mint;
 pub(in crate::cli::host) mod token;
 
 use serde_json::{json, Value};

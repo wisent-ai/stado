@@ -230,7 +230,9 @@ impl Replication {
             });
         match started {
             Ok(pass) => self.running = Some(pass),
-            Err(error) => log(&format!("disaster-recovery replication not started: {error}")),
+            Err(error) => log(&format!(
+                "disaster-recovery replication not started: {error}"
+            )),
         }
     }
 
