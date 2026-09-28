@@ -7,6 +7,7 @@
 pub mod gates;
 pub mod policy;
 pub mod prepare;
+mod reap;
 pub mod reconcile;
 
 use std::time::{Duration, Instant};
