@@ -227,9 +227,10 @@ pub(super) async fn create(
             // The item is rewritten whole, so the password it already holds is
             // read from the owner vault first; without it the rewrite would
             // erase the only copy.
-            let password = owner.password(&item).await.map_err(|error| {
-                CmdError::click(format!("{item} was not rewritten: {error}"))
-            })?;
+            let password = owner
+                .password(&item)
+                .await
+                .map_err(|error| CmdError::click(format!("{item} was not rewritten: {error}")))?;
             (existing.clone(), Some(password), json!({ "reused": true }))
         }
         None => {
@@ -238,9 +239,9 @@ pub(super) async fn create(
             // The generated password exists only in this process until the
             // item holds it, so an owner vault that cannot take the write
             // must stop the creation before the project exists.
-            owner.ready().map_err(|error| {
-                CmdError::click(format!("{name} was not created: {error}"))
-            })?;
+            owner
+                .ready()
+                .map_err(|error| CmdError::click(format!("{name} was not created: {error}")))?;
             let password = format!(
                 "{}{}",
                 uuid::Uuid::new_v4().simple(),

@@ -48,8 +48,11 @@ impl Owner {
         context: &Value,
     ) -> Result<(), CmdError> {
         match self {
-            Self::Here => owner::write_item(item, item_type, fields, context)
-                .map_err(|error| CmdError::click(format!("{item} was not stored in this host's owner vault: {error}"))),
+            Self::Here => owner::write_item(item, item_type, fields, context).map_err(|error| {
+                CmdError::click(format!(
+                    "{item} was not stored in this host's owner vault: {error}"
+                ))
+            }),
             Self::Host(host) => {
                 let payload = json!({
                     "schema": ITEM_SCHEMA,
@@ -61,7 +64,9 @@ impl Owner {
                 crate::cli::host::store_vault_item(host, item, item_type, &payload, false)
                     .await
                     .map_err(|error| {
-                        CmdError::click(format!("{item} was not stored in {host}'s owner vault: {error}"))
+                        CmdError::click(format!(
+                            "{item} was not stored in {host}'s owner vault: {error}"
+                        ))
                     })
             }
         }
@@ -71,9 +76,11 @@ impl Owner {
     /// generated password cannot be stored would be unreachable.
     pub(super) fn ready(&self) -> Result<(), CmdError> {
         match self {
-            Self::Here => owner::vault()
-                .map(|_| ())
-                .map_err(|error| CmdError::click(format!("this host's owner vault cannot be written: {error}"))),
+            Self::Here => owner::vault().map(|_| ()).map_err(|error| {
+                CmdError::click(format!(
+                    "this host's owner vault cannot be written: {error}"
+                ))
+            }),
             Self::Host(_) => Ok(()),
         }
     }
@@ -81,11 +88,18 @@ impl Owner {
     /// The password an existing item already holds, which a rewrite must keep.
     pub(super) async fn password(&self, item: &str) -> Result<String, CmdError> {
         match self {
-            Self::Here => owner::read_string(item, "db_password")
-                .map_err(|error| CmdError::click(format!("{item}#db_password could not be read here: {error}"))),
+            Self::Here => owner::read_string(item, "db_password").map_err(|error| {
+                CmdError::click(format!(
+                    "{item}#db_password could not be read here: {error}"
+                ))
+            }),
             Self::Host(host) => crate::credential_store::read_string(item, "db_password")
                 .await
-                .map_err(|error| CmdError::click(format!("{item}#db_password could not be read from {host}: {error}")))?
+                .map_err(|error| {
+                    CmdError::click(format!(
+                        "{item}#db_password could not be read from {host}: {error}"
+                    ))
+                })?
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| CmdError::click(format!("{item} on {host} holds no db_password"))),
         }
