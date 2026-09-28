@@ -254,4 +254,13 @@ pub enum ReadCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// The `stado serve` roles process PID runs on this host, from its kernel
+    /// argument vector. Asked over the host channel before a role's old unit
+    /// is retired; not an operator command.
+    #[command(name = "serve-roles", hide = true)]
+    ServeRoles {
+        #[arg(long)]
+        pid: u32,
+    },
 }

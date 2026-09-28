@@ -13,6 +13,7 @@ use crate::deploy::host_access::native::ReverseForward;
 mod api;
 mod arguments;
 mod identity;
+pub(crate) mod roles;
 mod supervisor;
 
 #[derive(Args)]

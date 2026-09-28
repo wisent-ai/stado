@@ -24,9 +24,11 @@ pub struct RunningProgram {
     pub declared_written_epoch: Option<i64>,
     /// When the running executable was last written.
     pub running_written_epoch: Option<i64>,
-    /// The option names (`--name`, values dropped) the live process was
-    /// started with; empty when nothing runs under the unit.
-    pub flags: Vec<String>,
+    /// The `stado serve` role options the live process runs, parsed on its
+    /// host from its kernel argument vector by that host's Stado; empty for
+    /// a unit that is not stado, when nothing runs, or when that Stado
+    /// cannot answer.
+    pub serve_roles: Vec<String>,
 }
 
 impl RunningProgram {
@@ -114,8 +116,8 @@ fn parse_process(stdout: &str) -> RunningProgram {
             program.declared_written_epoch = declared_written.trim().parse().ok();
             program.running_written_epoch = running_written.trim().parse().ok();
         }
-        if let ["STADO_PROCESS_FLAGS", flags] = host_channel::marker_fields(line).as_slice() {
-            program.flags = flags.split_whitespace().map(str::to_string).collect();
+        if let ["STADO_SERVE_ROLES", roles] = host_channel::marker_fields(line).as_slice() {
+            program.serve_roles = roles.split_whitespace().map(str::to_string).collect();
         }
     }
     program

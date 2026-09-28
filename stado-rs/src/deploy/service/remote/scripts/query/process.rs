@@ -54,12 +54,8 @@ running=''
 started=''
 declared_written=''
 running_written=''
-flags=''
 if [ -n \"$pid\" ]; then
   running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
-  # Only the option names the process was started with, never their values:
-  # an argument can carry a secret, and a role is switched on by its name.
-  flags=$(/bin/ps -ww -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr ' \\t' '\\n\\n' | /usr/bin/sed -n 's/=.*//; /^--/p' | /usr/bin/tr '\\n' ' ')
   lstart=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null)
   if [ \"$os\" = \"Darwin\" ]; then
     started=$(/bin/date -j -f '%a %b %d %T %Y' \"$lstart\" +%s 2>/dev/null)
@@ -72,6 +68,16 @@ if [ -n \"$pid\" ]; then
   fi
 fi
 printf 'STADO_PROCESS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$declared\" \"$resolved\" \"$running\" \"$started\" \"$declared_written\" \"$running_written\"
-printf 'STADO_PROCESS_FLAGS\\t%s\\n' \"$flags\"
+# The roles a stado process runs come from its kernel argument vector, read
+# by the host's own Stado; a rendered ps line cannot separate an option from
+# words inside another option's value. Only a unit whose declared program is
+# stado is asked, and a Stado without the probe answers nothing.
+case \"$declared\" in
+  */stado)
+    if [ -n \"$pid\" ] && [ -x \"$declared\" ]; then
+      \"$declared\" service serve-roles --pid \"$pid\" 2>/dev/null | /usr/bin/grep '^STADO_SERVE_ROLES' || true
+    fi
+    ;;
+esac
 say 'inspected' \"$unit\"
 ";

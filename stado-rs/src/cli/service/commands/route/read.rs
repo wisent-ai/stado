@@ -75,5 +75,8 @@ pub(crate) async fn dispatch(command: ReadCommands) -> Result<(), CmdError> {
         } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ReadCommands::OnboardingCatalog => onboarding_catalog().await,
         ReadCommands::Status { name, json } => status(&name, json).await,
+        ReadCommands::ServeRoles { pid } => {
+            crate::cli::integrations::runtime::roles::print_roles(pid)
+        }
     }
 }

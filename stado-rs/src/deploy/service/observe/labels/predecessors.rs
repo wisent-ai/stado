@@ -69,7 +69,8 @@ async fn retirement(target: &ComputeTarget, unit: &str, runner: &Runner) -> Pred
 
 /// Whether the live process under `running` on `target` runs the role `flag`
 /// switches on: something runs under the unit, it executes the artefact the
-/// unit declares, and it was started with `flag`. `None` when it does; the
+/// unit declares, and its kernel argument vector, parsed on that host as
+/// `stado serve` parses it, switches that role on. `None` when it does; the
 /// reason otherwise. The unit's declared arguments are not evidence: a
 /// declaration can name the flag before the process that reads it starts.
 pub async fn role_taken_over(
@@ -84,8 +85,8 @@ pub async fn role_taken_over(
         Some(format!("nothing runs under {unit}"))
     } else if process.matches_process() != Some(true) {
         Some(format!("{unit} is not proven to run its declared program"))
-    } else if !process.flags.iter().any(|started| started == flag) {
-        Some(format!("{unit} was not started with {flag}"))
+    } else if !process.serve_roles.iter().any(|role| role == flag) {
+        Some(format!("{unit}'s process does not run the {flag} role"))
     } else {
         None
     })
