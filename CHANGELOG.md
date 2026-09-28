@@ -17,6 +17,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- **`stado config get KEY` prints one resolved value:** the same map `stado config show` prints under `resolved`, one key at a time — a string bare, a list or object as JSON — and a key that resolves to nothing is refused by name. Scripts that parsed `config show` with a JSON reader (Brama's launcher used `python3`) read the value directly.
+
 - **Stado Desktop's cloud control-plane image runs the Stado Linux release, not the retired Python package:** the image was `python:3.12-slim` with `pip install 'stado[aws,azure]'` and a copy of `stado/` found through `stado package-root`, which in the Rust CLI printed the build machine's `data/` directory, so the AWS, Azure and Google Cloud provisioners always stopped at "The installed Stado package source could not be located". The context now holds the installer `stado bootstrap --print-install-script` prints — the same verified download of `stado`, `stado-fix` and `stado-watchdog` for the configured API and this release version that `stado bootstrap` runs on a host — and a `debian:bookworm-slim` Dockerfile that runs it and starts `/root/.stado/bin/stado cloud-control-plane`. The hidden `stado package-root` and `stado::data_dir` it relied on are removed.
 
 - **`stado_database::sync::Client::run` hands SeaORM entity work to the shared client:** a product whose tables are SeaORM entities but whose callers are synchronous (Jeden, Singularity) passes `|db| async move { … }` — entity queries, a transaction, its migrator — and waits for the closure's own result. Such a product keeps no runtime or connection thread of its own; the only error `run` adds is a task that stopped before answering.

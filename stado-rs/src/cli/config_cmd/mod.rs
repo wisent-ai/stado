@@ -1,5 +1,5 @@
 //! `stado config SUB` — configuration lifecycle commands:
-//! show | validate | init | migrate | migrate-identities | set | unset.
+//! show | get | validate | init | migrate | migrate-identities | set | unset.
 //!
 //! One component per group of verbs. `keys` holds the two that change a single
 //! dotted key of the file, `document` holds the three that act on the file as
@@ -14,7 +14,7 @@ use super::CmdError;
 
 use document::{init, migrate, migrate_identities, validate};
 use keys::{set, unset};
-use show::show;
+use show::{get, show};
 
 pub fn run(sub: &str, key: Option<&str>, value: Option<&str>) -> Result<(), CmdError> {
     match sub {
@@ -23,6 +23,12 @@ pub fn run(sub: &str, key: Option<&str>, value: Option<&str>) -> Result<(), CmdE
         "migrate-identities" => migrate_identities(),
         "validate" => validate(),
         "show" => show(),
+        "get" => match key {
+            Some(key) => get(key),
+            None => Err(CmdError::click(
+                "config get needs a resolved key, e.g. stado config get agent_skarbiec_url",
+            )),
+        },
         "set" => match (key, value) {
             (Some(key), Some(value)) => set(key, value),
             _ => Err(CmdError::click(

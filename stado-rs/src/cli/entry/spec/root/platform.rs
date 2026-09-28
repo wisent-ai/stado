@@ -29,10 +29,11 @@ pub(crate) enum PlatformCommands {
     /// List available submit profiles, or show one profile's JSON.
     Profiles { name: Option<String> },
 
-    /// Inspect or change stado configuration: show | validate | init | migrate | set | unset.
+    /// Inspect or change stado configuration: show | get | validate | init | migrate | set | unset.
     Config {
         #[arg(default_value = "show")]
         sub: String,
+        /// `get`: a resolved key as `show` names it, e.g. `agent_skarbiec_url`;
         /// `set` and `unset`: dotted key, e.g. `alerts.channels`.
         key: Option<String>,
         /// `set`: JSON value; a bare word is stored as a string.

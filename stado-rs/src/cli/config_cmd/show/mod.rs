@@ -17,8 +17,8 @@ use crate::config_file;
 
 use crate::cli::CmdError;
 
-/// `config show`: the resolved values for the operator-facing keys.
-pub(super) fn show() -> Result<(), CmdError> {
+/// Every operator-facing key with its resolved value.
+fn resolved() -> Map<String, Value> {
     // Keys mirror cli.py exactly (lowercased constant names).
     let mut resolved = Map::new();
     resolved.insert("project".into(), Value::from(config::project()));
@@ -37,7 +37,11 @@ pub(super) fn show() -> Result<(), CmdError> {
     deployment::insert(&mut resolved);
     skarbiec::insert(&mut resolved);
     placement::insert(&mut resolved);
+    resolved
+}
 
+/// `config show`: the resolved values for the operator-facing keys.
+pub(super) fn show() -> Result<(), CmdError> {
     let where_ = config_file::config_path().map_err(|exc| CmdError::click(exc.to_string()))?;
     let mut out = Map::new();
     out.insert(
@@ -46,7 +50,21 @@ pub(super) fn show() -> Result<(), CmdError> {
             .map(|p| Value::from(p.display().to_string()))
             .unwrap_or(Value::Null),
     );
-    out.insert("resolved".into(), Value::Object(resolved));
+    out.insert("resolved".into(), Value::Object(resolved()));
     println!("{}", serde_json::to_string_pretty(&Value::Object(out))?);
+    Ok(())
+}
+
+/// `config get KEY`: one resolved value as bare text (a list or object as
+/// JSON). A key that resolves to nothing is refused by name, so a script
+/// reading it never proceeds with an empty value.
+pub(super) fn get(key: &str) -> Result<(), CmdError> {
+    match resolved().get(key) {
+        Some(Value::String(text)) if !text.is_empty() => println!("{text}"),
+        Some(Value::Null) | Some(Value::String(_)) | None => {
+            return Err(CmdError::click(format!("configuration resolves no value for {key}")));
+        }
+        Some(other) => println!("{other}"),
+    }
     Ok(())
 }
