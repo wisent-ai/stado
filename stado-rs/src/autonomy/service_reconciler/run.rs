@@ -278,8 +278,9 @@ pub async fn reconcile(
         }
         outcomes.push(outcome);
     }
-    let retired = super::predecessors::retire(&replacements, policy, &runner, &mut summary).await;
-    outcomes.extend(retired);
+    outcomes.extend(
+        super::predecessors::retire(&replacements, &findings, policy, &runner, &mut summary).await,
+    );
 
     let report = ServiceReconcileReport {
         schema_version: SCHEMA_VERSION,

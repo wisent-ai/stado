@@ -6,7 +6,8 @@
 //! replacement, outside every release and review path. Each pass therefore
 //! boots such a unit out and withdraws its autostart on every host that runs
 //! the product replacing it, and then does the same for [`strays`]: failing
-//! units in the fleet's namespace that nothing declares at all.
+//! units in the fleet's namespace that nothing declares at all. Last,
+//! [`standby`] boots out every standby unit the pass's sweep found serving.
 
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::deploy::service::{self, ServiceStatus, STATE_ACTIVE};
@@ -14,6 +15,7 @@ use crate::deploy::Runner;
 
 use super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
 
+mod standby;
 mod strays;
 
 /// The hosts and catalog entries whose predecessors a pass must retire: one
@@ -35,10 +37,12 @@ pub(super) fn replacements(
 }
 
 /// Retire each replacement's predecessors on its host, then every failing
-/// undeclared fleet unit on the local hosts. Report mode and the emergency
-/// pause record the plan and touch nothing, as for every repair.
+/// undeclared fleet unit on the local hosts, then stop every standby unit
+/// `findings` shows serving. Report mode and the emergency pause record the
+/// plan and touch nothing, as for every repair.
 pub(super) async fn retire(
     replacements: &[(String, crate::deploy::service_catalog::CatalogService)],
+    findings: &[crate::cli::service_verify::Finding],
     policy: &AutonomyPolicy,
     runner: &Runner,
     summary: &mut ServiceReconcileSummary,
@@ -102,5 +106,6 @@ pub(super) async fn retire(
         }
     }
     outcomes.extend(strays::retire_strays(policy, runner, summary).await);
+    outcomes.extend(standby::stop_serving_standbys(findings, policy, runner, summary).await);
     outcomes
 }

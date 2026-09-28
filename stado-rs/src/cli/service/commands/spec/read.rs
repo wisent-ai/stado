@@ -197,7 +197,8 @@ pub enum ReadCommands {
     /// Exits non-zero on `unreachable`, `misowned` and `standby_serving`,
     /// counted separately: the first usually means the service needs
     /// attention, the second means the declaration does, the third means a
-    /// standby unit is running and must be stopped.
+    /// standby unit is running; the service reconciler's next pass boots it
+    /// out on its host (outcome action `stop_standby`).
     Verify {
         /// Check one host's declarations instead of the whole fleet.
         #[arg(long)]
