@@ -112,81 +112,8 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
                 .as_deref()
                 .is_some_and(|unit| candidate.matches(unit))
     });
-    // The catalog's environment is the product's own requirement for the
-    // unit, so it applies whatever declared the program: a registry entry
-    // adopted from a hand-installed plist names the same binary and still
-    // needs the same variables. Program and args keep their resolution
-    // order; only the environment is defaulted from the catalog.
-    let mut unit_env: Vec<(String, String)> = catalog_entry
-        .as_ref()
-        .map(|entry| {
-            crate::deploy::service_catalog::resolve_entry(
-                entry,
-                &crate::deploy::service_catalog::home_for(&target),
-                Some(&target.release_platform),
-                &target.name,
-            )
-            .2
-        })
-        .unwrap_or_default();
-    let mut unit = unit_program(&host, options.name, options.from, options.args, existing)?;
-    if unit.source == "catalog" {
-        let entry = crate::deploy::service_catalog::CatalogService {
-            name: options.name.to_string(),
-            summary: String::new(),
-            unit: unit.unit.clone(),
-            program: unit.program.clone(),
-            args: unit.args.clone(),
-            env: unit.env.clone(),
-            retired_units: Vec::new(),
-            role_units: Vec::new(),
-        };
-        let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
-            &entry,
-            &crate::deploy::service_catalog::home_for(&target),
-            Some(&target.release_platform),
-            &target.name,
-        );
-        unit.program = program;
-        unit.args = args;
-        unit_env = env;
-        eprintln!(
-            "{host} declares no program for {}; rendering the unit from the Wisent service \
-             catalog this build ships: {} {}",
-            options.name,
-            unit.program,
-            unit.args.join(" ")
-        );
-    }
-    if unit.source == "shipped" {
-        eprintln!(
-            "{host} declares no program for {}; rendering the unit from the declaration shipped \
-             with this build: {} {}",
-            options.name,
-            unit.program,
-            unit.args.join(" ")
-        );
-    }
-    let home = crate::deploy::service_catalog::home_for(&target);
-    let mut env_overrides = unit.env;
-    for assignment in options.env {
-        let (name, value) = assignment
-            .split_once('=')
-            .ok_or_else(|| CmdError::usage("--env requires NAME=VALUE"))?;
-        env_overrides.insert(name.to_string(), value.to_string());
-    }
-    for (name, value) in env_overrides {
-        let value = crate::deploy::service_catalog::resolve_word(
-            &value,
-            &home,
-            Some(&target.release_platform),
-            &target.name,
-        );
-        match unit_env.iter_mut().find(|(key, _)| key == &name) {
-            Some((_, current)) => *current = value,
-            None => unit_env.push((name, value)),
-        }
-    }
+    let (mut unit, unit_env) =
+        program::resolved_unit(&target, &options, existing, catalog_entry.as_ref())?;
     // A canonical declaration wins, then the identity carried by the resolved
     // program, then the unit already declared on this host. The canonical
     // identity must win even when the registry supplies the program: otherwise
