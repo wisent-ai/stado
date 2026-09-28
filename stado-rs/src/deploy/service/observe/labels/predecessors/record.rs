@@ -131,6 +131,31 @@ pub(super) async fn write_record(
     .map(|_| ())
 }
 
+/// The record state of an API listener unit this host's Stado process
+/// retired at API start, written before it retires the unit.
+pub(super) const TAKEN_OVER: &str = "taken_over";
+
+/// The record state of a takeover whose retirement failed, so the unit is
+/// still the one serving and may be repaired.
+pub(super) const WITHDRAWN: &str = "takeover_withdrawn";
+
+/// The takeover this host's Stado process recorded for API listener unit
+/// `unit`: the pid that retired it and since when. `None` when none was
+/// recorded, or the record cannot be read, so the unit is still repaired.
+pub(super) async fn taken_over(
+    target: &ComputeTarget,
+    unit: &str,
+    runner: &Runner,
+) -> Option<String> {
+    let record = read_record(target, unit, runner).await.ok()??;
+    (record.state == TAKEN_OVER).then(|| {
+        format!(
+            "pid {} retired it at API start on the same storage root (epoch {})",
+            record.artefact, record.since
+        )
+    })
+}
+
 async fn run(
     target: &ComputeTarget,
     script: &str,

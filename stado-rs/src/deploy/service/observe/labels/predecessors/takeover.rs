@@ -12,15 +12,12 @@
 //! retires these units: a flag in a live argument vector proves neither a
 //! bound listener nor the same root. Each retirement is recorded on the host
 //! as `taken_over`, and that record is what keeps ensure and the reconciler
-//! from repairing the old unit afterwards, see [`taken_over`].
+//! from repairing the old unit afterwards, see [`record::taken_over`].
 
 use crate::deploy::service::*;
 
-use super::{record, retirement, PredecessorRetirement};
-
-/// The handoff record state of an API listener unit this host's Stado
-/// process retired at API start.
-const TAKEN_OVER: &str = "taken_over";
+use super::record::{self, taken_over, TAKEN_OVER, WITHDRAWN};
+use super::{retirement, PredecessorRetirement};
 
 /// The unit the init system started this process under: launchd names the
 /// job in `XPC_SERVICE_NAME`, systemd in the process's own cgroup path.
@@ -80,44 +77,47 @@ async fn take_over_retired(
             });
             continue;
         }
-        let retired = retirement(&target, retired, runner).await;
-        if retired.state != "failed" {
-            let pid = std::process::id().to_string();
+        // The record is written before the unit is retired, so a repair that
+        // re-reads it after its own ensure sees it and retires the unit again
+        // (see [`retire_if_taken_over`]); a retirement that fails withdraws it.
+        let pid = std::process::id().to_string();
+        if let Err(error) =
+            record::write_record(&target, retired, TAKEN_OVER, &[], &pid, runner).await
+        {
+            retirements.push(PredecessorRetirement {
+                unit: retired.to_string(),
+                state: "failed".to_string(),
+                detail: format!(
+                    "its takeover could not be recorded, so the reconciler would repair it: {error}"
+                ),
+            });
+            continue;
+        }
+        let outcome = retirement(&target, retired, runner).await;
+        if outcome.state == "failed" {
             if let Err(error) =
-                record::write_record(&target, &retired.unit, TAKEN_OVER, &[], &pid, runner).await
+                record::write_record(&target, retired, WITHDRAWN, &[], &pid, runner).await
             {
-                retirements.push(PredecessorRetirement {
-                    detail: format!(
-                        "{}; its takeover could not be recorded, so the reconciler would \
-                         repair it: {error}",
-                        retired.detail
-                    ),
-                    state: "failed".to_string(),
-                    unit: retired.unit,
-                });
-                continue;
+                eprintln!("[stado] predecessor {retired}: its takeover record stays: {error}");
             }
         }
-        retirements.push(retired);
+        retirements.push(outcome);
     }
     Ok(retirements)
 }
 
-/// The takeover this host's Stado process recorded for API listener unit
-/// `unit`: the pid that retired it and since when. `None` when none was
-/// recorded, or the record cannot be read, so the unit is still repaired.
-pub(super) async fn taken_over(
+/// Retire `unit` on `target` again when its takeover is recorded: what a
+/// repair runs after its own ensure, because a takeover that started while
+/// the repair was under way recorded itself before retiring, and the ensure
+/// may have brought the unit back after that retirement. `None` when no
+/// takeover is recorded.
+pub async fn retire_if_taken_over(
     target: &ComputeTarget,
     unit: &str,
     runner: &Runner,
-) -> Option<String> {
-    let record = record::read_record(target, unit, runner).await.ok()??;
-    (record.state == TAKEN_OVER).then(|| {
-        format!(
-            "pid {} retired it at API start on the same storage root (epoch {})",
-            record.artefact, record.since
-        )
-    })
+) -> Option<PredecessorRetirement> {
+    taken_over(target, unit, runner).await?;
+    Some(retirement(target, unit, runner).await)
 }
 
 /// The local backend word a predecessor must name to serve the same root.

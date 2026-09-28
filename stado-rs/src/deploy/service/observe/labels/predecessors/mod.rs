@@ -7,7 +7,7 @@ mod takeover;
 
 pub use handoff::*;
 pub use listener::{hand_over_role, listener_role, listener_standing};
-pub use takeover::take_over_on_start;
+pub use takeover::{retire_if_taken_over, take_over_on_start};
 
 /// What retiring one catalog-retired unit on one host did.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -103,7 +103,7 @@ pub async fn role_retired(
         return listener::listener_retired(target, running, role, stopped, runner).await;
     }
     if crate::deploy::service_catalog::api_role(role) {
-        return takeover::taken_over(target, &role.unit, runner).await;
+        return record::taken_over(target, &role.unit, runner).await;
     }
     let (_, not_running) = role_process(target, running, &role.flag, runner)
         .await

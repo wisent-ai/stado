@@ -1,4 +1,5 @@
 mod command;
+mod roles;
 mod types;
 mod validation;
 use anyhow::{bail, Context, Result};

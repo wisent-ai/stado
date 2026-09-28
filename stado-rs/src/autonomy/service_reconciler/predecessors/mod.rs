@@ -24,7 +24,7 @@ mod roles;
 mod standby;
 mod strays;
 
-pub(super) use roles::taken_over;
+pub(super) use roles::{retake, taken_over};
 
 /// A declared catalog service and its catalog entry, for each one whose entry
 /// names retired or role units: the replacements a pass retires predecessors

@@ -193,12 +193,32 @@ pub async fn reconcile(
                 continue;
             }
         };
-        let result = match planned_action {
-            "beacon_repair" => reconcile_beacon(&status, &target, &runner).await,
-            "adopt" => reconcile_observed(&status, &target, &runner).await,
-            "ensure" => reconcile_unreachable(&status, &target, &runner).await,
-            "host_probe" => reconcile_undeclared(&status, &target, &runner).await,
+        // The takeover may have been recorded since the row was judged: asked
+        // again under the lease, and once more after the repair, which retires
+        // a unit the repair brought back after a takeover retired it.
+        let taken = if planned_action == "beacon_repair" {
+            None
+        } else {
+            super::predecessors::taken_over(&status.service, &replacements, &runner).await
+        };
+        let result = match (taken, planned_action) {
+            (Some(detail), _) => Ok(("retired".to_string(), false, detail)),
+            (None, "beacon_repair") => reconcile_beacon(&status, &target, &runner).await,
+            (None, "adopt") => reconcile_observed(&status, &target, &runner).await,
+            (None, "ensure") => reconcile_unreachable(&status, &target, &runner).await,
+            (None, "host_probe") => reconcile_undeclared(&status, &target, &runner).await,
             _ => unreachable!(),
+        };
+        let result = match result {
+            Ok((action, changed, detail)) if action != "retired" => {
+                match super::predecessors::retake(&status.service, &target, &runner).await {
+                    Some(undone) => {
+                        Ok(("retired".to_string(), true, format!("{detail}; {undone}")))
+                    }
+                    None => Ok((action, changed, detail)),
+                }
+            }
+            other => other,
         };
         let result = gate.release(&subject, &lease, result).await;
         match result {
