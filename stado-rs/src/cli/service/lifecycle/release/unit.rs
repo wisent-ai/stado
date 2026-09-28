@@ -69,6 +69,32 @@ pub(crate) async fn restart(
     recovery_unit: Option<&str>,
     json: bool,
 ) -> Result<(), CmdError> {
+    let (payload, cells, failures) =
+        restart_reports(name, host, take_over_listener, recovery_unit).await?;
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "restart")
+}
+
+/// Restart NAME's declared units and return their reports without printing
+/// anything, for a caller that owns the one document it answers with.
+pub(crate) async fn restart_quietly(name: &str, host: Option<&str>) -> Result<Value, CmdError> {
+    let (payload, _, failures) = restart_reports(name, host, None, None).await?;
+    fail_if_any(&failures, "restart")?;
+    Ok(Value::Array(payload))
+}
+
+type RestartReports = (Vec<Value>, Vec<Vec<String>>, Vec<String>);
+
+async fn restart_reports(
+    name: &str,
+    host: Option<&str>,
+    take_over_listener: Option<&str>,
+    recovery_unit: Option<&str>,
+) -> Result<RestartReports, CmdError> {
     let services = declared_matching(name, host).await?;
     let runner = production_runner();
     let mut payload: Vec<Value> = Vec::new();
@@ -134,12 +160,7 @@ pub(crate) async fn restart(
         payload.push(entry);
     }
 
-    if json {
-        print_json(&Value::Array(payload))?;
-    } else {
-        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "DETAIL"], &cells);
-    }
-    fail_if_any(&failures, "restart")
+    Ok((payload, cells, failures))
 }
 
 pub(crate) async fn stop(

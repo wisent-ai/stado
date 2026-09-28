@@ -141,18 +141,21 @@ pub(super) async fn push(
     let remote: Value = serde_json::from_slice(&fetched.content)
         .map_err(|error| CmdError::click(format!("{host}'s config file: {error}")))?;
     let agrees = remote.get("database_api") == Some(&local);
+    let mut restarted = Value::Null;
     let status = match (agrees, check) {
         (true, _) => "in agreement",
         (false, true) => "would push",
         (false, false) => {
             crate::cli::host::write_host_config(host, "database_api", &local.to_string()).await?;
-            crate::cli::service::reconcile_after_config_change(service, host).await?;
+            // The unit's restart reports go into this command's one receipt:
+            // a second document on stdout would make `--json` unparseable.
+            restarted = crate::cli::service::restart_quietly(service, Some(host)).await?;
             "pushed"
         }
     };
     report_mutation(
         json_output,
-        json!({ "host": host, "service": service, "database_api": status }),
+        json!({ "host": host, "service": service, "database_api": status, "restarted": restarted }),
     )?;
     if check && !agrees {
         return Err(CmdError::click(format!(

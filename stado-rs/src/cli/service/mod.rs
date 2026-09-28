@@ -62,7 +62,7 @@ pub(crate) use lifecycle::deploy::catalog::{
     ensure_local_dependency, reconcile_after_config_change,
 };
 pub(crate) use lifecycle::release::release_pipeline_product;
-pub(crate) use lifecycle::release::unit::{host_sudo_password, restart};
+pub(crate) use lifecycle::release::unit::{host_sudo_password, restart, restart_quietly};
 pub(crate) use runtime::secrets::service_secret;
 
 // ---------------------------------------------------------------------------
