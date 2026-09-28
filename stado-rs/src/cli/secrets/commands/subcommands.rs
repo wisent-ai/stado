@@ -64,6 +64,10 @@ pub enum CredentialItemCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Host primitive used by `show`: read a `skarbiec get --json` document
+    /// on stdin and print each field's length and SHA-256, never a value.
+    #[command(name = "summarize-local", hide = true)]
+    SummarizeLocal,
 }
 
 #[derive(Subcommand)]

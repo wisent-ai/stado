@@ -110,6 +110,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             CredentialItemCommands::StampFingerprints { host, apply, json } => {
                 super::host::stamp_vault_fingerprints(&host, apply, json).await
             }
+            CredentialItemCommands::SummarizeLocal => super::host::summarize_item_local(),
         },
         SecretsCommands::Token { command } => match command {
             CredentialTokenCommands::Mint {

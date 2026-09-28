@@ -113,26 +113,63 @@ struct VaultItemSummary {
     fields: Vec<VaultFieldSummary>,
 }
 
-/// The reducer that runs on the host: `skarbiec get` writes the decrypted
-/// document to a pipe, and this reads it, replaces every value with its length
-/// and SHA-256, and prints the summary. Nothing else is printed, so a value
-/// cannot reach this process even by accident.
-/// No indented block anywhere in it, deliberately: a Rust string literal that
-/// continues with `\` drops the next line's leading whitespace, so an indented
-/// `for` body arrives at the host as an `IndentationError`. A comprehension
-/// needs no indentation and cannot lose it.
-const VAULT_FIELD_SUMMARY_PROGRAM: &str = concat!(
-    "import sys,json,hashlib\n",
-    "document=json.load(sys.stdin)\n",
-    "fields=document.get('fields') or {}\n",
-    "encode=lambda value: (value if isinstance(value,str)",
-    " else json.dumps(value,separators=(',',':'),sort_keys=True)).encode()\n",
-    "print(json.dumps({'kind':document.get('kind'),'schema':document.get('schema'),",
-    "'fields':[{'name':name,'text':isinstance(fields[name],str),",
-    "'length':len(encode(fields[name])),",
-    "'sha256':hashlib.sha256(encode(fields[name])).hexdigest()}",
-    " for name in sorted(fields)]}))\n",
-);
+/// The reducer the host runs as `stado credentials item summarize-local`:
+/// `skarbiec get` writes the decrypted document to a pipe, and this reads it,
+/// replaces every value with its length and SHA-256, and prints the summary.
+/// Nothing else is printed, so a value cannot reach the caller even by
+/// accident. A text field is hashed as its bytes; any other value as its
+/// compact JSON with object keys sorted.
+pub fn summarize_local() -> Result<(), crate::cli::CmdError> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let refused = |detail: String| crate::cli::CmdError::click(detail);
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|error| refused(format!("the item document could not be read: {error}")))?;
+    let document: Value = serde_json::from_str(&input)
+        .map_err(|error| refused(format!("the item document is not JSON: {error}")))?;
+    let empty = serde_json::Map::new();
+    let fields = document["fields"].as_object().unwrap_or(&empty);
+    let mut names: Vec<&String> = fields.keys().collect();
+    names.sort();
+    let summary: Vec<Value> = names
+        .into_iter()
+        .map(|name| {
+            let value = &fields[name];
+            let bytes = match value {
+                Value::String(text) => text.clone().into_bytes(),
+                other => sorted(other).to_string().into_bytes(),
+            };
+            serde_json::json!({
+                "name": name,
+                "text": value.is_string(),
+                "length": bytes.len(),
+                "sha256": hex::encode(Sha256::digest(&bytes)),
+            })
+        })
+        .collect();
+    let report = serde_json::json!({
+        "kind": document.get("kind"),
+        "schema": document.get("schema"),
+        "fields": summary,
+    });
+    println!("{report}");
+    Ok(())
+}
+
+/// VALUE with every object's keys in sorted order.
+fn sorted(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            Value::Object(keys.into_iter().map(|key| (key.clone(), sorted(&map[key]))).collect())
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+        other => other.clone(),
+    }
+}
 
 /// When the host last wrote this item. Read from the same encrypted record as
 /// the revision, so it costs no decryption.

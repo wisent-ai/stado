@@ -4,7 +4,7 @@ use crate::cli::CmdError;
 
 use crate::cli::host::machine::users::credentials::credential_host;
 use crate::cli::host::secrets::vault::item::{
-    read_vault_phase, read_vault_updated_at, VaultItemSummary, VAULT_FIELD_SUMMARY_PROGRAM,
+    read_vault_phase, read_vault_updated_at, VaultItemSummary,
 };
 use crate::cli::host::secrets::vault::vault_word;
 
@@ -66,12 +66,12 @@ pub async fn vault_item_show(
     let summary_text = crate::deploy::host_channel::run_command(
         &resolved,
         &format!(
-            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --json | python3 -c {}",
+            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --json | {} credentials item summarize-local",
             crate::deploy::shlex_quote(&gnupg_home),
             crate::deploy::shlex_quote(&vault),
             crate::deploy::shlex_quote(&skarbiec),
             crate::deploy::shlex_quote(item),
-            crate::deploy::shlex_quote(VAULT_FIELD_SUMMARY_PROGRAM),
+            crate::deploy::shlex_quote(&format!("{home}/.stado/bin/stado")),
         ),
         &runner,
     )
