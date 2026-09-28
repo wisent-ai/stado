@@ -36,6 +36,10 @@ enum ChangesCommand {
     List {
         #[arg(long)]
         task: Option<String>,
+        /// Only these change ids (repeatable). A caller that follows a few
+        /// tickets reads those, not every ticket the fleet ever queued.
+        #[arg(long = "id")]
+        ids: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -126,13 +130,20 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
             }
             Ok(())
         }
-        ChangesCommand::List { task, json } => {
+        ChangesCommand::List { task, ids, json } => {
             let store = JobStorage::new().await.map_err(failure)?;
             let mut statuses = Vec::new();
             // A ticket's id is its object name, so the wanted set comes from
             // the listing alone; every ticket a build batch froze arrives with
             // that batch, and only the rest are downloaded one by one.
-            let paths = ticket_paths(&store).await?;
+            let paths: Vec<String> = ticket_paths(&store)
+                .await?
+                .into_iter()
+                .filter(|path| {
+                    ids.is_empty()
+                        || ticket_id(path).is_some_and(|id| ids.iter().any(|wanted| wanted == id))
+                })
+                .collect();
             let wanted: std::collections::HashSet<String> = paths
                 .iter()
                 .filter_map(|path| ticket_id(path))
