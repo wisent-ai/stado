@@ -113,6 +113,22 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_apple_challenge_he
     Ok(identity)
 }
 
+/// Run on the build host with `$1` the host's Stado, `$2` the bundle
+/// identifier, `$3` the staged file and `$4` the previous signature (may be
+/// empty); stdin carries the certificate chain and the private key, one base64
+/// line each, which reach the signer only through its environment.
+const NATIVE_SIGN: &str = r#"set -eu
+IFS= read -r certificate || exit
+IFS= read -r key || exit
+WISENT_CODESIGN_CERTIFICATE_PEM=$(printf '%s' "$certificate" | /usr/bin/base64 -d)
+WISENT_CODESIGN_PRIVATE_KEY_PEM=$(printf '%s' "$key" | /usr/bin/base64 -d)
+export WISENT_CODESIGN_CERTIFICATE_PEM WISENT_CODESIGN_PRIVATE_KEY_PEM
+if [ -n "$4" ]; then
+  exec "$1" product signing sign --identifier "$2" --previous "$4" "$3" --json
+fi
+exec "$1" product signing sign --identifier "$2" "$3" --json
+"#;
+
 /// Sign the staged helper with the fleet's stored Apple certificate.
 ///
 /// A build host holds no signing identity of its own. The certificate and its
@@ -137,23 +153,28 @@ async fn sign_helper(
         .await?,
     )
     .map_err(|error| DeployError(format!("Apple issuer chain is not text: {error}")))?;
+    use base64::Engine as _;
+    let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
     let certificate = signing_credential("certificate").await?;
-    let request = serde_json::json!({
-        "signer": [signer, "product"],
-        "identifier": APPLE_CHALLENGE_HELPER_BUNDLE_ID,
-        "target": staged,
-        "previous": previous,
-        "certificate": format!("{}\n{issuers}", certificate.trim_end()),
-        "private_key": signing_credential("private_key").await?,
-    });
+    let certificate = format!("{}\n{issuers}", certificate.trim_end());
+    let private_key = signing_credential("private_key").await?;
+    // The certificate and its key travel on stdin, one base64 line each, and
+    // reach `stado product signing sign` only through its environment, never
+    // its argv, so a process listing on this host cannot read either.
+    let stdin = format!("{}\n{}\n", encode(&certificate), encode(&private_key));
     let output = host_channel::run_program_with_stdin(
         target,
         &[
-            "/usr/bin/python3",
+            "/bin/sh",
             "-c",
-            include_str!("../../../host_payloads/native_signing/sign.py"),
+            NATIVE_SIGN,
+            "stado-native-sign",
+            signer,
+            APPLE_CHALLENGE_HELPER_BUNDLE_ID,
+            staged,
+            previous,
         ],
-        &request.to_string(),
+        &stdin,
         runner,
     )
     .await?;
@@ -164,9 +185,11 @@ async fn sign_helper(
             output.detail().trim()
         )));
     }
-    let report: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
+    // One target in, one report out: the CLI answers with a list either way.
+    let reports: serde_json::Value = serde_json::from_str(&output.stdout).map_err(|error| {
         DeployError(format!("invalid Apple challenge signing receipt: {error}"))
     })?;
+    let report = &reports[0];
     if report["state"].as_str() != Some("stable") {
         return Err(DeployError(format!(
             "{}: Apple challenge helper signature is {}",
