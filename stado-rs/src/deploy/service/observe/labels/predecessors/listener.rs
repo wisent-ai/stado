@@ -83,10 +83,24 @@ pub async fn hand_over_role(
     )
     .await;
     let outcome = match standing {
-        Ok(Handoff::Complete) => match complete_handoff(target, &unit, &process, runner).await {
-            Ok(()) => return retirement(target, &unit, runner).await,
-            Err(error) => Err(error),
-        },
+        // The listener is recorded acquired before the old unit is retired and
+        // complete only once that retirement is confirmed, so a retirement that
+        // fails half way is retried on the next pass rather than forgotten.
+        Ok(Handoff::Complete) => {
+            match mark_handoff(target, &unit, "acquired", &process, runner).await {
+                Ok(()) => {
+                    let retired = retirement(target, &unit, runner).await;
+                    if retired.state == "failed" {
+                        return retired;
+                    }
+                    match mark_handoff(target, &unit, "complete", &process, runner).await {
+                        Ok(()) => return retired,
+                        Err(error) => Err(error),
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        }
         Ok(Handoff::Retained(detail)) => return answer("absent", detail),
         Ok(Handoff::Kept(detail)) => return answer("kept", detail),
         Ok(Handoff::Waiting(detail)) => Ok(("awaiting_resolver".to_string(), detail)),
@@ -117,14 +131,17 @@ pub async fn hand_over_role(
 }
 
 /// Whether `role`'s unit must not be repaired: its listener was acquired, or
-/// it stepped aside and the resolver has not answered yet.
+/// it stepped aside and the resolver has not answered yet. `stopped` says the
+/// registry holds the replacement stopped, which undoes an unfinished
+/// handoff but never a completed one.
 pub(super) async fn listener_retired(
     target: &ComputeTarget,
     running: &ManagedService,
     role: &crate::deploy::service_catalog::RoleUnit,
+    stopped: bool,
     runner: &Runner,
 ) -> Option<String> {
-    match listener_standing(target, running, role, false, runner)
+    match listener_standing(target, running, role, stopped, runner)
         .await
         .ok()?
     {

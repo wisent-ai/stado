@@ -73,16 +73,18 @@ pub async fn retire_catalog_predecessors(
 /// Whether `role`'s unit is out of the way on `target` and must not be
 /// repaired: the replacement runs the role, or, for a role that shares its
 /// listener, the listener was acquired or the unit stepped aside and the
-/// resolver has not answered yet. The detail when it is; `None` otherwise,
-/// including when that cannot be established.
+/// resolver has not answered yet. `stopped` says the registry holds the
+/// replacement stopped. The detail when it is; `None` otherwise, including
+/// when that cannot be established.
 pub async fn role_retired(
     target: &ComputeTarget,
     running: &ManagedService,
     role: &crate::deploy::service_catalog::RoleUnit,
+    stopped: bool,
     runner: &Runner,
 ) -> Option<String> {
     if listener_role(role) {
-        return listener::listener_retired(target, running, role, runner).await;
+        return listener::listener_retired(target, running, role, stopped, runner).await;
     }
     let (_, not_running) = role_process(target, running, &role.flag, runner)
         .await

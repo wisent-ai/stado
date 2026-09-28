@@ -13,10 +13,14 @@ use crate::deploy::Runner;
 
 use super::Replacement;
 
-/// `Some(detail)` when `declared` is a role unit of a replacement running on
-/// its host and that replacement's live process is proven to run the role;
-/// `None` when the unit is still the only thing doing its work, including
-/// when that cannot be established.
+/// `Some(detail)` when `declared` is a role unit of a replacement on its host
+/// and that replacement took the role over: its live process is proven to run
+/// an ordinary role, or, for a role that shares its unit's listener, the
+/// host's handoff record says the listener was acquired or the unit stepped
+/// aside and the resolver has not answered. A listener role is asked even
+/// while the replacement is not running, because an acquired listener stays
+/// acquired across the replacement's restarts. `None` when the unit is still
+/// the only thing doing its work, including when that cannot be established.
 pub(in crate::autonomy::service_reconciler) async fn taken_over(
     declared: &ManagedService,
     replacements: &[Replacement],
@@ -29,7 +33,7 @@ pub(in crate::autonomy::service_reconciler) async fn taken_over(
         active,
     } in replacements
     {
-        if !active || running.host != declared.host {
+        if running.host != declared.host {
             continue;
         }
         let Some(role) = entry
@@ -39,10 +43,13 @@ pub(in crate::autonomy::service_reconciler) async fn taken_over(
         else {
             continue;
         };
+        if !active && !service::listener_role(role) {
+            continue;
+        }
         let target = crate::deploy::host_channel::canonical_target(&running.host)
             .await
             .ok()?;
-        if let Some(proof) = service::role_retired(&target, running, role, runner).await {
+        if let Some(proof) = service::role_retired(&target, running, role, !active, runner).await {
             return Some(format!(
                 "{unit} is retired on {}: {} took its role over ({proof})",
                 running.host, entry.name

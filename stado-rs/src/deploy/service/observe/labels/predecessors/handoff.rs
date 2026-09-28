@@ -16,8 +16,9 @@
 //! - No record, and the replacement runs the role: the unit steps aside
 //!   (`handed_over`). Only a caller that can bring the unit back starts one.
 //! - The resolver published `serving`, by the pid the replacement runs now,
-//!   after the record was written: the listener is acquired, and the record
-//!   becomes `complete`.
+//!   after the record was written: the listener is acquired. The record says
+//!   `acquired` until the old unit's retirement is confirmed, which is retried
+//!   every pass, and `complete` after it.
 //! - `complete`: the unit stays retired. Registry health after that is the
 //!   resolver's own business: a `backing_off` over a failed refresh keeps its
 //!   listeners bound, and bringing the old unit back beside it would only
@@ -99,6 +100,11 @@ pub async fn handoff_standing(
             record.artefact
         )));
     }
+    // Acquired, and the old unit's retirement not yet confirmed: retry it,
+    // never undo it, whatever the resolver says now.
+    if record.state == "acquired" {
+        return Ok(Handoff::Complete);
+    }
     if serving_now(record.since) {
         return Ok(Handoff::Complete);
     }
@@ -177,13 +183,16 @@ pub async fn restore_handoff(
     write_record(target, unit, "refused", scopes, artefact, runner).await
 }
 
-/// Record that the replacement's resolver acquired the listener, so later
-/// resolver states no longer reopen the handoff.
-pub async fn complete_handoff(
+/// Record how far the replacement's resolver got with the listener:
+/// `acquired` once it serves, before the old unit is retired, and `complete`
+/// once that retirement is confirmed. Neither is reopened by later resolver
+/// states.
+pub async fn mark_handoff(
     target: &ComputeTarget,
     unit: &str,
+    state: &str,
     process: &RunningProgram,
     runner: &Runner,
 ) -> Result<(), DeployError> {
-    write_record(target, unit, "complete", &[], &process.resolved, runner).await
+    write_record(target, unit, state, &[], &process.resolved, runner).await
 }
