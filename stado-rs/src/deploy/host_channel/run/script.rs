@@ -24,6 +24,17 @@ pub async fn run_script(
     run_script_with_timeout(target, script, remote_timeout(), runner).await
 }
 
+/// Run a fixed script and wait for it to finish, however long its work takes:
+/// a pass whose length follows the data it reads (every byte of a replica
+/// hashed) is not cut short by a wall clock that knows nothing of that data.
+pub async fn run_script_to_completion(
+    target: &ComputeTarget,
+    script: &str,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    Ok(run_script_with_bound(target, script, None, runner).await?.0)
+}
+
 /// Run a fixed remote script with an operation-specific wall-clock bound.
 /// Connection setup remains bounded by the shared SSH options.
 pub async fn run_script_with_timeout(
@@ -32,11 +43,9 @@ pub async fn run_script_with_timeout(
     timeout: Duration,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    Ok(
-        run_script_with_timeout_and_connection(target, script, timeout, runner)
-            .await?
-            .0,
-    )
+    Ok(run_script_with_bound(target, script, Some(timeout), runner)
+        .await?
+        .0)
 }
 
 /// Run a fixed script and report which declared connection carried it.
@@ -44,6 +53,15 @@ pub async fn run_script_with_timeout_and_connection<'a>(
     target: &'a ComputeTarget,
     script: &str,
     timeout: Duration,
+    runner: &Runner,
+) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
+    run_script_with_bound(target, script, Some(timeout), runner).await
+}
+
+async fn run_script_with_bound<'a>(
+    target: &'a ComputeTarget,
+    script: &str,
+    bound: Option<Duration>,
     runner: &Runner,
 ) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
     let (argv, _key, used_connection) = if target_is_this_host(target) {
@@ -61,7 +79,7 @@ pub async fn run_script_with_timeout_and_connection<'a>(
     let output = runner(CommandSpec {
         argv,
         stdin: Some(script.to_string()),
-        timeout: Some(timeout),
+        timeout: bound,
     })
     .await
     .map_err(DeployError)?;

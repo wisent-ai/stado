@@ -215,6 +215,29 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         product: String,
     },
+    /// The host half of `stado host backup-audit`: classify this host's
+    /// replica against its primary store and, with --reclaim yes --apply yes,
+    /// delete the twins this pass proved. Prints the marker lines the
+    /// operator side reads.
+    #[command(name = "backup-audit-local", hide = true)]
+    BackupAuditLocal {
+        #[arg(long)]
+        backup: std::path::PathBuf,
+        #[arg(long)]
+        primary: std::path::PathBuf,
+        #[arg(long)]
+        namespace: String,
+        #[arg(long, value_parser = ["yes", "no"])]
+        reclaim: String,
+        #[arg(long, value_parser = ["yes", "no"])]
+        apply: String,
+        /// Exact object paths, each hex-encoded, comma separated
+        #[arg(long, default_value = "")]
+        objects_hex: String,
+        /// Namespaces to inventory, each hex-encoded, comma separated
+        #[arg(long, default_value = "")]
+        inventory_namespaces_hex: String,
+    },
     #[command(name = "storage-root-reconcile-worker", hide = true)]
     StorageRootReconcileWorker {
         target: String,

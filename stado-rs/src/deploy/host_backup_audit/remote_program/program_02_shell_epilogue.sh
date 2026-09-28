@@ -1,4 +1,3 @@
-STADO_AUDIT_EOF
 pruned=0
 if [ '@APPLY@' = yes ] && [ '@RECLAIM@' = yes ]; then
   # Counted as the difference the delete made rather than as the empty

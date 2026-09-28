@@ -21,7 +21,10 @@ pub use remote::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, run_command,
 };
-pub use script::{run_script, run_script_with_timeout, run_script_with_timeout_and_connection};
+pub use script::{
+    run_script, run_script_to_completion, run_script_with_timeout,
+    run_script_with_timeout_and_connection,
+};
 
 /// Run one fixed program on a resolved target.
 ///

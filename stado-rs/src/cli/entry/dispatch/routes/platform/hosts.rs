@@ -88,6 +88,31 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
         HostStateCommands::ReleaseStoreRepairLocal { config, product } => {
             host::release_store_repair_local(&config, &product)
         }
+        HostStateCommands::BackupAuditLocal {
+            backup,
+            primary,
+            namespace,
+            reclaim,
+            apply,
+            objects_hex,
+            inventory_namespaces_hex,
+        } => {
+            let pass = crate::deploy::host_backup_audit::local::LocalPass {
+                backup,
+                primary,
+                namespace,
+                objects: crate::deploy::host_backup_audit::local::hex_list(&objects_hex)
+                    .map_err(crate::cli::CmdError::usage)?,
+                inventory_namespaces: crate::deploy::host_backup_audit::local::hex_list(
+                    &inventory_namespaces_hex,
+                )
+                .map_err(crate::cli::CmdError::usage)?,
+                reclaim: reclaim == "yes",
+                apply: reclaim == "yes" && apply == "yes",
+            };
+            crate::deploy::host_backup_audit::local::run(&pass);
+            Ok(())
+        }
         HostStateCommands::StorageRootReconcileWorker {
             target,
             target_config,

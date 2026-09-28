@@ -254,5 +254,5 @@ pub use run::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, run_command, run_program, run_program_with_connection, run_program_with_stdin,
     run_program_with_stdin_and_connection, run_program_with_timeout, run_script,
-    run_script_with_timeout, run_script_with_timeout_and_connection,
+    run_script_to_completion, run_script_with_timeout, run_script_with_timeout_and_connection,
 };

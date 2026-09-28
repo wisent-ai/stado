@@ -46,16 +46,16 @@
 //!
 //! The pass is split by what it reads and what it writes down: `plan` holds
 //! the request and the program text it produces, `remote_program` the fixed
-//! program itself, `report` the reading, and `parse` the fold from the
-//! program's marker lines into it.
-
-use std::time::Duration;
+//! shell around it, `local` the pass itself as the host's own Stado runs it
+//! (`stado host backup-audit-local`), `report` the reading, and `parse` the
+//! fold from the pass's marker lines into it.
 
 use crate::targets::ComputeTarget;
 
 use super::host_channel;
 use super::{DeployError, Runner};
 
+pub mod local;
 mod parse;
 mod plan;
 mod remote_program;
@@ -72,8 +72,8 @@ pub const TWIN: &str = "twin";
 pub const DIFFERS: &str = "differs";
 /// The primary does not have this address at all. The sole-copy case; kept.
 pub const ABSENT: &str = "absent";
-/// The primary has this address at the same size, but the pass ran out of its
-/// hashing budget before proving the bytes match.
+/// The primary has this address at the same size, but one of the two files
+/// could not be read to prove the bytes match.
 ///
 /// Reported as its own class rather than folded into [`TWIN`], because the one
 /// thing this command exists to prevent is treating an unproven twin as
@@ -95,17 +95,9 @@ pub async fn audit_host(
 ) -> Result<(ComputeTarget, BackupAudit), DeployError> {
     let target = host_channel::canonical_target(host).await?;
     let script = remote_script(plan);
-    let output = if plan.reclaim {
-        host_channel::run_script_with_timeout(
-            &target,
-            &script,
-            Duration::from_secs(RECLAIM_TIMEOUT_SECONDS),
-            runner,
-        )
-        .await?
-    } else {
-        host_channel::run_script(&target, &script, runner).await?
-    };
+    // Every same-size pair is hashed, so the pass takes as long as the replica
+    // it reads; it is waited for, not cut off.
+    let output = host_channel::run_script_to_completion(&target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,
