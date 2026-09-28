@@ -57,7 +57,12 @@ final class StadoFirstUseJourney: ObservableObject {
     }
 
     func expose() async {
-        try? await client?.expose(evidenceRevision: evidenceRevision)
+        guard let client else { return }
+        do {
+            try await client.expose(evidenceRevision: evidenceRevision)
+        } catch {
+            errorMessage = "Stado could not record that this step was shown. \(error.localizedDescription)"
+        }
     }
 
     func dismissError() {
@@ -214,9 +219,7 @@ struct StadoFirstUseRoot: View {
         }
     }
 
-    /// One line in the posture signal strip. It used to be a shadowed card
-    /// floating over the shell, competing with the context bar for the same
-    /// strip of window.
+    /// One line in the posture signal strip.
     private var firstRunNotice: String {
         guard let snapshot = operationsStore.snapshot else {
             return "Waiting for the first completed job"
