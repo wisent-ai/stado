@@ -27,8 +27,9 @@ case "$env_path" in "$home"/*) ;; *) fail 'target must be inside the target home
 [ ! -L "$env_path" ] || fail 'target cannot be a symlink'
 [ -f "$env_path" ] || fail 'environment file must already exist'
 parent=$(/usr/bin/dirname "$env_path")
-real_parent=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$parent")
-/usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=sys.argv[2]; sys.exit(0 if os.path.commonpath((home,parent)) == home else 1)' "$home" "$real_parent" || fail 'resolved target leaves the target home'
+real_parent=$(cd "$parent" && pwd -P) || fail 'target parent cannot be resolved'
+real_home=$(cd "$home" && pwd -P) || fail 'target home cannot be resolved'
+case "$real_parent/" in "$real_home"/*) ;; *) fail 'resolved target leaves the target home' ;; esac
 key=$(printf '%s' '@KEY_B64@' | /usr/bin/base64 "$decode")
 value=$(printf '%s' '@VALUE_B64@' | /usr/bin/base64 "$decode")
 tmp="$parent/.stado-env-set.$$"
@@ -71,8 +72,9 @@ case "$env_path" in "$home"/*) ;; *) fail 'target must be inside the target home
 [ ! -L "$env_path" ] || fail 'target cannot be a symlink'
 [ -f "$env_path" ] || fail 'environment file must already exist'
 parent=$(/usr/bin/dirname "$env_path")
-real_parent=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$parent")
-/usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=sys.argv[2]; sys.exit(0 if os.path.commonpath((home,parent)) == home else 1)' "$home" "$real_parent" || fail 'resolved target leaves the target home'
+real_parent=$(cd "$parent" && pwd -P) || fail 'target parent cannot be resolved'
+real_home=$(cd "$home" && pwd -P) || fail 'target home cannot be resolved'
+case "$real_parent/" in "$real_home"/*) ;; *) fail 'resolved target leaves the target home' ;; esac
 key=$(printf '%s' '@KEY_B64@' | /usr/bin/base64 "$decode")
 tmp="$parent/.stado-env-unset.$$"
 trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM

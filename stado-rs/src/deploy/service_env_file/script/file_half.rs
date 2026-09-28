@@ -66,10 +66,12 @@ if [ ! -f "$env_path" ]; then
   refuse missing 'no regular file at the target'
 fi
 parent=$(/usr/bin/dirname "$env_path")
-real_parent=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$parent")
-if ! /usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=sys.argv[2]; sys.exit(0 if os.path.commonpath((home,parent)) == home else 1)' "$home" "$real_parent"; then
-  refuse refused_outside_home 'the resolved target leaves the target home'
-fi
+real_parent=$(cd "$parent" 2>/dev/null && pwd -P) || refuse missing 'the target directory cannot be resolved'
+real_home=$(cd "$home" 2>/dev/null && pwd -P) || refuse refused_outside_home 'the target home cannot be resolved'
+case "$real_parent/" in
+  "$real_home"/*) ;;
+  *) refuse refused_outside_home 'the resolved target leaves the target home' ;;
+esac
 if [ ! -r "$env_path" ]; then
   refuse unreadable 'the login user cannot read the target'
 fi

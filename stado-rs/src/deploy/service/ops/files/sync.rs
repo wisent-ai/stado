@@ -37,9 +37,9 @@ if [ -e "$target_path" ] || [ -L "$target_path" ]; then
 fi
 parent=$(/usr/bin/dirname "$target_path") || fail 'target parent unavailable'
 /bin/mkdir -p "$parent" || fail 'cannot create target parent'
-if ! /usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=os.path.realpath(sys.argv[2]); raise SystemExit(0 if os.path.commonpath((home,parent)) == home else 1)' "$HOME" "$parent"; then
-  fail 'target parent escapes the target home'
-fi
+real_parent=$(cd "$parent" && pwd -P) || fail 'target parent cannot be resolved'
+real_home=$(cd "$HOME" && pwd -P) || fail 'target home cannot be resolved'
+case "$real_parent/" in "$real_home"/*) ;; *) fail 'target parent escapes the target home' ;; esac
 tmp="$target_path.stado-file-sync.$$"
 trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
 umask u=rw,go=
@@ -118,8 +118,9 @@ if [ -e "$token_path" ]; then
 fi
 parent=$(/usr/bin/dirname "$token_path")
 [ -d "$parent" ] || fail 'token file parent directory must already exist'
-real_parent=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$parent")
-/usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=sys.argv[2]; sys.exit(0 if os.path.commonpath((home,parent)) == home else 1)' "$home" "$real_parent" || fail 'resolved token file leaves the target home'
+real_parent=$(cd "$parent" && pwd -P) || fail 'token file parent cannot be resolved'
+real_home=$(cd "$home" && pwd -P) || fail 'target home cannot be resolved'
+case "$real_parent/" in "$real_home"/*) ;; *) fail 'resolved token file leaves the target home' ;; esac
 tmp="$parent/.stado-token-file-sync.$$"
 trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
 umask u=rw,go=

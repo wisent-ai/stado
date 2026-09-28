@@ -22,8 +22,14 @@ stado_sync_field=@FIELD@
 if [ -n \"$stado_sync_item\" ]; then
   value=$(\"$HOME/.stado/bin/stado\" credentials get \"$stado_sync_item\" --field \"$stado_sync_field\" 2>/dev/null) || fail_sync 'bearer unavailable on this host'
   [ -n \"$value\" ] || fail_sync 'bearer field is empty'
-  export variable
-  assignment=$(/usr/bin/env STADO_SYNC_VALUE=\"$value\" /usr/bin/python3 -c 'import os, shlex; print(os.environ[\"variable\"] + \"=\" + shlex.quote(os.environ[\"STADO_SYNC_VALUE\"]))' 2>/dev/null) || fail_sync 'cannot render the assignment'
+  # shlex.quote's rule: a value of only safe characters stays bare, any other
+  # is single-quoted with each ' written as '\\''.
+  case \"$value\" in
+    *[!A-Za-z0-9_@%+=:,./-]*)
+      quoted=$(printf '%s' \"$value\" | /usr/bin/sed \"s/'/'\\\\\\\\''/g\") || fail_sync 'cannot render the assignment'
+      assignment=\"$variable='$quoted'\" ;;
+    *) assignment=\"$variable=$value\" ;;
+  esac
 else
   assignment=$(printf '%s' '@ASSIGNMENT_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_sync 'invalid assignment payload'
 fi
