@@ -110,20 +110,37 @@ fn bundle_names(load: Loader, path: &str) -> Read<Vec<String>> {
     Ok(names)
 }
 
-/// Node's `resolvePackageTarget` under one condition set: `Some(true)` for a
-/// path, `Some(false)` when the first matching branch is blocked (`null`),
-/// `None` when nothing matches so the caller moves on. Condition keys are
-/// tried in their written order and the first one the set holds decides.
+/// The condition Node matches in every environment, whatever the caller's set.
+const UNCONDITIONAL: &str = "default";
+
+/// Node's `resolvePackageTarget` (lib/internal/modules/esm/resolve.js) under
+/// one condition set: `Some(true)` for a path, `Some(false)` for a blocked
+/// target (`null`, an empty array, or an array whose every branch is blocked
+/// or unmatched after at least one was blocked), `None` when nothing matched,
+/// so the caller moves on. In a condition map the keys are tried in their
+/// written order; `default` always matches, any other key when the set holds
+/// it, and the first match decides even when it is blocked.
 fn resolve(target: &serde_json::Value, conditions: &[&str]) -> Option<bool> {
     match target {
         serde_json::Value::String(path) => Some(!path.is_empty()),
         serde_json::Value::Null => Some(false),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .find_map(|item| resolve(item, conditions).filter(|resolved| *resolved)),
+        serde_json::Value::Array(items) if items.is_empty() => Some(false),
+        serde_json::Value::Array(items) => {
+            let mut blocked = false;
+            for item in items {
+                match resolve(item, conditions) {
+                    Some(true) => return Some(true),
+                    Some(false) => blocked = true,
+                    None => {}
+                }
+            }
+            blocked.then_some(false)
+        }
         serde_json::Value::Object(map) => map
             .iter()
-            .filter(|(condition, _)| conditions.contains(&condition.as_str()))
+            .filter(|(condition, _)| {
+                condition.as_str() == UNCONDITIONAL || conditions.contains(&condition.as_str())
+            })
             .find_map(|(_, branch)| resolve(branch, conditions)),
         _ => Some(false),
     }
