@@ -201,6 +201,7 @@ pub async fn reconcile(
         } else {
             super::predecessors::taken_over(&status.service, &replacements, &runner).await
         };
+        let repaired = taken.is_none();
         let result = match (taken, planned_action) {
             (Some(detail), _) => Ok(("retired".to_string(), false, detail)),
             (None, "beacon_repair") => reconcile_beacon(&status, &target, &runner).await,
@@ -209,16 +210,21 @@ pub async fn reconcile(
             (None, "host_probe") => reconcile_undeclared(&status, &target, &runner).await,
             _ => unreachable!(),
         };
-        let result = match result {
-            Ok((action, changed, detail)) if action != "retired" => {
-                match super::predecessors::retake(&status.service, &target, &runner).await {
-                    Some(undone) => {
-                        Ok(("retired".to_string(), true, format!("{detail}; {undone}")))
-                    }
-                    None => Ok((action, changed, detail)),
-                }
+        // A failed repair may still have loaded the unit (autostart is enabled
+        // before startup is judged), so the retirement is retried either way;
+        // a failed repair stays failed, and a failed retirement fails the row.
+        let retaken = if repaired {
+            super::predecessors::retake(&status.service, &target, &runner).await
+        } else {
+            None
+        };
+        let result = match (result, retaken) {
+            (result, None) => result,
+            (Ok((_, _, detail)), Some(Ok(undone))) => {
+                Ok(("retired".to_string(), true, format!("{detail}; {undone}")))
             }
-            other => other,
+            (Ok((_, _, detail)), Some(Err(failed))) => Err(format!("{detail}; {failed}")),
+            (Err(error), Some(Ok(undone) | Err(undone))) => Err(format!("{error}; {undone}")),
         };
         let result = gate.release(&subject, &lease, result).await;
         match result {

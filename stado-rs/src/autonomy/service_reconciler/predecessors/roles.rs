@@ -64,27 +64,34 @@ pub(in crate::autonomy::service_reconciler) async fn taken_over(
     None
 }
 
-/// After a repair of `declared` on `target`: when it is an API listener unit
-/// and the host Stado process recorded its takeover meanwhile, retire it
-/// again, because that takeover may have retired it before this repair's
-/// ensure brought it back. The takeover records itself before it retires,
-/// so whichever of the two finishes last, the unit ends retired. The detail
-/// of that retirement; `None` when there was nothing to undo.
+/// After a repair of `declared` on `target`, whether it succeeded or not:
+/// when it is an API listener unit and the host Stado process recorded its
+/// takeover meanwhile, retire it again, because that takeover may have
+/// retired it before this repair's ensure brought it back. The takeover
+/// records itself before it retires, so whichever of the two finishes last,
+/// the unit ends retired. `Ok` with the retirement's detail, `Err` when that
+/// retirement failed and the unit may run beside its replacement; `None`
+/// when there was nothing to undo.
 pub(in crate::autonomy::service_reconciler) async fn retake(
     declared: &ManagedService,
     target: &crate::targets::ComputeTarget,
     runner: &Runner,
-) -> Option<String> {
+) -> Option<Result<String, String>> {
     let host = crate::deploy::service_catalog::host_process().ok()?;
     let unit = declared.unit_id();
     if !crate::deploy::service_catalog::api_predecessors(&host).contains(&unit) {
         return None;
     }
     let retired = service::retire_if_taken_over(target, unit, runner).await?;
-    Some(format!(
-        "{unit} was taken over by {} during this repair and is {} again ({})",
+    let detail = format!(
+        "{unit} was taken over by {} during this repair; retiring it again: {} ({})",
         host.unit.as_deref().unwrap_or(&host.name),
         retired.state,
         retired.detail
-    ))
+    );
+    Some(if retired.state == "failed" {
+        Err(detail)
+    } else {
+        Ok(detail)
+    })
 }
