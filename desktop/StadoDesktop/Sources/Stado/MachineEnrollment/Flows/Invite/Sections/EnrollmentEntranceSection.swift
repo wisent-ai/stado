@@ -20,15 +20,21 @@ struct EnrollmentEntranceSection: View {
             trailing: trailing
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
+                if let problem = store.entranceReadProblem, store.entranceBusy == nil {
+                    EnrollmentNote(
+                        title: store.ingress == nil
+                            ? "The entrance could not be read"
+                            : "The last read failed — below is the previous answer",
+                        detail: problem
+                    )
+                }
                 if let busy = store.entranceBusy {
                     EnrollmentNote(title: "Working", detail: busy)
                 } else if let ingress = store.ingress, ingress.published {
                     standing(ingress)
                 } else if store.ingress != nil {
                     absent
-                } else if let problem = store.entranceReadProblem {
-                    EnrollmentNote(title: "The entrance could not be read", detail: problem)
-                } else {
+                } else if store.entranceReadProblem == nil {
                     EnrollmentNote(
                         title: "Reading",
                         detail: "Asking the control plane whether an entrance is standing."

@@ -79,7 +79,7 @@ extension DeploymentSetupView {
                 errorMessage = provisioningFailure
             } catch {
                 errorMessage = provisioningFailure
-                    + " Stado could not record this deployment as failed, so the registry still lists it as provisioning: "
+                    + " Stado could not confirm that the registry records this deployment as failed; check its status in Deployments: "
                     + Self.describe(error)
             }
             isProvisioning = false
