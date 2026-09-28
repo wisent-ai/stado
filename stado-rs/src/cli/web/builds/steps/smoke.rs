@@ -47,7 +47,9 @@ impl Site {
     fn tail(&self) -> String {
         let text = std::fs::read_to_string(&self.log).unwrap_or_default();
         let start = text.len().saturating_sub(LOG_TAIL_BYTES);
-        let start = (start..text.len()).find(|&index| text.is_char_boundary(index)).unwrap_or(0);
+        let start = (start..text.len())
+            .find(|&index| text.is_char_boundary(index))
+            .unwrap_or(0);
         text[start..].trim().to_string()
     }
 }
@@ -71,7 +73,12 @@ fn extract(tarball: &Path, into: &Path) -> Result<(), CmdError> {
     })?;
     tar::Archive::new(flate2::read::GzDecoder::new(file))
         .unpack(into)
-        .map_err(|error| CmdError::click(format!("{} cannot be extracted: {error}", tarball.display())))
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{} cannot be extracted: {error}",
+                tarball.display()
+            ))
+        })
 }
 
 fn launch(root: &Path, port: u16, log: PathBuf) -> Result<Site, CmdError> {
@@ -87,7 +94,9 @@ fn launch(root: &Path, port: u16, log: PathBuf) -> Result<Site, CmdError> {
         .stderr(output)
         .process_group(0)
         .spawn()
-        .map_err(|error| CmdError::click(format!("{} cannot be started: {error}", launcher.display())))?;
+        .map_err(|error| {
+            CmdError::click(format!("{} cannot be started: {error}", launcher.display()))
+        })?;
     Ok(Site { child, log })
 }
 
@@ -106,12 +115,18 @@ async fn fetch(client: &reqwest::Client, port: u16, path: &str) -> Result<(u16, 
 
 /// Until the launcher's server accepts a connection on `port`, or the
 /// launcher exits; `Some` carries the exit.
-async fn until_listening(site: &mut Site, port: u16) -> Result<Option<std::process::ExitStatus>, CmdError> {
+async fn until_listening(
+    site: &mut Site,
+    port: u16,
+) -> Result<Option<std::process::ExitStatus>, CmdError> {
     loop {
         if let Some(status) = site.child.try_wait()? {
             return Ok(Some(status));
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             return Ok(None);
         }
         tokio::task::yield_now().await;
@@ -139,7 +154,11 @@ pub(crate) async fn smoke(paths: &[String]) -> Result<(), CmdError> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| CmdError::click(format!("no HTTP client: {error}")))?;
-    let paths: Vec<String> = if paths.is_empty() { vec!["/".to_string()] } else { paths.to_vec() };
+    let paths: Vec<String> = if paths.is_empty() {
+        vec!["/".to_string()]
+    } else {
+        paths.to_vec()
+    };
     let mut failures = Vec::new();
     for path in &paths {
         match fetch(&client, port, path).await {
@@ -147,9 +166,13 @@ pub(crate) async fn smoke(paths: &[String]) -> Result<(), CmdError> {
                 println!("stado web smoke: {product} {path} answered {status} ({bytes} bytes)");
             }
             Ok((status, bytes)) if (300..400).contains(&status) => {
-                println!("stado web smoke: {product} {path} redirected with {status} ({bytes} bytes)");
+                println!(
+                    "stado web smoke: {product} {path} redirected with {status} ({bytes} bytes)"
+                );
             }
-            Ok((status, bytes)) => failures.push(format!("{path} answered {status} with {bytes} bytes")),
+            Ok((status, bytes)) => {
+                failures.push(format!("{path} answered {status} with {bytes} bytes"))
+            }
             Err(error) => failures.push(format!("{path} did not answer: {error}")),
         }
     }
