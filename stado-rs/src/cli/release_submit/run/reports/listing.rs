@@ -7,14 +7,14 @@ use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 
 use super::jobs::{
-    candidate_prefixes, compiling_count, job_state_and_cost, previous_compile_total,
+    candidate_prefixes, compiling_count, job_state_and_cost, previous_compile_total, JobReading,
 };
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX, VERSION_SCAN_WINDOW};
 
 /// One platform leg joined to its queue job: which run it belongs to, which
 /// platform it is, and — when the queue still holds the job — the lifecycle
-/// prefix it sits under with the seconds it has cost.
-type PlatformJoin = (usize, String, Option<(String, Option<i64>)>);
+/// prefix it sits under, the seconds it has cost and the error it ended with.
+type PlatformJoin = (usize, String, Option<JobReading>);
 
 /// Which runs a listing is about: one product, one run by id prefix, one
 /// version. Every field left `None` matches every run.
@@ -158,9 +158,32 @@ pub(crate) async fn matching_runs(
     .collect()
     .await;
     for (index, platform, found) in answers {
-        let Some((state, seconds)) = found else {
+        let Some((state, seconds, error)) = found else {
             continue;
         };
+        let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
+            continue;
+        };
+        // The run object moves a platform to failed only when submit or
+        // resume next looks at it, so a job that already ended failed would
+        // read as in flight with no failure. The job record is the authority
+        // on how the build ended; its error is what the reader needs.
+        if let Some(error) = error {
+            if record["state"].as_str() != Some("failed") {
+                let job_id = record["job_id"].as_str().unwrap_or_default().to_owned();
+                record["state"] = Value::String("failed".into());
+                record["failure"] =
+                    Value::String(format!("build job {job_id} ended {state}: {error}"));
+                let failure = record["failure"].clone();
+                if runs[index]["failure"].is_null() {
+                    runs[index]["failure"] = Value::String(format!(
+                        "{platform}: {}",
+                        failure.as_str().unwrap_or_default()
+                    ));
+                }
+                runs[index]["job_failed"] = Value::Bool(true);
+            }
+        }
         let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
             continue;
         };
@@ -178,6 +201,10 @@ pub(crate) async fn matching_runs(
             .and_then(crate::release_pipeline::ReleaseRunState::named);
         if let Some(state) = &state {
             run["phase"] = Value::String(state.phase().to_owned());
+        }
+        if run["job_failed"].as_bool() == Some(true) {
+            run["phase"] = Value::String("failed".into());
+            continue;
         }
         let live = state.is_some_and(|state| !state.finished() && !state.published());
         if !live {

@@ -48,15 +48,32 @@ pub(super) fn candidate_prefixes(platform_state: Option<&str>) -> &'static [&'st
     }
 }
 
-/// The queue state one job sits in and what it has cost so far.
+/// What the queue says about one platform's job: the lifecycle prefix it sits
+/// under, the seconds it has cost, and — when it ended failed or cancelled —
+/// the error the job recorded.
+pub(super) type JobReading = (String, Option<i64>, Option<String>);
+
+/// The queue state one job sits in, what it has cost so far, and why it
+/// failed when it did.
 pub(super) async fn job_state_and_cost(
     store: &JobStorage,
     job_id: &str,
     prefixes: &[&str],
-) -> Option<(String, Option<i64>)> {
+) -> Option<JobReading> {
     for state in prefixes {
         match store.read_job(state, job_id).await {
-            Ok(Some(job)) => return Some(((*state).to_string(), build_seconds(&job))),
+            Ok(Some(job)) => {
+                let ended_badly = matches!(*state, runs::FAILED | runs::CANCELLED);
+                let error = ended_badly.then(|| {
+                    job.error
+                        .clone()
+                        .filter(|text| !text.trim().is_empty())
+                        .unwrap_or_else(|| {
+                            format!("the job recorded no error; stado job watch {job_id}")
+                        })
+                });
+                return Some(((*state).to_string(), build_seconds(&job), error));
+            }
             Ok(None) => continue,
             Err(_) => return None,
         }
