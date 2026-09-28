@@ -34,7 +34,8 @@ pub fn source_bundle() -> Command {
     Command::new("source-bundle")
         .about(
             "Release build step: the checkout's files in a reproducible \
-             $WISENT_OUTPUT_DIR/release/<name> with each file's digest",
+             $WISENT_OUTPUT_DIR/release/<name> with each file's digest, and \
+             release/SOURCE_REVISION from $WISENT_SOURCE_COMMIT when it is set",
         )
         .arg(
             Arg::new("name")
