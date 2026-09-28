@@ -108,7 +108,10 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                 status::for_change(saved, &Default::default())
             } else {
                 let wanted = std::iter::once(saved.id.clone()).collect();
-                status::for_change(saved, &status::observations(&store, &wanted).await?)
+                status::for_change(
+                    saved,
+                    &status::observations(&store, &wanted).await?.by_change,
+                )
             };
             if *json {
                 println!("{}", serde_json::to_string(&receipt)?);
@@ -126,13 +129,25 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
         ChangesCommand::List { task, json } => {
             let store = JobStorage::new().await.map_err(failure)?;
             let mut statuses = Vec::new();
-            let listed: Vec<Change> = entries(&store)
-                .await?
-                .into_iter()
-                .filter(|change| task.as_ref().is_none_or(|task| task == &change.task_id))
+            // A ticket's id is its object name, so the wanted set comes from
+            // the listing alone; every ticket a build batch froze arrives with
+            // that batch, and only the rest are downloaded one by one.
+            let paths = ticket_paths(&store).await?;
+            let wanted: std::collections::HashSet<String> = paths
+                .iter()
+                .filter_map(|path| ticket_id(path))
+                .map(str::to_owned)
                 .collect();
-            let wanted = listed.iter().map(|change| change.id.clone()).collect();
-            let observations = status::observations(&store, &wanted).await?;
+            let mut observed = status::observations(&store, &wanted).await?;
+            let unfrozen: Vec<String> = paths
+                .into_iter()
+                .filter(|path| ticket_id(path).is_none_or(|id| !observed.frozen.contains_key(id)))
+                .collect();
+            let mut listed: Vec<Change> = download(&store, &unfrozen).await?;
+            listed.extend(wanted.iter().filter_map(|id| observed.frozen.remove(id)));
+            listed.retain(|change| task.as_ref().is_none_or(|task| task == &change.task_id));
+            listed.sort_by(|left, right| left.id.cmp(&right.id));
+            let observations = observed.by_change;
             for change in listed {
                 statuses.push(status::for_change(change, &observations));
             }
@@ -159,16 +174,26 @@ pub(super) fn failure(error: impl std::fmt::Display) -> CmdError {
     CmdError::click(error.to_string())
 }
 
-pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError> {
-    let paths: Vec<String> = store
+/// Every ticket object under [`PREFIX`].
+async fn ticket_paths(store: &JobStorage) -> Result<Vec<String>, CmdError> {
+    Ok(store
         .list_paths(PREFIX, 0)
         .await
         .map_err(failure)?
         .into_iter()
         .filter(|path| path.ends_with(".json"))
-        .collect();
-    // Independent reads, fanned out like every other bulk object read.
-    let texts = futures::stream::iter(&paths)
+        .collect())
+}
+
+/// The change id a ticket object is named after (`<PREFIX><id>.json`).
+fn ticket_id(path: &str) -> Option<&str> {
+    path.strip_prefix(PREFIX)?.strip_suffix(".json")
+}
+
+/// Download and parse the named tickets, fanned out like every other bulk
+/// object read.
+async fn download(store: &JobStorage, paths: &[String]) -> Result<Vec<Change>, CmdError> {
+    let texts = futures::stream::iter(paths)
         .map(|path| async move { (path, store.download_text(path).await) })
         .buffered(crate::queue::copy::DEFAULT_CONCURRENCY)
         .collect::<Vec<_>>()
@@ -183,19 +208,31 @@ pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError>
     Ok(entries)
 }
 
+pub(super) async fn entries(store: &JobStorage) -> Result<Vec<Change>, CmdError> {
+    download(store, &ticket_paths(store).await?).await
+}
+
 /// The products whose handed-off work no build has taken yet: every ticket
 /// still `queued`. `stado build newest --queued` builds exactly these, which
 /// is the daily batch the handoff promises.
 pub(crate) async fn queued_products() -> Result<std::collections::BTreeSet<String>, CmdError> {
     let store = JobStorage::new().await.map_err(failure)?;
-    let pending = entries(&store).await?;
-    let wanted = pending.iter().map(|change| change.id.clone()).collect();
-    let observations = status::observations(&store, &wanted).await?;
-    Ok(pending
+    let paths = ticket_paths(&store).await?;
+    let wanted: std::collections::HashSet<String> = paths
+        .iter()
+        .filter_map(|path| ticket_id(path))
+        .map(str::to_owned)
+        .collect();
+    let observed = status::observations(&store, &wanted).await?;
+    // A ticket some build observed is not queued, so only the others are read.
+    let unobserved: Vec<String> = paths
         .into_iter()
-        .map(|change| status::for_change(change, &observations))
-        .filter(|status| status.state == "queued")
-        .map(|status| status.change.product)
+        .filter(|path| ticket_id(path).is_none_or(|id| !observed.by_change.contains_key(id)))
+        .collect();
+    Ok(download(&store, &unobserved)
+        .await?
+        .into_iter()
+        .map(|change| change.product)
         .collect())
 }
 
@@ -224,7 +261,7 @@ pub(crate) async fn bind(
     };
     let mut covered = Vec::new();
     let wanted = candidates.iter().map(|change| change.id.clone()).collect();
-    let observations = status::observations(&store, &wanted).await?;
+    let observations = status::observations(&store, &wanted).await?.by_change;
     for change in candidates {
         if change.product == product
             && change.repository == repository

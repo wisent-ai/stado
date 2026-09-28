@@ -23,10 +23,12 @@ pub(super) struct Observation {
 /// another, the whole build history cost a `changes list` 74 seconds on
 /// 2026-09-23, past the 60 seconds Oko waits for it, so no handoff or
 /// qualification reached Oko's ledger at all.
+/// Each batch also carries the full tickets it froze, so a ticket a batch
+/// covers need not be downloaded again: `frozen` holds them by id.
 pub(super) async fn observations(
     store: &JobStorage,
     wanted: &std::collections::HashSet<String>,
-) -> Result<HashMap<String, Observation>, CmdError> {
+) -> Result<Observed, CmdError> {
     let batches: Vec<String> = store
         .list_paths("runs/build/", 0)
         .await
@@ -39,20 +41,32 @@ pub(super) async fn observations(
         .buffered(crate::queue::copy::DEFAULT_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
-    let mut observations: HashMap<String, Observation> = HashMap::new();
+    let mut observed = Observed::default();
     for answer in answers {
         let Some((batch, observation)) = answer? else {
             continue;
         };
         for change in batch {
-            if observations.get(&change.id).is_none_or(|old| {
+            if observed.by_change.get(&change.id).is_none_or(|old| {
                 (&observation.created_at, &observation.run_id) > (&old.created_at, &old.run_id)
             }) {
-                observations.insert(change.id, observation.clone());
+                observed
+                    .by_change
+                    .insert(change.id.clone(), observation.clone());
             }
+            observed.frozen.insert(change.id.clone(), change);
         }
     }
-    Ok(observations)
+    Ok(observed)
+}
+
+/// What the build history says about the wanted tickets.
+#[derive(Default)]
+pub(super) struct Observed {
+    /// The newest build observation covering each ticket.
+    pub(super) by_change: HashMap<String, Observation>,
+    /// Each covered ticket as its batch froze it.
+    pub(super) frozen: HashMap<String, Change>,
 }
 
 /// One frozen batch and what its build observed; nothing for an empty batch,
