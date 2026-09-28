@@ -17,24 +17,32 @@ use crate::queue::StorageError;
 use super::gate::MutationGate;
 use super::receipts::{ServiceReconcileOutcome, ServiceReconcileSummary};
 
+mod roles;
 mod standby;
 mod strays;
 
-/// The hosts and catalog entries whose predecessors a pass must retire: one
-/// row per declared service that is running and whose catalog entry names at
-/// least one retired unit, or a role unit whose flag that host's unit carries.
-pub(super) fn replacements(
-    statuses: &[ServiceStatus],
-) -> Vec<(String, crate::deploy::service_catalog::CatalogService)> {
+pub(super) use roles::taken_over;
+
+/// A running catalog service and its catalog entry, for each one whose entry
+/// names retired or role units: the replacements a pass retires predecessors
+/// for, and asks about before repairing a role unit.
+pub(super) type Replacement = (
+    service::ManagedService,
+    crate::deploy::service_catalog::CatalogService,
+);
+
+/// The replacements among `statuses`: one row per declared service that is
+/// running and whose catalog entry names at least one retired or role unit.
+pub(super) fn replacements(statuses: &[ServiceStatus]) -> Vec<Replacement> {
     statuses
         .iter()
         .filter(|status| status.state == STATE_ACTIVE)
         .filter_map(|status| {
             let entry = crate::deploy::service_catalog::lookup(&status.service.name)
                 .ok()
-                .flatten()?
-                .retiring_on(&status.service.args);
-            (!entry.retired_units.is_empty()).then(|| (status.service.host.clone(), entry))
+                .flatten()?;
+            (!entry.retired_units.is_empty() || !entry.role_units.is_empty())
+                .then(|| (status.service.clone(), entry))
         })
         .collect()
 }
@@ -43,9 +51,10 @@ pub(super) fn replacements(
 /// undeclared fleet unit on the local hosts, then stop every standby unit
 /// `findings` shows serving, through the pass's mutation gate. Report mode
 /// and the emergency pause record the plan and touch nothing, as for every
-/// repair.
+/// repair. A role unit whose role the replacement's live process is not
+/// proven to run is recorded `kept` and left running.
 pub(super) async fn retire(
-    replacements: &[(String, crate::deploy::service_catalog::CatalogService)],
+    replacements: &[Replacement],
     findings: &[crate::cli::service_verify::Finding],
     policy: &AutonomyPolicy,
     runner: &Runner,
@@ -53,7 +62,8 @@ pub(super) async fn retire(
     summary: &mut ServiceReconcileSummary,
 ) -> Result<Vec<ServiceReconcileOutcome>, StorageError> {
     let mut outcomes = Vec::new();
-    for (host, entry) in replacements {
+    for (running, entry) in replacements {
+        let host = &running.host;
         let row = |unit: &str, classification: &str, changed: bool, detail: String| {
             ServiceReconcileOutcome {
                 host: host.clone(),
@@ -67,8 +77,13 @@ pub(super) async fn retire(
                 detail,
             }
         };
+        let units: Vec<&String> = entry
+            .retired_units
+            .iter()
+            .chain(entry.role_units.iter().map(|role| &role.unit))
+            .collect();
         if policy.mode == AutonomyMode::Report || policy.emergency_paused {
-            for unit in &entry.retired_units {
+            for unit in &units {
                 outcomes.push(row(
                     unit,
                     "planned",
@@ -85,21 +100,24 @@ pub(super) async fn retire(
             Ok(target) => target,
             Err(error) => {
                 summary.failures += 1;
-                for unit in &entry.retired_units {
+                for unit in &units {
                     outcomes.push(row(unit, "repair_failed", false, error.to_string()));
                 }
                 continue;
             }
         };
-        for retirement in service::retire_catalog_predecessors(&target, entry, runner).await {
+        for retirement in
+            service::retire_catalog_predecessors(&target, entry, running, runner).await
+        {
             let (classification, changed) = match retirement.state.as_str() {
                 "retired" => ("retired", true),
+                "kept" => ("kept", false),
                 "absent" => continue,
                 _ => ("repair_failed", false),
             };
             if changed {
                 summary.changed += 1;
-            } else {
+            } else if classification == "repair_failed" {
                 summary.failures += 1;
             }
             outcomes.push(row(

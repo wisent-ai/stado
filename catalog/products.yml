@@ -513,8 +513,6 @@ products:
       flag: --release-interval-seconds
     - unit: com.wisent.compute.service.stado-local-control-plane
       flag: --control-plane
-    - unit: com.wisent.host-health-beacon
-      flag: --health-interval-seconds
     - unit: com.wisent.compute.service.stado-agent-mini
       flag: --worker
     - unit: wisent-compute-agent.service

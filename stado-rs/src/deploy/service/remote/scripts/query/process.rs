@@ -54,8 +54,12 @@ running=''
 started=''
 declared_written=''
 running_written=''
+flags=''
 if [ -n \"$pid\" ]; then
   running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+  # Only the option names the process was started with, never their values:
+  # an argument can carry a secret, and a role is switched on by its name.
+  flags=$(/bin/ps -ww -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr ' \\t' '\\n\\n' | /usr/bin/sed -n 's/=.*//; /^--/p' | /usr/bin/tr '\\n' ' ')
   lstart=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null)
   if [ \"$os\" = \"Darwin\" ]; then
     started=$(/bin/date -j -f '%a %b %d %T %Y' \"$lstart\" +%s 2>/dev/null)
@@ -68,5 +72,6 @@ if [ -n \"$pid\" ]; then
   fi
 fi
 printf 'STADO_PROCESS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$declared\" \"$resolved\" \"$running\" \"$started\" \"$declared_written\" \"$running_written\"
+printf 'STADO_PROCESS_FLAGS\\t%s\\n' \"$flags\"
 say 'inspected' \"$unit\"
 ";

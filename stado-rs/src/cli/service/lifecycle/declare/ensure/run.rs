@@ -323,8 +323,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         error
     })?;
 
-    predecessors::retire_after_ensure(&target, catalog_entry.as_ref(), &record.args, &runner)
-        .await?;
+    predecessors::retire_after_ensure(&target, catalog_entry.as_ref(), &record, &runner).await?;
     Ok(EnsureReceipt {
         host,
         name: record.name.clone(),

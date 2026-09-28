@@ -104,6 +104,17 @@ pub async fn reconcile(
                 outcomes.push(outcome);
                 continue;
             }
+            // A role unit whose role this host's product process runs is
+            // retired there, although its declaration remains: the same
+            // question retirement asks decides it, so it is never reasserted.
+            if let Some(detail) =
+                super::predecessors::taken_over(&status.service, &replacements, &runner).await
+            {
+                outcome.classification = "retired".to_string();
+                outcome.detail = detail;
+                outcomes.push(outcome);
+                continue;
+            }
             // A `failed` unit is the same repair as a missing one: the unit
             // exists, nothing runs under it, and `ensure` restarts in place.
             summary.missing += 1;

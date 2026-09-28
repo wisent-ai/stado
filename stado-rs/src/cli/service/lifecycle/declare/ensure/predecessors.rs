@@ -5,21 +5,20 @@
 use super::*;
 
 /// Retire every unit `entry` lists in `retired_units` on `target`, and each
-/// of its `role_units` whose flag the ensured unit's `args` carry, and say
-/// what happened to each on stderr, leaving the command's JSON contract
-/// unchanged. A unit that could not be retired is the command's failure: the
-/// replacement runs, but its predecessor may run beside it.
+/// of its `role_units` whose role the just-ensured `running` unit's live
+/// process is proven to run, and say what happened to each on stderr,
+/// leaving the command's JSON contract unchanged. A unit that could not be
+/// retired is the command's failure: the replacement runs, but its
+/// predecessor may run beside it. A kept role unit is not a failure.
 pub(super) async fn retire_after_ensure(
     target: &crate::targets::ComputeTarget,
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
-    args: &[String],
+    running: &crate::deploy::service::ManagedService,
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
-    let Some(entry) = entry.map(|entry| entry.retiring_on(args)) else {
-        return Ok(());
-    };
+    let Some(entry) = entry else { return Ok(()) };
     let mut failed = Vec::new();
-    for retirement in service::retire_catalog_predecessors(target, &entry, runner).await {
+    for retirement in service::retire_catalog_predecessors(target, entry, running, runner).await {
         eprintln!(
             "{}: {} replaced {}: {} ({})",
             target.name, entry.name, retirement.unit, retirement.state, retirement.detail
