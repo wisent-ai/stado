@@ -134,8 +134,13 @@ pub fn release(
         let member = member.as_str().context("stage member must be a path")?;
         let member_path = relative(Path::new(member))?;
         let root_binary = member == runtime_binary && member_path.components().count() == 1;
-        let binary = member.starts_with("bin/") || root_binary;
-        if !binary && !member.starts_with(&format!("share/{id}/")) {
+        // A file nested below bin/ (a launcher's sourced stages) is part of the
+        // stage a bin/ entry runs from: it is installed at the same relative
+        // path so that entry finds it, but it is no command of its own and
+        // gets no link on PATH.
+        let nested_helper = member.starts_with("bin/") && member_path.components().count() > 2;
+        let binary = (member.starts_with("bin/") && !nested_helper) || root_binary;
+        if !binary && !nested_helper && !member.starts_with(&format!("share/{id}/")) {
             continue;
         }
         let source = manifest::inside(&output, source_name).with_context(|| {
@@ -150,10 +155,12 @@ pub fn release(
         } else {
             member.to_owned()
         });
-        if binary {
-            if !source.is_file() || member_path.components().count() > 2 {
-                bail!("CLI stage member must be one regular binary under bin/: {member}");
+        if binary || nested_helper {
+            if !source.is_file() {
+                bail!("CLI stage member must be a regular file under bin/: {member}");
             }
+        }
+        if binary {
             placements.push(Placement {
                 source: destination.clone(),
                 destination: runtime
