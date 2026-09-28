@@ -1,11 +1,13 @@
 //! `stado cancel JOB_ID [--terminate]` performs one durable, idempotent
 //! cancellation transition, and `stado cancel --queued` performs it for every
-//! job still waiting in the queue. Every accepted cancellation writes the
+//! job still waiting in the queue. A cancellation of a named job writes the
 //! marker consumed by agents/coordinators and moves the job to `cancelled/`;
-//! a cancelled job is never deleted or mislabeled as failed.
+//! `--queued` moves only jobs still unclaimed. A cancelled job is never
+//! deleted or mislabeled as failed.
 //!
-//! A recorded cloud instance is deleted before the state transition on every
-//! path so cancellation cannot knowingly leave paid capacity behind.
+//! A named job's recorded cloud instance is deleted before the state
+//! transition so cancellation cannot knowingly leave paid capacity behind; a
+//! job still in the queue holds none.
 //! `--terminate` additionally reports the instance lookup and fails loudly
 //! when a running job has no recoverable instance record.
 //!
@@ -42,7 +44,7 @@ pub async fn run(job_id: Option<&str>, queued: bool, terminate: bool) -> Result<
     let store = default_store(crate::config::bucket()).await?;
     match (job_id, queued) {
         (Some(job_id), false) => cancel_one(&store, job_id, terminate).await,
-        (None, true) => cancel_queue(&store, terminate).await,
+        (None, true) => cancel_queue(&store).await,
         (Some(_), true) => Err(CmdError::click(
             "cancel takes a job id or --queued, not both: --queued already names every job \
              waiting in the queue",
@@ -61,20 +63,26 @@ pub async fn run(job_id: Option<&str>, queued: bool, terminate: bool) -> Result<
 /// reported `Job .migration not found`. A marker goes when the job it points
 /// at does.
 ///
-/// Read first, then cancel each: a job that is claimed between the listing
-/// and its turn is already out of `queue/`, and `cancel_in_store` is
-/// idempotent about a job that has since gone terminal, so the pass neither
-/// races nor double-reports.
-async fn cancel_queue(store: &JobStorage, terminate: bool) -> Result<(), CmdError> {
+/// Read first, then cancel each while it is still unclaimed: the move out of
+/// `queue/` is fenced on the generation read, so a job a host claims between
+/// the listing and its turn is left running and counted apart, never
+/// followed into `running/`. A queued job holds no provider capacity, so
+/// there is nothing to terminate and `--terminate` changes nothing here.
+async fn cancel_queue(store: &JobStorage) -> Result<(), CmdError> {
     let mut cancelled = 0usize;
+    let mut claimed = 0usize;
     let mut failed: Vec<String> = Vec::new();
     for job_id in store.list_job_ids("queue").await? {
-        match cancel_one(store, &job_id, terminate).await {
-            Ok(()) => cancelled += 1,
+        match cancel_queued_in_store(store, &job_id).await {
+            Ok(true) => cancelled += 1,
+            Ok(false) => claimed += 1,
             Err(error) => failed.push(format!("{job_id}: {error}")),
         }
     }
-    println!("cancelled {cancelled} queued job(s)");
+    println!(
+        "cancelled {cancelled} queued job(s); {claimed} were claimed by a host first \
+         and keep running"
+    );
     if failed.is_empty() {
         return Ok(());
     }
