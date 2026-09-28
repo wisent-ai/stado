@@ -8,7 +8,33 @@
 
 use std::path::Path;
 
+use super::{fill, Planned, BUILD, MANIFEST, QUALITY};
 use crate::cli::CmdError;
+use crate::release_pipeline::PRODUCT_MANIFEST;
+
+/// The manifest and scripts an iOS checkout is released with, filled from
+/// its project.
+pub(super) fn files(checkout: &Path, product: &str, scheme: Option<&str>) -> Result<Vec<Planned>, CmdError> {
+    let project = read(checkout)?;
+    let scheme = scheme.map(str::to_string).unwrap_or_else(|| project.name.clone());
+    let values = [
+        ("PRODUCT", product),
+        ("PROJECT", project.name.as_str()),
+        ("SCHEME", scheme.as_str()),
+        ("APP", scheme.as_str()),
+        ("BUNDLE_ID", project.bundle_id.as_str()),
+        ("TEAM", project.team.as_str()),
+    ];
+    eprintln!(
+        "{product}: {}.xcodeproj, scheme {scheme}, bundle {}, team {}, version {}",
+        project.name, project.bundle_id, project.team, project.version
+    );
+    Ok(vec![
+        Planned { path: checkout.join(PRODUCT_MANIFEST), text: fill(MANIFEST, &values), executable: false },
+        Planned { path: checkout.join("release/build.sh"), text: fill(BUILD, &values), executable: true },
+        Planned { path: checkout.join("release/quality.sh"), text: fill(QUALITY, &values), executable: true },
+    ])
+}
 
 pub(super) struct Project {
     pub name: String,

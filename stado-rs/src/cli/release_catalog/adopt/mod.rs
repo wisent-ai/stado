@@ -17,16 +17,21 @@ use clap::{Args, ValueEnum};
 use crate::cli::CmdError;
 use crate::release_pipeline::{self, PRODUCT_MANIFEST};
 
+mod cargo;
 mod xcode;
 
 const MANIFEST: &str = include_str!("templates/manifest.json");
 const BUILD: &str = include_str!("templates/build.sh");
 const QUALITY: &str = include_str!("templates/quality.sh");
+const CARGO_BUILD: &str = include_str!("templates/cargo-build.sh");
+const CARGO_TEST: &str = include_str!("templates/cargo-test.sh");
 
 #[derive(Clone, Copy, ValueEnum)]
 pub(super) enum Kind {
     /// An iOS app built from the one `*.xcodeproj` at the checkout root.
     IosXcode,
+    /// A Rust package whose root `Cargo.toml` declares the binaries it ships.
+    Cargo,
 }
 
 #[derive(Args)]
@@ -130,34 +135,10 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
             )));
         }
     }
-    let Kind::IosXcode = args.kind;
-    let project = xcode::read(&checkout)?;
-    let scheme = args.scheme.clone().unwrap_or_else(|| project.name.clone());
-    let values = [
-        ("PRODUCT", product.as_str()),
-        ("PROJECT", project.name.as_str()),
-        ("SCHEME", scheme.as_str()),
-        ("APP", scheme.as_str()),
-        ("BUNDLE_ID", project.bundle_id.as_str()),
-        ("TEAM", project.team.as_str()),
-    ];
-    let files = vec![
-        Planned {
-            path: checkout.join(PRODUCT_MANIFEST),
-            text: fill(MANIFEST, &values),
-            executable: false,
-        },
-        Planned {
-            path: checkout.join("release/build.sh"),
-            text: fill(BUILD, &values),
-            executable: true,
-        },
-        Planned {
-            path: checkout.join("release/quality.sh"),
-            text: fill(QUALITY, &values),
-            executable: true,
-        },
-    ];
+    let files = match args.kind {
+        Kind::IosXcode => xcode::files(&checkout, &product, args.scheme.as_deref())?,
+        Kind::Cargo => cargo::files(&checkout, &product)?,
+    };
     if let Some(taken) = files.iter().find(|file| file.path.exists()) {
         return Err(CmdError::click(format!(
             "{} already exists; adopt writes only files the checkout does not have",
@@ -171,10 +152,6 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
             "product name {product:?} is not a valid release identifier"
         )));
     }
-    eprintln!(
-        "{product}: {}.xcodeproj, scheme {scheme}, bundle {}, team {}, version {}",
-        project.name, project.bundle_id, project.team, project.version
-    );
     Ok((checkout, product, files))
 }
 
@@ -220,9 +197,15 @@ pub(super) async fn run(args: AdoptArgs) -> Result<(), CmdError> {
         println!("  stado release catalog declare-publisher {product} --owner HOST --client HOST");
     }
     super::checkout::sync(&checkout, args.json).await?;
+    let signing = match args.kind {
+        Kind::IosXcode => format!(
+            ", store the provisioning profile as {product}-signing#provisioning_profile_base64"
+        ),
+        Kind::Cargo => String::new(),
+    };
     println!(
-        "next: commit and push {PRODUCT_MANIFEST} and release/, store the provisioning profile as \
-         {product}-signing#provisioning_profile_base64, then `stado release submit` {product}"
+        "next: commit and push {PRODUCT_MANIFEST} and release/{signing}, then \
+         `stado release changes submit` hands its commits to the batch release"
     );
     Ok(())
 }
