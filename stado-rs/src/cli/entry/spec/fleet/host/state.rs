@@ -179,6 +179,15 @@ pub(crate) enum HostStateCommands {
         #[arg(last = true)]
         program: Vec<String>,
     },
+    /// Return one release-catalog coordinate in this host's local stores to
+    /// the managed account; the host half of the release-store repair.
+    #[command(name = "release-store-repair-local", hide = true)]
+    ReleaseStoreRepairLocal {
+        #[arg(long)]
+        config: String,
+        #[arg(long)]
+        product: String,
+    },
     #[command(name = "storage-root-reconcile-worker", hide = true)]
     StorageRootReconcileWorker {
         target: String,

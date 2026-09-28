@@ -86,10 +86,12 @@ pub(crate) async fn apply_release_store_repair(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
+    // The host's own Stado does the bounded ownership repair; see
+    // `stado host release-store-repair-local`.
     let script = format!(
-        "export STADO_RELEASE_STORE_PRODUCT={}\n{}",
+        "set -eu\nexec \"$HOME/.stado/bin/stado\" host release-store-repair-local \
+         --config \"${{STADO_CONFIG:-$HOME/.config/stado/config.json}}\" --product {}\n",
         crate::deploy::shlex_quote(product),
-        include_str!("../../../../../../deploy/release/repair_release_store.sh")
     );
     let repaired = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
