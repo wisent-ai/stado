@@ -20,13 +20,25 @@ use super::{output_dir, required, RECORD_SCHEMA};
 /// The bundle a Supabase product's build stages.
 const BUNDLE: &str = "supabase-source.tar";
 
-/// Run the Supabase CLI in `source` and answer its standard output.
-fn supabase(source: &Path, arguments: &[&str], token: &str, password: &str) -> Result<String> {
-    let output = Command::new("supabase")
+/// Run the Supabase CLI in `source` and answer its standard output. Without
+/// a database password the CLI signs in with a temporary login role it
+/// creates through the Management API, so the access token alone suffices.
+fn supabase(
+    source: &Path,
+    arguments: &[&str],
+    token: &str,
+    password: Option<&str>,
+) -> Result<String> {
+    let mut command = Command::new("supabase");
+    command
         .args(arguments)
         .current_dir(source)
         .env("SUPABASE_ACCESS_TOKEN", token)
-        .env("SUPABASE_DB_PASSWORD", password)
+        .env_remove("SUPABASE_DB_PASSWORD");
+    if let Some(password) = password {
+        command.env("SUPABASE_DB_PASSWORD", password);
+    }
+    let output = command
         .stdin(Stdio::null())
         .output()
         .with_context(|| format!("cannot run supabase {}", arguments.join(" ")))?;
@@ -176,7 +188,10 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
         );
     }
     let token = required("SUPABASE_ACCESS_TOKEN")?;
-    let password = required("SUPABASE_DB_PASSWORD")?;
+    let password = std::env::var("SUPABASE_DB_PASSWORD")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let password = password.as_deref();
     let project = required("SUPABASE_PROJECT_REF")?;
     let work = output_dir()?.join(format!("supabase-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&work)?;
@@ -199,7 +214,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             &source,
             &["link", "--project-ref", &project],
             &token,
-            &password,
+            password,
         )?;
         // Reconcile the history before pushing, so db push applies only what
         // the database has not run: split parts and baseline versions it
@@ -209,7 +224,7 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             &source,
             &["migration", "list", "--linked", "--output-format", "json"],
             &token,
-            &password,
+            password,
         )?;
         let (carried, retired) = history::repairs(&source, &history::applied(&listing)?)?;
         let mut answers = Vec::new();
@@ -219,16 +234,16 @@ pub fn deliver(project_dir: &str) -> Result<i32> {
             }
             let mut arguments = vec!["migration", "repair", "--status", status];
             arguments.extend(versions.iter().map(String::as_str));
-            answers.push(json!(supabase(&source, &arguments, &token, &password)?));
+            answers.push(json!(supabase(&source, &arguments, &token, password)?));
         }
         let repaired = history::receipt(&carried, &retired, answers);
-        let database = supabase(&source, &["db", "push", "--include-all"], &token, &password)?;
+        let database = supabase(&source, &["db", "push", "--include-all"], &token, password)?;
         let functions = if source.join("supabase/functions").is_dir() {
             json!(supabase(
                 &source,
                 &["functions", "deploy", "--project-ref", &project],
                 &token,
-                &password
+                password
             )?)
         } else {
             Value::Null
