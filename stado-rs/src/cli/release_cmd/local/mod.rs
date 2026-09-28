@@ -40,11 +40,14 @@ pub struct ReleaseConvergeLocalReadersArgs {
     #[arg(long, default_value = "stado")]
     name: String,
     /// Verified release archive retained by the root product delivery.
-    #[arg(long)]
-    archive: PathBuf,
+    /// Absent for a source install: the installed binary still recycles the
+    /// units running the image it replaced, and service-local readers keep
+    /// their own release until a release install hands them one.
+    #[arg(long, requires = "sha256")]
+    archive: Option<PathBuf>,
     /// Catalog SHA-256 for `archive`.
-    #[arg(long)]
-    sha256: String,
+    #[arg(long, requires = "archive")]
+    sha256: Option<String>,
 }
 
 /// Install the same verified Stado archive into every registry-declared

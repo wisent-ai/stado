@@ -216,13 +216,31 @@ pub fn perform(
                     .collect::<Result<Vec<_>>>()?;
                 // A step that hands the release archive to a reconciler has
                 // nothing to hand when the installation was built from source.
-                // The binary is already placed, so failing here would leave
-                // the receipt interrupted over a working install; the step is
-                // recorded as not run, with the reason, and the install ends.
-                let needs_archive = words
-                    .iter()
-                    .any(|word| matches!(*word, "{release_archive}" | "{release_archive_sha256}"));
-                if needs_archive && archive.is_none() {
+                // An option whose value is a release placeholder is then left
+                // out, so the reconciler still runs on what the source install
+                // did place (Stado's recycles the units executing the binary
+                // it replaced); a placeholder in any other position cannot be
+                // dropped, and that step is recorded as not run, with the
+                // reason, over a working install.
+                let is_placeholder =
+                    |word: &str| matches!(word, "{release_archive}" | "{release_archive_sha256}");
+                let words: Vec<&str> = if archive.is_none() {
+                    let mut kept = Vec::with_capacity(words.len());
+                    let mut index = 0;
+                    while index < words.len() {
+                        let is_option = words[index].starts_with("--");
+                        if is_option && words.get(index + 1).is_some_and(|value| is_placeholder(value)) {
+                            index += 2;
+                            continue;
+                        }
+                        kept.push(words[index]);
+                        index += 1;
+                    }
+                    kept
+                } else {
+                    words
+                };
+                if archive.is_none() && words.iter().any(|word| is_placeholder(word)) {
                     let reason =
                         "this installation was built from source, so there is no verified \
                          release archive to hand to the step; readers it would reconcile \

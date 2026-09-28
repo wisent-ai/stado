@@ -17,37 +17,38 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
             "release converge-local-readers only supports the Stado product",
         ));
     }
-    if !crate::deploy::host_release::is_sha256(&args.sha256) {
-        return Err(CmdError::click(
-            "release converge-local-readers requires a lowercase SHA-256",
-        ));
-    }
-    let mut archive = std::fs::File::open(&args.archive).map_err(|error| {
-        CmdError::click(format!(
-            "release converge-local-readers: cannot open verified archive {}: {error}",
-            args.archive.display()
-        ))
-    })?;
-    let mut digest = sha2::Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let count = archive.read(&mut buffer).map_err(|error| {
+    if let (Some(archive_path), Some(expected)) = (&args.archive, &args.sha256) {
+        if !crate::deploy::host_release::is_sha256(expected) {
+            return Err(CmdError::click(
+                "release converge-local-readers requires a lowercase SHA-256",
+            ));
+        }
+        let mut archive = std::fs::File::open(archive_path).map_err(|error| {
             CmdError::click(format!(
-                "release converge-local-readers: cannot read verified archive {}: {error}",
-                args.archive.display()
+                "release converge-local-readers: cannot open verified archive {}: {error}",
+                archive_path.display()
             ))
         })?;
-        if count == 0 {
-            break;
+        let mut digest = sha2::Sha256::new();
+        let mut buffer = [0_u8; 1024 * 1024];
+        loop {
+            let count = archive.read(&mut buffer).map_err(|error| {
+                CmdError::click(format!(
+                    "release converge-local-readers: cannot read verified archive {}: {error}",
+                    archive_path.display()
+                ))
+            })?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
         }
-        digest.update(&buffer[..count]);
-    }
-    let actual = hex::encode(digest.finalize());
-    if actual != args.sha256 {
-        return Err(CmdError::click(format!(
-            "release converge-local-readers: archive digest mismatch: expected {}, got {actual}",
-            args.sha256
-        )));
+        let actual = hex::encode(digest.finalize());
+        if &actual != expected {
+            return Err(CmdError::click(format!(
+                "release converge-local-readers: archive digest mismatch: expected {expected}, got {actual}"
+            )));
+        }
     }
 
     let directory = crate::config_file::expand_tilde("~").join(".stado/bin");
@@ -94,10 +95,14 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     )
     .await
     .map_err(CmdError::click)?;
-    converge_service_local_stado_readers(
-        "release converge-local-readers",
-        &executable,
-        args.archive.as_path(),
-    )
-    .await
+    let Some(archive) = args.archive.as_deref() else {
+        log(
+            "release converge-local-readers: no release archive was given (a source install), \
+             so service-local Stado readers keep their installed release until a release \
+             install hands them one",
+        );
+        return Ok(());
+    };
+    converge_service_local_stado_readers("release converge-local-readers", &executable, archive)
+        .await
 }
