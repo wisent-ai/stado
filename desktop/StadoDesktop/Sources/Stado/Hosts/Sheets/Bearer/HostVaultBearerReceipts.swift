@@ -89,6 +89,9 @@ extension HostVaultBearerSheet {
         if let tokenFileName = request.tokenFileName {
             lines[0] = "Create or reuse ~/.stado/\(tokenFileName) on \(host) for \(request.consumer)."
         }
+        if let storeItem = request.storeItem {
+            lines[0] = "Mint a new bearer for \(request.consumer) and store it as \(storeItem)#token in the owner vault."
+        }
         if request.replaceCapabilities {
             lines.append("Replace the consumer's existing capability set.")
         } else {
@@ -103,6 +106,8 @@ extension HostVaultBearerSheet {
                 ? "The owner-vault field stays on the target and is not returned to Desktop."
                 : request.tokenFileName != nil
                     ? "The owner-only bearer file remains on this host for subsequent requests."
+                    : request.storeItem != nil
+                        ? "The bearer is written to the owner-vault item and is not returned to Desktop."
                     : request.showGeneratedBearer
                         ? "The generated bearer is shown after success because Show generated bearer is enabled."
                         : "The generated plaintext is discarded; only its hash and grant remain in the target vault.",

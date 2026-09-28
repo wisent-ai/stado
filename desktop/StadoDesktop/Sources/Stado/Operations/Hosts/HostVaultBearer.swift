@@ -10,6 +10,7 @@ struct HostVaultBearerReceipt: Decodable, Sendable {
     let status: String
     let skarbiec: HostVaultBearerGrant
     let tokenSource: HostVaultBearerSource?
+    let storedItem: HostVaultBearerStoredItem?
     let detail: String?
 
     var succeeded: Bool {
@@ -19,6 +20,7 @@ struct HostVaultBearerReceipt: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case target, status, skarbiec, detail
         case tokenSource = "token_source"
+        case storedItem = "stored_item"
     }
 }
 
@@ -64,4 +66,16 @@ struct HostVaultBearerCapability: Decodable, Sendable {
 struct HostVaultBearerSource: Decodable, Sendable {
     let item: String
     let field: String
+}
+
+/// The owner-vault item `--store-item` wrote the newly minted bearer into,
+/// reported by its encrypted-record revision, never its value.
+struct HostVaultBearerStoredItem: Decodable, Sendable {
+    let item: String
+    let after: HostVaultBearerItemPhase
+}
+
+struct HostVaultBearerItemPhase: Decodable, Sendable {
+    let state: String
+    let revision: String
 }

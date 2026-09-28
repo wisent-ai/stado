@@ -124,6 +124,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 token_field,
                 raw_token,
                 token_file_name,
+                store_item,
                 json,
             } => {
                 super::host::vault_token_mint(
@@ -137,6 +138,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                     token_field.as_deref().unwrap_or("token"),
                     raw_token,
                     token_file_name.as_deref(),
+                    store_item.as_deref(),
                     json,
                 )
                 .await

@@ -35,6 +35,7 @@ struct HostVaultBearerSheet: View {
     @State private var tokenItem = ""
     @State private var tokenField = "token"
     @State private var tokenFileName = ""
+    @State private var storeItem = ""
     @State var reviewing = false
 
     private var cleanConsumer: String {
@@ -65,6 +66,10 @@ struct HostVaultBearerSheet: View {
         tokenFileName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var cleanStoreItem: String {
+        storeItem.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var parsedTTL: UInt64? {
         cleanTTL.isEmpty ? nil : UInt64(cleanTTL)
     }
@@ -92,7 +97,10 @@ struct HostVaultBearerSheet: View {
             tokenItem: mode == .stored ? cleanTokenItem : nil,
             tokenField: cleanTokenField,
             tokenFileName: mode == .mint && !cleanTokenFileName.isEmpty ? cleanTokenFileName : nil,
-            showGeneratedBearer: mode == .mint && cleanTokenFileName.isEmpty && showGeneratedBearer
+            storeItem: mode == .mint && cleanTokenFileName.isEmpty && !cleanStoreItem.isEmpty
+                ? cleanStoreItem : nil,
+            showGeneratedBearer: mode == .mint && cleanTokenFileName.isEmpty && cleanStoreItem.isEmpty
+                && showGeneratedBearer
         )
     }
 
@@ -118,6 +126,9 @@ struct HostVaultBearerSheet: View {
         }
         .onChange(of: tokenFileName) { _, _ in
             if !cleanTokenFileName.isEmpty { showGeneratedBearer = false }
+        }
+        .onChange(of: storeItem) { _, _ in
+            if !cleanStoreItem.isEmpty { showGeneratedBearer = false }
         }
     }
 
@@ -149,28 +160,11 @@ struct HostVaultBearerSheet: View {
                 }
 
                 if mode == .mint {
-                    field(
-                        title: "Keep bearer on this host",
-                        hint: "Optional basename under ~/.stado. Stado creates an owner-only file if absent and reuses its bearer if present; the value is not returned to Desktop."
-                    ) {
-                        TextField("registry-api-verifier-grant", text: $tokenFileName)
-                            .textFieldStyle(.roundedBorder)
-                            .accessibilityIdentifier("host-vault-bearer-token-file")
-                    }
-                    Toggle(isOn: $showGeneratedBearer) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Show generated bearer")
-                                .font(WisentTypeScale.bodyStrong())
-                                .foregroundStyle(WisentDesign.ink)
-                            Text(showGeneratedBearer
-                                ? "The command returns the new plaintext bearer once so it can be copied. Skarbiec stores only its hash."
-                                : "Off by default. The command returns non-secret grant metadata and discards its generated plaintext output.")
-                                .font(WisentTypeScale.caption())
-                                .foregroundStyle(WisentDesign.muted)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                    .disabled(!cleanTokenFileName.isEmpty)
+                    HostVaultBearerMintOptions(
+                        tokenFileName: $tokenFileName,
+                        storeItem: $storeItem,
+                        showGeneratedBearer: $showGeneratedBearer
+                    )
                 }
 
                 field(title: "Consumer", hint: "The exact consumer identity this bearer authenticates.") {
@@ -280,17 +274,8 @@ struct HostVaultBearerSheet: View {
     private func field<Content: View>(
         title: String,
         hint: String,
-        @ViewBuilder content: () -> Content
+        @ViewBuilder content: @escaping () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-            Text(title)
-                .font(WisentTypeScale.bodyStrong())
-                .foregroundStyle(WisentDesign.ink)
-            content()
-                .font(WisentTypeScale.body())
-            Text(hint)
-                .font(WisentTypeScale.caption())
-                .foregroundStyle(WisentDesign.muted)
-        }
+        HostVaultBearerField(title: title, hint: hint, content: content)
     }
 }

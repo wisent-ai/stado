@@ -13,7 +13,8 @@ use crate::cli::host::secrets::vault::vault_word;
 ///
 /// Existing-bearer bytes stay on the target and never enter argv or the report.
 /// `raw_token` exposes only a newly generated bearer for a secret-store pipe;
-/// `token_file_name` instead persists and reuses it on the target.
+/// `token_file_name` instead persists and reuses it on the target;
+/// `store_item` writes it as that owner-vault item's `token` field.
 #[allow(clippy::too_many_arguments)]
 pub async fn vault_token_mint(
     target: &str,
@@ -26,6 +27,7 @@ pub async fn vault_token_mint(
     token_field: &str,
     raw_token: bool,
     token_file_name: Option<&str>,
+    store_item: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     vault_word("consumer", consumer)?;
@@ -49,6 +51,14 @@ pub async fn vault_token_mint(
         if raw_token {
             return Err(CmdError::usage(
                 "--raw-token and --token-file-name cannot be used together",
+            ));
+        }
+    }
+    if let Some(item) = store_item {
+        vault_word("store item", item)?;
+        if token_item.is_some() || raw_token || token_file_name.is_some() {
+            return Err(CmdError::usage(
+                "--store-item stores a newly minted bearer; it cannot be used with --token-item, --raw-token or --token-file-name",
             ));
         }
     }
@@ -78,6 +88,7 @@ pub async fn vault_token_mint(
     let token_source = token_item.map(|item| (item, token_field));
     let (resolved, mut report) =
         remote_skarbiec_json_at(target, &arguments, None, token_source, token_file_name).await?;
+    let mut stored = None;
     if token_source.is_none() && token_file_name.is_none() {
         let token = report
             .get("token")
@@ -93,6 +104,19 @@ pub async fn vault_token_mint(
             println!("{token}");
             return Ok(());
         }
+        if let Some(item) = store_item {
+            // The canonical item envelope Skarbiec's `set-json` accepts, the
+            // same one the release publisher writes for its own bearer.
+            let payload = json!({
+                "schema": "skarbiec.item.v2",
+                "kind": "token",
+                "fields": { "token": token },
+                "context": { "consumer": consumer, "audience": audience },
+            })
+            .to_string();
+            stored =
+                Some(crate::cli::host::write_vault_item(target, item, "token", &payload).await?);
+        }
     }
     if let Some(object) = report.as_object_mut() {
         object.remove("token");
@@ -105,6 +129,9 @@ pub async fn vault_token_mint(
         });
         if let Some((item, field)) = token_source {
             metadata["token_source"] = json!({ "item": item, "field": field });
+        }
+        if let Some(stored) = &stored {
+            metadata["stored_item"] = stored.clone();
         }
         println!("{}", serde_json::to_string_pretty(&metadata)?);
     } else {
@@ -119,6 +146,14 @@ pub async fn vault_token_mint(
         );
         if let Some(path) = report.get("token_file").and_then(Value::as_str) {
             println!("Bearer file: {path}");
+        }
+        if let Some(stored) = &stored {
+            println!(
+                "Stored as {}#token (revision {} -> {})",
+                stored["item"].as_str().unwrap_or_default(),
+                stored["before"]["revision"].as_str().unwrap_or_default(),
+                stored["after"]["revision"].as_str().unwrap_or_default(),
+            );
         }
     }
     Ok(())

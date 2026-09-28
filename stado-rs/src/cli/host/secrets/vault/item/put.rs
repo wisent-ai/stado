@@ -36,6 +36,31 @@ pub(crate) async fn store_vault_item(
     payload: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
+    let report = write_vault_item(target, item, item_type, payload).await?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "{}: stored {item} as {item_type}; state {} -> {}, revision {} -> {}",
+            report["target"].as_str().unwrap_or_default(),
+            report["before"]["state"].as_str().unwrap_or_default(),
+            report["after"]["state"].as_str().unwrap_or_default(),
+            report["before"]["revision"].as_str().unwrap_or_default(),
+            report["after"]["revision"].as_str().unwrap_or_default(),
+        );
+    }
+    Ok(())
+}
+
+/// Write one item and return its encrypted-record report (target, item, kind,
+/// before and after state and revision) instead of printing it, for a caller
+/// whose own output is a single JSON document.
+pub(crate) async fn write_vault_item(
+    target: &str,
+    item: &str,
+    item_type: &str,
+    payload: &str,
+) -> Result<Value, CmdError> {
     vault_word("vault item", item)?;
     vault_word("credential type", item_type)?;
     if payload.is_empty() || payload.len() > usize::from(u16::MAX) {
@@ -106,28 +131,17 @@ pub(crate) async fn store_vault_item(
         )));
     }
 
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "item": item,
-                "kind": item_type,
-                "before": {
-                    "state": before.state,
-                    "revision": before.revision,
-                },
-                "after": {
-                    "state": after.state,
-                    "revision": after.revision,
-                },
-            }))?
-        );
-    } else {
-        println!(
-            "{}: stored {item} as {item_type}; state {} -> {}, revision {} -> {}",
-            resolved.name, before.state, after.state, before.revision, after.revision
-        );
-    }
-    Ok(())
+    Ok(json!({
+        "target": resolved.name,
+        "item": item,
+        "kind": item_type,
+        "before": {
+            "state": before.state,
+            "revision": before.revision,
+        },
+        "after": {
+            "state": after.state,
+            "revision": after.revision,
+        },
+    }))
 }

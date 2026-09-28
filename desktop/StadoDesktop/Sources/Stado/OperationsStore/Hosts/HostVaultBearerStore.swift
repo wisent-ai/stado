@@ -12,6 +12,7 @@ struct HostVaultBearerRequest: Equatable, Sendable {
     let tokenItem: String?
     let tokenField: String
     let tokenFileName: String?
+    let storeItem: String?
     let showGeneratedBearer: Bool
 }
 
@@ -46,6 +47,9 @@ final class HostVaultBearerStore: ObservableObject {
         }
         if let tokenFileName = request.tokenFileName {
             arguments += ["--token-file-name", tokenFileName]
+        }
+        if let storeItem = request.storeItem {
+            arguments += ["--store-item", storeItem]
         }
         arguments.append(request.showGeneratedBearer ? "--raw-token" : "--json")
         return arguments
@@ -118,6 +122,11 @@ final class HostVaultBearerStore: ObservableObject {
         if let tokenFileName = request.tokenFileName {
             return receipt.status == "token_minted"
                 && receipt.skarbiec.tokenFile?.hasSuffix("/.stado/\(tokenFileName)") == true
+        }
+        if let storeItem = request.storeItem {
+            return receipt.status == "token_minted"
+                && receipt.storedItem?.item == storeItem
+                && receipt.storedItem?.after.state == "active"
         }
         return receipt.status == "token_minted"
     }
