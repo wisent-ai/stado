@@ -43,6 +43,12 @@ fn files(directory: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 /// The file's `LC_RPATH` paths and its `@rpath/` dependencies, from `otool -l`.
+///
+/// A framework's own install name (`LC_ID_DYLIB`) is printed with the same
+/// `name` line as a dependency but is what the file answers to, not what it
+/// loads: Sparkle.framework's `@rpath/Sparkle.framework/Versions/B/Sparkle` has
+/// nothing to resolve against Sparkle's own (empty) run paths, and counting it
+/// refused every Brama Desktop bundle as unresolved.
 fn load_commands(binary: &Path) -> Result<(Vec<String>, Vec<String>)> {
     let listed = Command::new("/usr/bin/otool")
         .arg("-l")
@@ -52,13 +58,16 @@ fn load_commands(binary: &Path) -> Result<(Vec<String>, Vec<String>)> {
     let text = String::from_utf8_lossy(&listed.stdout);
     let mut rpaths = Vec::new();
     let mut dylibs = Vec::new();
-    let mut in_rpath = false;
+    let mut command = "";
     for line in text.lines().map(str::trim) {
-        if let Some(command) = line.strip_prefix("cmd ") {
-            in_rpath = command == "LC_RPATH";
-        } else if let Some(rest) = line.strip_prefix("path ").filter(|_| in_rpath) {
+        if let Some(current) = line.strip_prefix("cmd ") {
+            command = current;
+        } else if let Some(rest) = line.strip_prefix("path ").filter(|_| command == "LC_RPATH") {
             rpaths.push(rest.split(" (offset").next().unwrap_or(rest).to_owned());
-        } else if let Some(rest) = line.strip_prefix("name ") {
+        } else if let Some(rest) = line
+            .strip_prefix("name ")
+            .filter(|_| command != "LC_ID_DYLIB")
+        {
             let name = rest.split(" (offset").next().unwrap_or(rest);
             if name.starts_with(RPATH) && !dylibs.iter().any(|known| known == name) {
                 dylibs.push(name.to_owned());
