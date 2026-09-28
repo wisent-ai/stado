@@ -9,6 +9,7 @@
 //! repointing an edge at a name that does not work would fix nothing.
 
 mod edge;
+mod undeclared;
 
 use serde_json::{json, Value};
 
@@ -18,7 +19,8 @@ use crate::deploy::DeployError;
 use crate::public_origin::{self, funnel, PublicOrigin, Resolution, ResolutionState, WEB_EDGE};
 use crate::targets::Registry;
 
-pub(crate) use edge::{edge_selection, undeclared_row, EdgeSelection};
+pub(crate) use edge::{edge_selection, EdgeSelection};
+pub(crate) use undeclared::undeclared_row;
 
 pub(crate) const VERDICT_SERVING: &str = "serving";
 
