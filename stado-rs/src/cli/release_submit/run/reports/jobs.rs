@@ -5,8 +5,11 @@
 //! has been running so far, so a release in flight is readable rather than
 //! blank.
 
+use crate::cli::release_submit::run::source::build_path;
 use crate::queue::runs;
 use crate::queue::storage::JobStorage;
+use crate::release_control;
+use crate::release_pipeline::{self, ProductManifest};
 
 use super::load_run_value;
 
@@ -126,4 +129,38 @@ pub(super) async fn previous_compile_total(
         }
     }
     None
+}
+
+/// Whether a run's platform is one the release cannot ship without, by the
+/// manifest the run was built from — the same policy submit applies when a
+/// leg fails (`run/submit.rs`: only a required platform fails the release).
+/// `Err` says why the manifest could not be read, so the reader is told the
+/// question is open instead of being handed a guess.
+pub(super) async fn platform_required(
+    store: &JobStorage,
+    run: &serde_json::Value,
+    platform: &str,
+) -> Result<bool, String> {
+    let product = run["product"].as_str().unwrap_or_default();
+    let Some(build_id) = run["build_id"].as_str() else {
+        return Err("the run names no build, so its manifest cannot be read".into());
+    };
+    let path = build_path(product, build_id, "manifest.json");
+    let bytes = store
+        .read_bytes(&path)
+        .await
+        .map_err(|error| format!("{path}: {error}"))?
+        .ok_or_else(|| format!("build manifest is missing: {path}"))?;
+    if run["manifest_sha256"].as_str() != Some(release_control::sha256_bytes(&bytes).as_str()) {
+        return Err(format!("{path} does not match the run's manifest digest"));
+    }
+    let ProductManifest::Release(manifest) = release_pipeline::parse_product_manifest(&bytes)?
+    else {
+        return Err(format!("{path} disables releases"));
+    };
+    manifest
+        .platforms
+        .get(platform)
+        .map(|recipe| recipe.required)
+        .ok_or_else(|| format!("{path} declares no platform {platform}"))
 }

@@ -7,7 +7,8 @@ use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 
 use super::jobs::{
-    candidate_prefixes, compiling_count, job_state_and_cost, previous_compile_total, JobReading,
+    candidate_prefixes, compiling_count, job_state_and_cost, platform_required,
+    previous_compile_total, JobReading,
 };
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX, VERSION_SCAN_WINDOW};
 
@@ -167,21 +168,31 @@ pub(crate) async fn matching_runs(
         // The run object moves a platform to failed only when submit or
         // resume next looks at it, so a job that already ended failed would
         // read as in flight with no failure. The job record is the authority
-        // on how the build ended; its error is what the reader needs.
+        // on how the build ended; its error is shown on every leg. Whether
+        // that failure fails the release is submit's rule, not this
+        // listing's: only a platform the manifest marks required does.
         if let Some(error) = error {
             if record["state"].as_str() != Some("failed") {
                 let job_id = record["job_id"].as_str().unwrap_or_default().to_owned();
+                let failure = format!("build job {job_id} ended {state}: {error}");
                 record["state"] = Value::String("failed".into());
-                record["failure"] =
-                    Value::String(format!("build job {job_id} ended {state}: {error}"));
-                let failure = record["failure"].clone();
-                if runs[index]["failure"].is_null() {
-                    runs[index]["failure"] = Value::String(format!(
-                        "{platform}: {}",
-                        failure.as_str().unwrap_or_default()
-                    ));
+                record["failure"] = Value::String(failure.clone());
+                match platform_required(&store, &runs[index], &platform).await {
+                    Ok(true) => {
+                        if runs[index]["failure"].is_null() {
+                            runs[index]["failure"] =
+                                Value::String(format!("{platform}: {failure}"));
+                        }
+                        runs[index]["required_leg_failed"] = Value::Bool(true);
+                    }
+                    Ok(false) => {
+                        runs[index]["platforms"][&platform]["required"] = Value::Bool(false);
+                    }
+                    Err(why) => {
+                        runs[index]["platforms"][&platform]["required_unknown"] =
+                            Value::String(why);
+                    }
                 }
-                runs[index]["job_failed"] = Value::Bool(true);
             }
         }
         let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
@@ -202,7 +213,7 @@ pub(crate) async fn matching_runs(
         if let Some(state) = &state {
             run["phase"] = Value::String(state.phase().to_owned());
         }
-        if run["job_failed"].as_bool() == Some(true) {
+        if run["required_leg_failed"].as_bool() == Some(true) {
             run["phase"] = Value::String("failed".into());
             continue;
         }
