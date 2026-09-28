@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use crate::cli::release_submit::run::source::{committed_file, git_text};
 use crate::cli::CmdError;
 
-pub(in crate::cli::release_submit) mod published_diff;
+mod published_diff;
 
 /// Where the verified record sits inside the source archive.
 pub(crate) const PROVENANCE_PATH: &str = ".wisent-provenance/baseline.json";
@@ -30,6 +30,39 @@ const BASELINE: &str = "released-surface.json";
 const TIER: &str = "git-archive:";
 const REMOTE: &str = "origin";
 const PEELED: &str = "^{}";
+
+/// Permission bits of a record added to a snapshot: owner read-write,
+/// everyone else read, as `git archive` writes a regular file.
+const RECORD_MODE: u32 = 0o644;
+
+/// Add every history record a release build needs and cannot compute from
+/// files alone: the verified baseline provenance and the published diff.
+/// A record that does not apply to this commit is not written.
+pub(crate) fn append_records<W: std::io::Write>(
+    files: &mut tar::Builder<W>,
+    root: &Path,
+    commit: &str,
+) -> Result<(), CmdError> {
+    let records = [
+        (PROVENANCE_PATH, record(root, commit)?),
+        (
+            published_diff::PUBLISHED_DIFF_PATH,
+            published_diff::record(root, commit)?,
+        ),
+    ];
+    for (path, record) in records {
+        let Some(record) = record else {
+            continue;
+        };
+        let mut header = tar::Header::new_gnu();
+        header.set_size(record.len() as u64);
+        header.set_mode(RECORD_MODE);
+        header.set_mtime(u64::default());
+        header.set_cksum();
+        files.append_data(&mut header, path, &record[..])?;
+    }
+    Ok(())
+}
 
 /// The committed baseline's marker, when the commit holds a baseline.
 fn baseline_marker(root: &Path, commit: &str) -> Result<Option<String>, CmdError> {
