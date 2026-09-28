@@ -92,18 +92,32 @@ pub fn supabase() -> Command {
              database (supabase db start, Supabase CLI and Docker on the runner) and stops it",
                 ),
         )
+        .arg(project_dir())
+}
+
+/// Where the Supabase project (the directory holding `supabase/`) sits inside
+/// the bundle, for a repository that keeps it below its root (`web`).
+fn project_dir() -> Arg {
+    Arg::new("project-dir")
+        .long("project-dir")
+        .default_value(".")
+        .help("Directory inside the bundle that holds supabase/ (default: the bundle root)")
 }
 
 pub fn deliver() -> Command {
     Command::new("deliver")
         .about("Release deliveries to hosting providers, run by a manifest's deliveries")
         .subcommand_required(true)
-        .subcommand(Command::new("supabase").about(
-            "Push the verified release's supabase-source.tar (migrations, functions) to the \
-             Supabase project SUPABASE_PROJECT_REF with SUPABASE_ACCESS_TOKEN and \
-             SUPABASE_DB_PASSWORD, carrying split migrations in as applied; writes \
-             supabase-receipt.json",
-        ))
+        .subcommand(
+            Command::new("supabase")
+                .about(
+                    "Push the verified release's supabase-source.tar (migrations, functions) to the \
+                     Supabase project SUPABASE_PROJECT_REF with SUPABASE_ACCESS_TOKEN and \
+                     SUPABASE_DB_PASSWORD, carrying split migrations in as applied; writes \
+                     supabase-receipt.json",
+                )
+                .arg(project_dir()),
+        )
         .subcommand(
             Command::new("testflight")
                 .about(

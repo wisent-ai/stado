@@ -39,7 +39,11 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
         ),
         "npm" => super::npm::deliver(),
         "render" => render(&text("service-name")?),
-        "supabase" => super::supabase::deliver(),
+        "supabase" => super::supabase::deliver(
+            arguments
+                .get_one::<String>("project-dir")
+                .map_or(".", String::as_str),
+        ),
         "testflight" => super::testflight::deliver(&text("ipa")?),
         "vercel-files" => vercel_files(
             &text("bundle")?,

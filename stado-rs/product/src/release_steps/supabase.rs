@@ -101,6 +101,20 @@ fn isolate(source: &Path) -> Result<String> {
     Ok(scratch)
 }
 
+/// The Supabase project directory inside an unpacked bundle: `project_dir`
+/// relative to its `source/` root, refused when it would leave that root.
+fn project(unpacked: &Path, project_dir: &str) -> Result<PathBuf> {
+    let relative = Path::new(project_dir);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        bail!("--project-dir {project_dir} must be a relative path inside the bundle");
+    }
+    Ok(unpacked.join("source").join(relative))
+}
+
 /// `stado product supabase verify`: the post-build test of a supabase-source
 /// platform. It unpacks the staged `release/supabase-source.tar` exactly as
 /// the delivery will, starts a scratch local database from its config (the
@@ -108,7 +122,7 @@ fn isolate(source: &Path) -> Result<String> {
 /// storage and extension schemas production has), and stops it again without
 /// keeping a volume. A migration Postgres refuses fails the test with the
 /// CLI's own report, so a schema that cannot apply never qualifies.
-pub fn verify() -> Result<i32> {
+pub fn verify(project_dir: &str) -> Result<i32> {
     let output = output_dir()?;
     let bundle = output.join("release").join(BUNDLE);
     if !bundle.is_file() {
@@ -121,7 +135,7 @@ pub fn verify() -> Result<i32> {
     fs::create_dir_all(&work)?;
     let result = (|| -> Result<()> {
         safe_unpack(&bundle, &work)?;
-        let source = work.join("source");
+        let source = project(&work, project_dir)?;
         // Only a database this run named can be stopped: until the scratch
         // project_id is written, nothing was started and nothing is stopped.
         let scratch = isolate(&source)?;
@@ -141,7 +155,7 @@ pub fn verify() -> Result<i32> {
     Ok(0)
 }
 
-pub fn deliver() -> Result<i32> {
+pub fn deliver(project_dir: &str) -> Result<i32> {
     let archive = PathBuf::from(required("WISENT_RELEASE_ARCHIVE")?);
     let digest = required("WISENT_RELEASE_SHA256")?;
     if crate::common::sha256(&archive)? != digest {
@@ -169,7 +183,7 @@ pub fn deliver() -> Result<i32> {
         let unpacked = work.join("bundle");
         fs::create_dir_all(&unpacked)?;
         safe_unpack(&bundle, &unpacked)?;
-        let source = unpacked.join("source");
+        let source = project(&unpacked, project_dir)?;
         supabase(
             &source,
             &["link", "--project-ref", &project],

@@ -187,7 +187,11 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
             .context("supabase release operation is missing")?
             .as_str()
         {
-            "verify" => crate::release_steps::run_supabase_verify(),
+            "verify" => crate::release_steps::run_supabase_verify(
+                arguments
+                    .get_one::<String>("project-dir")
+                    .map_or(".", String::as_str),
+            ),
             other => anyhow::bail!("unknown supabase release operation {other}"),
         },
         "python" => crate::release_steps::run_python(
