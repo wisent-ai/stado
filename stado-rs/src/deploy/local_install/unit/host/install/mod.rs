@@ -7,15 +7,18 @@
 //! renamed with a `.retired-<date>` suffix, which launchd and systemd ignore
 //! and which leaves the exact previous definition on disk for rollback.
 
+mod retire;
+
 use std::path::{Path, PathBuf};
 
 use crate::deploy::local_install::activation::commands::current_uid;
 use crate::deploy::local_install::activation::execute_plan;
 use crate::deploy::local_install::{systemd_unit, LocalOs};
 use crate::deploy::service::{parse_local_unit_file, UnitFile, KIND_LAUNCHD, KIND_SYSTEMD};
-use crate::deploy::{CommandSpec, DeployError, Runner};
+use crate::deploy::{DeployError, Runner};
 
 use super::{merge, Component, InstallPlan};
+use retire::retire;
 
 /// Which planned component a native executable belongs to. Only the program
 /// decides; the merge then parses the actual arguments.
@@ -153,81 +156,8 @@ fn discover(
     Ok(components)
 }
 
-fn retired_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(format!(".retired-{}", chrono::Utc::now().format("%Y%m%d")));
-    PathBuf::from(name)
-}
-
 /// Where launchd keeps system-domain daemons.
 const SYSTEM_DAEMON_DIRECTORY: &str = "/Library/LaunchDaemons";
-
-fn sudo(arguments: &[&str]) -> CommandSpec {
-    let mut argv = vec!["/usr/bin/sudo".to_string(), "-n".to_string()];
-    argv.extend(arguments.iter().map(|argument| argument.to_string()));
-    CommandSpec::new(argv)
-}
-
-/// Stop one replaced unit and move its file out of the init system's view.
-async fn retire(
-    component: &Component,
-    host: &InstallPlan,
-    runner: &Runner,
-) -> Result<(), DeployError> {
-    let path = PathBuf::from(&component.native_definition().path);
-    let target = retired_path(&path);
-    let label = &component.plan.label;
-    let (stop, rename) = match (host.os, path.starts_with(SYSTEM_DAEMON_DIRECTORY)) {
-        (LocalOs::Darwin, true) => (
-            sudo(&["/bin/launchctl", "bootout", &format!("system/{label}")]),
-            Some(sudo(&[
-                "/bin/mv",
-                &path.to_string_lossy(),
-                &target.to_string_lossy(),
-            ])),
-        ),
-        (LocalOs::Darwin, false) => (
-            CommandSpec::new(vec![
-                "launchctl".to_string(),
-                "bootout".to_string(),
-                format!("gui/{}/{label}", current_uid()),
-            ]),
-            None,
-        ),
-        (LocalOs::Linux, _) => (
-            CommandSpec::new(vec![
-                "systemctl".to_string(),
-                "--user".to_string(),
-                "disable".to_string(),
-                "--now".to_string(),
-                systemd_unit(label),
-            ]),
-            None,
-        ),
-    };
-    // An unloaded job answers bootout with an error; the file move below is
-    // what keeps it from returning, so only that step decides success.
-    let _ = runner(stop).await.map_err(DeployError)?;
-    match rename {
-        Some(rename) => {
-            let output = runner(rename).await.map_err(DeployError)?;
-            if !output.ok() {
-                return Err(DeployError(format!(
-                    "retiring {label}: moving {} was refused: {}",
-                    path.display(),
-                    output.detail()
-                )));
-            }
-        }
-        None => std::fs::rename(&path, &target).map_err(|error| {
-            DeployError(format!(
-                "retiring {label}: moving {}: {error}",
-                path.display()
-            ))
-        })?,
-    }
-    Ok(())
-}
 
 /// The roles an installed host unit already runs. Its argv and the
 /// environment of the units it retired are the only record of them once
