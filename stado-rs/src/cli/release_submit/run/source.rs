@@ -55,6 +55,29 @@ pub(crate) fn resolve_commit(root: &Path, requested: Option<&str>) -> Result<Str
             "--commit must be 40 lowercase hexadecimal characters",
         ));
     }
+    // `cat-file -e` answers by exit status: 0 the object is here, 1 this
+    // repository holds no such object (the caller named something else),
+    // anything else git itself failing, such as a root that is no repository.
+    let present = Command::new("git")
+        .args(["cat-file", "-e", &commit])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .current_dir(root)
+        .output()?;
+    match present.status.code() {
+        Some(0) => {}
+        Some(1) => {
+            return Err(CmdError::usage(format!(
+                "--commit {commit} names no object in {}",
+                root.display()
+            )))
+        }
+        _ => {
+            return Err(CmdError::click(format!(
+                "git cat-file -e {commit} failed: {}",
+                String::from_utf8_lossy(&present.stderr).trim()
+            )))
+        }
+    }
     if git(root, &["cat-file", "-t", &commit])? != b"commit\n" {
         return Err(CmdError::usage("--commit must name a Git commit object"));
     }
