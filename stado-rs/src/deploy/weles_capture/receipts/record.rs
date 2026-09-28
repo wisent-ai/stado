@@ -5,6 +5,11 @@
 //! every capture run and holds its answer, so Stado writes it down. The record
 //! is rewritten after every run, so a batch stopped halfway still reports the
 //! runs it finished and the refusal that stopped it.
+//!
+//! Only one invocation ever writes a batch's record: it first creates
+//! `batch-claim.json` holding a token of its own, create-only, and a batch
+//! whose claim exists is refused. A retry or a concurrent run of the same
+//! plan therefore cannot replace the receipts an earlier run wrote.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +17,7 @@ use super::super::ARTIFACT_NAMESPACE;
 use crate::deploy::DeployError;
 
 const RECORD_OBJECT: &str = "batch-record.json";
+const CLAIM_OBJECT: &str = "batch-claim.json";
 
 /// One capture run as Stado recorded it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,28 +30,61 @@ pub struct Receipt {
     pub error: Option<String>,
 }
 
-fn record_uri(batch: &str) -> String {
-    format!("stado://{ARTIFACT_NAMESPACE}/{batch}/{RECORD_OBJECT}")
+fn object_uri(batch: &str, object: &str) -> String {
+    format!("stado://{ARTIFACT_NAMESPACE}/{batch}/{object}")
 }
 
-/// Replace the batch's record with every receipt so far.
+fn record_uri(batch: &str) -> String {
+    object_uri(batch, RECORD_OBJECT)
+}
+
+async fn put(uri: &str, bytes: &[u8], content_type: &str, if_absent: bool) -> Result<(), String> {
+    let staged = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    std::fs::write(staged.path(), bytes).map_err(|error| error.to_string())?;
+    crate::cli::storage::store_object(
+        uri,
+        &staged.path().display().to_string(),
+        content_type,
+        if_absent,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+/// Make this invocation the only writer of the batch's record. The claim is
+/// created only if absent and holds a token no other invocation has, so a
+/// second claim of the same batch - a retry or a concurrent run - is refused
+/// instead of replacing receipts it never wrote.
+pub async fn claim(batch: &str) -> Result<(), DeployError> {
+    let uri = object_uri(batch, CLAIM_OBJECT);
+    let started = || {
+        DeployError(format!(
+            "capture batch {batch} was already started ({uri} exists); a batch runs once, \
+             so plan a new batch id, and read this one with \
+             `stado workload status weles-capture:{batch}`"
+        ))
+    };
+    match crate::cli::storage::fetch_object_versioned(&uri).await {
+        Ok(Some(_)) => return Err(started()),
+        Ok(None) => {}
+        Err(error) => return Err(DeployError(format!("cannot read {uri}: {error}"))),
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    put(&uri, token.as_bytes(), "text/plain", true)
+        .await
+        .map_err(|error| DeployError(format!("cannot claim {uri}: {error}")))
+}
+
+/// Replace the batch's record with every receipt so far. Only the invocation
+/// that won [`claim`] calls this.
 pub async fn write(batch: &str, receipts: &[Receipt]) -> Result<(), DeployError> {
     let uri = record_uri(batch);
     let bytes = serde_json::to_vec(receipts)
         .map_err(|error| DeployError(format!("cannot encode {uri}: {error}")))?;
-    let staged = tempfile::NamedTempFile::new()
-        .map_err(|error| DeployError(format!("cannot stage {uri}: {error}")))?;
-    std::fs::write(staged.path(), &bytes)
-        .map_err(|error| DeployError(format!("cannot stage {uri}: {error}")))?;
-    crate::cli::storage::store_object(
-        &uri,
-        &staged.path().display().to_string(),
-        "application/json",
-        false,
-    )
-    .await
-    .map_err(|error| DeployError(format!("cannot store {uri}: {error}")))?;
-    Ok(())
+    put(&uri, &bytes, "application/json", false)
+        .await
+        .map_err(|error| DeployError(format!("cannot store {uri}: {error}")))
 }
 
 /// The batch's record. A batch Stado never recorded is refused as unknown,

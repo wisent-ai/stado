@@ -26,10 +26,13 @@ pub struct Enqueued {
 /// The old admission API and its database queue were removed from Weles.
 /// Returning only after each run finishes means an accepted row already has a
 /// final run id and its artifacts have either been uploaded or the command has
-/// failed with the worker's exact reason. After every run the batch's record
-/// in Stado storage is rewritten, so a batch stopped halfway still reports the
-/// runs it finished and the refusal that stopped it.
+/// failed with the worker's exact reason. The batch is claimed before the
+/// first run, so a batch id that already ran is refused rather than rerun over
+/// its own record; after every run the record in Stado storage is rewritten,
+/// so a batch stopped halfway still reports the runs it finished and the
+/// refusal that stopped it.
 pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, DeployError> {
+    record::claim(&plan.batch).await?;
     let mut accepted = Vec::with_capacity(plan.captures.len());
     let mut receipts = Vec::with_capacity(plan.captures.len());
     for capture in &plan.captures {
