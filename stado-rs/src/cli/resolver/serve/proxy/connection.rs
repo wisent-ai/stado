@@ -90,7 +90,25 @@ pub(super) async fn proxy_connection(
             relay(client_read, client_write, stream, adapter, host, port).await
         }
         Upstream::Remote(stream, session) => {
-            let result = relay(client_read, client_write, stream, adapter, host, port).await;
+            let started = std::time::Instant::now();
+            // `channel closed` alone cannot say whether the service on the
+            // remote host dropped this one connection or the whole SSH
+            // session to that host died under every channel at once; the
+            // session's own state after the failure is that answer.
+            let result = relay(client_read, client_write, stream, adapter, host, port)
+                .await
+                .map_err(|error| {
+                    let session_state = if session.usable() {
+                        "still open, so the service end closed this one channel"
+                    } else {
+                        "closed, so every channel on it failed together"
+                    };
+                    format!(
+                        "{error} after {} ms; the SSH session to {:?} is {session_state}",
+                        started.elapsed().as_millis(),
+                        resolved.active_host,
+                    )
+                });
             drop(session);
             result
         }
