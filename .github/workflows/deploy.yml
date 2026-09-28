@@ -178,24 +178,18 @@ jobs:
       # allowed to run before the full target verdict is required.
       - name: Reclaim declared release Rust scratch
         run: cargo clean --manifest-path stado-rs/Cargo.toml
+      # The installed binary may predate `host gates --require-disk`, so its
+      # report is judged here; the candidate below judges its own.
       - name: Require candidate build admission
         run: |
-          set -euo pipefail
-          set +e
+          set -uo pipefail
           gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
-          set -e
-          GATES_JSON="$gates" python3 -c '
-          import json, os
-          report = json.loads(os.environ["GATES_JSON"])
-          disk = report.get("disk") or {}
-          free = disk.get("free_gb")
-          low = disk.get("low_watermark_gb")
-          if free is None or low is None:
-              raise SystemExit("host gates did not report free_gb and low_watermark_gb")
-          if free < low:
-              raise SystemExit(f"runner capacity remains below build admission: {free:.2f} < {low} GiB")
-          print(f"candidate build admitted: {free:.2f} >= {low} GiB")
-          '
+          printf '%s' "$gates" | /usr/bin/jq -e -r '.disk as $d
+            | if $d.free_gb == null or $d.low_watermark_gb == null
+              then error("host gates did not report free_gb and low_watermark_gb")
+              elif $d.free_gb < $d.low_watermark_gb
+              then error("runner capacity remains below build admission: \($d.free_gb) < \($d.low_watermark_gb) GiB")
+              else "candidate build admitted: \($d.free_gb) >= \($d.low_watermark_gb) GiB" end'
       - name: Build the capacity binary from this revision
         run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
       - name: Reclaim declared capacity with candidate
@@ -206,23 +200,8 @@ jobs:
             --json
       - name: Require declared build capacity
         run: |
-          set -euo pipefail
-          set +e
-          gates=$("$GITHUB_WORKSPACE/stado-rs/target/release/stado" host gates \
-            lukasz-macbook --json)
-          set -e
-          GATES_JSON="$gates" python3 -c '
-          import json, os
-          report = json.loads(os.environ["GATES_JSON"])
-          disk = report.get("disk") or {}
-          free = disk.get("free_gb")
-          target = disk.get("target_free_gb")
-          if free is None or target is None:
-              raise SystemExit("host gates did not report free_gb and target_free_gb")
-          if free < target:
-              raise SystemExit(f"runner capacity remains below target: {free:.2f} < {target} GiB")
-          print(f"runner capacity proved: {free:.2f} >= {target} GiB")
-          '
+          "$GITHUB_WORKSPACE/stado-rs/target/release/stado" host gates \
+            lukasz-macbook --json --require-disk target
 
       # Every call below first claims one create-only record at version scope,
       # then its platform record. The shared version write is the arbitration
@@ -248,20 +227,12 @@ jobs:
       - name: Require capacity after candidate scratch reset
         if: always()
         run: |
-          set -euo pipefail
-          set +e
+          set -uo pipefail
           gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
-          set -e
-          GATES_JSON="$gates" python3 -c '
-          import json, os
-          report = json.loads(os.environ["GATES_JSON"])
-          disk = report.get("disk") or {}
-          free = disk.get("free_gb")
-          target = disk.get("target_free_gb")
-          if free is None or target is None or free < target:
-              raise SystemExit(f"runner capacity below target after scratch reset: {free} < {target}")
-          print(f"runner capacity retained: {free:.2f} >= {target} GiB")
-          '
+          printf '%s' "$gates" | /usr/bin/jq -e -r '.disk as $d
+            | if $d.free_gb == null or $d.target_free_gb == null or $d.free_gb < $d.target_free_gb
+              then error("runner capacity below target after scratch reset: \($d.free_gb) < \($d.target_free_gb)")
+              else "runner capacity retained: \($d.free_gb) >= \($d.target_free_gb) GiB" end'
 
   # Stable Linux publication needs the native registry authority reader updated
   # first. Otherwise its resolver can reject data the release itself supports,

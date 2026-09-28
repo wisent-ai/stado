@@ -75,3 +75,39 @@ pub(super) fn claiming_outcome(
         gates.blockers.join(", ")
     )))
 }
+
+/// Which declared disk threshold `--require-disk` holds the host to.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum DiskRequirement {
+    /// The watermark admission is gated on.
+    LowWatermark,
+    /// The free space reclamation aims for.
+    Target,
+}
+
+/// The disk verdict alone: free space against the chosen declared threshold,
+/// whatever else the host is blocked on. A threshold or reading the host did
+/// not answer with is a failure, never a pass.
+pub(super) fn disk_outcome(
+    gates: &crate::deploy::host_gates::HostGates,
+    requirement: DiskRequirement,
+) -> Result<(), CmdError> {
+    let (name, threshold) = match requirement {
+        DiskRequirement::LowWatermark => ("low_watermark_gb", gates.low_watermark_gb),
+        DiskRequirement::Target => ("target_free_gb", gates.target_free_gb),
+    };
+    let (Some(free), Some(threshold)) = (gates.free_gb, threshold) else {
+        return Err(CmdError::click(format!(
+            "{} did not report free_gb and {name}",
+            gates.host
+        )));
+    };
+    if free < threshold as f64 {
+        return Err(CmdError::click(format!(
+            "{} disk is below {name}: {free:.2} < {threshold} GiB",
+            gates.host
+        )));
+    }
+    println!("{} disk meets {name}: {free:.2} >= {threshold} GiB", gates.host);
+    Ok(())
+}

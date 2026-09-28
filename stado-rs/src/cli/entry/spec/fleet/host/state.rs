@@ -126,6 +126,10 @@ pub(crate) enum HostStateCommands {
         /// Emit the gates as JSON.
         #[arg(long)]
         json: bool,
+        /// Exit on free disk space against this declared threshold instead
+        /// of on `claiming`.
+        #[arg(long, value_enum)]
+        require_disk: Option<crate::cli::host::DiskRequirement>,
     },
     /// Why TARGET went quiet: beacon age, the path and endpoint it published,
     /// its last sleep and wake, its interface changes, the silences recorded
