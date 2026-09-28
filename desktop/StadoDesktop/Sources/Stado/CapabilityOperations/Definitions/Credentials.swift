@@ -14,6 +14,23 @@ enum NativeCredentialOperations {
             .init(id: "item", label: "Item identifier", required: true),
             .init(id: "tags", label: "Comma-separated tags (blank reads only)", option: "--tags"),
         ]),
+        .init(id: "item-apple-profile", title: "Store Apple provisioning profiles in a signing item", path: ["credentials", "item", "apple-profile"], fields: [
+            .init(id: "item", label: "Signing item (for example tama-desktop-signing)", required: true),
+            .init(id: "profiles", label: "FIELD=BUNDLE_ID pairs", option: "--profile", required: true, multiple: true),
+            .init(id: "credentials", label: "App Store Connect key item", option: "--credentials", initial: "wisent-apple-notary"),
+            .init(id: "type", label: "Profile type", option: "--type", initial: "MAC_APP_DIRECT"),
+            .init(id: "certificate-type", label: "Certificate type", option: "--certificate-type", initial: "DEVELOPER_ID_APPLICATION"),
+        ]),
+        .init(id: "database-adopt", title: "Adopt Supabase database items (all, or one named)", path: ["database", "adopt"], hostPlacement: .none, fields: [
+            .init(id: "name", label: "Declared database (blank adopts every Supabase-backed one)"),
+            .init(id: "project-ref", label: "Supabase project ref (first adoption of the named one)", option: "--project-ref"),
+            .init(id: "password-file", label: "File holding the database password", option: "--password-file"),
+            .init(id: "check", label: "Check only; write nothing and report drift", option: "--check", flag: true, initial: "true"),
+        ]),
+        .init(id: "database-push", title: "Push database declarations to a host", path: ["database", "push"], hostPlacement: .positional, fields: [
+            .init(id: "service", label: "Unit serving the database plane", option: "--service", required: true),
+            .init(id: "check", label: "Check only; write nothing and report a difference", option: "--check", flag: true, initial: "true"),
+        ]),
         .init(id: "vault-sync", title: "Check or synchronize the declared vault", path: ["credentials", "vault", "sync"], fields: [
             .init(id: "check", label: "Check without replacing the vault", option: "--check", flag: true, initial: "true"),
         ]),
