@@ -18,6 +18,7 @@ use crate::cli::CmdError;
 use crate::release_pipeline::{self, PRODUCT_MANIFEST};
 
 mod cargo;
+mod npm;
 mod xcode;
 
 const MANIFEST: &str = include_str!("templates/manifest.json");
@@ -32,6 +33,9 @@ pub(super) enum Kind {
     IosXcode,
     /// A Rust package whose root `Cargo.toml` declares the binaries it ships.
     Cargo,
+    /// An npm package whose `package.json` declares the files it publishes;
+    /// the release is its source bundle and its own `npm test`.
+    Npm,
 }
 
 #[derive(Args)]
@@ -138,6 +142,7 @@ fn plan(args: &AdoptArgs) -> Result<(PathBuf, String, Vec<Planned>), CmdError> {
     let files = match args.kind {
         Kind::IosXcode => xcode::files(&checkout, &product, args.scheme.as_deref())?,
         Kind::Cargo => cargo::files(&checkout, &product)?,
+        Kind::Npm => npm::files(&checkout, &product)?,
     };
     if let Some(taken) = files.iter().find(|file| file.path.exists()) {
         return Err(CmdError::click(format!(
@@ -201,7 +206,7 @@ pub(super) async fn run(args: AdoptArgs) -> Result<(), CmdError> {
         Kind::IosXcode => format!(
             ", store the provisioning profile as {product}-signing#provisioning_profile_base64"
         ),
-        Kind::Cargo => String::new(),
+        Kind::Cargo | Kind::Npm => String::new(),
     };
     println!(
         "next: commit and push {PRODUCT_MANIFEST} and release/{signing}, then \
