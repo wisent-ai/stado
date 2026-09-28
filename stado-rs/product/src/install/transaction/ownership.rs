@@ -35,6 +35,58 @@ pub fn shared(runtime: &Runtime, product: &str, surface: &str) -> Result<BTreeSe
     Ok(paths)
 }
 
+/// Whether `other` is another surface of `product` installed from the same
+/// recipe source — the same kind, repository and manifest — so the files it
+/// places are the ones this install is about to place.
+///
+/// transcript-lake's cli and service surfaces both place
+/// `~/.stado/bin/transcript-lake` from one stado-release manifest, and each
+/// refused to replace it while the other owned it, so neither could ever be
+/// updated (2026-09-28).
+pub fn sibling(other: &state::ProductState, product: &str, surface: &str, recipe: &Value) -> bool {
+    let same =
+        |key: &str| other.recipe.get(key).is_some() && other.recipe.get(key) == recipe.get(key);
+    other.product == product
+        && other.surface != surface
+        && other.status == "ready"
+        && same("kind")
+        && same("repository")
+        && same("manifest")
+}
+
+/// Paths other surfaces own, split into those a sibling installed from the
+/// same recipe owns (which this install may replace, re-recording the
+/// sibling) and every other owned path (which it may not change).
+pub fn shared_for_install(
+    runtime: &Runtime,
+    product: &str,
+    surface: &str,
+    recipe: &Value,
+) -> Result<(BTreeSet<PathBuf>, Vec<state::ProductState>)> {
+    let mut strict = BTreeSet::new();
+    let mut siblings = Vec::new();
+    for state in state::all(runtime)? {
+        if state.status == "absent" || (state.product == product && state.surface == surface) {
+            continue;
+        }
+        if sibling(&state, product, surface, recipe) {
+            siblings.push(state);
+            continue;
+        }
+        for path in state.protected_paths() {
+            match path.canonicalize() {
+                Ok(physical) => {
+                    strict.insert(physical);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            strict.insert(path.clone());
+        }
+    }
+    Ok((strict, siblings))
+}
+
 pub fn overlaps(path: &Path, shared: &BTreeSet<PathBuf>) -> bool {
     let physical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     shared.iter().any(|other| {
