@@ -168,31 +168,14 @@ pub(crate) async fn matching_runs(
         // The run object moves a platform to failed only when submit or
         // resume next looks at it, so a job that already ended failed would
         // read as in flight with no failure. The job record is the authority
-        // on how the build ended; its error is shown on every leg. Whether
-        // that failure fails the release is submit's rule, not this
-        // listing's: only a platform the manifest marks required does.
+        // on how the build ended; its error is shown on the leg. A leg the
+        // run already records as failed keeps the failure text it has.
         if let Some(error) = error {
             if record["state"].as_str() != Some("failed") {
                 let job_id = record["job_id"].as_str().unwrap_or_default().to_owned();
-                let failure = format!("build job {job_id} ended {state}: {error}");
                 record["state"] = Value::String("failed".into());
-                record["failure"] = Value::String(failure.clone());
-                match platform_required(&store, &runs[index], &platform).await {
-                    Ok(true) => {
-                        if runs[index]["failure"].is_null() {
-                            runs[index]["failure"] =
-                                Value::String(format!("{platform}: {failure}"));
-                        }
-                        runs[index]["required_leg_failed"] = Value::Bool(true);
-                    }
-                    Ok(false) => {
-                        runs[index]["platforms"][&platform]["required"] = Value::Bool(false);
-                    }
-                    Err(why) => {
-                        runs[index]["platforms"][&platform]["required_unknown"] =
-                            Value::String(why);
-                    }
-                }
+                record["failure"] =
+                    Value::String(format!("build job {job_id} ended {state}: {error}"));
             }
         }
         let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
@@ -213,15 +196,18 @@ pub(crate) async fn matching_runs(
         if let Some(state) = &state {
             run["phase"] = Value::String(state.phase().to_owned());
         }
-        // A required leg whose job already ended failed decides the run the
-        // way submit will on its next pass. State and phase are derived
-        // together, so the CLI line (which prints `state`), the JSON and the
-        // Desktop console (which read `phase`) all say failed; the stored
-        // word is kept as `recorded_state` for whoever resumes the run.
+        // Whether a failed leg fails the release is submit's rule, not this
+        // listing's: only a platform the build manifest marks required does.
+        // Every failed leg is weighed — one the run already recorded (a build
+        // refresh can adopt a failed leg while the run stays waiting) as well
+        // as one whose job was just seen ending — so state and phase agree
+        // for the CLI line (which prints `state`), the JSON and the Desktop
+        // console (which reads `phase`). The stored word is kept as
+        // `recorded_state` for whoever resumes the run.
         let unfinished = state
             .as_ref()
             .is_some_and(|state| !state.finished() && !state.published());
-        if unfinished && run["required_leg_failed"].as_bool() == Some(true) {
+        if unfinished && required_leg_failed(&store, run).await {
             let failed = crate::release_pipeline::ReleaseRunState::Failed;
             run["recorded_state"] = run["state"].clone();
             run["state"] = serde_json::to_value(&failed).expect("a run state serializes");
@@ -263,4 +249,39 @@ pub(crate) async fn matching_runs(
         }
     }
     Ok(runs)
+}
+
+/// Whether any failed leg of `run` is one the build manifest marks required.
+/// Each failed leg is labelled `required` true or false, or carries
+/// `required_unknown` with the reason the manifest could not be read; the
+/// first required failure becomes the run's `failure` when it has none.
+async fn required_leg_failed(store: &JobStorage, run: &mut Value) -> bool {
+    let Some(platforms) = run["platforms"].as_object() else {
+        return false;
+    };
+    let failed: Vec<String> = platforms
+        .iter()
+        .filter(|(_, record)| record["state"].as_str() == Some("failed"))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut any = false;
+    for platform in failed {
+        match platform_required(store, run, &platform).await {
+            Ok(required) => {
+                run["platforms"][&platform]["required"] = Value::Bool(required);
+                if required {
+                    any = true;
+                    if run["failure"].is_null() {
+                        let text = match run["platforms"][&platform]["failure"].as_str() {
+                            Some(text) => format!("{platform}: {text}"),
+                            None => format!("{platform}: failed with no recorded reason"),
+                        };
+                        run["failure"] = Value::String(text);
+                    }
+                }
+            }
+            Err(why) => run["platforms"][&platform]["required_unknown"] = Value::String(why),
+        }
+    }
+    any
 }
