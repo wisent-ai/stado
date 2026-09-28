@@ -38,8 +38,9 @@ pub async fn observe_action_payload(
     fresh_profile: bool,
 ) -> Result<Value, DeployError> {
     channel
-        .observe_run(&run_request(action, params, account_id, fresh_profile))
+        .run_outcome(&run_request(action, params, account_id, fresh_profile))
         .await
+        .map(|(payload, _failure)| payload)
 }
 
 /// The `/run` body, built where it can be read in a test.

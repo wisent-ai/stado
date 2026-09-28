@@ -7,7 +7,7 @@ mod record;
 use serde_json::{json, Value};
 
 use super::channel::Channel;
-use super::{Plan, CAPTURE_ACTION, REQUEST_DEADLINE, RUN_ROUTE};
+use super::{Plan, CAPTURE_ACTION, REQUEST_DEADLINE};
 use crate::deploy::DeployError;
 
 pub use batch::{status, totals};
@@ -33,23 +33,23 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
     let mut accepted = Vec::with_capacity(plan.captures.len());
     let mut receipts = Vec::with_capacity(plan.captures.len());
     for capture in &plan.captures {
+        // A trajectory that failed still ran: Weles answers 502 with the run id
+        // after writing its diagnostics, so the record keeps that id and the
+        // failed run stays diagnosable through `weles-diagnostics:<run-id>`.
         let outcome = channel
-            .call(
-                RUN_ROUTE,
-                &json!({
-                    "action": CAPTURE_ACTION,
-                    "params": Value::Object(capture.params.clone()),
-                    "creds": "redact",
-                    "timeout_ms": REQUEST_DEADLINE.as_millis(),
-                }),
-            )
+            .run_outcome(&json!({
+                "action": CAPTURE_ACTION,
+                "params": Value::Object(capture.params.clone()),
+                "creds": "redact",
+                "timeout_ms": REQUEST_DEADLINE.as_millis(),
+            }))
             .await
-            .and_then(|payload| {
+            .and_then(|(payload, failure)| {
                 payload
                     .get("run_id")
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
-                    .map(str::to_string)
+                    .map(|run_id| (run_id.to_string(), failure))
                     .ok_or_else(|| {
                         DeployError(
                             "the Weles API completed the capture and returned no run id"
@@ -66,7 +66,7 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
             error,
         };
         match outcome {
-            Ok(run_id) => {
+            Ok((run_id, None)) => {
                 receipts.push(receipt(run_id.clone(), STATE_DONE, None));
                 record::write(&plan.batch, &receipts).await?;
                 accepted.push(Enqueued {
@@ -75,6 +75,14 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
                     axis: capture.axis.clone(),
                     artifact_prefix: capture.artifact_prefix.clone(),
                 });
+            }
+            Ok((run_id, Some(failure))) => {
+                receipts.push(receipt(run_id.clone(), STATE_FAILED, Some(failure.clone())));
+                record::write(&plan.batch, &receipts).await?;
+                return Err(DeployError(format!(
+                    "capture run {run_id} failed: {failure}; read it with \
+                     `stado workload status weles-diagnostics:{run_id}`"
+                )));
             }
             Err(error) => {
                 receipts.push(receipt(

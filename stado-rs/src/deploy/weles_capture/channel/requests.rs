@@ -148,22 +148,26 @@ impl Channel {
         Self::require_success(route, status, &response_body, payload)
     }
 
-    /// Keep a completed `/run` envelope even when its trajectory failed. Weles
-    /// writes browser diagnostics before returning that 502; treating the HTTP
-    /// status as if no run happened discards the exact network record needed to
-    /// explain the failure.
-    pub(super) async fn observe_run(&self, body: &Value) -> Result<Value, DeployError> {
+    /// The completed `/run` envelope and, when its trajectory failed, the
+    /// refusal it earned. Weles writes browser diagnostics before answering that
+    /// 502, so a failed run that carries a run id is an outcome, not an error:
+    /// its caller keeps the id needed to read those diagnostics.
+    pub(in crate::deploy::weles_capture) async fn run_outcome(
+        &self,
+        body: &Value,
+    ) -> Result<(Value, Option<String>), DeployError> {
         let (status, response_body, payload) = self
             .json_request(reqwest::Method::POST, RUN_ROUTE, Some(body))
             .await?;
-        if payload
+        let ran = payload
             .get("run_id")
             .and_then(Value::as_str)
-            .is_some_and(|run_id| !run_id.is_empty())
-        {
-            return Ok(payload);
+            .is_some_and(|run_id| !run_id.is_empty());
+        match Self::require_success(RUN_ROUTE, status, &response_body, payload.clone()) {
+            Ok(payload) => Ok((payload, None)),
+            Err(refusal) if ran => Ok((payload, Some(refusal.0))),
+            Err(refusal) => Err(refusal),
         }
-        Self::require_success(RUN_ROUTE, status, &response_body, payload)
     }
 
     pub(in crate::deploy::weles_capture) async fn get_json(
