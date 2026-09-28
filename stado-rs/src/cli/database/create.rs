@@ -8,13 +8,16 @@
 //! expose the credit balance; the report names the billing page it is on
 //! instead of guessing it. A project that already carries the name is
 //! reused, never created twice. The credential item `<name>-database` is
-//! written with the project's coordinates and the generated password, and
-//! the database is declared for its consumers as `declare` does.
+//! written with the project's coordinates and the generated password into the
+//! fleet's owner vault — directly on the owner host, through the host channel
+//! from any other — and the database is declared for its consumers as
+//! `declare` does.
 
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
-use crate::credential_store::owner;
+
+use super::owner_vault;
 
 const API: &str = "https://api.supabase.com/v1";
 const TOKEN_ITEM: &str = "SUPABASE_ACCESS_TOKEN";
@@ -217,17 +220,15 @@ pub(super) async fn create(
     let listed = call(reqwest::Method::GET, "/projects", &token, None).await?;
     let projects = listed.as_array().cloned().unwrap_or_default();
     let item = format!("{name}-database");
+    let owner = owner_vault::locate().await?;
 
     let (project, password, report) = match projects.iter().find(|p| p["name"] == name) {
         Some(existing) => {
             // The item is rewritten whole, so the password it already holds is
             // read from the owner vault first; without it the rewrite would
             // erase the only copy.
-            let password = owner::read_string(&item, "db_password").map_err(|error| {
-                CmdError::click(format!(
-                    "{item} was not rewritten: its db_password could not be read from the owner vault here ({error}). \
-                     Run stado database create on the vault owner host."
-                ))
+            let password = owner.password(&item).await.map_err(|error| {
+                CmdError::click(format!("{item} was not rewritten: {error}"))
             })?;
             (existing.clone(), Some(password), json!({ "reused": true }))
         }
@@ -235,13 +236,10 @@ pub(super) async fn create(
             let (slug, region, report) =
                 priced_creation(name, anchor, &token, &projects, accept_monthly_usd).await?;
             // The generated password exists only in this process until the
-            // item holds it, so a host that cannot write the item must not
-            // create the project.
-            owner::vault().map_err(|error| {
-                CmdError::click(format!(
-                    "{item} cannot be written here, so {name} was not created: {error}. \
-                     Run stado database create on the vault owner host."
-                ))
+            // item holds it, so an owner vault that cannot take the write
+            // must stop the creation before the project exists.
+            owner.ready().map_err(|error| {
+                CmdError::click(format!("{name} was not created: {error}"))
             })?;
             let password = format!(
                 "{}{}",
@@ -277,8 +275,7 @@ pub(super) async fn create(
     });
     let fields = item_fields(name, &project, pooler.as_ref(), password.as_deref());
     let context = json!({ "engine": "postgres", "provider": "supabase", "product": name });
-    owner::write_item(&item, "bundle", &fields, &context)
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    owner.store(&item, "bundle", &fields, &context).await?;
 
     let declared = super::verbs::declaration(
         name,
@@ -291,6 +288,7 @@ pub(super) async fn create(
         "project_ref": reference,
         "status": project["status"],
         "item": item,
+        "item_vault": owner.name(),
         "pooler": pooler.is_some(),
         "password_on_item": password.is_some(),
         "cost": report,
@@ -300,8 +298,9 @@ pub(super) async fn create(
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
         println!(
-            "database {name}: project {reference} ({}), item {item}; pooler {}, password {}; cost {report}",
+            "database {name}: project {reference} ({}), item {item} in {}'s owner vault; pooler {}, password {}; cost {report}",
             project["status"].as_str().unwrap_or("unknown"),
+            owner.name(),
             if pooler.is_some() { "recorded" } else { "not reported yet: run create again to fill it" },
             if password.is_some() { "on the item" } else { "unknown" },
         );

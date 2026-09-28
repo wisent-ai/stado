@@ -17,6 +17,7 @@ use super::CmdError;
 
 mod commands;
 mod create;
+mod owner_vault;
 mod reads;
 mod verbs;
 mod writes;
