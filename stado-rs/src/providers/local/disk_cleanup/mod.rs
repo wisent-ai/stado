@@ -14,6 +14,7 @@
 //! exclusive/shared lock file, the canonical-policy resolution, and the
 //! top-level [`run_cleanup_once`] orchestration.
 
+pub mod agent_logs;
 pub mod backup_twins;
 pub mod build_caches;
 pub mod catalogue;

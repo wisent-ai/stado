@@ -52,6 +52,16 @@ pub(super) async fn sweep(
         policy.mode == "enforce",
         report,
     );
+    // What the coding-agent harnesses on this host leave in their own log
+    // directories. No product reads them again, and no harness removes them.
+    crate::providers::local::disk_cleanup::agent_logs::scan_agent_logs(
+        home,
+        policy,
+        attempted_at,
+        policy.max_scan_items,
+        policy.mode == "enforce",
+        report,
+    );
     // After the cleaners and before the volume is measured: on a Mac their
     // deletions are worth nothing until the snapshots pinning those blocks
     // are thinned, so a pass can remove every tagged build tree it finds and

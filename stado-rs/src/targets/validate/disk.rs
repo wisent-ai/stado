@@ -193,6 +193,12 @@ pub(crate) fn validate_disk_cleanup(
             }
         }
         if let Some(root) = cleaner.get("root") {
+            if name == crate::providers::local::disk_cleanup::agent_logs::CLEANER {
+                return Err(verr(
+                    &format!("{cleaner_location}.root"),
+                    "agent_logs sweeps only the harness log directories it names; it takes no root",
+                ));
+            }
             if root.as_str().is_none_or(|r| r.trim().is_empty()) {
                 return Err(verr(
                     &format!("{cleaner_location}.root"),

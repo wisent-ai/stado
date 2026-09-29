@@ -26,6 +26,14 @@ pub struct CleanerDeclaration {
 /// Every cleaner, in the order the registry contract lists them.
 pub const CLEANERS: &[CleanerDeclaration] = &[
     CleanerDeclaration {
+        name: super::agent_logs::CLEANER,
+        since: "0.22.18",
+        default_root: "",
+        sweeps: "logs the coding-agent harnesses keep under this account (.omp/logs, .claude/debug, .codex/log, .factory/logs, .kimi-code/logs), past the declared age",
+        min_age_floor_seconds: 604_800,
+        root_override_since: None,
+    },
+    CleanerDeclaration {
         name: "backup_twins",
         since: "0.13.0",
         default_root: super::backup_twins::BACKUP_ROOT,

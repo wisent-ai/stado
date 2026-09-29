@@ -100,6 +100,8 @@ pub struct CleanupReport {
     /// became free space.
     pub local_snapshots: CleanerReport,
     pub object_evidence: CleanerReport,
+    /// Aged logs of the coding-agent harnesses under this account's home.
+    pub agent_logs: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_job_count: i64,
