@@ -49,10 +49,12 @@ pub fn prepare(
         },
     )?;
     if kind == "cargo" {
-        let staging = root
-            .join(".wisent-output/cargo-install")
-            .join(uuid::Uuid::new_v4().to_string());
-        fs::create_dir_all(&staging)?;
+        let staging_run = crate::common::runs::fresh(
+            &root.join(".wisent-output/cargo-install"),
+            &uuid::Uuid::new_v4().to_string(),
+            crate::common::runs::KEPT_BUILDS,
+        )?;
+        let staging = staging_run.path.clone();
         let mut arguments = vec![
             "--release".to_owned(),
             "--target-dir".to_owned(),

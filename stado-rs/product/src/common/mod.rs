@@ -1,6 +1,7 @@
 mod archive;
 mod files;
 mod process;
+pub mod runs;
 
 use anyhow::{bail, Context, Result};
 pub use archive::{copy_tree, file_members, platform, relative, unpack};

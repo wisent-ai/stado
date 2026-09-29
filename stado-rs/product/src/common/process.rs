@@ -17,11 +17,12 @@ static EXECUTABLE_HASH: LazyLock<std::result::Result<String, String>> = LazyLock
 
 fn recorded(command: &mut Command) -> Result<(Output, PathBuf)> {
     let runtime = Runtime::new(None)?;
-    let folder = runtime
-        .output
-        .join("commands")
-        .join(uuid::Uuid::new_v4().to_string());
-    fs::create_dir_all(&folder)?;
+    let run = super::runs::fresh(
+        &runtime.output.join("commands"),
+        &uuid::Uuid::new_v4().to_string(),
+        super::runs::KEPT_COMMAND_RECORDS,
+    )?;
+    let folder = run.path.clone();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

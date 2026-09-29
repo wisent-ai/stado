@@ -25,13 +25,15 @@ pub fn prepare(
         "cargo" | "npm" | "pip" | "pipx" => packages::prepare(runtime, product, recipe, root),
         "local-build" => {
             let binaries = packages::names(recipe, "binaries")?;
-            let home = root
-                .join(".build/local-install")
-                .join(uuid::Uuid::new_v4().to_string());
+            let run = uuid::Uuid::new_v4().to_string();
+            let kept = crate::common::runs::KEPT_BUILDS;
+            let home_run =
+                crate::common::runs::fresh(&root.join(".build/local-install"), &run, kept)?;
+            let home = home_run.path.clone();
             fs::create_dir_all(home.join(".local/bin"))?;
-            let evidence = root
-                .join(".wisent-output/local-install")
-                .join(uuid::Uuid::new_v4().to_string());
+            let evidence_run =
+                crate::common::runs::fresh(&root.join(".wisent-output/local-install"), &run, kept)?;
+            let evidence = evidence_run.path.clone();
             let recorded = source::snapshot(root, &evidence, &home)?;
             checked(
                 Command::new("/bin/sh")

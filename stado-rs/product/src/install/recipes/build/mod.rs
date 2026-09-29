@@ -36,7 +36,8 @@ pub fn release(
     root: &Path,
 ) -> Result<Prepared> {
     let id = text(product, "id")?;
-    let evidence = evidence::directory(root)?;
+    let run = evidence::directory(root)?;
+    let evidence = run.path.clone();
     let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
     let revision = recorded["revision"]
         .as_str()
@@ -209,7 +210,8 @@ pub fn desktop(
     if !cfg!(target_os = "macos") {
         bail!("desktop bundle installation requires macOS");
     }
-    let evidence = evidence::directory(root)?;
+    let run = evidence::directory(root)?;
+    let evidence = run.path.clone();
     let recorded = source::snapshot(root, &evidence, &root.join(".build/wisent-source"))?;
     let document = if recipe["kind"] == "desktop-release" {
         manifest::load(root, text(recipe, "manifest")?)?

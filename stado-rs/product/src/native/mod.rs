@@ -75,7 +75,12 @@ fn execute(
     if !output.is_absolute() {
         bail!("WISENT_OUTPUT_DIR must be absolute");
     }
-    let evidence = output.join("native").join(&invocation);
+    let evidence_run = crate::common::runs::fresh(
+        &output.join("native"),
+        &invocation,
+        crate::common::runs::KEPT_BUILDS,
+    )?;
+    let evidence = evidence_run.path.clone();
     let parent = root.path.join(".build/wisent-native");
     let _writer = lock(&parent.join("writer.lock"))?;
     let workspace = parent.join(format!("{invocation}.xcworkspace"));

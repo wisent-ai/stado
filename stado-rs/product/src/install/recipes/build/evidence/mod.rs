@@ -1,41 +1,25 @@
-//! Where a source install keeps its evidence, and how much of it is kept.
+//! Where a source install keeps its evidence, and what a failed one keeps.
 //!
-//! Each install writes `<checkout>/.wisent-output/install/<uuid>` holding a
+//! Each install writes `<checkout>/.wisent-output/install/<run>` holding a
 //! committed-source export and that export's whole build output, which for a
-//! large product is over a gigabyte. A checkout keeps the newest few; an
-//! install that failed keeps only its logs and receipt.
+//! large product is over a gigabyte. The checkout keeps the newest few runs
+//! ([`runs::KEPT_BUILDS`]); an install that failed keeps only its logs and
+//! receipt.
 
 pub(super) mod failures;
 
-use anyhow::{Context, Result};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::SystemTime,
-};
+use crate::common::runs::{self, Run};
+use anyhow::Result;
+use std::{fs, path::Path};
 
-/// How many earlier evidence trees of one checkout are kept.
-const KEPT: usize = 3;
-
-/// A new evidence directory under `<root>/.wisent-output/install`, after
-/// removing all but the newest [`KEPT`] earlier ones. An install running in
-/// another process is among the newest, so its tree is kept.
-pub(super) fn directory(root: &Path) -> Result<PathBuf> {
-    let parent = root.join(".wisent-output/install");
-    if let Ok(entries) = fs::read_dir(&parent) {
-        let mut earlier: Vec<(SystemTime, PathBuf)> = entries
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
-            .collect();
-        earlier.sort_by(|left, right| right.0.cmp(&left.0));
-        for (_, stale) in earlier.into_iter().skip(KEPT) {
-            fs::remove_dir_all(&stale).with_context(|| {
-                format!("removing earlier install evidence {}", stale.display())
-            })?;
-        }
-    }
-    Ok(parent.join(uuid::Uuid::new_v4().to_string()))
+/// A new install run under `<root>/.wisent-output/install`, held in use until
+/// the returned value is dropped.
+pub(super) fn directory(root: &Path) -> Result<Run> {
+    runs::fresh(
+        &root.join(".wisent-output/install"),
+        &uuid::Uuid::new_v4().to_string(),
+        runs::KEPT_BUILDS,
+    )
 }
 
 /// A source build in progress. Unless it is marked finished, leaving scope
