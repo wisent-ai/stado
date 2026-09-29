@@ -64,6 +64,7 @@ fn roles(args: &ServeArgs) -> Vec<&'static str> {
             "--health-interval-seconds",
         ),
         (args.run_worker, "--worker"),
+        (args.forward_destination.is_some(), "--forward-destination"),
     ]
     .into_iter()
     .filter_map(|(on, flag)| on.then_some(flag))

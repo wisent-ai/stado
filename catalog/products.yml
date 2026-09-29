@@ -532,6 +532,10 @@ products:
       flag: --worker
     - unit: wisent-compute-agent.service
       flag: --worker
+    # This unit's launcher execs `ssh -N -R` for the host-health forward that
+    # the process's --forward-destination role keeps; it holds no local listener.
+    - unit: com.wisent.stado-host-health-forward
+      flag: --forward-destination
 - id: lem
   name: Lem
   status: active
