@@ -1,5 +1,6 @@
 //! The shared body of one cleanup pass, from the lock inward.
 
+mod busy;
 pub(crate) mod entry;
 pub(crate) mod finish;
 pub(crate) mod keep_list;
@@ -10,6 +11,7 @@ use serde_json::Value;
 
 use crate::primitives::constants;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::LockState;
+use crate::providers::local::disk_cleanup::janitor::pass::lock::holds;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::takeover::{
     acquire_lock_state, pid_alive, retired_locks_active,
 };
@@ -159,6 +161,14 @@ pub(crate) async fn cleanup_once(
         Ok(LockState::Busy { holder }) => {
             report.lock_busy = true;
             match holder {
+                _ if busy::describe_workloads(
+                    &state_dir,
+                    &home,
+                    &registry,
+                    !preview,
+                    &mut report,
+                    log_fn,
+                ) => {}
                 Some(holder) => {
                     let age = epoch_now() - holder.acquired_at;
                     let remaining = holder.deadline_at - epoch_now();
@@ -264,6 +274,12 @@ pub(crate) async fn cleanup_once(
         );
     }
 
+    // The exclusive hold answers any turn this janitor asked running
+    // workloads for; they may take their shared holds again once it ends. A
+    // preview deletes nothing, so it leaves the request standing.
+    if !preview {
+        holds::clear_turn(&state_dir);
+    }
     run_with_lock(
         &home,
         &state_dir,

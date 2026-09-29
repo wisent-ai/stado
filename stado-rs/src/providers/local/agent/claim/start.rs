@@ -79,7 +79,7 @@ pub(crate) async fn start_candidate(
     // The disk-cleanup workload lock (Python
     // `acquire_workload_lock`): a shared hold on the janitor's
     // lock file for as long as the workload owns its slot.
-    let workload_lock = match disk_cleanup::acquire_workload_lock() {
+    let workload_lock = match disk_cleanup::acquire_workload_lock(&job.job_id) {
         Ok(lock) => lock,
         Err(exc) => {
             log_fn(&format!(

@@ -1,6 +1,7 @@
 //! The secure home, the state directory, and the lock files beneath it.
 
 pub(crate) mod file;
+pub(crate) mod holds;
 pub(crate) mod takeover;
 pub(crate) mod workload;
 

@@ -1,6 +1,7 @@
 //! The janitor's own cases: what a preview reports, what enforcement
 //! deletes, and what a held lock refuses.
 use super::*;
+use stado::providers::local::disk_cleanup::acquire_workload_lock_in;
 
 #[test]
 #[ignore = "Probierz records the real disk-cleanup preview journey"]
@@ -180,6 +181,51 @@ fn busy_lock_preserves_the_reclaim_hysteresis_and_scan_cursor() {
     );
 
     FileExt::unlock(&held).unwrap();
+}
+
+/// A host whose jobs never stop must still get its cleanup. A pass that
+/// finds the lock held by a running workload names that work and counts it,
+/// and below the low watermark (this journey's policy is always below it) no
+/// new workload is admitted until a pass has had the lock.
+#[test]
+fn a_pass_blocked_by_workloads_names_them_and_gets_its_turn() {
+    let journey = Journey::new();
+    let tagged = journey.tagged_cache("turn-candidate");
+    let running = acquire_workload_lock_in(journey.home.path(), "job-running-build")
+        .unwrap()
+        .expect("no cleanup holds the lock yet");
+
+    let blocked = janitor_report(&journey.invoke_reports(&["disk-cleanup", "--once"]));
+    assert_eq!(
+        blocked["outcome"], "lock_busy_workloads",
+        "cleanup report: {blocked:#}"
+    );
+    assert_eq!(blocked["active_job_count"], 1);
+    assert!(
+        blocked["errors"].to_string().contains("job-running-build"),
+        "the busy pass names the job holding the lock: {blocked:#}"
+    );
+    assert!(tagged.is_dir(), "a blocked pass deletes nothing");
+    assert!(
+        acquire_workload_lock_in(journey.home.path(), "job-arriving-later")
+            .unwrap()
+            .is_none(),
+        "below the low watermark a new workload waits for the pass"
+    );
+
+    drop(running);
+    let cleaned = janitor_report(&journey.invoke_reports(&["disk-cleanup", "--once"]));
+    assert_eq!(
+        cleaned["outcome"], "reclaimed_progress",
+        "cleanup report: {cleaned:#}"
+    );
+    assert!(!tagged.exists(), "the pass that got its turn deleted");
+    assert!(
+        acquire_workload_lock_in(journey.home.path(), "job-after-cleanup")
+            .unwrap()
+            .is_some(),
+        "the pass answered its request, so work is admitted again"
+    );
 }
 
 #[test]

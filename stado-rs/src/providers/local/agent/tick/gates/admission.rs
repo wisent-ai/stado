@@ -105,7 +105,8 @@ pub(crate) async fn publish_and_admit(
     // a required release delivery sat queued against it. The probe takes the
     // shared lock and releases it at once, which is what the claim would do,
     // and what it saw is published under the same key the claim path writes.
-    let lock_reason = match crate::providers::local::disk_cleanup::acquire_workload_lock() {
+    let probe = crate::providers::local::disk_cleanup::acquire_workload_lock("admission-probe");
+    let lock_reason = match probe {
         Ok(Some(probe)) => {
             crate::providers::local::disk_cleanup::release_workload_lock(probe, log_fn);
             agent_diag.remove("disk_cleanup_admission");

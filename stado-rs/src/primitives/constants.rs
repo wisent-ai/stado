@@ -204,6 +204,12 @@ pub const MIN_RUNTIME_BEFORE_YIELD_S: u64 = 300;
 /// Cache TTL for the CUDA child-probe in local_agent.
 pub const CUDA_PROBE_CACHE_S: u64 = 30;
 
+/// How long a janitor's request for its turn keeps new workloads from
+/// claiming. Below its low watermark the janitor asks running workloads to
+/// drain; a pass that asked and never ran must not keep the host from work
+/// for longer than a release build takes to finish.
+pub const CLEANUP_TURN_TTL_S: u64 = 1800;
+
 // ---------------------------------------------------------------------------
 // Sizing / capacity caches
 // ---------------------------------------------------------------------------

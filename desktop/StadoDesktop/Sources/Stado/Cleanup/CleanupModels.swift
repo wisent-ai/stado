@@ -74,6 +74,8 @@ struct CleanupReport: Codable, Sendable {
             OutcomePresentation(title: "No eligible items", detail: "Pressure remains, but policy authorized no deletions.", symbol: "exclamationmark.triangle.fill", severity: .warning)
         case "lock_busy":
             OutcomePresentation(title: "Cleanup already running", detail: "Another registry-controlled pass holds the cleanup lock.", symbol: "hourglass", severity: .neutral)
+        case "lock_busy_workloads":
+            OutcomePresentation(title: "Waiting for running jobs", detail: "Running jobs hold the cleanup lock. Below the low watermark, new jobs wait until a cleanup pass has run.", symbol: "hourglass", severity: .warning)
         case "partial_error":
             OutcomePresentation(title: "Cleanup incomplete", detail: "The pass completed with sanitized errors.", symbol: "exclamationmark.triangle.fill", severity: .critical)
         case "invalid_or_unavailable_policy":

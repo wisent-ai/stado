@@ -40,7 +40,10 @@ pub(crate) fn finish(
             control_update,
         ) {
             report.add_error("state_write", &exc);
-            if report.outcome != "lock_busy" && report.outcome != "invalid_or_unavailable_policy" {
+            if !matches!(
+                report.outcome.as_str(),
+                "lock_busy" | "lock_busy_workloads" | "invalid_or_unavailable_policy"
+            ) {
                 report.outcome = "partial_error".to_string();
             }
         }

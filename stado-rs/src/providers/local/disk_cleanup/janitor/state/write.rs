@@ -99,6 +99,7 @@ pub(crate) fn write_state(
     // and that is what this is.
     let outcome = report.get("outcome").and_then(Value::as_str);
     let prevented_now = outcome == Some("lock_busy")
+        || outcome == Some("lock_busy_workloads")
         || (outcome == Some("lock_busy_unattributed")
             && report
                 .get("active_job_count")

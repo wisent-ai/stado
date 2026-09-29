@@ -73,7 +73,8 @@ impl Home {
 
     /// One shared workload hold, taken the way `agent::run_agent` takes it.
     fn hold(&self) -> Option<WorkloadLock> {
-        acquire_workload_lock_in(self.path()).expect("the lock file is ours to open")
+        acquire_workload_lock_in(self.path(), "workload-hold-journey")
+            .expect("the lock file is ours to open")
     }
 
     /// Whether a cleanup pass could take the run lock right now.
