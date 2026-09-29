@@ -43,10 +43,17 @@ pub fn release(
         .context("source snapshot has no revision")?
         .trim_end_matches("-dirty")
         .to_owned();
+    let checkout = root;
+    let key = evidence::failures::key(id, &platform()?, &revision, recipe);
+    if let Err(refusal) = evidence::failures::refuse_recorded(checkout, &key) {
+        fs::remove_dir_all(&evidence)?;
+        return Err(refusal);
+    }
     // Quality, build and signing run in the committed tree, as the release
     // worker's git archive does: an uncommitted edit another session is
     // making in this checkout neither enters the install nor fails it.
     let committed = evidence.join("source");
+    let build = evidence::Build::start(&evidence);
     let archive_sha256 = source::export(root, &revision, &committed)?;
     let root = committed.as_path();
     let document = manifest::load(root, text(recipe, "manifest")?)?;
@@ -101,18 +108,10 @@ pub fn release(
     environment.extend(inputs::materialise(runtime, &document, spec, &inputs)?);
     environment.extend(manifest::secrets(&[&document, spec])?);
     if let Some(quality) = spec.get("quality") {
-        for check in quality
-            .as_array()
-            .context("release quality must be an array")?
-        {
-            step(check, root, &environment).with_context(|| {
-                format!(
-                    "{id} quality {} failed; build evidence: {}",
-                    check["name"],
-                    evidence.display()
-                )
-            })?;
-        }
+        let install = (id, revision.as_str(), evidence.as_path());
+        evidence::failures::gate(checkout, &key, install, quality, |check| {
+            step(check, root, &environment)
+        })?;
     }
     step(&spec["build"], root, &environment)
         .with_context(|| format!("{id} build failed; evidence: {}", evidence.display()))?;
@@ -192,6 +191,7 @@ pub fn release(
         &evidence.join("prepared.json"),
         &json!({"product": id, "source_revision": revision, "placements": placements}),
     )?;
+    build.finished();
     Ok(Prepared {
         placements,
         source_revision: revision,
