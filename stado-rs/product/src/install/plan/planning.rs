@@ -5,9 +5,10 @@
 //! left `installing`) resumes the plan it retained, so a repeated
 //! after-install step places nothing new. It is superseded instead when the
 //! retained plan can no longer be what the operator asked for: a pinned
-//! coordinate whose files are already placed, or a source build whose checkout
-//! now stands on another commit. Resuming such a plan would repeat whatever it
-//! got wrong on every attempt, with a rollback as the only way on.
+//! coordinate whose files are already placed, a source build whose checkout
+//! now stands on another commit, or a plan prepared for a recipe the catalog
+//! has since corrected. Resuming such a plan would repeat whatever it got
+//! wrong on every attempt, with a rollback as the only way on.
 
 use super::{release, Prepared};
 use crate::install::recipes;
@@ -49,8 +50,33 @@ pub(in super::super) fn select(
             ),
         };
     };
-    if incomplete.recipe != *request.selected || incomplete.host.as_deref() != request.host {
-        bail!("unfinished installation is bound to another recipe or host; roll it back first");
+    if incomplete.host.as_deref() != request.host {
+        bail!("unfinished installation is bound to another host; finish it there first");
+    }
+    // A catalog correction changes the recipe itself (for example a
+    // host_config key the host now refuses). The retained plan was prepared
+    // for the old recipe, so resuming it repeats the refused step; it is
+    // superseded by a fresh preparation of the recipe asked for now.
+    if incomplete.recipe != *request.selected {
+        let replacement = match request.pin {
+            Some((version, revision)) => {
+                release::prepare(request.product, version, revision, request.runtime)?
+            }
+            None => recipes::prepare(
+                request.runtime,
+                request.product,
+                request.selected,
+                request.surface,
+                &canonical_checkout(request)?,
+            )?,
+        };
+        supersede(request.runtime, incomplete)?;
+        eprintln!(
+            "{}: the unfinished installation prepared for an earlier recipe is superseded by \
+             the current catalog recipe; its backups stay in this installation's previous record",
+            request.id
+        );
+        return Ok(replacement);
     }
     let retained = || -> Result<Prepared> {
         Ok(serde_json::from_value(
