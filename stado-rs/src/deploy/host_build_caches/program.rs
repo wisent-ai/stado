@@ -18,6 +18,11 @@ pub const FORCE_ENV: &str = "STADO_CACHE_FORCE";
 /// same doors.
 pub const PRUNE_ENV: &str = "STADO_CACHE_PRUNE";
 
+/// Verdict of a walk that `find` ended without producing a single tag, after
+/// every attempt. The host answered; its walk did not finish, so a report
+/// states it as an incomplete verdict instead of failing the command.
+pub const SCAN_FAILED: &str = "scan-failed";
+
 /// Two phases. First one `find` pass collects the tag files, so the walk is
 /// never mutated underneath itself — deleting during the walk made `find`
 /// fail and swallowed the report while the deletions still happened. Then
@@ -28,8 +33,11 @@ pub const PRUNE_ENV: &str = "STADO_CACHE_PRUNE";
 /// The walk prunes every root named in `STADO_CACHE_PRUNE` before opening
 /// it, and reads `find`'s own error lines instead of its exit status: a
 /// directory it could not open is one `permission-denied` row and the walk
-/// goes on. `scan-failed` is kept for the case where `find` failed and
-/// produced no tag at all.
+/// goes on. A walk that `find` ends with a failure before printing any tag is
+/// walked again, up to `STADO_CACHE_SCAN_ATTEMPTS` times (three when unset),
+/// because BSD `find` abandons the whole walk on one interrupted `fts_read`.
+/// `scan-failed` is kept for a walk that failed with no tag on its last
+/// attempt.
 pub const REMOTE_SCRIPT: &str = r#"root="${STADO_CACHE_ROOT:-}"
 days="${STADO_CACHE_MIN_AGE_DAYS:-}"
 apply="${STADO_CACHE_APPLY:-}"
@@ -83,12 +91,22 @@ if [ -n "$prune" ]; then
   done
   IFS=$saved_ifs
 fi
-if [ $# -gt 0 ]; then
-  listing=$(/usr/bin/find "$root" \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>&1)
-else
-  listing=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG -print 2>&1)
-fi
-find_status=$?
+attempts="${STADO_CACHE_SCAN_ATTEMPTS:-3}"
+attempt=1
+while :; do
+  if [ $# -gt 0 ]; then
+    listing=$(/usr/bin/find "$root" \( "$@" \) -prune -o -type f -name CACHEDIR.TAG -print 2>&1)
+  else
+    listing=$(/usr/bin/find "$root" -type f -name CACHEDIR.TAG -print 2>&1)
+  fi
+  find_status=$?
+  [ "$find_status" -ne 0 ] || break
+  [ "$attempt" -lt "$attempts" ] || break
+  if printf '%s\n' "$listing" | /usr/bin/grep -q -v -e '^find: ' -e '^$'; then
+    break
+  fi
+  attempt=$((attempt + 1))
+done
 tags=""
 other_errors=""
 while IFS= read -r line; do

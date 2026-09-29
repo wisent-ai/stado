@@ -182,12 +182,16 @@ pub(super) async fn report(target_name: &str, json_output: bool) -> Result<(), C
         ))
         .machine_readable(json_output));
     }
-    // A verdict that only ran out of seconds is reported, not fatal: every
-    // other figure above it was already read, and the inventory's own budget
-    // has behaved this way since the walk was given one. A host that refused
-    // the read still fails the command.
+    // A verdict that ran out of seconds, or a walk the host's `find` ended
+    // before it printed any tag, is reported as incomplete, not fatal: every
+    // other figure above it was already read, and the host did answer. A
+    // host that refused the read still fails the command.
     if let Some(error) = cache_report.error.filter(|error| !error.is_empty()) {
-        if cache_report.timed_out {
+        let walk_failed = cache_report
+            .entries
+            .iter()
+            .any(|entry| entry.state == crate::deploy::host_build_caches::SCAN_FAILED);
+        if cache_report.timed_out || walk_failed {
             eprintln!("{} build cache verdict incomplete: {error}", target.name);
             return Ok(());
         }
