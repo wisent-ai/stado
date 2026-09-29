@@ -81,7 +81,7 @@ pub fn materialise(
         // build reads as one file (`extract: false`, such as a git bundle) has
         // no checkout shape: a mounted directory there makes the build's
         // `install` refuse it, so that archive is fetched and held to its digest.
-        let substitute = entry["extract"].as_bool().unwrap_or(false);
+        let substitute = extracted(&entry);
         let checkout = if substitute {
             match source::checkout(runtime, &format!("wisent-ai/{repository}")) {
                 Ok(checkout) => Some(checkout),
@@ -149,7 +149,7 @@ fn fetch_verified(
     // release worker sets it (`inputs_root/<mount>`): an unpacked tree, or the
     // one file an unextracted input is. Naming the file's parent directory
     // instead gave every single-file input of a product the same value.
-    if entry["extract"].as_bool().unwrap_or(false) {
+    if extracted(entry) {
         fs::create_dir_all(mount)?;
         unpack(&fetched, mount)?;
     } else {
@@ -158,4 +158,11 @@ fn fetch_verified(
     let resolved = mount.to_path_buf();
     let receipt = json!({"input": key, "kind": "verified-archive", "uri": uri, "sha256": actual, "mount": mount});
     Ok((resolved, receipt))
+}
+
+/// Whether an input is unpacked. Absent means yes, as the release contract
+/// (`release_pipeline::validate::predicates::default_extract`) and the release
+/// worker read it: a source archive declared without the field is a tree.
+fn extracted(entry: &Value) -> bool {
+    entry["extract"].as_bool().unwrap_or(true)
 }
