@@ -142,6 +142,14 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
             return Err(invalid(format!("{name} must be a boolean")));
         }
     }
+    // No default is inserted for terminates_agent, so a request that omits it
+    // keeps the digest it had before the field existed.
+    if normalized
+        .get("terminates_agent")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(invalid("terminates_agent must be a boolean"));
+    }
     let packages = &normalized["apt_packages"];
     let valid_packages = packages.as_array().is_some_and(|items| {
         items

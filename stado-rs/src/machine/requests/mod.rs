@@ -26,6 +26,7 @@ const REQUEST_FIELDS: &[&str] = &[
     "output_uri",
     "verify_command",
     "exclusive",
+    "terminates_agent",
     "source_archive_path",
     "input_objects",
     "secret_env",
