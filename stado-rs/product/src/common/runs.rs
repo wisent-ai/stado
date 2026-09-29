@@ -86,7 +86,7 @@ fn prune(parent: &Path, kept: usize) -> Result<Option<PathBuf>> {
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
-    earlier.sort_by(|left, right| right.0.cmp(&left.0));
+    earlier.sort_by_key(|run| std::cmp::Reverse(run.0));
     let newest = earlier.first().map(|(_, path)| path.clone());
     for (_, stale) in earlier.into_iter().skip(kept) {
         if in_use(&stale) {
