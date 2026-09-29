@@ -145,14 +145,17 @@ fn fetch_verified(
     if actual != digest {
         bail!("input {key}: {uri} served SHA-256 {actual}; the manifest declares {digest}");
     }
-    let resolved = if entry["extract"].as_bool().unwrap_or(false) {
+    // The build reads `WISENT_INPUT_<KEY>_DIR` as the mount itself, the way the
+    // release worker sets it (`inputs_root/<mount>`): an unpacked tree, or the
+    // one file an unextracted input is. Naming the file's parent directory
+    // instead gave every single-file input of a product the same value.
+    if entry["extract"].as_bool().unwrap_or(false) {
         fs::create_dir_all(mount)?;
         unpack(&fetched, mount)?;
-        mount.to_path_buf()
     } else {
         fs::copy(&fetched, mount)?;
-        mount.parent().unwrap().to_path_buf()
-    };
+    }
+    let resolved = mount.to_path_buf();
     let receipt = json!({"input": key, "kind": "verified-archive", "uri": uri, "sha256": actual, "mount": mount});
     Ok((resolved, receipt))
 }
