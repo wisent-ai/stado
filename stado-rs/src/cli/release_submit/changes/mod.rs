@@ -1,6 +1,7 @@
 //! Pushed work waiting for a later shared build. Handoff starts no build.
 mod source;
 mod status;
+mod ticket;
 
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
@@ -93,14 +94,11 @@ pub async fn dispatch(args: &ChangesArgs) -> Result<(), CmdError> {
                     .map_err(failure)?
                     .ok_or_else(|| CmdError::click("pending change disappeared after admission"))?;
                 let saved: Change = serde_json::from_str(&text)?;
-                if saved.id != change.id
-                    || saved.repository != change.repository
-                    || saved.source_commit != change.source_commit
-                    || saved.task_id != change.task_id
-                    || saved.session_id != change.session_id
-                    || saved.product != change.product
-                {
-                    return Err(CmdError::click("pending change identity mismatch"));
+                if let Some(differing) = ticket::disagreement(&saved, &change) {
+                    return Err(CmdError::click(format!(
+                        "pending change {} at {path} disagrees with this handoff: {differing}",
+                        change.id
+                    )));
                 }
                 saved
             };
