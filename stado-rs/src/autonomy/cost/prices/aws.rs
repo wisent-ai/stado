@@ -212,6 +212,7 @@ fn aws_quote(
         accelerator_type: crate::catalog::AWS_INSTANCE_TO_ACCEL
             .get(machine)
             .map(|accelerator| accelerator.to_string()),
+        family: None,
         purchase_option: purchase_option.to_string(),
         unit: "hour".to_string(),
         hourly_usd,

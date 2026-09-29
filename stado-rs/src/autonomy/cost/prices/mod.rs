@@ -4,8 +4,8 @@
 //! [`PriceBook`] — and [`refresh_prices`], which fans out to one reader per
 //! configured provider, are here. [`book`] holds the [`PriceBook`] lookup and
 //! the machine shape table it composes from; [`gcp`], [`azure`] and [`aws`]
-//! hold the reads themselves. The description helpers at the bottom are the
-//! vocabulary those readers share.
+//! hold the reads themselves. The helper at the bottom reads the accelerator
+//! from an Azure meter's name, the one catalog that names it nowhere else.
 
 mod aws;
 mod azure;
@@ -44,6 +44,11 @@ pub struct PriceQuote {
     pub region: Option<String>,
     pub machine_type: Option<String>,
     pub accelerator_type: Option<String>,
+    /// The machine family a per-core or per-GiB price belongs to (`n1`,
+    /// `g2`, `a2`), read from the provider's own product classification;
+    /// `None` for a price per machine or per accelerator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
     pub purchase_option: String,
     pub unit: String,
     pub hourly_usd: f64,
@@ -116,6 +121,7 @@ pub async fn refresh_prices(policy: &AutonomyPolicy) -> PriceBook {
                 region: None,
                 machine_type: None,
                 accelerator_type: None,
+                family: None,
                 purchase_option: "on_demand".to_string(),
                 unit: "hour".to_string(),
                 hourly_usd: hourly,
@@ -162,31 +168,6 @@ fn infer_accelerator(description: &str) -> Option<String> {
     .iter()
     .find(|(alias, _)| normalized_description.contains(alias))
     .map(|(_, canonical)| (*canonical).to_string())
-}
-
-fn infer_machine_type(description: &str) -> Option<String> {
-    description
-        .split_whitespace()
-        .find(|word| {
-            let lowered = word.to_ascii_lowercase();
-            lowered.starts_with("a2-")
-                || lowered.starts_with("g2-")
-                || lowered.starts_with("n1-")
-                || lowered.starts_with("standard_")
-                || lowered.starts_with("p3.")
-                || lowered.starts_with("p4.")
-                || lowered.starts_with("g4dn.")
-                || lowered.starts_with("g5.")
-        })
-        .map(|word| {
-            word.trim_matches(|character: char| {
-                !character.is_alphanumeric()
-                    && character != '-'
-                    && character != '_'
-                    && character != '.'
-            })
-            .to_string()
-        })
 }
 
 fn normalized(value: &str) -> String {

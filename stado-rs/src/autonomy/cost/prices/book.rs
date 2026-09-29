@@ -8,7 +8,7 @@
 use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
-use super::{normalized, PriceBook, PriceQuote};
+use super::{PriceBook, PriceQuote};
 
 impl PriceBook {
     pub fn find_hourly(
@@ -35,14 +35,7 @@ impl PriceBook {
             .quotes
             .iter()
             .filter(matching)
-            .filter(|quote| {
-                quote.machine_type.as_deref() == Some(machine_type)
-                    || (!machine_type.is_empty()
-                        && quote
-                            .description
-                            .to_ascii_lowercase()
-                            .contains(&machine_type.to_ascii_lowercase()))
-            })
+            .filter(|quote| quote.machine_type.as_deref() == Some(machine_type))
             .min_by(|left, right| {
                 left.hourly_usd
                     .partial_cmp(&right.hourly_usd)
@@ -57,11 +50,7 @@ impl PriceBook {
         self.quotes
             .iter()
             .filter(matching)
-            .filter(|quote| {
-                quote.accelerator_type.as_deref() == Some(accelerator_type)
-                    || (!accelerator_type.is_empty()
-                        && normalized(&quote.description).contains(&normalized(accelerator_type)))
-            })
+            .filter(|quote| quote.accelerator_type.as_deref() == Some(accelerator_type))
             .min_by(|left, right| {
                 left.hourly_usd
                     .partial_cmp(&right.hourly_usd)
@@ -78,24 +67,17 @@ impl PriceBook {
         purchase: &str,
     ) -> Option<PriceQuote> {
         let (family, cores, memory_gb, accelerator_count) = gcp_machine_shape(machine_type)?;
-        let family_key = normalized(family);
-        // The family is named only in the SKU description; whether a SKU
-        // prices a core hour or a GiB-hour of memory is its usage unit.
+        // The family and the accelerator come from the SKU's product
+        // taxonomy; whether a SKU prices a core hour or a GiB-hour of memory
+        // is its usage unit.
         let core = self.cheapest_gcp_quote(region, purchase, |quote| {
-            quote.machine_type.is_none()
-                && quote.accelerator_type.is_none()
-                && quote.unit == "hour"
-                && normalized(&quote.description).contains(&family_key)
+            quote.family.as_deref() == Some(family) && quote.unit == "hour"
         })?;
         let memory = self.cheapest_gcp_quote(region, purchase, |quote| {
-            quote.machine_type.is_none()
-                && quote.accelerator_type.is_none()
-                && quote.unit == "gib_hour"
-                && normalized(&quote.description).contains(&family_key)
+            quote.family.as_deref() == Some(family) && quote.unit == "gib_hour"
         })?;
         let accelerator = self.cheapest_gcp_quote(region, purchase, |quote| {
             quote.accelerator_type.as_deref() == Some(accelerator_type)
-                || normalized(&quote.description).contains(&normalized(accelerator_type))
         })?;
         Some(PriceQuote {
             schema_version: SCHEMA_VERSION,
@@ -107,6 +89,7 @@ impl PriceBook {
             region: region.map(str::to_string),
             machine_type: Some(machine_type.to_string()),
             accelerator_type: Some(accelerator_type.to_string()),
+            family: None,
             purchase_option: purchase.to_string(),
             unit: "hour".to_string(),
             hourly_usd: core.hourly_usd * cores

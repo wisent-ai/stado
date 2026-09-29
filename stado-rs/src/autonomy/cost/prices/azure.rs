@@ -107,6 +107,7 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 accelerator_type: infer_accelerator(&format!("{description} {meter}")),
+                family: None,
                 purchase_option: if meter.to_ascii_lowercase().contains("spot")
                     || meter.to_ascii_lowercase().contains("low priority")
                     || item

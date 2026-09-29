@@ -1,5 +1,7 @@
 //! The GCP price read: the Cloud Billing Catalog, paged, one quote per SKU
-//! and service region.
+//! and service region, each classified by the Pricing API's product taxonomy.
+
+mod taxonomy;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -7,10 +9,10 @@ use serde_json::Value;
 use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
-use super::{
-    infer_accelerator, infer_machine_type, PriceQuote, PriceSource, PriceState,
-    PRICING_HTTP_TIMEOUT,
-};
+use super::{PriceQuote, PriceSource, PriceState, PRICING_HTTP_TIMEOUT};
+use taxonomy::{gcp_sku_taxonomy, SkuTaxonomy};
+
+const COMPUTE_ENGINE_SERVICE: &str = "6F81-5844-456A";
 
 pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
     let mut source = PriceSource {
@@ -44,9 +46,17 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
         .timeout(PRICING_HTTP_TIMEOUT)
         .build()
         .expect("pricing HTTP client builds");
+    let taxonomy = match gcp_sku_taxonomy(&client, token.as_str()).await {
+        Ok(taxonomy) => taxonomy,
+        Err(error) => {
+            source.state = PriceState::Blocked;
+            source.error = Some(error);
+            return source;
+        }
+    };
     let mut page_token: Option<String> = None;
     loop {
-        let mut url = "https://cloudbilling.googleapis.com/v1/services/6F81-5844-456A/skus?currencyCode=USD&pageSize=5000".to_string();
+        let mut url = format!("https://cloudbilling.googleapis.com/v1/services/{COMPUTE_ENGINE_SERVICE}/skus?currencyCode=USD&pageSize=5000");
         if let Some(page) = page_token.as_deref() {
             url.push_str("&pageToken=");
             url.push_str(
@@ -114,10 +124,13 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             {
                 continue;
             }
-            let lowered_description = description.to_ascii_lowercase();
-            if lowered_description.contains("custom instance") {
-                continue;
-            }
+            // Custom-shape cores and memory share their family's taxonomy and
+            // cost at least the predefined shape's rate, so the cheapest quote
+            // of a family is the predefined one and they need no exclusion.
+            let classified = sku
+                .get("skuId")
+                .and_then(Value::as_str)
+                .and_then(|sku_id| taxonomy.get(sku_id));
             let regions: Vec<Option<String>> = sku
                 .get("serviceRegions")
                 .and_then(Value::as_array)
@@ -130,8 +143,14 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 })
                 .filter(|regions: &Vec<Option<String>>| !regions.is_empty())
                 .unwrap_or_else(|| vec![None]);
-            let accelerator = infer_accelerator(&description);
-            let machine = infer_machine_type(&description);
+            let family = match classified {
+                Some(SkuTaxonomy::Family(family)) => Some(family.clone()),
+                _ => None,
+            };
+            let accelerator = match classified {
+                Some(SkuTaxonomy::Accelerator(accelerator)) => Some(accelerator.to_string()),
+                _ => None,
+            };
             for region in regions {
                 source.quotes.push(PriceQuote {
                     schema_version: SCHEMA_VERSION,
@@ -143,8 +162,9 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
                         .to_string(),
                     description: description.clone(),
                     region,
-                    machine_type: machine.clone(),
+                    machine_type: None,
                     accelerator_type: accelerator.clone(),
+                    family: family.clone(),
                     purchase_option: purchase_option.to_string(),
                     unit: unit.to_string(),
                     hourly_usd: rate,
