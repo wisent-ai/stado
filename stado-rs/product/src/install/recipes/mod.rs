@@ -26,13 +26,12 @@ pub fn prepare(
         "local-build" => {
             let binaries = packages::names(recipe, "binaries")?;
             let run = uuid::Uuid::new_v4().to_string();
-            let kept = crate::common::runs::KEPT_BUILDS;
             let home_run =
-                crate::common::runs::fresh(&root.join(".build/local-install"), &run, kept)?;
+                crate::common::runs::fresh_build(&root.join(".build/local-install"), &run)?;
             let home = home_run.path.clone();
             fs::create_dir_all(home.join(".local/bin"))?;
             let evidence_run =
-                crate::common::runs::fresh(&root.join(".wisent-output/local-install"), &run, kept)?;
+                crate::common::runs::fresh_build(&root.join(".wisent-output/local-install"), &run)?;
             let evidence = evidence_run.path.clone();
             let recorded = source::snapshot(root, &evidence, &home)?;
             checked(

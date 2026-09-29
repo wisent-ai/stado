@@ -13,12 +13,12 @@ use anyhow::Result;
 use std::{fs, path::Path};
 
 /// A new install run under `<root>/.wisent-output/install`, held in use until
-/// the returned value is dropped.
+/// the returned value is dropped, and refused when the volume cannot hold
+/// another run the size of the last one.
 pub(super) fn directory(root: &Path) -> Result<Run> {
-    runs::fresh(
+    runs::fresh_build(
         &root.join(".wisent-output/install"),
         &uuid::Uuid::new_v4().to_string(),
-        runs::KEPT_BUILDS,
     )
 }
 

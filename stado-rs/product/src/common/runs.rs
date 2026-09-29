@@ -7,7 +7,7 @@
 //! attempt. Every such parent now keeps its newest few runs; a run whose
 //! creator is still working is never removed, whatever its age.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use std::{
     fs::{self, File},
@@ -35,6 +35,34 @@ pub struct Run {
 /// `kept`. A run whose creator still holds it is skipped, not removed.
 pub fn fresh(parent: &Path, name: &str, kept: usize) -> Result<Run> {
     prune(parent, kept)?;
+    create(parent, name)
+}
+
+/// A build run: [`fresh`] with [`KEPT_BUILDS`], refused before anything is
+/// written when the volume holds less free space than the newest earlier run
+/// of this parent took. A build that ran out of disk would fail every process
+/// on the host with it, not only itself.
+pub fn fresh_build(parent: &Path, name: &str) -> Result<Run> {
+    if let Some(newest) = prune(parent, KEPT_BUILDS)? {
+        let needed = bytes(&newest);
+        let free = fs2::available_space(parent)
+            .with_context(|| format!("reading the free space under {}", parent.display()))?;
+        if free < needed {
+            bail!(
+                "{:.1} GiB are free under {} and the previous run there, {}, took {:.1} GiB; \
+                 a build now would fill the volume. Free space on this host first (`stado space \
+                 reclaim <host>`), then run it again",
+                gib(free),
+                parent.display(),
+                newest.display(),
+                gib(needed)
+            );
+        }
+    }
+    create(parent, name)
+}
+
+fn create(parent: &Path, name: &str) -> Result<Run> {
     let path = parent.join(name);
     fs::create_dir_all(&path).with_context(|| format!("creating the run {}", path.display()))?;
     let in_use = File::create(path.join(IN_USE))
@@ -48,9 +76,10 @@ pub fn fresh(parent: &Path, name: &str, kept: usize) -> Result<Run> {
     })
 }
 
-fn prune(parent: &Path, kept: usize) -> Result<()> {
+/// Remove all but the newest `kept` runs; answer the newest run left.
+fn prune(parent: &Path, kept: usize) -> Result<Option<PathBuf>> {
     let Ok(entries) = fs::read_dir(parent) else {
-        return Ok(());
+        return Ok(None);
     };
     let mut earlier: Vec<(SystemTime, PathBuf)> = entries
         .filter_map(|entry| entry.ok())
@@ -58,6 +87,7 @@ fn prune(parent: &Path, kept: usize) -> Result<()> {
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
     earlier.sort_by(|left, right| right.0.cmp(&left.0));
+    let newest = earlier.first().map(|(_, path)| path.clone());
     for (_, stale) in earlier.into_iter().skip(kept) {
         if in_use(&stale) {
             continue;
@@ -65,7 +95,26 @@ fn prune(parent: &Path, kept: usize) -> Result<()> {
         fs::remove_dir_all(&stale)
             .with_context(|| format!("removing the earlier run {}", stale.display()))?;
     }
-    Ok(())
+    Ok(newest)
+}
+
+/// Bytes of the regular files under `path`, symbolic links not followed.
+fn bytes(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => bytes(&entry.path()),
+            Ok(kind) if kind.is_file() => entry.metadata().map_or(0, |data| data.len()),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn gib(bytes: u64) -> f64 {
+    bytes as f64 / f64::from(1u32 << 30)
 }
 
 /// Whether the run's creator still holds its marker. A run without a marker
