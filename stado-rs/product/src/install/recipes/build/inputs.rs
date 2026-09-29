@@ -77,8 +77,22 @@ pub fn materialise(
         } else {
             scope.to_owned()
         };
-        let resolved = match source::checkout(runtime, &format!("wisent-ai/{repository}")) {
-            Ok(checkout) => {
+        // A checkout stands in for an extracted source tree only. An input the
+        // build reads as one file (`extract: false`, such as a git bundle) has
+        // no checkout shape: a mounted directory there makes the build's
+        // `install` refuse it, so that archive is fetched and held to its digest.
+        let substitute = entry["extract"].as_bool().unwrap_or(false);
+        let checkout = if substitute {
+            match source::checkout(runtime, &format!("wisent-ai/{repository}")) {
+                Ok(checkout) => Some(checkout),
+                Err(error) if error.is::<source::MissingCheckout>() => None,
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
+        let resolved = match checkout {
+            Some(checkout) => {
                 #[cfg(unix)]
                 std::os::unix::fs::symlink(&checkout, &mount)?;
                 #[cfg(not(unix))]
@@ -88,13 +102,12 @@ pub fn materialise(
                 receipts.push(json!({"input": key, "kind": "canonical-checkout", "path": checkout, "revision": revision, "declared_archive": uri, "declared_sha256": digest}));
                 checkout
             }
-            Err(error) if error.is::<source::MissingCheckout>() => {
+            None => {
                 let (resolved, receipt) =
                     fetch_verified(&key, uri, digest, &entry, directory, &mount)?;
                 receipts.push(receipt);
                 resolved
             }
-            Err(error) => return Err(error),
         };
         environment.insert(
             super::mounts::environment_name(&key),
