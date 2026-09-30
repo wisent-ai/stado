@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::cli::build_cmd::timing::phase;
-use crate::cli::release_submit::builds::builder::{builder, Fleet};
+use crate::cli::release_submit::builds::builder::{builder, refuse_unheld_secret_items, Fleet};
 use crate::cli::release_submit::builds::history;
 use crate::cli::release_submit::builds::jobs::command::release_worker_command;
 use crate::cli::release_submit::builds::jobs::{input, persist_worker_request, secret_refs};
@@ -138,6 +138,7 @@ pub(crate) async fn enqueue(
             let pinned = saved_request
                 .as_ref()
                 .map(|request| request.builder.as_str());
+            refuse_unheld_secret_items(&m.product, platform, &recipe.secret_env).await?;
             let (host, consumer) = builder(
                 fleet,
                 &recipe.runner_platform,
