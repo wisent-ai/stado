@@ -15,5 +15,7 @@ mod api;
 mod command;
 mod records;
 mod routes;
+mod zone;
 
 pub use command::{dispatch, CloudflareCommands, TunnelScopeArgs};
+pub(crate) use zone::{import_zone, ZoneEntry};

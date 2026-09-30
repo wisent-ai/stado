@@ -76,6 +76,25 @@ pub(crate) enum DnsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Move a zone into Cloudflare: every record written there first, then
+    /// the registrar's nameservers pointed at Cloudflare's and read back.
+    ///
+    /// Refused before any write when the zone holds a record type Cloudflare
+    /// cannot carry (Namecheap URL redirects), naming those records.
+    Delegate {
+        /// Zone name, for example wisent.com.
+        zone: String,
+        /// Skarbiec item holding the Cloudflare account_id and a scoped api_token
+        /// that may create zones and DNS records.
+        #[arg(long)]
+        api_credential: String,
+        /// Skarbiec item holding api_user, api_key, username and client_ip.
+        #[arg(long, default_value = DEFAULT_CREDENTIAL)]
+        credential: String,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub(crate) async fn dispatch(command: DnsCommands) -> Result<(), CmdError> {
@@ -114,6 +133,12 @@ pub(crate) async fn dispatch(command: DnsCommands) -> Result<(), CmdError> {
             credential,
             json,
         } => remove(&name, &record_type, zone.as_deref(), &credential, json).await,
+        DnsCommands::Delegate {
+            zone,
+            api_credential,
+            credential,
+            json,
+        } => super::delegate::delegate(&zone, &api_credential, &credential, json).await,
     }
 }
 

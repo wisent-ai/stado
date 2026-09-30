@@ -20,6 +20,7 @@
 //! Google Workspace's.
 
 mod command;
+mod delegate;
 mod records;
 mod registrar;
 #[cfg(test)]

@@ -55,6 +55,17 @@ pub(in crate::cli::cloudflare) async fn tunnel_access(
     })
 }
 
+/// The account a zone is created in and the client that creates it, from one
+/// credential carrying `account_id` and a scoped `api_token`; no tunnel.
+pub(in crate::cli::cloudflare) async fn account_access(
+    api_credential_name: &str,
+) -> Result<(String, CloudflareClient), CmdError> {
+    let account_id = required_field(api_credential_name, "account_id").await?;
+    let api_token = required_field(api_credential_name, "api_token").await?;
+    validate_api_component("account_id", &account_id)?;
+    Ok((account_id, CloudflareClient::new(api_token)?))
+}
+
 /// One required credential field, read by name through the selected store.
 pub(in crate::cli::cloudflare) async fn required_field(
     item: &str,

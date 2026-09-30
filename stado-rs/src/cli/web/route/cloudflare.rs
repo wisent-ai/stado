@@ -30,8 +30,8 @@ pub(super) fn cloudflare_unavailable(hostname: &str) -> String {
          `stado cloudflare route-tunnel --api-credential <that item> --tunnel-credential \
          platform-cloudflare-bobloo-tunnel --zone {zone} --hostname {hostname}` publishes it. \
          {zone} must also be a zone Cloudflare's nameservers serve, because Cloudflare issues \
-         that certificate only for a zone it serves; a zone at Namecheap has to declare \
-         `--edge stado` instead."
+         that certificate only for a zone it serves; `stado dns delegate {zone} \
+         --api-credential <that item>` moves a zone the registrar serves into Cloudflare."
     )
 }
 
