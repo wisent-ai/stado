@@ -18,7 +18,10 @@ const SCAN_WINDOW: usize = 120;
 
 /// The newest `limit` builds the product filter admits, newest first, as
 /// recorded: a listing does not read every build's jobs.
-async fn recent_builds(product: Option<&str>, limit: usize) -> Result<Vec<BuildRun>, CmdError> {
+pub(in crate::cli::build_cmd) async fn recent_builds(
+    product: Option<&str>,
+    limit: usize,
+) -> Result<Vec<BuildRun>, CmdError> {
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;

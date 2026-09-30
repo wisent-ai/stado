@@ -130,5 +130,92 @@ pub(crate) async fn ensure_build(
         return Err(persist_build_failure(&mut build, error).await);
     }
     let enqueue_failure = queue_build(&mut build, &reading.manifest).await?;
+    cancel_superseded(&build, &reading.root).await;
     Ok((build, enqueue_failure))
+}
+
+/// How many of the product's newest build records are read for ones this
+/// build supersedes: the listing is newest first, and a superseded build
+/// still running is by nature among the newest.
+const SUPERSEDED_SCAN: usize = 20;
+
+/// Cancel the jobs of this product's older builds that are still running on
+/// a platform this build also queued, when this build's commit contains
+/// theirs, and say each one on stderr.
+///
+/// On 2026-09-30 stado build 652b6c96 (c6a63931) compiled on lukasz-macbook
+/// for over 77 minutes after build 03baf850 (063d095f, a descendant) was
+/// queued, holding the Cargo build-directory lock the new build waited on:
+/// every minute of it was spent on a result nobody would use. A build of a
+/// commit that is not an ancestor of this one, or of the same commit, is
+/// left alone. A cancellation or a read that fails is named and the new
+/// build stands: it is queued either way, and only the wait is lost.
+async fn cancel_superseded(build: &BuildRun, root: &std::path::Path) {
+    let older = match super::report::recent_builds(Some(&build.product), SUPERSEDED_SCAN).await {
+        Ok(builds) => builds,
+        Err(error) => {
+            eprintln!(
+                "build {}: older {} builds could not be read, so none was cancelled: {error}",
+                build.build_id, build.product
+            );
+            return;
+        }
+    };
+    let mut facade = None;
+    for old in older.iter().filter(|old| {
+        old.build_id != build.build_id
+            && old.state == release_pipeline::BuildRunState::Waiting
+            && old.source_commit != build.source_commit
+    }) {
+        match crate::cli::release_submit::changes::contains(
+            root,
+            &old.source_commit,
+            &build.source_commit,
+        ) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                eprintln!(
+                    "build {}: whether {} contains build {}'s {} is unknown, so it was not cancelled: {error}",
+                    build.build_id, build.source_commit, old.build_id, old.source_commit
+                );
+                continue;
+            }
+        }
+        for platform in old.platforms.values().filter(|platform| {
+            platform.state == release_pipeline::PlatformRunState::Submitted
+                && build.platforms.contains_key(&platform.platform)
+        }) {
+            if facade.is_none() {
+                match crate::machine::MachineFacade::new().await {
+                    Ok(opened) => facade = Some(opened),
+                    Err(error) => {
+                        eprintln!(
+                            "build {}: the queue could not be opened, so superseded builds were not cancelled: {error}",
+                            build.build_id
+                        );
+                        return;
+                    }
+                }
+            }
+            let Some(queue) = facade.as_ref() else {
+                return;
+            };
+            match queue.cancel_job(&platform.job_id).await {
+                Ok(_) => eprintln!(
+                    "build {}: cancelled {} job {} of build {} ({}), which this build's {} contains",
+                    build.build_id,
+                    platform.platform,
+                    platform.job_id,
+                    old.build_id,
+                    old.source_commit,
+                    build.source_commit
+                ),
+                Err(error) => eprintln!(
+                    "build {}: {} job {} of superseded build {} could not be cancelled: {error}",
+                    build.build_id, platform.platform, platform.job_id, old.build_id
+                ),
+            }
+        }
+    }
 }

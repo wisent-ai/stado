@@ -28,7 +28,7 @@ pub(super) fn repository(root: &Path) -> Result<String, CmdError> {
     git(root, &["remote", "get-url", "origin"])
 }
 
-pub(super) fn contains(root: &Path, older: &str, newer: &str) -> Result<bool, CmdError> {
+pub(crate) fn contains(root: &Path, older: &str, newer: &str) -> Result<bool, CmdError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)

@@ -8,6 +8,7 @@ use crate::queue::storage::JobStorage;
 use clap::{Args, Subcommand};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+pub(crate) use source::contains;
 use std::path::PathBuf;
 
 const PREFIX: &str = "runs/release-changes/";

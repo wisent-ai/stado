@@ -11,6 +11,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Released
 
+- [0.22.18](changelog/0.22.18.md)
 - [0.22.17 – 0.22.18](changelog/0.22.17-0.22.18.md)
 - [0.16.41 – 0.22.15](changelog/0.16.41-0.22.15.md)
 - [0.16.20 – 0.16.40](changelog/0.16.20-0.16.40.md)

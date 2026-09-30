@@ -16,7 +16,7 @@ use crate::queue::storage::JobStorage;
 use crate::release_control;
 use crate::release_pipeline::{self, BuildRun, BuildRunState, PlatformRunState, ProductManifest};
 
-pub(super) use list::list;
+pub(super) use list::{list, recent_builds};
 
 /// One line's worth of what the platforms did.
 pub(super) fn summary(build: &BuildRun) -> String {
