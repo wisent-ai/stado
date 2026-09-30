@@ -68,14 +68,65 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
             row
         })
         .collect();
+    let rows = with_twins(rows);
     if json_output {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         for row in &rows {
             print_row(row);
         }
+        for row in rows
+            .iter()
+            .filter(|row| row["twin_declared"] == json!(false))
+        {
+            println!(
+                "missing twin: {} has no declaration for {}",
+                row["hostname"].as_str().unwrap_or_default(),
+                row["twin"].as_str().unwrap_or_default()
+            );
+        }
     }
     Ok(())
+}
+
+/// The two zones every product answers in, identically: the operator's rule
+/// of 2026-09-30, "wszystkie powinny miec zarowno wisent.com jak i wisent.ai
+/// identyczne odpowiedniki" (Oko 6dd957d5). Six hostnames had no twin and
+/// nothing said so.
+const TWIN_ZONES: [&str; 2] = ["wisent.com", "wisent.ai"];
+
+/// The same name in the other zone, for a hostname in one of the two.
+fn twin(hostname: &str) -> Option<String> {
+    let [first, second] = TWIN_ZONES;
+    [(first, second), (second, first)]
+        .into_iter()
+        .find_map(|(zone, other)| {
+            if hostname == zone {
+                return Some(other.to_string());
+            }
+            hostname
+                .strip_suffix(zone)
+                .filter(|label| label.ends_with('.'))
+                .map(|label| format!("{label}{other}"))
+        })
+}
+
+/// Every row whose hostname is in a twin zone, with its twin and whether any
+/// declaration owns that twin.
+fn with_twins(mut rows: Vec<Value>) -> Vec<Value> {
+    let declared: std::collections::BTreeSet<String> = rows
+        .iter()
+        .filter_map(|row| row["hostname"].as_str().map(str::to_string))
+        .collect();
+    for row in &mut rows {
+        let Some(twin) = row["hostname"].as_str().and_then(twin) else {
+            continue;
+        };
+        let object = row.as_object_mut().expect("every row is a JSON object");
+        object.insert("twin_declared".into(), json!(declared.contains(&twin)));
+        object.insert("twin".into(), json!(twin));
+    }
+    rows
 }
 
 fn print_row(row: &Value) {
