@@ -62,6 +62,29 @@ pub async fn vault_item_show(
         )));
     }
     let skarbiec = crate::cli::host::release_managed_skarbiec(&resolved, &runner, &home).await?;
+    let host_stado = format!("{home}/.stado/bin/stado");
+
+    // The summary runs the host's own stado. A release older than d8edc134
+    // has no reducer, and the pipe then broke with a usage line and a panic
+    // that read as an outage (50f4260c), so the host is asked first.
+    let reducer = crate::deploy::host_channel::run_command(
+        &resolved,
+        &format!(
+            "{} credentials item summarize-local --help",
+            crate::deploy::shlex_quote(&host_stado)
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !reducer.ok() {
+        return Err(CmdError::refused(format!(
+            "{host}: {item} exists, but its fields cannot be summarised there: {host_stado} has \
+             no 'credentials item summarize-local' (added in stado d8edc134); install a stado \
+             release that carries it on {host}",
+            host = resolved.name
+        )));
+    }
 
     let summary_text = crate::deploy::host_channel::run_command(
         &resolved,
@@ -71,7 +94,7 @@ pub async fn vault_item_show(
             crate::deploy::shlex_quote(&vault),
             crate::deploy::shlex_quote(&skarbiec),
             crate::deploy::shlex_quote(item),
-            crate::deploy::shlex_quote(&format!("{home}/.stado/bin/stado")),
+            crate::deploy::shlex_quote(&host_stado),
         ),
         &runner,
     )
