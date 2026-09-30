@@ -10,9 +10,11 @@
 //! by hand after its first start failed. The manifest states all of it, so
 //! this step reads them from it:
 //!
-//! 1. the release publisher, through `declare_publisher`;
+//! 1. the release publisher, through `declare_publisher`, and the publisher
+//!    of every pinned build input Stado cannot read (`publishers.rs`);
 //! 2. every `secret_env` reference a platform or delivery declares, added to
-//!    the workload secret declaration on the vault owner and this host and
+//!    the workload secret declaration on the vault owner, this host and every
+//!    registry target that builds the platform (`host_grant.rs`), and
 //!    granted to the workload agent in the owner's vault;
 //! 3. the post-build tests each required platform must declare for a build
 //!    to qualify a task, reported by name when missing;
@@ -59,9 +61,10 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
     publishers::ensure_publishers(manifest).await?;
     steps.push(json!({ "step": "publisher", "product": product }));
 
-    let references = secret_references(manifest)?;
+    let references = host_grant::secret_references(manifest)?;
     if !references.is_empty() {
         steps.push(ensure_workload_secrets(product, &references).await?);
+        steps.push(host_grant::declare_on_builders(manifest).await?);
     }
 
     if let Some(runtime) = manifest.runtime.as_ref() {
@@ -175,36 +178,6 @@ pub(crate) fn missing_programs_refusal(product: &str, missing: &[String]) -> Res
          the checkout holds, and each stage key at a path inside WISENT_OUTPUT_DIR",
         missing.join("; ")
     )))
-}
-
-/// Every `item#field` the manifest's platforms and deliveries read at build
-/// time, refused when one is not an `item#field` reference.
-fn secret_references(
-    manifest: &ReleasePipelineManifest,
-) -> Result<BTreeSet<(String, String)>, CmdError> {
-    manifest
-        .platforms
-        .values()
-        .flat_map(|platform| platform.secret_env.values())
-        .chain(
-            manifest
-                .deliveries
-                .iter()
-                .flat_map(|delivery| delivery.secret_env.values()),
-        )
-        .map(|reference| {
-            reference
-                .split_once('#')
-                .filter(|(item, field)| !item.is_empty() && !field.is_empty())
-                .map(|(item, field)| (item.to_string(), field.to_string()))
-                .ok_or_else(|| {
-                    CmdError::click(format!(
-                        "{}: secret_env reference {reference:?} is not item#field",
-                        manifest.product
-                    ))
-                })
-        })
-        .collect()
 }
 
 /// Required platforms whose manifest names no post-build test, so none of

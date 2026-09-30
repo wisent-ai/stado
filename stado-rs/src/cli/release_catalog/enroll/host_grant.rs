@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use crate::cli::host::{remote_config_output, write_host_config, RemoteConfigAction};
 use crate::cli::CmdError;
+use crate::release_pipeline::ReleasePipelineManifest;
 
 const ITEMS_KEY: &str = "agent.skarbiec.items";
 const FIELDS_KEY: &str = "agent.skarbiec.secret_fields";
@@ -83,3 +84,84 @@ pub(super) async fn declare_on_host(
     }
     Ok(())
 }
+
+/// One `item#field` reference, refused when it is not one.
+fn reference(product: &str, reference: &str) -> Result<(String, String), CmdError> {
+    reference
+        .split_once('#')
+        .filter(|(item, field)| !item.is_empty() && !field.is_empty())
+        .map(|(item, field)| (item.to_string(), field.to_string()))
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{product}: secret_env reference {reference:?} is not item#field"
+            ))
+        })
+}
+
+/// Every `item#field` the manifest's platforms and deliveries read at build
+/// time, refused when one is not an `item#field` reference.
+pub(super) fn secret_references(
+    manifest: &ReleasePipelineManifest,
+) -> Result<BTreeSet<(String, String)>, CmdError> {
+    manifest
+        .platforms
+        .values()
+        .flat_map(|platform| platform.secret_env.values())
+        .chain(
+            manifest
+                .deliveries
+                .iter()
+                .flat_map(|delivery| delivery.secret_env.values()),
+        )
+        .map(|each| reference(&manifest.product, each))
+        .collect()
+}
+
+/// Declare each platform's secrets, and those of the deliveries that run on
+/// it, on every registry target that builds that platform.
+///
+/// The owner and this host were the only hosts declared. On 2026-09-30
+/// oko-landing's web build was refused because the one linux-amd64 builder,
+/// ubuntu-server-rtx-pro-6000, did not list vercel-deployment#team_id in its
+/// agent.skarbiec.secret_fields (78acffb8), and nothing ever added it: a host
+/// that builds a platform learns its secrets here, from its own lists.
+pub(super) async fn declare_on_builders(
+    manifest: &ReleasePipelineManifest,
+) -> Result<Value, CmdError> {
+    let registry = crate::deploy::host_channel::canonical_registry()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut declared = Vec::new();
+    for (name, platform) in &manifest.platforms {
+        let references = platform
+            .secret_env
+            .values()
+            .chain(
+                manifest
+                    .deliveries
+                    .iter()
+                    .filter(|delivery| &delivery.platform == name)
+                    .flat_map(|delivery| delivery.secret_env.values()),
+            )
+            .map(|each| reference(&manifest.product, each))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if references.is_empty() {
+            continue;
+        }
+        let missing: Vec<&(String, String)> = references.iter().collect();
+        for target in registry
+            .targets
+            .iter()
+            .filter(|target| target.release_platform == platform.runner_platform)
+        {
+            declare_on_host(&target.name, &missing).await?;
+            declared.push(json!({ "host": target.name, "platform": name }));
+        }
+    }
+    Ok(json!({
+        "step": "builder-secrets",
+        "product": manifest.product,
+        "declared_on": declared,
+    }))
+}
+
