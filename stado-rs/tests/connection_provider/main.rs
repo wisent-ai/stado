@@ -10,8 +10,6 @@
 //! never which one carried the command, so a host whose preferred route was
 //! dead read like a healthy one. `used_connection` is that missing fact.
 
-mod lan;
-
 use std::path::Path;
 use std::process::{Command, Output};
 
