@@ -55,15 +55,36 @@ pub(in crate::cli::cloudflare) async fn tunnel_access(
     })
 }
 
+/// The item Weles acquires the account's API token into (Weles contract
+/// `cloudflare.api_token`): kind api-key, the token in `api_key` (8e7c5e53).
+pub(crate) const ACQUIRED_API_CREDENTIAL: &str = "cloudflare-api";
+
 /// The account a zone is created in and the client that creates it, from one
-/// credential carrying `account_id` and a scoped `api_token`; no tunnel.
+/// credential holding the token in `api_key`, the field Weles writes an
+/// acquired token to. The account is the one the token reaches: Cloudflare's
+/// `/accounts` must answer exactly one, so a token that reaches several is
+/// refused instead of creating the zone in whichever came first.
 pub(in crate::cli::cloudflare) async fn account_access(
     api_credential_name: &str,
 ) -> Result<(String, CloudflareClient), CmdError> {
-    let account_id = required_field(api_credential_name, "account_id").await?;
-    let api_token = required_field(api_credential_name, "api_token").await?;
-    validate_api_component("account_id", &account_id)?;
-    Ok((account_id, CloudflareClient::new(api_token)?))
+    crate::cli::host::settle_consumer_reads(api_credential_name, &["api_key"]).await?;
+    let api_token = required_field(api_credential_name, "api_key").await?;
+    let client = CloudflareClient::new(api_token)?;
+    let accounts = client.get("/accounts", &[]).await?;
+    let ids: Vec<String> = super::result_array(&accounts, "Cloudflare account list")?
+        .iter()
+        .filter_map(|account| account.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect();
+    let [account_id] = ids.as_slice() else {
+        return Err(CmdError::click(format!(
+            "the token in {api_credential_name} reaches {} Cloudflare accounts; it must reach \
+             exactly one",
+            ids.len()
+        )));
+    };
+    validate_api_component("account_id", account_id)?;
+    Ok((account_id.clone(), client))
 }
 
 /// One required credential field, read by name through the selected store.

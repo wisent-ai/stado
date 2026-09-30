@@ -84,9 +84,9 @@ pub(crate) enum DnsCommands {
     Delegate {
         /// Zone name, for example wisent.com.
         zone: String,
-        /// Skarbiec item holding the Cloudflare account_id and a scoped api_token
-        /// that may create zones and DNS records.
-        #[arg(long)]
+        /// Skarbiec item holding a Cloudflare API token in `api_key` that may
+        /// create zones and DNS records; Weles acquires it into cloudflare-api.
+        #[arg(long, default_value = crate::cli::cloudflare::ACQUIRED_API_CREDENTIAL)]
         api_credential: String,
         /// Skarbiec item holding api_user, api_key, username and client_ip.
         #[arg(long, default_value = DEFAULT_CREDENTIAL)]
