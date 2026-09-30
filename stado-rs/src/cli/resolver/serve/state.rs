@@ -48,6 +48,16 @@ pub(super) struct ResolverState {
 
 impl ResolverState {
     /// Open a channel and retain its session until the caller finishes copying.
+    ///
+    /// On 2026-09-30 connections through this adapter waited 2 to 11 minutes
+    /// while the remote object API refused channels at once. Two things made
+    /// that queue: every refused channel dropped a healthy session, so the
+    /// next connection opened a new SSH session from scratch; and every open
+    /// ran while holding the one lock all services and consumers share, so
+    /// each connection waited for every handshake queued before it. A
+    /// session is now opened without the shared lock, and it is dropped only
+    /// when it is closed; a channel the service refuses leaves it in place and
+    /// is reported to the caller at once.
     pub(super) async fn tunnel_connect(
         &self,
         active_host: &str,
@@ -58,19 +68,34 @@ impl ResolverState {
         let key = format!("{active_host}|{host}:{port}");
         // Preserve the existing single reconnect before any client bytes are sent.
         for attempt in 0..2 {
-            let tunnel = {
+            let held = {
                 let mut tunnels = self.tunnels.lock().await;
-                if let Some(tunnel) = tunnels.get(&key).filter(|tunnel| tunnel.usable()) {
-                    Arc::clone(tunnel)
-                } else {
-                    tunnels.remove(&key);
-                    let tunnel = Arc::new(Tunnel::open(paths).await?);
-                    tunnels.insert(key.clone(), Arc::clone(&tunnel));
-                    tunnel
+                match tunnels.get(&key).filter(|tunnel| tunnel.usable()) {
+                    Some(tunnel) => Some(Arc::clone(tunnel)),
+                    None => {
+                        tunnels.remove(&key);
+                        None
+                    }
+                }
+            };
+            let tunnel = match held {
+                Some(tunnel) => tunnel,
+                None => {
+                    let opened = Arc::new(Tunnel::open(paths).await?);
+                    let mut tunnels = self.tunnels.lock().await;
+                    // Another connection may have opened one meanwhile; keep
+                    // the first so every caller shares one session.
+                    let kept = tunnels
+                        .entry(key.clone())
+                        .or_insert_with(|| Arc::clone(&opened));
+                    Arc::clone(kept)
                 }
             };
             match tunnel.connect(host, port).await {
                 Ok(stream) => return Ok((stream, tunnel)),
+                // The session is alive: the service end refused this one
+                // channel, and a new session would be refused the same way.
+                Err(error) if tunnel.usable() => return Err(error),
                 Err(error) => {
                     let mut tunnels = self.tunnels.lock().await;
                     if tunnels
