@@ -25,9 +25,10 @@ pub enum StartSlotError {
 }
 
 /// The capacity-diagnostics key holding this scan's declines, one
-/// `{job_id, reason}` object each; `stado host gates` reads it back to say why
-/// a waiting job is not being taken.
-pub const GRANT_DECLINED_KEY: &str = "grant_declined";
+/// `{job_id, reason}` object each: a secret this host's grant cannot resolve,
+/// or a build whose Cargo directory another running build here holds.
+/// `stado host gates` reads it back to say why a waiting job is not taken.
+pub const CLAIM_DECLINED_KEY: &str = "claim_declined";
 
 impl From<StorageError> for StartSlotError {
     fn from(error: StorageError) -> Self {

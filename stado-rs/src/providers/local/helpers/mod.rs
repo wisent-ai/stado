@@ -30,7 +30,7 @@ pub mod gpu;
 pub mod host;
 pub mod running_slot;
 
-pub use claims::eligibility::{eligibility_refusal, job_eligible};
+pub use claims::eligibility::{build_cache_key, eligibility_refusal, job_eligible};
 pub use claims::queue_scan::no_eligible_in_queue;
 pub use gpu::capacity::build_capacity_dict_per_card;
 pub use gpu::inventory::{detect_gpu_type, detect_local_vram_gb, smi_gpu_cards, GpuCard};

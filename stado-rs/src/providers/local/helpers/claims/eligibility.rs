@@ -10,6 +10,28 @@ use crate::models::Job;
 use crate::providers::local::helpers::gpu::capacity::compat_accel_types;
 use crate::providers::local::helpers::{accel_hourly_rate, MODEL_RE};
 
+/// The build cache a release build job compiles into: its product and
+/// platform, read from the output coordinate the build enqueue gives it
+/// (`…/runs/build/<product>/<build id>/platforms/<platform>/…`).
+///
+/// The release worker sets `CARGO_TARGET_DIR` to
+/// `<build cache>/<product>/<platform>/cargo-target` from the same two words,
+/// so two jobs with one key contend for one Cargo build-directory lock. On
+/// 2026-09-30 lukasz-macbook claimed three Stado darwin builds at once; the
+/// newest sat 42 minutes in `Blocking waiting for file lock on build
+/// directory` inside a claimed slot while the queue called it running.
+pub fn build_cache_key(job: &Job) -> Option<(&str, &str)> {
+    let (_, rest) = job.output_uri.split_once("/runs/build/")?;
+    let mut parts = rest.split('/');
+    let product = parts.next().filter(|word| !word.is_empty())?;
+    parts.next().filter(|word| !word.is_empty())?;
+    if parts.next()? != "platforms" {
+        return None;
+    }
+    let platform = parts.next().filter(|word| !word.is_empty())?;
+    Some((product, platform))
+}
+
 /// Does `identity` name this consumer?
 ///
 /// Three spellings of one host reach the queue and every one of them is

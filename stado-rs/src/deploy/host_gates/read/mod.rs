@@ -191,7 +191,7 @@ fn attach_declines(gates: &mut HostGates) {
     let Some(declines) = gates
         .published_diagnostics
         .as_ref()
-        .and_then(|diag| diag.get(crate::providers::local::slots::GRANT_DECLINED_KEY))
+        .and_then(|diag| diag.get(crate::providers::local::slots::CLAIM_DECLINED_KEY))
         .and_then(Value::as_array)
     else {
         return;

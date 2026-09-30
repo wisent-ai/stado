@@ -41,7 +41,7 @@ pub(crate) async fn start_candidate(
     diag_eligibility_rejected: &mut i64,
     diag_eligible: &mut i64,
     diag_claim_errors: &mut i64,
-    grant_declined: &mut Vec<Value>,
+    claim_declined: &mut Vec<Value>,
     started: &mut i64,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<bool> {
@@ -75,6 +75,26 @@ pub(crate) async fn start_candidate(
     if !job_system_packages_eligible(job, kind) {
         *diag_eligibility_rejected += 1;
         return Ok(false);
+    }
+    // One build cache, one compile: a release build whose product and
+    // platform share their Cargo target directory with a build already
+    // running here stays in the queue, where it is visible and another
+    // builder may take it, instead of in a claimed slot blocked on Cargo's
+    // build-directory lock.
+    if let Some((product, platform)) = helpers::build_cache_key(job) {
+        if slots
+            .iter()
+            .any(|slot| helpers::build_cache_key(&slot.slot.job) == Some((product, platform)))
+        {
+            claim_declined.push(serde_json::json!({
+                "job_id": job.job_id,
+                "reason": format!(
+                    "a {product} {platform} build is already running here and holds the Cargo \
+                     build directory this one compiles into"
+                ),
+            }));
+            return Ok(false);
+        }
     }
     *diag_eligible += 1;
     // The disk-cleanup workload lock (Python
@@ -171,7 +191,7 @@ pub(crate) async fn start_candidate(
             // it yet.
             disk_cleanup::release_workload_lock(workload_lock, log_fn);
             *diag_eligible -= 1;
-            grant_declined.push(serde_json::json!({
+            claim_declined.push(serde_json::json!({
                 "job_id": job.job_id,
                 "reason": reason,
             }));

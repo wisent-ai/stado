@@ -11,7 +11,7 @@ use crate::models::{activation_extraction_must_share_gpu, isoformat_utc, Job};
 use crate::primitives::constants;
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
-use crate::providers::local::slots::{ActiveSlot, GRANT_DECLINED_KEY};
+use crate::providers::local::slots::{ActiveSlot, CLAIM_DECLINED_KEY};
 use crate::queue::capacity::CapacitySnapshot;
 use crate::queue::JobStorage;
 use crate::sizing::Sizing;
@@ -76,7 +76,7 @@ pub(crate) async fn claim_scan(
     let mut diag_claim_errors = 0i64;
     let mut diag_cpu_rejected = 0i64;
     let mut diag_ram_rejected = 0i64;
-    let mut grant_declined = Vec::new();
+    let mut claim_declined = Vec::new();
     let mut available_cpu_cores = last_cap
         .as_ref()
         .map(|capacity| capacity.available_cpu_cores)
@@ -183,7 +183,7 @@ pub(crate) async fn claim_scan(
             &mut diag_eligibility_rejected,
             &mut diag_eligible,
             &mut diag_claim_errors,
-            &mut grant_declined,
+            &mut claim_declined,
             &mut started,
             log_fn,
         )
@@ -205,7 +205,7 @@ pub(crate) async fn claim_scan(
         Value::from(diag_eligibility_rejected),
     );
     agent_diag.insert("eligible_count".into(), Value::from(diag_eligible));
-    agent_diag.insert(GRANT_DECLINED_KEY.into(), Value::Array(grant_declined));
+    agent_diag.insert(CLAIM_DECLINED_KEY.into(), Value::Array(claim_declined));
     agent_diag.insert("claimed_this_loop".into(), Value::from(started));
     agent_diag.insert("claim_errors".into(), Value::from(diag_claim_errors));
     agent_diag.insert(
