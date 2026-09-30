@@ -59,10 +59,14 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
 /// every one of those five days.
 pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let store = beacon_store().await?;
-    let report = crate::deploy::host_state::ping::ping_host(target, &store, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let store = beacon_store().await.map_err(|exc| exc.to_string());
+    let report = crate::deploy::host_state::ping::ping_host(
+        target,
+        store.as_ref().map_err(Clone::clone),
+        &runner,
+    )
+    .await
+    .map_err(|exc| CmdError::click(exc.to_string()))?;
     let verdict = crate::deploy::host_state::ping::Verdict::Ok.as_str();
     if json {
         print_json(&report);
