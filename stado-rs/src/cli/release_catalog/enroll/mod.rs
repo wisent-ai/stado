@@ -74,12 +74,28 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
         }
     }
 
-    let python = python_steps(manifest);
+    let python = steps_matching(manifest, |argv| {
+        argv.first().is_some_and(|program| {
+            let name = program.rsplit('/').next().unwrap_or(program);
+            name == "python" || name.starts_with("python3")
+        })
+    });
     if !python.is_empty() {
         return Err(CmdError::click(format!(
             "{product}: {} run Python, which this workshop does not use; give the product a \
              build and delivery in its own language or Stado's packaging",
             python.join(", ")
+        )));
+    }
+    let vercel = steps_matching(manifest, |argv| {
+        argv.join(" ").starts_with(RETIRED_HOSTING_COMMAND)
+    });
+    if !vercel.is_empty() {
+        return Err(CmdError::refused(format!(
+            "{product}: {} build or deliver through Vercel ('{RETIRED_HOSTING_COMMAND}'); web \
+             products are hosted by Stado: give the product a web platform built by \
+             'stado web build' and publish it as the web-hosting documentation describes",
+            vercel.join(", ")
         )));
     }
 
@@ -88,29 +104,31 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
     Ok(Enrollment { steps, untested })
 }
 
-/// Every quality, build, test and delivery step whose program is Python, by
+/// The operator's ruling of 2026-09-30: web products move to Stado hosting,
+/// "dlaczego mielibysmy cokolwiek robic wspolnego z vercelem" (721ad26f).
+const RETIRED_HOSTING_COMMAND: &str = "stado web vercel";
+
+/// Every quality, build, test and delivery step whose argv `matches`, by
 /// name. las and echo built and delivered through `python3 release/*.py`
-/// long after the workshop removed Python, and enrolment passed them.
-fn python_steps(manifest: &ReleasePipelineManifest) -> Vec<String> {
-    let python = |argv: &[String]| {
-        argv.first().is_some_and(|program| {
-            let name = program.rsplit('/').next().unwrap_or(program);
-            name == "python" || name.starts_with("python3")
-        })
-    };
+/// long after the workshop removed Python, and enrolment passed them; seven
+/// products still deployed to Vercel after the move to Stado hosting.
+fn steps_matching(
+    manifest: &ReleasePipelineManifest,
+    matches: impl Fn(&[String]) -> bool,
+) -> Vec<String> {
     let mut found = Vec::new();
     for (platform_name, platform) in &manifest.platforms {
         for gate in platform.quality.iter().chain(&platform.tests) {
-            if python(&gate.argv) {
+            if matches(&gate.argv) {
                 found.push(format!("{platform_name} step {}", gate.name));
             }
         }
-        if python(&platform.build.argv) {
+        if matches(&platform.build.argv) {
             found.push(format!("{platform_name} build"));
         }
     }
     for delivery in &manifest.deliveries {
-        if python(&delivery.argv) {
+        if matches(&delivery.argv) {
             found.push(format!("delivery {}", delivery.name));
         }
     }
