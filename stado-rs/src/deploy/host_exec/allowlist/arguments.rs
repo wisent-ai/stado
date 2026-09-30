@@ -1,7 +1,7 @@
 //! The fixed argument shapes: the paths an entry's own arguments name, and
 //! which of those are read from inside the managed account's home.
 
-/// The managed service directory `com.wisent.weles-admission` runs out of,
+/// The managed service directory the Weles unit `com.wisent.weles` runs out of,
 /// relative to the managed account's home.
 ///
 /// Written once, so the three entries that read it cannot drift apart about

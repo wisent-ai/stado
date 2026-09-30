@@ -45,6 +45,7 @@ fn retired_units(run: &mut Run) -> Result<()> {
     ensure!(
         lake["retired_units"]
             == serde_json::json!([
+                "com.wisent.compute.service.transcript-lake",
                 "com.wisent.transcript-lake-stream",
                 "com.wisent.transcript-lake-secret-scrub"
             ]),
@@ -52,16 +53,36 @@ fn retired_units(run: &mut Run) -> Result<()> {
     );
 
     let before = fs::read(&run.catalog)?;
-    for (retired, refusal) in [
-        ("com.wisent.always-on.skarbiec", "a declared service unit"),
-        ("com.wisent.skarbiec", "already retired by skarbiec"),
-        ("com.wisent/../skarbiec", "expected launchd labels"),
+    // Each case: the unit the declaration runs as, a unit it retires, and the
+    // reason the refusal must name. The first is the operator's rule of
+    // 2026-09-30: one service per repository, named com.wisent.<product>.
+    for (unit, retired, refusal) in [
+        (
+            "com.wisent.compute.service.transcript-lake",
+            "com.wisent.transcript-lake-stream",
+            "is not com.wisent.transcript-lake",
+        ),
+        (
+            "com.wisent.transcript-lake",
+            "com.wisent.skarbiec",
+            "a declared service unit",
+        ),
+        (
+            "com.wisent.transcript-lake",
+            "com.wisent.always-on.skarbiec",
+            "already retired by skarbiec",
+        ),
+        (
+            "com.wisent.transcript-lake",
+            "com.wisent/../skarbiec",
+            "expected launchd labels",
+        ),
     ] {
         let declaration = run.root.join("retiring-service.yaml");
         fs::write(
             &declaration,
             format!(
-                "installable: true\nunit: com.wisent.compute.service.transcript-lake\nprogram: $HOME/.local/bin/transcript-lake\nargs: [stream, --json]\nsummary: Retirement refusal journey\nretired_units: [\"{retired}\"]\n"
+                "installable: true\nunit: {unit}\nprogram: $HOME/.local/bin/transcript-lake\nargs: [stream, --json]\nsummary: Retirement refusal journey\nretired_units: [\"{retired}\"]\n"
             ),
         )?;
         let path = declaration.to_str().context("declaration path")?.to_owned();
@@ -78,7 +99,7 @@ fn retired_units(run: &mut Run) -> Result<()> {
         let stderr = fs::read_to_string(refused.directory.join("stderr.log"))?;
         ensure!(
             stderr.contains(refusal),
-            "retiring {retired} was refused without naming why: {stderr}"
+            "declaring {unit} retiring {retired} was refused without naming why: {stderr}"
         );
         ensure!(
             fs::read(&run.catalog)? == before,

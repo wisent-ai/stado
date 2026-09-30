@@ -31,8 +31,8 @@ const SPIS_TRUST_FIELDS: &[&str] = &[
 /// how that question gets answered against the host rather than against a
 /// guess.
 const SKARBIEC_UNIT_PLISTS: &[&str] = &[
-    "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
-    "/Library/LaunchAgents/com.wisent.always-on.skarbiec.plist",
+    "/Library/LaunchDaemons/com.wisent.skarbiec.plist",
+    "/Library/LaunchAgents/com.wisent.skarbiec.plist",
 ];
 
 /// The environment the Skarbiec daemon on this host is actually started with.
@@ -54,12 +54,10 @@ async fn live_skarbiec_environment(
         .iter()
         .map(|path| (*path).to_string())
         .collect();
-    // A laptop runs the one Skarbiec process as the user's login agent. The
-    // keychain launcher's com.wisent.skarbiec, read here before, is one of the
-    // units that process retires and removes, so a host that converged would
-    // have answered that no managed unit names its vault.
+    // A laptop runs the one Skarbiec process as the user's login agent,
+    // com.wisent.skarbiec: one service per repository, named for it (263eaf97).
     units.push(format!(
-        "{home}/Library/LaunchAgents/com.wisent.always-on.skarbiec.plist"
+        "{home}/Library/LaunchAgents/com.wisent.skarbiec.plist"
     ));
 
     let extract = |unit: &str, key: &'static str| {

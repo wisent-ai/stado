@@ -171,7 +171,7 @@ pub(crate) enum HostStateCommands {
     #[command(name = "unit-log")]
     UnitLog {
         target: String,
-        /// Unit label as launchd knows it, e.g. com.wisent.always-on.brama.
+        /// Unit label as launchd knows it, e.g. com.wisent.brama.
         unit: String,
         /// Tail this many lines from each declared log path (default 40).
         #[arg(long)]

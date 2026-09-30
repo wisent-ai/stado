@@ -202,6 +202,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     });
 
     let runner = production_runner();
+    predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
     let outcome = service::ensure_service(&target, &plan, &runner)
         .await
         .map_err(click)?;

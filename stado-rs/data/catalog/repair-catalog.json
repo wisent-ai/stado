@@ -3,7 +3,7 @@
     {
       "name": "brama",
       "summary": "The authenticated provider-neutral gateway every Wisent model call goes through.",
-      "unit": "com.wisent.always-on.brama",
+      "unit": "com.wisent.brama",
       "repair": []
     },
     {
@@ -14,7 +14,7 @@
     {
       "name": "skarbiec",
       "summary": "The credential and authentication vault.",
-      "unit": "com.wisent.always-on.skarbiec",
+      "unit": "com.wisent.skarbiec",
       "repair": [
         {
           "name": "audit-lock",

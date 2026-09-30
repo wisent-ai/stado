@@ -3,9 +3,9 @@
 # object boundary after Skarbiec has recovered. Invoked by the declared
 # `skarbiec/audit-lock` repair step.
 #
-# A host runs one Skarbiec process, com.wisent.always-on.skarbiec on the
-# catalog's port 8895: a login agent on a laptop, a system daemon on the
-# always-on mini. The units it replaced (com.wisent.skarbiec, the
+# A host runs one Skarbiec process, com.wisent.skarbiec on the catalog's
+# port 8895: a login agent on a laptop, a system daemon on the always-on
+# mini. The units it replaced (com.wisent.always-on.skarbiec, the
 # skarbiec-control-plane and replica-sync services) are retired, so this
 # repair restarts the one process and never a retired unit.
 set -eu
@@ -27,7 +27,7 @@ kick_loaded() {
 case "$health" in
   *'"ok":true'*) audit_recovered=false ;;
   *'audit journal lock'*|*'audit.append.lock'*)
-    kick_loaded com.wisent.always-on.skarbiec
+    kick_loaded com.wisent.skarbiec
     attempt=0
     while [ "$attempt" -lt 30 ]; do
       health=$(/usr/bin/curl --silent --show-error --max-time 5 "$health_url" || true)

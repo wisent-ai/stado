@@ -16,7 +16,7 @@
 use std::process::{Command, Output};
 
 const PATH: &str = "release_unit_image_revisit.targets.m1.products.transcript-lake";
-const DECLARED: &str = "com.wisent.compute.service.transcript-lake";
+const DECLARED: &str = "com.wisent.transcript-lake";
 const RETIRED: &str = "com.wisent.transcript-lake-stream";
 
 const REGISTRY: &str = r#"{
@@ -39,7 +39,7 @@ const REGISTRY: &str = r#"{
             "m1": {
                 "state_dir": "/Users/m1/.stado/release-state",
                 "products": {
-                    "transcript-lake": ["com.wisent.compute.service.transcript-lake"]
+                    "transcript-lake": ["com.wisent.transcript-lake"]
                 }
             }
         }

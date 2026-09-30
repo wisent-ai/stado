@@ -178,9 +178,11 @@ products:
     installable: true
     program: $HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec
     args: []
-    unit: com.wisent.always-on.brama
+    unit: com.wisent.brama
     summary: The authenticated provider-neutral gateway every Wisent model call goes
       through.
+    retired_units:
+    - com.wisent.always-on.brama
   dependencies:
   - product: skarbiec
     surface: service
@@ -236,13 +238,14 @@ products:
     - weles-mcp
   service:
     installable: true
-    unit: com.wisent.weles-admission
+    unit: com.wisent.weles
     program: $HOME/.stado/services/weles-admission/current/$STADO_PLATFORM/weles-api-launcher
     args: []
     summary: One Weles process per host serving the API and admission, the resident
       task dispatcher that executes authorized browser workflows, and the keyword-planner
       routes.
     retired_units:
+    - com.wisent.weles-admission
     - com.wisent.weles-worker
     - com.wisent.compute.service.weles-keyword-planner-api
     - com.wisent.compute.service.com.wisent.always-on.weles
@@ -315,7 +318,7 @@ products:
     cli jak i aplikacje desktopowa".'
   service:
     installable: true
-    unit: com.wisent.always-on.skarbiec
+    unit: com.wisent.skarbiec
     program: $HOME/.stado/bin/skarbiec
     args:
     - serve
@@ -331,7 +334,7 @@ products:
     retired_units:
     - com.wisent.compute.service.skarbiec-replica-sync
     - com.wisent.compute.service.skarbiec-control-plane
-    - com.wisent.skarbiec
+    - com.wisent.always-on.skarbiec
     - com.wisent.compute.service.com.wisent.skarbiec-weles
 - id: most
   name: Most
@@ -675,7 +678,7 @@ products:
     cli jak i aplikacje desktopowa".'
   service:
     installable: true
-    unit: com.wisent.compute.service.probierz
+    unit: com.wisent.probierz
     program: $HOME/.stado/bin/probierz
     args:
     - intake
@@ -685,6 +688,7 @@ products:
     summary: The one Probierz process per host, the failure intake that desktop applications
       post wisent-errors envelopes to; it needs no harness directory.
     retired_units:
+    - com.wisent.compute.service.probierz
     - com.wisent.probierz-intake
   dependencies:
   - product: brama
@@ -885,7 +889,7 @@ products:
     manifest: .wisent-desktop-release.json
   service:
     installable: true
-    unit: com.wisent.always-on.skrzynka
+    unit: com.wisent.skrzynka
     program: $HOME/.local/bin/skrzynka
     args:
     - --skarbiec-bin
@@ -897,6 +901,8 @@ products:
       PATH: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
     summary: Skrzynka loopback mail API and scheduled IMAP synchronization; credentials
       remain in the account's Skarbiec vault.
+    retired_units:
+    - com.wisent.always-on.skrzynka
   approved_by: lukaszbartoszcze
   approved_at: '2026-09-02T19:53:07Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
@@ -972,7 +978,7 @@ products:
     cli jak i aplikacje desktopowa".'
   service:
     installable: true
-    unit: com.wisent.compute.service.oko-autonomy
+    unit: com.wisent.oko
     program: $HOME/.stado/bin/oko
     args:
     - serve
@@ -982,6 +988,7 @@ products:
       the Slack responder, catalogue synchronisation and task handover are Oko routines
       Stado schedules.
     retired_units:
+    - com.wisent.compute.service.oko-autonomy
     - ai.wisent.oko.pty-broker
     - ai.wisent.oko.transcript-index
     - ai.wisent.oko.tasks-control
@@ -1077,7 +1084,7 @@ products:
     cli jak i aplikacje desktopowa".'
   service:
     installable: true
-    unit: com.wisent.compute.service.transcript-lake
+    unit: com.wisent.transcript-lake
     program: $HOME/.local/bin/transcript-lake
     args:
     - stream
@@ -1085,6 +1092,7 @@ products:
     summary: The one Transcript Lake process per host, continuously streaming local
       agent transcripts into the lake.
     retired_units:
+    - com.wisent.compute.service.transcript-lake
     - com.wisent.transcript-lake-stream
     # An hourly python3 scrub an agent installed by hand on 2026-08-31; the
     # operator's answer was that tokens in transcripts are not a problem

@@ -13,7 +13,7 @@
 # the host calls itself.
 set -eu
 
-label="com.wisent.always-on.skarbiec"
+label="com.wisent.skarbiec"
 path="/Library/LaunchDaemons/${label}.plist"
 plistbuddy=/usr/libexec/PlistBuddy
 stado="$HOME/.stado/bin/stado"

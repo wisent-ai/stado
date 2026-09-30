@@ -51,3 +51,40 @@ pub(super) async fn retire_after_ensure(
         failed.join("; ")
     )))
 }
+
+/// Retire the units `entry` lists in `retired_units` on `target` before its
+/// one unit is started, so a product renamed to `com.wisent.<product>` can
+/// bind the listener its old label held. A unit that could not be retired
+/// refuses the ensure: starting the replacement beside it is the second
+/// process this whole path exists to prevent. Role units are untouched here;
+/// they keep their work until the running replacement proves it runs it.
+pub(super) async fn retire_before_ensure(
+    target: &crate::targets::ComputeTarget,
+    entry: Option<&crate::deploy::service_catalog::CatalogService>,
+    runner: &crate::deploy::Runner,
+) -> Result<(), CmdError> {
+    let Some(entry) = entry else { return Ok(()) };
+    let mut failed = Vec::new();
+    for retirement in service::retire_units(target, entry, runner).await {
+        if retirement.state == "absent" {
+            continue;
+        }
+        eprintln!(
+            "{}: {} retired {} before starting: {} ({})",
+            target.name, entry.name, retirement.unit, retirement.state, retirement.detail
+        );
+        if retirement.state == "failed" {
+            failed.push(format!("{}: {}", retirement.unit, retirement.detail));
+        }
+    }
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{}: {} was not started, because the units it replaced could not all be retired and \
+         would run beside it: {}",
+        target.name,
+        entry.name,
+        failed.join("; ")
+    )))
+}

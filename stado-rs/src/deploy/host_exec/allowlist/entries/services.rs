@@ -34,7 +34,7 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
     // [`home_rooted_script`] against the managed account's own home.
     ApprovedCommand {
         argv: WELES_ADMISSION_CURRENT,
-        why: "prints the release directory `com.wisent.weles-admission` executes through. \
+        why: "prints the release directory the Weles unit `com.wisent.weles` executes through. \
               The unit's program is that link plus a platform directory, so this name is the \
               whole answer to which release is running, and it is the fact `release status` \
               cannot give: that verb reports what a rollout recorded, and on 2026-09-02 the \

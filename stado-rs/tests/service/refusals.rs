@@ -193,7 +193,7 @@ fn a_new_unit_running_a_products_executable_is_refused_as_a_second_process() {
     assert!(
         told.contains(&format!(
             "{} would run {program}, a second skarbiec process beside its one unit \
-             com.wisent.always-on.skarbiec; a product runs as one process per host, so move \
+             com.wisent.skarbiec; a product runs as one process per host, so move \
              this work into skarbiec and deploy skarbiec instead",
             unit.label
         )),

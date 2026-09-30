@@ -204,8 +204,21 @@ pub fn validate(document: &Value) -> Result<()> {
                     }
                 }
             }
+            // One service per repository, named for it: the operator's rule of
+            // 2026-09-30, "JEDNA USLUGE NA REPOZYTORIUM. to znaczy
+            // com.wisent.stado. i com.wisent.skarbiec" (263eaf97). Seven
+            // products ran under labels that named a role or a history instead.
             if let Some(unit) = service.get("unit") {
-                declared_units.insert(unit.as_str().context("service.unit must be a string")?);
+                let unit = unit.as_str().context("service.unit must be a string")?;
+                let expected = format!("{PRODUCT_UNIT_PREFIX}{id}");
+                if unit != expected {
+                    bail!(
+                        "{id}.service.unit: {unit} is not {expected}; a product runs one service \
+                         named com.wisent.<product>, and the label it ran under before goes in \
+                         retired_units"
+                    );
+                }
+                declared_units.insert(unit);
             }
             // A product runs one service per host; the units it ran before that
             // are named here so nothing declares them again.
@@ -237,6 +250,9 @@ pub fn validate(document: &Value) -> Result<()> {
     }
     Ok(())
 }
+
+/// Every product's one service unit is this prefix and the product id.
+const PRODUCT_UNIT_PREFIX: &str = "com.wisent.";
 
 pub(super) fn unit_label(value: &str) -> bool {
     !value.is_empty()

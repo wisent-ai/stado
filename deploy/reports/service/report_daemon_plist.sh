@@ -9,7 +9,7 @@
 # Read-only. Takes the label as its first argument.
 set -u
 
-label="${1:-com.wisent.always-on.skarbiec}"
+label="${1:-com.wisent.skarbiec}"
 path="/Library/LaunchDaemons/${label}.plist"
 
 echo "path: $path"

@@ -30,6 +30,6 @@ printf -- '--- port holders ---\n'
   | /usr/bin/awk '$9 ~ /:(8080|18080|18081)$/ {print "  " $1, "pid=" $2, $9}' | /usr/bin/head -8
 
 printf -- '--- legacy service ---\n'
-/bin/launchctl print system/com.wisent.always-on.brama 2>/dev/null \
+/bin/launchctl print system/com.wisent.brama 2>/dev/null \
   | /usr/bin/awk '/state|pid|program/ {print "  " $0}' | /usr/bin/head -6 \
   || printf '  legacy label not loaded in system domain\n'

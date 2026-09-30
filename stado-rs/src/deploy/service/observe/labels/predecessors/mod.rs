@@ -46,10 +46,8 @@ pub async fn retire_catalog_predecessors(
     running: &ManagedService,
     runner: &Runner,
 ) -> Vec<PredecessorRetirement> {
-    let mut retirements = Vec::with_capacity(replacement.retired_units.len());
-    for unit in &replacement.retired_units {
-        retirements.push(retirement(target, unit, runner).await);
-    }
+    let mut retirements = retire_units(target, replacement, runner).await;
+    retirements.reserve(replacement.role_units.len());
     for role in &replacement.role_units {
         if listener_role(role) {
             continue;
@@ -88,6 +86,25 @@ pub async fn retire_catalog_predecessors(
                 },
             },
         );
+    }
+    retirements
+}
+
+/// Retire only the units `replacement` lists in `retired_units`, never a role
+/// unit. A retired unit must not run under any condition, so this is safe to
+/// do BEFORE the replacement starts, and it has to be when the replacement
+/// is a renamed unit on the same listener: a product moving to its one unit
+/// `com.wisent.<product>` (263eaf97) cannot bind 8895 while
+/// `com.wisent.always-on.skarbiec` still holds it, and an ensure that waits
+/// for the new unit to stay up would fail before it retired the old one.
+pub async fn retire_units(
+    target: &ComputeTarget,
+    replacement: &crate::deploy::service_catalog::CatalogService,
+    runner: &Runner,
+) -> Vec<PredecessorRetirement> {
+    let mut retirements = Vec::with_capacity(replacement.retired_units.len());
+    for unit in &replacement.retired_units {
+        retirements.push(retirement(target, unit, runner).await);
     }
     retirements
 }

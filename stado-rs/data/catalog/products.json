@@ -94,9 +94,9 @@
       },
       "units": [
         {
-          "label": "com.wisent.always-on.skarbiec",
+          "label": "com.wisent.skarbiec",
           "kind": "launchd",
-          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist"
+          "path": "/Library/LaunchDaemons/com.wisent.skarbiec.plist"
         }
       ]
     },
