@@ -169,28 +169,16 @@ async fn store_on_owner(
     crate::cli::host::store_vault_item(owner, &id, ITEM_TYPE, &payload, false)
         .await
         .map_err(|error| format!("{id} was not stored in {owner}'s vault: {error}"))?;
-    let credentials =
-        crate::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
-    // The consumer's bearer file sits at the same place under the owner's
-    // home, which is not this machine's.
-    let token_file = crate::cli::release_catalog::home_relative(&credentials.token_file);
-    for field in CHANNEL_FIELDS {
-        crate::cli::host::grant_item_read(
-            owner,
-            &credentials.consumer,
-            &id,
-            field,
-            &token_file,
-            false,
-        )
+    // The same consumer the channel reads with, granted on the owner; progress
+    // on stderr, because `fleet invite --json` prints one document on stdout.
+    crate::cli::host::settle_consumer_reads(&id, &CHANNEL_FIELDS)
         .await
         .map_err(|error| {
             format!(
-                "{id} is stored on {owner}, but {} could not be granted {field}: {error}",
-                credentials.consumer
+                "{id} is stored on {owner}, but its fields could not be made readable: {}",
+                error.message.as_deref().unwrap_or("no detail")
             )
         })?;
-    }
     read_back(client, &id, &[("public_key", pair.public_key.trim())], true).await
 }
 

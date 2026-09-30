@@ -20,6 +20,80 @@ pub async fn grant_item_read(
     token_file: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
+    let (host, bearer_path) = ensure_item_read(target, consumer, item, field, token_file).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": host,
+                "consumer": consumer,
+                "item": item,
+                "field": field,
+                "token_file": bearer_path,
+                "granted": true,
+            }))?
+        );
+    } else {
+        println!("{host}: {consumer} may read {item}#{field}");
+    }
+    Ok(())
+}
+
+/// Make `fields` of `item` readable by the consumer this host's own credential
+/// reads authenticate as, in the vault those reads reach.
+///
+/// On the vault owner that is its own vault, widened in place. Anywhere else
+/// the host reads the owner's vault through the broker, and its vault files
+/// are retired copies: widening one of them refused on lukasz-macbook for
+/// every command that needed a grant first — `stado fleet key generate`
+/// (7db47e80), then `stado dns list` (85b4d4a6) — so the grant goes to the
+/// owner over the host channel. Progress goes to stderr: callers print one
+/// JSON document on stdout.
+pub async fn settle_consumer_reads(item: &str, fields: &[&str]) -> Result<(), CmdError> {
+    if crate::credential_store::skarbiec_url().is_none() {
+        return Ok(());
+    }
+    let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
+    if owner == here {
+        let outcome = crate::credential_store::grant::settle_field_reads(item, fields)
+            .map_err(|error| CmdError::click(format!("cannot make {item} readable: {error}")))?;
+        if let Some(outcome) = outcome.filter(crate::credential_store::grant::GrantOutcome::wrote) {
+            eprintln!(
+                "granted read on {} ({} capabilities held, was {})",
+                outcome.added.join(", "),
+                outcome.held_after,
+                outcome.held_before
+            );
+        }
+        return Ok(());
+    }
+    let consumer = crate::config::skarbiec_consumer();
+    let token_file =
+        crate::cli::release_catalog::home_relative(crate::config::skarbiec_token_file());
+    for field in fields {
+        let (host, _) = ensure_item_read(&owner, consumer, item, field, &token_file)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{item}#{field} could not be made readable by {consumer} on the vault owner \
+                     {owner}: {}",
+                    error.message.as_deref().unwrap_or("no detail")
+                ))
+            })?;
+        eprintln!("{host}: {consumer} may read {item}#{field}");
+    }
+    Ok(())
+}
+
+/// The grant itself, printing nothing: the resolved host name and the bearer
+/// path Skarbiec read on it.
+async fn ensure_item_read(
+    target: &str,
+    consumer: &str,
+    item: &str,
+    field: &str,
+    token_file: &str,
+) -> Result<(String, String), CmdError> {
     vault_word("consumer", consumer)?;
     vault_word("vault item", item)?;
     vault_word("item field", field)?;
@@ -69,22 +143,7 @@ pub async fn grant_item_read(
             crate::deploy::host_channel::last_error_line(&granted, "remote command failed")
         )));
     }
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "consumer": consumer,
-                "item": item,
-                "field": field,
-                "token_file": bearer_path,
-                "granted": true,
-            }))?
-        );
-    } else {
-        println!("{}: {consumer} may read {item}#{field}", resolved.name);
-    }
-    Ok(())
+    Ok((resolved.name, bearer_path))
 }
 
 /// Report what one consumer's grant on TARGET actually holds.

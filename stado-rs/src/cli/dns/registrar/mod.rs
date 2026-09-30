@@ -61,26 +61,17 @@ impl Registrar {
 /// item field` with the credential sitting in the vault the whole time, and so
 /// did `stado credentials get namecheap_auto --field api_user` beside it.
 /// [`crate::credential_store::grant::settle_field_reads`] is where that whole
-/// story is written down, and it is shared because the same 403 arrived from
-/// `stado release catalog sync` an hour later.
+/// story is written down. The grant is made where this host's reads land: in
+/// its own vault on the owner, on the owner from anywhere else (85b4d4a6).
 async fn settle_readable(item: &str) -> Result<(), CmdError> {
-    let outcome = crate::credential_store::grant::settle_field_reads(item, &REGISTRAR_FIELDS)
+    crate::cli::host::settle_consumer_reads(item, &REGISTRAR_FIELDS)
+        .await
         .map_err(|error| {
             CmdError::click(format!(
-                "cannot make the registrar credential {item:?} readable: {error}"
+                "cannot make the registrar credential {item:?} readable: {}",
+                error.message.as_deref().unwrap_or("no detail")
             ))
-        })?;
-    if let Some(outcome) = outcome.filter(crate::credential_store::grant::GrantOutcome::wrote) {
-        // stderr, not stdout: `--json` callers parse one document, and a
-        // widened grant is not part of it.
-        eprintln!(
-            "granted read on {} ({} capabilities held, was {})",
-            outcome.added.join(", "),
-            outcome.held_after,
-            outcome.held_before
-        );
-    }
-    Ok(())
+        })
 }
 
 async fn field(item: &str, name: &str) -> Result<String, CmdError> {
