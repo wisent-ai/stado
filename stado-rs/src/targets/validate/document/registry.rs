@@ -34,7 +34,7 @@ pub(crate) fn validate_registry_body(
         .ok_or_else(|| verr("registry.targets", "must be an array"))?;
 
     let mut names: HashSet<&str> = HashSet::new();
-    let mut identities: HashMap<String, String> = HashMap::new();
+    let mut identities: HashMap<String, (usize, String)> = HashMap::new();
     let mut target_heuristics: HashMap<&str, &str> = HashMap::new();
     let valid_kinds =
         crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::HostTarget)
@@ -246,14 +246,25 @@ pub(crate) fn validate_registry_body(
                 .map_err(|problem| verr(&problem.location, &problem.message))?;
         }
 
+        // An identity belongs to one host, and two connection paths still may
+        // not name one identity. A connection path that dials the host by one
+        // of its own declared hostnames is the same host, not a second one:
+        // that name (its .local name) is what follows a lease-assigned address.
+        let is_hostname = |location: &str| location.contains(".hostnames[");
+        let is_route = |location: &str| location.contains(".ssh");
         for (identity, identity_location) in target_identities(target, &location)? {
-            if let Some(previous) = identities.get(&identity) {
+            // The route takes the hostname's place, so a second route naming
+            // the same identity is refused against the first route.
+            let own_name = identities.get(&identity).is_some_and(|(owner, previous)| {
+                *owner == index && is_hostname(previous) && is_route(&identity_location)
+            });
+            if let Some((_, previous)) = identities.get(&identity).filter(|_| !own_name) {
                 return Err(verr(
                     &identity_location,
                     &format!("host identity '{identity}' is already declared by {previous}"),
                 ));
             }
-            identities.insert(identity, identity_location);
+            identities.insert(identity, (index, identity_location));
         }
     }
     validate_coordinators(root, &target_heuristics)?;
