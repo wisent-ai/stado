@@ -66,14 +66,18 @@ pub(super) fn validate_product_contracts(
     crate::placement::validate_registry_contract(data).map_err(RegistryValidationError)?;
     crate::service_resolution::validate_registry_contract(data).map_err(RegistryValidationError)?;
     crate::release_control::validate_registry_contract(data).map_err(RegistryValidationError)?;
-    // The unit-image revisit policy is a top-level, unmodelled key, so it
-    // round-trips through `Registry::extra` and older builds preserve it
-    // without reading it. Validating it here is what makes an operator learn
-    // at the write, and what makes a build that disagrees with the document
-    // report it through the existing `build-refuses-registry` finding rather
-    // than act on the part it understood.
-    crate::release_unit_image::validate_registry_contract(data).map_err(RegistryValidationError)?;
-    // The public-origin block is judged here for the same reason: an origin
+    // The unit-image revisit policy is not judged here. It names launchd
+    // labels, and a label the product catalog renames (263eaf97 moved seven
+    // products to com.wisent.<product>) turns a block that was valid when it
+    // was written into a refused one the moment a build carrying the rename
+    // reads it: every command on every host stopped reading the registry
+    // (000d82b6). Its readers — the release agent's revisit pass and the
+    // stale-unit-image annotations — validate it themselves and report a
+    // refusal on their own line, and a write that changes the block is held
+    // to the full check by `validate_registry_for_write`.
+    //
+    // The public-origin block is judged here so an operator learns at the
+    // write: an origin
     // nothing outside the tailnet can resolve reached the public release
     // route through an untyped deployment variable, and no reader refused it.
     crate::public_origin::validate_registry_contract(data).map_err(RegistryValidationError)?;

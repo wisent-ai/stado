@@ -75,4 +75,4 @@ pub(crate) mod registry_policy;
 pub(crate) use pass::annotate::annotations;
 pub(crate) use pass::revisit_once;
 pub(crate) use registry_policy::contract::validate_registry_contract;
-pub(crate) use registry_policy::policy;
+pub(crate) use registry_policy::{policy, REVISIT_POLICY_KEY};

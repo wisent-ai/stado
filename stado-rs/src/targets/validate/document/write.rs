@@ -25,16 +25,32 @@ pub fn validate_registry_for_write(
     current: Option<&Value>,
 ) -> Result<Option<String>, RegistryValidationError> {
     validate_registry_body(candidate, false)?;
-    let Err(inference_error) = crate::inference::schema::validate(candidate) else {
-        return Ok(None);
-    };
-    let unchanged =
-        current.is_some_and(|current| candidate.get("inference") == current.get("inference"));
-    if unchanged {
-        Ok(Some(inference_error))
-    } else {
-        Err(RegistryValidationError(inference_error))
+    let mut kept = Vec::new();
+    // The two sections a write is held to only when it changes them: model
+    // routes (above), and the unit-image revisit policy, whose labels a
+    // catalog rename can invalidate without anyone touching the block
+    // (000d82b6). A fault already in an unchanged section is returned for
+    // the caller to report, never swallowed.
+    let scoped = [
+        (
+            "inference",
+            crate::inference::schema::validate(candidate).err(),
+        ),
+        (
+            crate::release_unit_image::REVISIT_POLICY_KEY,
+            crate::release_unit_image::validate_registry_contract(candidate).err(),
+        ),
+    ];
+    for (section, failure) in scoped {
+        let Some(failure) = failure else { continue };
+        let unchanged =
+            current.is_some_and(|current| candidate.get(section) == current.get(section));
+        if !unchanged {
+            return Err(RegistryValidationError(failure));
+        }
+        kept.push(failure);
     }
+    Ok((!kept.is_empty()).then(|| kept.join("; ")))
 }
 
 /// Load and validate a registry-v2 JSON file.
