@@ -1,5 +1,6 @@
 //! One connection: resolve where it should go, open it, and copy both ways.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +21,9 @@ enum Upstream {
     Local(TcpStream),
     Remote(russh::ChannelStream<russh::client::Msg>, Arc<Tunnel>),
 }
+
+/// Channel opens sent to a remote host that have not been answered yet.
+static OPENS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) async fn proxy_connection(
     client: TcpStream,
@@ -62,11 +66,34 @@ pub(super) async fn proxy_connection(
             .map(Upstream::Local)
     } else {
         let paths = resolved_ssh_paths(&resolved);
-        state
+        // Every open that has not answered yet is counted and named, so a
+        // connection the adapter holds without end leaves a line saying which
+        // host it waits on and for how long. On 2026-09-30 directory connects
+        // waited 2 to 11 minutes behind this adapter while the log held only
+        // the opens that failed at once, so the one that never answered could
+        // not be told apart.
+        let waiting = OPENS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+        let started = std::time::Instant::now();
+        eprintln!(
+            "stado resolver service={} consumer={} opening channel to {host}:{port} on {:?}; \
+             {waiting} open(s) now waiting for an answer",
+            adapter.service, adapter.consumer, resolved.active_host
+        );
+        let opened = state
             .tunnel_connect(&resolved.active_host, &paths, host, port)
             .await
             .map(|(stream, session)| Upstream::Remote(stream, session))
-            .map_err(|error| format!("active host {:?}: {error}", resolved.active_host))
+            .map_err(|error| format!("active host {:?}: {error}", resolved.active_host));
+        let still = OPENS_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst) - 1;
+        eprintln!(
+            "stado resolver service={} consumer={} channel to {host}:{port} answered {} after {} ms; \
+             {still} open(s) still waiting",
+            adapter.service,
+            adapter.consumer,
+            if opened.is_ok() { "open" } else { "refused" },
+            started.elapsed().as_millis()
+        );
+        opened
     };
     // A refusal is written to the client before anything is read from it, so
     // the sentence names the reason instead of a socket that closed silently.

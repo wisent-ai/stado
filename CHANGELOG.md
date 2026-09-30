@@ -19,6 +19,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- **The resolver adapter says which channel opens are still waiting (d73f4df5):** on 2026-09-30 connections through the local object-API adapter waited 2 to 11 minutes while its log showed only the opens that failed at once. Every channel open to a remote host now logs when it is sent, how many opens are waiting for an answer, and when it is answered (open or refused) with its elapsed milliseconds, so a connection held without end names the host and the time it has waited.
+
 - **`stado host ping` answers while the object store is down (ffd7f928):** the command opened the beacon store before anything else and exited `infra_down` when it could not, so during an object-API outage nobody could ask whether a host answered ssh. The store's failure is now the beacon half's answer (`unreadable: the beacon store did not open: …`), and the ssh half is still probed and reported.
 
 - **`service directory connect` reads the registry once (a29cca4c):** the verb read the registry for the directory, then twice more to learn which host it runs on and where the service is placed. On 2026-09-29, with the object API refusing, each read spent its retries before falling back to the last-good copy, so one connect outlasted the 30-second limit of every agent hook that asks for Brama's address and every hooked tool call of every session was refused. All three answers now come from the one document it read.
