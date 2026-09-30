@@ -21,7 +21,7 @@ pub(crate) use publisher::mint_bearer as fresh_bearer;
 use central::sync_catalog;
 use checkout::sync;
 pub(crate) use enroll::{enroll, missing_programs_refusal, missing_step_programs};
-pub(crate) use publisher::{fleet_hosts, this_host};
+pub(crate) use publisher::{fleet_hosts, home_relative, this_host};
 
 const CATALOG_PREFIX: &str = "release-catalog";
 

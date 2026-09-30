@@ -46,7 +46,7 @@ pub(crate) fn mint_bearer() -> String {
 }
 
 /// `~/…` for a path under this machine's home, unchanged otherwise.
-pub(super) fn home_relative(path: &str) -> String {
+pub(crate) fn home_relative(path: &str) -> String {
     match std::env::var("HOME") {
         Ok(home) if !home.is_empty() && path.starts_with(&home) => {
             format!("~{}", &path[home.len()..])

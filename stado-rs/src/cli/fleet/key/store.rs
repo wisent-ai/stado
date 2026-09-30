@@ -65,7 +65,7 @@ pub(crate) fn configured_client() -> Result<Client, String> {
 /// Fields of a key-pair item the SSH channel's reader must be able to read.
 /// Grants are per item, so these are exactly the capabilities a freshly minted
 /// key is missing.
-const CHANNEL_FIELDS: [&str; 2] = ["private_key", "public_key"];
+pub(in crate::cli::fleet::key) const CHANNEL_FIELDS: [&str; 2] = ["private_key", "public_key"];
 
 /// Finish a key write: make the item readable by the consumer the SSH channel
 /// reads it through, then prove it through that same consumer.
@@ -121,6 +121,18 @@ pub(crate) async fn settle_readable(
             );
         }
     }
+    read_back(client, id, verify, brokered).await
+}
+
+/// Prove `verify`'s fields of `id` through `client`, the reader the SSH
+/// channel opens. `brokered` reads through the broker's per-item grant, which
+/// a caller must already have widened.
+pub(crate) async fn read_back(
+    client: &Client,
+    id: &str,
+    verify: &[(&str, &str)],
+    brokered: bool,
+) -> Result<(), String> {
     for (field, expected) in verify {
         let read = if brokered {
             client

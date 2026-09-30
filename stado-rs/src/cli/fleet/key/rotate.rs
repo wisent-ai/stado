@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    authorized_keys_line, channel_argv, configured_client, item_id, run_checked, settle_readable,
-    ITEM_TYPE,
+    authorized_keys_line, channel_argv, configured_client, item_id, read_back, run_checked,
+    settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
 };
 
 struct KeyPair {
@@ -130,8 +130,68 @@ pub(crate) async fn generate_stored(
 ) -> Result<(String, String), String> {
     let pair = generate_pair(runner, &item_id(target)).await?;
     let client = configured_client()?;
-    store_pair(&client, target, &pair).await?;
+    // The key belongs in the fleet vault, on the host that owns it. A host
+    // that reads that vault through the broker holds only retired copies, and
+    // writing into one of them was refused before anything was stored
+    // (7db47e80), so it sends the item and its grant to the owner instead.
+    let (owner, here) = crate::cli::release_catalog::fleet_hosts()
+        .await
+        .map_err(|error| error.to_string())?;
+    if owner == here {
+        store_pair(&client, target, &pair).await?;
+    } else {
+        store_on_owner(&client, &owner, target, &pair).await?;
+    }
     Ok((pair.public_key, pair.fingerprint))
+}
+
+/// Store `pair` in `owner`'s vault over the host channel, grant the channel's
+/// consumer both fields there, and read the public half back through the
+/// broker this host reads the fleet vault with.
+async fn store_on_owner(
+    client: &crate::skarbiec::Client,
+    owner: &str,
+    target: &str,
+    pair: &KeyPair,
+) -> Result<(), String> {
+    let id = item_id(target);
+    let payload = json!({
+        "schema": "skarbiec.item.v2",
+        "kind": ITEM_TYPE,
+        "fields": { "private_key": pair.private_key, "public_key": pair.public_key },
+        "context": {
+            "key_type": "ED25519",
+            "fingerprint": pair.fingerprint,
+            "added_at": chrono::Utc::now().to_rfc3339(),
+        },
+    })
+    .to_string();
+    crate::cli::host::store_vault_item(owner, &id, ITEM_TYPE, &payload, false)
+        .await
+        .map_err(|error| format!("{id} was not stored in {owner}'s vault: {error}"))?;
+    let credentials =
+        crate::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
+    // The consumer's bearer file sits at the same place under the owner's
+    // home, which is not this machine's.
+    let token_file = crate::cli::release_catalog::home_relative(&credentials.token_file);
+    for field in CHANNEL_FIELDS {
+        crate::cli::host::grant_item_read(
+            owner,
+            &credentials.consumer,
+            &id,
+            field,
+            &token_file,
+            false,
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "{id} is stored on {owner}, but {} could not be granted {field}: {error}",
+                credentials.consumer
+            )
+        })?;
+    }
+    read_back(client, &id, &[("public_key", pair.public_key.trim())], true).await
 }
 
 /// `key generate TARGET` — store a fresh pair and print only the public key.

@@ -18,4 +18,6 @@ pub use store::{authorized_keys_line, item_id};
 
 pub(crate) use store::configured_client;
 
-pub(in crate::cli::fleet::key) use store::{run_checked, settle_readable, ITEM_TYPE};
+pub(in crate::cli::fleet::key) use store::{
+    read_back, run_checked, settle_readable, CHANNEL_FIELDS, ITEM_TYPE,
+};
