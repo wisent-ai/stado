@@ -3,7 +3,7 @@
 
 use serde_json::{json, Map};
 
-use crate::cli::web::{product, unit_label, UNIT_DOMAIN};
+use crate::cli::web::{former_unit_label, product, unit_label, UNIT_DOMAIN};
 use crate::cli::CmdError;
 use crate::declaration::{DeclarationRun, DeclarationSource, ServiceDeclaration};
 use crate::deploy::{host_channel, production_runner, service};
@@ -89,6 +89,21 @@ pub(crate) async fn deploy(name: &str, version: Option<&str>, json: bool) -> Res
     // installs the unit where the host does not have it, leaves matching
     // loaded definitions alone, and reloads only an actual definition drift.
     let label = unit_label(name);
+    // The unit this product ran under before it was named for its
+    // repository holds the same port; it goes first, or the new unit could
+    // not bind. `absent` on every host that never had it.
+    let former = former_unit_label(name);
+    let (retired, detail) = service::retire_label(&target, &former, &runner)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{host}: {label} was not installed, because {former} could not be retired and \
+                 would hold its port: {error}"
+            ))
+        })?;
+    if retired != "absent" {
+        eprintln!("{host}: {name} retired {former}: {retired} ({detail})");
+    }
     let plan = service::plan_deploy_labelled(&target, name, &label, &program, &[], &environment)
         .map_err(click)?;
     let outcome = service::ensure_service(&target, &plan, &runner)

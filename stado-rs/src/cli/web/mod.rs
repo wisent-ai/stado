@@ -49,15 +49,22 @@ use super::CmdError;
 
 pub(crate) use plane::{declare, list, mutate_web, product, remove, DeclareRequest, WebCommands};
 
-/// Every managed web unit is labelled under one domain, so `launchctl list`
-/// and `stado service list` both group them without a naming convention
-/// anyone has to remember.
-pub(crate) const UNIT_DOMAIN: &str = "com.wisent.web";
+/// A web product is one repository, so it runs as one unit named for it,
+/// `com.wisent.<product>`, like every other product (263eaf97: "JEDNA USLUGE
+/// NA REPOZYTORIUM. to znaczy com.wisent.stado. i com.wisent.skarbiec").
+pub(crate) const UNIT_DOMAIN: &str = "com.wisent";
 
-/// Where a web product's released bytes are installed on its host. The
-/// release machinery already owns `$HOME/.stado/services/<name>/current`.
+/// The domain web units were labelled under until 2026-09-30. `stado web
+/// deploy` retires `com.wisent.web.<product>` before it starts the product's
+/// one unit, which binds the same port.
+pub(crate) const FORMER_UNIT_DOMAIN: &str = "com.wisent.web";
+
 pub(crate) fn unit_label(product: &str) -> String {
     format!("{UNIT_DOMAIN}.{product}")
+}
+
+pub(crate) fn former_unit_label(product: &str) -> String {
+    format!("{FORMER_UNIT_DOMAIN}.{product}")
 }
 
 /// The launcher the staged tarball carries, relative to the install root.
