@@ -5,10 +5,10 @@ use serde_json::{json, Value};
 
 use crate::observations;
 
-use crate::cli::registry;
 use crate::cli::CmdError;
+use crate::targets;
 
-use crate::cli::directory::document::{click, directory, read_document, service, this_target};
+use crate::cli::directory::document::{click, directory, read_document, service, this_target_in};
 use crate::cli::directory::routes::{answers, routable_address, service_port};
 
 /// The loopback address `asking` declares for reaching `service`, or `None` when
@@ -73,7 +73,7 @@ pub(in crate::cli::directory) async fn connect(
     let entry = service(block, name)?;
     let asking = match target {
         Some(value) => value,
-        None => this_target().await?,
+        None => this_target_in(&document)?,
     };
     let active = entry
         .get("active_host")
@@ -123,7 +123,8 @@ pub(in crate::cli::directory) async fn connect(
         match adapter_route(&document, &asking, name, consumer.as_deref(), scheme)? {
             Some(route) => route,
             None => {
-                let registry = registry::read_registry().await?;
+                let registry = targets::load_registry_from_value(&document)
+                    .map_err(|exc| click(format!("cannot read the registry's hosts: {exc}")))?;
                 let placed = registry
                     .targets
                     .iter()
@@ -149,7 +150,7 @@ pub(in crate::cli::directory) async fn connect(
     // address and an admission that nobody checked it -- probing anyway would
     // knock on this host's own loopback and report the result as if it came
     // from somewhere else, which is the confusion this command exists to end.
-    let here = this_target().await.unwrap_or_default();
+    let here = this_target_in(&document).unwrap_or_default();
     let probe = if no_verify || asking != here {
         None
     } else {

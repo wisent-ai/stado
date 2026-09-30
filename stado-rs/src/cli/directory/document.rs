@@ -100,6 +100,30 @@ pub(super) async fn this_target() -> Result<String, CmdError> {
         })
 }
 
+/// This machine's fleet name, read from a document the caller already holds.
+///
+/// `service directory connect` read the registry once for the directory and
+/// then twice more through `this_target`, and on 2026-09-29, with the object
+/// API refusing, each read spent its retries before falling back to the copy.
+/// Three sequential reads outlasted the 30-second limit of every agent hook
+/// that asks for Brama's address, so every hooked tool call was refused. One
+/// document answers all three questions, from one generation.
+pub(super) fn this_target_in(document: &Value) -> Result<String, CmdError> {
+    let hostname = crate::providers::vast::system_hostname();
+    let registry = targets::load_registry_from_value(document)
+        .map_err(|exc| click(format!("cannot resolve this target: {exc}")))?;
+    registry
+        .lookup_self(&hostname)
+        .map_err(|exc| click(exc.to_string()))?
+        .map(|found| found.name.clone())
+        .ok_or_else(|| {
+            click(format!(
+                "host {hostname} is not in {}",
+                targets::registry_location()
+            ))
+        })
+}
+
 /// The address the directory hands one target for one service.
 ///
 /// One spelling, shared by the write loop and by the sweep that decides what

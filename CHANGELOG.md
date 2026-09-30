@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- **`service directory connect` reads the registry once (a29cca4c):** the verb read the registry for the directory, then twice more to learn which host it runs on and where the service is placed. On 2026-09-29, with the object API refusing, each read spent its retries before falling back to the last-good copy, so one connect outlasted the 30-second limit of every agent hook that asks for Brama's address and every hooked tool call of every session was refused. All three answers now come from the one document it read.
