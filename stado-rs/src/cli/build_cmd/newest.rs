@@ -21,6 +21,8 @@ use crate::cli::release_newest::{plan, workspace, Planned, Standing};
 use crate::cli::CmdError;
 use crate::release_pipeline::{BuildRunState, PlatformRunState};
 
+use super::report::refusals::{batch_failure, Refusal};
+
 #[derive(Args)]
 pub struct BuildNewestArgs {
     /// The directory holding the product checkouts. Defaults to the parent of
@@ -61,6 +63,9 @@ struct Outcome {
     state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure: Option<String>,
+    /// The code the refusal's own error stated, for the batch summary.
+    #[serde(skip)]
+    code: Option<crate::primitives::failure::FailureCode>,
 }
 
 impl Outcome {
@@ -176,6 +181,7 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
             build_id: None,
             state: "refused".to_owned(),
             failure: None,
+            code: None,
         };
         match build_checkout(entry, commit, version).await {
             Ok((build_id, state, failure)) => {
@@ -183,7 +189,10 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
                 outcome.state = state.word().to_owned();
                 outcome.failure = failure;
             }
-            Err(error) => outcome.failure = Some(error.to_string()),
+            Err(error) => {
+                outcome.failure = Some(error.to_string());
+                outcome.code = error.failure.clone();
+            }
         }
         if !args.json {
             match (&outcome.build_id, &outcome.failure) {
@@ -259,15 +268,15 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
     if failed.is_empty() {
         return Ok(());
     }
-    Err(CmdError::click(format!(
-        "build newest: {} product(s) failed or refused: {}",
-        failed.len(),
-        failed
-            .iter()
-            .map(|outcome| outcome.product.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    )))
+    let refusals: Vec<Refusal<'_>> = failed
+        .iter()
+        .map(|outcome| Refusal {
+            product: &outcome.product,
+            code: outcome.code.clone(),
+            failure: outcome.failure.as_deref(),
+        })
+        .collect();
+    Err(batch_failure(&refusals))
 }
 
 /// One checkout's build, as `stado build submit` would queue it.
