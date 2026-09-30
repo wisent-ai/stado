@@ -47,7 +47,8 @@ pub enum RuntimeCommands {
         /// Service name, or the host's own name for the unit.
         name: String,
         /// Restrict to one registry host; omit to restart it everywhere it
-        /// is managed.
+        /// is managed. Naming the machine that runs the command finds the
+        /// unit in its last-known-good registry copy, not through the object API.
         #[arg(long)]
         host: Option<String>,
         /// Optional loopback URL whose stale listener is stopped before restart.

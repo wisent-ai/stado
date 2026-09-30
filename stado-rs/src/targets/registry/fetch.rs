@@ -109,6 +109,25 @@ pub fn last_good_after(cause: &str) -> Option<(Registry, Option<RegistryCopyNoti
     ))
 }
 
+/// The last-known-good copy, read before the authority, for a command that
+/// acts on a unit of THIS machine. The authority is served by this
+/// machine's own object API; when that API is the unit that hangs, a read
+/// through it never fails, so [`fetch_registry_or_last_good`] never reaches
+/// the copy and the managed restart of the API waits forever (cb8780c9).
+/// Returns the copy with the sentence the caller puts before the operator,
+/// or `None` when no copy is kept or the store is a local directory.
+pub fn last_good_for_this_host() -> Option<(Registry, String)> {
+    let (registry, meta, age) = load_last_good().filter(|_| !store_is_local_filesystem())?;
+    let notice = format!(
+        "acting on a unit of this machine from the last-known-good registry copy from {age}s \
+         ago ({}, read_at {}, generation {}), not through the object API the unit may be",
+        registry_last_good_path().unwrap_or_default().display(),
+        meta.read_at,
+        meta.generation,
+    );
+    Some((registry, notice))
+}
+
 /// Fetch the canonical registry from the configured store (Python
 /// `_load_from_gcs`, `source="gcs"`): the authority for fleet-survival
 /// decisions — the coordinator's rogue-daemon kill switch and host-health

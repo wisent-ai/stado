@@ -106,6 +106,36 @@ async fn beacon_store() -> Result<JobStorage, CmdError> {
     super::host::beacon_store().await
 }
 
+/// The last-known-good copy when `host` names this machine, else `None`.
+///
+/// On 2026-09-30 `stado service restart --host lukasz-macbook
+/// stado-object-api` ran 300 s with no answer: this machine's object API
+/// hung, and both the host check and the registry read went through it, so
+/// the one managed way to cycle it never started (cb8780c9). A unit on this
+/// machine needs no authority to be found: its declaration is in the copy
+/// every registry refresh keeps here, and restarting it involves no network.
+fn this_host_copy(host: Option<&str>) -> Option<targets::Registry> {
+    let host = host?;
+    let (registry, notice) = targets::last_good_for_this_host()?;
+    let target = registry.lookup(host)?;
+    if !host_channel::target_is_this_host(target) {
+        return None;
+    }
+    eprintln!("{notice}");
+    Some(registry)
+}
+
+/// The target a unit command acts on: from this machine's copy when the
+/// host is this machine, from the authority otherwise.
+pub(crate) async fn unit_target(host: &str) -> Result<targets::ComputeTarget, CmdError> {
+    match this_host_copy(Some(host)) {
+        Some(registry) => host_channel::resolve_target(&registry, host)
+            .cloned()
+            .map_err(click),
+        None => host_channel::canonical_target(host).await.map_err(click),
+    }
+}
+
 /// The declared managed set matching NAME, without touching beacons.
 ///
 /// The write-side commands need the declaration — its unit id and its
@@ -115,12 +145,18 @@ pub(crate) async fn declared_matching(
     name: &str,
     host: Option<&str>,
 ) -> Result<Vec<ManagedService>, CmdError> {
-    if let Some(host) = host {
-        // Resolve the host first so an unknown or non-local target reports
-        // the registry's own precise refusal rather than "no such service".
-        host_channel::canonical_target(host).await.map_err(click)?;
-    }
-    let registry = registry::read_registry().await?;
+    let registry = match this_host_copy(host) {
+        Some(registry) => registry,
+        None => {
+            if let Some(host) = host {
+                // Resolve the host first so an unknown or non-local target
+                // reports the registry's own precise refusal rather than
+                // "no such service".
+                host_channel::canonical_target(host).await.map_err(click)?;
+            }
+            registry::read_registry().await?
+        }
+    };
     let mut found: Vec<ManagedService> = Vec::new();
     for target in registry.local_targets() {
         if host.is_some_and(|host| target.name != host) {

@@ -18,3 +18,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado service restart|stop --host <this machine>` finds the unit in this machine's last-known-good registry copy instead of asking the object API first, and says so on stderr. When the unit is the object API and it hangs, the restart now runs instead of waiting forever (cb8780c9).

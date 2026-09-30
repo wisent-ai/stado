@@ -102,9 +102,7 @@ async fn restart_reports(
     let mut failures: Vec<String> = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::service::unit_target(&declared.host).await?;
         let sudo_password = if UnitDomain::from_path(&declared.path).requires_privileged_bootstrap()
         {
             host_sudo_password(&target).await?
@@ -176,9 +174,7 @@ pub(crate) async fn stop(
     let mut failures: Vec<String> = Vec::new();
 
     for declared in &services {
-        let target = host_channel::canonical_target(&declared.host)
-            .await
-            .map_err(click)?;
+        let target = crate::cli::service::unit_target(&declared.host).await?;
         let sudo_password = if UnitDomain::from_path(&declared.path).requires_privileged_bootstrap()
         {
             host_sudo_password(&target).await?
