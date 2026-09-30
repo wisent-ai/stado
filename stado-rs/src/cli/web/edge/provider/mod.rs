@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use super::{mutate_web, unit_label, CmdError};
+use super::{mutate_web, CmdError};
 use crate::providers::azure;
 
 mod provision;

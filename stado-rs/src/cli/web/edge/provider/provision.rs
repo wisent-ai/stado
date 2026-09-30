@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use super::super::declaring::{checked_declaration, record};
-use super::super::{EDGE_CLOUD_INIT, EDGE_DISK_GB, EDGE_IMAGE_URN, PROXY_UNIT};
+use super::super::{CADDYFILE_ON_EDGE, EDGE_CLOUD_INIT, EDGE_DISK_GB, EDGE_IMAGE_URN, HOST_UNIT};
 use super::requests::{interface_body, network_path, public_ip_body, security_group_body};
 use super::{refusal, unwind, CmdError};
 use crate::config;
@@ -227,9 +227,9 @@ pub(in crate::cli::web::edge) async fn provision(
     } else {
         println!("{name} at {address} in {region} ({size}): {change} as the fleet's web edge");
         println!(
-            "next: join {name} to the tailnet and the registry, then install its reverse proxy \
-             with `stado service deploy {} --host {name}`",
-            super::unit_label(PROXY_UNIT)
+            "next: join {name} to the tailnet and the registry, then run the edge in its Stado \
+             process: {HOST_UNIT} with `stado serve --edge-caddy <caddy program> \
+             --edge-caddyfile {CADDYFILE_ON_EDGE}`"
         );
     }
     Ok(())

@@ -71,6 +71,12 @@ impl ServeArgs {
         if let Some(interval) = self.forward_interval_seconds {
             args.push(format!("--forward-interval-seconds={interval}"));
         }
+        if let Some(caddy) = &self.edge_caddy {
+            args.push(format!("--edge-caddy={}", caddy.display()));
+        }
+        if let Some(caddyfile) = &self.edge_caddyfile {
+            args.push(format!("--edge-caddyfile={}", caddyfile.display()));
+        }
         if self.api {
             args.push("--api".to_string());
         }

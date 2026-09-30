@@ -40,28 +40,30 @@
 //! meaningful reconcile: the set the proxy holds and the set the declarations
 //! ask for are comparable because one is only ever produced from the other.
 //!
-//! **Why it is a registry-managed unit.** The proxy is installed, configured
-//! and restarted only through `stado service` — `declare`, `deploy`,
-//! `file-sync`, `secret-sync`, `status` — over the approved host channel. The
-//! Caddyfile travels inside that channel's request body as
-//! [`crate::deploy::service::sync_service_file`] carries it, never in an
-//! argument vector and never through a shell one-liner on the box. An edge
-//! configured by hand is an edge nobody can reproduce, and the certificate it
-//! holds is the fleet's public face.
+//! **Why it is a role of `com.wisent.stado`.** One repository runs one
+//! service (the operator's rule of 2026-09-30, 1e14440a), and the edge is
+//! Stado's. The host's Stado process runs the proxy when it is started with
+//! `--edge-caddy <program> --edge-caddyfile <path>` ([`role`]); nothing else
+//! is installed for it. The Caddyfile travels inside the approved host
+//! channel's request body as [`crate::deploy::service::sync_service_file`]
+//! carries it, never in an argument vector and never through a shell
+//! one-liner on the box, and Caddy's `--watch` loads it. An edge configured
+//! by hand is an edge nobody can reproduce, and the certificate it holds is
+//! the fleet's public face.
 //!
-//! One fact belongs to the unit declaration rather than to this file: the
-//! proxy binds 80 and 443, and on Linux a `systemd --user` unit needs
-//! `CAP_NET_BIND_SERVICE` on the binary to do so. Port 80 is not optional —
-//! Let's Encrypt's HTTP-01 challenge arrives there. Until the declaration
-//! grants it, [`status`] reports both ports as unanswered, which is exactly
-//! what an operator needs to see.
+//! The proxy binds 80 and 443. Port 80 is not optional — Let's Encrypt's
+//! HTTP-01 challenge arrives there — and on Linux the program needs
+//! `CAP_NET_BIND_SERVICE` to bind it. Until both answer from the internet,
+//! [`status`] reports them as unanswered, which is exactly what an operator
+//! needs to see.
 
+use super::mutate_web;
 use super::CmdError;
-use super::{mutate_web, unit_label};
 
 mod commands;
 mod declaring;
 mod provider;
+pub(crate) mod role;
 mod serving;
 
 pub(crate) use commands::EdgeCommands;
@@ -114,9 +116,12 @@ const EDGE_CLOUD_INIT: &str = "#cloud-config\n\
 /// bodies are built here — and the version has to be named here with them.
 const NETWORK_API_VERSION: &str = "2023-09-01";
 
-/// The reverse proxy's unit, under the same domain every web unit uses so
-/// `stado service list` groups the edge with the products it fronts.
-const PROXY_UNIT: &str = "edge";
+/// The unit the edge runs under: the host's one Stado process.
+const HOST_UNIT: &str = "com.wisent.stado";
+
+/// The `stado serve` option that switches the edge role on, as the catalog's
+/// role checks name it.
+const EDGE_ROLE: &str = "--edge-caddyfile";
 
 /// Where the generated Caddyfile lands on the edge.
 ///

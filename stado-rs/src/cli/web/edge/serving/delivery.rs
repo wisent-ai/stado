@@ -1,9 +1,9 @@
-//! Delivering the configuration to the edge, through the reverse proxy the
-//! registry declares as a managed unit.
+//! Delivering the configuration to the edge, the role of the host's one
+//! Stado process (`com.wisent.stado`) that runs the reverse proxy.
 
 use serde_json::{json, Value};
 
-use super::super::{CADDYFILE_ON_EDGE, PROXY_UNIT};
+use super::super::{CADDYFILE_ON_EDGE, EDGE_ROLE, HOST_UNIT};
 use super::{caddyfile, terminated_hostnames, CmdError};
 use crate::config::WebApiEdge;
 use crate::deploy::{host_channel, production_runner, service, service_file_fetch};
@@ -13,29 +13,34 @@ fn click(error: impl ToString) -> CmdError {
     CmdError::click(error.to_string())
 }
 
-/// The edge's reverse proxy, as the registry declares it.
+/// The edge host's Stado process, as the registry declares it, proven to run
+/// the edge role: its live argument vector, parsed as `stado serve` parses
+/// it, carries `--edge-caddyfile`. A declaration that names the flag before
+/// the process started with it proves nothing.
 async fn proxy(edge: &WebApiEdge) -> Result<(ComputeTarget, service::ManagedService), CmdError> {
-    let unit = super::unit_label(PROXY_UNIT);
-    let target = host_channel::canonical_target(edge.target())
+    let host = edge.target();
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let enable = format!(
+        "the edge terminates nothing until {HOST_UNIT} on {host} runs its edge role: declare it \
+         with `stado serve --edge-caddy <caddy program> --edge-caddyfile {CADDYFILE_ON_EDGE}` \
+         and `stado service ensure stado --host {host}`, then reconcile with \
+         `stado web edge hostnames`"
+    );
+    let declared = crate::cli::service::declared_matching(HOST_UNIT, Some(host))
         .await
-        .map_err(click)?;
-    let declared = crate::cli::service::declared_matching(&unit, Some(edge.target()))
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "{error}; the edge terminates nothing until its reverse proxy is a managed unit: \
-                 write a declaration naming {unit} on {host}, install it with \
-                 `stado service declare --file <declaration>` and \
-                 `stado service deploy {unit} --host {host}`, then reconcile with \
-                 `stado web edge hostnames`",
-                host = edge.target()
-            ))
-        })?;
+        .map_err(|error| CmdError::click(format!("{error}; {enable}")))?;
     let service = declared
         .into_iter()
         .next()
         .expect("declared_matching refuses an empty match");
-    Ok((target, service))
+    let runner = production_runner();
+    match service::role_process(&target, &service, EDGE_ROLE, &runner).await {
+        Ok((_, None)) => Ok((target, service)),
+        Ok((_, Some(reason))) => Err(CmdError::click(format!("{reason}; {enable}"))),
+        Err(error) => Err(CmdError::click(format!(
+            "{host}: whether {HOST_UNIT} runs the edge role could not be read: {error}"
+        ))),
+    }
 }
 
 /// Make the edge terminate exactly `routes`, and report what that changed.
@@ -131,20 +136,9 @@ pub(in crate::cli::web) async fn deliver(
             synced.failure()
         )));
     }
-    // The file on disk is not the configuration until the proxy has read it,
-    // and a hostname whose certificate was never ordered is exactly the
-    // outage this ordering exists to prevent.
-    let restarted = service::restart_service(&target, &declared, &runner)
-        .await
-        .map_err(click)?;
-    if !restarted.succeeded("restarted") {
-        return Err(CmdError::click(format!(
-            "{}: {unit} holds the new configuration on disk and did not restart, so it is still \
-             serving the old one: {}",
-            target.name,
-            restarted.failure()
-        )));
-    }
+    // No restart: the edge role runs Caddy with `--watch`, which loads the
+    // file it was just given. Restarting com.wisent.stado would take every
+    // other role on the host down with it for a configuration change.
     report["change"] = json!("delivered");
     report["local_file"] = json!(local.to_str());
     Ok(report)

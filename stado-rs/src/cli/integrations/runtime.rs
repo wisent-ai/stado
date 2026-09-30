@@ -74,6 +74,12 @@ pub(crate) struct ServeArgs {
     /// Reconcile the reverse listener at its own declared cadence.
     #[arg(long, requires = "forward_destination")]
     pub forward_interval_seconds: Option<NonZeroU64>,
+    /// Run the web edge's reverse proxy, this program, inside this process.
+    #[arg(long, requires = "edge_caddyfile")]
+    pub edge_caddy: Option<std::path::PathBuf>,
+    /// The Caddyfile `stado web edge` delivers to this host; watched and reloaded.
+    #[arg(long, requires = "edge_caddy")]
+    pub edge_caddyfile: Option<std::path::PathBuf>,
     /// Collect workstation diagnostics inside this host process.
     #[arg(long)]
     pub watchdog: bool,
@@ -169,6 +175,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     }
     if let Some((forward, interval)) = reverse_forward {
         supervisor.spawn("reverse-forward", move || forward.run(interval))?;
+    }
+    if let (Some(caddy), Some(caddyfile)) = (args.edge_caddy, args.edge_caddyfile) {
+        supervisor.spawn("edge", move || crate::cli::web::edge_role(caddy, caddyfile))?;
     }
     if args.watchdog {
         let diagnostics = crate::watchdog::ParsedArgs {

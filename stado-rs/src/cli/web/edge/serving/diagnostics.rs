@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{declared, PROXY_UNIT};
+use super::super::{declared, HOST_UNIT};
 use super::{deliver, stado_routes, CmdError};
 
 /// Whether the edge answers a TCP connection on one port, from here.
@@ -29,7 +29,7 @@ pub(in crate::cli::web::edge) async fn status(json_output: bool) -> Result<(), C
         "target": edge.target(),
         "address": edge.address(),
         "contact": edge.contact(),
-        "unit": super::unit_label(PROXY_UNIT),
+        "unit": HOST_UNIT,
         "http": { "port":
             80, "answers": http, "detail": http_detail },
         "https": { "port":

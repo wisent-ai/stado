@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{unit_label, CmdError};
+use super::CmdError;
 use crate::config;
 
 mod caddyfiles;
