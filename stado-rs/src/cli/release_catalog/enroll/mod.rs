@@ -34,15 +34,15 @@ use crate::cli::host::{grant_item_read, vault_token_sync, TokenSyncMode};
 use crate::cli::CmdError;
 use crate::release_pipeline::ReleasePipelineManifest;
 
-use super::publisher::{ensure_publisher, fleet_hosts, home_relative};
+use super::publisher::{fleet_hosts, home_relative};
 
 mod host_grant;
+mod publishers;
 mod rollout;
 mod runtime;
 
-// The config keys the workload secret gate reads (`config::agent_skarbiec_items`
-// and `config::agent_skarbiec_secret_fields`) are written per host by
-// `host_grant::declare_on_host`.
+// `host_grant::declare_on_host` writes, per host, the config keys the workload
+// secret gate reads (`config::agent_skarbiec_items`, `agent_skarbiec_secret_fields`).
 
 /// What enrolling one product found and did, step by step.
 pub(crate) struct Enrollment {
@@ -56,7 +56,7 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
     let product = manifest.product.as_str();
     let mut steps = Vec::new();
 
-    ensure_publisher(product).await?;
+    publishers::ensure_publishers(manifest).await?;
     steps.push(json!({ "step": "publisher", "product": product }));
 
     let references = secret_references(manifest)?;

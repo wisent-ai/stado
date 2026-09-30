@@ -257,16 +257,21 @@ pub(super) async fn ensure_publisher(product: &str) -> Result<(), CmdError> {
     {
         return Ok(());
     }
+    eprintln!("{product}: this host declares no release publisher for it; declaring it now");
+    declare_publisher_on_fleet(product).await
+}
+
+/// `declare_publisher` between the fleet's vault owner and this host, with the
+/// command it ran named in the refusal. Also used for a declared publisher
+/// whose item Stado cannot read (`enroll::publishers`).
+pub(super) async fn declare_publisher_on_fleet(product: &str) -> Result<(), CmdError> {
     let (owner, client) = fleet_hosts().await?;
-    eprintln!(
-        "{product}: this host declares no release publisher for it; declaring it now \
-         (vault owner {owner}, release client {client})"
-    );
+    eprintln!("{product}: declaring the publisher (vault owner {owner}, release client {client})");
     declare_publisher(product, &owner, &client, &[], &[], false)
         .await
         .map_err(|error| {
             CmdError::click(format!(
-                "{product} has no release publisher and declaring one failed \
+                "declaring {product}'s release publisher failed \
                  (stado release catalog declare-publisher {product} --owner {owner} \
                  --client {client}): {error}"
             ))
