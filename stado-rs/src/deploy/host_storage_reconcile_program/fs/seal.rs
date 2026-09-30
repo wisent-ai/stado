@@ -58,7 +58,7 @@ fn seal_one(path: &str, mode: u32) -> Step<()> {
     let info =
         fs::symlink_metadata(path).map_err(|error| format!("cannot inspect {path}: {error}"))?;
     let flags = darwin::flags(&info);
-    if flags & darwin::USER_IMMUTABLE == 0 {
+    if !darwin::carries(flags, darwin::USER_IMMUTABLE) {
         fs::set_permissions(path, fs::Permissions::from_mode(mode))
             .and_then(|()| darwin::set_flags(path, flags | darwin::USER_IMMUTABLE))
             .map_err(|error| format!("cannot seal {path}: {error}"))?;
@@ -85,8 +85,10 @@ pub(in crate::deploy::host_storage_reconcile_program) fn seal_tree(root: &str) -
 fn sealed(path: &str, mode: u32) -> Step<bool> {
     let info =
         fs::symlink_metadata(path).map_err(|error| format!("cannot inspect {path}: {error}"))?;
-    Ok(darwin::flags(&info) & darwin::USER_IMMUTABLE != 0
-        && info.permissions().mode() & MODE_BITS == mode)
+    Ok(
+        darwin::carries(darwin::flags(&info), darwin::USER_IMMUTABLE)
+            && info.permissions().mode() & MODE_BITS == mode,
+    )
 }
 
 pub(in crate::deploy::host_storage_reconcile_program) fn validate_sealed_tree(

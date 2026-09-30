@@ -34,7 +34,7 @@ pub(in crate::deploy::host_storage_reconcile_program) fn clone_file(
     if let Ok(info) = fs::symlink_metadata(&temporary) {
         let staged = regular_identity(context, &temporary)?;
         if info.uid() != nix::unistd::getuid().as_raw()
-            || darwin::flags(&info) & darwin::ANY_IMMUTABLE != 0
+            || darwin::carries(darwin::flags(&info), darwin::ANY_IMMUTABLE)
         {
             recover_privileged_clone(context, &temporary)?;
         }

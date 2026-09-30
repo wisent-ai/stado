@@ -24,6 +24,10 @@ mod native {
         info.st_flags()
     }
 
+    pub fn carries(flags: u32, mask: u32) -> bool {
+        flags & mask != 0
+    }
+
     pub fn set_flags(path: &str, flags: u32) -> io::Result<()> {
         let path = c_path(path)?;
         // SAFETY: `path` is a NUL-terminated string that outlives the call.
@@ -66,6 +70,10 @@ mod native {
         0
     }
 
+    pub fn carries(_flags: u32, _mask: u32) -> bool {
+        false
+    }
+
     pub fn set_flags(_path: &str, _flags: u32) -> io::Result<()> {
         Err(unsupported())
     }
@@ -84,6 +92,13 @@ pub(super) const ANY_IMMUTABLE: u32 = native::ANY_IMMUTABLE;
 
 pub(super) fn flags(info: &Metadata) -> u32 {
     native::flags(info)
+}
+
+/// Whether `flags` carries any bit of `mask`. Written per platform: where the
+/// flag constants are zero, `flags & mask` is a mask with zero, which clippy
+/// refuses (`bad_bit_mask`) and which failed every linux-amd64 stado build.
+pub(super) fn carries(flags: u32, mask: u32) -> bool {
+    native::carries(flags, mask)
 }
 
 pub(super) fn set_flags(path: &str, flags: u32) -> io::Result<()> {

@@ -191,7 +191,7 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
             }
             Err(error) => {
                 outcome.failure = Some(error.to_string());
-                outcome.code = error.failure.clone();
+                outcome.code = error.failure;
             }
         }
         if !args.json {
@@ -272,7 +272,7 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
         .iter()
         .map(|outcome| Refusal {
             product: &outcome.product,
-            code: outcome.code.clone(),
+            code: outcome.code,
             failure: outcome.failure.as_deref(),
         })
         .collect();

@@ -27,7 +27,6 @@ impl Refusal<'_> {
     /// sentence when the error arrived as prose (the documented last resort).
     fn code(&self) -> FailureCode {
         self.code
-            .clone()
             .or_else(|| self.failure.map(classify_message))
             .unwrap_or(FailureCode::Unknown)
     }
