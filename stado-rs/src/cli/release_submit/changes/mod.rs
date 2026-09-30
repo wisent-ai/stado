@@ -247,7 +247,15 @@ pub(crate) async fn queued_products() -> Result<std::collections::BTreeSet<Strin
 }
 
 /// Freeze only tickets whose commits the selected build actually contains.
-/// Called before queueing the build; later submissions cannot join its batch.
+/// Called before queueing the build.
+///
+/// The first freeze is the build's batch (`changes.json`) and never changes.
+/// A ticket handed off after it, whose commit that same build contains, is
+/// bound in an additional batch (`changes-<digest>.json`) beside it: a build
+/// is identified by its commit, so a later build of that commit is the same
+/// build, and on 2026-09-30 a tama handoff made after build 5654e49f froze
+/// stayed `queued` for good while every `build newest --queued` picked tama
+/// again and answered with that same passed build.
 pub(crate) async fn bind(
     root: &std::path::Path,
     commit: &str,
@@ -256,14 +264,15 @@ pub(crate) async fn bind(
 ) -> Result<(), CmdError> {
     let store = JobStorage::new().await.map_err(failure)?;
     let path = format!("runs/build/{run_id}/changes.json");
-    if store.download_text(&path).await.map_err(failure)?.is_some() {
-        return Ok(());
-    }
+    let frozen = store.download_text(&path).await.map_err(failure)?.is_some();
     let candidates: Vec<_> = entries(&store)
         .await?
         .into_iter()
         .filter(|change| change.product == product)
         .collect();
+    if candidates.is_empty() && frozen {
+        return Ok(());
+    }
     let repository = if candidates.is_empty() {
         String::new()
     } else {
@@ -277,16 +286,29 @@ pub(crate) async fn bind(
             && change.repository == repository
             && source::contains(root, &change.source_commit, commit)?
         {
+            let unbound = !observations.contains_key(&change.id);
             let state = status::for_change(change.clone(), &observations);
-            if state.state != "passed" {
+            if (!frozen && state.state != "passed") || (frozen && unbound) {
                 covered.push(change);
             }
         }
     }
     covered.sort_by(|a, b| a.id.cmp(&b.id));
+    let target = if frozen {
+        if covered.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<&str> = covered.iter().map(|change| change.id.as_str()).collect();
+        format!(
+            "runs/build/{run_id}/changes-{}.json",
+            crate::release_control::sha256_bytes(ids.join("\n").as_bytes())
+        )
+    } else {
+        path
+    };
     // A racing coordinator may freeze first. Its immutable set is authoritative.
     store
-        .create_text_if_absent(&path, &serde_json::to_string(&covered)?)
+        .create_text_if_absent(&target, &serde_json::to_string(&covered)?)
         .await
         .map_err(failure)?;
     Ok(())

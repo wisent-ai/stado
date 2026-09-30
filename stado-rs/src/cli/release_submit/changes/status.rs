@@ -34,7 +34,7 @@ pub(super) async fn observations(
         .await
         .map_err(failure)?
         .into_iter()
-        .filter(|path| path.ends_with("/changes.json"))
+        .filter(|path| is_batch(path))
         .collect();
     let answers = futures::stream::iter(&batches)
         .map(|path| batch_observation(store, path, wanted))
@@ -58,6 +58,13 @@ pub(super) async fn observations(
         }
     }
     Ok(observed)
+}
+
+/// A build's batch file: its first freeze `changes.json`, or an additional
+/// `changes-<digest>.json` bound later to the same build.
+fn is_batch(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name == "changes.json" || (name.starts_with("changes-") && name.ends_with(".json"))
 }
 
 /// What the build history says about the wanted tickets.
@@ -88,7 +95,7 @@ async fn batch_observation(
     if batch.is_empty() || !batch.iter().any(|change| wanted.contains(&change.id)) {
         return Ok(None);
     }
-    let root = path.trim_end_matches("changes.json");
+    let root = &path[..path.rfind('/').map_or(0, |slash| slash + 1)];
     // A terminal build's observation never changes: its receipts are
     // immutable and nothing re-enters a finished build. It is kept beside the
     // batch the first time it is read, and later reads take that one file
