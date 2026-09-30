@@ -10,11 +10,24 @@ use super::*;
 
 /// Errors before or after the queue claim are agent failures. A claim error is
 /// scoped to one queued job and may be reported while the scan continues.
+///
+/// `Declined` is not a failure of the agent: this host cannot resolve a secret
+/// the job names, so the job stays queued for a host that can. It is its own
+/// variant because it was once `Ok(None)` like a lost race, and the scan
+/// counted a job this host will never take as eligible: `eligible_count 4,
+/// claimed_this_loop 0`, every rejection counter 0, and `stado host gates`
+/// read `claiming: yes, blockers: none` while a pinned build waited a week.
 #[derive(Debug)]
 pub enum StartSlotError {
     Claim(StorageError),
+    Declined(String),
     Other(StorageError),
 }
+
+/// The capacity-diagnostics key holding this scan's declines, one
+/// `{job_id, reason}` object each; `stado host gates` reads it back to say why
+/// a waiting job is not being taken.
+pub const GRANT_DECLINED_KEY: &str = "grant_declined";
 
 impl From<StorageError> for StartSlotError {
     fn from(error: StorageError) -> Self {
@@ -39,7 +52,8 @@ impl From<std::io::Error> for StartSlotError {
 ///
 /// Returns None when a dedupe/refusal check fires or apt-install refuses —
 /// the caller leaves the job in queue/ for another agent to claim (or the
-/// job was already moved/dropped by the check itself).
+/// job was already moved/dropped by the check itself). A secret this host's
+/// grant cannot resolve is [`StartSlotError::Declined`], with the reason.
 pub async fn start_slot(
     store: &JobStorage,
     job: Job,
@@ -86,7 +100,7 @@ pub async fn start_slot(
             "decline {}: {reason}; leaving it queued for a host that can resolve it",
             job.job_id
         ));
-        return Ok(None);
+        return Err(StartSlotError::Declined(reason));
     }
     let reason = deprecated_activation_command_reason(&cmd);
     if !reason.is_empty() {

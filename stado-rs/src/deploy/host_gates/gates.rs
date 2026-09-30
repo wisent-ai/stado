@@ -127,4 +127,8 @@ pub struct HostGates {
 pub struct WaitingJob {
     pub job_id: String,
     pub age_seconds: Option<i64>,
+    /// Why this host's last claim scan turned the job down, in the agent's
+    /// words (today: a secret its grant cannot resolve). `None` when the host
+    /// published no decline for it, which is not the same as "no reason".
+    pub declined: Option<String>,
 }

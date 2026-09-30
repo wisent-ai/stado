@@ -83,6 +83,7 @@ pub(super) async fn waiting_jobs(
         waiting.push(WaitingJob {
             job_id: job.job_id,
             age_seconds,
+            declined: None,
         });
     }
     waiting.sort_by_key(|job| std::cmp::Reverse(job.age_seconds));

@@ -126,6 +126,7 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
                     json!({
                         "job_id": job.job_id,
                         "age_seconds": job.age_seconds,
+                        "declined": job.declined,
                     })
                 })
                 .collect(),

@@ -174,6 +174,7 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         publication_observed,
     );
     gates.waiting_jobs = waiting;
+    attach_declines(&mut gates);
     gates.complete = observations.iter().all(DiagnosticRead::complete);
     gates.observations = observations;
     if !gates.complete {
@@ -181,6 +182,30 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         gates.blockers.push(HOST_DIAGNOSTIC_INCOMPLETE.to_string());
     }
     Ok(gates)
+}
+
+/// Put the host's own reason beside each waiting job it declined. The queue
+/// says what is starving and the capacity publication says why; joined here
+/// once, the text report and `--json` cannot tell two different stories.
+fn attach_declines(gates: &mut HostGates) {
+    let Some(declines) = gates
+        .published_diagnostics
+        .as_ref()
+        .and_then(|diag| diag.get(crate::providers::local::slots::GRANT_DECLINED_KEY))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    for job in &mut gates.waiting_jobs {
+        job.declined = declines
+            .iter()
+            .find(|decline| {
+                decline.get("job_id").and_then(Value::as_str) == Some(job.job_id.as_str())
+            })
+            .and_then(|decline| decline.get("reason"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
 }
 
 async fn host_read<T>(

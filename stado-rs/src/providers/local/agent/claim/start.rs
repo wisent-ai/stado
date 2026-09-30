@@ -41,6 +41,7 @@ pub(crate) async fn start_candidate(
     diag_eligibility_rejected: &mut i64,
     diag_eligible: &mut i64,
     diag_claim_errors: &mut i64,
+    grant_declined: &mut Vec<Value>,
     started: &mut i64,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<bool> {
@@ -160,6 +161,20 @@ pub(crate) async fn start_candidate(
                 "last_claim_error_at".into(),
                 Value::from(isoformat_utc(Utc::now())),
             );
+            return Ok(false);
+        }
+        Err(StartSlotError::Declined(reason)) => {
+            // Eligible by every rule, and still not this host's: the grant
+            // cannot resolve a secret the job names. It leaves the eligible
+            // count and is published with its reason, because counted as
+            // eligible it read as a healthy host that simply had not got to
+            // it yet.
+            disk_cleanup::release_workload_lock(workload_lock, log_fn);
+            *diag_eligible -= 1;
+            grant_declined.push(serde_json::json!({
+                "job_id": job.job_id,
+                "reason": reason,
+            }));
             return Ok(false);
         }
         Err(StartSlotError::Other(exc)) => {

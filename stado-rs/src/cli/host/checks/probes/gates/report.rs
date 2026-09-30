@@ -200,6 +200,14 @@ pub(super) fn print_report(gates: &HostGates) {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        // The host's own reason, per job: `claiming: yes, blockers: none`
+        // above a week-old waiting build is only true for jobs the host can
+        // take, and without this line it read as a healthy, merely busy host.
+        for job in &gates.waiting_jobs {
+            if let Some(reason) = &job.declined {
+                println!("declined: {}: {reason}", job.job_id);
+            }
+        }
     }
     // Printed after the verdict and never as part of it: a note is a thing the
     // operator has to know before they conclude the numbers do not add up, and
