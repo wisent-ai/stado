@@ -8,7 +8,7 @@ use super::super::*;
 /// Fold the marker lines of stdout into a reading.
 pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskReading {
     let mut reading = DiskReading::default();
-    let mut memory_page_size: Option<i64> = None;
+    let mut memory_level_pct: Option<i64> = None;
     let mut memory_pages: Vec<String> = Vec::new();
     let mut meminfo: Vec<String> = Vec::new();
     for line in stdout.lines() {
@@ -56,8 +56,10 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             // Printed whether or not anything held it, so "nobody is holding
             // the lock" is distinguishable from "this host could not be asked".
             ["STADO_MEMORY", "page_size", value] => {
-                memory_page_size = value.split_whitespace().next().and_then(fold_int);
-                reading.memory.page_size_bytes = memory_page_size;
+                reading.memory.page_size_bytes = value.split_whitespace().next().and_then(fold_int);
+            }
+            ["STADO_MEMORY", "level_pct", value] => {
+                memory_level_pct = fold_int(value);
             }
             ["STADO_MEMORY", "total_bytes", value] => {
                 reading.memory.total_bytes = fold_int(value);
@@ -122,7 +124,7 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             _ => {}
         }
     }
-    fold_memory(&mut reading, memory_page_size, &memory_pages, &meminfo);
+    fold_memory(&mut reading, memory_level_pct, &memory_pages, &meminfo);
     reading
 }
 

@@ -20,20 +20,22 @@ use super::*;
 /// Memory and swap, read from the host's own kernel.
 ///
 /// Two fixed, read-only readers, one per platform, and a host missing either
-/// reports what it has. The macOS sum is free plus speculative plus purgeable
-/// pages — what an allocation can obtain without evicting anonymous memory —
-/// because macOS publishes no `MemAvailable`.
+/// reports what it has. On macOS available memory is the kernel's own
+/// `kern.memorystatus_level` share of `hw.memsize`, the same figure the
+/// host's memory pass reads
+/// ([`crate::providers::local::host_memory::reading`]).
 pub const MEMORY_SECTION: &str = r#"if [ -x /usr/bin/vm_stat ]; then
   /usr/bin/vm_stat 2>/dev/null | while IFS= read -r row; do
     case "$row" in
       Mach*page\ size\ of*) printf 'STADO_MEMORY\tpage_size\t%s\n' "${row##*page size of }" ;;
-      Pages\ free:*|Pages\ speculative:*|Pages\ purgeable:*|Pages\ occupied\ by\ compressor:*|Swapouts:*)
+      Pages\ occupied\ by\ compressor:*|Swapouts:*)
         printf 'STADO_MEMORY_PAGES\t%s\n' "$row" ;;
     esac
   done
 fi
 if [ -x /usr/sbin/sysctl ]; then
   printf 'STADO_MEMORY\ttotal_bytes\t%s\n' "$(/usr/sbin/sysctl -n hw.memsize 2>/dev/null)"
+  printf 'STADO_MEMORY\tlevel_pct\t%s\n' "$(/usr/sbin/sysctl -n kern.memorystatus_level 2>/dev/null)"
   /usr/sbin/sysctl vm.swapusage 2>/dev/null | while IFS= read -r row; do
     case "$row" in
       vm.swapusage:*) printf 'STADO_MEMORY\tswap\t%s\n' "${row#vm.swapusage: }" ;;
@@ -139,7 +141,7 @@ pub(super) fn fold_int(value: &str) -> Option<i64> {
 /// different ways.
 pub(super) fn fold_memory(
     reading: &mut DiskReading,
-    page_size: Option<i64>,
+    level_pct: Option<i64>,
     pages: &[String],
     meminfo: &[String],
 ) {
@@ -157,17 +159,13 @@ pub(super) fn fold_memory(
         };
         return;
     }
+    reading.memory.available_bytes = level_pct
+        .zip(reading.memory.total_bytes)
+        .and_then(|(level, total)| host::macos_available_bytes(level, total));
     if pages.is_empty() {
         return;
     }
     let text = pages.join("\n");
     reading.memory.compressor_pages = host::vm_stat_pages(&text, host::MACOS_COMPRESSOR_ROW);
     reading.memory.swapouts = host::vm_stat_pages(&text, host::MACOS_SWAPOUT_ROW);
-    if let Some(page_size) = page_size {
-        let obtainable: i64 = host::MACOS_OBTAINABLE_CLASSES
-            .iter()
-            .filter_map(|label| host::vm_stat_pages(&text, label))
-            .sum();
-        reading.memory.available_bytes = Some(obtainable.saturating_mul(page_size));
-    }
 }

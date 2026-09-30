@@ -9,13 +9,14 @@
 //! The two platforms do not mean the same thing by "free", and pretending
 //! they do is how a watermark becomes noise. Linux publishes `MemAvailable`,
 //! which the kernel computes as what a new allocation can obtain without
-//! swapping. macOS publishes no such figure, so this reader sums the page
-//! classes that are obtainable without evicting anonymous memory — free,
-//! speculative and purgeable — and records the compressor and swapout
-//! counters beside it as evidence. On charless-mac-mini on 2026-09-06 those
-//! counters read 797k pages in the compressor and 12.2M swapouts against 4.3
-//! of 5 GB of swap in use, which is the state a free-page figure alone
-//! reports as a merely busy machine.
+//! swapping. macOS publishes its own counterpart as a percentage,
+//! `kern.memorystatus_level` — the figure `memory_pressure` prints as "memory
+//! free percentage" — and this reader takes that share of `hw.memsize`. It
+//! used to sum only free, speculative and purgeable pages, which leaves out
+//! the inactive and file-backed cache the kernel reclaims: on 2026-09-30
+//! lukasz-macbook published 0.7 GiB available against a 4 GiB watermark
+//! while the kernel's level read 71% of 64 GiB. The compressor and swapout
+//! counters are still recorded beside it as evidence.
 
 use std::process::Command;
 
@@ -130,14 +131,21 @@ fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
-/// The page classes a new macOS allocation can obtain without evicting
-/// anonymous memory.
-pub const MACOS_OBTAINABLE_CLASSES: [&str; 3] =
-    ["Pages free", "Pages speculative", "Pages purgeable"];
+/// The `sysctl` that states, as a whole percentage of physical memory, what
+/// the macOS kernel counts as available: its counterpart of Linux
+/// `MemAvailable`.
+pub const MACOS_MEMORY_LEVEL: &str = "kern.memorystatus_level";
 /// The macOS compressor's occupancy row.
 pub const MACOS_COMPRESSOR_ROW: &str = "Pages occupied by compressor";
 /// The macOS lifetime swapout row.
 pub const MACOS_SWAPOUT_ROW: &str = "Swapouts";
+
+/// The bytes a kernel memory level (a whole percentage) makes of `total`.
+pub fn macos_available_bytes(level_pct: i64, total: i64) -> Option<i64> {
+    (0..=constants::PERCENT)
+        .contains(&level_pct)
+        .then(|| total.saturating_mul(level_pct) / constants::PERCENT)
+}
 
 fn read_macos() -> MemoryReading {
     let mut reading = MemoryReading {
@@ -145,16 +153,15 @@ fn read_macos() -> MemoryReading {
             .and_then(|text| text.trim().parse::<i64>().ok()),
         ..MemoryReading::default()
     };
+    let level = command_stdout("/usr/sbin/sysctl", &["-n", MACOS_MEMORY_LEVEL])
+        .and_then(|text| text.trim().parse::<i64>().ok());
+    reading.available_bytes = level
+        .zip(reading.total_bytes)
+        .and_then(|(level, total)| macos_available_bytes(level, total));
     if let Some(text) = command_stdout("/usr/bin/vm_stat", &[]) {
         reading.compressor_pages = vm_stat_pages(&text, MACOS_COMPRESSOR_ROW);
         reading.swapouts = vm_stat_pages(&text, MACOS_SWAPOUT_ROW);
-        if let Some(page_size) = vm_stat_page_size(&text) {
-            let obtainable: i64 = MACOS_OBTAINABLE_CLASSES
-                .iter()
-                .filter_map(|label| vm_stat_pages(&text, label))
-                .sum();
-            reading.available_bytes = Some(obtainable.saturating_mul(page_size));
-        }
+        reading.page_size_bytes = vm_stat_page_size(&text);
     }
     if let Some(text) = command_stdout("/usr/sbin/sysctl", &["-n", "vm.swapusage"]) {
         let (used, total) = swapusage_bytes(&text);

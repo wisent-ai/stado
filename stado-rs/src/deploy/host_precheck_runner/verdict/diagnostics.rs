@@ -72,7 +72,7 @@ printf 'ExecMainStatus=%s\n' "$(printf '%s' "$state" | sed -n 's/.*last exit cod
 printf 'UnitLimits=%s\n' "$(printf '%s' "$state" | grep -iE 'limit|resource|jetsam|memory' | tr -s ' \n' ' ')"
 printf 'StandardOutput=%s\n' "$runner_root/_diag/launchd.stdout.log"
 printf 'StandardError=%s\n' "$runner_root/_diag/launchd.stderr.log"
-printf 'MemoryAvailableKB=%s\n' "$(vm_stat | awk -F'[:.]' '/page size of/ {size=$0} /Pages free|Pages speculative|Pages purgeable/ {gsub(/[^0-9]/, "", $2); pages+=$2} END {match(size, /[0-9]+/); print pages * substr(size, RSTART, RLENGTH) / 1024}')"
+printf 'MemoryAvailableKB=%s\n' "$(( $(sysctl -n hw.memsize) / 100 * $(sysctl -n kern.memorystatus_level) / 1024 ))"
 printf 'MemoryTotalKB=%s\n' "$(( $(sysctl -n hw.memsize) / 1024 ))"
 printf 'SwapUsage=%s\n' "$(sysctl -n vm.swapusage | tr -s ' ')"
 printf 'RunnerAccount=%s\n' "$(id -un "$runner_user" 2>/dev/null || printf 'absent')"
