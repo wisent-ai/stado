@@ -251,6 +251,7 @@ products:
     - com.wisent.compute.service.com.wisent.always-on.weles
     - com.wisent.always-on.weles-api
     - com.wisent.compute.service.weles-api
+    - com.wisent.weles-api
     - com.wisent.weles-auto-deploy
     - com.wisent.compute.service.weles-release-cutover
   approved_by: lukaszbartoszcze

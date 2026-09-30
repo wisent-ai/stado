@@ -54,7 +54,7 @@ pub(super) async fn status(
         ("mobile-runtime", _) => mobile_runtime(target, false, json_output).await,
         ("gui-automation", _) => gui_automation_status(target, json_output).await,
         ("weles-recordings", _) => recordings_status(&resolved, json_output),
-        ("weles-activity" | "weles-browser-task" | "weles-image-inspect" | "weles-api-runtime", _) => {
+        ("weles-activity" | "weles-browser-task" | "weles-image-inspect", _) => {
             weles_activity(target, json_output).await
         }
         _ => Err(CmdError::click(format!(

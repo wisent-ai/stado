@@ -12,7 +12,11 @@ use serde_json::Value;
 pub fn service_api_actions() -> Vec<String> {
     super::super::declared_actions("service")
 }
-pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api", "image-video-router"];
+/// Weles is one process, `com.wisent.weles` (catalog, 632f468c). A host config
+/// still naming a label the catalog retired, such as `com.wisent.weles-api`,
+/// is read as that product's one unit rather than refused, so no host's
+/// managed-service routes fail closed on the rename.
+pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles", "image-video-router"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceDeployer {
@@ -119,14 +123,27 @@ pub(crate) fn parse_service_deployers(
             Some(Value::Array(values)) if !values.is_empty() => {
                 let mut parsed = Vec::with_capacity(values.len());
                 for value in values {
-                    let Some(service) = value.as_str() else {
+                    let Some(declared) = value.as_str() else {
                         problems.push(format!(
                             "service_api.deployers.{product}.services entries must be strings"
                         ));
                         entry_valid = false;
                         continue;
                     };
-                    if !canonical(service) && service != "com.wisent.weles-api" {
+                    let current = match crate::deploy::service_catalog::retired_by(declared) {
+                        Ok(replacement) => replacement.and_then(|entry| entry.unit),
+                        Err(error) => {
+                            problems.push(format!(
+                                "service_api.deployers.{product}.services {declared:?} could not \
+                                 be checked against the catalog's retired units: {error}"
+                            ));
+                            entry_valid = false;
+                            None
+                        }
+                    };
+                    let service = current.as_deref().unwrap_or(declared);
+                    let unit_label = service.strip_prefix("com.wisent.").is_some_and(canonical);
+                    if !canonical(service) && !unit_label {
                         problems.push(format!(
                             "service_api.deployers.{product}.services contains non-canonical {service:?}"
                         ));

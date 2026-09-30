@@ -11,9 +11,9 @@ use super::plan::{
     string_array,
 };
 use super::runners::{
-    list_sessions, mobile_runtime, refresh_weles_api_runtime, run_gui_automation,
-    run_weles_browser_task, run_weles_capture, run_weles_diagnostics, run_weles_image_inspect,
-    set_weles_recordings_dir, weles_activity, weles_browser_runtime,
+    list_sessions, mobile_runtime, run_gui_automation, run_weles_browser_task, run_weles_capture,
+    run_weles_diagnostics, run_weles_image_inspect, set_weles_recordings_dir, weles_activity,
+    weles_browser_runtime,
 };
 
 mod interactive;
@@ -239,10 +239,6 @@ async fn run_kind(
         "weles-activity" => weles_activity(target, json_output).await,
         "weles-recordings" => {
             set_weles_recordings_dir(target, required_text(document, "path")?, json_output).await
-        }
-        "weles-api-runtime" => {
-            refresh_weles_api_runtime(target, required_text(document, "revision")?, json_output)
-                .await
         }
         "weles-browser-runtime" => {
             let document = required_plan(document, kind)?;

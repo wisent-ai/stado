@@ -50,7 +50,8 @@ pub struct WorkloadKind {
     /// wrong for work that puts one back: on 2026-09-20 charless-mac-mini
     /// sat below its disk watermark, refused every placement with
     /// `disk_pressure_active`, and that refusal covered `weles-api-runtime`
-    /// — the deployment that moves that host's worker to a named revision —
+    /// — the deployment that then moved that host's worker to a named revision,
+    /// removed once Weles became the one catalog process `com.wisent.weles` —
     /// so the fleet's only browser host could not be repaired because it
     /// needed repairing. A maintenance kind runs on the host it names and
     /// takes no hold. Every declaration check still applies, so a host that

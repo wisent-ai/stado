@@ -13,6 +13,5 @@ pub(crate) use capture::{
     weles_run_diagnostics,
 };
 pub(crate) use runtime::{
-    mobile_runtime, recordings_status, refresh_weles_api_runtime, set_weles_recordings_dir,
-    weles_browser_runtime,
+    mobile_runtime, recordings_status, set_weles_recordings_dir, weles_browser_runtime,
 };

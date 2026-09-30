@@ -70,16 +70,6 @@
       "report": ["target", "recordings_directory", "registry_generation", "updated_launch_agents"]
     },
     {
-      "kind": "weles-api-runtime",
-      "product": "weles-worker",
-      "interactive": false,
-      "registry_allowance": null,
-      "plan_schema": "wisent.weles-api-runtime-plan.v1",
-      "reservation": {"cpu_cores": 1, "ram_gb": 1, "vram_gb": 0},
-      "maintenance": true,
-      "report": ["target", "revision", "service_restart"]
-    },
-    {
       "kind": "weles-browser-runtime",
       "product": "weles-worker",
       "interactive": false,
