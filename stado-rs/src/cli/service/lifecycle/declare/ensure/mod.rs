@@ -10,6 +10,7 @@ use super::*;
 mod audit;
 mod predecessors;
 pub(crate) mod program;
+mod route;
 pub(crate) mod run;
 
 use audit::record_ensure_audit;

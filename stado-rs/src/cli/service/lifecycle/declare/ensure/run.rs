@@ -245,6 +245,11 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         );
         return Err(CmdError::click(detail));
     }
+    // The write below goes through this process's registry route; when the
+    // unit just acted on carries that route, it is made after the restarted
+    // resolver publishes `serving`.
+    route::await_route(&target, &plan, &outcome, options.name)
+        .map_err(|cause| CmdError::click(format!("{host}: {cause}")))?;
 
     let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
     record.program = unit.program;

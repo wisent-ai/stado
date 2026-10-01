@@ -20,6 +20,7 @@ pub use crate::cli::resolver::authority::tunnel::TUNNEL_OPEN_BUDGET;
 pub use crate::cli::resolver::directory::document::canonical_document;
 pub use crate::cli::resolver::directory::document::canonical_document_or_last_good;
 pub use crate::cli::resolver::serve::serve;
+pub(crate) use report::serving::await_serving;
 
 pub(crate) use crate::cli::resolver::directory::document::last_good_document;
 pub(crate) use crate::cli::resolver::directory::read_local_snapshot;

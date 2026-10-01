@@ -5,3 +5,4 @@
 pub(in crate::cli::resolver) mod probe;
 pub(in crate::cli::resolver) mod published;
 pub(in crate::cli::resolver) mod readiness;
+pub(crate) mod serving;

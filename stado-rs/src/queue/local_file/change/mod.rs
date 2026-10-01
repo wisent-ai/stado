@@ -40,6 +40,15 @@ impl LocalBackend {
     }
 }
 
+/// The kernel's notification for writes under `directories`, for a reader
+/// that waits on a file another Stado process publishes — the resolver's
+/// state, say — rather than on a store prefix. Armed before the caller's
+/// read, as the store's own watches are, so a write that lands between the
+/// read and the wait still wakes it.
+pub(crate) fn watch(directories: &[PathBuf]) -> Result<Box<dyn ChangeWatch>, StorageError> {
+    platform::arm(directories).map(|watch| Box::new(watch) as Box<dyn ChangeWatch>)
+}
+
 fn kernel_error(action: &str, directory: &std::path::Path, error: nix::Error) -> StorageError {
     StorageError::Other(format!(
         "{action} the change watch on {}: {error}",

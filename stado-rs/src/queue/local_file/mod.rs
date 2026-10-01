@@ -16,6 +16,7 @@ use crate::queue::StorageError;
 mod atomic;
 mod blob_backend;
 mod change;
+pub(crate) use change::watch as watch_directories;
 mod paths;
 mod write_fence;
 
