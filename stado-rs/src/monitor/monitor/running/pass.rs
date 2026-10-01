@@ -54,10 +54,7 @@ pub async fn check_running_jobs(
             provider.delete_instance(&instance_ref).await?;
             store.move_job(&job, "running", "failed").await?;
             store.cleanup_status(&job_id).await?;
-            let msg = format!(
-                "Job {job_id} FAILED: {}",
-                job.command.chars().take(100).collect::<String>()
-            );
+            let msg = format!("Job {job_id} FAILED: {}", job.command);
             // Best-effort: alert failures never block the monitor tick.
             send_alert(config::alerts_topic(), &msg, "").await;
             log(&format!("{job_id}: FAILED"));
