@@ -57,7 +57,6 @@ pub(crate) async fn remote_config_output(
         RemoteConfigAction::Set { key, value } => format!(
             "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
-             \"$binary\" config migrate\n\
              \"$binary\" config set \"$key\" \"$value\"\n\
              \"$binary\" config show",
             STANDARD.encode(key.as_bytes()),

@@ -10,10 +10,13 @@ pub(in crate::providers::gcp::inventory) fn instances_detail(
     value: &Value,
 ) -> (&'static str, Option<usize>, Value) {
     let mut instances = Vec::new();
-    let mut by_status = BTreeMap::<String, usize>::new();
+    let mut by_status = BTreeMap::<String, Vec<String>>::new();
     for item in aggregated(value, "instances") {
         let status = text(item.get("status"));
-        *by_status.entry(status.clone()).or_default() += true as usize;
+        by_status
+            .entry(status.clone())
+            .or_default()
+            .push(text(item.get("name")));
         let accelerators: Vec<Value> = item
             .get("guestAccelerators")
             .and_then(Value::as_array)

@@ -25,12 +25,6 @@ pub(super) async fn load_run_value(
 /// Where `run_state_path` puts every run object, and its leaf.
 pub(super) const RUN_STATE_PREFIX: &str = "runs/release-pipeline/";
 pub(super) const RUN_STATE_LEAF: &str = "/run.json";
-/// How many run objects a listing reads before it stops looking: a product
-/// or version filter is answered from the body of each run, one request per
-/// run, and the whole history is not a bounded question. A run named by id
-/// is picked from the listing before any read, so this never cuts it off.
-pub(crate) const VERSION_SCAN_WINDOW: usize = 120;
-
 /// One run recorded for a `(product, version)`: its id, its state word and
 /// the commit it was cut from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,17 +35,14 @@ pub(crate) struct RecordedRun {
 }
 
 /// Every run recorded for each `(product, version)`, newest first, read in one
-/// walk of the newest `limit` run objects.
+/// walk of every run object.
 ///
 /// `matching_runs` answers one product at a time and joins every platform to
 /// its queue job, which is what `release status` needs and what a whole
 /// workspace cannot afford: `release newest` asks the same question of forty
-/// checkouts at once, and asking it product by product cost one listing plus
-/// up to a hundred and twenty body reads each — twenty-four minutes for a
-/// plan that submits nothing. This reads each run body once and answers
-/// for every product from that one pass.
+/// checkouts at once. This reads each run body once and answers for every
+/// product from that one pass.
 pub(crate) async fn recorded_runs(
-    limit: usize,
 ) -> Result<std::collections::BTreeMap<(String, String), Vec<RecordedRun>>, CmdError> {
     let store = JobStorage::new()
         .await
@@ -64,7 +55,6 @@ pub(crate) async fn recorded_runs(
         .filter(|blob| blob.name.ends_with(RUN_STATE_LEAF))
         .collect::<Vec<_>>();
     blobs.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
-    blobs.truncate(limit);
     let bodies = futures::stream::iter(blobs.into_iter().map(|blob| {
         let store = &store;
         async move { load_run_value(store, &blob.name).await }

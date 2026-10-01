@@ -5,15 +5,12 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::Url;
 use uuid::Uuid;
 
-use super::super::{
-    callback_chunk_size, callback_limit, header_end_len, one, CmdError, ARM_SCOPE,
-    AZURE_CLI_CLIENT_ID,
-};
+use super::super::{CmdError, ARM_SCOPE, AZURE_CLI_CLIENT_ID};
 
 pub(super) fn pkce_pair() -> (String, String) {
     let verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -74,30 +71,15 @@ pub(super) async fn receive_authorization_code(
     listener: TcpListener,
     expected_state: &str,
 ) -> Result<String, CmdError> {
-    let (mut stream, _) = listener.accept().await?;
-    let mut request = Vec::new();
-    let mut chunk = vec![u8::default(); callback_chunk_size()];
-    while request.len() < callback_limit() {
-        let count = stream.read(&mut chunk).await?;
-        if count == usize::default() {
-            break;
-        }
-        request.extend_from_slice(&chunk[..count]);
-        if request
-            .windows(header_end_len())
-            .any(|window| window == b"\r\n\r\n")
-        {
-            break;
-        }
-    }
-    let first_line = String::from_utf8_lossy(&request)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let (stream, _) = listener.accept().await?;
+    // The redirect target is the request line's second word; the headers
+    // after it say nothing this command reads.
+    let mut reader = tokio::io::BufReader::new(stream);
+    let mut first_line = String::new();
+    reader.read_line(&mut first_line).await?;
     let target = first_line
-        .split_whitespace()
-        .nth(one())
+        .split_once(' ')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
         .ok_or_else(|| CmdError::click("invalid Azure OAuth callback"))?;
     let callback = Url::parse(&format!("http://localhost{target}"))
         .map_err(|err| CmdError::click(format!("invalid Azure OAuth callback: {err}")))?;
@@ -122,12 +104,12 @@ pub(super) async fn receive_authorization_code(
     };
     let (status, message) = if result.is_ok() {
         (
-            "200 OK",
+            reqwest::StatusCode::OK,
             "Azure login completed. You can close this window.",
         )
     } else {
         (
-            "400 Bad Request",
+            reqwest::StatusCode::BAD_REQUEST,
             "Azure login failed. Return to the terminal for details.",
         )
     };
@@ -135,7 +117,7 @@ pub(super) async fn receive_authorization_code(
         "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{message}",
         message.len()
     );
-    stream.write_all(response.as_bytes()).await?;
+    reader.get_mut().write_all(response.as_bytes()).await?;
     result
 }
 

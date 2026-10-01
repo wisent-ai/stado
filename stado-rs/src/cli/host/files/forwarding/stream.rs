@@ -82,7 +82,9 @@ pub(super) async fn stream_file(
         let mut options = crate::deploy::host_channel::ssh_options(ssh_target);
         options.pop();
         let mut argv = vec!["scp".to_string(), "-q".to_string()];
-        argv.extend(options.into_iter().skip(usize::from(true)));
+        if let Some((_program, flags)) = options.split_first() {
+            argv.extend(flags.iter().cloned());
+        }
         argv.push(source.to_string());
         argv.push(format!("{ssh_target}:{staged}"));
         let key = crate::deploy::host_access::ssh_key::materialize(resolved.channel_key())

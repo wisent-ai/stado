@@ -74,8 +74,7 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
         .filter(|path| path.is_file())
         .filter_map(|path| vault_identity(path).map(|(owner, items)| (path.clone(), owner, items)))
         .collect();
-    if present.len() > usize::from(true) {
-        let first_owner = &present[usize::default()].1;
+    if let [(_, first_owner, _), _, ..] = present.as_slice() {
         if present.iter().all(|(_, owner, _)| owner == first_owner) {
             let described = present
                 .iter()

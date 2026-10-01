@@ -61,8 +61,7 @@ pub(super) fn checked_owner_file(path: &Path) -> Result<(), SkarbiecError> {
     if metadata.uid() != current_uid()? {
         return Err(insecure("must be owned by the current user"));
     }
-    let non_owner_mask = u32::from(u8::MAX >> (u16::BITS / u8::BITS));
-    if metadata.permissions().mode() & non_owner_mask != u32::MIN {
+    if crate::primitives::file_mode::open_to_others(metadata.permissions().mode()) {
         return Err(insecure("must not be accessible by group or other users"));
     }
     Ok(())
@@ -182,8 +181,7 @@ pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> 
             .and_then(|name| name.to_str())
             .unwrap_or("store")
     ));
-    let owner_mode = u32::from_str_radix("600", u8::BITS)
-        .map_err(|source| SkarbiecError::Deployment(source.to_string()))?;
+    let owner_mode = crate::primitives::file_mode::owner_read_write();
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

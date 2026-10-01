@@ -83,31 +83,23 @@ pub fn attribute(target_name: &str, mut answer: Value) -> Value {
 
 /// Totals an operator reads before the detail.
 pub fn summarize(hosts: &[Value]) -> Value {
-    let mut vaults = usize::MIN;
-    let mut items = u64::MIN;
-    let mut unreachable = usize::MIN;
-    let one = usize::from(u8::from(true));
-    for host in hosts {
-        if host.get("error").is_some() {
-            unreachable = unreachable.saturating_add(one);
-        }
-        let Some(list) = host.get("vaults").and_then(Value::as_array) else {
-            continue;
-        };
-        vaults = vaults.saturating_add(list.len());
-        for vault in list {
-            items = items.saturating_add(
-                vault
-                    .get("items")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
-            );
-        }
-    }
+    let unreachable: Vec<&Value> = hosts
+        .iter()
+        .filter(|host| host.get("error").is_some())
+        .collect();
+    let vaults: Vec<&Value> = hosts
+        .iter()
+        .filter_map(|host| host.get("vaults").and_then(Value::as_array))
+        .flatten()
+        .collect();
+    let items: u64 = vaults
+        .iter()
+        .filter_map(|vault| vault.get("items").and_then(Value::as_u64))
+        .sum();
     json!({
         "hosts": hosts.len(),
-        "unreachable": unreachable,
-        "vaults": vaults,
+        "unreachable": unreachable.len(),
+        "vaults": vaults.len(),
         "items": items,
     })
 }

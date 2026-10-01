@@ -21,7 +21,6 @@ pub fn validate(data: &Value) -> Vec<String> {
     let mut problems = crate::capabilities::validate_catalog();
     let empty = Map::new();
     let root = data.as_object().unwrap_or(&empty);
-    document::schema_version(root, &mut problems);
     helpers::unresolved_placeholders(data, "", &mut problems);
     helpers::unread_storage_keys(root, &mut problems);
     document::credentials_and_alerts(root, &mut problems);

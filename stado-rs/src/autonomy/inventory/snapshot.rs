@@ -13,7 +13,6 @@ use chrono::Utc;
 
 use crate::autonomy::model::{
     InventorySnapshot, InventorySource, Ownership, ResourceGraph, ResourceRecord, SourceState,
-    SCHEMA_VERSION,
 };
 use crate::capabilities::ProviderId;
 use crate::cli::resources::model::canonical_json_bytes;
@@ -78,7 +77,6 @@ pub async fn collect(store: &JobStorage) -> Result<InventorySnapshot, StorageErr
         .iter()
         .all(|source| source.state == SourceState::Complete);
     let mut snapshot = InventorySnapshot {
-        schema_version: SCHEMA_VERSION,
         snapshot_id: String::new(),
         created_at: observed_at.to_rfc3339(),
         complete,

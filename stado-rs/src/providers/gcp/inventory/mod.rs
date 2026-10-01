@@ -74,46 +74,22 @@ pub struct GcpInventoryReport {
 }
 
 pub async fn inspect(options: InventoryOptions) -> GcpInventoryReport {
-    let provider = match tokio::time::timeout(
-        crate::doctor::PROBE_TIMEOUT,
-        crate::skarbiec::gcp_provider(),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(|error| error.to_string()),
-        Err(_) => Err(format!(
-            "GCP credential resolution exceeded {:?}",
-            crate::doctor::PROBE_TIMEOUT
-        )),
-    };
+    let provider = crate::skarbiec::gcp_provider()
+        .await
+        .map_err(|error| error.to_string());
     let auth = match provider {
-        Ok(provider) => {
-            match tokio::time::timeout(
-                crate::doctor::PROBE_TIMEOUT,
-                provider.token(&[CLOUD_PLATFORM_SCOPE]),
-            )
-            .await
-            {
-                Ok(Ok(token)) => reqwest::Client::builder()
-                    .timeout(crate::doctor::PROBE_TIMEOUT)
-                    .build()
-                    .map(|http| Client {
-                        http,
-                        token: token.as_str().to_string(),
-                    })
-                    .map_err(|error| error.to_string()),
-                Ok(Err(error)) => Err(error.to_string()),
-                Err(_) => Err(format!(
-                    "GCP token acquisition exceeded {:?}",
-                    crate::doctor::PROBE_TIMEOUT
-                )),
-            }
-        }
+        Ok(provider) => match provider.token(&[CLOUD_PLATFORM_SCOPE]).await {
+            Ok(token) => Ok(Client {
+                http: reqwest::Client::new(),
+                token: token.as_str().to_string(),
+            }),
+            Err(error) => Err(error.to_string()),
+        },
         Err(error) => Err(error),
     };
 
     let mut specs = probe_specs(&options);
-    let mut probes = Vec::with_capacity(specs.len().saturating_add(true as usize));
+    let mut probes = Vec::with_capacity(specs.len());
     match auth {
         Ok(client) => {
             probes.push(ProbeReport {

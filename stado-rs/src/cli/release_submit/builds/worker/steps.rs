@@ -169,25 +169,14 @@ pub(super) fn require_free_space(
     Ok(())
 }
 
-/// Free space of the volume holding `path`, in GiB, read through the host's
-/// own `df -Pk` rather than a crate that guesses at mount tables.
+/// Free space of the volume holding `path`, in GiB, from the file system's
+/// own `statvfs` answer: blocks available to an unprivileged writer times the
+/// block size.
 fn free_gibibytes(path: &Path) -> Option<f64> {
-    let output = std::process::Command::new("/bin/df")
-        .args(["-Pk", &path.display().to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let blocks: f64 = text
-        .lines()
-        .nth(usize::from(true))?
-        .split_whitespace()
-        .nth(3)?
-        .parse()
-        .ok()?;
-    Some(blocks / (1024.0 * 1024.0))
+    let stats = nix::sys::statvfs::statvfs(path).ok()?;
+    let bytes =
+        u64::from(stats.blocks_available()).checked_mul(u64::from(stats.fragment_size()))?;
+    Some(bytes as f64 / crate::providers::local::disk_cleanup::GIB as f64)
 }
 
 /// Install the toolchain components this recipe's gates run, when the recipe

@@ -1,26 +1,11 @@
-//! The document's own contract and the two storage backends it names: the
-//! schema version this binary supports, the credential store and alert
-//! channels, and the primary queue store with the replica the catalog may
-//! require alongside it.
+//! The document's two storage backends and its credential and alert
+//! selectors: the credential store and alert channels, and the primary queue
+//! store with the replica the catalog may require alongside it.
 
 use serde_json::{Map, Value};
 
 use super::helpers::{catalog_variant, validate_variant_config};
 use crate::config_file::readers::{binding_in, field_in};
-use crate::config_file::SCHEMA_VERSION;
-
-/// The one version of the document contract this binary can read.
-pub(super) fn schema_version(root: &Map<String, Value>, problems: &mut Vec<String>) {
-    match root.get("schema_version").and_then(Value::as_u64) {
-        Some(version) if version == u64::from(SCHEMA_VERSION) => {}
-        Some(version) => problems.push(format!(
-            "unsupported config schema_version {version}; expected {SCHEMA_VERSION}"
-        )),
-        None => problems.push(format!(
-            "config schema_version is required; expected {SCHEMA_VERSION}"
-        )),
-    }
-}
 
 /// The credential store selector and alert channels, judged against the
 /// capability catalog rather than a literal list.

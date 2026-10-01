@@ -1,4 +1,4 @@
-//! The storage probes: a bounded, per-prefix listing of one endpoint, plus the
+//! The storage probes: a per-prefix listing of one endpoint, plus the
 //! provider-neutral projection `resources show` renders from the same read.
 
 use std::collections::BTreeMap;
@@ -10,42 +10,16 @@ use crate::cli::blast_radius::{PrefixReport, StorageInspection, StorageReport};
 use crate::queue::copy::{Endpoint, CANONICAL_PREFIXES};
 use crate::queue::BlobBackend;
 
-pub(in crate::cli::blast_radius) async fn inspect_storage_bounded(
-    role: &str,
-    endpoint: Option<&Endpoint>,
-) -> StorageInspection {
-    match tokio::time::timeout(
-        crate::doctor::PROBE_TIMEOUT,
-        inspect_storage(role, endpoint),
-    )
-    .await
-    {
-        Ok(inspection) => inspection,
-        Err(_) => StorageInspection {
-            report: StorageReport {
-                role: role.to_string(),
-                locator: endpoint.map(Endpoint::describe),
-                state: "unreachable".to_string(),
-                object_count: None,
-                newest_object_at: None,
-                error: Some(format!(
-                    "storage inspection exceeded {:?}",
-                    crate::doctor::PROBE_TIMEOUT
-                )),
-                prefixes: Vec::new(),
-            },
-            names: BTreeMap::new(),
-        },
-    }
-}
-
 /// Provider-neutral storage projection used by `resources show`.
 pub(crate) async fn storage_resource_report(role: &str, endpoint: Option<&Endpoint>) -> Value {
-    serde_json::to_value(inspect_storage_bounded(role, endpoint).await.report)
+    serde_json::to_value(inspect_storage(role, endpoint).await.report)
         .expect("storage report serialization is infallible")
 }
 
-async fn inspect_storage(role: &str, endpoint: Option<&Endpoint>) -> StorageInspection {
+pub(in crate::cli::blast_radius) async fn inspect_storage(
+    role: &str,
+    endpoint: Option<&Endpoint>,
+) -> StorageInspection {
     let Some(endpoint) = endpoint else {
         return StorageInspection {
             report: StorageReport {

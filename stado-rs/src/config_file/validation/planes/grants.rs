@@ -104,10 +104,7 @@ pub(in crate::config_file::validation) fn messaging(
                     })
                 })
                 && items.iter().enumerate().all(|(index, item)| {
-                    items
-                        .iter()
-                        .skip(index.saturating_add(usize::from(true)))
-                        .all(|later| later != item)
+                    items.iter().position(|earlier| earlier == item) == Some(index)
                 })
         }) {
             problems.push(format!(

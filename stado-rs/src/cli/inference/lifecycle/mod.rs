@@ -44,13 +44,15 @@ pub(super) fn replace(registry: &mut schema::Registry, deployment: schema::Deplo
         .sort_by(|left, right| left.name.cmp(&right.name));
 }
 
+/// Probe the deployment until it reports ready or its container reports a
+/// startup failure. Each probe is a round trip to the host, which is what
+/// paces the loop.
 pub(super) async fn wait_ready(
     target: &crate::targets::ComputeTarget,
     deployment: &schema::Deployment,
     bearer: &str,
 ) -> Result<Value, CmdError> {
     let runner = production_runner();
-    let interval = std::time::Duration::from_secs(u64::from(u8::BITS));
     loop {
         let report = inference::probe(target, deployment, bearer, &runner)
             .await
@@ -71,7 +73,6 @@ pub(super) async fn wait_ready(
                 deployment.name
             )));
         }
-        tokio::time::sleep(interval).await;
     }
 }
 pub(super) async fn restore_after_failed_apply(

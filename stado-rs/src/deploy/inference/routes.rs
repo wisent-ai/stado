@@ -14,11 +14,7 @@ fn report(target: &ComputeTarget, output: &crate::deploy::CommandOutput, ok: &st
 
 pub fn transaction(registry: &Registry) -> Result<String, DeployError> {
     let body = serde_json::to_vec(registry).map_err(|error| DeployError(error.to_string()))?;
-    let digest = format!("{:x}", Sha256::digest(body));
-    let one = usize::from(u8::from(true));
-    let two = one.saturating_add(one);
-    let width = Sha256::output_size() / two;
-    Ok(digest.chars().take(width).collect())
+    Ok(format!("{:x}", Sha256::digest(body)))
 }
 
 fn valid_transaction(value: &str) -> bool {

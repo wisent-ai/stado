@@ -148,7 +148,7 @@ pub async fn exec_host(
             let script = home_rooted_script(approved.argv);
             host_channel::run_script_with_connection(&target, &script, runner).await?
         }
-        (Some((_, arguments)), None) if candidates.len() > usize::from(true) => {
+        (Some((_, arguments)), None) if matches!(candidates, [_, _, ..]) => {
             let script = candidate_script(candidates, arguments);
             host_channel::run_script_with_connection(&target, &script, runner).await?
         }
@@ -163,7 +163,7 @@ pub async fn exec_host(
     // asking it for one would fail a run that worked.
     let resolved_executable = if account.is_some() {
         None
-    } else if candidates.len() > usize::from(true) {
+    } else if matches!(candidates, [_, _, ..]) {
         match extract_resolved_executable(&mut output.stderr, candidates)? {
             Some(path) => Some(path),
             // A failed run may never have reached any candidate.
@@ -205,7 +205,7 @@ pub async fn exec_host(
             .iter()
             .map(|word| (*word).to_string())
             .collect(),
-        program_candidates: (candidates.len() > usize::from(true))
+        program_candidates: matches!(candidates, [_, _, ..])
             .then(|| candidates.iter().map(|path| (*path).to_string()).collect()),
         resolved_executable,
         stdout: output.stdout,

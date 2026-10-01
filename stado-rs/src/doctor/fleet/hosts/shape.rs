@@ -1,7 +1,5 @@
 //! The standing declared-against-running sweep, as one doctor row.
 
-use std::time::Duration;
-
 use crate::doctor::{Check, Findings, Status};
 
 // ---------------------------------------------------------------------------
@@ -13,11 +11,6 @@ pub(in crate::doctor) const SHAPE_TITLE: &str = "Fleet shape: declared against r
 pub(in crate::doctor) const SHAPE_REMEDY: &str =
     "each finding names the command that resolves it; the same sweep runs on every coordinator \
      tick, so a finding here is not waiting on anyone typing this";
-
-/// Per-host work times the fleet, so this row cannot share the flat probe
-/// budget: it reads listeners, loaded units and disk from every managed host.
-pub(in crate::doctor) const FLEET_SHAPE_DEADLINE: Duration = Duration::from_secs(600);
-
 /// The standing checks in [`crate::fleet_shape`], as one doctor row.
 ///
 /// A sweep that measured nothing is a FAIL and not a PASS. That distinction is

@@ -34,42 +34,32 @@ pub(in crate::cli::resources::inventory) async fn inspect_billing(
             }
         }
     };
-    match tokio::time::timeout(crate::doctor::PROBE_TIMEOUT, billing::live_snapshot(&store)).await {
-        Ok(snapshot) => {
-            let failures: Vec<String> = billed
-                .iter()
-                .filter_map(|provider| {
-                    let status = snapshot
-                        .get(*provider)
-                        .and_then(|section| section.get("status"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown");
-                    (status != "ok").then(|| format!("{provider}: {status}"))
-                })
-                .collect();
-            SourceReport {
-                name: "billing",
-                state: if failures.is_empty() {
-                    "ok".to_string()
-                } else {
-                    "degraded".to_string()
-                },
-                data: snapshot,
-                error: if failures.is_empty() {
-                    None
-                } else {
-                    Some(failures.join("; "))
-                },
-            }
-        }
-        Err(_) => SourceReport {
+    {
+        let snapshot = billing::live_snapshot(&store).await;
+        let failures: Vec<String> = billed
+            .iter()
+            .filter_map(|provider| {
+                let status = snapshot
+                    .get(*provider)
+                    .and_then(|section| section.get("status"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                (status != "ok").then(|| format!("{provider}: {status}"))
+            })
+            .collect();
+        SourceReport {
             name: "billing",
-            state: "blocked".to_string(),
-            data: Value::Null,
-            error: Some(format!(
-                "billing inventory exceeded {:?}",
-                crate::doctor::PROBE_TIMEOUT
-            )),
-        },
+            state: if failures.is_empty() {
+                "ok".to_string()
+            } else {
+                "degraded".to_string()
+            },
+            data: snapshot,
+            error: if failures.is_empty() {
+                None
+            } else {
+                Some(failures.join("; "))
+            },
+        }
     }
 }

@@ -49,7 +49,7 @@ const BACKOFF_CAP: Duration = Duration::from_secs(60);
 /// [`BACKOFF_BASE`] doubled per consecutive failure, capped at
 /// [`BACKOFF_CAP`].
 pub(crate) fn backoff_delay(attempt: u32) -> Duration {
-    let doublings = attempt.saturating_sub(1).min(u32::BITS - 1);
+    let doublings = attempt.saturating_sub(1);
     Duration::from_secs(
         BACKOFF_BASE
             .as_secs()

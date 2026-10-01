@@ -34,7 +34,7 @@ pub(super) fn prefilter_candidates_with_routing(
         .map(|(accelerator, _)| accelerator.as_str())
         .collect();
     let mut cand: Vec<(i64, i64, String)> = Vec::new();
-    let mut skipped_no_quota = usize::default();
+    let mut skipped_no_quota: Vec<&str> = Vec::new();
     for info in blobs {
         if !info.name.ends_with(".json") {
             continue;
@@ -63,7 +63,7 @@ pub(super) fn prefilter_candidates_with_routing(
             explicit_accel
         };
         if !accel_for_filter.is_empty() && !in_quota.contains(accel_for_filter) {
-            skipped_no_quota += true as usize;
+            skipped_no_quota.push(&info.name);
             continue;
         }
         let prio: i64 = meta
@@ -87,6 +87,6 @@ pub(super) fn prefilter_candidates_with_routing(
     cand.truncate(window_budget);
     (
         cand.into_iter().map(|(_, _, job_id)| job_id).collect(),
-        skipped_no_quota,
+        skipped_no_quota.len(),
     )
 }

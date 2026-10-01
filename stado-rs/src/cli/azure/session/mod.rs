@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
-use super::{one, CmdError, LoginArgs, OperatorToken, ARM_SCOPE};
+use super::{CmdError, LoginArgs, OperatorToken, ARM_SCOPE};
 
 mod credentials;
 mod grant;
@@ -68,7 +68,10 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
 }
 
 pub(in crate::cli::azure) fn jwt_claims(token: &str) -> Value {
-    let Some(payload) = token.split('.').nth(one()) else {
+    let Some(payload) = token
+        .split_once('.')
+        .and_then(|(_, rest)| rest.split('.').next())
+    else {
         return Value::Null;
     };
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD

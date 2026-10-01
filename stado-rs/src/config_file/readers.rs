@@ -23,7 +23,7 @@ use super::discovery::{load_config_file, load_config_file_fresh};
 /// `config.rs` drives from catalog entries rather than from literals.
 ///
 /// What legitimately stays on the string form is everything that is not a
-/// configuration key: `schema_version` (the document's own contract), the
+/// configuration key: the
 /// placeholder walk over arbitrary nodes, the section-presence gates that ask
 /// only whether an operator declared a section at all, and the map sections
 /// whose member names are operator data rather than settings —

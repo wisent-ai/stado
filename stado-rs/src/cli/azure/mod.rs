@@ -38,29 +38,6 @@ const VIRTUAL_MACHINE_CONTRIBUTOR_ROLE: &str = "9980e02c-c2be-4d73-94e8-173b1dc7
 const QUOTA_REQUEST_OPERATOR_ROLE: &str = "0e5f05e5-9ab9-446b-b98d-1e2157c94125";
 const SUPPORT_REQUEST_CONTRIBUTOR_ROLE: &str = "cfd33db0-3dd1-45e3-aa9d-cdbdf3b6f24e";
 
-fn parsed<T: std::str::FromStr>(text: &str) -> T
-where
-    T::Err: std::fmt::Debug,
-{
-    text.parse().expect("valid built-in number")
-}
-
-fn callback_limit() -> usize {
-    parsed("16384")
-}
-
-fn callback_chunk_size() -> usize {
-    parsed("2048")
-}
-
-fn header_end_len() -> usize {
-    parsed("4")
-}
-
-fn one() -> usize {
-    usize::from(true)
-}
-
 #[derive(Subcommand)]
 pub enum AzureCommands {
     /// Sign in through Microsoft Account federation and encrypt the refresh token in Skarbiec.

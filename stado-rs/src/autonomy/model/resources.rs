@@ -1,6 +1,6 @@
 //! The inventory family: what a resource is, who owns it, and how it links.
 //!
-//! [`SCHEMA_VERSION`] stamps every record in this module tree. [`Ownership`]
+//! [`Ownership`]
 //! and [`SourceState`] are the vocabulary the read uses, [`ResourceRecord`] is
 //! one observed resource with its canonical identity, and
 //! [`canonical_resource_id`] mints that identity. [`InventorySource`] is one
@@ -14,8 +14,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::capabilities::ProviderId;
-
-pub const SCHEMA_VERSION: u16 = true as u16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,7 +40,6 @@ pub enum SourceState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceRecord {
-    pub schema_version: u16,
     pub resource_id: String,
     pub provider: ProviderId,
     pub account: String,
@@ -86,7 +83,6 @@ impl ResourceRecord {
         let resource_type = resource_type.into();
         let native_reference = native_reference.into();
         Self {
-            schema_version: SCHEMA_VERSION,
             resource_id: canonical_resource_id(
                 provider,
                 &account,
@@ -183,7 +179,6 @@ pub struct InventorySource {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InventorySnapshot {
-    pub schema_version: u16,
     pub snapshot_id: String,
     pub created_at: String,
     pub complete: bool,

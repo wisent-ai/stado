@@ -69,11 +69,12 @@ pub(crate) async fn get(
         ))
     })?;
     if let Some(object) = value.as_object() {
-        if object.len() == usize::from(true) {
-            if let Some(raw) = object.get("value").and_then(Value::as_str) {
-                println!("{raw}");
-                return Ok(());
-            }
+        if let (Some(raw), [_]) = (
+            object.get("value").and_then(Value::as_str),
+            object.keys().collect::<Vec<_>>().as_slice(),
+        ) {
+            println!("{raw}");
+            return Ok(());
         }
     }
     println!("{}", serde_json::to_string_pretty(&value)?);

@@ -8,8 +8,6 @@ pub(in crate::doctor) const PLACEMENT_TITLE: &str = "Service placement";
 pub(in crate::doctor) const PLACEMENT_REMEDY: &str =
     "`stado service stop NAME --host HOST` ends an instance nothing placed here";
 
-/// Run a probe under [`PROBE_TIMEOUT`]. An elapsed probe becomes a FAIL
-/// row rather than a hung command, so the remaining probes still report.
 /// Nothing serving here that is placed somewhere else.
 ///
 /// A gateway is placed on exactly one host. A second copy listening on the same

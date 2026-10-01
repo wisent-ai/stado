@@ -51,7 +51,8 @@ fn parse_identity(identity: &str) -> Result<(u32, u64), DeployError> {
     let start_ticks = start_ticks.parse::<u64>().map_err(|_| {
         DeployError("invalid process identity; START_TICKS must be an unsigned integer".to_string())
     })?;
-    if pid == u32::from(false) || start_ticks == u64::from(false) {
+    if std::num::NonZeroU32::new(pid).is_none() || std::num::NonZeroU64::new(start_ticks).is_none()
+    {
         return Err(DeployError(
             "invalid process identity; PID and START_TICKS must be non-zero".to_string(),
         ));

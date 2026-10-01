@@ -180,11 +180,10 @@ async fn runs_only(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
             })
             .collect();
         return Err(CmdError::click(format!(
-            "no release run matches run={} version={} product={} among the newest {} runs; the newest are:\n  {}",
+            "no release run matches run={} version={} product={}; the newest are:\n  {}",
             args.run.as_deref().unwrap_or("*"),
             args.version.as_deref().unwrap_or("*"),
             args.product.as_deref().unwrap_or("*"),
-            crate::cli::release_submit::VERSION_SCAN_WINDOW,
             known.join("\n  ")
         ))
         .stating(crate::primitives::failure::FailureCode::Refused));

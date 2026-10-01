@@ -193,8 +193,7 @@ fn reject_insecure_mode(path: &Path) -> Result<(), SkarbiecError> {
         path: path.display().to_string(),
         source,
     })?;
-    let non_owner_mask = u32::from(u8::MAX >> (u16::BITS / u8::BITS));
-    if metadata.permissions().mode() & non_owner_mask != u32::MIN {
+    if crate::primitives::file_mode::open_to_others(metadata.permissions().mode()) {
         return Err(SkarbiecError::InsecureTokenFile(path.display().to_string()));
     }
     Ok(())

@@ -102,12 +102,11 @@ pub(crate) fn mint_acquisition_token(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CmdError::click("Skarbiec grant issue report contained no token"))?;
-    let owner_read_write = (u8::BITS - u16::BITS / u8::BITS) << (u8::BITS - u16::BITS / u8::BITS);
     let write_result = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(owner_read_write)
+            .mode(crate::primitives::file_mode::owner_read_write())
             .open(output_path)?;
         file.write_all(token.as_bytes())?;
         file.sync_all()

@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::super::{one, CmdError, ARM_RESOURCE, IDENTITY_API_VERSION, STORAGE_API_VERSION};
+use super::super::{CmdError, ARM_RESOURCE, IDENTITY_API_VERSION, STORAGE_API_VERSION};
 
 async fn list_resource_collection(
     http: &reqwest::Client,
@@ -48,12 +48,10 @@ fn select_resource<'a>(resources: &'a [Value], preferred_prefix: &str) -> Option
                 .unwrap_or(false)
         })
         .collect();
-    if matching.len() == one() {
-        matching.first().copied()
-    } else if resources.len() == one() {
-        resources.first()
-    } else {
-        None
+    match (matching.as_slice(), resources) {
+        ([only], _) => Some(*only),
+        (_, [only]) => Some(only),
+        _ => None,
     }
 }
 

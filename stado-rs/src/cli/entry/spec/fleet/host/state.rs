@@ -171,9 +171,9 @@ pub(crate) enum HostStateCommands {
         target: String,
         /// Unit label as launchd knows it, e.g. com.wisent.brama.
         unit: String,
-        /// Tail this many lines from each declared log path (default 40).
+        /// Tail this many lines from each declared log path.
         #[arg(long)]
-        lines: Option<u32>,
+        lines: u32,
         #[arg(long)]
         json: bool,
     },

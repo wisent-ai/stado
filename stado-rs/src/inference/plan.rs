@@ -20,9 +20,7 @@ pub fn document_digest(document: &Value) -> Result<String, String> {
 
 fn plan_id(expected: &str, deployment: &Deployment) -> Result<String, String> {
     let body = serde_json::to_vec(&(expected, deployment)).map_err(|error| error.to_string())?;
-    let digest = format!("{:x}", Sha256::digest(body));
-    let width = Sha256::output_size() / (u8::BITS as usize);
-    Ok(digest.chars().take(width).collect())
+    Ok(format!("{:x}", Sha256::digest(body)))
 }
 
 fn root() -> Result<PathBuf, String> {

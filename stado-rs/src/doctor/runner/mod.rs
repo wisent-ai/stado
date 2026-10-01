@@ -1,12 +1,9 @@
-//! The command itself: every selected probe, run concurrently under its own
-//! deadline, assembled into one ordered report.
+//! The command itself: every selected probe, run concurrently, assembled into
+//! one ordered report.
 
 use chrono::{SecondsFormat, Utc};
 
-use self::bounds::{
-    agent_skarbiec_deadline, alerts_deadline, object_auth_deadline, registry_probe_deadline,
-    selected, selected_within, storage_round_trip_deadline,
-};
+use self::bounds::selected;
 use crate::doctor::fleet::credentials::agent::{
     check_agent_skarbiec, AGENT_SKARBIEC_ID, AGENT_SKARBIEC_REMEDY, AGENT_SKARBIEC_TITLE,
 };
@@ -29,14 +26,12 @@ use crate::doctor::fleet::hosts::placement::{
 use crate::doctor::fleet::hosts::registry::{
     check_registry, REGISTRY_ID, REGISTRY_REMEDY, REGISTRY_TITLE,
 };
-use crate::doctor::fleet::hosts::shape::{
-    check_fleet_shape, FLEET_SHAPE_DEADLINE, SHAPE_ID, SHAPE_REMEDY, SHAPE_TITLE,
-};
+use crate::doctor::fleet::hosts::shape::{check_fleet_shape, SHAPE_ID, SHAPE_REMEDY, SHAPE_TITLE};
 use crate::doctor::fleet::releases::channel::{
     check_release_channel, RELEASE_ID, RELEASE_REMEDY, RELEASE_TITLE,
 };
 use crate::doctor::fleet::releases::integrity::{
-    check_release_integrity, INTEGRITY_DEADLINE, INTEGRITY_ID, INTEGRITY_REMEDY, INTEGRITY_TITLE,
+    check_release_integrity, INTEGRITY_ID, INTEGRITY_REMEDY, INTEGRITY_TITLE,
 };
 use crate::doctor::fleet::units::alerts::{check_alerts, ALERTS_ID, ALERTS_REMEDY, ALERTS_TITLE};
 use crate::doctor::fleet::units::queue::{
@@ -108,9 +103,8 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
             check_config()
         }),
-        selected_within(
+        selected(
             scope,
-            storage_round_trip_deadline(),
             STORAGE_ID,
             STORAGE_TITLE,
             STORAGE_REMEDY,
@@ -123,9 +117,8 @@ pub async fn run(scope: RunScope) -> Report {
             BACKUP_REMEDY,
             check_backup(&store_error),
         ),
-        selected_within(
+        selected(
             scope,
-            object_auth_deadline(),
             OBJECT_AUTH_ID,
             OBJECT_AUTH_TITLE,
             OBJECT_AUTH_REMEDY,
@@ -152,9 +145,8 @@ pub async fn run(scope: RunScope) -> Report {
             RELEASE_REMEDY,
             check_release_channel(),
         ),
-        selected_within(
+        selected(
             scope,
-            INTEGRITY_DEADLINE,
             INTEGRITY_ID,
             INTEGRITY_TITLE,
             INTEGRITY_REMEDY,
@@ -163,9 +155,8 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
             check_agent_template().await
         },),
-        selected_within(
+        selected(
             scope,
-            agent_skarbiec_deadline(),
             AGENT_SKARBIEC_ID,
             AGENT_SKARBIEC_TITLE,
             AGENT_SKARBIEC_REMEDY,
@@ -181,9 +172,8 @@ pub async fn run(scope: RunScope) -> Report {
         selected(scope, IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
             check_vm_identity()
         },),
-        selected_within(
+        selected(
             scope,
-            registry_probe_deadline(),
             REGISTRY_ID,
             REGISTRY_TITLE,
             REGISTRY_REMEDY,
@@ -196,9 +186,8 @@ pub async fn run(scope: RunScope) -> Report {
             CONTROL_REMEDY,
             check_queue_control(store, &store_error),
         ),
-        selected_within(
+        selected(
             scope,
-            alerts_deadline(),
             ALERTS_ID,
             ALERTS_TITLE,
             ALERTS_REMEDY,
@@ -218,17 +207,15 @@ pub async fn run(scope: RunScope) -> Report {
             PLACEMENT_REMEDY,
             check_placement(),
         ),
-        selected_within(
+        selected(
             scope,
-            FLEET_SHAPE_DEADLINE,
             SHAPE_ID,
             SHAPE_TITLE,
             SHAPE_REMEDY,
             check_fleet_shape(),
         ),
-        selected_within(
+        selected(
             scope,
-            FLEET_SHAPE_DEADLINE,
             BUILD_OUTPUT_ID,
             BUILD_OUTPUT_TITLE,
             BUILD_OUTPUT_REMEDY,

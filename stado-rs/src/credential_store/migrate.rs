@@ -58,8 +58,7 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
         ))
     })?;
     let temporary = parent.join(format!(".stado-config-{}.tmp", std::process::id()));
-    let owner_mode =
-        u32::from_str_radix("600", u8::BITS).map_err(|source| deployment(source.to_string()))?;
+    let owner_mode = crate::primitives::file_mode::owner_read_write();
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     if let Ok(metadata) = std::fs::metadata(path) {
@@ -114,12 +113,6 @@ fn persist_selector(locator: &str) -> Result<(), SkarbiecError> {
     let root = document
         .as_object_mut()
         .ok_or_else(|| deployment(format!("config {} must be a JSON object", path.display())))?;
-    if !root.contains_key("schema_version") {
-        root.insert(
-            "schema_version".to_string(),
-            Value::from(crate::config_file::SCHEMA_VERSION),
-        );
-    }
     match root.get_mut("credentials") {
         None => {
             root.insert(

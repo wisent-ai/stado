@@ -10,10 +10,8 @@ use crate::cli::resources::model::{
 use crate::cli::CmdError;
 
 pub(super) fn parse_selector(project: &str, selector: &str) -> Result<Action, CmdError> {
-    let mut parts = selector.splitn("gcp".len(), ':');
-    let provider = parts.next().unwrap_or_default();
-    let resource_type = parts.next().unwrap_or_default();
-    let locator = parts.next().unwrap_or_default();
+    let (provider, rest) = selector.split_once(':').unwrap_or((selector, ""));
+    let (resource_type, locator) = rest.split_once(':').unwrap_or((rest, ""));
     if !crate::capabilities::ProviderId::Gcp.matches(provider)
         || resource_type.is_empty()
         || locator.is_empty()

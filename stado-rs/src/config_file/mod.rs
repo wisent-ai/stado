@@ -35,9 +35,6 @@ pub use discovery::{config_path, find_config_file, load_config_file};
 pub use readers::{field_value, get, get_fresh, resolve, resolve_list};
 pub use validation::validate;
 
-/// Root configuration contract written by `stado config init`.
-pub const SCHEMA_VERSION: u16 = true as u16;
-
 /// Environment variable naming an explicit config file path.
 pub const FILE_ENV: &str = "STADO_CONFIG";
 /// Candidate config file locations, searched in order after $STADO_CONFIG.
@@ -65,7 +62,6 @@ pub fn template() -> Value {
             .filter(|provider| *provider != local)
             .collect::<Vec<_>>();
     serde_json::json!({
-        "schema_version": SCHEMA_VERSION,
         "providers": [local],
         "providers_disabled": disabled,
         "credentials": {

@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use crate::queue::BlobBackend;
 
-// `super::copy`, `super::failover` and `super::STORAGE_LAYOUT_VERSION` for
-// the components below, which name them exactly as this module's body did.
-use crate::queue::{copy, failover, STORAGE_LAYOUT_VERSION};
+// `super::copy` and `super::failover` for the components below, which name
+// them exactly as this module's body did.
+use crate::queue::{copy, failover};
 
 mod blobs;
 mod construct;

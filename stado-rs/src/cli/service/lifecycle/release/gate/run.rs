@@ -64,9 +64,8 @@ pub(crate) async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), Cm
         .map_err(click)?;
     let program = shown.detail.trim();
     let directory = program
-        .split("/services/")
-        .nth(usize::from(true))
-        .and_then(|rest| rest.split('/').next())
+        .split_once("/services/")
+        .and_then(|(_, rest)| rest.split('/').next())
         .filter(|segment| !segment.is_empty())
         .ok_or_else(|| {
             CmdError::click(format!(

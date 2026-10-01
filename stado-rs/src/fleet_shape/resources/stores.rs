@@ -2,8 +2,6 @@
 //! the declared replica can hold what the primary writes, and whether a
 //! service that calls itself healthy is actually serving.
 
-use std::time::Duration;
-
 use serde_json::Value;
 
 use super::super::{Finding, Sweep, HEALTH_CHECK, REPLICA_CHECK};
@@ -103,10 +101,7 @@ pub async fn health_disagreement() -> Option<Finding> {
         return None;
     }
     let endpoint = format!("{}/healthz", url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(u8::BITS as u64))
-        .build()
-        .ok()?;
+    let client = reqwest::Client::new();
     let body: Value = client.get(&endpoint).send().await.ok()?.json().await.ok()?;
     let ok = body.get("ok").and_then(Value::as_bool).unwrap_or_default();
     let degraded = body

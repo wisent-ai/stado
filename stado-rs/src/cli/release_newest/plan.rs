@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::cli::release_submit::{
-    committed_file, head_commit, recorded_runs, uncommitted_paths, RecordedRun, VERSION_SCAN_WINDOW,
+    committed_file, head_commit, recorded_runs, uncommitted_paths, RecordedRun,
 };
 use crate::cli::CmdError;
 use crate::release_pipeline::{self, ProductManifest, PRODUCT_MANIFEST};
@@ -98,7 +98,7 @@ pub async fn plan(root: &Path, products: &[String]) -> Result<Vec<Planned>, CmdE
             root.display()
         )));
     }
-    let published = recorded_runs(VERSION_SCAN_WINDOW).await?;
+    let published = recorded_runs().await?;
     let mut planned = Vec::new();
     for checkout in checkouts {
         let entry = read(&checkout, &published);

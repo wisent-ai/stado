@@ -45,9 +45,8 @@ pub(crate) async fn update(
         })?;
     let program = observed.as_str();
     let directory = program
-        .split("/services/")
-        .nth(usize::from(true))
-        .and_then(|rest| rest.split('/').next())
+        .split_once("/services/")
+        .and_then(|(_, rest)| rest.split('/').next())
         .filter(|segment| !segment.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| declared.name.clone());

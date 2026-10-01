@@ -6,12 +6,13 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::super::session::jwt_claims;
-use super::super::{parsed, CmdError, RepairRbacArgs, ARM_RESOURCE, ARM_SCOPE, ROLE_API_VERSION};
+use super::super::{CmdError, RepairRbacArgs, ARM_RESOURCE, ARM_SCOPE, ROLE_API_VERSION};
 
 fn role_assignment_name(scope: &str, principal_id: &str, role_id: &str) -> Uuid {
     let material = format!("{scope}\n{principal_id}\n{role_id}");
     let digest = Sha256::digest(material.as_bytes());
-    Uuid::from_slice(&digest[..parsed("16")]).expect("SHA digest prefix is a UUID")
+    Uuid::from_slice(&digest[..std::mem::size_of::<uuid::Bytes>()])
+        .expect("SHA digest prefix is a UUID")
 }
 
 pub(super) async fn ensure_role(

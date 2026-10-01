@@ -14,7 +14,7 @@ use crate::providers::gcp::inventory::InventoryOptions;
 use crate::queue::copy::Endpoint;
 
 pub(super) use credentials::inspect_credential_store;
-pub(super) use storage::inspect_storage_bounded;
+pub(super) use storage::inspect_storage;
 pub(crate) use storage::storage_resource_report;
 
 pub(crate) fn gcp_inventory_options(

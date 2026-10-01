@@ -87,8 +87,7 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         .map_err(|error| DeployError(error.to_string()))?
         .as_nanos();
     let path = std::env::temp_dir().join(format!("stado-host-key-{}-{nonce}", std::process::id()));
-    let owner_mode =
-        u32::from_str_radix("600", u8::BITS).map_err(|error| DeployError(error.to_string()))?;
+    let owner_mode = crate::primitives::file_mode::owner_read_write();
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -216,21 +215,22 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
 /// Force OpenSSH to use only the target-scoped key. The first argv word must be
 /// `ssh` or `scp`; callers retain the returned [`KeyFile`] until the process
 /// exits.
-pub fn add_identity(mut argv: Vec<String>, key: &KeyFile) -> Result<Vec<String>, DeployError> {
-    if !matches!(argv.first().map(String::as_str), Some("ssh" | "scp")) {
+pub fn add_identity(argv: Vec<String>, key: &KeyFile) -> Result<Vec<String>, DeployError> {
+    let Some((program, rest)) = argv
+        .split_first()
+        .filter(|(program, _)| matches!(program.as_str(), "ssh" | "scp"))
+    else {
         return Err(DeployError(
             "SSH identity can only be attached to an ssh or scp invocation".to_string(),
         ));
-    }
-    let after_program = usize::from(true);
-    argv.splice(
-        after_program..after_program,
-        [
-            "-i".to_string(),
-            key.path().to_string_lossy().to_string(),
-            "-o".to_string(),
-            "IdentitiesOnly=yes".to_string(),
-        ],
-    );
-    Ok(argv)
+    };
+    let mut attached = vec![
+        program.clone(),
+        "-i".to_string(),
+        key.path().to_string_lossy().to_string(),
+        "-o".to_string(),
+        "IdentitiesOnly=yes".to_string(),
+    ];
+    attached.extend(rest.iter().cloned());
+    Ok(attached)
 }

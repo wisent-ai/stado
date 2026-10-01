@@ -10,7 +10,7 @@ use super::jobs::{
     candidate_prefixes, compiling_count, job_state_and_cost, platform_required,
     previous_compile_total, JobReading,
 };
-use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX, VERSION_SCAN_WINDOW};
+use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
 
 /// One platform leg joined to its queue job: which run it belongs to, which
 /// platform it is, and — when the queue still holds the job — the lifecycle
@@ -100,12 +100,12 @@ pub(crate) async fn matching_runs(
         blobs.into_iter().map(|blob| blob.name).collect()
     };
     let mut runs = Vec::new();
-    let mut examined = usize::default();
+    let mut examined: Vec<String> = Vec::new();
     for path in &ordered {
-        if runs.len() >= limit || examined >= VERSION_SCAN_WINDOW {
+        if runs.len() >= limit {
             break;
         }
-        examined += true as usize;
+        examined.push(path.clone());
         let Some(run) = load_run_value(&store, path).await? else {
             continue;
         };
@@ -116,7 +116,7 @@ pub(crate) async fn matching_runs(
     }
     // Older runs stay unread unless a live build needs its denominator; the
     // ones already consumed above cannot be that denominator.
-    ordered.drain(..examined.min(ordered.len()));
+    ordered.retain(|path| !examined.contains(path));
     let older = ordered;
     // An in-flight run says only "publishing", which reads as a promise, and a
     // finished one says "reconciled" without ever saying what it cost. The run

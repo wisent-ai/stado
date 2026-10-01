@@ -56,9 +56,6 @@ pub mod storage;
 pub mod submit;
 pub mod tombstone;
 
-/// Canonical queue/storage layout contract recorded in release manifests.
-pub const STORAGE_LAYOUT_VERSION: u16 = true as u16;
-
 /// The suffix `put` stages a large body under: `<key>.__stado_upload/<upload
 /// id>/<index>`. A part is not an object, and the difference decides whether a
 /// key may be listed, composed, or served — so the marker is declared once

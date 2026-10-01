@@ -31,7 +31,7 @@ pub struct MailAnalysisReport {
     pub query: String,
     pub message_count: usize,
     pub action_required_count: usize,
-    pub categories: BTreeMap<String, usize>,
+    pub categories: BTreeMap<String, Vec<String>>,
     pub amounts: Vec<String>,
     pub messages: Vec<MailAnalysis>,
 }
@@ -44,8 +44,8 @@ pub fn summarize(query: &str, messages: Vec<MailAnalysis>) -> MailAnalysisReport
         for category in &message.categories {
             categories
                 .entry(category.clone())
-                .and_modify(|count| *count += usize::from(true))
-                .or_insert(usize::from(true));
+                .or_insert_with(Vec::new)
+                .push(message.id.clone());
         }
         for amount in &message.amounts {
             if seen_amounts.insert(amount.clone()) {

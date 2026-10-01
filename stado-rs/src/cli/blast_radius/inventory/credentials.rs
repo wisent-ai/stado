@@ -49,14 +49,7 @@ pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> Credenti
             }
         }
     };
-    let listed = match tokio::time::timeout(crate::doctor::PROBE_TIMEOUT, client.list_items()).await
-    {
-        Ok(result) => result.map_err(|error| error.to_string()),
-        Err(_) => Err(format!(
-            "credential store inspection exceeded {:?}",
-            crate::doctor::PROBE_TIMEOUT
-        )),
-    };
+    let listed = client.list_items().await.map_err(|error| error.to_string());
     match listed {
         Ok(mut items) => {
             items.retain(|item| item.deleted != Some(true));

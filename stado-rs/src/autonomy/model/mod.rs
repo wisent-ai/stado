@@ -16,5 +16,5 @@ pub use decisions::{
 };
 pub use resources::{
     canonical_resource_id, InventorySnapshot, InventorySource, Ownership, ResourceGraph,
-    ResourceRecord, SourceState, SCHEMA_VERSION,
+    ResourceRecord, SourceState,
 };

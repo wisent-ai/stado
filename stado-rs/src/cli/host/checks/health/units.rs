@@ -83,16 +83,10 @@ pub(in crate::cli::host) async fn collect_unit_log(
 /// Without this the only route to the sentence naming the fault was an ssh
 /// session, which is the one thing the fleet does not allow, so the fault got
 /// guessed at instead.
-pub async fn unit_log(
-    target: &str,
-    unit: &str,
-    lines: Option<u32>,
-    json: bool,
-) -> Result<(), CmdError> {
+pub async fn unit_log(target: &str, unit: &str, lines: u32, json: bool) -> Result<(), CmdError> {
     // The unit id becomes a fixed word in the shared launchd/systemd reader,
     // so reject anything that is not a single safe unit name first.
     vault_word("unit label", unit)?;
-    let lines = lines.unwrap_or(40).clamp(u32::from(true), 200_000);
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;

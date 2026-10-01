@@ -12,7 +12,7 @@ use super::analysis::{
     compare_coverage, data_domains, dependency_owns_backend, downstream_impacts,
     validate_dependency,
 };
-use super::inventory::{gcp_inventory_options, inspect_credential_store, inspect_storage_bounded};
+use super::inventory::{gcp_inventory_options, inspect_credential_store, inspect_storage};
 use super::report::print_human;
 use super::{BlastRadiusReport, FailoverPolicy, Summary};
 
@@ -45,8 +45,8 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
         }
     };
     let (primary, backup, infrastructure, credential_store) = tokio::join!(
-        inspect_storage_bounded("primary", Some(&primary_endpoint)),
-        inspect_storage_bounded("backup", backup_endpoint.as_ref()),
+        inspect_storage("primary", Some(&primary_endpoint)),
+        inspect_storage("backup", backup_endpoint.as_ref()),
         inventory_probe,
         inspect_credential_store(),
     );

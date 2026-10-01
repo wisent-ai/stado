@@ -79,7 +79,7 @@ pub fn authority(declared: Option<&str>, vaults: &[Value]) -> Value {
     // about which one is this host's.
     let contested = owners
         .iter()
-        .filter(|(_, paths)| paths.len() > usize::from(true))
+        .filter(|(_, paths)| matches!(paths.as_slice(), [_, _, ..]))
         .map(|(owner, paths)| format!("{owner}: {}", paths.join(", ")))
         .collect::<Vec<_>>();
     if !contested.is_empty() {

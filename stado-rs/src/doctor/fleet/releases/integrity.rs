@@ -1,7 +1,5 @@
 //! The standing audit of what the release channel already holds.
 
-use std::time::Duration;
-
 use super::claims::{
     claim_only_verdict, in_flight, require_version_claim_agreement, CLAIM_WITHOUT_ARTIFACT,
 };
@@ -22,28 +20,6 @@ pub(in crate::doctor) const INTEGRITY_REMEDY: &str =
 /// version ever released, and an audit that re-reads all of them on every
 /// `doctor` would be slow enough that someone turns it off.
 const INTEGRITY_VERSIONS: usize = 6;
-
-/// This row's own wall clock, for the same reason [`FLEET_SHAPE_DEADLINE`] has
-/// one: its work grows with the channel, so it cannot share the flat
-/// [`PROBE_TIMEOUT`].
-///
-/// The arithmetic, not a guess. [`INTEGRITY_VERSIONS`] versions times two
-/// platforms is twelve coordinates; each one reads its `SHA256SUMS` and then
-/// probes the nine names that file declares. That is about 120 network reads,
-/// and one `storage stat` against the release channel measured 1.5 to 5
-/// seconds during the 0.13.46 publication. Under the 8-second flat budget the
-/// row could not finish its first coordinate, so the standing audit of the
-/// release channel -- the check whose entire purpose is to notice
-/// `stado/0.10.0/darwin-arm64` sitting half-published for four months -- has
-/// been answering `probe did not answer within 8s` instead of auditing
-/// anything.
-///
-/// The nine probes per coordinate run concurrently, and so do the two manifest
-/// reads that check the coordinate was built from one revision, which is what
-/// makes this bound sufficient rather than merely generous: twelve coordinates
-/// at two round trips each, not 144 in series.
-pub(in crate::doctor) const INTEGRITY_DEADLINE: Duration = Duration::from_secs(180);
-
 /// Walk what the channel actually holds and say, per version and platform,
 /// whether the coordinate is deliverable: every object present, and every
 /// publisher of it naming one build.

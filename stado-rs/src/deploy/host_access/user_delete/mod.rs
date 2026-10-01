@@ -143,13 +143,7 @@ pub fn parse_status(stdout: &str, username: &str) -> Result<(String, String), De
             continue;
         };
         let fields: Vec<&str> = rest.split('\t').collect();
-        let Some(status) = fields.first() else {
-            continue;
-        };
-        let Some(os_name) = fields.get(usize::from(true)) else {
-            continue;
-        };
-        let Some(reported) = fields.get(usize::from(true) + usize::from(true)) else {
+        let [status, os_name, reported, ..] = fields.as_slice() else {
             continue;
         };
         if *reported == username {

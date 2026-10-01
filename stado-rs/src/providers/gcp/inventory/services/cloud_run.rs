@@ -67,7 +67,7 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_service_detail(
     }
     (
         if ready { "ok" } else { "degraded" },
-        Some(true as usize),
+        None,
         json!({
             "name": value.get("name"),
             "uri": value.get("uri"),

@@ -13,7 +13,7 @@ pub(in crate::providers::gcp::inventory) fn scheduler_detail(
         .unwrap_or("UNKNOWN");
     (
         if state == "ENABLED" { "ok" } else { "degraded" },
-        Some(true as usize),
+        None,
         json!({
             "name": value.get("name"),
             "state": state,

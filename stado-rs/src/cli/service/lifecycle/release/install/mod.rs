@@ -82,7 +82,7 @@ pub(super) fn refuse_archive_without_program(
     program: &str,
     members: &[String],
 ) -> Result<(), String> {
-    let Some(relative) = program.split("/current/").nth(usize::from(true)) else {
+    let Some((_, relative)) = program.split_once("/current/") else {
         // A unit pinned to a version directory rather than `current` is a
         // different fault, reported by `follow_current`; there is no program
         // path to look for here and inventing one would refuse every archive.

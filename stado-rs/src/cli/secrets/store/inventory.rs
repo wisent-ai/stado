@@ -128,10 +128,9 @@ pub(crate) fn inspect_vault(
     json: bool,
 ) -> Result<(), CmdError> {
     let metadata = std::fs::symlink_metadata(path)?;
-    let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
-        || metadata.mode() & unsafe_bits != u32::default()
+        || crate::primitives::file_mode::open_to_others(metadata.mode())
     {
         return Err(CmdError::click(
             "vault must be an owner-only regular local file",

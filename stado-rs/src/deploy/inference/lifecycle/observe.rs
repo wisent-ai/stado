@@ -89,7 +89,6 @@ pub async fn verify_completion(
         &json!({
             "model": deployment.name,
             "messages": [{"role": "user", "content": "Reply with the single word ready."}],
-            "max_tokens": u8::BITS,
         })
         .to_string(),
     );

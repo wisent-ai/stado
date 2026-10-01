@@ -15,10 +15,9 @@
 //!   "quota is zero" until the release channel and the VM identity turned
 //!   out to be broken too. Every probe captures its own error into its own
 //!   [`Check`], exactly as each section of
-//!   [`crate::monitor::billing::collect_billing`] captures its own. Probes
-//!   additionally run under a shared deadline ([`PROBE_TIMEOUT`]) so a
-//!   black-holed endpoint degrades to one FAIL row instead of hanging the
-//!   command.
+//!   [`crate::monitor::billing::collect_billing`] captures its own. Every
+//!   probe runs concurrently, so one slow dependency delays only its own
+//!   row's answer.
 //! - **Same code path as production.** The template probe renders through
 //!   [`crate::scheduler::dispatch::agent::bundled_template_for`] with
 //!   credentials resolved from Skarbiec and
@@ -35,8 +34,6 @@
 //! outside `queue::copy::CANONICAL_PREFIXES`, for the same reason
 //! `queue::copy::SENTINEL_PATH` is: a diagnostic probe is precisely what a
 //! backend migration must not carry across.
-
-use std::time::Duration;
 
 use crate::config;
 
@@ -70,10 +67,3 @@ fn provider_enabled(provider: crate::capabilities::ProviderId) -> bool {
 fn storage_adapter(name: &str) -> Option<crate::capabilities::StorageAdapter> {
     crate::capabilities::storage_adapter(name)
 }
-
-/// Ceiling on ONE probe. Bounds the command against a black-holed endpoint
-/// — the failure mode of an unreachable release channel or a firewalled
-/// cloud API, which drop packets rather than refusing them, so the socket
-/// never returns. Derived digit-free from `u8::BITS`. Probes run
-/// concurrently, so this bounds the whole command and not one row of it.
-pub const PROBE_TIMEOUT: Duration = Duration::from_secs(u8::BITS as u64);

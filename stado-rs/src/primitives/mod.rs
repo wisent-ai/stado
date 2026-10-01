@@ -4,5 +4,6 @@
 
 pub mod constants;
 pub mod failure;
+pub mod file_mode;
 pub mod procutil;
 pub mod testutil;
