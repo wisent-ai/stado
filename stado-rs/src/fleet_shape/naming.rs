@@ -7,13 +7,24 @@ use super::{Finding, PREFIX_CHECK, SUFFIX_CHECK};
 use crate::deploy::{local_install, service};
 use crate::targets::{ComputeTarget, Registry};
 
-/// The label prefix this fleet's own installer mints.
+/// The label prefix this fleet's installer mints: `com.wisent.<name>`.
 ///
 /// A label that carries it twice was built by applying it to a name that
 /// already had it. That is not cosmetic: the doubled label is a DIFFERENT
 /// label, so it is declared nowhere, every ownership reader calls it
-/// undeclared, and launchd runs it anyway.
-const MINTED_PREFIX: &str = "com.wisent.compute.service.";
+/// undeclared, and launchd runs it anyway. A label under the retired
+/// `com.wisent.compute.` prefix is a unit an earlier release minted; the one
+/// unit of that name is `com.wisent.<name>`.
+const MINTED_PREFIX: &str = local_install::FLEET_LABEL_PREFIX;
+const RETIRED_PREFIX: &str = local_install::RETIRED_COMPUTE_PREFIX;
+
+/// What a label built under the retired prefix should be: the name after the
+/// `<kind>.` segment, under the one prefix.
+fn retired_to_one(label: &str) -> Option<String> {
+    let rest = label.strip_prefix(RETIRED_PREFIX)?;
+    let (_kind, name) = rest.split_once('.')?;
+    Some(local_install::label(name))
+}
 
 /// A label carries this fleet's minted prefix exactly once.
 ///
@@ -31,10 +42,23 @@ pub(in crate::fleet_shape) fn doubled_prefix(
 ) {
     for unit in loaded {
         *measured += 1;
+        if let Some(one) = retired_to_one(&unit.label) {
+            out.push(Finding {
+                check: PREFIX_CHECK,
+                subject: format!("{}:{}", target.name, unit.label),
+                declared: format!("one unit {one}"),
+                observed: "a unit minted under the retired com.wisent.compute. prefix is loaded".to_string(),
+                command: format!(
+                    "stado service bootout {} --host {} --domain <the domain it is loaded in>; the release carrying {one} retires it",
+                    unit.label, target.name
+                ),
+            });
+            continue;
+        }
         let Some(rest) = unit.label.strip_prefix(MINTED_PREFIX) else {
             continue;
         };
-        if !rest.starts_with(MINTED_PREFIX) && !rest.starts_with("com.wisent.") {
+        if !rest.starts_with(MINTED_PREFIX) {
             continue;
         }
         out.push(Finding {
@@ -128,7 +152,7 @@ pub(in crate::fleet_shape) fn declared_doubled_prefix(
         let Some(rest) = service.label.strip_prefix(MINTED_PREFIX) else {
             continue;
         };
-        if !rest.starts_with("com.wisent.") {
+        if !rest.starts_with(MINTED_PREFIX) {
             continue;
         }
         out.push(Finding {
@@ -200,7 +224,7 @@ pub(in crate::fleet_shape) fn profile_unit_names(
                 let Some(rest) = unit.unit.strip_prefix(MINTED_PREFIX) else {
                     continue;
                 };
-                if !rest.starts_with("com.wisent.") {
+                if !rest.starts_with(MINTED_PREFIX) {
                     continue;
                 }
                 out.push(Finding {

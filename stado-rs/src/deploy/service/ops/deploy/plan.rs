@@ -103,7 +103,7 @@ pub fn plan_deploy(
     args: &[String],
 ) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
-    let label = local_install::label(DEPLOY_KIND, name);
+    let label = local_install::label(name);
     plan_deploy_labelled(target, name, &label, program, args, &[])
 }
 

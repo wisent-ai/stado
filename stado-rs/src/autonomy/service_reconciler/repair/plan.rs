@@ -86,7 +86,7 @@ pub(super) fn resolved_plan(
         None => service::plan_deploy_labelled(
             target,
             &declared.name,
-            &crate::deploy::local_install::label(service::DEPLOY_KIND, &declared.name),
+            &crate::deploy::local_install::label(&declared.name),
             &unit.program,
             &unit.args,
             &unit_env,

@@ -30,7 +30,7 @@ async fn local_uid(runner: &Runner) -> Result<String, String> {
 /// through the deploy channel. A service that is not loaded anywhere is
 /// reported and treated as already stopped.
 pub(super) async fn stop_source(runner: &Runner, plan: &MigrationPlan) -> Result<(), String> {
-    let label = label(&plan.from_name);
+    let label = label(&plan.from_name)?;
     let uid = local_uid(runner).await?;
     let print_spec = CommandSpec::new(vec![
         "launchctl".to_string(),

@@ -134,7 +134,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         None => service::plan_deploy_labelled(
             &target,
             options.name,
-            &crate::deploy::local_install::label(service::DEPLOY_KIND, options.name),
+            &crate::deploy::local_install::label(options.name),
             &unit.program,
             &unit.args,
             &unit_env,

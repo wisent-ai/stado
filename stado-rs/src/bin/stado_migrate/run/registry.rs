@@ -75,7 +75,7 @@ pub(super) async fn verify(runner: &Runner, plan: &MigrationPlan) -> Result<(), 
             active.join(", ")
         ));
     }
-    let check = format!("launchctl print gui/$(id -u)/{}", label(&plan.to_name));
+    let check = format!("launchctl print gui/$(id -u)/{}", label(&plan.to_name)?);
     let out = runner(CommandSpec::new(ssh_argv(&plan.to_host, &check))).await?;
     if out.ok() {
         println!(

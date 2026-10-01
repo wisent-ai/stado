@@ -18,11 +18,13 @@ use crate::plan::build;
 use self::hosts::{bootstrap_target, move_store, stop_source};
 use self::registry::{flip_registry, verify};
 
-/// Label prefix every Stado coordinator service registers under (launchd).
-const COORDINATOR_LABEL_PREFIX: &str = "com.wisent.compute.coordinator.";
-
-fn label(name: &str) -> String {
-    format!("{COORDINATOR_LABEL_PREFIX}{name}")
+/// The coordinator is a role of the one Stado unit on a host, so the unit a
+/// migration stops on the source and reads on the target is the catalog's
+/// `com.wisent.stado`, whatever the coordinator is named.
+fn label(_name: &str) -> Result<String, String> {
+    stado::deploy::service_catalog::lookup("stado")?
+        .map(|product| product.unit.unwrap_or(product.name))
+        .ok_or_else(|| "the service catalog does not declare Stado".to_string())
 }
 
 async fn run_checked(runner: &Runner, spec: CommandSpec, what: &str) -> Result<String, String> {

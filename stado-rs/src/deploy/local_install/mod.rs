@@ -42,13 +42,16 @@ use self::unit::plan;
 pub use self::unit::render::daemon_plist_text;
 pub use self::unit::InstallPlan;
 
-/// Python `LABEL_PREFIX`.
-pub const LABEL_PREFIX: &str = "com.wisent.compute";
-/// The label prefix every unit this fleet installs carries, whichever writer
-/// installed it: [`LABEL_PREFIX`] mints `com.wisent.compute.<kind>.<name>` and
-/// the always-on set is `com.wisent.always-on.<name>`, so one prefix covers both.
-/// Deliberately broader than `LABEL_PREFIX` to match all fleet-produced labels.
+/// The label prefix every unit this fleet installs carries: a product's one
+/// unit is `com.wisent.<product>`, as the catalog names it, and a declared
+/// service outside the catalog is `com.wisent.<name>`. Earlier releases
+/// minted `com.wisent.compute.<kind>.<name>` and `com.wisent.always-on.<name>`;
+/// those are retired units, recognised by this prefix and removed, never
+/// minted again.
 pub const FLEET_LABEL_PREFIX: &str = "com.wisent.";
+/// The prefix earlier releases minted onto a service name. A unit carrying
+/// it is a retired one.
+pub const RETIRED_COMPUTE_PREFIX: &str = "com.wisent.compute.";
 
 /// Fetches the central HF write token (Python `_hf_write_token`);
 /// injectable so tests never touch GCS.
@@ -95,19 +98,26 @@ fn python_os_name(os: &str) -> &str {
     }
 }
 
-/// Mint a launchd label for a service unit, or return an already-full label unchanged.
-///
-/// If `name` is a bare product name like `"stado-agent-mini"` or `"disk-cleanup"`,
-/// returns `{LABEL_PREFIX}.{kind}.{name}` — e.g. `com.wisent.compute.service.stado-agent-mini`.
-/// If `name` is already a fleet label (starts with `com.wisent.`), returns it unchanged,
-/// preventing a double prefix, which leaves stale duplicate queue agents that
-/// can stall the fleet for days.
-pub fn label(kind: &str, name: &str) -> String {
+/// The one label for a declared unit: `com.wisent.<name>`, or an already-full
+/// fleet label unchanged, so a name that carries the prefix is never prefixed
+/// twice (a doubled label is a different unit, declared nowhere and running
+/// anyway).
+pub fn label(name: &str) -> String {
     if name.starts_with(FLEET_LABEL_PREFIX) {
         name.to_string()
     } else {
-        format!("{LABEL_PREFIX}.{kind}.{name}")
+        format!("{FLEET_LABEL_PREFIX}{name}")
     }
+}
+
+/// The one unit Stado runs under on a host, as the catalog names it; every
+/// Stado role (serve, agent, coordinator, release, health, sync) is a role of
+/// this unit.
+pub fn stado_unit() -> Result<String, DeployError> {
+    let product = crate::deploy::service_catalog::lookup("stado")
+        .map_err(DeployError)?
+        .ok_or_else(|| DeployError("the service catalog does not declare Stado".to_string()))?;
+    Ok(product.unit.unwrap_or(product.name))
 }
 
 /// The systemd unit name for a label, or an already-suffixed name unchanged.

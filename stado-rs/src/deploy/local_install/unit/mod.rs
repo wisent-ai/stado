@@ -125,7 +125,7 @@ pub fn plan(
         label: if kind == "host" {
             host::canonical_label()?
         } else {
-            label(kind, name)
+            label(name)
         },
         exec_args: exec_args_for(bins, kind, name)?,
         env: install_env(home, kind, hf_token),

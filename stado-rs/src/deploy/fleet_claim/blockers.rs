@@ -14,14 +14,14 @@ use crate::targets::{ComputeTarget, Registry};
 
 use super::{wait_words, Blocker};
 
-/// The `com.wisent.compute.agent.` label prefix
-/// [`crate::deploy::local_install::label`] mints for `kind=agent`.
-const MINTED_AGENT_PREFIX: &str = "com.wisent.compute.agent.";
+/// The `com.wisent.compute.agent.` prefix earlier releases minted for a
+/// separate queue-agent unit; a host still declaring one is on a retired
+/// release, and the agent is read from it until that release is replaced.
+const RETIRED_AGENT_PREFIX: &str = "com.wisent.compute.agent.";
 
-/// The spelling an operator gets when they deploy a queue agent through
-/// `stado service deploy`, which mints the `service` kind instead: the mini's
-/// agent is declared as `com.wisent.compute.service.stado-agent-mini`.
-const DEPLOYED_AGENT_MARK: &str = "stado-agent";
+/// The spelling an operator got when they deployed a queue agent through
+/// `stado service deploy` on a retired release.
+const RETIRED_AGENT_MARK: &str = "stado-agent";
 
 /// Every reason one host cannot claim, silence first and policy last: an
 /// operator reads the top line to learn whether the host is talking at all,
@@ -84,19 +84,24 @@ pub(super) async fn host_blockers(
     Ok(blockers)
 }
 
-/// The queue agent this target declares, if it declares one.
-///
-/// Two spellings exist in this fleet and both are the agent: the label
-/// [`crate::deploy::local_install::label`] mints for `kind=agent`
-/// ([`MINTED_AGENT_PREFIX`]), and the `service`-kind label an operator gets
-/// from `stado service deploy` ([`DEPLOYED_AGENT_MARK`], as in the mini's
-/// `com.wisent.compute.service.stado-agent-mini`).
+/// The unit that runs this target's queue agent, if the target declares one:
+/// the one Stado unit the catalog names, in which the agent is a role, or on
+/// a host still on a retired release, the separate agent unit that release
+/// installed ([`RETIRED_AGENT_PREFIX`], [`RETIRED_AGENT_MARK`]).
 fn declared_agent(target: &ComputeTarget) -> Option<service::ManagedService> {
-    service::declared_services(target).into_iter().find(|unit| {
-        unit.unit_id().starts_with(MINTED_AGENT_PREFIX)
-            || unit.unit_id().contains(DEPLOYED_AGENT_MARK)
-            || unit.name.contains(DEPLOYED_AGENT_MARK)
-    })
+    let one = crate::deploy::local_install::stado_unit().ok();
+    let declared = service::declared_services(target);
+    declared
+        .iter()
+        .find(|unit| one.as_deref() == Some(unit.unit_id()))
+        .or_else(|| {
+            declared.iter().find(|unit| {
+                unit.unit_id().starts_with(RETIRED_AGENT_PREFIX)
+                    || unit.unit_id().contains(RETIRED_AGENT_MARK)
+                    || unit.name.contains(RETIRED_AGENT_MARK)
+            })
+        })
+        .cloned()
 }
 
 /// The detail for [`host_gates::AGENT_DECLARED_NOT_LOADED`], or `None` when

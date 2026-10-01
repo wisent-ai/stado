@@ -38,10 +38,7 @@ pub(crate) struct Component {
 }
 
 pub(crate) fn canonical_label() -> Result<String, DeployError> {
-    let product = crate::deploy::service_catalog::lookup("stado")
-        .map_err(DeployError)?
-        .ok_or_else(|| DeployError("the service catalog does not declare Stado".to_string()))?;
-    Ok(product.unit.unwrap_or(product.name))
+    crate::deploy::local_install::stado_unit()
 }
 
 fn command(plan: &InstallPlan) -> Result<Commands, DeployError> {
