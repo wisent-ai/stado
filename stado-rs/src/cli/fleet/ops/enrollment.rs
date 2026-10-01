@@ -144,6 +144,10 @@ pub fn preflight_enroll(
 /// the probe because the probe is the first thing that needs the key, and
 /// before any registry write, so a machine that cannot be adopted leaves no
 /// entry behind.
+///
+/// With `as_json` the progress lines go to standard error and standard output
+/// carries one `{target, hostname, kind, fleet, generation, bootstrapped,
+/// offline_invite_spent}` document.
 pub async fn enroll(
     name: &str,
     ssh: Option<&str>,
@@ -151,7 +155,39 @@ pub async fn enroll(
     fleet_name: Option<&str>,
     bootstrap: bool,
     install_key: bool,
+    as_json: bool,
 ) -> Result<bool, String> {
+    let answer = enrolled(name, ssh, kind, fleet_name, bootstrap, install_key, as_json).await?;
+    if as_json {
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        return Ok(true);
+    }
+    if let Some(invite_id) = answer["offline_invite_spent"].as_str() {
+        println!("offline invite {invite_id} is spent");
+    }
+    println!("enrolled '{name}' (kind={kind})");
+    Ok(true)
+}
+
+/// The enrollment itself, answering the document `enroll --json` prints.
+/// Progress lines go to standard output, or to standard error when `quiet`
+/// leaves standard output to the caller's one JSON answer.
+pub async fn enrolled(
+    name: &str,
+    ssh: Option<&str>,
+    kind: &str,
+    fleet_name: Option<&str>,
+    bootstrap: bool,
+    install_key: bool,
+    quiet: bool,
+) -> Result<Value, String> {
+    let say = |line: &str| {
+        if quiet {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    };
     let Some(destination) = ssh else {
         return Err(
             "enroll needs --ssh for a verified registration; without a reachable channel use machine-initiated enrollment: stado fleet join on the machine, then stado fleet approve here"
@@ -199,11 +235,16 @@ pub async fn enroll(
     let generation = push_document_if(&next, &expected_generation)
         .await
         .map_err(|exc| exc.to_string())?;
-    println!("registered '{name}', verified as '{hostname}' (generation {generation})");
+    say(&format!("registered '{name}', verified as '{hostname}' (generation {generation})"));
     if bootstrap {
-        if let Err(exc) =
-            crate::cli::setup::bootstrap::run(Some(name.to_string()), false, false, false).await
-        {
+        let bootstrapped = crate::cli::setup::bootstrap::run_reporting(
+            Some(name.to_string()),
+            false,
+            false,
+            &mut |line: &str| say(line),
+        )
+        .await;
+        if let Err(exc) = bootstrapped {
             // The rollback's own expected generation: the re-read here is what
             // the removal is computed from, so it is also what the removal is
             // conditional on. A writer that lands in between leaves the entry
@@ -231,13 +272,22 @@ pub async fn enroll(
     // from the machine's owner and registered the name. The registration
     // already stands, so a store that cannot be reached now is a warning, not a
     // reason to fail a run that wrote the registry.
-    match crate::cli::fleet::invite::close_offline_for_target(name).await {
-        Ok(Some(invite_id)) => println!("offline invite {invite_id} is spent"),
-        Ok(None) => {}
-        Err(exc) => eprintln!(
-            "registration stands, but the offline invite for '{name}' could not be closed: {exc}"
-        ),
-    }
-    println!("enrolled '{name}' (kind={kind})");
-    Ok(true)
+    let spent = match crate::cli::fleet::invite::close_offline_for_target(name).await {
+        Ok(spent) => spent,
+        Err(exc) => {
+            eprintln!(
+                "registration stands, but the offline invite for '{name}' could not be closed: {exc}"
+            );
+            None
+        }
+    };
+    Ok(serde_json::json!({
+        "target": name,
+        "hostname": hostname,
+        "kind": kind,
+        "fleet": fleet_name,
+        "generation": generation,
+        "bootstrapped": bootstrap,
+        "offline_invite_spent": spent,
+    }))
 }

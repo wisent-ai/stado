@@ -25,12 +25,23 @@ pub async fn run(
         );
         return Ok(());
     }
+    run_reporting(target, dry_run, local, &mut |line: &str| println!("{line}")).await
+}
+
+/// The bootstrap itself, with its progress lines handed to `echo`: standard
+/// output for `stado bootstrap`, standard error for a caller whose standard
+/// output carries one JSON answer (`stado fleet enroll --json`).
+pub async fn run_reporting(
+    target: Option<String>,
+    dry_run: bool,
+    local: bool,
+    echo: &mut dyn FnMut(&str),
+) -> Result<(), CmdError> {
     let registry = crate::targets::load_registry_auto()
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     let runner = crate::deploy::production_runner();
     let hf_fetch = crate::deploy::local_install::production_hf_fetcher();
-    let mut echo = |line: &str| println!("{line}");
     crate::deploy::bootstrap::run_bootstrap(
         &registry,
         target.as_deref(),
@@ -38,7 +49,7 @@ pub async fn run(
         local,
         &runner,
         &hf_fetch,
-        &mut echo,
+        echo,
     )
     .await
     .map_err(|exc| CmdError::click(exc.to_string()))

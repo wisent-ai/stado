@@ -112,6 +112,10 @@ pub enum FleetCommands {
         /// Install the agent on the machine after registering it.
         #[arg(long)]
         bootstrap: bool,
+        /// Emit the machine-readable document instead of the lines; progress
+        /// goes to standard error.
+        #[arg(long)]
+        json: bool,
     },
     /// Mint an invite: something the machine's owner runs, no access needed.
     Invite {
@@ -178,6 +182,10 @@ pub enum FleetCommands {
         /// Fleet to place the machine in right away.
         #[arg(long)]
         fleet: Option<String>,
+        /// Emit the machine-readable document instead of the lines; progress
+        /// goes to standard error.
+        #[arg(long)]
+        json: bool,
     },
     /// Drop a pending join request.
     Reject {

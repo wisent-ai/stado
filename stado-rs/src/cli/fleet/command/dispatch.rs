@@ -49,6 +49,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
             fleet,
             bootstrap,
             install_key,
+            json,
         } => {
             ops::enroll(
                 &name,
@@ -57,6 +58,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
                 fleet.as_deref(),
                 bootstrap,
                 install_key,
+                json,
             )
             .await
         }
@@ -77,9 +79,11 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         FleetCommands::Methods { json } => enroll::catalog::methods(json).await,
         FleetCommands::Join { json } => enroll::join(json).await,
         FleetCommands::Pending { json } => enroll::pending(json).await,
-        FleetCommands::Approve { hostname, fleet } => {
-            enroll::approve(&hostname, fleet.as_deref()).await
-        }
+        FleetCommands::Approve {
+            hostname,
+            fleet,
+            json,
+        } => enroll::approve(&hostname, fleet.as_deref(), json).await,
         FleetCommands::Reject { hostname, json } => enroll::reject(&hostname, json).await,
         FleetCommands::Catalog { json } => enroll::catalog::catalog(json).await,
         FleetCommands::Key(sub) => {

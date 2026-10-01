@@ -157,8 +157,10 @@ async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, Stri
     if let Some(public_key) = stored.filter(|value| !value.trim().is_empty()) {
         return Ok(public_key.trim().to_string());
     }
-    println!("no key pair for '{target}' yet; minting one into {id}");
-    rotate::generate(runner, target, false).await?;
+    // Narration of a step inside `fleet enroll`, on standard error: standard
+    // output belongs to the command's answer, which may be one JSON document.
+    eprintln!("no key pair for '{target}' yet; minting one into {id}");
+    rotate::generate_stored(runner, target).await?;
     configured_client()?
         .read_declared_string(&id, "public_key")
         .await
@@ -196,7 +198,7 @@ pub async fn install_first_contact(
         .lines()
         .any(|line| line == "STADO_ADOPT_PRESENT")
     {
-        println!(
+        eprintln!(
             "the fleet public key for '{target}' is already in ~/.ssh/authorized_keys on {destination}; nothing appended"
         );
         return Ok(AdoptOutcome::AlreadyPresent);
@@ -206,7 +208,7 @@ pub async fn install_first_contact(
         .lines()
         .any(|line| line == "STADO_ADOPT_INSTALLED")
     {
-        println!(
+        eprintln!(
             "installed the fleet public key for '{target}' into ~/.ssh/authorized_keys on {destination}"
         );
         return Ok(AdoptOutcome::Installed);

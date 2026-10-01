@@ -152,7 +152,15 @@ pub async fn pending(as_json: bool) -> Result<bool, String> {
 /// machine is registered under the name its invite reserved (and minted the
 /// channel key for, and showed its owner), while a plain `join` request is
 /// registered under the machine's own hostname as before.
-pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, String> {
+///
+/// With `as_json` progress goes to standard error and standard output carries
+/// one `{approved, target, generation, fleet, enrollment, invite_spent,
+/// install_with}` document.
+pub async fn approve(
+    hostname: &str,
+    fleet_name: Option<&str>,
+    as_json: bool,
+) -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let text = store
         .download_text(&request_path(hostname))
@@ -175,6 +183,8 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
     let destination = request_destination(&request).map(str::to_string);
     let invite_id = request_invite_id(&request).map(str::to_string);
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    let mut enrollment = Value::Null;
+    let mut registered_generation = Value::Null;
     match &destination {
         Some(destination) => {
             if invite_id.is_some() {
@@ -185,15 +195,30 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
             // `install_key` is false: an invited machine put the fleet's public
             // key in its own authorized_keys as the invite's first act, so
             // there is nothing to install and no second channel to do it over.
-            crate::cli::fleet::ops::enroll(
-                &name,
-                Some(destination),
-                &kind,
-                fleet_name,
-                true,
-                false,
-            )
-            .await?;
+            if as_json {
+                enrollment = crate::cli::fleet::ops::enrolled(
+                    &name,
+                    Some(destination),
+                    &kind,
+                    fleet_name,
+                    true,
+                    false,
+                    true,
+                )
+                .await?;
+                registered_generation = enrollment["generation"].clone();
+            } else {
+                crate::cli::fleet::ops::enroll(
+                    &name,
+                    Some(destination),
+                    &kind,
+                    fleet_name,
+                    true,
+                    false,
+                    false,
+                )
+                .await?;
+            }
         }
         None => {
             catalog::require_join_allowed(&document)?;
@@ -206,24 +231,35 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
                 .and_then(Value::as_str)
                 .ok_or_else(|| "join request has no architecture".to_string())?;
             let release_platform = release_platform(request_os, request_arch)?;
-            // Pure: the entry is a function of the document it is appended to
-            // and of the join request, which is already decided. A lost race
-            // is answered by appending it to the newer document.
+            // Pure: the entry, and the fleet it is placed in, are a function of
+            // the document they are written into and of the join request, which
+            // is already decided. A lost race is answered by applying both to
+            // the newer document, in the one write.
             let generation = commit_document(|document| {
-                register_target(
+                let registered = register_target(
                     document,
                     &name,
                     &kind,
                     std::slice::from_ref(&request_hostname),
                     release_platform,
                 )
-                .map_err(crate::cli::CmdError::click)
+                .map_err(crate::cli::CmdError::click)?;
+                match fleet_name {
+                    Some(fleet) => crate::cli::fleet::ops::assign_target(&registered, &name, fleet)
+                        .map_err(crate::cli::CmdError::click),
+                    None => Ok(registered),
+                }
             })
             .await
             .map_err(|exc| exc.to_string())?;
-            println!("approved '{request_hostname}' as target '{name}' (generation {generation})");
-            if let Some(fleet) = fleet_name {
-                crate::cli::fleet::ops::assign(&name, fleet, false).await?;
+            registered_generation = json!(generation);
+            if !as_json {
+                println!(
+                    "approved '{request_hostname}' as target '{name}' (generation {generation})"
+                );
+                if let Some(fleet) = fleet_name {
+                    println!("target '{name}' assigned to fleet '{fleet}' (generation {generation})");
+                }
             }
         }
     }
@@ -240,10 +276,28 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
     // do, whatever allowance it had left.
     if let Some(invite_id) = &invite_id {
         crate::cli::fleet::invite::mark_spent(&store, invite_id).await?;
+    }
+    let install_with = destination
+        .is_none()
+        .then(|| format!("stado bootstrap --local --target '{name}'"));
+    if as_json {
+        let answer = json!({
+            "approved": request_hostname,
+            "target": name,
+            "generation": registered_generation,
+            "fleet": fleet_name,
+            "enrollment": enrollment,
+            "invite_spent": invite_id,
+            "install_with": install_with,
+        });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        return Ok(true);
+    }
+    if let Some(invite_id) = &invite_id {
         println!("invite {invite_id} is spent");
     }
-    if destination.is_none() {
-        println!("install the agent on the machine: stado bootstrap --local --target '{name}'");
+    if let Some(install_with) = install_with {
+        println!("install the agent on the machine: {install_with}");
     }
     Ok(true)
 }
