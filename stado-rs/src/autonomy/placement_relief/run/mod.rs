@@ -6,18 +6,13 @@ use chrono::{SecondsFormat, Utc};
 use crate::autonomy::policy::AutonomyPolicy;
 use crate::queue::{JobStorage, StorageError};
 
-use super::{
-    host_memory, plan, words, ReliefReport, ReliefSummary, LATEST_REPORT, REPORT_PREFIX,
-    SCHEMA_VERSION,
-};
+use super::{host_memory, plan, words, ReliefReport, ReliefSummary, LATEST_REPORT, REPORT_PREFIX};
 
 mod execute;
 mod gates;
-mod pressure;
 
 use execute::execute;
 use gates::refusal;
-use pressure::pressure_window;
 
 pub async fn reconcile(
     store: &JobStorage,
@@ -29,8 +24,8 @@ pub async fn reconcile(
     let decision_id = format!("placement-relief-{}", created_at.replace(':', "-"));
     let previous =
         crate::autonomy::storage::read_json::<ReliefReport>(store, LATEST_REPORT).await?;
-    let (relocations, previous_pressure) = previous
-        .map(|report| (report.relocations, report.pressure_seen))
+    let relocations = previous
+        .map(|report| report.relocations)
         .unwrap_or_default();
 
     let (document, generation) = crate::cli::registry::fetch_versioned_document()
@@ -40,22 +35,10 @@ pub async fn reconcile(
         .map_err(|error| StorageError::Other(format!("placement relief: {error}")))?;
     let publications = crate::queue::capacity::read_publications(store).await?;
     let hosts = host_memory(&registry, &publications, now);
-    // Every host that says it is pressured right now stamps this instant;
-    // the rest keep whatever the previous report remembered, and anything
-    // older than the window is dropped so the map cannot grow without bound.
-    let pressure_seen = pressure_window(&hosts, &previous_pressure, &created_at, now);
-    let outcomes = plan(
-        &document,
-        &registry,
-        &hosts,
-        &relocations,
-        &pressure_seen,
-        now,
-    )
-    .map_err(|error| StorageError::Other(format!("placement relief: {error}")))?;
+    let outcomes = plan(&document, &registry, &hosts)
+        .map_err(|error| StorageError::Other(format!("placement relief: {error}")))?;
 
     let mut report = ReliefReport {
-        schema_version: SCHEMA_VERSION,
         decision_id,
         created_at: created_at.clone(),
         mode: policy.mode,
@@ -65,13 +48,12 @@ pub async fn reconcile(
         },
         rows: Vec::with_capacity(outcomes.len()),
         relocations,
-        pressure_seen,
     };
-    let mut relocated = usize::default();
+    let mut relocated: Vec<String> = Vec::new();
     let authority = crate::cli::placement::local_is_authority(&document, &registry);
     for outcome in outcomes {
         let mut row = outcome.row;
-        if row.candidates.len() > usize::default() {
+        if !row.candidates.is_empty() {
             report.summary.pressured += 1;
         }
         let Some(due) = outcome.due else {
@@ -82,7 +64,7 @@ pub async fn reconcile(
             continue;
         };
         report.summary.planned += 1;
-        if let Some(refusal) = refusal(store, policy, &authority, relocated, &due.action).await? {
+        if let Some(refusal) = refusal(store, policy, &authority, &relocated, &due.action).await? {
             row.classification = refusal.classification;
             row.detail = format!("{}; {}", row.detail, refusal.detail);
             if refusal.blocked {
@@ -91,6 +73,7 @@ pub async fn reconcile(
             report.rows.push(row);
             continue;
         }
+        let profile = due.profile.name.clone();
         if execute(
             store,
             policy,
@@ -102,7 +85,7 @@ pub async fn reconcile(
         )
         .await?
         {
-            relocated += 1;
+            relocated.push(profile);
         }
         report.rows.push(row);
     }

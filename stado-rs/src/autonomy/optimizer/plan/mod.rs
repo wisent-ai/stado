@@ -13,7 +13,7 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::autonomy::cost::PriceBook;
-use crate::autonomy::model::{DecisionKind, DecisionRecord, SCHEMA_VERSION};
+use crate::autonomy::model::{DecisionKind, DecisionRecord};
 use crate::autonomy::policy::AutonomyPolicy;
 use crate::capabilities::ProviderId;
 use crate::models::Job;
@@ -34,16 +34,6 @@ use decisions::{
     explain_selection, persist_predicted_savings, persist_unplaced_decision, placement_constraints,
     update_job_placement,
 };
-
-/// How many of the newest feedback records one planning pass reads.
-///
-/// The pass used to read every record ever written -- 3,642 of them on
-/// 2026-09-03, one object request each, on every pass. This is the cost bound
-/// that stops the archive's size from reaching the planner at all: the
-/// per-target median startup time and failure ratio these records feed are
-/// statistics, and a few hundred recent samples per target describe a target
-/// at least as well as a month of them.
-const FEEDBACK_SAMPLE_CAP: usize = 512;
 
 #[expect(
     clippy::too_many_arguments,
@@ -71,7 +61,7 @@ pub async fn plan_queued(
     summary.provider_errors = provider_errors;
     let history_rows = crate::scheduler::cost::collect_completed(store).await?;
     let wall_times = crate::scheduler::cost::wall_time_table(&history_rows);
-    let feedback = super::storage::list_recent_feedback(store, FEEDBACK_SAMPLE_CAP).await?;
+    let feedback = super::storage::list_recent_feedback(store).await?;
     let planning_now = Utc::now();
     // The planner considers the whole queue: it is placing capacity, not
     // claiming a slot, so nothing here narrows the window and nothing bounds
@@ -92,7 +82,7 @@ pub async fn plan_queued(
         .await?;
     queued.sort_by(job_order);
     for job in queued {
-        summary.considered_jobs += true as usize;
+        summary.considered_jobs.push(job.job_id.clone());
         if !job.pinned_host.is_empty() && job.pinned_host != job.assigned_to {
             continue;
         }
@@ -111,7 +101,7 @@ pub async fn plan_queued(
             .filter(|candidate| candidate.eligible)
             .min_by(|left, right| candidate_order(left, right));
         let Some(selected) = selected else {
-            summary.no_eligible_target += true as usize;
+            summary.no_eligible_target.push(job.job_id.clone());
             persist_unplaced_decision(store, &job, candidates, policy, inventory_snapshot_id)
                 .await?;
             continue;
@@ -128,12 +118,11 @@ pub async fn plan_queued(
         )
         .await?;
         let Some(lease) = lease else {
-            summary.active_lease_skips += true as usize;
+            summary.active_lease_skips.push(job.job_id.clone());
             continue;
         };
         let explanation = explain_selection(selected, &candidates);
         let decision = DecisionRecord {
-            schema_version: SCHEMA_VERSION,
             decision_id: decision_id.clone(),
             kind: DecisionKind::Placement,
             subject_id: job.job_id.clone(),
@@ -155,10 +144,10 @@ pub async fn plan_queued(
             let _ = super::storage::release_placement_lease(store, &job.job_id, &lease.token).await;
             return Err(error);
         }
-        summary.decided_jobs += true as usize;
+        summary.decided_jobs.push(job.job_id.clone());
         match update_job_placement(store, &job, selected).await {
             Ok(true) => {
-                summary.changed_jobs += true as usize;
+                summary.changed_jobs.push(job.job_id.clone());
                 if let Err(error) =
                     persist_predicted_savings(store, &decision_id, &job, selected, &candidates, now)
                         .await

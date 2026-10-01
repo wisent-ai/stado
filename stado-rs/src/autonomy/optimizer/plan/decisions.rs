@@ -9,13 +9,11 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::autonomy::model::{DecisionKind, DecisionRecord, SavingsRecord, SCHEMA_VERSION};
+use crate::autonomy::model::{DecisionKind, DecisionRecord, SavingsRecord};
 use crate::autonomy::optimizer::types::PlacementCandidate;
 use crate::autonomy::policy::AutonomyPolicy;
 use crate::models::Job;
 use crate::queue::{JobStorage, StorageError};
-
-const TWO: f64 = (u16::BITS / u8::BITS) as f64;
 
 pub(super) async fn persist_predicted_savings(
     store: &JobStorage,
@@ -39,7 +37,6 @@ pub(super) async fn persist_predicted_savings(
         return Ok(());
     }
     let record = SavingsRecord {
-        schema_version: SCHEMA_VERSION,
         savings_id: uuid::Uuid::new_v4().to_string(),
         decision_id: decision_id.to_string(),
         resource_id: None,
@@ -52,7 +49,6 @@ pub(super) async fn persist_predicted_savings(
         realized_cost_usd: None,
         predicted_savings_usd: baseline_cost - selected_cost,
         realized_savings_usd: None,
-        confidence: TWO.recip(),
         source_invoice_period: None,
     };
     super::storage::write_savings(store, &record).await
@@ -113,7 +109,6 @@ pub(super) async fn persist_unplaced_decision(
     let now = Utc::now();
     let expires = now + chrono::Duration::seconds(policy.limits.decision_ttl_seconds as i64);
     let decision = DecisionRecord {
-        schema_version: SCHEMA_VERSION,
         decision_id: uuid::Uuid::new_v4().to_string(),
         kind: DecisionKind::Placement,
         subject_id: job.job_id.clone(),

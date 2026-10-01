@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cli::resources::model::{ActionKind, SCHEMA_VERSION};
+use crate::cli::resources::model::ActionKind;
 use crate::cli::CmdError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,11 +57,9 @@ pub struct ActionState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationState {
-    pub schema_version: u8,
     pub operation_id: String,
     pub plan_hash: String,
     pub phase: Phase,
-    pub revision: u64,
     pub created_at: String,
     pub updated_at: String,
     pub actions: BTreeMap<String, ActionState>,
@@ -70,7 +68,6 @@ pub struct OperationState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationEvent {
-    pub schema_version: u8,
     pub event_id: String,
     pub operation_id: String,
     pub recorded_at: String,
@@ -80,7 +77,7 @@ pub struct OperationEvent {
 }
 
 pub(super) fn validate_state(operation_id: &str, state: &OperationState) -> Result<(), CmdError> {
-    if state.schema_version != SCHEMA_VERSION || state.operation_id != operation_id {
+    if state.operation_id != operation_id {
         return Err(CmdError::click("invalid operation state document"));
     }
     Ok(())

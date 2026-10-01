@@ -32,10 +32,13 @@ pub(super) fn observed_failure_probability(
     Some(failed as f64 / samples.len() as f64)
 }
 
+/// The middle value: walking the sorted values from both ends, the first
+/// place the low side reaches the high side.
 fn median(mut values: Vec<f64>) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
     values.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
-    Some(values[values.len() / (u16::BITS / u8::BITS) as usize])
+    values
+        .iter()
+        .zip(values.iter().rev())
+        .find(|(low, high)| low >= high)
+        .map(|(middle, _)| *middle)
 }

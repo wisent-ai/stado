@@ -23,25 +23,7 @@ pub(super) async fn relief(json_output: bool) -> Result<(), CmdError> {
         crate::autonomy::placement_relief::ReliefReport,
     >(&store, LATEST_REPORT)
     .await?;
-    let relocations = previous
-        .as_ref()
-        .map(|report| report.relocations.clone())
-        .unwrap_or_default();
-    // The same window the tick keeps: an operator reading this has to see the
-    // profile the next tick will move, and a host that dipped below its
-    // watermark two minutes ago is still pressured to both of them.
-    let pressure_seen = previous
-        .as_ref()
-        .map(|report| report.pressure_seen.clone())
-        .unwrap_or_default();
-    let rows: Vec<ReliefRow> = plan(
-        &document,
-        &parsed,
-        &hosts,
-        &relocations,
-        &pressure_seen,
-        now,
-    )
+    let rows: Vec<ReliefRow> = plan(&document, &parsed, &hosts)
     .map_err(CmdError::click)?
     .into_iter()
     .map(|outcome| outcome.row)

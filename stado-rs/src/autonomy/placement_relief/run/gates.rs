@@ -12,7 +12,7 @@ use chrono::Utc;
 use crate::autonomy::policy::{AutonomyMode, AutonomyPolicy};
 use crate::queue::{JobStorage, StorageError};
 
-use super::super::{words, DueAction, MAX_RELOCATIONS_PER_TICK};
+use super::super::{words, DueAction};
 
 /// Why a move is not being made, in the report's own words.
 pub(super) struct Refusal {
@@ -27,7 +27,7 @@ pub(super) async fn refusal(
     store: &JobStorage,
     policy: &AutonomyPolicy,
     authority: &Result<Option<bool>, String>,
-    relocated: usize,
+    relocated: &[String],
     action: &DueAction,
 ) -> Result<Option<Refusal>, StorageError> {
     if policy.mode == AutonomyMode::Report || policy.emergency_paused {
@@ -49,10 +49,10 @@ pub(super) async fn refusal(
         }));
     }
 
-    if relocated >= MAX_RELOCATIONS_PER_TICK || relocated >= policy.limits.max_actions_per_tick {
+    if let Some(moved) = relocated.first() {
         return Ok(Some(Refusal {
             classification: words::ACTION_LIMIT.to_string(),
-            detail: "this tick already spent its relocation".to_string(),
+            detail: format!("this tick already relocated {moved}"),
             blocked: true,
         }));
     }

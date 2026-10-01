@@ -5,8 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u8 = true as u8;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {

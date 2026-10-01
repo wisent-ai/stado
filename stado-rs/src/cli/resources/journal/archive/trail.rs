@@ -16,7 +16,7 @@ use crate::cli::resources::journal::names::{
     remote_path, validate_artifact_name, validate_operation_id,
 };
 use crate::cli::resources::journal::records::OperationEvent;
-use crate::cli::resources::model::{canonical_json_bytes, SCHEMA_VERSION};
+use crate::cli::resources::model::canonical_json_bytes;
 use crate::cli::CmdError;
 
 use super::Journal;
@@ -30,7 +30,6 @@ impl Journal {
         detail: Value,
     ) -> Result<(), CmdError> {
         let record = OperationEvent {
-            schema_version: SCHEMA_VERSION,
             event_id: Uuid::new_v4().to_string(),
             operation_id: operation_id.to_string(),
             recorded_at: now(),

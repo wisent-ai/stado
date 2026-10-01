@@ -34,7 +34,6 @@ pub(super) struct Summary {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ResourcesReport {
-    pub(super) schema_version: u8,
     pub(super) generated_at: String,
     pub(super) read_only: bool,
     pub(super) configuration: ConfigurationReport,

@@ -2,11 +2,9 @@
 //!
 //! Ownership is the whole point. The window is opened only after Cloud Billing
 //! has explicitly answered `billingEnabled=false`, so a window somebody else
-//! opened is never adopted and never closed by mistake. Closing is retried,
-//! and a close that cannot be confirmed is escalated by the caller rather than
-//! swallowed — an unclosed window costs money silently.
-
-use std::time::Duration;
+//! opened is never adopted and never closed by mistake. A close that Cloud
+//! Billing does not confirm is escalated by the caller rather than swallowed
+//! — an unclosed window costs money silently.
 
 use serde_json::{json, Value};
 
@@ -52,33 +50,18 @@ pub(super) async fn update_gcp_billing(project: &str, account: &str) -> Result<(
 }
 
 pub(super) async fn close_billing_window(project: &str) -> Result<(), CmdError> {
-    let mut last = None;
-    let attempts = "GCP".len();
-    for attempt in usize::MIN..attempts {
-        match gcp_billing_request(
-            reqwest::Method::PUT,
-            project,
-            Some(json!({"billingAccountName": ""})),
-        )
-        .await
-        {
-            Ok(value) if value.get("billingEnabled").and_then(Value::as_bool) == Some(false) => {
-                return Ok(())
-            }
-            Ok(value) => {
-                last = Some(format!(
-                    "Cloud Billing did not explicitly confirm billingEnabled=false: {value}"
-                ))
-            }
-            Err(error) => last = Some(error.to_string()),
-        }
-        if attempt.saturating_add(usize::from(true)) < attempts {
-            tokio::time::sleep(Duration::from_secs("ok".len() as u64)).await;
-        }
+    let value = gcp_billing_request(
+        reqwest::Method::PUT,
+        project,
+        Some(json!({"billingAccountName": ""})),
+    )
+    .await?;
+    if value.get("billingEnabled").and_then(Value::as_bool) == Some(false) {
+        return Ok(());
     }
-    Err(CmdError::click(last.unwrap_or_else(|| {
-        "unknown Cloud Billing close failure".to_string()
-    })))
+    Err(CmdError::click(format!(
+        "Cloud Billing did not explicitly confirm billingEnabled=false: {value}"
+    )))
 }
 
 async fn gcp_billing_request(

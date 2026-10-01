@@ -20,7 +20,7 @@ use serde_json::json;
 use crate::cli::resources::journal::clock::now;
 use crate::cli::resources::journal::names::{remote_path, validate_operation_id};
 use crate::cli::resources::journal::records::{ActionPhase, ActionState, OperationState, Phase};
-use crate::cli::resources::model::{canonical_json_bytes, Plan, SCHEMA_VERSION};
+use crate::cli::resources::model::{canonical_json_bytes, Plan};
 use crate::cli::CmdError;
 use crate::queue::{JobStorage, StorageError};
 
@@ -80,11 +80,9 @@ impl Journal {
             })
             .collect();
         let state = OperationState {
-            schema_version: SCHEMA_VERSION,
             operation_id: plan.operation_id.clone(),
             plan_hash: plan.sha256()?,
             phase: Phase::Planned,
-            revision: u64::default(),
             created_at: created_at.clone(),
             updated_at: created_at,
             actions,

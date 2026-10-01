@@ -56,7 +56,6 @@ impl Journal {
         validate_state(operation_id, &state)?;
         let before_actions = state.actions.clone();
         change(&mut state)?;
-        state.revision = state.revision.saturating_add(true as u64);
         let updated_at = now();
         for (action_id, action) in &mut state.actions {
             if before_actions.get(action_id) != Some(action) {

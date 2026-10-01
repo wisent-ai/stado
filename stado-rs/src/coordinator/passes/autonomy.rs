@@ -125,10 +125,10 @@ pub(crate) async fn run_autonomy_once(
         .await?;
         log(&format!(
             "autonomy placement: considered={} decided={} changed={} blocked={}",
-            placement.considered_jobs,
-            placement.decided_jobs,
-            placement.changed_jobs,
-            placement.no_eligible_target
+            placement.considered_jobs.len(),
+            placement.decided_jobs.len(),
+            placement.changed_jobs.len(),
+            placement.no_eligible_target.len()
         ));
     } else if policy.mode != crate::autonomy::AutonomyMode::Report {
         log("autonomy placement blocked: inventory is incomplete");

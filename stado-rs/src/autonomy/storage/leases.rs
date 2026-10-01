@@ -6,14 +6,12 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::autonomy::model::SCHEMA_VERSION;
 use crate::queue::{JobStorage, StorageError};
 
 use super::LEASE_PREFIX;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacementLease {
-    pub schema_version: u16,
     pub subject_id: String,
     pub decision_id: String,
     pub token: String,
@@ -42,7 +40,6 @@ pub async fn acquire_placement_lease(
         .map_err(|_| StorageError::Other("placement lease TTL exceeds i64".to_string()))?;
     let path = lease_path(subject_id);
     let lease = PlacementLease {
-        schema_version: SCHEMA_VERSION,
         subject_id: subject_id.to_string(),
         decision_id: decision_id.to_string(),
         token: uuid::Uuid::new_v4().to_string(),
@@ -58,12 +55,6 @@ pub async fn acquire_placement_lease(
         return Ok(None);
     };
     let prior: PlacementLease = serde_json::from_str(&current.content)?;
-    if prior.schema_version != SCHEMA_VERSION {
-        return Err(StorageError::Other(format!(
-            "unsupported placement lease schema_version {}",
-            prior.schema_version
-        )));
-    }
     if prior.active_at(now) {
         return Ok((prior.decision_id == decision_id && prior.holder == holder).then_some(prior));
     }
@@ -91,12 +82,6 @@ pub async fn renew_placement_lease(
         return Ok(None);
     };
     let mut lease: PlacementLease = serde_json::from_str(&current.content)?;
-    if lease.schema_version != SCHEMA_VERSION {
-        return Err(StorageError::Other(format!(
-            "unsupported placement lease schema_version {}",
-            lease.schema_version
-        )));
-    }
     if lease.token != token {
         return Ok(None);
     }
@@ -122,12 +107,6 @@ pub async fn release_placement_lease(
         return Ok(false);
     };
     let mut lease: PlacementLease = serde_json::from_str(&current.content)?;
-    if lease.schema_version != SCHEMA_VERSION {
-        return Err(StorageError::Other(format!(
-            "unsupported placement lease schema_version {}",
-            lease.schema_version
-        )));
-    }
     if lease.token != token {
         return Ok(false);
     }
@@ -153,8 +132,7 @@ pub async fn release_placement_lease_exact(
     owned: &PlacementLease,
     released: &PlacementLease,
 ) -> Result<bool, StorageError> {
-    if released.schema_version != owned.schema_version
-        || released.subject_id != owned.subject_id
+    if released.subject_id != owned.subject_id
         || released.decision_id != owned.decision_id
         || released.token != owned.token
         || released.holder != owned.holder
@@ -171,12 +149,6 @@ pub async fn release_placement_lease_exact(
     let current_lease: PlacementLease = serde_json::from_str(&current.content)?;
     if current_lease == *released {
         return Ok(true);
-    }
-    if current_lease.schema_version != SCHEMA_VERSION {
-        return Err(StorageError::Other(format!(
-            "unsupported placement lease schema_version {}",
-            current_lease.schema_version
-        )));
     }
     if current_lease.token != owned.token {
         return Ok(false);

@@ -83,11 +83,13 @@ pub struct OperationScope {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Plan {
-    pub schema_version: u8,
     pub operation_id: String,
     pub intent: Intent,
     pub created_at: String,
-    pub expires_at: String,
+    /// Set only by the autonomy reconciler, from the policy's
+    /// `decision_ttl_seconds`; an operator's plan has none.
+    #[serde(default)]
+    pub expires_at: Option<String>,
     pub stado_version: String,
     pub scope: OperationScope,
     pub configuration_fingerprint: String,

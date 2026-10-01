@@ -42,11 +42,11 @@ pub struct PlacementCandidate {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlacementRunSummary {
-    pub considered_jobs: usize,
-    pub decided_jobs: usize,
-    pub changed_jobs: usize,
-    pub no_eligible_target: usize,
-    pub active_lease_skips: usize,
+    pub considered_jobs: Vec<String>,
+    pub decided_jobs: Vec<String>,
+    pub changed_jobs: Vec<String>,
+    pub no_eligible_target: Vec<String>,
+    pub active_lease_skips: Vec<String>,
     pub provider_errors: BTreeMap<String, String>,
 }
 

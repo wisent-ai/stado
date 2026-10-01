@@ -6,7 +6,6 @@ mod taxonomy;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
 use super::{PriceQuote, PriceSource, PriceState};
@@ -150,7 +149,6 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             };
             for region in regions {
                 source.quotes.push(PriceQuote {
-                    schema_version: SCHEMA_VERSION,
                     provider: ProviderId::Gcp,
                     sku: sku
                         .get("skuId")
@@ -212,11 +210,12 @@ fn gcp_sku_hourly_rate(sku: &Value) -> Option<(f64, &'static str)> {
                 .or_else(|| value.as_f64())
         })
         .unwrap_or_default();
+    // `google.type.Money.nanos` counts billionths of a unit, the same scale
+    // as std's nanoseconds of a second.
     let nanos = price
         .get("nanos")
-        .and_then(Value::as_f64)
+        .and_then(Value::as_u64)
+        .map(|nanos| std::time::Duration::from_nanos(nanos).as_secs_f64())
         .unwrap_or_default();
-    let decimal_base = (u8::BITS + (u16::BITS / u8::BITS)) as f64;
-    let nanos_exponent = (u8::BITS + true as u32) as i32;
-    Some((units + nanos / decimal_base.powi(nanos_exponent), unit))
+    Some((units + nanos, unit))
 }

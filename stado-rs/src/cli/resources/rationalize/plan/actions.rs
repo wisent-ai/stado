@@ -44,7 +44,7 @@ pub(super) fn actions_for(finding: &Finding) -> Vec<Action> {
         }],
         "persistent-disk" => {
             let snapshot_id = format!("action-{}", uuid::Uuid::new_v4().simple());
-            let snapshot_name = recovery_snapshot_name(&resource.name);
+            let snapshot_name = recovery_snapshot_name();
             vec![
                 Action {
                     id: snapshot_id.clone(),

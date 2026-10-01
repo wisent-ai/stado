@@ -18,9 +18,7 @@
 //! `stado placement move` runs — same claim, same execution, same rollback —
 //! under the same rails as every other autonomous mutation: report mode
 //! plans and records, the emergency pause and circuit breaker block, one
-//! lease per profile, one relocation per tick, and a profile moved within
-//! the cooldown is left where it is so two hosts cannot hand a profile back
-//! and forth.
+//! lease per profile and one relocation per tick.
 //!
 //! [`evidence`] reads what each host says about its memory, [`plan`] decides
 //! what every profile needs from that evidence alone, and [`run`] puts each
@@ -41,37 +39,11 @@ pub use run::reconcile;
 
 pub(crate) const LATEST_REPORT: &str = "state/autonomy/placement_relief/latest.json";
 const REPORT_PREFIX: &str = "state/autonomy/placement_relief/runs";
-const SCHEMA_VERSION: u16 = 1;
 
-/// How long after a relocation a profile stays where it landed, whatever the
-/// evidence says. A move stops every unit in the profile, copies its state
-/// and starts it elsewhere; the source host's next memory reading has to see
-/// those processes gone and the destination's has to see them warm before
-/// either reading means anything. The host memory janitor passes at most
-/// every five minutes and publishes after each pass; thirty minutes is six
-/// publications on both sides, enough for a swapped-out source to page its
-/// remaining processes back in and for a destination that could not carry
-/// the load to say so.
-pub const RELOCATION_COOLDOWN_SECONDS: i64 = 1800;
-
-/// How long one published pressure reading keeps a host pressured for this
-/// stage, whatever its next publication says.
-///
-/// A host sitting on its memory watermark crosses it every few minutes, so
-/// one instantaneous sample decides nothing: the tick that happens to read
-/// the host between two dips settles the profile on a machine that has no
-/// memory left, and the tick that reads a dip moves it. Pressure therefore
-/// sticks for this window, and a host has to publish clear for the whole of
-/// it before the profile on it settles. Three times the memory pass's
-/// five-minute cadence, so a recovered host is settled within a quarter of
-/// an hour.
-pub const PRESSURE_STICKY_SECONDS: i64 = 900;
-
-/// Relocations one tick may execute. One: every destination's headroom was
-/// measured before the first move, and a second profile placed onto the same
-/// host in the same tick would be placed on headroom the first move already
-/// spent.
-pub const MAX_RELOCATIONS_PER_TICK: usize = 1;
+// A tick moves one profile at most: every destination's headroom was
+// measured before the first move, and a second profile placed onto the same
+// host in the same tick would be placed on headroom the first move already
+// spent. The next tick measures again.
 
 /// The words a row is classified with. Written once so the report, the CLI
 /// and the tests read the same vocabulary.
@@ -84,8 +56,6 @@ pub mod words {
     /// The placed host is over its watermark and no other declared host has
     /// more headroom; the row names every candidate and why it was refused.
     pub const NO_DESTINATION: &str = "no_destination_with_headroom";
-    /// The profile was relocated within the cooldown.
-    pub const MOVED_RECENTLY: &str = "moved_recently";
     /// The profile cannot be moved by anyone: split, incomplete or
     /// release-controlled.
     pub const PROFILE_UNMOVABLE: &str = "profile_unmovable";
@@ -144,20 +114,13 @@ pub struct ReliefSummary {
 /// What one pass left behind, and when each profile last landed somewhere.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReliefReport {
-    pub schema_version: u16,
     pub decision_id: String,
     pub created_at: String,
     pub mode: crate::autonomy::policy::AutonomyMode,
     pub summary: ReliefSummary,
     pub rows: Vec<ReliefRow>,
-    /// Profile name to the RFC 3339 instant of its last relocation. Carried
-    /// forward from the previous report, so a cooldown survives ticks that
-    /// move nothing.
+    /// Profile name to the RFC 3339 instant of its last relocation, carried
+    /// forward from the previous report as history.
     #[serde(default)]
     pub relocations: BTreeMap<String, String>,
-    /// Host name to the RFC 3339 instant it last published memory pressure.
-    /// Carried forward, so a host that dips below its watermark between two
-    /// ticks is still treated as pressured by the next one.
-    #[serde(default)]
-    pub pressure_seen: BTreeMap<String, String>,
 }

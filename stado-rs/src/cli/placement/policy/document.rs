@@ -84,7 +84,7 @@ fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, Cmd
             )));
         }
     }
-    if seen.contains("*") && seen.len() != usize::from(true) {
+    if seen.contains("*") && seen.iter().any(|action| *action != "*") {
         return Err(CmdError::click(format!(
             "{target} declares the weles wildcard alongside named actions; the loader requires \
              '*' to stand alone, because a list that says both does not say which one wins"

@@ -134,11 +134,10 @@ pub(super) fn schedule_plan(
         projects.insert(resource.account.clone());
     }
     let plan = Plan {
-        schema_version: crate::cli::resources::model::SCHEMA_VERSION,
         operation_id,
         intent: Intent::AutonomousReconcile,
         created_at: created.to_rfc3339(),
-        expires_at: expires.to_rfc3339(),
+        expires_at: Some(expires.to_rfc3339()),
         stado_version: env!("CARGO_PKG_VERSION").to_string(),
         scope: OperationScope {
             providers,

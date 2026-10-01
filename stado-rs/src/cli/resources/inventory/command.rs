@@ -117,7 +117,6 @@ pub(crate) async fn build(args: &ShowArgs) -> Result<ResourcesReport, CmdError> 
         incomplete_sources,
     };
     let report = ResourcesReport {
-        schema_version: u8::from(true),
         generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         read_only: true,
         configuration: ConfigurationReport {

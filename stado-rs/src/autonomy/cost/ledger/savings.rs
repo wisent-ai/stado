@@ -11,7 +11,7 @@ pub struct SavingsSummary {
     pub records: usize,
     pub predicted_savings_usd: f64,
     pub realized_savings_usd: f64,
-    pub pending_measurement: usize,
+    pub pending_measurement: Vec<String>,
     pub by_provider: BTreeMap<String, f64>,
 }
 
@@ -40,7 +40,7 @@ pub fn summarize_savings_with_measurements(
                 .entry(record.provider.as_str().to_string())
                 .or_default() += measurement.realized_savings_usd;
         } else {
-            summary.pending_measurement += true as usize;
+            summary.pending_measurement.push(record.savings_id.clone());
         }
     }
     summary

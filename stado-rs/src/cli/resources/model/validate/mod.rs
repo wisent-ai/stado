@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cli::CmdError;
 
-use super::{ActionKind, Authorization, Intent, Plan, ProviderKind, Reversibility, SCHEMA_VERSION};
+use super::{ActionKind, Authorization, Intent, Plan, ProviderKind, Reversibility};
 use locator::validate_action_locator;
 use rollback::{rollback_pair, validate_rollback};
 
@@ -30,12 +30,6 @@ impl Plan {
     }
 
     pub fn validate(&self) -> Result<(), CmdError> {
-        if self.schema_version != SCHEMA_VERSION {
-            return Err(CmdError::click(format!(
-                "unsupported resource plan schema {}",
-                self.schema_version
-            )));
-        }
         if self.operation_id.is_empty() {
             return Err(CmdError::click("resource plan needs an operation id"));
         }

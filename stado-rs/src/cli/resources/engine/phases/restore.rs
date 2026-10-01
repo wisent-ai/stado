@@ -166,7 +166,7 @@ pub(in crate::cli::resources::engine) async fn restore_locked(
             })
             .await?;
         let restore_result = match context.restore(action, rollback, receipt).await {
-            Ok(_) => context.wait_for(action, &rollback.postconditions).await,
+            Ok(_) => context.check_postconditions(action, &rollback.postconditions).await,
             Err(error) => Err(error),
         };
         let restore_result = match restore_result {

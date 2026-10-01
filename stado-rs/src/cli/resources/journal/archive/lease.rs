@@ -1,24 +1,23 @@
-//! The single-writer lock an operation is mutated under: an expiring lease
-//! taken by compare-and-swap, renewed between mutations, and released by the
-//! phase that took it. An expired lease may be stolen; a live one may not.
+//! The single-writer lock an operation is mutated under: taken by
+//! compare-and-swap, checked between mutations, and released by the phase
+//! that took it. A held lock is never stolen; a released one may be taken.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::cli::resources::journal::clock::{lease_duration, now, timestamp};
+use crate::cli::resources::journal::clock::now;
 use crate::cli::resources::journal::names::{remote_path, validate_operation_id};
-use crate::cli::resources::model::{canonical_json_bytes, SCHEMA_VERSION};
+use crate::cli::resources::model::canonical_json_bytes;
 use crate::cli::CmdError;
 
 use super::{map_conflict, Journal};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OperationLease {
-    schema_version: u8,
     owner: String,
     acquired_at: String,
-    expires_at: String,
+    #[serde(default)]
+    released_at: Option<String>,
 }
 
 impl Journal {
@@ -29,12 +28,10 @@ impl Journal {
             crate::watchdog::hostname(),
             Uuid::new_v4().simple()
         );
-        let now_value = Utc::now();
         let lease = OperationLease {
-            schema_version: SCHEMA_VERSION,
             owner: owner.clone(),
-            acquired_at: timestamp(now_value),
-            expires_at: timestamp(now_value + lease_duration()),
+            acquired_at: now(),
+            released_at: None,
         };
         let body = String::from_utf8(canonical_json_bytes(&lease)?)
             .map_err(|error| CmdError::click(error.to_string()))?;
@@ -48,12 +45,10 @@ impl Journal {
             .await?
             .ok_or_else(|| CmdError::click("operation lock disappeared"))?;
         let current: OperationLease = serde_json::from_str(&versioned.content)?;
-        let expires = DateTime::parse_from_rfc3339(&current.expires_at)
-            .map_err(|error| CmdError::click(format!("invalid operation lock: {error}")))?;
-        if expires.with_timezone(&Utc) > Utc::now() {
+        if current.released_at.is_none() {
             return Err(CmdError::click(format!(
-                "operation is locked by {} until {}",
-                current.owner, current.expires_at
+                "operation is locked by {} since {}; it stays locked until that run releases it",
+                current.owner, current.acquired_at
             )));
         }
         self.store
@@ -70,19 +65,12 @@ impl Journal {
             .read_text_versioned(&path)
             .await?
             .ok_or_else(|| CmdError::click("operation lock disappeared"))?;
-        let mut lease: OperationLease = serde_json::from_str(&versioned.content)?;
-        if lease.owner != owner {
+        let lease: OperationLease = serde_json::from_str(&versioned.content)?;
+        if lease.owner != owner || lease.released_at.is_some() {
             return Err(CmdError::click(
                 "operation lock was lost before the next mutation",
             ));
         }
-        lease.expires_at = timestamp(Utc::now() + lease_duration());
-        let body = String::from_utf8(canonical_json_bytes(&lease)?)
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        self.store
-            .compare_and_swap_text(&path, &versioned.version, &body)
-            .await
-            .map_err(map_conflict)?;
         Ok(())
     }
 
@@ -95,7 +83,7 @@ impl Journal {
         if lease.owner != owner {
             return Err(CmdError::click("operation lock ownership changed"));
         }
-        lease.expires_at = now();
+        lease.released_at = Some(now());
         let body = String::from_utf8(canonical_json_bytes(&lease)?)
             .map_err(|error| CmdError::click(error.to_string()))?;
         self.store

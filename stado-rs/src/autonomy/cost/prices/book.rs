@@ -5,7 +5,6 @@
 //! machine from its core, memory and accelerator SKUs — which is what the
 //! shape table at the bottom describes.
 
-use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
 use super::{PriceBook, PriceQuote};
@@ -80,7 +79,6 @@ impl PriceBook {
             quote.accelerator_type.as_deref() == Some(accelerator_type)
         })?;
         Some(PriceQuote {
-            schema_version: SCHEMA_VERSION,
             provider: ProviderId::Gcp,
             sku: format!("{}+{}+{}", core.sku, memory.sku, accelerator.sku),
             description: format!(

@@ -13,7 +13,6 @@ use crate::cli::CmdError;
 
 #[derive(Debug, Serialize)]
 struct VerificationReport {
-    schema_version: u8,
     operation_id: String,
     checked_at: String,
     desired_phase: String,
@@ -143,7 +142,6 @@ pub(in crate::cli::resources::engine) async fn verify_locked(
     }
     let ok = actions.iter().all(|action| action.ok);
     let report = VerificationReport {
-        schema_version: super::model::SCHEMA_VERSION,
         operation_id: plan.operation_id.clone(),
         checked_at: chrono::Utc::now().to_rfc3339(),
         desired_phase: if restored { "restored" } else { "applied" }.to_string(),
@@ -189,7 +187,7 @@ pub(in crate::cli::resources::engine) async fn verify_locked(
         }
     }
     if !ok {
-        return Err(CmdError::silent(true as i32));
+        return Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE));
     }
     Ok(())
 }

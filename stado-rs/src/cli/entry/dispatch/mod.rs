@@ -29,10 +29,11 @@ use failure::{failure_point, failure_service};
 /// that can hang the tool.
 ///
 /// Exit codes:
-/// 0 on success, [`CLICK_ERROR_CODE`] on a runtime error, 2 on
-/// usage errors (clap parse failures exit 2 on their own) and for
-/// not-yet-implemented commands, and [`crate::primitives::failure::retry_exit_code`]
-/// when the failure is one a retry can clear. See `stado.wisent.com/docs/cli`.
+/// `EXIT_SUCCESS` on success, [`CLICK_ERROR_CODE`] on a runtime error,
+/// clap's usage code on usage errors (clap parse failures exit with it on
+/// their own) and for not-yet-implemented commands, and
+/// [`crate::primitives::failure::retry_exit_code`] when the failure is one a
+/// retry can clear. See `stado.wisent.com/docs/cli`.
 pub async fn main_entry() -> i32 {
     // Parse in two steps rather than through `Cli::parse()` — which is
     // exactly these two steps — so the matches tree is still in hand
@@ -47,7 +48,7 @@ pub async fn main_entry() -> i32 {
     };
     match dispatch(cli).await {
         // Success.
-        Ok(()) => i32::default(),
+        Ok(()) => nix::libc::EXIT_SUCCESS,
         Err(err) => {
             // A command that printed its own diagnosis and then chose to say
             // nothing more has already answered; adding a classification

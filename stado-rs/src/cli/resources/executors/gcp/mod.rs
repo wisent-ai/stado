@@ -1,8 +1,6 @@
 //! The GCP REST executor: one authenticated client for the batch, and the
 //! transport every typed method in this tree goes through.
 
-use std::time::{Duration, Instant};
-
 use reqwest::Method;
 use serde_json::{json, Value};
 
@@ -93,37 +91,37 @@ impl GcpRest {
         {
             return Ok(());
         }
-        let url = operation
-            .get("selfLink")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                (operation.get("kind").and_then(Value::as_str) == Some("sql#operation"))
-                    .then(|| {
-                        operation.get("name").and_then(Value::as_str).map(|name| {
-                            format!(
-                                "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/operations/{name}",
-                                self.project
-                            )
-                        })
-                    })
-                    .flatten()
-            });
-        let Some(url) = url else {
+        // Compute answers `POST {selfLink}/wait` only once the operation is
+        // done or its own server-side wait elapses, so the loop asks again
+        // without a client clock. Cloud SQL has no wait method; its
+        // operation is read until it reports DONE.
+        let request = match operation.get("selfLink").and_then(Value::as_str) {
+            Some(link) => Some((Method::POST, format!("{link}/wait"))),
+            None => (operation.get("kind").and_then(Value::as_str) == Some("sql#operation"))
+                .then(|| operation.get("name").and_then(Value::as_str))
+                .flatten()
+                .map(|name| {
+                    (
+                        Method::GET,
+                        format!(
+                            "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/operations/{name}",
+                            self.project
+                        ),
+                    )
+                }),
+        };
+        let Some((method, url)) = request else {
             return Ok(());
         };
-        let deadline = Instant::now()
-            + Duration::from_secs(
-                chrono::Duration::hours(true as i64)
-                    .num_seconds()
-                    .try_into()
-                    .unwrap_or_default(),
-            );
         loop {
             let value = self
-                .get_allow_404(&url, "poll resource operation")
-                .await?
-                .ok_or_else(|| CmdError::click("resource operation disappeared while polling"))?;
+                .request_json(method.clone(), &url, None, "wait for resource operation")
+                .await?;
+            if value.get("already_absent").and_then(Value::as_bool) == Some(true) {
+                return Err(CmdError::click(format!(
+                    "resource operation disappeared while waiting: {url}"
+                )));
+            }
             if value.get("status").and_then(Value::as_str) == Some("DONE") {
                 if value.get("error").is_some_and(|error| !error.is_null()) {
                     return Err(CmdError::click(format!(
@@ -133,12 +131,6 @@ impl GcpRest {
                 }
                 return Ok(());
             }
-            if Instant::now() >= deadline {
-                return Err(CmdError::click(format!(
-                    "resource operation did not finish before timeout: {url}"
-                )));
-            }
-            tokio::time::sleep(Duration::from_secs(true as u64)).await;
         }
     }
 

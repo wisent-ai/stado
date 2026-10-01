@@ -17,7 +17,7 @@ use crate::capabilities::ProviderId;
 use crate::models::Job;
 
 use super::feedback::{observed_failure_probability, observed_startup_seconds};
-use super::shapes::{crosses_provider_boundary, machine_capacity};
+use super::shapes::crosses_provider_boundary;
 
 /// A target with no recorded startup is not charged one, and a target with
 /// no recorded failures carries no retry cost: the pass prices only what
@@ -136,16 +136,11 @@ pub(super) fn candidate(
         ));
     }
     if job.cpu_cores > i64::default() || job.memory_gb > i64::default() {
-        match machine_capacity(offer.provider, &offer.machine_type) {
-            Some((cpu, memory)) if cpu >= job.cpu_cores && memory >= job.memory_gb => {}
-            Some((cpu, memory)) => rejected.push(format!(
-                "shape has {cpu} CPU/{memory} GiB but job needs {}/{}",
-                job.cpu_cores, job.memory_gb
-            )),
-            None => rejected.push(
-                "provider shape capacity is unknown for explicit CPU/RAM constraints".to_string(),
-            ),
-        }
+        // No offer reports the CPU and memory of its shape, so an explicit
+        // constraint cannot be checked against one.
+        rejected.push(
+            "provider shape capacity is unknown for explicit CPU/RAM constraints".to_string(),
+        );
     }
     if !job.platform_os.is_empty()
         && offer.provider != ProviderId::Local

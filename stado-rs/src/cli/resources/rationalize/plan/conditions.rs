@@ -2,7 +2,6 @@
 //! addressed. The stable preconditions pin the exact observed object, so a
 //! resource that changed between audit and apply fails its own plan.
 
-use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::cli::resources::model::{
@@ -12,23 +11,10 @@ use crate::cli::resources::planner;
 use crate::cli::resources::rationalize::Finding;
 use crate::config;
 
-pub(super) fn recovery_snapshot_name(disk_name: &str) -> String {
-    let prefix = "stado-recovery-";
-    let nonce: String = uuid::Uuid::new_v4()
-        .simple()
-        .to_string()
-        .chars()
-        .take((u64::BITS / u8::BITS) as usize)
-        .collect();
-    let suffix = format!("-{}-{nonce}", Utc::now().format("%Y%m%d%H%M%S"));
-    let maximum = (u64::BITS as usize).saturating_sub(true as usize);
-    let available = maximum.saturating_sub(prefix.len() + suffix.len());
-    let disk: String = disk_name.chars().take(available).collect();
-    let disk = disk.trim_end_matches('-');
-    format!(
-        "{prefix}{}{suffix}",
-        if disk.is_empty() { "disk" } else { disk }
-    )
+/// A snapshot name of fixed shape whatever the disk is called: the disk it
+/// recovers is recorded in the plan's action, not squeezed into the name.
+pub(super) fn recovery_snapshot_name() -> String {
+    format!("stado-recovery-{}", uuid::Uuid::new_v4().simple())
 }
 
 pub(super) fn disk_restore_postconditions(

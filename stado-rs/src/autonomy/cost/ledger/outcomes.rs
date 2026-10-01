@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::autonomy::model::{DecisionKind, SavingsMeasurement, SCHEMA_VERSION};
+use crate::autonomy::model::{DecisionKind, SavingsMeasurement};
 use crate::autonomy::policy::AutonomyPolicy;
 use crate::queue::{JobStorage, StorageError};
 
@@ -111,7 +111,6 @@ pub async fn measure_outcomes(
             .to_string();
         if !feedback_ids.contains(decision.decision_id.as_str()) {
             let feedback = super::storage::PlacementFeedback {
-                schema_version: SCHEMA_VERSION,
                 decision_id: decision.decision_id.clone(),
                 subject_id: decision.subject_id.clone(),
                 target_id,
@@ -149,7 +148,6 @@ pub async fn measure_outcomes(
             .filter(|saving| saving.decision_id == decision.decision_id)
         {
             let measurement = SavingsMeasurement {
-                schema_version: SCHEMA_VERSION,
                 measurement_id: format!("measurement-{}", saving.savings_id),
                 savings_id: saving.savings_id.clone(),
                 decision_id: saving.decision_id.clone(),
@@ -160,7 +158,9 @@ pub async fn measure_outcomes(
                 source_invoice_period: None,
             };
             match super::storage::write_savings_measurement(store, &measurement).await {
-                Ok(()) => summary.savings_measured.push(measurement.savings_id.clone()),
+                Ok(()) => summary
+                    .savings_measured
+                    .push(measurement.savings_id.clone()),
                 Err(StorageError::StorageConflict(_)) => {}
                 Err(error) => return Err(error),
             }

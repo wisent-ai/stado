@@ -1,12 +1,7 @@
-//! The clock every archived document is stamped from: the lease window a lock
-//! is taken for, the wire timestamp a record carries, and the compact stamp an
-//! event file is named by.
+//! The clock every archived document is stamped from: the wire timestamp a
+//! record carries, and the compact stamp an event file is named by.
 
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
-
-pub(super) fn lease_duration() -> Duration {
-    Duration::hours((true as i64).saturating_add(true as i64))
-}
+use chrono::{DateTime, SecondsFormat, Utc};
 
 pub(super) fn now() -> String {
     timestamp(Utc::now())

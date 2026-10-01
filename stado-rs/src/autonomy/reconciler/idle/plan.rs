@@ -31,7 +31,7 @@ pub fn build_plan(
     let mut actions = Vec::new();
     let mut providers = BTreeSet::new();
     let mut projects = BTreeSet::new();
-    let mut provider_action_counts: BTreeMap<crate::capabilities::ProviderId, usize> =
+    let mut provider_actions: BTreeMap<crate::capabilities::ProviderId, Vec<String>> =
         BTreeMap::new();
 
     for source in &snapshot.sources {
@@ -83,11 +83,9 @@ pub fn build_plan(
                 && matches!(resource.ownership, Ownership::Owned | Ownership::Adopted)
                 && authorization.allowed
                 && actions.len() < policy.limits.max_actions_per_tick
-                && provider_action_counts
+                && provider_actions
                     .get(&resource.provider)
-                    .copied()
-                    .unwrap_or_default()
-                    < policy.limits.max_actions_per_provider;
+                    .is_none_or(|done| done.len() < policy.limits.max_actions_per_provider);
             findings.push(finding);
             if !can_act {
                 continue;
@@ -158,7 +156,10 @@ pub fn build_plan(
                 rollback,
                 depends_on: Vec::new(),
             });
-            *provider_action_counts.entry(resource.provider).or_default() += true as usize;
+            provider_actions
+                .entry(resource.provider)
+                .or_default()
+                .push(resource.resource_id.clone());
         }
     }
 
@@ -168,11 +169,10 @@ pub fn build_plan(
         ));
     }
     let plan = Plan {
-        schema_version: crate::cli::resources::model::SCHEMA_VERSION,
         operation_id,
         intent: Intent::AutonomousReconcile,
         created_at: created.to_rfc3339(),
-        expires_at: expires.to_rfc3339(),
+        expires_at: Some(expires.to_rfc3339()),
         stado_version: env!("CARGO_PKG_VERSION").to_string(),
         scope: OperationScope {
             providers,

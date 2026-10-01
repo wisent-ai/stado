@@ -8,9 +8,7 @@
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::autonomy::model::{
-    DecisionKind, DecisionRecord, InventorySnapshot, ResourceRecord, SCHEMA_VERSION,
-};
+use crate::autonomy::model::{DecisionKind, DecisionRecord, InventorySnapshot, ResourceRecord};
 use crate::autonomy::policy::{ActionRisk, AutonomyPolicy};
 
 pub(super) struct RecommendationContext<'a> {
@@ -37,7 +35,6 @@ impl RecommendationContext<'_> {
         let expires =
             self.now + chrono::Duration::seconds(self.policy.limits.decision_ttl_seconds as i64);
         DecisionRecord {
-            schema_version: SCHEMA_VERSION,
             decision_id: deterministic_id(resource, self.policy, self.snapshot, kind),
             kind,
             subject_id: resource.resource_id.clone(),

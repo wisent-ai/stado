@@ -32,11 +32,8 @@ pub(super) fn summarize(findings: &[Finding], incomplete_sources: usize) -> Summ
     }
 }
 
-pub(super) fn severity_rank(severity: &str) -> u8 {
-    match severity {
-        "high" => u8::default(),
-        "medium" => u8::from(true),
-        "low" => u8::from(true).saturating_add(u8::from(true)),
-        _ => u8::MAX,
-    }
+/// Sort key: high first, then medium, then low, then anything else. Each
+/// place is `false` only for its own severity, and `false` sorts first.
+pub(super) fn severity_rank(severity: &str) -> (bool, bool, bool) {
+    (severity != "high", severity != "medium", severity != "low")
 }

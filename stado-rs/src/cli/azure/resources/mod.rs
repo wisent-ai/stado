@@ -179,6 +179,6 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
     if failed == usize::default() {
         Ok(())
     } else {
-        Err(CmdError::silent(i32::from(true)))
+        Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))
     }
 }

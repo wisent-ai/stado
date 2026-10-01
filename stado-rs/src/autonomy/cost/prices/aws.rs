@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
 use super::{PriceQuote, PriceSource, PriceState};
@@ -65,11 +64,11 @@ pub(super) async fn aws_spot_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 samples.sort_by(|left, right| {
                     left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
                 });
-                let divisor = (u16::BITS / u8::BITS) as usize;
                 samples
-                    .get(samples.len() / divisor)
-                    .copied()
-                    .map(|rate| (machine, rate))
+                    .iter()
+                    .zip(samples.iter().rev())
+                    .find(|(low, high)| low >= high)
+                    .map(|(middle, _)| (machine, *middle))
             });
             for (machine, rate) in rates {
                 source.quotes.push(aws_quote(
@@ -203,7 +202,6 @@ fn aws_quote(
     observed_at: DateTime<Utc>,
 ) -> PriceQuote {
     PriceQuote {
-        schema_version: SCHEMA_VERSION,
         provider: ProviderId::Aws,
         sku: machine.to_string(),
         description: format!("AWS EC2 {machine} {purchase_option}"),

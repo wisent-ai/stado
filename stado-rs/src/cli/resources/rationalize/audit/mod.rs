@@ -174,7 +174,6 @@ pub(super) async fn build_report(args: &AuditArgs) -> Result<RationalizationRepo
         .count();
     let summary = summarize(&findings, incomplete_sources);
     let report = RationalizationReport {
-        schema_version: u8::from(true),
         generated_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
         read_only: true,
         min_age_seconds: args.min_age,

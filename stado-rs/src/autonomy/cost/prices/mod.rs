@@ -15,7 +15,6 @@ mod gcp;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::autonomy::model::SCHEMA_VERSION;
 use crate::autonomy::policy::AutonomyPolicy;
 use crate::capabilities::ProviderId;
 
@@ -33,7 +32,6 @@ pub enum PriceState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PriceQuote {
-    pub schema_version: u16,
     pub provider: ProviderId,
     pub sku: String,
     pub description: String,
@@ -66,7 +64,6 @@ pub struct PriceSource {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PriceBook {
-    pub schema_version: u16,
     pub created_at: String,
     pub sources: Vec<PriceSource>,
     pub quotes: Vec<PriceQuote>,
@@ -110,7 +107,6 @@ pub async fn refresh_prices(policy: &AutonomyPolicy) -> PriceBook {
             source: "autonomy policy".to_string(),
             error: None,
             quotes: vec![PriceQuote {
-                schema_version: SCHEMA_VERSION,
                 provider: ProviderId::Local,
                 sku: "local-capacity".to_string(),
                 description: "Configured marginal local host cost".to_string(),
@@ -132,12 +128,9 @@ pub async fn refresh_prices(policy: &AutonomyPolicy) -> PriceBook {
         .iter()
         .flat_map(|source| source.quotes.iter().cloned())
         .collect();
-    PriceBook {
-        schema_version: SCHEMA_VERSION,
-        created_at: observed_at.to_rfc3339(),
-        sources,
-        quotes,
-    }
+    PriceBook { created_at: observed_at.to_rfc3339(),
+    sources,
+    quotes, }
 }
 
 fn infer_accelerator(description: &str) -> Option<String> {

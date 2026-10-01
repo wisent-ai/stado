@@ -4,7 +4,6 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
 use super::{infer_accelerator, PriceQuote, PriceSource, PriceState};
@@ -87,7 +86,6 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
             }
             let meter = item.get("meterName").and_then(Value::as_str).unwrap_or("");
             source.quotes.push(PriceQuote {
-                schema_version: SCHEMA_VERSION,
                 provider: ProviderId::Azure,
                 sku: item
                     .get("meterId")

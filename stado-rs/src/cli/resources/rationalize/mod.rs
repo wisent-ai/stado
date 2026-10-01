@@ -68,7 +68,6 @@ struct Summary {
 
 #[derive(Debug, Clone, Serialize)]
 struct RationalizationReport {
-    schema_version: u8,
     generated_at: String,
     read_only: bool,
     min_age_seconds: u64,

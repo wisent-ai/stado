@@ -15,7 +15,6 @@ use super::super::CmdError;
 
 pub use kinds::{
     ActionKind, Authorization, FindingDisposition, Intent, ProviderKind, Reversibility,
-    SCHEMA_VERSION,
 };
 pub use plan::{
     Action, Condition, Finding, InventorySnapshot, OperationScope, Plan, ResourceLocator, Rollback,

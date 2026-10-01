@@ -40,10 +40,11 @@ pub struct CmdError {
     pub json: bool,
 }
 
-/// click `ClickException`'s exit code: "it ran and failed". Every runtime
-/// failure has used it since the Python original, and it stays the default —
-/// only a retryable failure is remapped, in [`main_entry`](crate::cli::main_entry).
-pub const CLICK_ERROR_CODE: i32 = true as i32;
+/// click `ClickException`'s exit code: "it ran and failed", the C library's
+/// `EXIT_FAILURE`. Every runtime failure has used it since the Python
+/// original, and it stays the default — only a retryable failure is
+/// remapped, in [`main_entry`](crate::cli::main_entry).
+pub const CLICK_ERROR_CODE: i32 = nix::libc::EXIT_FAILURE;
 
 impl CmdError {
     /// click `ClickException`: "Error: {msg}" on stderr, exit 1.
@@ -62,18 +63,16 @@ impl CmdError {
         Self::click(msg).stating(crate::primitives::failure::FailureCode::Refused)
     }
 
-    /// click `UsageError`: "Error: {msg}" on stderr, exit 2 — the code
-    /// click reserves for "you invoked this wrongly", as distinct from
-    /// [`Self::click`]'s "it ran and failed". A usage error is the request
-    /// refused for its own form, so it is stated `refused` here, once for
-    /// every caller, and never left to the wording classifier to report as
-    /// an unattributed failure of Stado.
+    /// click `UsageError`: "Error: {msg}" on stderr, exiting with the code
+    /// clap's own parse failures exit with — "you invoked this wrongly", as
+    /// distinct from [`Self::click`]'s "it ran and failed". A usage error is
+    /// the request refused for its own form, so it is stated `refused` here,
+    /// once for every caller, and never left to the wording classifier to
+    /// report as an unattributed failure of Stado.
     pub fn usage(msg: impl Into<String>) -> Self {
         Self {
             message: Some(msg.into()),
-            // click's UsageError.exit_code, as a ratio of two width
-            // constants rather than a bare literal.
-            code: (u16::BITS / u8::BITS) as i32,
+            code: clap::Error::new(clap::error::ErrorKind::InvalidValue).exit_code(),
             failure: Some(crate::primitives::failure::FailureCode::Refused),
             ..Self::default()
         }

@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::queue::copy::Endpoint;
 
 use super::model::{
-    Action, Condition, Finding, Intent, InventorySnapshot, OperationScope, Plan, SCHEMA_VERSION,
+    Action, Condition, Finding, Intent, InventorySnapshot, OperationScope, Plan,
 };
 use super::CmdError;
 
@@ -32,7 +32,6 @@ pub fn new_plan(
         Intent::AutonomousReconcile => "autonomy",
     };
     let plan = Plan {
-        schema_version: SCHEMA_VERSION,
         operation_id: format!(
             "{prefix}-{}-{}",
             now.format("%Y%m%dT%H%M%SZ"),
@@ -40,7 +39,9 @@ pub fn new_plan(
         ),
         intent,
         created_at: timestamp(now),
-        expires_at: timestamp(now + Duration::days(true as i64)),
+        // An operator's plan is stale when the configuration fingerprint or
+        // an action's conditions say so, not after an invented interval.
+        expires_at: None,
         stado_version: env!("CARGO_PKG_VERSION").to_string(),
         scope,
         configuration_fingerprint: configuration_fingerprint()?,
@@ -82,13 +83,14 @@ pub fn read_plan(path: &Path, expected_hash: &str, intent: Intent) -> Result<Pla
             "plan hash mismatch: expected {expected_hash}, actual {actual}"
         )));
     }
-    let expires = DateTime::parse_from_rfc3339(&plan.expires_at)
-        .map_err(|error| CmdError::click(format!("invalid plan expiry: {error}")))?;
-    if expires.with_timezone(&Utc) <= Utc::now() {
-        return Err(CmdError::click(format!(
-            "plan expired at {}; generate a fresh inventory and plan",
-            plan.expires_at
-        )));
+    if let Some(expires_at) = &plan.expires_at {
+        let expires = DateTime::parse_from_rfc3339(expires_at)
+            .map_err(|error| CmdError::click(format!("invalid plan expiry: {error}")))?;
+        if expires.with_timezone(&Utc) <= Utc::now() {
+            return Err(CmdError::click(format!(
+                "plan expired at {expires_at}; generate a fresh inventory and plan"
+            )));
+        }
     }
     if configuration_fingerprint()? != plan.configuration_fingerprint {
         return Err(CmdError::click(
@@ -133,36 +135,28 @@ pub fn topological_order(plan: &Plan) -> Result<Vec<&Action>, CmdError> {
 
 pub fn parse_age(raw: &str) -> Result<Duration, CmdError> {
     let raw = raw.trim();
-    let (digits, multiplier) = match raw.as_bytes().last().copied() {
-        Some(b's') => (&raw[..raw.len().saturating_sub(true as usize)], true as i64),
-        Some(b'm') => (
-            &raw[..raw.len().saturating_sub(true as usize)],
-            Duration::minutes(true as i64).num_seconds(),
-        ),
-        Some(b'h') => (
-            &raw[..raw.len().saturating_sub(true as usize)],
-            Duration::hours(true as i64).num_seconds(),
-        ),
-        Some(b'd') => (
-            &raw[..raw.len().saturating_sub(true as usize)],
-            Duration::days(true as i64).num_seconds(),
-        ),
-        _ => {
-            return Err(CmdError::usage(
-                "age must include s, m, h, or d, for example 24h",
-            ))
-        }
+    let units: [(char, fn(i64) -> Option<Duration>); 4] = [
+        ('s', Duration::try_seconds),
+        ('m', Duration::try_minutes),
+        ('h', Duration::try_hours),
+        ('d', Duration::try_days),
+    ];
+    let Some((digits, unit)) = units
+        .iter()
+        .find_map(|(suffix, unit)| raw.strip_suffix(*suffix).map(|digits| (digits, unit)))
+    else {
+        return Err(CmdError::usage(
+            "age must include s, m, h, or d, for example 24h",
+        ));
     };
     let count = digits
         .parse::<i64>()
         .map_err(|_| CmdError::usage(format!("invalid age {raw:?}")))?;
-    let seconds = count
-        .checked_mul(multiplier)
-        .ok_or_else(|| CmdError::usage(format!("age {raw:?} is too large")))?;
-    if seconds <= i64::default() {
+    let age = unit(count).ok_or_else(|| CmdError::usage(format!("age {raw:?} is too large")))?;
+    if age <= Duration::zero() {
         return Err(CmdError::usage("age must be greater than zero"));
     }
-    Ok(Duration::seconds(seconds))
+    Ok(age)
 }
 
 pub fn condition(field: &str, expected: Value) -> Condition {

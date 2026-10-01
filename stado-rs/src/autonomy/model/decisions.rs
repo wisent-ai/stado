@@ -25,7 +25,6 @@ pub enum DecisionKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecisionRecord {
-    pub schema_version: u16,
     pub decision_id: String,
     pub kind: DecisionKind,
     pub subject_id: String,
@@ -43,7 +42,6 @@ pub struct DecisionRecord {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavingsRecord {
-    pub schema_version: u16,
     pub savings_id: String,
     pub decision_id: String,
     pub resource_id: Option<String>,
@@ -56,12 +54,10 @@ pub struct SavingsRecord {
     pub realized_cost_usd: Option<f64>,
     pub predicted_savings_usd: f64,
     pub realized_savings_usd: Option<f64>,
-    pub confidence: f64,
     pub source_invoice_period: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavingsMeasurement {
-    pub schema_version: u16,
     pub measurement_id: String,
     pub savings_id: String,
     pub decision_id: String,
@@ -74,7 +70,6 @@ pub struct SavingsMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdoptionRecord {
-    pub schema_version: u16,
     pub resource_id: String,
     pub adopted_at: String,
     pub adopted_by: String,

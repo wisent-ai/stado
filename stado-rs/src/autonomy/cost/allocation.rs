@@ -6,16 +6,16 @@
 
 use std::collections::BTreeMap;
 
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::autonomy::model::{InventorySnapshot, ResourceRecord, SCHEMA_VERSION};
+use crate::autonomy::model::{InventorySnapshot, ResourceRecord};
 use crate::capabilities::ProviderId;
 use crate::queue::{JobStorage, StorageError};
 
 use super::prices::PriceBook;
-use super::HOURS_PER_MONTH;
+use super::HOURS_PER_DAY;
 
 pub fn enrich_inventory(snapshot: &mut InventorySnapshot, prices: &PriceBook) {
     for resource in &mut snapshot.resources {
@@ -54,13 +54,13 @@ fn enrich_resource(resource: &mut ResourceRecord, prices: &PriceBook) {
         preemptible,
     ) {
         resource.current_hourly_cost_usd = Some(quote.hourly_usd);
-        resource.forecast_monthly_cost_usd = Some(quote.hourly_usd * HOURS_PER_MONTH);
+        resource.forecast_monthly_cost_usd =
+            Some(quote.hourly_usd * HOURS_PER_DAY * f64::from(Utc::now().num_days_in_month()));
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CostEntry {
-    pub schema_version: u16,
     pub entry_id: String,
     pub provider: ProviderId,
     pub service: String,
@@ -84,12 +84,11 @@ pub struct CostBucket {
     pub gross_cost_usd: f64,
     pub credits_usd: f64,
     pub net_cost_usd: f64,
-    pub entries: usize,
+    pub entries: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AllocationReport {
-    pub schema_version: u16,
     pub created_at: String,
     pub entries: Vec<CostEntry>,
     pub by_provider: BTreeMap<String, CostBucket>,
@@ -123,7 +122,6 @@ pub async fn build_allocation(
 
 fn resource_cost_entry(resource: &ResourceRecord, hourly: f64) -> CostEntry {
     CostEntry {
-        schema_version: SCHEMA_VERSION,
         entry_id: format!("resource:{}", resource.resource_id),
         provider: resource.provider,
         service: resource.resource_type.clone(),
@@ -145,7 +143,6 @@ fn resource_cost_entry(resource: &ResourceRecord, hourly: f64) -> CostEntry {
 
 fn aggregate_allocation(entries: Vec<CostEntry>) -> AllocationReport {
     let mut report = AllocationReport {
-        schema_version: SCHEMA_VERSION,
         created_at: Utc::now().to_rfc3339(),
         entries,
         by_provider: BTreeMap::new(),
@@ -199,5 +196,5 @@ fn add_bucket(bucket: &mut CostBucket, entry: &CostEntry) {
     bucket.gross_cost_usd += entry.gross_cost_usd;
     bucket.credits_usd += entry.credits_usd;
     bucket.net_cost_usd += entry.net_cost_usd;
-    bucket.entries += true as usize;
+    bucket.entries.push(entry.entry_id.clone());
 }

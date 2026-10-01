@@ -3,7 +3,6 @@
 //! instance is deleted.
 
 use std::collections::BTreeSet;
-use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -29,7 +28,7 @@ impl Context {
             .filter(|action| action.resource.provider == ProviderKind::Gcp)
             .filter_map(|action| action.resource.project.as_deref())
             .collect();
-        if projects.len() > true as usize {
+        if projects.first() != projects.last() {
             return Err(CmdError::click(
                 "one execution batch cannot span multiple GCP projects",
             ));
@@ -108,31 +107,22 @@ impl Context {
         }
     }
 
-    pub async fn wait_for(
+    /// The action's state, read once after its provider operation finished,
+    /// against the conditions it promised. A mismatch is reported with what
+    /// was observed; nothing here waits for it to change.
+    pub async fn check_postconditions(
         &self,
         action: &Action,
         conditions: &[Condition],
     ) -> Result<Value, CmdError> {
-        let timeout = Duration::from_secs(
-            chrono::Duration::minutes(true as i64)
-                .num_seconds()
-                .try_into()
-                .unwrap_or_default(),
-        );
-        let deadline = Instant::now() + timeout;
-        loop {
-            let observed = self.inspect(action).await?;
-            if conditions_match(conditions, &observed) {
-                return Ok(observed);
-            }
-            if Instant::now() >= deadline {
-                return Err(CmdError::click(format!(
-                    "postconditions did not converge for {}: observed {}",
-                    action.resource.reference, observed
-                )));
-            }
-            tokio::time::sleep(Duration::from_secs(true as u64)).await;
+        let observed = self.inspect(action).await?;
+        if conditions_match(conditions, &observed) {
+            return Ok(observed);
         }
+        Err(CmdError::click(format!(
+            "postconditions do not hold for {} after its operation completed: observed {}",
+            action.resource.reference, observed
+        )))
     }
 
     async fn inspect_vm(&self, action: &Action) -> Result<Value, CmdError> {

@@ -6,19 +6,18 @@
 //! The billing-snapshot readers at the bottom are what the projection starts
 //! from when the provider has already invoiced part of the month.
 
-use chrono::{DateTime, Datelike, Timelike, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::autonomy::model::{InventorySnapshot, SCHEMA_VERSION};
+use crate::autonomy::model::InventorySnapshot;
 use crate::autonomy::policy::AutonomyPolicy;
 
 use super::allocation::AllocationReport;
-use super::{BILLING_MONTH_DAYS, HOURS_PER_DAY};
+use super::HOURS_PER_DAY;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CostForecast {
-    pub schema_version: u16,
     pub created_at: String,
     pub current_hourly_usd: f64,
     pub end_of_day_usd: f64,
@@ -45,11 +44,13 @@ pub fn forecast(
         .filter(|entry| entry.source == "live hourly price")
         .map(|entry| entry.net_cost_usd)
         .sum::<f64>();
-    let elapsed_hours = now.hour() as f64;
-    let month_days = days_in_month(now) as f64;
-    let elapsed_month_hours = ((now.day() - true as u32) as f64 * HOURS_PER_DAY) + elapsed_hours;
-    let remaining_month_hours =
-        (month_days * HOURS_PER_DAY - elapsed_month_hours).max(f64::default());
+    let month_start = (now.date_naive() - chrono::Days::new(u64::from(now.day0())))
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc();
+    let month_hours = f64::from(now.num_days_in_month()) * HOURS_PER_DAY;
+    let elapsed_month_hours =
+        (now - month_start).as_seconds_f64() / crate::monitor::billing::SECONDS_PER_HOUR as f64;
+    let remaining_month_hours = (month_hours - elapsed_month_hours).max(f64::default());
     let spent = billing_net_cost(billing_snapshot).unwrap_or_default();
     if elapsed_month_hours > f64::default() {
         current_hourly = current_hourly.max(spent / elapsed_month_hours);
@@ -68,7 +69,6 @@ pub fn forecast(
         .unwrap_or_default();
     let budget = policy.budgets.monthly_usd;
     CostForecast {
-        schema_version: SCHEMA_VERSION,
         created_at: now.to_rfc3339(),
         current_hourly_usd: current_hourly,
         end_of_day_usd: end_of_day,
@@ -186,15 +186,11 @@ pub fn detect_anomalies(
         }
     }
     for (provider, bucket) in &allocation.by_provider {
-        let attributed_resources = allocation
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.provider.as_str() == provider
-                    && (entry.workload.is_some() || entry.job_id.is_some())
-            })
-            .count();
-        if bucket.net_cost_usd > f64::default() && attributed_resources == usize::default() {
+        let attributed = allocation.entries.iter().any(|entry| {
+            entry.provider.as_str() == provider
+                && (entry.workload.is_some() || entry.job_id.is_some())
+        });
+        if bucket.net_cost_usd > f64::default() && !attributed {
             anomalies.push(anomaly(
                 &format!("provider-without-workload:{provider}"),
                 "medium",
@@ -243,16 +239,4 @@ fn credit_balance(snapshot: Option<&Value>) -> Option<f64> {
         .pointer("/azure/available_balance")
         .or_else(|| snapshot.pointer("/azure/balance"))
         .and_then(Value::as_f64)
-}
-
-fn days_in_month(now: DateTime<Utc>) -> u32 {
-    let next_month = if now.month() == u8::BITS + (u16::BITS / u8::BITS) {
-        chrono::NaiveDate::from_ymd_opt(now.year() + true as i32, true as u32, true as u32)
-    } else {
-        chrono::NaiveDate::from_ymd_opt(now.year(), now.month() + true as u32, true as u32)
-    };
-    next_month
-        .and_then(|next| next.pred_opt())
-        .map(|last| last.day())
-        .unwrap_or(BILLING_MONTH_DAYS as u32)
 }

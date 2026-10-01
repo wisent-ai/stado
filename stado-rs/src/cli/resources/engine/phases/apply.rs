@@ -233,7 +233,7 @@ pub(in crate::cli::resources::engine) async fn execute_locked(
                 }
             },
         };
-        let observed_after = match context.wait_for(action, &action.postconditions).await {
+        let observed_after = match context.check_postconditions(action, &action.postconditions).await {
             Ok(observed) => observed,
             Err(error) => match context.inspect(action).await {
                 Ok(observed) if conditions_match(&action.postconditions, &observed) => observed,

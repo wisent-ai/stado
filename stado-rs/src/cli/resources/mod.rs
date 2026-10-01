@@ -205,7 +205,6 @@ async fn adopt(args: &AdoptArgs) -> Result<(), CmdError> {
         return Err(CmdError::click("resource is already owned or adopted"));
     }
     let adoption = crate::autonomy::model::AdoptionRecord {
-        schema_version: crate::autonomy::model::SCHEMA_VERSION,
         resource_id: resource.resource_id.clone(),
         adopted_at: chrono::Utc::now().to_rfc3339(),
         adopted_by: std::env::var("USER").unwrap_or_else(|_| "operator".to_string()),
