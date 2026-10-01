@@ -1,9 +1,9 @@
 use crate::cli::CmdError;
 
 use crate::cli::host::files::forwarding::{deliver_file, DELIVERED_FILES_DIR};
-use serde_json::Value;
 use crate::cli::host::secrets::weles::trust::live_skarbiec_environment;
 use crate::cli::host::secrets::weles::{catalog_file_name, remove_remote};
+use serde_json::Value;
 
 /// `stado host render-public-document TARGET SOURCE` — deliver a checked-in
 /// renderer to TARGET and print the public JSON document it builds there from
@@ -170,7 +170,8 @@ pub async fn render_public_document(target: &str, source: &str) -> Result<(), Cm
 /// carrying a private half is the one mistake this command exists to make
 /// impossible, whoever consumes it.
 fn public_document(text: &str) -> Result<(), String> {
-    serde_json::from_str::<Value>(text).map_err(|_| "the renderer did not emit one JSON document")?;
+    serde_json::from_str::<Value>(text)
+        .map_err(|_| "the renderer did not emit one JSON document")?;
     if text.contains("PRIVATE KEY") {
         return Err("the rendered document carries private key material".to_string());
     }
