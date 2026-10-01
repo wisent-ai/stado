@@ -50,7 +50,6 @@ pub fn augment(command: Command) -> Command {
             "Restore exact retained installation bytes without rebuilding",
         ))
         .subcommand(lifecycle::sync())
-        .subcommand(lifecycle::schedule())
         .subcommand(lifecycle::signing())
         .subcommand(
             Command::new("paths")
@@ -115,7 +114,6 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
         "install" | "update" | "status" | "remove" | "rollback" | "sync" => {
             crate::install::run(&action, arguments, &runtime)
         }
-        "schedule" => crate::schedule::run(arguments, &runtime),
         "signing" => {
             let (action, arguments) = arguments
                 .remove_subcommand()

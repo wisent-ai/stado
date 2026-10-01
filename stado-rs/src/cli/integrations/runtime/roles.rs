@@ -63,6 +63,10 @@ fn roles(args: &ServeArgs) -> Vec<&'static str> {
             args.health_interval_seconds.is_some(),
             "--health-interval-seconds",
         ),
+        (
+            args.product_sync_interval_seconds.is_some(),
+            "--product-sync-interval-seconds",
+        ),
         (args.run_worker, "--worker"),
         (args.forward_destination.is_some(), "--forward-destination"),
         (args.edge_caddyfile.is_some(), "--edge-caddyfile"),

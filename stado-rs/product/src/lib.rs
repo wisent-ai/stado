@@ -18,7 +18,6 @@ mod native;
 mod paths;
 mod registry;
 mod release_steps;
-mod schedule;
 mod signing;
 mod source;
 mod state;

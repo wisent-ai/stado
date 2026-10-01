@@ -512,6 +512,13 @@ products:
       flag: --health-interval-seconds
     - unit: host-health-beacon.service
       flag: --health-interval-seconds
+    # Product updates run inside the one process
+    # (`stado serve --product-sync-interval-seconds`); the two hourly launchd
+    # agents `stado product schedule` used to install are its predecessors.
+    - unit: com.wisent.products.cli-sync
+      flag: --product-sync-interval-seconds
+    - unit: com.wisent.products.desktop-sync
+      flag: --product-sync-interval-seconds
 - id: lem
   name: Lem
   status: active

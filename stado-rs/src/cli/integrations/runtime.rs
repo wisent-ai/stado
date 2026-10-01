@@ -62,6 +62,14 @@ pub(crate) struct ServeArgs {
     /// Enable host-health publication at this declared cadence.
     #[arg(long)]
     pub health_interval_seconds: Option<NonZeroU64>,
+    /// Reconcile installed product surfaces against canonical origin/main at
+    /// this declared cadence, inside this process.
+    #[arg(long, requires = "product_sync_surface")]
+    pub product_sync_interval_seconds: Option<NonZeroU64>,
+    /// A surface `stado product sync --surface` reconciles on that cadence;
+    /// repeat for each declared surface, in the order they run.
+    #[arg(long, requires = "product_sync_interval_seconds")]
+    pub product_sync_surface: Vec<String>,
     /// Existing reverse-forward SSH destination (user@host); both ends stay loopback.
     #[arg(long, requires_all = ["forward_remote_port", "forward_local_port", "forward_interval_seconds"])]
     pub forward_destination: Option<String>,
@@ -169,6 +177,12 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
             health_beacons(Duration::from_secs(interval.get()))
         })?;
     }
+    if let Some(interval) = args.product_sync_interval_seconds {
+        let surfaces = args.product_sync_surface;
+        supervisor.spawn("product-sync", move || {
+            product_sync(Duration::from_secs(interval.get()), surfaces)
+        })?;
+    }
     if let Some((forward, interval)) = reverse_forward {
         supervisor.spawn("reverse-forward", move || forward.run(interval))?;
     }
@@ -260,6 +274,47 @@ async fn health_beacons(period: Duration) -> Result<(), CmdError> {
         // scheduled ticks instead of cancelling work or bursting repeated probes.
         if let Err(error) = crate::cli::host::collect_beacon(true).await {
             eprintln!("[stado serve host-health] collect-and-publish failed: {error}");
+        }
+    }
+}
+
+/// `stado product`, as the CLI defines it.
+fn product_command() -> clap::Command {
+    stado_product::cli::augment(clap::Command::new("product"))
+}
+
+async fn product_sync(period: Duration, surfaces: Vec<String>) -> Result<(), CmdError> {
+    let mut schedule = tokio::time::interval(period);
+    schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        schedule.tick().await;
+        for surface in &surfaces {
+            let line = vec![
+                "product".to_string(),
+                "sync".to_string(),
+                "--surface".to_string(),
+                surface.clone(),
+                "--fetch".to_string(),
+            ];
+            let outcome = tokio::task::spawn_blocking(move || {
+                let matches = product_command()
+                    .try_get_matches_from(line)
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                stado_product::cli::run(matches, crate::cli::setup::product::build())
+            })
+            .await;
+            match outcome {
+                Ok(Ok(0)) => {}
+                Ok(Ok(status)) => eprintln!(
+                    "[stado serve product-sync] {surface} sync exited with status {status}"
+                ),
+                Ok(Err(error)) => {
+                    eprintln!("[stado serve product-sync] {surface} sync failed: {error:#}")
+                }
+                Err(error) => {
+                    eprintln!("[stado serve product-sync] {surface} sync stopped: {error}")
+                }
+            }
         }
     }
 }

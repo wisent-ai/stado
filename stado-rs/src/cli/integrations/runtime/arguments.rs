@@ -32,6 +32,12 @@ impl ServeArgs {
         if let Some(interval) = self.health_interval_seconds {
             args.push(format!("--health-interval-seconds={interval}"));
         }
+        if let Some(interval) = self.product_sync_interval_seconds {
+            args.push(format!("--product-sync-interval-seconds={interval}"));
+        }
+        for surface in &self.product_sync_surface {
+            args.push(format!("--product-sync-surface={surface}"));
+        }
         if let Some(target) = &self.worker.target {
             args.push(format!("--target={target}"));
         }

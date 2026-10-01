@@ -67,23 +67,6 @@ pub fn sync() -> Command {
         ))
 }
 
-pub fn schedule() -> Command {
-    Command::new("schedule")
-        .about("Inspect or reconcile the native macOS product update agents")
-        .arg(
-            flag(
-                "install",
-                "Install or update the declared native launch agents",
-            )
-            .conflicts_with("remove"),
-        )
-        .arg(flag("remove", "Remove the declared product update agents"))
-        .arg(flag(
-            "json",
-            "Print launchd observations and reconciliation results",
-        ))
-}
-
 pub fn signing() -> Command {
     Command::new("signing").about("Inspect and preserve stable Apple native code identity")
         .subcommand_required(true).arg_required_else_help(true)
