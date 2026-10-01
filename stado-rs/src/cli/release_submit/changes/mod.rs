@@ -253,8 +253,8 @@ pub(crate) async fn queued_products() -> Result<std::collections::BTreeSet<Strin
 /// A ticket handed off after it, whose commit that same build contains, is
 /// bound in an additional batch (`changes-<digest>.json`) beside it: a build
 /// is identified by its commit, so a later build of that commit is the same
-/// build, and on 2026-09-30 a tama handoff made after build 5654e49f froze
-/// stayed `queued` for good while every `build newest --queued` picked tama
+/// build, and a handoff made after the build froze would otherwise stay
+/// `queued` for good while every `build newest --queued` picked the product
 /// again and answered with that same passed build.
 pub(crate) async fn bind(
     root: &std::path::Path,

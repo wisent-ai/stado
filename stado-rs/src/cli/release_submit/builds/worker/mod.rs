@@ -137,9 +137,9 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     let mut build = execute("build", &recipe.build.argv, &source, &environment)?;
     if build.status == StepStatus::Passed && request.platform.starts_with("darwin-") {
         // The signer is this worker's own Stado — never whatever signing
-        // program the builder's PATH happens to carry, which on 2026-09-10
-        // was nothing, and which ended weles-worker 0.6.6 before its first
-        // signature with "cannot run wisent-products".
+        // program the builder's PATH happens to carry, which can be nothing,
+        // ending a build before its first signature with "cannot run
+        // wisent-products".
         //
         // The identity is the fleet's too: the Apple certificate and key
         // Skarbiec holds, handed to the signer's own temporary keychain

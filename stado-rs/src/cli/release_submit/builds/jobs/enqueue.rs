@@ -47,8 +47,8 @@ pub(crate) async fn enqueue(
     prior_terminal_job_id: Option<&str>,
 ) -> Result<PlatformRun, CmdError> {
     // The fleet's daily ceiling. A release submits one build per platform,
-    // and on 2026-09-21 that was 47 of the 58 builds this fleet started in a
-    // day. The charge below asks and records in one registry generation, and
+    // and releases are most of the builds this fleet starts in a day. The
+    // charge below asks and records in one registry generation, and
     // its refusal names the release (`a release build`) and verifies a
     // recorded user exception exactly as a separate question would. A second
     // read of the registry here only to ask first cost every platform one

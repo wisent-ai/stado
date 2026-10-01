@@ -64,9 +64,9 @@ async fn require_current_delivery(request: &DeliveryRequest) -> Result<(), CmdEr
 ///
 /// The fence used to refuse with the product, version and platform it was
 /// asked for and nothing about what it read, so an operator could not tell a
-/// superseded digest from a run that had already failed: on 2026-09-20 the
-/// 0.21.35 delivery to the mini refused with that sentence and the release had
-/// to be finished by hand through the host declaration.
+/// superseded digest from a run that had already failed, and a delivery
+/// refused with that sentence had to be finished by hand through the host
+/// declaration.
 fn disagreements(
     run: &crate::release_pipeline::ReleaseRun,
     platform: Option<&crate::release_pipeline::PlatformRun>,

@@ -158,10 +158,10 @@ fn product_name(checkout: &Path) -> Result<String, String> {
 
 /// The commit a checkout stands on is what it releases, whatever else the
 /// checkout holds. A workspace keeps one checkout per repository and several
-/// sessions work in it at once, so on 2026-09-23 jeden and stado both held
-/// another session's unfinished edits minutes after being committed clean,
-/// and refusing any uncommitted path meant a pushed commit could not be
-/// released at all. Those edits never reach a build: the release is the
+/// sessions work in it at once, so a checkout holds another session's
+/// unfinished edits minutes after being committed clean, and refusing any
+/// uncommitted path would mean a pushed commit could not be released at
+/// all. Those edits never reach a build: the release is the
 /// commit's objects. What the commit says it releases is different: an
 /// uncommitted manifest, or a working copy that declares another version
 /// than the commit does, means the operator is about to release something
@@ -212,10 +212,10 @@ fn standing(checkout: &Path, published: &Recorded) -> Result<Standing, String> {
 /// and the store refuses a second revision under one version (`stado/0.21.54
 /// already attests source revision …`). A run still moving on this commit is
 /// waited for; no run, or a failed or superseded run of this commit, leaves the
-/// commit to release. On 2026-09-23 stado 0.21.54's run failed its darwin
-/// quality gate, the fix was committed at the same version, and `newest` called
-/// the version "already published", which sent the operator to wait for a
-/// publication that could never come instead of to the version bump it needed.
+/// commit to release. When a version's run fails its quality gate and the
+/// fix is committed at the same version, calling the version "already
+/// published" sends the operator to wait for a publication that can never
+/// come instead of to the version bump it needs.
 fn standing_from_runs(
     commit: String,
     version: String,

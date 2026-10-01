@@ -50,8 +50,8 @@ pub(super) fn build_environment(
     ]);
     // The scratch tree is thrown away with the job, and a Cargo product
     // compiled from scratch there three times per platform per release -
-    // clippy, the documentation test, the release build - is what made a
-    // Stado release take hours on 2026-09-18. The compiled dependencies live
+    // clippy, the documentation test, the release build - is what makes a
+    // release take hours. The compiled dependencies live
     // on the builder instead, per product and platform, so the next release
     // of the same product recompiles only what its commit changed. Cargo
     // locks the directory itself, so two jobs of one product on one host

@@ -123,8 +123,8 @@ pub(super) async fn continue_run(
     run.state = ReleaseRunState::Waiting;
     // A platform that could not be queued while others were is not a
     // finished submission: the run says so, and so does the operator's
-    // terminal. On 2026-09-18 stado 0.21.7 queued only darwin-arm64 and
-    // answered "builds queued" while linux-amd64 had found no builder.
+    // terminal, instead of answering "builds queued" when one platform has
+    // found no builder.
     if let Some(error) = &enqueue_failure {
         run.failure = Some(format!("not every platform was queued: {error}"));
     }

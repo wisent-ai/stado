@@ -34,9 +34,9 @@ pub(crate) async fn enqueue_platforms(
         // A platform stays recorded as Submitted while its job runs, and
         // nothing wrote Failed when the job ended badly. A resubmission then
         // saw Submitted, kept the dead job, and reported the run as waiting
-        // for builds that would never come: jeden 0.1.8 sat on a cancelled
-        // darwin job and a failed linux job for three hours on 2026-09-18
-        // while three resubmissions each answered "builds queued". The job
+        // for builds that would never come: a run sits on a cancelled job and
+        // a failed job for hours while every resubmission answers "builds
+        // queued". The job
         // is the truth; a terminal failure or cancellation behind Submitted
         // is a failed platform.
         if build

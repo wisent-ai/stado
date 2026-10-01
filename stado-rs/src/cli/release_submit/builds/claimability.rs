@@ -92,8 +92,8 @@ fn publication_blockers(publication: &Value) -> Vec<String> {
     if flag("queue_paused") == Some(true) {
         blockers.push(QUEUE_PAUSED.to_string());
     }
-    // A janitor whose pass cannot start is the condition that closed both
-    // darwin-arm64 builders on 2026-09-03 with ample free disk on each. The
+    // A janitor whose pass cannot start is a condition that closes a builder
+    // with ample free disk. The
     // publication cannot compute the gate's staleness arithmetic -- that reads
     // the janitor state file on the host -- but it does carry the outcome, and
     // `lock_busy` is the outcome that never advances `last_success_at`.
