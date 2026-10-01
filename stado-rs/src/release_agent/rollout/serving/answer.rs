@@ -82,18 +82,11 @@ async fn stable_bind_answer(
                     .unwrap_or("no response before the deadline")
             ));
         }
-        last_error = Some(
-            match client
-                .get(&url)
-                .timeout(remaining.min(Duration::from_secs(3)))
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => return Ok(()),
-                Ok(response) => format!("HTTP {}", response.status()),
-                Err(error) => format!("{error:#}"),
-            },
-        );
+        last_error = Some(match client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => format!("HTTP {}", response.status()),
+            Err(error) => format!("{error:#}"),
+        });
         tokio::time::sleep(
             deadline
                 .saturating_duration_since(tokio::time::Instant::now())

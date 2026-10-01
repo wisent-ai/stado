@@ -2,7 +2,7 @@
 //! that says it was this listener that answered.
 
 use crate::cli::fleet::ingress::runtime::process::with_causes;
-use crate::cli::fleet::ingress::{FETCH_TIMEOUT, POLL, PUBLIC_DEADLINE};
+use crate::cli::fleet::ingress::{POLL, PUBLIC_DEADLINE};
 
 /// Fetch `/join.sh` through the public address and prove it is this listener's.
 ///
@@ -23,7 +23,6 @@ pub async fn verify_public(base: &str) -> Result<(usize, usize), String> {
     }
     let endpoint = format!("{base}/join.sh");
     let client = reqwest::Client::builder()
-        .timeout(FETCH_TIMEOUT)
         .build()
         .map_err(|exc| format!("could not build an HTTP client: {exc}"))?;
     let deadline = tokio::time::Instant::now() + PUBLIC_DEADLINE;

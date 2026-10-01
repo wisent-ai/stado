@@ -80,7 +80,6 @@ pub async fn fetch_instance_metadata_at(
         .get(url)
         .header("Metadata", "true")
         .query(&[("api-version", IMDS_API_VERSION)])
-        .timeout(timeout)
         .send()
         .await?
         .error_for_status()?

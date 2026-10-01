@@ -158,7 +158,6 @@ async fn reconcile_model_review_route(
     }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| DeployError(format!("Brama route client failed: {error}")))?;
     let response = client
@@ -180,7 +179,6 @@ async fn reconcile_model_review_route(
 async fn verify_model_review_bearer(token: &str) -> Result<(), DeployError> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| DeployError(format!("Brama verification client failed: {error}")))?;
     let response = client

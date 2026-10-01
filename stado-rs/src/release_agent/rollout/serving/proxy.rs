@@ -76,7 +76,6 @@ pub(crate) async fn stable_bind_ready(serving: &BlueGreenServing) -> bool {
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
     reqwest::Client::new()
         .get(url)
-        .timeout(Duration::from_secs(3))
         .send()
         .await
         .is_ok_and(|response| response.status().is_success())

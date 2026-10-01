@@ -1,8 +1,6 @@
 //! The exact release coordinate this deployment runs, and the route it
 //! travels.
 
-use std::time::Duration;
-
 use serde_json::Value;
 
 use crate::config;
@@ -176,18 +174,11 @@ async fn findings_for_origin_route(api: &str, findings: &mut Findings) {
     };
     let pinned = crate::remote::tailnet::address_of(&host);
     // A resolver with no answer for this suffix is exactly the state being
-    // measured, and `getaddrinfo` can sit on one of those for seconds. Bound
-    // it well inside the shared probe deadline: no answer in two seconds is
-    // the answer.
-    let resolved: Vec<std::net::IpAddr> = tokio::time::timeout(
-        Duration::from_secs(2),
-        tokio::net::lookup_host(format!("{host}:443")),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .map(|addresses| addresses.map(|address| address.ip()).collect())
-    .unwrap_or_default();
+    // measured; its own failure is the answer.
+    let resolved: Vec<std::net::IpAddr> = tokio::net::lookup_host(format!("{host}:443"))
+        .await
+        .map(|addresses| addresses.map(|address| address.ip()).collect())
+        .unwrap_or_default();
     match pinned {
         None if resolved.is_empty() => {
             findings.note(

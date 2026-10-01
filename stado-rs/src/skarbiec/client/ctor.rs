@@ -63,7 +63,6 @@ impl Client {
         }
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(120))
             .build()?;
         let base_url = if route_store {
             base_url.trim().to_string()

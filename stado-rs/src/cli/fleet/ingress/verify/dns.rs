@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::cli::fleet::ingress::{DNS_DEADLINE, DNS_POLL, FETCH_TIMEOUT};
+use crate::cli::fleet::ingress::{DNS_DEADLINE, DNS_POLL};
 
 /// Cloudflare's own DNS-over-HTTPS resolver, asked whether Cloudflare has
 /// published the name Cloudflare just handed us.
@@ -37,7 +37,7 @@ const DOH_RESOLVER: &str = "https://cloudflare-dns.com/dns-query";
 /// lets the fetch that follows be the thing that decides — with the original
 /// risk, and no worse than not having asked.
 pub async fn await_public_dns(host: &str) -> Result<(), String> {
-    let client = match reqwest::Client::builder().timeout(FETCH_TIMEOUT).build() {
+    let client = match reqwest::Client::builder().build() {
         Ok(client) => client,
         Err(_) => return Ok(()),
     };

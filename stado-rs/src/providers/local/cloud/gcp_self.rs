@@ -37,7 +37,6 @@ pub async fn fetch_metadata_at(
     let text = reqwest::Client::new()
         .get(format!("{base}/{path}"))
         .header("Metadata-Flavor", "Google")
-        .timeout(timeout)
         .send()
         .await?
         .error_for_status()?

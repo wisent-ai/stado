@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::process::Child;
 
-use crate::cli::fleet::ingress::{FETCH_TIMEOUT, LISTENER_DEADLINE, POLL, TUNNEL_DEADLINE};
+use crate::cli::fleet::ingress::{LISTENER_DEADLINE, POLL, TUNNEL_DEADLINE};
 
 use super::{log_tail, tunnel_address};
 
@@ -12,7 +12,6 @@ use super::{log_tail, tunnel_address};
 pub async fn await_listener(child: &mut Child, port: u16, log: &Path) -> Result<(), String> {
     let endpoint = format!("http://127.0.0.1:{port}/join.sh");
     let client = reqwest::Client::builder()
-        .timeout(FETCH_TIMEOUT)
         .build()
         .map_err(|exc| format!("could not build an HTTP client: {exc}"))?;
     let deadline = tokio::time::Instant::now() + LISTENER_DEADLINE;

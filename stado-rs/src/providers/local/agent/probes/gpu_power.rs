@@ -1,17 +1,11 @@
 //! The host-level NVIDIA board power cap the registry declares.
 
-use std::time::Duration;
-
 async fn read_gpu_power_limits() -> Result<Vec<f64>, String> {
-    let output = tokio::time::timeout(
-        Duration::from_secs(30),
-        tokio::process::Command::new("nvidia-smi")
-            .args(["--query-gpu=power.limit", "--format=csv,noheader,nounits"])
-            .output(),
-    )
-    .await
-    .map_err(|_| "nvidia-smi power query timed out after 30s".to_string())?
-    .map_err(|error| format!("nvidia-smi power query failed: {error}"))?;
+    let output = tokio::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=power.limit", "--format=csv,noheader,nounits"])
+        .output()
+        .await
+        .map_err(|error| format!("nvidia-smi power query failed: {error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
@@ -42,15 +36,11 @@ pub async fn reconcile_gpu_power_limit(watts: u32) -> Result<String, String> {
     let desired = f64::from(watts);
     let current = read_gpu_power_limits().await?;
     if !current.iter().all(|actual| (actual - desired).abs() < 0.5) {
-        let output = tokio::time::timeout(
-            Duration::from_secs(30),
-            tokio::process::Command::new("nvidia-smi")
-                .arg(format!("--power-limit={watts}"))
-                .output(),
-        )
-        .await
-        .map_err(|_| "nvidia-smi power-limit update timed out after 30s".to_string())?
-        .map_err(|error| format!("nvidia-smi power-limit update failed: {error}"))?;
+        let output = tokio::process::Command::new("nvidia-smi")
+            .arg(format!("--power-limit={watts}"))
+            .output()
+            .await
+            .map_err(|error| format!("nvidia-smi power-limit update failed: {error}"))?;
         if !output.status.success() {
             let detail = String::from_utf8_lossy(&output.stderr);
             return Err(format!(

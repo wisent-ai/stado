@@ -99,7 +99,6 @@ pub(crate) async fn github_json(
     body: Option<&Value>,
 ) -> Result<Value, DeployError> {
     let mut request = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| DeployError(format!("GitHub client could not start: {error}")))?

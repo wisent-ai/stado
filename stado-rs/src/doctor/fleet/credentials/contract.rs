@@ -46,10 +46,7 @@ pub(in crate::doctor) async fn skarbiec_contract_check() -> Check {
         }
     };
     let endpoint = format!("{}/v1/items/read", url.trim_end_matches('/'));
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    {
+    let client = match reqwest::Client::builder().build() {
         Ok(client) => client,
         Err(err) => {
             return Check::new(

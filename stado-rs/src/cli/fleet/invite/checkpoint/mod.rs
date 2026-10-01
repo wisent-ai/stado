@@ -8,11 +8,6 @@ use crate::cli::fleet::invite::record::{MODE_OFFLINE, MODE_ONLINE};
 
 pub(in crate::cli::fleet::invite) mod base;
 
-/// How long a control-point probe may take. An invite is minted while somebody
-/// waits for the answer, and a checkpoint slower than this is not one the
-/// machine's owner can use either.
-const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-
 /// Machine-readable verdicts of [`probe_checkpoint`]. The three refusals an
 /// operator fixes by different means are named separately on purpose: a name
 /// with no DNS answer needs a record, a refused connection needs a listener or
@@ -134,7 +129,7 @@ pub async fn probe_checkpoint(base: &str) -> Checkpoint {
             ),
         );
     }
-    let client = match reqwest::Client::builder().timeout(PROBE_TIMEOUT).build() {
+    let client = match reqwest::Client::builder().build() {
         Ok(client) => client,
         Err(exc) => {
             return Checkpoint::refused(

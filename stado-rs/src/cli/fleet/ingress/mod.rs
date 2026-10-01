@@ -133,7 +133,5 @@ const PUBLIC_DEADLINE: Duration = Duration::from_secs(60);
 const DNS_POLL: Duration = Duration::from_secs(2);
 /// Gap between polls of the listener, tunnel and verification deadlines.
 const POLL: Duration = Duration::from_millis(400);
-/// Timeout of one external fetch during verification.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a signalled process group gets to go away before it is killed.
 const TERMINATE_GRACE: Duration = Duration::from_secs(5);

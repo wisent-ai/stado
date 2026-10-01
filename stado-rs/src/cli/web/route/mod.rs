@@ -91,9 +91,6 @@ const VERIFY_BUDGET: Duration = Duration::from_secs(300);
 /// Gap between verification attempts.
 const VERIFY_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Per-request ceiling for one verification attempt.
-const VERIFY_TIMEOUT: Duration = Duration::from_secs(15);
-
 pub(crate) async fn route(name: &str, check: bool, json: bool) -> Result<(), CmdError> {
     let declared = super::product(name)?;
     match declared.edge() {

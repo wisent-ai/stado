@@ -2,16 +2,6 @@
 
 use crate::cli::storage::*;
 
-/// Ceiling on one whole object-API request, however large its body.
-///
-/// Sized to clear the largest transfer this client performs rather than to
-/// express a latency expectation: a 70 MB release read-back over a relayed
-/// tailnet path is legitimate and must not be cut, which is why the total
-/// 60-second timeout that once lived here was removed. What this replaces is
-/// not a slow request but an eternal one -- the caller that holds a lock, or
-/// a fleet gate, while a request that will never return is still outstanding.
-const OBJECT_REQUEST_CEILING: Duration = Duration::from_secs(900);
-
 /// One HTTPS client that trusts what `storage.stado.ca_file` names.
 ///
 /// The queue backend already loads that certificate; callers that built their
@@ -68,14 +58,7 @@ fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
     // nothing. The ceiling below is outside no phase: it covers the call.
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        // A ceiling on the WHOLE request, so no single call can outlive the
-        // work it was issued for. Generous on purpose: it has to clear the
-        // largest immutable transfer this client performs, which is why the
-        // old 60-second total was wrong. It is not a latency budget -- it is
-        // the difference between a request that fails and one that never
-        // returns, which is what a caller holding a lock cannot survive.
-        .timeout(OBJECT_REQUEST_CEILING)
-        // The same pool contract as
+        // The pool contract of
         // `queue::stado_object::StadoObjectBackend::client`, and for the same
         // reason: the object API holds a reused connection for 120 s
         // (`Dashboard::KEEP_ALIVE_IDLE`), so this side retires it first at

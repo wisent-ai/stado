@@ -1,8 +1,6 @@
 //! The inference reservation a host may be holding its GPU for, and the
 //! queued GPU work that decides whether the reservation keeps it.
 
-use std::time::Duration;
-
 use crate::config::estimate_gpu_memory;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::job_system_packages_eligible;
@@ -97,15 +95,11 @@ fn inference_container_name(deployment: &str) -> Result<String, String> {
 
 pub(crate) async fn inference_container_running(deployment: &str) -> Result<bool, String> {
     let container = inference_container_name(deployment)?;
-    let output = tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio::process::Command::new("docker")
-            .args(["inspect", "--format={{.State.Running}}", &container])
-            .output(),
-    )
-    .await
-    .map_err(|_| "docker inspect timed out".to_string())?
-    .map_err(|error| format!("docker inspect failed: {error}"))?;
+    let output = tokio::process::Command::new("docker")
+        .args(["inspect", "--format={{.State.Running}}", &container])
+        .output()
+        .await
+        .map_err(|error| format!("docker inspect failed: {error}"))?;
     if !output.status.success() {
         return Ok(false);
     }

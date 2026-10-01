@@ -1,8 +1,5 @@
-//! The two entry points and everything they share: one deadline per host, the
-//! checks answered from the registry document alone, and the questions one
-//! host is asked.
-
-use std::time::Duration;
+//! The two entry points and everything they share: the checks answered from
+//! the registry document alone, and the questions one host is asked.
 
 use super::loaded::environment::unit_environment;
 use super::loaded::orphans::loaded_without_unit_file;
@@ -20,10 +17,6 @@ use super::{
 };
 use crate::deploy::{host_channel, service, Runner};
 use crate::targets::{ComputeTarget, Registry};
-
-/// Per-host wall clock. A host that has gone quiet must cost one line, not the tick. Three remote
-/// tick it was swept from.
-const HOST_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// Sweep the whole canonical registry.
 ///
@@ -61,15 +54,16 @@ pub async fn sweep(runner: &Runner) -> Sweep {
     result
 }
 
-/// Everything one host is asked, under one deadline.
+/// Everything one host is asked. A host that cannot be reached is reported
+/// with the error its channel gave.
 async fn sweep_host(
     registry: &Registry,
     target: &ComputeTarget,
     runner: &Runner,
     result: &mut Sweep,
 ) {
-    match tokio::time::timeout(HOST_TIMEOUT, host_findings(registry, target, runner)).await {
-        Ok(Ok((mut findings, mut notes, mut measurements))) => {
+    match host_findings(registry, target, runner).await {
+        Ok((mut findings, mut notes, mut measurements)) => {
             result.measured += 1;
             for finding in findings.drain(..) {
                 result.record(finding);
@@ -77,11 +71,7 @@ async fn sweep_host(
             result.notes.append(&mut notes);
             result.measurements.append(&mut measurements);
         }
-        Ok(Err(error)) => result.unreachable.push((target.name.clone(), error)),
-        Err(_) => result.unreachable.push((
-            target.name.clone(),
-            format!("did not answer within {}s", HOST_TIMEOUT.as_secs()),
-        )),
+        Err(error) => result.unreachable.push((target.name.clone(), error)),
     }
 }
 

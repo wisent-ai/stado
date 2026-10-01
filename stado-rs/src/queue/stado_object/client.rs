@@ -159,7 +159,6 @@ impl StadoObjectBackend {
         // a hang converted into a named error reaches callers that already
         // handle storage failures.
         let mut builder = Client::builder()
-            .timeout(std::time::Duration::from_secs(300))
             // Sharing the client is what makes a pool possible; these three
             // state what the pool is for. The idle timeout is the contract
             // with the object API, which holds a reused connection for 120 s

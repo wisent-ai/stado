@@ -33,21 +33,17 @@ pub async fn gpu_driver_available() -> (bool, String) {
 }
 
 async fn run_cuda_probe() -> (bool, String) {
-    let res = tokio::time::timeout(
-        Duration::from_secs(30),
-        tokio::process::Command::new("nvidia-smi")
-            .args(["--query-gpu=uuid", "--format=csv,noheader,nounits"])
-            .output(),
-    )
-    .await;
+    let res = tokio::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=uuid", "--format=csv,noheader,nounits"])
+        .output()
+        .await;
     match res {
-        Ok(Ok(out)) => cuda_probe_result(
+        Ok(out) => cuda_probe_result(
             out.status.code().unwrap_or(-1),
             &String::from_utf8_lossy(&out.stdout),
             &String::from_utf8_lossy(&out.stderr),
         ),
-        Ok(Err(exc)) => (false, format!("cuda probe raised: {exc}")),
-        Err(_) => (false, "cuda probe raised: timed out after 30s".to_string()),
+        Err(exc) => (false, format!("cuda probe raised: {exc}")),
     }
 }
 

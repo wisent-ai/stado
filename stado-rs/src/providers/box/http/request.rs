@@ -75,7 +75,6 @@ impl BoxHttpTransport {
         let mut request = self
             .client
             .request(method, self.url(path, query))
-            .timeout(self.timeout)
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
             .header(reqwest::header::ACCEPT, "application/json");
         if let Some(body) = body {

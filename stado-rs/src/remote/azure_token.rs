@@ -105,7 +105,6 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
         .get("http://169.254.169.254/metadata/identity/oauth2/token")
         .header("Metadata", "true")
         .query(&[("api-version", IMDS_API_VERSION), ("resource", resource)])
-        .timeout(Duration::from_secs(2))
         .send()
         .await?;
     if !response.status().is_success() {
@@ -160,7 +159,6 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
             ("scope", scope),
             ("grant_type", "client_credentials"),
         ])
-        .timeout(Duration::from_secs(20))
         .send()
         .await?;
     if !response.status().is_success() {

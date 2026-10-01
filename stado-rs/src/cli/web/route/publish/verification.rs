@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use super::super::planning::zone_of;
-use super::super::{CmdError, VERCEL_HEADER, VERIFY_BUDGET, VERIFY_INTERVAL, VERIFY_TIMEOUT};
+use super::super::{CmdError, VERCEL_HEADER, VERIFY_BUDGET, VERIFY_INTERVAL};
 use super::verify_url;
 use crate::config::WebApiProduct;
 
@@ -27,7 +27,6 @@ use crate::config::WebApiProduct;
 pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> {
     let url = verify_url(declared);
     let client = reqwest::Client::builder()
-        .timeout(VERIFY_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let started = tokio::time::Instant::now();

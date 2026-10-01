@@ -3,7 +3,6 @@
 
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
@@ -96,14 +95,6 @@ impl CauseHold {
     }
 }
 
-/// How long the condition check gets before it counts as no answer.
-///
-/// It opens vault items, which is one `gpg` per distinct item, so it is not
-/// instant — but it is scoped to one resource, and a check that outlives this
-/// is a check that is not going to answer. A hung predicate must degrade to
-/// [`WallVerdict::Unknown`] rather than stall a reconcile tick.
-const PREDICATE_TIMEOUT_SECONDS: u64 = 20;
-
 /// Ask a cause's own condition whether its wall still stands.
 ///
 /// Runs as the release user with that user's `HOME`, mirroring
@@ -133,22 +124,9 @@ async fn ask_wall(
         .arg(&skarbiec)
         .args(&predicate.args)
         .stdin(Stdio::null());
-    let run = tokio::time::timeout(
-        Duration::from_secs(PREDICATE_TIMEOUT_SECONDS),
-        command.output(),
-    )
-    .await;
-    let output = match run {
-        Err(_) => {
-            return unreachable(format!(
-                "`skarbiec {}` did not answer within {PREDICATE_TIMEOUT_SECONDS}s",
-                predicate.args.join(" ")
-            ))
-        }
-        Ok(Err(error)) => {
-            return unreachable(format!("cannot run {}: {error}", skarbiec.display()))
-        }
-        Ok(Ok(output)) => output,
+    let output = match command.output().await {
+        Err(error) => return unreachable(format!("cannot run {}: {error}", skarbiec.display())),
+        Ok(output) => output,
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let verdict = release_cause::read_routes_verify(output.status.success(), &stdout);
