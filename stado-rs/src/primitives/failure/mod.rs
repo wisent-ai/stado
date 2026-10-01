@@ -30,10 +30,8 @@
 //!
 //! A failure's code is what the code that failed stated about it
 //! (`CmdError::failure`, a typed error). An error that states none is
-//! [`FailureCode::Unknown`]: until 2026-10-01 its code was guessed from the
-//! sentence's words against a list of phrases, and the operator ordered every
-//! decision by keyword removed. A guess is no evidence; a caller that knows
-//! its failure says so where it builds the error.
+//! [`FailureCode::Unknown`]; its wording is never read for a code. A caller
+//! that knows its failure says so where it builds the error.
 
 /// The vocabulary and everything derivable from a code come from the fleet
 /// package. `wisent-errors` was extracted from this module verbatim: the code

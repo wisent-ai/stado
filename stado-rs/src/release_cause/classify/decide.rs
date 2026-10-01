@@ -1,14 +1,11 @@
 //! Naming the cause behind one quarantine from what carries it as structure:
 //! the failure envelope a product wrote, or the agent's own observation.
 //!
-//! Until 2026-10-01 a cause was also guessed from English sentences in the
-//! candidate's log tail. The operator ordered every decision made by keyword
-//! removed; a sentence list survives no rewording and says nothing a product
-//! did not already say in its envelope. What the agent observed itself — a
-//! release refused for rollback compatibility, a pid gone, a port held by
-//! another process, a probe that timed out — it now names where it observes
-//! it ([`crate::release_agent`]), and a product's own refusal is read from its
-//! `wisent-errors` envelope ([`super::envelope`]).
+//! What the agent observes itself — a release refused for rollback
+//! compatibility, a pid gone, a port held by another process, a probe that
+//! timed out — it names where it observes it ([`crate::release_agent`]), and
+//! a product's own refusal is read from its `wisent-errors` envelope
+//! ([`super::envelope`]). A log line without an envelope names no cause.
 
 use super::envelope;
 use super::segments::{bound, strip_ansi};

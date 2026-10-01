@@ -1,10 +1,10 @@
 //! Why the release agent gave up on a release, as the sentence it composed
 //! and the cause it observed while composing it.
 //!
-//! The cause used to be guessed afterwards from the sentence's words. It is
-//! known where the agent observes it — the pid it watches is gone, another
-//! process listens on the port, the probe timed out, the manifest declares no
-//! rollback compatibility — so it is carried from there as structure.
+//! The cause is known where the agent observes it — the pid it watches is
+//! gone, another process listens on the port, the probe timed out, the
+//! manifest declares no rollback compatibility — so it is carried from there
+//! as structure.
 
 use std::fmt;
 
