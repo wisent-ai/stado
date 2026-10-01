@@ -56,16 +56,20 @@ pub(super) async fn retire_after_ensure(
 /// one unit is started, so a product renamed to `com.wisent.<product>` can
 /// bind the listener its old label held. A unit that could not be retired
 /// refuses the ensure: starting the replacement beside it is the second
-/// process this whole path exists to prevent. Role units are untouched here;
-/// they keep their work until the running replacement proves it runs it.
+/// process this whole path exists to prevent, and whatever this call did
+/// retire is given back before the refusal, so the product keeps running
+/// under its old label. Role units are untouched here; they keep their work
+/// until the running replacement proves it runs it. Returns what was
+/// retired, for [`reinstate_after_failed_ensure`].
 pub(super) async fn retire_before_ensure(
     target: &crate::targets::ComputeTarget,
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
     runner: &crate::deploy::Runner,
-) -> Result<(), CmdError> {
-    let Some(entry) = entry else { return Ok(()) };
+) -> Result<Vec<service::Reversible>, CmdError> {
+    let Some(entry) = entry else { return Ok(Vec::new()) };
+    let (retirements, reversible) = service::retire_units_reversibly(target, entry, runner).await;
     let mut failed = Vec::new();
-    for retirement in service::retire_units(target, entry, runner).await {
+    for retirement in retirements {
         if retirement.state == "absent" {
             continue;
         }
@@ -78,13 +82,37 @@ pub(super) async fn retire_before_ensure(
         }
     }
     if failed.is_empty() {
-        return Ok(());
+        return Ok(reversible);
     }
+    let given_back = service::reinstate_units(target, None, &reversible, runner).await;
     Err(CmdError::click(format!(
         "{}: {} was not started, because the units it replaced could not all be retired and \
-         would run beside it: {}",
+         would run beside it: {}{}",
         target.name,
         entry.name,
-        failed.join("; ")
+        failed.join("; "),
+        given_back_sentence(&given_back)
     )))
+}
+
+/// Give back what [`retire_before_ensure`] retired, after the replacement
+/// `replacement_label` was started and did not come up, and say what
+/// happened in words the ensure's refusal appends. Empty when nothing was
+/// retired.
+pub(super) async fn reinstate_after_failed_ensure(
+    target: &crate::targets::ComputeTarget,
+    replacement_label: &str,
+    retired: &[service::Reversible],
+    runner: &crate::deploy::Runner,
+) -> String {
+    given_back_sentence(
+        &service::reinstate_units(target, Some(replacement_label), retired, runner).await,
+    )
+}
+
+fn given_back_sentence(steps: &[String]) -> String {
+    if steps.is_empty() {
+        return String::new();
+    }
+    format!(". The units retired for it were given back: {}", steps.join("; "))
 }

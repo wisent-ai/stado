@@ -202,10 +202,28 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
     });
 
     let runner = production_runner();
-    predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
-    let outcome = service::ensure_service(&target, &plan, &runner)
-        .await
-        .map_err(click)?;
+    let retired =
+        predecessors::retire_before_ensure(&target, catalog_entry.as_ref(), &runner).await?;
+    let outcome = match service::ensure_service(&target, &plan, &runner).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let mut error = click(error);
+            let given_back = predecessors::reinstate_after_failed_ensure(
+                &target,
+                &plan.label,
+                &retired,
+                &runner,
+            )
+            .await;
+            if !given_back.is_empty() {
+                error.message = Some(format!(
+                    "{}{given_back}",
+                    error.message.as_deref().unwrap_or("the ensure failed")
+                ));
+            }
+            return Err(error);
+        }
+    };
     if !outcome.succeeded() {
         let mut detail = format!(
             "{host}: could not ensure {}: {}",
@@ -221,6 +239,10 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
                 ". `stado service list --unowned` names a process that may still hold its port",
             );
         }
+        detail.push_str(
+            &predecessors::reinstate_after_failed_ensure(&target, &plan.label, &retired, &runner)
+                .await,
+        );
         return Err(CmdError::click(detail));
     }
 
