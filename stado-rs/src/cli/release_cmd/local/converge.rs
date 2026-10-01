@@ -57,8 +57,8 @@ pub(in crate::cli::release_cmd) async fn converge_local_readers(
     // The queue agent recycles itself only when `stado.release-version`
     // names a version other than the one it was compiled from, and only
     // `release install-local` wrote that file. A `stado product install`
-    // left it at 0.22.0 under a 0.22.5 binary on 2026-09-26, so the object
-    // API that carries the agent stayed on the replaced image indefinitely.
+    // leaves it at the previous version under a newer binary, so the object
+    // API that carries the agent stays on the replaced image indefinitely.
     // This command is the installed binary when it runs from the install, so
     // its own version is the installed one.
     let running = std::env::current_exe()

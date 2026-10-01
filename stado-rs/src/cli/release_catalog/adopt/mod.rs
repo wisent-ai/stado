@@ -1,9 +1,8 @@
 //! `stado release catalog adopt`: add an application checkout to the release
 //! pipeline in one command.
 //!
-//! On 2026-09-23 the operator asked for turbot-ios and wisent-ios-repo to be
-//! released like every other product. Neither had a `.wisent-release.json` or
-//! release scripts, and the path to one was a manifest copied from another app
+//! An application checkout without a `.wisent-release.json` or release
+//! scripts used to reach the pipeline by a manifest copied from another app
 //! by hand, scripts edited by hand, `catalog declare-publisher`, then `catalog
 //! sync`. This command writes the manifest and scripts from templates filled
 //! with what the checkout's own project states, declares the publisher when

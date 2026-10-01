@@ -13,13 +13,13 @@ use super::ReleaseStatusArgs;
 /// `stado release status [--product NAME] [--json]` — desired against observed,
 /// and now against what the host actually runs.
 ///
-/// Two things were true of this command until 2026-08-18 and both were wrong.
-/// It printed `brama target=control-host desired=0.2.27 observed=unreported`
+/// Two things used to be true of this command and both were wrong.
+/// It printed `desired=<version> observed=unreported`
 /// and exited **zero**, so a host that had never once said what it runs read as
 /// a host with nothing to answer for. And `observed` came only from the release
 /// agent's own state file, so software installed outside the release channel —
-/// skarbiec 0.2.1 on one machine and 0.2.3 on another, neither in any published
-/// release — was invisible here even while it was the thing breaking the fleet.
+/// a vault binary at a version no published release carried — was invisible
+/// here even while it was the thing breaking the fleet.
 ///
 /// The third column closes both. It is the host's own software report
 /// ([`crate::host_software`]), read out of the observation store rather than
@@ -29,9 +29,8 @@ use super::ReleaseStatusArgs;
 /// exits non-zero on any of them with one sentence per row naming the host and
 /// the exact disagreement.
 pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
-    // A question about one run reads that run: on 2026-09-12 the whole
-    // status went into ~/.oko/brama-release-status.json three times to grep
-    // one version's block out of it.
+    // A question about one run reads that run, instead of the whole status
+    // being written to a file and one version's block grepped out of it.
     if args.run.is_some() || args.version.is_some() {
         return runs_only(args).await;
     }

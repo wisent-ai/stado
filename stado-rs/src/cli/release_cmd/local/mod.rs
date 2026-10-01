@@ -23,7 +23,7 @@ pub use restore::ReleaseRestoreLocalArgs;
 /// archive path and digest come from the delivery worker's environment
 /// (`WISENT_RELEASE_ARCHIVE`, `WISENT_RELEASE_SHA256`), the same contract
 /// the retired python installer read. This command replaced the last
-/// load-bearing script of the 137 deleted on 2026-08-19.
+/// load-bearing installer script.
 #[derive(Args)]
 pub struct ReleaseInstallLocalArgs {
     /// Archive member to install, e.g. bin/stado.

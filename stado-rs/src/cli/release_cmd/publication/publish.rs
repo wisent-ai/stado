@@ -13,8 +13,8 @@ use super::claims::claim_release_coordinate;
 /// proceed to the create-only write, so a store that could not answer was
 /// indistinguishable from an empty coordinate: the write then returned
 /// `409 object exists` and the release reported `object exists` with no hint
-/// that nothing had been compared. Measured on stado 0.16.32 on 2026-09-06,
-/// where three resumes each died that way on `release.sig`. Presence is asked
+/// that nothing had been compared, and every resume died that way on
+/// `release.sig`. Presence is asked
 /// through [`crate::cli::storage::release_object_present`], which propagates an
 /// unanswered store as an error instead of as absence.
 async fn put_immutable(uri: &str, bytes: &[u8], content_type: &str) -> Result<(), CmdError> {
@@ -88,7 +88,7 @@ pub(crate) async fn publish_pipeline_release(
     // create-only channel refused it. The coordinate was spent with no
     // commit marker in it, which is the one state the ordered chain
     // `release.tar.gz -> qualification.json -> release.sig -> release.json`
-    // exists to make recoverable. Measured on stado 0.16.32 on 2026-09-06.
+    // exists to make recoverable.
     //
     // Deriving it from the qualification receipt keeps the publication a pure
     // function of the build, so every retry writes byte-identical objects and

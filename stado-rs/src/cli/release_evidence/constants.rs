@@ -59,9 +59,9 @@ pub const BLOCKER_REPEATING_CAUSE: &str = "repeating_quarantine_cause";
 /// candidate at all. The agent's own comment says the next tick rolls the
 /// release out "once whichever declaration claimed that port gives it back"
 /// — and nothing ever makes it give it back, so this is a stop, not a wait.
-/// On 2026-09-21 the mini sat in this state with a verdict of `rolling`
-/// while every credential write on that host refused, `weles-api` crashed on
-/// the refusal at boot, and no account could be signed in.
+/// A host can sit in this state with a verdict of `rolling` while every
+/// credential write on it refuses, the browser service crashes on the
+/// refusal at boot, and no account can be signed in.
 pub const BLOCKER_STABLE_BIND_HELD: &str = "stable_bind_held_by_other_declaration";
 
 /// The command that retires [`BLOCKER_DESIRED_DIGEST_QUARANTINED`]. Named here
