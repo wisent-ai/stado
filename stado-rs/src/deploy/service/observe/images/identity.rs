@@ -97,10 +97,10 @@ pub enum ImageState {
     /// other bytes and the running process holds the only remaining reference
     /// to the ones it is executing.
     ///
-    /// This is the case that actually happened: on 2026-09-02 the janitor's
-    /// six-day-old `--watch` process was executing an inode with zero links
-    /// while `~/.stado/bin/stado` had been replaced more than once underneath
-    /// it. It is a variant of its own because it is the one where no copy of
+    /// This is the case of a long-lived janitor `--watch` process executing
+    /// an inode with zero links while `~/.stado/bin/stado` has been replaced
+    /// more than once underneath it. It is a variant of its own because it
+    /// is the one where no copy of
     /// the running build survives anywhere to be diffed.
     Unlinked {
         running: ImageIdentity,

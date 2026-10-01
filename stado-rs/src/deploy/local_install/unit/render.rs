@@ -96,7 +96,7 @@ fn plist_document(
     <!-- launchd hands a job the system's soft `maxfiles`, which is 256 on
          macOS. The resolver holds transport connections for registry paths
          and a stream per in-flight adapter
-         request; on 2026-09-02 it crossed that ceiling and every registry
+         request; once it crosses that ceiling every registry
          read for the next hours failed with `no registry SSH connection
          path answered (primary: Too many open files (os error 24))`, the
          job exited 1, launchd restarted it, and the cycle repeated. Release

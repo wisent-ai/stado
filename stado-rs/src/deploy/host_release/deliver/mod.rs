@@ -152,8 +152,8 @@ fn base_release_report(
     report.insert("declared_version".to_string(), json!(plan.declared_version));
     report.insert("release_uri".to_string(), json!(plan.release_uri()));
     report.insert("sha256".to_string(), json!(plan.sha256));
-    // The address the TARGET was told to fetch from. Its absence cost an hour
-    // on 2026-09-03: `fetch no_declared_size` says the answer carried no
+    // The address the TARGET was told to fetch from. Without it,
+    // `fetch no_declared_size` says the answer carried no
     // `Content-Range`, and nothing in the receipt said which origin had
     // answered, so the one fact that separates "the store cannot serve ranges"
     // from "the target reached the wrong server" was not in the report.

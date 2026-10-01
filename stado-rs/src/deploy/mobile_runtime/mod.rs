@@ -1,10 +1,9 @@
 //! Verify and repair the mobile automation runtime a host declares it needs.
 //!
-//! NO Python original. This module exists because of what stopped four Spis
-//! crawl families on 2026-09-03: neither `appium` nor `adb` is installed on
-//! either macOS host, so the iOS and Android capture placements have no
-//! driver to open an application with and no bridge to reach a device
-//! through.
+//! NO Python original. This module exists because mobile crawl families stop
+//! when neither `appium` nor `adb` is installed on a macOS host: the iOS and
+//! Android capture placements then have no driver to open an application
+//! with and no bridge to reach a device through.
 //!
 //! The probe half already existed and the repair half did not.
 //! [`super::host_exec`] approved `appium --version`,

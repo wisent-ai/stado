@@ -3,12 +3,12 @@
 //!
 //! NO Python original: item three of `stado.wisent.com/docs/missing-commands`.
 //!
-//! Why two signals and not one: on 2026-07-24 control-host answered
-//! ssh perfectly while its health beacon was five days old — the disk was
-//! full, launchd was wedged, and the beacon writer had not run since.
-//! "Can I ssh in" and "is this box reporting" are different questions, and
-//! a ping that answers only the first is exactly the tool that let that
-//! incident run for five days. So both are probed, both are reported, and
+//! Why two signals and not one: a host can answer ssh perfectly while its
+//! health beacon is days old — the disk full, launchd wedged, and the beacon
+//! writer not run since. "Can I ssh in" and "is this box reporting" are
+//! different questions, and a ping that answers only the first is exactly
+//! the tool that lets such an incident run for days. So both are probed,
+//! both are reported, and
 //! the verdict is the WORSE of the two ([`Verdict`] is ordered worst-last
 //! so the combination is a plain `max`).
 //!
@@ -199,8 +199,8 @@ pub async fn beacon_signal(store: &JobStorage, identity: &str, now: DateTime<Utc
 ///
 /// `store` is the beacon store as it could be opened, or why it could not.
 /// A store that does not open is the beacon half's answer, not the whole
-/// command's: on 2026-09-29 the object API was down, `stado host ping` exited
-/// on that alone, and nobody could ask whether the host itself answered ssh.
+/// command's: a `stado host ping` that exits on a closed object API alone
+/// leaves nobody able to ask whether the host itself answers ssh.
 pub async fn ping_host(
     target_name: &str,
     store: Result<&JobStorage, String>,

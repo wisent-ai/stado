@@ -68,7 +68,7 @@ pub(super) async fn pipeline_catalog_identity(
     // reading the sidecar beside it makes release delivery report the version
     // as installed while installing the older build, with host-state
     // confirming `in-sync` — every reading true about itself and none of them
-    // about the version an operator asked for.
+    // about the version that was requested.
     //
     // A version number that means two different builds is not deliverable, and
     // the doctrine for that is already written in `catalog_identity` below:

@@ -11,9 +11,9 @@ use crate::deploy::DeployError;
 /// with the signed manifest already in hand. `doctor`'s release-channel audit
 /// asks it about every recent coordinate, so a version poisoned at publication
 /// time is named by the standing audit rather than waiting for the next
-/// delivery to discover it — which is how 0.13.27 was found on 2026-09-01, and
-/// how 0.13.49 was found on 2026-09-03 only after its train had been re-run to
-/// completion into a coordinate that can never be delivered.
+/// delivery to discover it — otherwise a poisoned version is found only
+/// after its train has been re-run to completion into a coordinate that can
+/// never be delivered.
 pub(super) fn revision_conflict(
     product: &str,
     version: &str,

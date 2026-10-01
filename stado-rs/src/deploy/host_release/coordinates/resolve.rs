@@ -76,8 +76,8 @@ pub async fn resolve_release_request(
     product.platform(platform)?;
     // The origin the registry declares for public release reads is the one a
     // target can reach without a bearer; the configured API origin answers
-    // only while an edge still forwards the route, and on 2026-09-22 the
-    // stado.wisent.com edge stopped. A fleet that declares no such origin
+    // only while an edge still forwards the route, and an edge can stop. A
+    // fleet that declares no such origin
     // keeps its configured one.
     let declared = serde_json::Value::Object(registry.extra.clone());
     let release_api = match crate::public_origin::publishing(&declared, RELEASE_ROUTE) {

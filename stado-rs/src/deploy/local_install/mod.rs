@@ -117,8 +117,7 @@ pub fn label(kind: &str, name: &str) -> String {
 /// The mirror of [`label`] one suffix over, and it is here for the same reason.
 /// [`label`] stopped the fleet minting its own prefix onto a name that already
 /// carried it; nothing stopped `.service` being appended to a name that already
-/// ended in it, and on 2026-09-03 that produced
-/// `com.wisent.compute.service.stado-resolver.service.service` in the registry
+/// ended in it, which produces a `….service.service` label in the registry
 /// and on the unit path. A doubled suffix is a DIFFERENT unit name, so systemd
 /// was asked for a unit nobody had written, the declaration reported `missing`
 /// with `observed: never`, and the resolver was declared on a host where it had
