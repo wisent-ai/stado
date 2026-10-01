@@ -96,7 +96,7 @@
         {
           "label": "com.wisent.skarbiec",
           "kind": "launchd",
-          "path": "/Library/LaunchDaemons/com.wisent.skarbiec.plist"
+          "path": "$HOME/Library/LaunchAgents/com.wisent.skarbiec.plist"
         }
       ]
     },
