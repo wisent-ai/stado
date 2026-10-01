@@ -19,6 +19,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- `stado identity relay-apple-challenge` and `stado identity issue-apple-capabilities` are replaced by `stado identity relay-challenge --provider apple` and `stado identity issue-capabilities --provider apple` (cli.md rule 1). A provider without an adapter is refused by name with the list of those that have one. Weles's Apple account placement calls the new form (weles `src/auth/apple-account-placement.mjs`), so a Weles carrying that change needs a Stado that carries this one.
-- `stado host render-spis-admission-trust` is replaced by `stado host render-public-document TARGET SOURCE` (cli.md rule 1): any checked-in renderer runs against TARGET's own live vault and its document is printed verbatim. Stado refuses output that is not one JSON document or that carries private key material; the document's shape is checked by its consumer, so Stado no longer holds one product's receipt-trust schema.
