@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- The `stado database` commands that change a declaration or the database service, and `stado database place`, print `key: value` lines without `--json`; before, those changes ignored `--json` and `place` printed JSON either way. `place --json` stays one line, which `database create` reads from a remote placement.

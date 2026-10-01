@@ -95,12 +95,13 @@ pub(super) async fn place(
     checked(name, engine)?;
     let here = crate::cli::release_catalog::this_host().await?;
     let report = placement(name, engine, port, &here).await?;
+    // `--json` stays one line: `create` reads the last line of a remote
+    // placement's output (`last_json`), after whatever the unit install printed.
     if json_output {
         println!("{}", serde_json::to_string(&report)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
     }
-    Ok(())
+    crate::cli::print_answer(&report, false)
 }
 
 fn checked(name: &str, engine: &str) -> Result<(), CmdError> {

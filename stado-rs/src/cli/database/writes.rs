@@ -93,9 +93,7 @@ pub(super) fn canonical_name(name: &str) -> bool {
 }
 
 pub(super) fn report_mutation(json_output: bool, report: Value) -> Result<(), CmdError> {
-    let _ = json_output;
-    println!("{}", serde_json::to_string_pretty(&report)?);
-    Ok(())
+    crate::cli::print_answer(&report, json_output)
 }
 
 /// This machine's `database_api` block, as its config file holds it.
