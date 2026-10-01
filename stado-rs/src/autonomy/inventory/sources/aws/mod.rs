@@ -16,7 +16,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
-use crate::autonomy::inventory::values::permission_error;
 use crate::autonomy::model::{InventorySource, ResourceRecord, SourceState};
 use crate::capabilities::ProviderId;
 
@@ -35,7 +34,6 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
         state: SourceState::Complete,
         observed_at: observed_at.to_rfc3339(),
         coverage: BTreeSet::new(),
-        missing_permissions: Vec::new(),
         upstream_error: None,
         resources: Vec::new(),
     };
@@ -54,17 +52,17 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
     source.coverage.insert("ec2.instances".to_string());
     match aws_instances(&ec2, &account, &region, observed_at).await {
         Ok(items) => source.resources.extend(items),
-        Err(error) => record_aws_error("ec2.instances", error, &mut source, &mut errors),
+        Err(error) => record_aws_error("ec2.instances", error, &mut errors),
     }
     source.coverage.insert("ec2.volumes".to_string());
     match aws_volumes(&ec2, &account, &region, observed_at).await {
         Ok(items) => source.resources.extend(items),
-        Err(error) => record_aws_error("ec2.volumes", error, &mut source, &mut errors),
+        Err(error) => record_aws_error("ec2.volumes", error, &mut errors),
     }
     source.coverage.insert("ec2.snapshots".to_string());
     match aws_snapshots(&ec2, &account, &region, observed_at).await {
         Ok(items) => source.resources.extend(items),
-        Err(error) => record_aws_error("ec2.snapshots", error, &mut source, &mut errors),
+        Err(error) => record_aws_error("ec2.snapshots", error, &mut errors),
     }
     source.coverage.insert("ec2.addresses".to_string());
     match ec2.describe_addresses().send().await {
@@ -104,9 +102,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 source.resources.push(resource);
             }
         }
-        Err(error) => {
-            record_aws_error("ec2.addresses", error.to_string(), &mut source, &mut errors)
-        }
+        Err(error) => record_aws_error("ec2.addresses", error.to_string(), &mut errors),
     }
     source.coverage.insert("ec2.reservations".to_string());
     match ec2.describe_reserved_instances().send().await {
@@ -140,12 +136,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 source.resources.push(resource);
             }
         }
-        Err(error) => record_aws_error(
-            "ec2.reservations",
-            error.to_string(),
-            &mut source,
-            &mut errors,
-        ),
+        Err(error) => record_aws_error("ec2.reservations", error.to_string(), &mut errors),
     }
     source.coverage.insert("ec2.images".to_string());
     match ec2.describe_images().owners("self").send().await {
@@ -181,7 +172,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 source.resources.push(resource);
             }
         }
-        Err(error) => record_aws_error("ec2.images", error.to_string(), &mut source, &mut errors),
+        Err(error) => record_aws_error("ec2.images", error.to_string(), &mut errors),
     }
     source.coverage.insert("s3.buckets".to_string());
     match s3.list_buckets().send().await {
@@ -202,7 +193,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
                 source.resources.push(resource);
             }
         }
-        Err(error) => record_aws_error("s3.buckets", error.to_string(), &mut source, &mut errors),
+        Err(error) => record_aws_error("s3.buckets", error.to_string(), &mut errors),
     }
     if !errors.is_empty() {
         source.state = SourceState::Degraded;
@@ -211,15 +202,7 @@ pub(in crate::autonomy::inventory) async fn collect_aws(
     source
 }
 
-fn record_aws_error(
-    operation: &str,
-    error: String,
-    source: &mut InventorySource,
-    errors: &mut Vec<String>,
-) {
-    if permission_error(&error) {
-        source.missing_permissions.push(operation.to_string());
-    }
+fn record_aws_error(operation: &str, error: String, errors: &mut Vec<String>) {
     errors.push(format!("{operation}: {error}"));
 }
 

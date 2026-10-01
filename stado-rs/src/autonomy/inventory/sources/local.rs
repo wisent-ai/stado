@@ -47,7 +47,6 @@ pub(in crate::autonomy::inventory) async fn collect_local(
         state: SourceState::Complete,
         observed_at: observed_at.to_rfc3339(),
         coverage: BTreeSet::from(["capacity.publications".to_string()]),
-        missing_permissions: Vec::new(),
         upstream_error: None,
         resources,
     })

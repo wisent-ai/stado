@@ -36,8 +36,8 @@ mod tickets;
 /// escalate arm. `reply_body` and `escalation_body` are the two bodies it
 /// renders and were published by the pre-image at the same paths.
 pub use respond::{escalation_body, reply_body, respond_to_open_quota_tickets};
-/// `RepliesError` is the error `crate::cli::quota::submit`'s
-/// `support_permission_error` takes by reference; `SystemAzRunner` is the
+/// `RepliesError` is the error `crate::cli::quota::submit` reports with az's
+/// own stderr; `SystemAzRunner` is the
 /// production runner `crate::cli::quota::report` and
 /// `crate::cli::quota::submit::increase` construct and hand in; and
 /// `AzRunner` is the seam every re-exported signature below carries a

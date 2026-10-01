@@ -177,8 +177,6 @@ pub struct InventorySource {
     pub state: SourceState,
     pub observed_at: String,
     pub coverage: BTreeSet<String>,
-    #[serde(default)]
-    pub missing_permissions: Vec<String>,
     pub upstream_error: Option<String>,
     pub resources: Vec<ResourceRecord>,
 }

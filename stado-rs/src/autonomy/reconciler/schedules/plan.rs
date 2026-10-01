@@ -157,7 +157,6 @@ pub(super) fn schedule_plan(
                     state: format!("{:?}", source.state).to_ascii_lowercase(),
                     detail: json!({
                         "coverage": source.coverage,
-                        "missing_permissions": source.missing_permissions,
                         "upstream_error": source.upstream_error,
                     }),
                 })

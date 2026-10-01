@@ -2,8 +2,7 @@
 //!
 //! [`collect_gcp`] runs the probe set the blast-radius options ask for and
 //! turns every probe that [`gcp_probe_shape`] recognizes into records via
-//! [`gcp_resource`]; a probe error becomes an upstream error and, when it
-//! reads as a permission refusal, a missing permission.
+//! [`gcp_resource`]; a probe error becomes an upstream error, quoted whole.
 
 use std::collections::BTreeSet;
 
@@ -11,8 +10,8 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use crate::autonomy::inventory::values::{
-    canonical_revision, collect_resource_references, object_strings, permission_error,
-    region_from_zone, source_state, value_text,
+    canonical_revision, collect_resource_references, object_strings, region_from_zone,
+    source_state, value_text,
 };
 use crate::autonomy::model::{InventorySource, ResourceRecord};
 use crate::capabilities::ProviderId;
@@ -28,15 +27,11 @@ pub(in crate::autonomy::inventory) async fn collect_gcp(
     let report = crate::providers::gcp::inventory::inspect(options).await;
     let mut resources = Vec::new();
     let mut coverage = BTreeSet::new();
-    let mut missing_permissions = Vec::new();
     let mut errors = Vec::new();
     for probe in &report.probes {
         coverage.insert(probe.service.clone());
         if let Some(error) = &probe.error {
             errors.push(format!("{}: {error}", probe.name));
-            if permission_error(error) {
-                missing_permissions.push(probe.name.clone());
-            }
         }
         let Some((kind, key)) = gcp_probe_shape(&probe.name) else {
             continue;
@@ -55,7 +50,6 @@ pub(in crate::autonomy::inventory) async fn collect_gcp(
         state,
         observed_at: observed_at.to_rfc3339(),
         coverage,
-        missing_permissions,
         upstream_error: (!errors.is_empty()).then(|| errors.join("; ")),
         resources,
     }

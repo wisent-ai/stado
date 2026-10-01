@@ -86,21 +86,20 @@ pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
     let client = agent_secret_client().map_err(|error| error.to_string())?;
     let visible = client.list_items().await.map_err(|error| {
         let text = error.to_string();
-        // The broker did answer: it refused the consumer. Skarbiec says
-        // "consumer grant required" for a grant it does not hold, and a grant
-        // whose expires_at has passed is one it no longer holds; naming the
-        // grant sends the diagnosis there instead of at the broker's URL.
-        if text.contains("consumer grant required") {
-            format!(
+        // The broker did answer and refused the consumer (401 or 403): a
+        // grant it does not hold, or one whose expires_at has passed. Naming
+        // the grant sends the diagnosis there instead of at the broker's URL.
+        // The status decides, not the broker's wording.
+        match error.status() {
+            Some(401 | 403) => format!(
                 "this host's agent grant for consumer {} is missing or has expired at the broker ({text}); \
                  `skarbiec grant list` shows its expires_at, and `skarbiec grant issue {} --capabilities … \
                  --replace-capabilities --token-file {}` renews it",
                 crate::config::agent_skarbiec_consumer(),
                 crate::config::agent_skarbiec_consumer(),
                 crate::config::agent_skarbiec_token_file(),
-            )
-        } else {
-            format!("the agent's Skarbiec broker did not answer: {text}")
+            ),
+            _ => format!("the agent's Skarbiec broker did not answer: {text}"),
         }
     })?;
     for (env_name, reference) in &job.secret_env {

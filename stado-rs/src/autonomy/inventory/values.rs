@@ -3,8 +3,8 @@
 //! [`value_text`] and [`object_strings`] pull the strings a provider payload
 //! carries under any of a list of keys, [`collect_resource_references`] walks
 //! a payload for the identifiers that point at another resource,
-//! [`region_from_zone`] narrows a zone to its region, [`source_state`] and
-//! [`permission_error`] classify what a read came back with, and
+//! [`region_from_zone`] narrows a zone to its region, [`source_state`]
+//! classifies what a read came back with by its summary, and
 //! [`canonical_revision`] and [`sha256_hex`] are the digests a record and a
 //! snapshot are addressed by.
 
@@ -68,14 +68,6 @@ pub(super) fn source_state(summary: &str, errors: &[String]) -> SourceState {
     } else {
         SourceState::Degraded
     }
-}
-
-pub(super) fn permission_error(error: &str) -> bool {
-    let lowered = error.to_ascii_lowercase();
-    lowered.contains("permission")
-        || lowered.contains("forbidden")
-        || lowered.contains("unauthorized")
-        || lowered.contains("accessdenied")
 }
 
 pub(super) fn region_from_zone(zone: &str) -> Option<&str> {

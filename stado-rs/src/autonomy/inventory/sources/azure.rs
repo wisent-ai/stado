@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use crate::autonomy::inventory::values::{
-    canonical_revision, collect_resource_references, object_strings, permission_error, value_text,
+    canonical_revision, collect_resource_references, object_strings, value_text,
 };
 use crate::autonomy::model::{InventorySource, ResourceRecord, SourceState};
 use crate::capabilities::ProviderId;
@@ -24,7 +24,6 @@ pub(in crate::autonomy::inventory) async fn collect_azure(
         state: SourceState::Complete,
         observed_at: observed_at.to_rfc3339(),
         coverage: ["azure.resource_graph".to_string()].into_iter().collect(),
-        missing_permissions: Vec::new(),
         upstream_error: None,
         resources: Vec::new(),
     };
@@ -61,11 +60,6 @@ pub(in crate::autonomy::inventory) async fn collect_azure(
             Err(error) => {
                 let detail = error.to_string();
                 source.state = SourceState::Blocked;
-                if permission_error(&detail) {
-                    source
-                        .missing_permissions
-                        .push("Microsoft.ResourceGraph/resources/read".to_string());
-                }
                 source.upstream_error = Some(detail);
                 return source;
             }
