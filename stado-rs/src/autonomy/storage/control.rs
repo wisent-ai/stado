@@ -1,10 +1,13 @@
 //! The emergency pause and the mutation circuit breaker: one compare-and-swap
-//! object that every mutating stage reads before it acts.
+//! object that every mutating stage reads before it acts. A write that loses
+//! the compare-and-swap is refused as a conflict; the caller decides whether
+//! to ask again.
+
+use std::num::{NonZeroU64, NonZeroUsize};
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::autonomy::model::SCHEMA_VERSION;
 use crate::queue::{JobStorage, StorageError};
 
 use super::CONTROL_PATH;
@@ -12,12 +15,13 @@ use super::CONTROL_PATH;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlState {
-    pub schema_version: u16,
     pub emergency_paused: bool,
     pub reason: Option<String>,
     pub changed_at: String,
     pub changed_by: String,
-    pub consecutive_mutation_failures: usize,
+    /// When each mutation since the last success failed; the breaker opens
+    /// once there are as many as the policy's threshold.
+    pub mutation_failures: Vec<String>,
     pub circuit_open_until: Option<String>,
     pub last_mutation_error: Option<String>,
 }
@@ -25,12 +29,11 @@ pub struct ControlState {
 impl Default for ControlState {
     fn default() -> Self {
         Self {
-            schema_version: SCHEMA_VERSION,
             emergency_paused: false,
             reason: None,
             changed_at: Utc::now().to_rfc3339(),
             changed_by: "default".to_string(),
-            consecutive_mutation_failures: usize::default(),
+            mutation_failures: Vec::new(),
             circuit_open_until: None,
             last_mutation_error: None,
         }
@@ -49,14 +52,36 @@ pub async fn load_control(store: &JobStorage) -> Result<ControlState, StorageErr
     let Some(raw) = store.download_text(CONTROL_PATH).await? else {
         return Ok(ControlState::default());
     };
-    let state: ControlState = serde_json::from_str(&raw)?;
-    if state.schema_version != SCHEMA_VERSION {
-        return Err(StorageError::Other(format!(
-            "unsupported autonomy control schema_version {}",
-            state.schema_version
-        )));
+    Ok(serde_json::from_str(&raw)?)
+}
+
+/// Read the state, change it, and write it back against the version read.
+async fn update(
+    store: &JobStorage,
+    conflict: &str,
+    change: impl FnOnce(&mut ControlState),
+) -> Result<ControlState, StorageError> {
+    let versioned = store.read_text_versioned(CONTROL_PATH).await?;
+    let mut state = match versioned.as_ref() {
+        Some(value) => serde_json::from_str::<ControlState>(&value.content)?,
+        None => ControlState::default(),
+    };
+    change(&mut state);
+    let content = serde_json::to_string(&state)?;
+    let write = match versioned {
+        Some(value) => store
+            .compare_and_swap_text(CONTROL_PATH, &value.version, &content)
+            .await
+            .map(|_| true),
+        None => store.create_text_if_absent(CONTROL_PATH, &content).await,
+    };
+    match write {
+        Ok(true) => Ok(state),
+        Ok(false) | Err(StorageError::StorageConflict(_)) => {
+            Err(StorageError::StorageConflict(conflict.to_string()))
+        }
+        Err(error) => Err(error),
     }
-    Ok(state)
 }
 
 pub async fn set_control(
@@ -66,41 +91,15 @@ pub async fn set_control(
     actor: impl Into<String>,
 ) -> Result<ControlState, StorageError> {
     let actor = actor.into();
-    let attempts = (u16::BITS / u8::BITS) as usize;
-    for _ in usize::default()..attempts {
-        let versioned = store.read_text_versioned(CONTROL_PATH).await?;
-        let mut state = match versioned.as_ref() {
-            Some(value) => serde_json::from_str::<ControlState>(&value.content)?,
-            None => ControlState::default(),
-        };
-        if state.schema_version != SCHEMA_VERSION {
-            return Err(StorageError::Other(format!(
-                "unsupported autonomy control schema_version {}",
-                state.schema_version
-            )));
-        }
+    update(store, "autonomy control state changed concurrently", |state| {
         state.emergency_paused = emergency_paused;
-        state.reason = reason.clone();
+        state.reason = reason;
         state.changed_at = Utc::now().to_rfc3339();
-        state.changed_by = actor.clone();
-        let content = serde_json::to_string(&state)?;
-        let write = match versioned {
-            Some(value) => store
-                .compare_and_swap_text(CONTROL_PATH, &value.version, &content)
-                .await
-                .map(|_| true),
-            None => store.create_text_if_absent(CONTROL_PATH, &content).await,
-        };
-        match write {
-            Ok(true) => return Ok(state),
-            Ok(false) | Err(StorageError::StorageConflict(_)) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(StorageError::StorageConflict(
-        "autonomy control state changed concurrently".to_string(),
-    ))
+        state.changed_by = actor;
+    })
+    .await
 }
+
 pub async fn record_mutation_outcome(
     store: &JobStorage,
     succeeded: bool,
@@ -108,62 +107,34 @@ pub async fn record_mutation_outcome(
     failure_threshold: usize,
     cooldown_seconds: u64,
 ) -> Result<ControlState, StorageError> {
-    if failure_threshold == usize::default() {
-        return Err(StorageError::Other(
-            "circuit-breaker failure threshold must be positive".to_string(),
-        ));
-    }
-    let cooldown_seconds = i64::try_from(cooldown_seconds)
-        .map_err(|_| StorageError::Other("circuit-breaker cooldown exceeds i64".to_string()))?;
-    if cooldown_seconds == i64::default() {
-        return Err(StorageError::Other(
-            "circuit-breaker cooldown must be positive".to_string(),
-        ));
-    }
-    let attempts = (u16::BITS / u8::BITS) as usize;
-    for _ in usize::default()..attempts {
-        let versioned = store.read_text_versioned(CONTROL_PATH).await?;
-        let mut state = match versioned.as_ref() {
-            Some(value) => serde_json::from_str::<ControlState>(&value.content)?,
-            None => ControlState::default(),
-        };
-        if state.schema_version != SCHEMA_VERSION {
-            return Err(StorageError::Other(format!(
-                "unsupported autonomy control schema_version {}",
-                state.schema_version
-            )));
-        }
-        if succeeded {
-            state.consecutive_mutation_failures = usize::default();
-            state.circuit_open_until = None;
-            state.last_mutation_error = None;
-        } else {
-            state.consecutive_mutation_failures = state
-                .consecutive_mutation_failures
-                .saturating_add(true as usize);
-            state.last_mutation_error = error.map(str::to_string);
-            if state.consecutive_mutation_failures >= failure_threshold {
-                state.circuit_open_until =
-                    Some((Utc::now() + Duration::seconds(cooldown_seconds)).to_rfc3339());
+    let failure_threshold = NonZeroUsize::new(failure_threshold).ok_or_else(|| {
+        StorageError::Other("circuit-breaker failure threshold must be positive".to_string())
+    })?;
+    let cooldown_seconds = NonZeroU64::new(cooldown_seconds)
+        .and_then(|value| i64::try_from(value.get()).ok())
+        .ok_or_else(|| {
+            StorageError::Other("circuit-breaker cooldown must fit positive i64 seconds".to_string())
+        })?;
+    update(
+        store,
+        "autonomy circuit-breaker state changed concurrently",
+        |state| {
+            let now = Utc::now();
+            if succeeded {
+                state.mutation_failures.clear();
+                state.circuit_open_until = None;
+                state.last_mutation_error = None;
+            } else {
+                state.mutation_failures.push(now.to_rfc3339());
+                state.last_mutation_error = error.map(str::to_string);
+                if state.mutation_failures.len() >= failure_threshold.get() {
+                    state.circuit_open_until =
+                        Some((now + Duration::seconds(cooldown_seconds)).to_rfc3339());
+                }
             }
-        }
-        state.changed_at = Utc::now().to_rfc3339();
-        state.changed_by = "autonomy-circuit-breaker".to_string();
-        let content = serde_json::to_string(&state)?;
-        let write = match versioned {
-            Some(value) => store
-                .compare_and_swap_text(CONTROL_PATH, &value.version, &content)
-                .await
-                .map(|_| true),
-            None => store.create_text_if_absent(CONTROL_PATH, &content).await,
-        };
-        match write {
-            Ok(true) => return Ok(state),
-            Ok(false) | Err(StorageError::StorageConflict(_)) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(StorageError::StorageConflict(
-        "autonomy circuit-breaker state changed concurrently".to_string(),
-    ))
+            state.changed_at = now.to_rfc3339();
+            state.changed_by = "autonomy-circuit-breaker".to_string();
+        },
+    )
+    .await
 }

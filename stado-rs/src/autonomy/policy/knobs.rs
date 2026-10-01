@@ -73,19 +73,10 @@ impl Default for PlacementPolicy {
     }
 }
 
+/// How old inventory and prices may be before a tick refuses to act on them;
+/// the operator's document states both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct FreshnessPolicy {
     pub inventory_max_age_seconds: u64,
     pub pricing_max_age_seconds: u64,
-}
-
-impl Default for FreshnessPolicy {
-    fn default() -> Self {
-        Self {
-            inventory_max_age_seconds: crate::monitor::billing::SECONDS_PER_MINUTE
-                * (u8::BITS as u64 - (u16::BITS / u8::BITS) as u64 - true as u64),
-            pricing_max_age_seconds: crate::monitor::billing::SECONDS_PER_HOUR,
-        }
-    }
 }

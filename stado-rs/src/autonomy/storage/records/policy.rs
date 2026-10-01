@@ -5,13 +5,15 @@ use crate::autonomy::policy::AutonomyPolicy;
 use crate::autonomy::storage::POLICY_PATH;
 use crate::queue::{JobStorage, StorageError};
 
-pub async fn load_policy(store: &JobStorage) -> Result<AutonomyPolicy, StorageError> {
+/// The operator's policy, or `None` when none was ever written: autonomy has
+/// no limits of its own to run under.
+pub async fn load_policy(store: &JobStorage) -> Result<Option<AutonomyPolicy>, StorageError> {
     let Some(raw) = store.download_text(POLICY_PATH).await? else {
-        return Ok(AutonomyPolicy::default());
+        return Ok(None);
     };
     let policy: AutonomyPolicy = serde_json::from_str(&raw)?;
     policy.validate().map_err(StorageError::Other)?;
-    Ok(policy)
+    Ok(Some(policy))
 }
 
 pub async fn write_policy(

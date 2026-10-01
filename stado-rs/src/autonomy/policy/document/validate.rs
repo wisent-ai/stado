@@ -1,51 +1,47 @@
 //! Refuse an unusable document at the door.
 //!
-//! The check runs in the order a document is read: the schema stamp and
-//! version string, then the limits that must be positive to mean anything,
-//! then the freshness TTLs, then the money — every budget must be a finite
-//! non-negative number — and finally each resource rule, where a grant that
-//! promises something the rule cannot deliver, an invalid cron expression, a
-//! pair of identical schedules or an unknown timezone are all rejected.
+//! The check runs in the order a document is read: the version string, then
+//! the limits that must be positive to mean anything, then the freshness
+//! TTLs, then the money — every budget must be a finite non-negative number —
+//! and finally each resource rule, where a grant that promises something the
+//! rule cannot deliver, an invalid cron expression, a pair of identical
+//! schedules or an unknown timezone are all rejected.
 
-use crate::autonomy::model::SCHEMA_VERSION;
+use std::num::{NonZeroU64, NonZeroUsize};
 
 use super::AutonomyPolicy;
 
+/// Positive and representable as `i64` seconds.
+fn positive_seconds(value: u64) -> bool {
+    NonZeroU64::new(value).is_some() && i64::try_from(value).is_ok()
+}
+
 impl AutonomyPolicy {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != SCHEMA_VERSION {
-            return Err(format!(
-                "unsupported autonomy policy schema_version {}",
-                self.schema_version
-            ));
-        }
         if self.policy_version.trim().is_empty() {
             return Err("policy_version is required".to_string());
         }
-        if self.limits.max_actions_per_tick == usize::default() {
+        if NonZeroUsize::new(self.limits.max_actions_per_tick).is_none() {
             return Err("limits.max_actions_per_tick must be positive".to_string());
         }
-        if self.limits.max_actions_per_provider == usize::default() {
+        if NonZeroUsize::new(self.limits.max_actions_per_provider).is_none() {
             return Err("limits.max_actions_per_provider must be positive".to_string());
         }
-        if self.limits.decision_ttl_seconds == u64::default()
-            || self.limits.decision_ttl_seconds > i64::MAX as u64
-        {
+        if !positive_seconds(self.limits.decision_ttl_seconds) {
             return Err("limits.decision_ttl_seconds must fit positive i64 seconds".to_string());
         }
-        if self.limits.max_concurrent_mutations == usize::default() {
+        if NonZeroUsize::new(self.limits.max_concurrent_mutations).is_none() {
             return Err("limits.max_concurrent_mutations must be positive".to_string());
         }
-        if self.limits.circuit_breaker_failures == usize::default()
-            || self.limits.circuit_breaker_cooldown_seconds == u64::default()
-            || self.limits.circuit_breaker_cooldown_seconds > i64::MAX as u64
+        if NonZeroUsize::new(self.limits.circuit_breaker_failures).is_none()
+            || !positive_seconds(self.limits.circuit_breaker_cooldown_seconds)
         {
             return Err(
                 "circuit-breaker threshold and cooldown must fit positive seconds".to_string(),
             );
         }
-        if self.freshness.inventory_max_age_seconds == u64::default()
-            || self.freshness.pricing_max_age_seconds == u64::default()
+        if NonZeroU64::new(self.freshness.inventory_max_age_seconds).is_none()
+            || NonZeroU64::new(self.freshness.pricing_max_age_seconds).is_none()
         {
             return Err("freshness TTLs must be positive".to_string());
         }
@@ -57,7 +53,7 @@ impl AutonomyPolicy {
             ("max_commitment_usd", self.budgets.max_commitment_usd),
             ("local_hourly_cost_usd", self.local_hourly_cost_usd),
         ] {
-            if amount.is_some_and(|value| !value.is_finite() || value < f64::default()) {
+            if amount.is_some_and(|value| !value.is_finite() || value.is_sign_negative()) {
                 return Err(format!("{name} must be a finite non-negative number"));
             }
         }

@@ -43,7 +43,7 @@ pub enum PolicyCommands {
 
 #[derive(Serialize)]
 struct OptimizeStatus {
-    policy: crate::autonomy::AutonomyPolicy,
+    policy: Option<crate::autonomy::AutonomyPolicy>,
     policy_version: Option<String>,
     control: crate::autonomy::storage::ControlState,
     inventory: Option<InventoryStatus>,
@@ -137,7 +137,10 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
         println!("{}", serde_json::to_string_pretty(&status)?);
         return Ok(());
     }
-    println!("Autonomy mode: {:?}", status.policy.mode);
+    match &status.policy {
+        Some(policy) => println!("Autonomy mode: {:?}", policy.mode),
+        None => println!("Autonomy policy: none written; autonomy does not run"),
+    }
     println!(
         "Emergency pause: {}{}",
         status.control.emergency_paused,
@@ -151,7 +154,7 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
     println!(
         "Circuit breaker: open={}, consecutive failures={}, until={}",
         status.control.circuit_open_at(chrono::Utc::now()),
-        status.control.consecutive_mutation_failures,
+        status.control.mutation_failures.len(),
         status
             .control
             .circuit_open_until
@@ -206,7 +209,13 @@ async fn explain(decision_id: &str) -> Result<(), CmdError> {
 
 async fn run_once() -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let policy = crate::autonomy::storage::load_policy(&store).await?;
+    let policy = crate::autonomy::storage::load_policy(&store)
+        .await?
+        .ok_or_else(|| {
+            CmdError::refused(
+                "no autonomy policy is written; `stado optimize policy apply <file>` states its limits",
+            )
+        })?;
     let providers = crate::coordinator::resolve_providers();
     crate::coordinator::run_autonomy_once(&store, &providers, policy, &|message| {
         eprintln!("[autonomy] {message}");

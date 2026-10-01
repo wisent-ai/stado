@@ -29,7 +29,7 @@ pub async fn publish_recommendations(
         now,
     };
     for resource in &snapshot.resources {
-        if underutilized(resource)
+        if underutilized(resource, policy)
             && resource.current_hourly_cost_usd.is_some()
             && publish(
                 store,

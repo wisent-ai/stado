@@ -113,13 +113,14 @@ pub async fn run_tick(
         ));
     }
     let autonomy_requires_routing = match crate::autonomy::storage::load_policy(store).await {
-        Ok(policy) => {
+        Ok(Some(policy)) => {
             let routed = policy.mode != crate::autonomy::AutonomyMode::Report;
             if let Err(error) = run_autonomy_once(store, providers, policy, log).await {
                 log(&format!("autonomy tick degraded: {error}"));
             }
             routed
         }
+        Ok(None) => false,
         Err(error) => {
             log(&format!(
                 "autonomy policy unreadable; fail-closing unpinned dispatch: {error}"

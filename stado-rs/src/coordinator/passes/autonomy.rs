@@ -23,7 +23,7 @@ pub(crate) async fn run_autonomy_once(
         log(&format!(
             "autonomy circuit breaker open until {} after {} consecutive mutation failures: {}",
             control.circuit_open_until.as_deref().unwrap_or("unknown"),
-            control.consecutive_mutation_failures,
+            control.mutation_failures.len(),
             control.last_mutation_error.as_deref().unwrap_or("unknown"),
         ));
     }

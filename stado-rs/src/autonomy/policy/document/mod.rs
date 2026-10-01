@@ -17,8 +17,6 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::autonomy::model::SCHEMA_VERSION;
-
 use super::{
     AutonomyMode, BudgetPolicy, FreshnessPolicy, IdlePolicy, PlacementPolicy, ResourceRule,
     SafetyLimits,
@@ -26,38 +24,26 @@ use super::{
 
 pub use authorize::AuthorizationDecision;
 
+/// No document means no autonomy: the idle, freshness and safety values have
+/// no defaults, so a tick runs only once an operator has written them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct AutonomyPolicy {
-    pub schema_version: u16,
     pub policy_version: String,
+    #[serde(default)]
     pub mode: AutonomyMode,
+    #[serde(default)]
     pub emergency_paused: bool,
+    #[serde(default)]
     pub budgets: BudgetPolicy,
+    #[serde(default)]
     pub placement: PlacementPolicy,
     pub idle: IdlePolicy,
     pub freshness: FreshnessPolicy,
     pub limits: SafetyLimits,
+    #[serde(default)]
     pub local_hourly_cost_usd: Option<f64>,
+    #[serde(default)]
     pub rules: Vec<ResourceRule>,
+    #[serde(default)]
     pub metadata: BTreeMap<String, String>,
-}
-
-impl Default for AutonomyPolicy {
-    fn default() -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            policy_version: "default-report-only".to_string(),
-            mode: AutonomyMode::Report,
-            emergency_paused: false,
-            budgets: BudgetPolicy::default(),
-            placement: PlacementPolicy::default(),
-            idle: IdlePolicy::default(),
-            freshness: FreshnessPolicy::default(),
-            limits: SafetyLimits::default(),
-            local_hourly_cost_usd: None,
-            rules: Vec::new(),
-            metadata: BTreeMap::new(),
-        }
-    }
 }
