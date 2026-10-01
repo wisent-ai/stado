@@ -72,10 +72,9 @@ echo STADO_ADOPT_INSTALLED
 /// One SSH invocation for first contact: no identity file, so OpenSSH resolves
 /// the credential itself, and `BatchMode=no` so it may ask the operator.
 ///
-/// `ConnectTimeout` bounds the one failure that would otherwise hang forever (a
-/// filtered port), and `NumberOfPasswordPrompts` bounds the retries. There is
-/// deliberately no wall-clock timeout on the command: a human at a password
-/// prompt is not a stalled process.
+/// `NumberOfPasswordPrompts` bounds the password retries. The command itself
+/// runs until ssh exits: a human at a password prompt is not a stalled
+/// process, and an unreachable port ends with the network's own error.
 fn first_contact_argv(destination: &str) -> Vec<String> {
     [
         "ssh",
@@ -83,8 +82,6 @@ fn first_contact_argv(destination: &str) -> Vec<String> {
         "StrictHostKeyChecking=accept-new",
         "-o",
         "BatchMode=no",
-        "-o",
-        "ConnectTimeout=10",
         "-o",
         "NumberOfPasswordPrompts=3",
         destination,

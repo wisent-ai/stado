@@ -184,7 +184,7 @@ if command -v nc >/dev/null 2>&1; then
     fi
 elif command -v ssh >/dev/null 2>&1; then
     ssh_probe="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+        -o UserKnownHostsFile=/dev/null \
         127.0.0.1 true 2>&1 || true)"
     case "$ssh_probe" in
         *'Connection refused'*|*'onnection timed out'*|*'No route to host'*) ssh_listening='no' ;;

@@ -115,8 +115,8 @@ pub fn remote_command(
     )
 }
 
-/// Python's ssh argv in `provision_users` (note the -o order: BatchMode,
-/// StrictHostKeyChecking, ConnectTimeout — different from host_recovery).
+/// The ssh argv `provision_users` runs: BatchMode, then
+/// StrictHostKeyChecking.
 pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
     vec![
         "ssh".to_string(),
@@ -124,8 +124,6 @@ pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
         "BatchMode=yes".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
-        "-o".to_string(),
-        "ConnectTimeout=15".to_string(),
         ssh_target.to_string(),
         command.to_string(),
     ]

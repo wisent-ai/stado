@@ -15,7 +15,7 @@
 //!   argument;
 //! - the ssh option set is not re-typed here. [`ssh_options`] takes
 //!   [`crate::deploy::host_state::reboot::ssh_reboot_argv`] and drops its trailing
-//!   remote program, so `BatchMode=yes`, `ConnectTimeout` and
+//!   remote program, so `BatchMode=yes` and
 //!   `StrictHostKeyChecking=accept-new` are literally the same words the
 //!   shipped reboot path uses and cannot fall out of step with it;
 //! - every subprocess goes through the [`Runner`] seam;

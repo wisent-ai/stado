@@ -23,7 +23,7 @@
 //!   [`fetch_unit_file`] ride the shared channel of
 //!   `deploy/host_channel.rs` — whose ssh option set is derived from
 //!   `deploy/host_reboot.rs::ssh_reboot_argv` rather than re-typed, so
-//!   `BatchMode=yes`, `ConnectTimeout` and
+//!   `BatchMode=yes` and
 //!   `StrictHostKeyChecking=accept-new` cannot drift between the host
 //!   commands and the service commands. The remote program is fixed and
 //!   narrow, it reports through the same tab-delimited `STADO_*` marker

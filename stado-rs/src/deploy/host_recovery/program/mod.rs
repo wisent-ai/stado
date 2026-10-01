@@ -102,15 +102,13 @@ pub fn remote_script_with_stable_binds(
         .replace("/usr/bin/tr '\t\r\n' ' '", r"/usr/bin/tr '\t\r\n' ' '")
 }
 
-/// Python `recover_host` ssh argv (note the -o order: BatchMode,
-/// ConnectTimeout, StrictHostKeyChecking).
+/// ssh argv for a recovery pass: BatchMode, then StrictHostKeyChecking. The
+/// connection ends when the network or the far side says so.
 pub fn ssh_argv(ssh_target: &str) -> Vec<String> {
     vec![
         "ssh".to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
-        "-o".to_string(),
-        "ConnectTimeout=15".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
         ssh_target.to_string(),

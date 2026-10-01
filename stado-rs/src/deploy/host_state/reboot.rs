@@ -42,8 +42,6 @@ pub fn ssh_reboot_argv(ssh_target: &str) -> Vec<String> {
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
-        "ConnectTimeout=15".to_string(),
-        "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
         ssh_target.to_string(),
         "sudo -n /sbin/shutdown -r now".to_string(),
