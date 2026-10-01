@@ -54,7 +54,6 @@ pub(super) fn rerun_options(original: &Job, retry_token: &str) -> SubmitOptions 
         re_submission_of: original.job_id.clone(),
         yieldable: original.yieldable,
         yield_command: original.yield_command.clone(),
-        yield_grace_seconds: original.yield_grace_seconds,
         pinned_host: original.pinned_host.clone(),
         platform_os: original.platform_os.clone(),
         architecture: original.architecture.clone(),

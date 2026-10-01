@@ -9,8 +9,6 @@ use super::*;
 /// missed-write tolerance. Python `HEARTBEAT_INTERVAL`.
 pub const HEARTBEAT_INTERVAL_S: u64 = constants::SLOT_HEARTBEAT_INTERVAL_S;
 
-/// Python `Job.yield_grace_seconds` fallback (`getattr(...) or 120`).
-pub(crate) const DEFAULT_YIELD_GRACE_S: i64 = 120;
 /// Python `Job.max_yields_before_protected` fallback (`getattr(...) or 5`).
 pub const DEFAULT_MAX_YIELDS: i64 = 5;
 

@@ -64,7 +64,7 @@ pub(crate) async fn list_sessions(json_output: bool) -> Result<(), CmdError> {
             number(session, "memory_gb")
         );
         println!(
-            "  follow it with `stado job watch {} --follow`",
+            "  follow it with `stado job watch {} --follow-seconds <SECONDS>`",
             text(session, "job_id")
         );
     }

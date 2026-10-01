@@ -81,6 +81,10 @@ pub(crate) struct AgentOptions {
     /// Maximum rental length in seconds; zero leaves it open-ended.
     #[arg(long, default_value_t = 3600)]
     pub vast_max_duration_s: i64,
+    /// Seconds between queue polls when a poll started nothing. Required to
+    /// run the worker; nothing in Stado chooses it.
+    #[arg(long)]
+    pub poll_seconds: Option<u64>,
 }
 
 /// The formatting gates a product declares, read or applied from a checkout.

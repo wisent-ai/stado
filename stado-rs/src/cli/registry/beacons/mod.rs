@@ -21,11 +21,9 @@ pub(in crate::cli::registry) const ACTIVE_STATE: &str = "active";
 const SCHEDULED_STATE: &str = "scheduled";
 
 /// A beacon older than the fleet's liveness window is a divergence, not
-/// jitter: the beacon republishes on the same cadence as the capacity
-/// broadcast (`constants::CAPACITY_HEARTBEAT_INTERVAL_S` seconds — the
-/// LaunchAgent `StartInterval` rendered by
-/// `deploy/install/install_macos_coordinator.sh`, and the systemd unit in
-/// `deploy/units/host-health-beacon.service`), so
+/// jitter: the beacon republishes on the cadence of the LaunchAgent
+/// `StartInterval` rendered by `deploy/install/install_macos_coordinator.sh`
+/// and the systemd unit in `deploy/units/host-health-beacon.service`, so
 /// [`capacity::CAPACITY_STALE_SECONDS`] is the same missed-publications
 /// window `queue::capacity` already applies to the other liveness signal.
 /// One window, both signals.

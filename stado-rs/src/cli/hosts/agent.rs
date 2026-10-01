@@ -131,7 +131,14 @@ pub async fn run(
     vast_auto_list: bool,
     vast_price_gpu: f64,
     vast_max_duration_s: i64,
+    poll_seconds: Option<u64>,
 ) -> Result<(), CmdError> {
+    let poll = std::time::Duration::from_secs(poll_seconds.ok_or_else(|| {
+        CmdError::usage(
+            "the worker needs --poll-seconds: the seconds between queue polls when a poll \
+             started nothing",
+        )
+    })?);
     let execution = crate::capabilities::configurable_variant(
         crate::capabilities::RuntimeFacet::Execution,
         &kind,
@@ -223,43 +230,30 @@ pub async fn run(
         });
         println!("[vast] auto-list thread started (price-gpu=${vast_price_gpu}/h)");
     }
-    loop {
-        match local_agent::run_agent(&gpu_type, idle_shutdown, &kind).await {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                // A release handoff must reach launchd/systemd. Retrying
-                // `run_agent` here keeps executing the replaced inode forever,
-                // publishes no capacity, and prevents the next release from
-                // being built on this host.
-                if error.is::<local_agent::ReleaseHandoff>() {
-                    return Err(CmdError::click(error.to_string()));
-                }
-                // A 401 from the object API is not this agent's credential:
-                // the bearer selected the namespace, and the namespace policy
-                // on the object API host did not grant the key. Between
-                // 2026-09-01 and 2026-09-03 that was `job-transitions/`, and
-                // the agent printed only the status code while it restarted
-                // for two days.
-                let message = error.to_string();
-                let hint = if message.contains("HTTP 401") {
-                    format!(
-                        "; the object API refused a key this binary uses — its \
-                         object_api.namespaces.{} policy must grant every prefix in \
-                         queue::copy::CANONICAL_PREFIXES; `stado doctor` on that host names the \
-                         missing ones",
-                        crate::config::QUEUE_OBJECT_NAMESPACE
-                    )
-                } else {
-                    String::new()
-                };
-                local_agent::agent_log(&format!(
-                    "agent loop failed: {message}{hint}; restarting after bounded delay"
-                ));
-                tokio::time::sleep(std::time::Duration::from_secs(
-                    crate::primitives::constants::POLL_INTERVAL_S,
-                ))
-                .await;
-            }
+    match local_agent::run_agent(&gpu_type, idle_shutdown, &kind, poll).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            // A 401 from the object API is not this agent's credential:
+            // the bearer selected the namespace, and the namespace policy
+            // on the object API host did not grant the key. Between
+            // 2026-09-01 and 2026-09-03 that was `job-transitions/`, and
+            // the agent printed only the status code while it restarted
+            // for two days.
+            let message = error.to_string();
+            let hint = if message.contains("HTTP 401") {
+                format!(
+                    "; the object API refused a key this binary uses — its \
+                     object_api.namespaces.{} policy must grant every prefix in \
+                     queue::copy::CANONICAL_PREFIXES; `stado doctor` on that host names the \
+                     missing ones",
+                    crate::config::QUEUE_OBJECT_NAMESPACE
+                )
+            } else {
+                String::new()
+            };
+            Err(CmdError::click(format!(
+                "agent loop failed: {message}{hint}"
+            )))
         }
     }
 }

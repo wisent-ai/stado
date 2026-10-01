@@ -3,7 +3,6 @@
 //! scan is allowed to see.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use serde_json::{Map, Value};
 
@@ -13,7 +12,7 @@ use crate::providers::local::agent::capacity::inference::{
 use crate::providers::local::agent::capacity::snapshot::{
     diag_map, measured_capacity, publish_branch,
 };
-use crate::providers::local::agent::{Step, POLL_INTERVAL_S};
+use crate::providers::local::agent::Step;
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::probe::version_check::{self, DriftOutcome};
@@ -73,7 +72,6 @@ pub(crate) async fn before_admission(
         )
         .await?;
         *last_cap = Some(snapshot);
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
         return Ok(Step::Done);
     }
 

@@ -171,9 +171,12 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
     let coordinator =
         ResidentCoordinator::prepare(CoordinatorMode::Local, store.clone(), interval).await?;
     spawn_daemon("stado-local-coordinator", move || coordinator.run())?;
-    spawn_daemon("stado-local-agent", || async {
+    let poll = Duration::from_secs(u64::try_from(interval).map_err(|_| {
+        ControlPlaneError::Other(format!("control-plane interval {interval} is negative"))
+    })?);
+    spawn_daemon("stado-local-agent", move || async move {
         // Python: threading.Thread(target=run_agent, kwargs={"kind": "local"}).
-        if let Err(exc) = run_agent("", false, "local").await {
+        if let Err(exc) = run_agent("", false, "local", poll).await {
             local_log(&format!("agent exited: {exc}"));
         }
     })?;

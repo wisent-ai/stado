@@ -2,7 +2,6 @@
 //! the census it leaves behind in the diagnostics.
 
 use std::path::Path;
-use std::time::Instant;
 
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -60,7 +59,6 @@ pub(crate) async fn claim_scan(
     total_vram_gb: i64,
     pinned_only: bool,
     vram_buffer_gb: i64,
-    claim_store_deadline: Instant,
     queued: &[Job],
     cards: &[helpers::GpuCard],
     last_cap: &Option<CapacitySnapshot>,
@@ -145,14 +143,12 @@ pub(crate) async fn claim_scan(
             raw_reserve,
             raw_reserved,
             raw_min_free,
-            claim_store_deadline,
             slots,
             agent_diag,
             &mut diag_raw_disk_rejected,
             &mut diag_cpu_rejected,
             &mut diag_ram_rejected,
             &mut diag_vram_rejected,
-            log_fn,
         )
         .await?
         else {

@@ -1,46 +1,21 @@
-//! The capacity broadcast, kept at its declared cadence while the tick works.
+//! The capacity broadcast, kept at the agent's poll period while the tick
+//! works.
 //!
-//! # Why this exists
-//!
-//! [`crate::primitives::constants::CAPACITY_STALE_SECONDS`] (180 s) is the window the fleet
-//! judges a host's liveness by, and
-//! [`crate::primitives::constants::CAPACITY_HEARTBEAT_INTERVAL_S`] is the design's own
-//! answer to it: publish at a third of the window. The agent tick published
-//! once per iteration, so the cadence was really "however long an iteration
-//! takes", and on a saturated object store an iteration takes as long as the
-//! store does. Bounding the tick's reads fixed the pathological case (17 and
-//! 43 minute iterations, measured on 2026-09-03) but produced the next one:
-//! with the whole tick inside a 90 s budget, the claimable-job listing — the
-//! heaviest read and the only one claiming depends on — lapsed on every single
-//! tick against a store answering in tens of seconds:
-//!
-//! ```text
-//! 22:49:58 loop: claimable-job read exhausted this tick's 90s store budget
-//! 22:51:38 loop: claimable-job read exhausted this tick's 90s store budget
-//! ```
-//!
-//! A host that stays fresh by never claiming is not fixed. Freshness and
-//! claiming were competing for one budget because one thread of control owned
-//! both, and they are not the same question: "is this agent alive" is answered
-//! by the loop going around, "may I have work" is answered by a store read
-//! that is allowed to be slow.
+//! "Is this agent alive" is answered by the loop going around; "may I have
+//! work" is answered by a store read that is allowed to be slow. One thread of
+//! control owned both, so a slow claimable-job listing also held the host's
+//! broadcast back. This task republishes the tick's last snapshot on the
+//! operator's poll period while the tick works.
 //!
 //! # Why this is not a liveness formality
 //!
 //! The republish is deliberately NOT unconditional, because a broadcast that
-//! keeps arriving from a wedged process is exactly the control-turned-formality
-//! the fleet cannot afford: it would route release builds to a host that will
-//! never claim them.
-//!
-//! So the tick stamps [`CapacityHeartbeat::record_tick_start`] at the top of
-//! every iteration, and this task republishes the last snapshot ONLY while
-//! that stamp is younger than [`crate::primitives::constants::AGENT_TICK_PROGRESS_TTL_S`].
-//! A loop that is slow keeps its host selectable; a loop that has stopped
-//! going around stops being spoken for, its row ages past the window, and
-//! `host gates` refuses dispatch to it exactly as before. The signal still
-//! means "this agent is going around its loop" — it just no longer means "and
-//! it finished an iteration in the last three minutes", which was never the
-//! question.
+//! keeps arriving from a wedged process would route release builds to a host
+//! that will never claim them. The tick stamps
+//! [`CapacityHeartbeat::record_tick_start`] at the top of every iteration, and
+//! this task republishes only when that stamp has moved since its own last
+//! republish. A loop that has stopped going around stops being spoken for,
+//! its row ages, and `host gates` refuses dispatch to it.
 //!
 //! Nothing here computes capacity. It republishes verbatim what the tick last
 //! published, so a host cannot advertise resources the tick has not measured.
@@ -48,9 +23,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::primitives::constants;
 use crate::queue::capacity::{publish_capacity, CapacitySnapshot};
 use crate::queue::JobStorage;
+
 struct Shared {
     snapshot: Option<CapacitySnapshot>,
     tick_started: Instant,
@@ -106,47 +81,41 @@ impl CapacityHeartbeat {
         self.lock().snapshot = Some(snapshot);
     }
 
-    /// Start republishing. `log_fn` is the agent's own logger, so a refused
-    /// republish is as visible as a refused tick publish.
+    /// Start republishing every `poll`. `log_fn` is the agent's own logger, so
+    /// a refused republish is as visible as a refused tick publish.
     pub fn spawn(
         &self,
         store: JobStorage,
         consumer_id: String,
         kind: String,
+        poll: Duration,
         log_fn: fn(&str),
     ) -> HeartbeatTask {
         let shared = self.shared.clone();
         let handle = tokio::spawn(async move {
-            let interval = Duration::from_secs(constants::CAPACITY_HEARTBEAT_INTERVAL_S);
-            let progress_ttl = Duration::from_secs(constants::AGENT_TICK_PROGRESS_TTL_S);
-            let mut announced_stall = false;
+            let mut spoken_for: Option<Instant> = None;
             loop {
-                tokio::time::sleep(interval).await;
-                let (snapshot, tick_age) = {
+                tokio::time::sleep(poll).await;
+                let (snapshot, tick_started) = {
                     let shared = shared
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    (shared.snapshot.clone(), shared.tick_started.elapsed())
+                    (shared.snapshot.clone(), shared.tick_started)
                 };
                 let Some(snapshot) = snapshot else {
                     // Nothing measured yet. The tick's own first publish is
                     // the first thing this host says.
                     continue;
                 };
-                if tick_age > progress_ttl {
-                    if !announced_stall {
-                        announced_stall = true;
-                        log_fn(&format!(
-                            "heartbeat: the tick has not started an iteration for {}s, past the \
-                             {}s progress window; this host will NOT be spoken for until the loop \
-                             moves again and its capacity row is allowed to go stale",
-                            tick_age.as_secs(),
-                            constants::AGENT_TICK_PROGRESS_TTL_S
-                        ));
-                    }
+                if spoken_for == Some(tick_started) {
+                    log_fn(&format!(
+                        "heartbeat: the tick has not started an iteration since {}s ago; this \
+                         host is not spoken for until the loop moves again",
+                        tick_started.elapsed().as_secs()
+                    ));
                     continue;
                 }
-                announced_stall = false;
+                spoken_for = Some(tick_started);
                 match publish_capacity(&store, &consumer_id, &kind, &snapshot).await {
                     Ok(()) => log_fn(&format!(
                         "heartbeat: republished accepting_jobs={} running_jobs={} \

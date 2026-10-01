@@ -187,7 +187,7 @@ pub(crate) async fn start_detached(request: DetachedRequest<'_>) -> Result<(), C
                 reservation.cpu_cores, reservation.ram_gb
             );
             println!(
-                "follow it with `stado job watch {} --follow`, stop it with `stado cancel {}`",
+                "follow it with `stado job watch {} --follow-seconds <SECONDS>`, stop it with `stado cancel {}`",
                 job.job_id, job.job_id
             );
         }

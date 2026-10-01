@@ -238,6 +238,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
                 args.worker.vast_auto_list,
                 args.worker.vast_price_gpu,
                 args.worker.vast_max_duration_s,
+                args.worker.poll_seconds,
             )
         })?;
     }

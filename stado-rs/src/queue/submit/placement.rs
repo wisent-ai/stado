@@ -134,7 +134,6 @@ pub(super) fn build_planned_job(
     job.re_submission_of = options.re_submission_of.clone();
     job.yieldable = options.yieldable;
     job.yield_command = options.yield_command.clone();
-    job.yield_grace_seconds = options.yield_grace_seconds;
     job.pinned_host = options.pinned_host.clone();
     job.secret_env = options.secret_env.clone();
     job.input_artifacts = options.input_artifacts.clone();

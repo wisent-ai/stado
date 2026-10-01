@@ -195,10 +195,11 @@ if ! ensure_legacy_link; then
   printf '%s\n' "[release-worker-bootstrap] cannot preserve legacy link: $old" >&2
   terminate_job_group
 fi
-# The legacy link stays until the job is terminal. `stado job watch --follow`
-# returns when the job's lifecycle ends, so the link is removed at that event;
-# a watch that ends without a terminal record is reported and the link is
-# left for the operator to see, not retried on a timer.
+# The legacy link stays until the job is terminal. `stado job watch
+# --follow-seconds` returns when the job's lifecycle ends, reading at the
+# agent's poll period, so the link is removed at that event; a watch that ends
+# without a terminal record is reported and the link is left for the operator
+# to see, not retried on a timer.
 if [ "$old" != "$work" ]; then
   (
     if ! owned_directory "$work/tmp"; then
@@ -214,7 +215,7 @@ if [ "$old" != "$work" ]; then
       printf '%s\n' "[release-worker-bootstrap] lifecycle watch file is not owned by this user: $response" >&2
       exit 1
     fi
-    "$HOME/.stado/bin/stado" job watch "$WC_JOB_ID" --follow --json >"$response"
+    "$HOME/.stado/bin/stado" job watch "$WC_JOB_ID" --follow-seconds "${STADO_POLL_SECONDS:?the agent that started this job states no poll period}" --json >"$response"
     watch_rc=$?
     if owned_regular_file "$response" &&
       /usr/bin/grep -Eq '^[[:space:]]*"terminal":[[:space:]]*true,?[[:space:]]*$' "$response"; then

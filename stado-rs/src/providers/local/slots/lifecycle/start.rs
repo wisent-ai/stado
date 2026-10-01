@@ -210,6 +210,11 @@ pub async fn start_slot(
                 .map(|root| (crate::providers::local::work_base::ENV, root)),
         )
         .envs(secret_environment)
+        .envs(
+            crate::providers::local::agent::POLL
+                .get()
+                .map(|poll| ("STADO_POLL_SECONDS", poll.as_secs().to_string())),
+        )
         .stdout(std::process::Stdio::from(stdout_file))
         // subprocess.STDOUT parity: stderr lands in the same log file.
         .stderr(std::process::Stdio::from(stderr_file))

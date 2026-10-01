@@ -105,20 +105,17 @@ pub struct SubmitArgs {
     /// Background job: the local worker may evict this job for a
     /// strictly-higher-priority queued job that does not otherwise fit.
     /// Requires --on-yield. The worker runs that hook (with WC_JOB_PID set),
-    /// waits --yield-grace, then requeues the job.
+    /// sends the job SIGTERM if it is still running, then requeues the job
     /// (resumes from wherever the hook saved state).
     #[arg(long)]
     yieldable: bool,
     /// Save-and-sync command run when the agent yields this job.
     /// Responsible for telling the job to stop, persisting state
     /// + artifacts (server/GCS/HF), and letting it exit. Required
-    ///   with --yieldable.
+    ///   with --yieldable. The agent sends the process group SIGTERM
+    ///   once the hook has finished and the job is still running.
     #[arg(long, default_value = "")]
     on_yield: String,
-    /// Seconds the --on-yield hook + clean exit get before the
-    /// agent SIGKILLs the process group (default 120).
-    #[arg(long, default_value_t = 120)]
-    yield_grace: i64,
     /// Pinned artifact input as NAME=TYPE/NAMESPACE/NAME@VERSION_OR_ALIAS.
     #[arg(long = "input-artifact")]
     input_artifacts: Vec<String>,

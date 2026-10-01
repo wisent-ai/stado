@@ -33,9 +33,6 @@ fn default_max_preempts() -> i64 {
 fn default_repo_extras() -> String {
     "train".into()
 }
-fn default_yield_grace() -> i64 {
-    120
-}
 fn default_max_yields() -> i64 {
     5
 }
@@ -225,8 +222,6 @@ pub struct Job {
     pub yieldable: bool,
     #[serde(default)]
     pub yield_command: String,
-    #[serde(default = "default_yield_grace")]
-    pub yield_grace_seconds: i64,
     #[serde(default)]
     pub yield_count: i64,
     #[serde(default = "default_max_yields")]

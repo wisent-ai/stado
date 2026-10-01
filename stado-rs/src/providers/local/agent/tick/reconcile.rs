@@ -15,7 +15,7 @@ use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;
 
 use super::super::capacity::snapshot::{measured_capacity, publish_branch};
-use super::super::{reconcile_gpu_power_limit, reconcile_placement_policy, Step, POLL_INTERVAL_S};
+use super::super::{reconcile_gpu_power_limit, reconcile_placement_policy, Step};
 
 const GPU_POWER_RECONCILE_INTERVAL_S: u64 = 300;
 
@@ -236,7 +236,6 @@ pub(super) async fn registry_declarations(
         )
         .await?;
         *last_cap = Some(snapshot);
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
         return Ok(Step::Done);
     }
     Ok(Step::Go(()))

@@ -14,8 +14,8 @@ mod tail;
 /// path. After the worker exits, successful output is uploaded and read back
 /// through the checked storage writer at both canonical status and exact
 /// attempt URIs, with the attempt receipt last; any failure changes the
-/// workload result to failure. A lifecycle-bound keeper uses the 0.15.10
-/// `job watch --follow --json` contract: that command emits `"terminal": true`
+/// workload result to failure. A lifecycle-bound keeper uses the
+/// `job watch --follow-seconds --json` contract: that command emits `"terminal": true`
 /// even when it returns failure for a failed job. The keeper persists and
 /// inspects that exact response before unlinking the verified symlink, and also
 /// removes that link if the persistent workdir disappears, so an unbounded

@@ -148,7 +148,6 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         terminates_agent: args.terminates_agent,
         yieldable: args.yieldable,
         yield_command: args.on_yield.clone(),
-        yield_grace_seconds: args.yield_grace,
         pinned_host,
         run_id: args.run_id.clone(),
         secret_env,

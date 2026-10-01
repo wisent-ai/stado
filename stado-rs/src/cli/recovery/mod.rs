@@ -70,12 +70,7 @@ async fn migrate(args: &RecoveryMigrateArgs) -> Result<(), CmdError> {
     println!("[1/9] fencing destination {}", destination.describe());
     let destination_store = endpoint_store(&destination).await?;
     control::set_paused(&destination_store, true, FENCE_REASON, "").await?;
-    drain_store(
-        &destination_store,
-        &destination.describe(),
-        args.drain_timeout,
-    )
-    .await?;
+    drain_store(&destination_store, &destination.describe()).await?;
 
     let mut billing_attempted = false;
     if args.manage_gcp_billing {
@@ -141,7 +136,7 @@ async fn transfer(
     println!("[3/9] fencing and draining source {}", source.describe());
     let source_store = endpoint_store(source).await?;
     control::set_paused(&source_store, true, FENCE_REASON, "").await?;
-    drain_store(&source_store, &source.describe(), args.drain_timeout).await?;
+    drain_store(&source_store, &source.describe()).await?;
     println!("[4/9] stopping every declared writer before the final copy");
     stop_services(services).await?;
     println!("[5/9] copying the complete canonical namespace");

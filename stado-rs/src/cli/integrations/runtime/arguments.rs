@@ -44,6 +44,9 @@ impl ServeArgs {
         if self.worker.vast_auto_list {
             args.push("--vast-auto-list".to_string());
         }
+        if let Some(seconds) = self.worker.poll_seconds {
+            args.push(format!("--poll-seconds={seconds}"));
+        }
         if self.resolver {
             args.push("--resolver".to_string());
         }

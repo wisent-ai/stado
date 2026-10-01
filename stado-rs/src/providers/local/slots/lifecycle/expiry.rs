@@ -1,6 +1,6 @@
 //! The two ways a slot's process stops before it finishes: the cooperative
-//! yield back to the queue, bounded by the job's own grace, and the
-//! termination of a job that has already been cancelled elsewhere.
+//! yield back to the queue, and the termination of a job that has already been
+//! cancelled elsewhere.
 
 use super::*;
 
@@ -12,15 +12,15 @@ use super::*;
 /// work. Returns true once the job has been requeued.
 /// Python `request_yield`.
 ///
-/// Sequence (total bounded by job.yield_grace_seconds):
+/// Sequence:
 ///   1. Run the job's yield_command (the save-and-sync hook) in the job
 ///      workdir with WC_JOB_PID set to the process-group leader, so the hook
 ///      can signal the job, persist state + artifacts externally, and let it
-///      exit.
-///   2. Wait for the process to exit on its own within the remaining grace.
-///   3. SIGKILL the whole process group only if the grace is blown (logged
-///      loudly — a timed-out yield means the hook didn't actually stop it).
-///   4. Requeue: running -> queue, state QUEUED, yield_count++, clear
+///      exit. The hook runs to completion.
+///   2. If the job is still running when the hook has finished, send its
+///      process group SIGTERM (logged: the hook did not stop it) and wait for
+///      it to exit.
+///   3. Requeue: running -> queue, state QUEUED, yield_count++, clear
 ///      instance_ref/started_at. NOT marked FAILED — resume is the job's own
 ///      business (checkpoint pull, server-side state, ...).
 ///
@@ -33,25 +33,14 @@ pub async fn request_yield(
 ) -> Result<bool, StorageError> {
     let pgid = slot.pid();
     let mut job = slot.slot.job.clone();
-    // Python `int(getattr(job, "yield_grace_seconds", 120) or 120)`: 0 -> 120.
-    let grace = if job.yield_grace_seconds != 0 {
-        job.yield_grace_seconds
-    } else {
-        DEFAULT_YIELD_GRACE_S
-    };
     let hook = job.yield_command.trim().to_string();
     let work_dir = job_work_dir(&job.job_id)?;
-    let deadline = Instant::now() + Duration::from_secs(grace.max(0) as u64);
     log_fn(&format!(
-        "yield: requesting yield of {} (grace={grace}s, pgid={pgid})",
+        "yield: requesting yield of {} (pgid={pgid})",
         job.job_id
     ));
 
     if !hook.is_empty() {
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .as_secs()
-            .max(1);
         let secret_environment = match resolve_job_secret_environment(&job).await {
             Ok(environment) => environment,
             Err(_) => {
@@ -68,15 +57,12 @@ pub async fn request_yield(
             .arg(&hook)
             .env("WC_JOB_ID", &job.job_id)
             .env("WC_JOB_PID", pgid.to_string())
-            .envs(secret_environment)
-            // A timed-out hook is killed (Python subprocess.run timeout
-            // semantics: kill the direct child, reap, raise).
-            .kill_on_drop(true);
+            .envs(secret_environment);
         if work_dir.exists() {
             cmd.current_dir(&work_dir);
         }
-        match tokio::time::timeout(Duration::from_secs(remaining), cmd.output()).await {
-            Ok(Ok(out)) => {
+        match cmd.output().await {
+            Ok(out) => {
                 let rc = python_returncode(out.status);
                 if rc != 0 {
                     log_fn(&format!(
@@ -85,35 +71,22 @@ pub async fn request_yield(
                     ));
                 }
             }
-            Ok(Err(exc)) => log_fn(&format!(
+            Err(exc) => log_fn(&format!(
                 "yield: on-yield hook {} raised: {exc}",
-                job.job_id
-            )),
-            Err(_) => log_fn(&format!(
-                "yield: on-yield hook {} exceeded grace; terminating",
                 job.job_id
             )),
         }
     }
 
-    loop {
-        if slot.child.try_wait()?.is_some() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
     if slot.child.try_wait()?.is_none() {
         log_fn(&format!(
-            "yield: {} still alive after grace — SIGKILL group {pgid}",
+            "yield: {} still running after its yield hook finished — SIGTERM group {pgid}",
             job.job_id
         ));
         // ProcessLookupError parity: the group may have exited between the
-        // poll and the signal.
-        let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGKILL);
-        let _ = tokio::time::timeout(Duration::from_secs(10), slot.child.wait()).await;
+        // check and the signal.
+        let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM);
+        slot.child.wait().await?;
     }
 
     slot.close_log();
@@ -152,23 +125,10 @@ pub(super) async fn terminate_cancelled_slot(
     log_fn: &mut dyn FnMut(&str),
 ) -> std::io::Result<()> {
     let pgid = slot.pid();
+    log_fn(&format!(
+        "cancelled job process group {pgid}: sending SIGTERM and waiting for it to exit"
+    ));
     let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM);
-    match tokio::time::timeout(
-        Duration::from_secs(crate::primitives::constants::POLL_INTERVAL_S),
-        slot.child.wait(),
-    )
-    .await
-    {
-        Ok(result) => {
-            result?;
-        }
-        Err(_) => {
-            log_fn(&format!(
-                "cancelled job process group {pgid} ignored SIGTERM; sending SIGKILL"
-            ));
-            let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGKILL);
-            slot.child.wait().await?;
-        }
-    }
+    slot.child.wait().await?;
     Ok(())
 }

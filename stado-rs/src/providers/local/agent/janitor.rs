@@ -6,10 +6,7 @@
 //! builder: `cli::release_submit::builder` reads live consumer capacity and
 //! refuses outright when nothing fresh names the platform, and
 //! `queue::capacity::read_consumer_capacity_at` drops any publication older
-//! than [`crate::primitives::constants::CAPACITY_STALE_SECONDS`] (180s). The design's own
-//! answer to that cutoff is
-//! [`crate::primitives::constants::CAPACITY_HEARTBEAT_INTERVAL_S`] — "always fresh before
-//! the stale threshold" — one third of it.
+//! than [`crate::primitives::constants::CAPACITY_STALE_SECONDS`] (180s).
 //!
 //! Awaiting `run_cleanup_once` BEFORE the capacity publication, on the same
 //! task, makes every second the janitor spends a second the publication is
@@ -25,9 +22,8 @@
 //!
 //! The pass runs on its own task at its own cadence; the tick reads only
 //! reports from passes that have already COMPLETED, and never waits for one in
-//! progress. Publication then happens at the heartbeat interval no matter how
-//! long a pass takes, which is the invariant that was being violated by an
-//! order of magnitude.
+//! progress. Publication then happens on the agent's poll period no matter
+//! how long a pass takes.
 //!
 //! The alternative the evidence report also offered — publish first, then run
 //! the pass in the same tick — was rejected: it fixes the ORDER but not the

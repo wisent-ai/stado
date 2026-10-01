@@ -1,18 +1,15 @@
 //! Whether one queued candidate fits the budgets this tick measured: raw
 //! staging disk, CPU, RAM, and both VRAM safety margins.
 
-use std::time::Instant;
-
 use chrono::Utc;
 use serde_json::{Map, Value};
 
 use crate::config::estimate_gpu_memory;
 use crate::models::{isoformat_utc, Job};
-use crate::primitives::constants;
 use crate::providers::local::agent::vram_safety_buffer_gb;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
-use crate::queue::{JobStorage, StorageError};
+use crate::queue::JobStorage;
 use crate::sizing::Sizing;
 
 /// Report `(need, requested cores, requested memory)` for a candidate this
@@ -32,16 +29,13 @@ pub(crate) async fn candidate_fit(
     raw_reserve: f64,
     raw_reserved: f64,
     raw_min_free: f64,
-    claim_store_deadline: Instant,
     slots: &[ActiveSlot],
     agent_diag: &mut Map<String, Value>,
     diag_raw_disk_rejected: &mut i64,
     diag_cpu_rejected: &mut i64,
     diag_ram_rejected: &mut i64,
     diag_vram_rejected: &mut i64,
-    log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Option<(i64, i64, f64)>> {
-    let claim_budget_left = || claim_store_deadline.saturating_duration_since(Instant::now());
     if is_raw_share && raw_free >= 0.0 && raw_free - raw_reserved - raw_reserve < raw_min_free {
         *diag_raw_disk_rejected += 1;
         agent_diag.insert(
@@ -64,12 +58,6 @@ pub(crate) async fn candidate_fit(
         *diag_ram_rejected += 1;
         return Ok(None);
     }
-    // Sizing comes out of the store too. A lapsed budget skips THIS
-    // candidate rather than falling back to the job's declared figure:
-    // the declared figure is the floor, and admitting a job on it when
-    // the measured estimate is unknown is how a host claims work that
-    // does not fit.
-    //
     // A submission that resolved to the CPU marker declared that it needs no
     // accelerator, and re-guessing from its command text overrides a fact
     // with a heuristic. A detached Jeden session carries its model route in
@@ -81,18 +69,8 @@ pub(crate) async fn candidate_fit(
     {
         0
     } else {
-        let Ok(estimated) =
-            tokio::time::timeout(claim_budget_left(), estimate_gpu_memory(cmd, sizing, store))
-                .await
-        else {
-            log_fn(&format!(
-                "loop: VRAM estimate for {} exhausted this tick's {}s store budget; not claiming it this tick",
-                job.job_id,
-                constants::AGENT_CLAIM_STORE_BUDGET_S
-            ));
-            return Ok(None);
-        };
-        job.gpu_mem_gb.max(estimated?)
+        job.gpu_mem_gb
+            .max(estimate_gpu_memory(cmd, sizing, store).await?)
     };
     // Hard VRAM safety buffer: refuse if declared use after admission
     // would leave less than the dynamic VRAM safety buffer. Use live
@@ -121,27 +99,10 @@ pub(crate) async fn candidate_fit(
     // child process. Only meaningful when the job actually needs
     // VRAM: on sub-buffer hosts total-buffer goes negative, which
     // would otherwise reject even need==0 (CPU-only) jobs.
-    // Same rule for the running slots' projection: one budget for the
-    // whole projection, and an unfinished projection refuses the
-    // candidate instead of admitting it against an incomplete total.
-    let projection = tokio::time::timeout(claim_budget_left(), async {
-        let mut projected_used = need;
-        for s in slots {
-            projected_used += helpers::slot_vram(&s.slot, sizing, store).await?;
-        }
-        Ok::<_, StorageError>(projected_used)
-    })
-    .await;
-    let Ok(projected_used) = projection else {
-        log_fn(&format!(
-            "loop: running-slot VRAM projection exhausted this tick's {}s store budget; not claiming {} \
-             this tick",
-            constants::AGENT_CLAIM_STORE_BUDGET_S,
-            job.job_id
-        ));
-        return Ok(None);
-    };
-    let projected_used = projected_used?;
+    let mut projected_used = need;
+    for s in slots {
+        projected_used += helpers::slot_vram(&s.slot, sizing, store).await?;
+    }
     if need > 0 && projected_used > total_vram_gb - vram_safety_buffer_gb(total_vram_gb) {
         *diag_vram_rejected += 1;
         agent_diag.insert(

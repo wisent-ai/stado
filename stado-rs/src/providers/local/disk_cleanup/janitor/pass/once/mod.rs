@@ -95,17 +95,9 @@ pub(crate) async fn cleanup_once(
     //
     // The workdir keep-list is different: its candidate names must be captured
     // under the same lock that protects deletion. `run_with_lock` performs that
-    // candidate-bounded authority read immediately before the workdir cleaner,
-    // inside both the store-read budget and the pass deadline.
+    // candidate-bounded authority read immediately before the workdir cleaner.
     let store_wait = Instant::now();
-    let input_budget = Duration::from_secs(constants::AGENT_STORE_READ_TIMEOUT_S);
-    let registry = match tokio::time::timeout(input_budget, fetch_canonical_registry()).await {
-        Ok(result) => result,
-        Err(_) => Err(JanitorError::timeout(&format!(
-            "canonical registry did not answer within {}s",
-            constants::AGENT_STORE_READ_TIMEOUT_S
-        ))),
-    };
+    let registry = fetch_canonical_registry().await;
     report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
     // The lock is taken with a stated deadline, and a hold past its own
     // deadline is answered rather than waited out. `lock_busy` used to be the

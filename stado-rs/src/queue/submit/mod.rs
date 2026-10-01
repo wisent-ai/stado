@@ -125,7 +125,6 @@ pub struct SubmitOptions {
     pub re_submission_of: String,
     pub yieldable: bool,
     pub yield_command: String,
-    pub yield_grace_seconds: i64,
     pub pinned_host: String,
     pub secret_env: BTreeMap<String, JobSecretRef>,
     pub input_artifacts: Map<String, Value>,
@@ -133,8 +132,8 @@ pub struct SubmitOptions {
 }
 
 impl Default for SubmitOptions {
-    /// Stado defaults: no provider pin, `repo_extras="train"`,
-    /// `yield_grace_seconds=120`, everything else empty/zero/false.
+    /// Stado defaults: no provider pin, `repo_extras="train"`, everything
+    /// else empty/zero/false.
     fn default() -> Self {
         Self {
             provider: String::new(),
@@ -168,7 +167,6 @@ impl Default for SubmitOptions {
             re_submission_of: String::new(),
             yieldable: false,
             yield_command: String::new(),
-            yield_grace_seconds: 120,
             pinned_host: String::new(),
             secret_env: BTreeMap::new(),
             input_artifacts: Map::new(),

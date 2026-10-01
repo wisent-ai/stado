@@ -83,11 +83,18 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
         if !watch {
             return Ok(());
         }
+        // The registry's `check_interval_seconds` is the cadence; a report
+        // that names none ends the watch with that fact.
         let interval = report
             .get("check_interval_seconds")
-            .and_then(Value::as_i64)
-            .unwrap_or(60);
-        tokio::time::sleep(Duration::from_secs(interval.max(60) as u64)).await;
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                CmdError::click(
+                    "the cleanup report names no check_interval_seconds, so --watch has no \
+                     declared cadence to run on",
+                )
+            })?;
+        tokio::time::sleep(Duration::from_secs(interval)).await;
     }
 }
 

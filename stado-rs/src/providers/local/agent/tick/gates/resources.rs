@@ -3,7 +3,6 @@
 //! offers.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use chrono::Utc;
 use serde_json::{Map, Value};
@@ -12,9 +11,7 @@ use crate::models::isoformat_utc;
 use crate::providers::local::agent::capacity::snapshot::{
     diag_map, measured_capacity, publish_branch,
 };
-use crate::providers::local::agent::{
-    gpu_driver_available, vram_safety_buffer_gb, Step, POLL_INTERVAL_S,
-};
+use crate::providers::local::agent::{gpu_driver_available, vram_safety_buffer_gb, Step};
 use crate::providers::local::disk::gate;
 use crate::providers::local::helpers;
 use crate::providers::local::slots::ActiveSlot;
@@ -65,7 +62,6 @@ pub(crate) async fn measure(
         )
         .await?;
         *last_cap = Some(snapshot);
-        tokio::time::sleep(Duration::from_secs(10)).await;
         return Ok(Step::Done);
     }
     let vram_buffer_gb = vram_safety_buffer_gb(total_vram_gb);
@@ -99,7 +95,6 @@ pub(crate) async fn measure(
         )
         .await?;
         *last_cap = Some(snapshot);
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
         return Ok(Step::Done);
     }
     if *free_vram_gb < vram_buffer_gb {

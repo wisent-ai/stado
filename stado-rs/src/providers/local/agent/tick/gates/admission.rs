@@ -2,13 +2,11 @@
 //! it, and the cooperative yield that makes room before anything is claimed.
 
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::primitives::constants;
 use crate::providers::local::agent::capacity::snapshot::{measured_capacity, publish_branch};
-use crate::providers::local::agent::{maybe_yield_for_priority, Step, POLL_INTERVAL_S};
+use crate::providers::local::agent::{maybe_yield_for_priority, Step};
 use crate::providers::local::self_terminate;
 use crate::providers::local::slots::ActiveSlot;
 use crate::queue::capacity::CapacitySnapshot;
@@ -28,51 +26,20 @@ pub(crate) async fn publish_and_admit(
     free_vram_gb: i64,
     idle_shutdown: bool,
     pressure_active: bool,
-    claim_store_deadline: Instant,
     available_accelerators: BTreeMap<String, i64>,
     slots: &mut Vec<ActiveSlot>,
     agent_diag: &mut Map<String, Value>,
     last_cap: &mut Option<CapacitySnapshot>,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Step<()>> {
-    let claim_budget_left = || claim_store_deadline.saturating_duration_since(Instant::now());
     // Maintenance mode is read before the publication: the row must report
     // the same admission decision the loop will enforce below. Jobs already
     // running were advanced earlier and continue normally.
     //
     // Re-read every iteration, never cached: `stado queue resume` has to
-    // reach a running agent without restarting it. The read shares the
-    // tick's store budget; a timeout publishes an explicit refusal rather
-    // than leaving the previous accepting decision live.
-    let Ok(queue_control) = tokio::time::timeout(claim_budget_left(), control::read(store)).await
-    else {
-        let snapshot = measured_capacity(
-            slots,
-            false,
-            Some("queue_control_unavailable"),
-            available_accelerators.clone(),
-            free_vram_gb,
-            total_vram_gb,
-            agent_diag.clone(),
-        );
-        let _ = publish_branch(
-            store,
-            consumer_id,
-            kind,
-            "queue-control-unavailable",
-            &snapshot,
-            log_fn,
-        )
-        .await;
-        *last_cap = Some(snapshot);
-        log_fn(&format!(
-            "loop: queue-control read exhausted this tick's {}s store budget; claiming nothing this tick",
-            constants::AGENT_CLAIM_STORE_BUDGET_S
-        ));
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
-        return Ok(Step::Done);
-    };
-    let queue_control = queue_control?;
+    // reach a running agent without restarting it. A read that fails ends the
+    // tick with the store's error.
+    let queue_control = control::read(store).await?;
     agent_diag.insert("queue_paused".into(), Value::from(queue_control.paused));
     // Which build is answering for this host. The broadcast carried a
     // capacity verdict, a claim-loop census and a disk report and never the
@@ -180,7 +147,6 @@ pub(crate) async fn publish_and_admit(
             self_terminate(kind, log_fn).await;
             return Ok(Step::Stop);
         }
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
         return Ok(Step::Done);
     }
     if !accepting_jobs && !pressure_active {
@@ -192,7 +158,6 @@ pub(crate) async fn publish_and_admit(
         log_fn(&format!(
             "admission refused by live resources: {reason}; skipping claims"
         ));
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
         return Ok(Step::Done);
     }
     // Disk pressure is enforced after the assigned queue is read. One exact

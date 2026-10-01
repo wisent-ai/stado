@@ -1,12 +1,11 @@
 //! What a run sets up once, and what one tick does before it can say anything
-//! about capacity: breadcrumbs, this tick's two store budgets, the running
-//! slots, the release handoff, and the janitor's last finished pass.
+//! about capacity: breadcrumbs, the running slots, the release handoff, and
+//! the janitor's last finished pass.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use crate::primitives::constants;
 use crate::providers::local::agent::heartbeat::CapacityHeartbeat;
 use crate::providers::local::agent::janitor::{JanitorReports, JanitorTask};
 use crate::providers::local::disk_cleanup;
@@ -52,36 +51,32 @@ pub(super) fn bound_store(log_fn: &mut dyn FnMut(&str)) -> (&'static str, bool) 
     (storage_backend, store_answers_for_fleet)
 }
 
-/// The janitor owns its own cadence from here. It is still invoked at the
-/// tick's poll interval -- the cleanup engine's own lock and policy decide
-/// what a pass does -- but off the critical path, so a long pass delays only
-/// the next pass and never a capacity broadcast. The task is held in scope for
-/// the agent's lifetime: dropping the handle aborts the pass loop, so a release
-/// handoff does not leave a janitor behind.
-pub(super) fn spawn_janitor() -> (JanitorReports, JanitorTask) {
+/// The janitor owns its own cadence from here. It is invoked at the agent's
+/// poll period -- the cleanup engine's own lock and policy decide what a pass
+/// does -- but off the critical path, so a long pass delays only the next pass
+/// and never a capacity broadcast. The task is held in scope for the agent's
+/// lifetime: dropping the handle aborts the pass loop, so a release handoff
+/// does not leave a janitor behind.
+pub(super) fn spawn_janitor(poll: Duration) -> (JanitorReports, JanitorTask) {
     let janitor_reports = JanitorReports::new();
-    let janitor = janitor_reports.spawn_janitor(
-        std::time::Duration::from_secs(crate::primitives::constants::POLL_INTERVAL_S),
-        |active_jobs| async move {
-            // Off the critical path, beside the disk pass, for the same reason:
-            // an expired lease is host garbage, and the host is the only thing
-            // that always knows it holds one.
-            crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg))
-                .await;
-            disk_cleanup::run_cleanup_once(
-                active_jobs,
-                false,
-                disk_cleanup::CleanupWriter::AgentTick,
-                &mut |msg: &str| agent_log(msg),
-            )
-            .await
-        },
-    );
+    let janitor = janitor_reports.spawn_janitor(poll, |active_jobs| async move {
+        // Off the critical path, beside the disk pass, for the same reason:
+        // an expired lease is host garbage, and the host is the only thing
+        // that always knows it holds one.
+        crate::providers::local::disk::scratch_sweep::sweep(&mut |msg: &str| agent_log(msg)).await;
+        disk_cleanup::run_cleanup_once(
+            active_jobs,
+            false,
+            disk_cleanup::CleanupWriter::AgentTick,
+            &mut |msg: &str| agent_log(msg),
+        )
+        .await
+    });
     (janitor_reports, janitor)
 }
 
-/// Advance every running slot, then report `(tick deadline, claim deadline,
-/// vast renter active)` for the rest of this tick to spend.
+/// Advance every running slot, then report whether a Vast renter is active
+/// for the rest of this tick.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn advance_slots(
     store: &JobStorage,
@@ -95,7 +90,7 @@ pub(super) async fn advance_slots(
     agent_diag: &mut Map<String, Value>,
     disk_low_bytes: &mut Option<i64>,
     log_fn: &mut dyn FnMut(&str),
-) -> anyhow::Result<(Instant, Instant, bool)> {
+) -> anyhow::Result<bool> {
     // Phase breadcrumbs for the 40GB a2-highgpu-1g first-iter hang.
     log_fn("loop: iter-start");
     heartbeat.record_tick_start();
@@ -120,48 +115,10 @@ pub(super) async fn advance_slots(
              host; the queue it reads is not the fleet queue"
         ));
     }
-    // ONE budget for everything this tick reads out of the store, shared
-    // across the reads rather than handed out per read.
-    //
-    // Per-read budgets were the first shape of this and they were wrong in
-    // a way the host said out loud: with 20 s each, the claimable-job
-    // listing -- much the heaviest read, and the only one claiming depends
-    // on -- timed out on every tick against this store, so the host stayed
-    // fresh and still claimed nothing. Freshness bought by never claiming
-    // is not the fix. A shared deadline spends the budget where the tick
-    // actually needs it: the small documents normally answer in under a
-    // second and leave nearly the whole allowance to the listing.
-    //
-    // Two deadlines, because the two halves of a tick answer different
-    // questions. Everything the tick reads BEFORE its own publication
-    // shares [`constants::AGENT_TICK_STORE_BUDGET_S`]: those reads only
-    // refine what the broadcast says, and none of them is worth delaying
-    // it. Everything the ADMISSION half reads shares the larger
-    // [`constants::AGENT_CLAIM_STORE_BUDGET_S`], because asking a
-    // saturated store for work legitimately takes longer than a heartbeat
-    // interval and the heartbeat task keeps publishing while it does.
-    // Every read below degrades to "keep what we last knew" or "claim
-    // nothing this tick"; nothing mutating is inside either deadline.
-    let tick_store_deadline =
-        Instant::now() + Duration::from_secs(constants::AGENT_TICK_STORE_BUDGET_S);
-    let store_budget_left = || tick_store_deadline.saturating_duration_since(Instant::now());
-    let claim_store_deadline =
-        Instant::now() + Duration::from_secs(constants::AGENT_CLAIM_STORE_BUDGET_S);
-    match tokio::time::timeout(
-        store_budget_left(),
-        crate::config::refresh_model_policy(store),
-    )
-    .await
-    {
-        Ok(Ok(_)) => {}
-        Ok(Err(exc)) => log_fn(&format!(
+    if let Err(exc) = crate::config::refresh_model_policy(store).await {
+        log_fn(&format!(
             "model policy refresh failed; retaining last good policy: {exc}"
-        )),
-        Err(_) => log_fn(&format!(
-            "model policy refresh exhausted this tick's {}s store budget; retaining last good \
-             policy so this tick still publishes capacity and claims",
-            constants::AGENT_TICK_STORE_BUDGET_S
-        )),
+        ));
     }
     // DEVIATION: the wisent upload_worker sweep is not ported (the
     // wisent Python package owns it); the fleet-flush subprocess path
@@ -223,5 +180,5 @@ pub(super) async fn advance_slots(
             serde_json::json!({"outcome": "no_pass_completed_yet"}),
         );
     }
-    Ok((tick_store_deadline, claim_store_deadline, vast_active))
+    Ok(vast_active)
 }

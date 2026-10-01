@@ -59,7 +59,6 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::config;
 use crate::models::isoformat_utc;
 
 use super::storage::JobStorage;
@@ -218,23 +217,9 @@ pub async fn job_count(store: &JobStorage, prefix: &str) -> Result<usize, Storag
     Ok(job_blobs(store, prefix).await?.len())
 }
 
-/// True when `running/` holds nothing — the condition `queue drain --wait`
-/// blocks on, and the claim `deploy/migrate_to_stado.sh` asks the operator
-/// to make with `CONFIRM_FLEET_DRAINED=yes`.
+/// True when `running/` holds nothing — the condition `queue drain` reports,
+/// and the claim `deploy/migrate_to_stado.sh` asks the operator to make with
+/// `CONFIRM_FLEET_DRAINED=yes`.
 pub async fn is_drained(store: &JobStorage) -> Result<bool, StorageError> {
     Ok(job_blobs(store, RUNNING_PREFIX).await?.is_empty())
-}
-
-/// Default deadline for `stado queue drain --wait`, in seconds.
-///
-/// Derived from `config::HEARTBEAT_STALE_MINUTES`, the window after which
-/// the monitor declares a running job's heartbeat dead and requeues it. A
-/// drain that has waited that long has given every slot a full staleness
-/// window to either finish or be reaped, so anything still in `running/`
-/// past it is genuinely long work — an operator decision, not a longer
-/// sleep.
-pub fn default_drain_timeout_s() -> u64 {
-    chrono::Duration::minutes(config::HEARTBEAT_STALE_MINUTES)
-        .num_seconds()
-        .unsigned_abs()
 }

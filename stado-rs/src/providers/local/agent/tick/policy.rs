@@ -16,7 +16,7 @@ use crate::queue::JobStorage;
 use crate::targets::ComputeTarget;
 
 use super::super::capacity::snapshot::{measured_capacity, publish_branch};
-use super::super::{lookup_self_auto, Step, POLL_INTERVAL_S};
+use super::super::{lookup_self_auto, Step};
 
 /// What one tick learns about the disk policy it admits against: the
 /// canonical registry target that declared it, the free bytes measured under
@@ -32,7 +32,6 @@ pub(super) async fn disk_policy(
     kind: &str,
     hostname: &str,
     fleet_staging: &Option<String>,
-    tick_store_deadline: Instant,
     total_vram_gb: i64,
     slots: &[ActiveSlot],
     agent_diag: &mut Map<String, Value>,
@@ -41,33 +40,14 @@ pub(super) async fn disk_policy(
     last_fleet_flush: &mut Instant,
     log_fn: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Step<DiskPolicy>> {
-    let store_budget_left = || tick_store_deadline.saturating_duration_since(Instant::now());
     // Admission reads the canonical declaration directly as well as the
     // janitor report. Cleanup deliberately uses a cross-process lock; a
     // busy lock or an older writer's invalid report must not erase a
-    // perfectly readable low watermark and close the queue forever.
-    //
-    // Bounded on the same budget, and a lapsed budget is NOT an error: the
-    // registry states the watermark, the pinned-only flag and the VRAM
-    // override, and this tick keeps whatever it last knew of all three
-    // (`disk_low_bytes` from the janitor's state file, `pinned_only` from
-    // the previous tick) rather than spending the broadcast's freshness
-    // window waiting for a restatement. `?` still propagates a real
-    // refusal, which is a different fact from a slow route: the registry
-    // fetch already falls back to its last-known-good copy and to the
-    // bundled snapshot before it errors at all.
-    let registry_target =
-        match tokio::time::timeout(store_budget_left(), lookup_self_auto(hostname)).await {
-            Ok(result) => result?,
-            Err(_) => {
-                log_fn(&format!(
-                    "loop: canonical registry target did not answer within {}s; keeping the last \
-                     known disk watermark and pinned-only state for this tick",
-                    constants::AGENT_TICK_STORE_BUDGET_S
-                ));
-                None
-            }
-        };
+    // perfectly readable low watermark and close the queue forever. The
+    // registry fetch already falls back to its last-known-good copy and to
+    // the bundled snapshot before it errors at all, so an error here is a
+    // real refusal and ends the tick with it.
+    let registry_target = lookup_self_auto(hostname).await?;
     if let Some(declared_low) = registry_target
         .as_ref()
         .and_then(|target| target.disk_cleanup.as_ref())
@@ -191,7 +171,6 @@ pub(super) async fn disk_policy(
         )
         .await;
         *last_cap = Some(snapshot);
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
         return Ok(Step::Done);
     }
     // The republish keep-alive below is unchanged from Python.

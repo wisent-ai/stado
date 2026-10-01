@@ -30,7 +30,7 @@
 //! - A *missing* marker is fatal. This index is the whole listing strategy
 //!   for `queue/`, so an unindexed queued job is invisible to every
 //!   scheduler forever while still reporting state `queued`: it is never
-//!   claimed, and `queue drain --wait` never terminates.
+//!   claimed, and `queue drain` never reports drained.
 //!
 //! So: create writes the marker before settling the job blob; a re-key
 //! writes the new marker before cleaning the superseded one (see

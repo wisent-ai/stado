@@ -19,7 +19,6 @@ use clap::Args;
 
 use crate::cli::storage::EndpointArgs;
 use crate::deploy::service;
-use crate::queue::control;
 use crate::queue::copy::DEFAULT_CONCURRENCY;
 use crate::targets::ComputeTarget;
 
@@ -75,9 +74,6 @@ pub struct RecoveryMigrateArgs {
     /// Resume dispatch and claims after every other step. Without it the destination stays paused.
     #[arg(long)]
     pub(super) resume: bool,
-    /// Maximum seconds to wait for running/ to drain on each store.
-    #[arg(long, default_value_t = control::default_drain_timeout_s())]
-    pub(super) drain_timeout: u64,
     /// Objects copied in parallel.
     #[arg(long, default_value_t = default_concurrency())]
     pub(super) concurrency: NonZeroUsize,

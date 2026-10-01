@@ -21,8 +21,8 @@ pub async fn dispatch_box_jobs(
 ) -> Result<i64, BoxDispatchError> {
     // Maintenance-mode gate (queue::control). Box dispatch is the OTHER
     // queue/ -> running/ mover in the coordinator tick, so a pause has to
-    // stop it too or `stado queue drain --wait` would watch running/ grow
-    // while it waits. Only the ADMIT half is gated: run_box_tick's
+    // stop it too or `stado queue drain` would watch running/ grow. Only the
+    // ADMIT half is gated: run_box_tick's
     // reconcile pass still drives already-leased boxes to completion —
     // the same asymmetry the local agent has between advance_slot and its
     // claim scan.

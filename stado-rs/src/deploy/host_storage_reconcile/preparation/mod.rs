@@ -147,19 +147,15 @@ pub(super) async fn prepare_lifecycle_fence(
                     "queue is not paused after its durable fencing transition".to_string(),
                 ));
             }
-            let deadline = Instant::now()
-                + Duration::from_secs(crate::queue::control::default_drain_timeout_s());
-            while !crate::queue::control::is_drained(store)
+            if !crate::queue::control::is_drained(store)
                 .await
                 .map_err(|error| DeployError(format!("cannot prove queue drained: {error}")))?
             {
-                if Instant::now() >= deadline {
-                    return Err(DeployError(
-                        "queue remained active until the canonical drain deadline; fence retained"
-                            .to_string(),
-                    ));
-                }
-                sleep(Duration::from_secs(5)).await;
+                return Err(DeployError(
+                    "queue is paused and running/ still holds jobs; fence retained, so the \
+                     reconcile resumes from here when it is run again"
+                        .to_string(),
+                ));
             }
             fence.queue.drained = true;
             write_fence(storage_target, transaction, &fence, runner).await?;

@@ -16,12 +16,14 @@
 //! by exactly the code that stamps them for a fresh submit. Resolved
 //! hardware is carried explicitly.
 //!
-//! `watch --follow` carries the byte cursor forward across polls, so every
+//! `watch --follow-seconds` carries the byte cursor forward across polls, so every
 //! poll prints only the bytes that appeared since the last one and the
 //! stream never restarts at zero. One page is the whole remaining log:
 //! [`MachineFacade::read_logs`](crate::machine::MachineFacade::read_logs) slices a buffer it has already downloaded,
 //! so paging in small windows would cost one extra read per window and save
 //! nothing.
+
+use std::time::Duration;
 
 use clap::Subcommand;
 
@@ -58,12 +60,14 @@ pub enum JobCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Print a job's log, and with --follow tail it to a terminal state.
+    /// Print a job's log, and with --follow-seconds tail it to a terminal
+    /// state.
     Watch {
         job_id: String,
-        /// Keep polling until the job reaches a terminal prefix.
+        /// Re-read the job and its log every this many seconds until the job
+        /// reaches a terminal prefix.
         #[arg(long)]
-        follow: bool,
+        follow_seconds: Option<u64>,
         /// Buffer the log and emit one JSON object instead of streaming.
         #[arg(long)]
         json: bool,
@@ -84,9 +88,9 @@ pub async fn dispatch(command: JobCommands) -> Result<(), CmdError> {
         } => set_priority(&job_id, priority, json).await,
         JobCommands::Watch {
             job_id,
-            follow,
+            follow_seconds,
             json,
-        } => watch(&job_id, follow, json).await,
+        } => watch(&job_id, follow_seconds.map(Duration::from_secs), json).await,
     }
 }
 

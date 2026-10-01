@@ -12,12 +12,10 @@
 //! make that claim true.
 
 use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
 
 use clap::Subcommand;
 use serde_json::Value;
 
-use crate::primitives::constants;
 use crate::queue::control::{self, QueueControl};
 use crate::queue::JobStorage;
 
@@ -48,16 +46,9 @@ pub enum QueueCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Pause, then (with --wait) block until no job is running any more.
-    Drain {
-        /// Wait for running/ to empty instead of returning immediately.
-        #[arg(long)]
-        wait: bool,
-        /// Deadline for --wait, in seconds. Exits non-zero if it elapses
-        /// with jobs still running.
-        #[arg(long, default_value_t = control::default_drain_timeout_s())]
-        timeout: u64,
-    },
+    /// Pause, then report whether any job is still running. Exits non-zero
+    /// while running/ is not empty.
+    Drain,
     /// What the fleet has spent on compiling today, and the ceiling it is
     /// measured against. `--limit` declares a new ceiling.
     Budget {
@@ -74,7 +65,7 @@ pub async fn dispatch(cmd: QueueCommands) -> Result<(), CmdError> {
         QueueCommands::Pause { reason } => pause(&reason).await,
         QueueCommands::Resume => resume().await,
         QueueCommands::Status { json } => status(json).await,
-        QueueCommands::Drain { wait, timeout } => drain(wait, timeout).await,
+        QueueCommands::Drain => drain().await,
         QueueCommands::Budget { limit, json } => budget(limit, json).await,
     }
 }
@@ -106,8 +97,8 @@ async fn pause(reason: &str) -> Result<(), CmdError> {
     print_state(&state);
     println!(
         "\nDispatch and new claims are stopped. Jobs already running keep going and \
-         queued jobs are untouched — resume with `stado queue resume`, or wait them out \
-         with `stado queue drain --wait`."
+         queued jobs are untouched — resume with `stado queue resume`, or check whether \
+         they are done with `stado queue drain`."
     );
     Ok(())
 }
@@ -152,57 +143,25 @@ async fn status(as_json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-async fn drain(wait: bool, timeout_s: u64) -> Result<(), CmdError> {
+async fn drain() -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let state = control::set_paused(&store, true, DRAIN_REASON, BY_THIS_HOST).await?;
     print_state(&state);
-
-    if !wait {
+    let running = control::job_count(&store, control::RUNNING_PREFIX).await?;
+    let Some(remaining) = NonZeroUsize::new(running) else {
+        let queued = control::job_count(&store, control::QUEUED_PREFIX).await?;
         println!(
-            "\nPaused. Nothing new dispatches or gets claimed, but jobs already in running/ \
-             are still going — the fleet is NOT drained yet. Re-run with --wait, or watch \
-             `stado queue status`, before copying storage."
+            "\ndrained: running/ is empty. {queued} job(s) remain queued and untouched — \
+             pausing is not cancelling, and they dispatch again on `stado queue resume`."
         );
         return Ok(());
-    }
-
-    // Poll at the agent's own cadence: a job leaves running/ when its
-    // agent notices the child exited, which happens once per
-    // `constants::POLL_INTERVAL_S`. Listing faster only adds storage
-    // traffic to a fleet that is trying to go quiet.
-    let poll = Duration::from_secs(constants::POLL_INTERVAL_S);
-    let budget = Duration::from_secs(timeout_s);
-    let started = Instant::now();
-    println!();
-    loop {
-        let running = control::job_count(&store, control::RUNNING_PREFIX).await?;
-        let elapsed = started.elapsed();
-        let Some(remaining) = NonZeroUsize::new(running) else {
-            let queued = control::job_count(&store, control::QUEUED_PREFIX).await?;
-            println!(
-                "drained after {}s: running/ is empty. {queued} job(s) remain queued and \
-                 untouched — pausing is not cancelling, and they dispatch again on \
-                 `stado queue resume`.",
-                elapsed.as_secs()
-            );
-            return Ok(());
-        };
-        if elapsed >= budget {
-            return Err(CmdError::click(format!(
-                "drain timed out after {}s with {remaining} job(s) still in running/. The \
-                 queue stays PAUSED, so nothing new was dispatched or claimed: re-run \
-                 `stado queue drain --wait` to keep waiting, cancel the stragglers with \
-                 `stado cancel`, or `stado queue resume` to abandon the drain. Do NOT \
-                 copy storage until running/ is empty.",
-                elapsed.as_secs()
-            )));
-        }
-        println!(
-            "waiting: {remaining} job(s) still running ({}s elapsed)",
-            elapsed.as_secs()
-        );
-        tokio::time::sleep(poll).await;
-    }
+    };
+    Err(CmdError::click(format!(
+        "{remaining} job(s) are still in running/. The queue stays PAUSED, so nothing new is \
+         dispatched or claimed: run `stado queue drain` again once they finish, cancel the \
+         stragglers with `stado cancel`, or `stado queue resume` to abandon the drain. Do NOT \
+         copy storage until running/ is empty."
+    )))
 }
 
 /// `stado queue budget`: what the fleet has spent on compiling today, and

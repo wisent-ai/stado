@@ -46,8 +46,10 @@ pub(crate) use probes::placement::reconcile_placement_policy;
 
 use crate::primitives::constants;
 
-/// Main agent poll interval (latency vs. storage-API load trade-off).
-pub const POLL_INTERVAL_S: u64 = constants::POLL_INTERVAL_S;
+/// The poll period this process's agent was started with, handed to every job
+/// it starts as `STADO_POLL_SECONDS` so a job that follows its own lifecycle
+/// reads at the operator's cadence.
+pub(crate) static POLL: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
 
 /// Cooperative-yield anti-thrash floor: never evict a yieldable slot that has
 /// run for less than this, so a just-(re)started background job gets real work

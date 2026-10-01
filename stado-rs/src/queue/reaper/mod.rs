@@ -16,9 +16,8 @@
 //! [`crate::queue::storage::JobStorage::renew_running_lease`] every
 //! [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`] from
 //! `write_heartbeat`. The TTL is the codebase's own
-//! [`crate::config::HEARTBEAT_STALE_MINUTES`] — the window
-//! [`super::control::default_drain_timeout_s`] documents as "the window
-//! after which the monitor declares a running job's heartbeat dead".
+//! [`crate::config::HEARTBEAT_STALE_MINUTES`] — the window after which the
+//! monitor declares a running job's heartbeat dead.
 //!
 //! Why in the document: while the lease was only the `status/<job_id>/heartbeat`
 //! blob, no amount of re-reading could fence this reaper. It read the running

@@ -25,7 +25,7 @@ use crate::sizing::Sizing;
 
 use reconcile::{GpuPowerLimitState, PlacementPolicyState};
 
-use super::{agent_log, claim, Step, POLL_INTERVAL_S};
+use super::{agent_log, claim, Step};
 
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
@@ -37,10 +37,20 @@ use super::{agent_log, claim, Step, POLL_INTERVAL_S};
 ///
 /// kind: capacity-broadcast label distinguishing physical workstations
 /// (kind="local") from ephemeral cloud-agent VMs (kind="gcp", ...).
-/// No global error handler wraps the loop body: unexpected errors
-/// crash the agent visibly (returned as Err) so the operator can diagnose.
-pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyhow::Result<()> {
+/// `poll` is the operator's period between polls; a poll that started a job
+/// is followed at once by the next. No global error handler wraps the loop
+/// body: unexpected errors crash the agent visibly (returned as Err) so the
+/// operator can diagnose.
+pub async fn run_agent(
+    gpu_type: &str,
+    idle_shutdown: bool,
+    kind: &str,
+    poll: Duration,
+) -> anyhow::Result<()> {
     let log_fn = &mut |msg: &str| agent_log(msg);
+    if super::POLL.set(poll).is_err() {
+        anyhow::bail!("an agent already runs in this process with its own poll period");
+    }
 
     let mut gpu_type = gpu_type.to_string();
     if gpu_type.is_empty() {
@@ -81,7 +91,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     if disk_low_bytes.is_some() {
         log_fn("init: loaded validated disk low watermark from janitor state");
     }
-    let (janitor_reports, _janitor) = prepare::spawn_janitor();
+    let (janitor_reports, _janitor) = prepare::spawn_janitor(poll);
     // The broadcast keeps its declared cadence while the tick works. See
     // [`crate::providers::local::agent::heartbeat`] for why this is not a
     // liveness formality: it republishes only what the tick last measured, and
@@ -91,10 +101,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         store.clone(),
         consumer_id.clone(),
         kind.to_string(),
+        poll,
         agent_log,
     );
+    let mut pace = false;
     loop {
-        let (tick_store_deadline, claim_store_deadline, vast_active) = prepare::advance_slots(
+        if pace {
+            tokio::time::sleep(poll).await;
+        }
+        pace = true;
+        let vast_active = prepare::advance_slots(
             &store,
             &sizing,
             &heartbeat,
@@ -114,7 +130,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             kind,
             &hostname,
             &fleet_staging,
-            tick_store_deadline,
             total_vram_gb,
             &slots,
             &mut agent_diag,
@@ -203,7 +218,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             free_vram_gb,
             idle_shutdown,
             pressure_active,
-            claim_store_deadline,
             available_accelerators,
             &mut slots,
             &mut agent_diag,
@@ -225,7 +239,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             free_vram_gb,
             pinned_only,
             pressure_active,
-            claim_store_deadline,
             current_free_bytes,
             disk_low_bytes,
             &slots,
@@ -248,7 +261,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             total_vram_gb,
             pinned_only,
             vram_buffer_gb,
-            claim_store_deadline,
             &queued,
             &cards,
             &last_cap,
@@ -260,6 +272,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         .await?;
 
         if started > 0 {
+            pace = false;
             continue;
         }
 
@@ -281,6 +294,5 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             self_terminate(kind, log_fn).await;
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
     }
 }
