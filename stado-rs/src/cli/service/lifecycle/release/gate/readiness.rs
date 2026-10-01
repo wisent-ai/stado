@@ -23,10 +23,10 @@ fn validate_readiness_url(url: &str) -> Result<(), CmdError> {
 /// `did not report releaseVersion or build.version <expected>` whenever a
 /// version was required, including when `curl` never once succeeded — so a
 /// candidate whose HTTP server never bound its port was reported as one that
-/// answered without a version field. Three weles-worker rollouts were rolled
-/// back on that sentence on 2026-09-02 while the real fault was
-/// `EADDRINUSE` on the service's port, and it sent the next reader hunting a
-/// field contract that was satisfiable the whole time. The three repairs are
+/// answered without a version field. Rollouts get rolled back on that
+/// sentence while the real fault is `EADDRINUSE` on the service's port, and
+/// it sends the next reader hunting a field contract that was satisfiable
+/// the whole time. The three repairs are
 /// different — start the service, publish the release the gate asked for, or
 /// teach the service to report its identity — so the sentence names which
 /// one is owed:

@@ -15,9 +15,9 @@ pub enum RuntimeCommands {
     /// a unit that is not stale, naming the identity it found, because a
     /// command that restarts whatever it is pointed at is a restart button.
     /// It re-reads the image afterwards and exits non-zero if the restart did
-    /// not change it: launchd re-execs the declared path, and on 2026-09-03
-    /// pid 49727 respawned under `KeepAlive` straight back onto the same
-    /// unlinked inode it had just left.
+    /// not change it: launchd re-execs the declared path, and a process can
+    /// respawn under `KeepAlive` straight back onto the same unlinked inode
+    /// it had just left.
     ///
     /// One unit per invocation. There is no `--all`: three stale units is
     /// three deliberate commands. Local only — which image a process is

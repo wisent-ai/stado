@@ -49,10 +49,10 @@ pub(super) struct ResolverState {
 impl ResolverState {
     /// Open a channel and retain its session until the caller finishes copying.
     ///
-    /// On 2026-09-30 connections through this adapter waited 2 to 11 minutes
-    /// while the remote object API refused channels at once. Two things made
-    /// that queue: every refused channel dropped a healthy session, so the
-    /// next connection opened a new SSH session from scratch; and every open
+    /// Connections through this adapter used to wait minutes while the
+    /// remote object API refused channels at once. Two things made that
+    /// queue: every refused channel dropped a healthy session, so the next
+    /// connection opened a new SSH session from scratch; and every open
     /// ran while holding the one lock all services and consumers share, so
     /// each connection waited for every handshake queued before it. A
     /// session is now opened without the shared lock, and it is dropped only

@@ -70,10 +70,9 @@ pub enum SecretsCommands {
     /// Every write and every authoritative read here goes through one file,
     /// and until this command existed nothing said which — the answer lived
     /// in a discovery rule and one environment variable, and it surfaced only
-    /// as a refusal from whatever command hit it. On 2026-09-05 that was
-    /// `stado repair stado --step release-verifier`, after two vaults on this
-    /// machine had been claiming one owner for long enough to close the
-    /// fleet's release publication boundary.
+    /// as a refusal from whatever command hit it — a repair step failing
+    /// after two vaults on one machine had been claiming one owner for long
+    /// enough to close the fleet's release publication boundary.
     ///
     /// Exits non-zero when nothing resolves, so a script can gate on it.
     Vault {

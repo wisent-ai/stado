@@ -16,8 +16,8 @@ use crate::cli::resolver::report::published::{
 ///
 /// The registry comes through [`targets::fetch_registry_or_last_good`]: a
 /// command whose whole purpose is diagnosing a sick control plane must not die
-/// with the authority it is diagnosing, and every host command did exactly
-/// that on 2026-08-19. A cached answer is still an answer, and its age is a
+/// with the authority it is diagnosing, which is what every host command
+/// used to do. A cached answer is still an answer, and its age is a
 /// blocker in the report rather than a footnote.
 pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<(), CmdError> {
     let (registry, notice) = targets::fetch_registry_or_last_good()

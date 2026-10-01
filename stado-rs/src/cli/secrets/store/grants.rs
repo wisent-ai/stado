@@ -72,8 +72,8 @@ pub(crate) fn mint_acquisition_token(
     // landed in ~/.local/share/skarbiec/… while the control-plane broker serves
     // ~/.stado/skarbiec.vault.json: the mint reported success, the file read
     // verified against the wrong store, and the broker kept answering 403 for
-    // the consumer the fleet authenticates as. On 2026-09-04 that is what the
-    // 0.14.9 delivery's resume step died on. `credential_store::owner::vault`
+    // the consumer the fleet authenticates as, which is what a delivery's
+    // resume step then dies on. `credential_store::owner::vault`
     // is the one declaration of where owner writes go.
     let vault = crate::credential_store::owner::vault()
         .map_err(|error| CmdError::click(format!("mint-acquisition-token: {error}")))?;

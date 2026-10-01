@@ -8,9 +8,9 @@ use super::*;
 ///
 /// The program is taken from the declaration, never from the rendered unit
 /// summary. That summary is the program AND its arguments in one string, so
-/// asking it for a path filename answered "stado coordinator" for
-/// `com.wisent.compute.service.stado-local-control-plane` on 2026-09-03 and
-/// wrote that as the program, leaving the declared `coordinator` to be
+/// asking it for a path filename answers "stado coordinator" for the
+/// control-plane unit and writes that as the program, leaving the declared
+/// `coordinator` to be
 /// appended a second time: the unit file came out as
 /// `.../current/darwin-arm/stado coordinator coordinator`, an argv the binary
 /// cannot parse. launchd happened to still hold the previous job, so the
@@ -31,8 +31,8 @@ pub(crate) async fn follow_current(
 ) -> Result<bool, CmdError> {
     // What the unit file on the host actually says today, always read, because
     // the declaration being right is not evidence that the file is. Those two
-    // drifted apart on 2026-09-03 -- the declaration named the package program
-    // and the file said `stado coordinator coordinator` -- and an earlier
+    // can drift apart -- the declaration naming the package program and the
+    // file saying `stado coordinator coordinator` -- and an earlier
     // version of this function returned here without looking, because the
     // DECLARED path was already on `current` and there was seemingly nothing
     // to repoint. Nothing else in the deployment path compares the two, so

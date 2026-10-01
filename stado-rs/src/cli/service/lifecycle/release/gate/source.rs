@@ -142,9 +142,9 @@ fn released_route(document: &Value, name: &str) -> Result<String, CmdError> {
 /// A placement-backed route MUST leave `managed_service` absent - the schema
 /// refuses it, because the unit is declared once per host inside the profile.
 /// Reading only the absent field made every such service unreachable from a
-/// unit name: on 2026-09-05 `service release com.wisent.always-on.brama` moved
-/// `current` to the new digest and then failed with "carries no route", so the
-/// host ran one release while the directory still described another.
+/// unit name: a `service release <unit>` moves `current` to the new digest
+/// and then fails with "carries no route", so the host runs one release
+/// while the directory still describes another.
 fn placement_declares_unit(document: &Value, entry: &Value, logical: &str, unit: &str) -> bool {
     let Some(profile_name) = entry.get("placement_profile").and_then(Value::as_str) else {
         return false;

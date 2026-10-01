@@ -66,10 +66,10 @@ pub(super) async fn proxy_connection(
         let paths = resolved_ssh_paths(&resolved);
         // Every open that has not answered yet is counted and named, so a
         // connection the adapter holds without end leaves a line saying which
-        // host it waits on and for how long. On 2026-09-30 directory connects
-        // waited 2 to 11 minutes behind this adapter while the log held only
-        // the opens that failed at once, so the one that never answered could
-        // not be told apart.
+        // host it waits on and for how long. Directory connects that wait
+        // minutes behind this adapter while the log holds only the opens
+        // that failed at once leave the one that never answered impossible
+        // to tell apart.
         let waiting = OPENS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
         let started = std::time::Instant::now();
         eprintln!(
