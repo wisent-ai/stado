@@ -174,7 +174,16 @@ async fn place_sqlite(
     let path = file.display().to_string();
     let fields = json!({ "engine": "sqlite", "provider": "fleet", "host": here, "path": path });
     let context = json!({ "engine": "sqlite", "provider": "fleet", "product": name });
-    owner.store(&item, "bundle", &fields, &context).await?;
+    if let Err(error) = owner.store(&item, "bundle", &fields, &context).await {
+        // A file this run created and no item names is a database nothing
+        // declares and `destroy` cannot reach: take it back, and the
+        // directory with it when nothing else is in there.
+        if !reused {
+            let _ = std::fs::remove_file(&file);
+            let _ = std::fs::remove_dir(directory);
+        }
+        return Err(error);
+    }
     Ok(json!({
         "reused": reused,
         "engine": "sqlite",
