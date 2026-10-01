@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::{install_timeout, parse_fields, report};
+use super::{parse_fields, report};
 use crate::deploy::{host_channel, DeployError, Runner};
 use crate::stream::schema::DisplayStream;
 use crate::targets::ComputeTarget;
@@ -53,8 +53,7 @@ pub async fn install(
         width,
         height,
     );
-    let output =
-        host_channel::run_script_with_timeout(target, &script, install_timeout(), runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     let mut body = report(target, &output, "installed");
     if let Some(map) = body.as_object_mut() {
         map.insert(

@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 
 use super::super::{
     activate_script, is_sha256, marker, marker_values, markers, recheck_staged_script,
-    stage_script, ReleasePlan, ALREADY_ACTIVE_STATUS, STAGE_TIMEOUT,
+    stage_script, ReleasePlan, ALREADY_ACTIVE_STATUS,
 };
 use super::{fail, step_entry, step_failure};
 use crate::deploy::{host_channel, service, service_label_print, DeployError, Runner};
@@ -88,8 +88,7 @@ pub(super) async fn stage_phase(
     let stage = if pre_staged_sha256.is_some() {
         host_channel::run_script(target, &recheck_staged_script(plan)?, runner).await?
     } else {
-        host_channel::run_script_with_timeout(target, &stage_script(plan), STAGE_TIMEOUT, runner)
-            .await?
+        host_channel::run_script(target, &stage_script(plan), runner).await?
     };
     let stage_markers = markers(&stage.stdout);
     report.insert(

@@ -101,14 +101,9 @@ pub async fn config_unset(
         remote::CONFIG_SCRIPT_PREFIX,
         STANDARD.encode(key.as_bytes())
     );
-    let output = crate::deploy::host_channel::run_script_with_timeout(
-        &resolved,
-        &script,
-        std::time::Duration::from_secs(60),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         // The host's own sentence, not just its last line: `stado config
         // unset` prints why it refused and a tracing banner after it, so

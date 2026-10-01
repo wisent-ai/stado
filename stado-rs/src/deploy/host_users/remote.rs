@@ -7,9 +7,6 @@ use crate::deploy::{shlex_quote, DeployError};
 /// Python `_STATUS_PREFIX`.
 pub const STATUS_PREFIX: &str = "STADO_USER\t";
 
-/// Python's `runner` deadline, in seconds, for the per-host ssh call.
-pub const SSH_TIMEOUT_SECONDS: u64 = 120;
-
 /// Python `_REMOTE_CREATE_SCRIPT` (byte-exact; verified against the
 /// checked-in golden rendered by the Python module).
 pub const REMOTE_CREATE_SCRIPT: &str = r#"set -eu

@@ -1,7 +1,7 @@
 //! The install root: one published release archive turned into the directory
 //! the unit's program path names, and the program path itself.
 
-use crate::cli::web::deploy::{click, marker, INSTALL_TIMEOUT};
+use crate::cli::web::deploy::{click, marker};
 use crate::cli::web::LAUNCHER;
 use crate::cli::CmdError;
 use crate::deploy::{host_channel, service_catalog, Runner};
@@ -170,7 +170,7 @@ pub(in crate::cli::web::deploy) async fn install_release(
         crate::deploy::shlex_quote(sha256),
         crate::deploy::shlex_quote(LAUNCHER),
     );
-    let output = host_channel::run_script_with_timeout(target, &script, INSTALL_TIMEOUT, runner)
+    let output = host_channel::run_script(target, &script, runner)
         .await
         .map_err(click)?;
     if !output.ok() {

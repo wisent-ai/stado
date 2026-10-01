@@ -6,8 +6,6 @@
 
 mod classify;
 
-use std::time::Duration;
-
 use serde_json::Value;
 
 use crate::deploy::products::{self, Shape};
@@ -18,9 +16,6 @@ use super::queries::VersionQuery;
 use super::{ProgramInspection, ReleaseMatch, Reporter};
 
 pub(super) use classify::Classification;
-
-/// A supported version command is a tiny read, not a recovery operation.
-const VERSION_QUERY_DEADLINE: Duration = Duration::from_secs(5);
 
 impl Reporter<'_> {
     /// The program one declared unit runs, read out of the unit file itself
@@ -86,22 +81,11 @@ impl Reporter<'_> {
     /// declared in the shipped product catalog.
     ///
     /// Failure is deliberately `None`: the caller still emits the program row
-    /// as `version=unknown`. The five-second command deadline is carried by
-    /// [`CommandSpec`](crate::deploy::CommandSpec), so a server-style binary
-    /// cannot consume the channel's 120-second recovery allowance.
+    /// as `version=unknown`. The query runs until the program exits.
     async fn query_version(&self, path: &str, query: &VersionQuery) -> Option<String> {
-        let output = tokio::time::timeout(
-            VERSION_QUERY_DEADLINE,
-            host_channel::run_program_with_timeout(
-                self.target,
-                &[path, &query.argument],
-                VERSION_QUERY_DEADLINE,
-                self.runner,
-            ),
-        )
-        .await
-        .ok()?
-        .ok()?;
+        let output = host_channel::run_program(self.target, &[path, &query.argument], self.runner)
+            .await
+            .ok()?;
         if !output.ok() {
             return None;
         }

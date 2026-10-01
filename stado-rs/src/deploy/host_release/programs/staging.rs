@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::deliver::step_failure;
+use super::super::ReleaseRequest;
 use super::super::{is_sha256, marker, markers, plan, resolve_release_request};
-use super::super::{ReleaseRequest, STAGE_TIMEOUT};
 use super::program::REMOTE_RETAIN_READER_ARCHIVE_BODY;
 use super::{bindings, probe_script, stage_script, FETCH_PRELUDE, SANITIZE_PRELUDE};
 use crate::deploy::{host_channel, DeployError, Runner};
@@ -47,8 +47,7 @@ pub async fn ensure_stado_reader_archive(
         "{}{SANITIZE_PRELUDE}{FETCH_PRELUDE}{REMOTE_RETAIN_READER_ARCHIVE_BODY}",
         bindings(&plan),
     );
-    let output =
-        host_channel::run_script_with_timeout(target, &script, STAGE_TIMEOUT, runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     let output_markers = markers(&output.stdout);
     if !output.ok() || marker(&output_markers, "step") != "retain_reader_archive" {
         return Err(DeployError(format!(
@@ -91,9 +90,7 @@ pub async fn stage_declared_release(
     {
         return Err(DeployError(step_failure(&probe_markers, &probe)));
     }
-    let stage =
-        host_channel::run_script_with_timeout(&target, &stage_script(&plan), STAGE_TIMEOUT, runner)
-            .await?;
+    let stage = host_channel::run_script(&target, &stage_script(&plan), runner).await?;
     let stage_markers = markers(&stage.stdout);
     if !stage.ok() || marker(&stage_markers, "step") != "stage" {
         return Err(DeployError(step_failure(&stage_markers, &stage)));

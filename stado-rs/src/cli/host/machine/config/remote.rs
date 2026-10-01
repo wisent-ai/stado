@@ -65,14 +65,9 @@ pub(crate) async fn remote_config_output(
         ),
     };
     let script = format!("{CONFIG_SCRIPT_PREFIX}{action}\n");
-    let output = crate::deploy::host_channel::run_script_with_timeout(
-        target,
-        &script,
-        std::time::Duration::from_secs(60),
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let output = crate::deploy::host_channel::run_script(target, &script, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         let detail = output.detail().trim().to_string();
         return Err(CmdError::click(if detail.is_empty() {

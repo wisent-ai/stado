@@ -3,8 +3,6 @@
 
 mod resolution;
 
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -80,11 +78,6 @@ struct HostExecReceipt {
     /// script resolves `$program` in the remote shell and reports nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resolved_executable: Option<String>,
-    /// Only for an account-owned entry, which runs under its own budget.
-    /// Without it a channel cut at the cap reads like a program that failed
-    /// fast, and the two ask for different next steps.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    timeout_seconds: Option<u64>,
     stdout: String,
     stderr: String,
     exit_code: i32,
@@ -142,45 +135,22 @@ pub async fn exec_host(
     let (mut output, used_connection) = match (approved.argv.split_first(), account) {
         (Some((_, arguments)), Some(account)) => {
             let script = account_script(account, arguments);
-            host_channel::run_script_with_timeout_and_connection(
-                &target,
-                &script,
-                Duration::from_secs(account.timeout_seconds),
-                runner,
-            )
-            .await?
+            host_channel::run_script_with_connection(&target, &script, runner).await?
         }
         (Some(_), None) if approved.argv == PROBIERZ_RUN_ROOT_CREATE => {
-            host_channel::run_script_with_timeout_and_connection(
-                &target,
-                &probierz_run_root_script(),
-                host_channel::remote_timeout(),
-                runner,
-            )
-            .await?
+            host_channel::run_script_with_connection(&target, &probierz_run_root_script(), runner)
+                .await?
         }
         // A read whose fixed paths are relative to the managed account's home
         // stands in that home first. One candidate, one absolute program, so
         // nothing below has a marker to look for.
         (Some(_), None) if home_rooted(approved.argv) => {
             let script = home_rooted_script(approved.argv);
-            host_channel::run_script_with_timeout_and_connection(
-                &target,
-                &script,
-                host_channel::remote_timeout(),
-                runner,
-            )
-            .await?
+            host_channel::run_script_with_connection(&target, &script, runner).await?
         }
         (Some((_, arguments)), None) if candidates.len() > usize::from(true) => {
             let script = candidate_script(candidates, arguments);
-            host_channel::run_script_with_timeout_and_connection(
-                &target,
-                &script,
-                host_channel::remote_timeout(),
-                runner,
-            )
-            .await?
+            host_channel::run_script_with_connection(&target, &script, runner).await?
         }
         _ => host_channel::run_program_with_connection(&target, approved.argv, runner).await?,
     };
@@ -238,7 +208,6 @@ pub async fn exec_host(
         program_candidates: (candidates.len() > usize::from(true))
             .then(|| candidates.iter().map(|path| (*path).to_string()).collect()),
         resolved_executable,
-        timeout_seconds: account.map(|account| account.timeout_seconds),
         stdout: output.stdout,
         stderr: output.stderr,
         exit_code: output.code,

@@ -23,11 +23,9 @@
 //!   surfaces the LAST stderr line verbatim.
 
 use std::future::Future;
-use std::time::Duration;
 
 use super::{
-    host_access::ssh_key, host_recovery, host_state::reboot, py_str_repr, shlex_quote, DeployError,
-    Runner,
+    host_access::ssh_key, host_state::reboot, py_str_repr, shlex_quote, DeployError, Runner,
 };
 use crate::targets::{ComputeTarget, Registry};
 
@@ -35,7 +33,6 @@ use crate::targets::{ComputeTarget, Registry};
 /// side did not exit clean. The success value is command-specific.
 pub const FAILED_STATUS: &str = "failed";
 const CONNECTION_PROBE_PROGRAM: [&str; 1] = ["true"];
-const CONNECTION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 struct HostSession {
     target: String,
@@ -227,17 +224,6 @@ pub fn ssh_script_argv(ssh_target: &str) -> Vec<String> {
     argv
 }
 
-/// The wall-clock cap on a remote read.
-///
-/// One channel, one cap: [`crate::deploy::host_recovery::TIMEOUT_SECONDS`],
-/// already the ceiling for the heaviest thing this fleet runs over ssh (the
-/// recovery pass, its cleanup included). The connect half is bounded far
-/// tighter by the inherited `ConnectTimeout` option, so a dead box still
-/// fails fast.
-pub fn remote_timeout() -> Duration {
-    Duration::from_secs(host_recovery::TIMEOUT_SECONDS)
-}
-
 mod connection;
 mod postcondition;
 mod report;
@@ -253,6 +239,6 @@ pub use report::{base_report, finish_report, last_error_line, marker_fields};
 pub use run::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, run_command, run_program, run_program_with_connection, run_program_with_stdin,
-    run_program_with_stdin_and_connection, run_program_with_timeout, run_script,
-    run_script_to_completion, run_script_with_timeout, run_script_with_timeout_and_connection,
+    run_program_with_stdin_and_connection, run_script, run_script_to_completion,
+    run_script_with_connection,
 };

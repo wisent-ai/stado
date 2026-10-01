@@ -3,7 +3,6 @@
 //! rename that commits it over the destination.
 
 use std::path::Path;
-use std::time::Duration;
 
 use crate::deploy::{
     host_access::ssh_key, host_channel, shlex_quote, CommandSpec, DeployError, Runner,
@@ -12,8 +11,6 @@ use crate::targets::ComputeTarget;
 
 use super::plan::{DeliveryPlan, SourceKind};
 use super::script::{guard_lines, parse_marker, DELIVERED_STATUS, MARKER};
-
-const TRANSFER_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 pub(super) async fn preflight(
     target: &ComputeTarget,

@@ -30,9 +30,3 @@ pub(super) fn safe_runtime(deployment: &Deployment) -> Result<(), DeployError> {
     }))
     .map_err(DeployError)
 }
-
-/// Large immutable image pulls and first model loads need a wider bound than
-/// ordinary host operations; connection establishment keeps its short SSH cap.
-pub fn startup_timeout() -> std::time::Duration {
-    host_channel::remote_timeout().saturating_mul(u8::BITS.saturating_mul(u8::BITS))
-}

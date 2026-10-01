@@ -1,8 +1,6 @@
 //! Opening the channel: bounds checking, the sleep argument, and the one
 //! call that puts the fixed script on a host.
 
-use std::time::Duration;
-
 use crate::deploy::service::quote_command_match;
 use crate::deploy::service_spawn_watch::script::WATCH_SCRIPT;
 use crate::deploy::service_spawn_watch::{
@@ -12,10 +10,6 @@ use crate::deploy::{host_channel, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 use super::parse::parse_watch;
-
-/// Slack added to the watch window for connection setup and teardown, so the
-/// channel's own bound never fires before the remote loop has said `DONE`.
-const TIMEOUT_SLACK: Duration = Duration::from_secs(60);
 
 /// Render the sleep argument. BSD `sleep` takes a decimal, and a whole number
 /// is spelled without a fraction so the common case reads as `1`.
@@ -53,8 +47,7 @@ pub async fn watch_spawns(
         .replace("@MATCH@", &format!("\"{matched}\""))
         .replace("@SECONDS@", &seconds.to_string())
         .replace("@GAP@", &gap_argument(interval_ms));
-    let bound = Duration::from_secs(seconds) + TIMEOUT_SLACK;
-    let output = host_channel::run_script_with_timeout(target, &script, bound, runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,

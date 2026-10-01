@@ -26,9 +26,6 @@ pub use program::{identity_values, remote_script, remote_script_with_stable_bind
 pub use report::{parse_output, to_sorted_pretty};
 pub use run::{recover_host, recover_host_with_registry};
 
-/// Python `_TIMEOUT_SECONDS`.
-pub const TIMEOUT_SECONDS: u64 = 120;
-
 /// Rust Stado cleanup binary. Recovery has no Python-package substitute.
 pub const WC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/stado"];
 

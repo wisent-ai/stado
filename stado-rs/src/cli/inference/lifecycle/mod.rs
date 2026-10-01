@@ -51,8 +51,7 @@ pub(super) async fn wait_ready(
 ) -> Result<Value, CmdError> {
     let runner = production_runner();
     let interval = std::time::Duration::from_secs(u64::from(u8::BITS));
-    let deadline = tokio::time::Instant::now() + inference::startup_timeout();
-    let last = loop {
+    loop {
         let report = inference::probe(target, deployment, bearer, &runner)
             .await
             .map_err(click)?;
@@ -68,19 +67,12 @@ pub(super) async fn wait_ready(
             })
         {
             return Err(CmdError::click(format!(
-                "inference '{}' container failed during startup",
+                "inference '{}' container failed during startup: {report}",
                 deployment.name
             )));
         }
-        if tokio::time::Instant::now() >= deadline {
-            break report;
-        }
         tokio::time::sleep(interval).await;
-    };
-    Err(CmdError::click(format!(
-        "inference '{}' did not become ready: {}",
-        deployment.name, last
-    )))
+    }
 }
 pub(super) async fn restore_after_failed_apply(
     attempted_target: &crate::targets::ComputeTarget,

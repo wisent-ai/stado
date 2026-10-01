@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::deploy::{host_channel, host_exec, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-use super::{confined_file_prelude, BUILD_TIMEOUT};
+use super::confined_file_prelude;
 
 #[derive(Debug, Serialize)]
 pub struct BuildOutcome {
@@ -72,8 +72,7 @@ pub async fn build(
         binary = shlex_quote(binary)
     ));
 
-    let output =
-        host_channel::run_script_with_timeout(target, &script, BUILD_TIMEOUT, runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     Ok(BuildOutcome {
         target: target.name.clone(),
         manifest_path: manifest_path.to_string(),

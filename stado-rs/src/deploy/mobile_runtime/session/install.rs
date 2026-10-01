@@ -6,19 +6,6 @@ use super::install_script::REMOTE_REPAIR_BODY;
 use crate::deploy::{host_channel, DeployError, Runner};
 use crate::targets::{ComputeTarget, MobileRuntime};
 
-/// Wall clock a repair is allowed, and why it is not the shared default.
-///
-/// [`host_channel::run_script`]'s bound is 120 seconds, which is right for
-/// the reads every other host command makes and wrong for this one: a single
-/// `appium driver install uiautomator2` fetches the driver, its dependency
-/// tree and its bundled server APKs, and the first attempt at this repair
-/// died at exactly that bound with the driver half-installed. A timeout
-/// shorter than the operation does not protect anything — it converts a slow
-/// success into an indeterminate state — so the bound is sized to the work
-/// and stays a bound, because an install that has not finished in a quarter
-/// of an hour is a fault to report and not a download to keep waiting on.
-const REPAIR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
-
 /// Install the declared runtime on the host, and report every step.
 pub async fn repair(
     target: &ComputeTarget,
@@ -63,8 +50,7 @@ pub async fn repair(
             "@PLATFORM_TOOLS_B64@",
             &STANDARD.encode(if declared.platform_tools { "yes" } else { "no" }),
         );
-    let output =
-        host_channel::run_script_with_timeout(target, &script, REPAIR_TIMEOUT, runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     let lines: Vec<String> = output
         .stdout
         .lines()

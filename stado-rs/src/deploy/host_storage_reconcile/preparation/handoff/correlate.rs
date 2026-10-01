@@ -31,7 +31,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn correlate_served_store(
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
     let command = host_step_script(&["served-store", "--port", &port.to_string()])?;
     let script = format!("printf '%s' {} | {command}", shlex_quote(&encoded));
-    let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(format!(
             "object API physical-store correlation failed on {}:{port}: {}",
@@ -55,6 +55,6 @@ pub(in crate::deploy::host_storage_reconcile) async fn observe_object_runtime(
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let script = host_step_script(&["object-runtime", "--port", &port.to_string()])?;
-    let output = host_channel::run_script_with_timeout(target, &script, TIMEOUT, runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     parse_remote_payload(&output)
 }

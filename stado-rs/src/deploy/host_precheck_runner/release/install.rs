@@ -109,13 +109,7 @@ async fn install_profile(
         )
         .await?
     } else {
-        host_channel::run_script_with_timeout(
-            &target,
-            &script,
-            Duration::from_secs(15 * 60),
-            &production_runner(),
-        )
-        .await?
+        host_channel::run_script(&target, &script, &production_runner()).await?
     };
     let mut value = report(&target, &output, "install", profile);
     if !output.ok() {

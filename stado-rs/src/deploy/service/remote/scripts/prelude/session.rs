@@ -25,16 +25,6 @@ pub const SESSION_HEADLESS: &str = "headless";
 /// unreadable session must not make a readable host look unreadable.
 pub const SESSION_UNKNOWN: &str = "unknown";
 
-/// The wall-clock cap on the session read.
-///
-/// Deliberately far under the channel's own
-/// [`host_channel::remote_timeout`]: this is four `exec`s behind an ssh hop
-/// the shared options already bound at `ConnectTimeout=15`, so thirty seconds
-/// leaves the reads fifteen of their own. A probe that has not answered by
-/// then is [`SESSION_UNKNOWN`] — a diagnostic that hangs on one of its facts
-/// is worse than one that reports that fact as unread.
-pub const SESSION_TIMEOUT_SECONDS: u64 = 30;
-
 /// The read-only half of [`DOMAIN_RESOLVER`]: who owns the console, whether
 /// launchd has a graphical domain, and nothing else.
 ///
@@ -162,14 +152,7 @@ impl HostSession {
 /// already has because one more optional read did not land.
 pub async fn read_session(target: &ComputeTarget, runner: &Runner) -> HostSession {
     let probe = SESSION_PROBE.replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER);
-    match host_channel::run_script_with_timeout(
-        target,
-        &probe,
-        std::time::Duration::from_secs(SESSION_TIMEOUT_SECONDS),
-        runner,
-    )
-    .await
-    {
+    match host_channel::run_script(target, &probe, runner).await {
         Ok(output) if output.ok() => HostSession::parse(&output.stdout),
         Ok(output) => HostSession::unknown(host_channel::last_error_line(
             &output,

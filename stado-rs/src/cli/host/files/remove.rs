@@ -73,10 +73,9 @@ esac
 "$@" space file remove-local "$path" --home "$HOME"
 "#
     );
-    let output = crate::deploy::host_channel::run_script_with_timeout(
+    let output = crate::deploy::host_channel::run_script(
         &resolved,
         &script,
-        std::time::Duration::from_secs(60),
         &crate::deploy::production_runner(),
     )
     .await

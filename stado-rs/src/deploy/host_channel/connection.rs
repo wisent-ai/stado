@@ -4,7 +4,7 @@
 
 use super::{
     last_error_line, ssh_program_argv, target_is_this_host, SshConnection, SshConnectionProbe,
-    CONNECTION_PROBE_PROGRAM, CONNECTION_PROBE_TIMEOUT, HOST_SESSION,
+    CONNECTION_PROBE_PROGRAM, HOST_SESSION,
 };
 use crate::deploy::{host_access::ssh_key, py_str_repr, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;

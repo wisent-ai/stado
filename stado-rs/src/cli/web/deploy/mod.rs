@@ -42,8 +42,6 @@ mod retire;
 mod run;
 mod stages;
 
-use std::time::Duration;
-
 use crate::cli::CmdError;
 use crate::deploy::{host_channel, DeployError};
 
@@ -108,12 +106,6 @@ const READY_ATTEMPTS: u32 = 20;
 const READY_INTERVAL_SECONDS: u32 = 3;
 /// Per-request budget for one readiness attempt.
 const READY_REQUEST_SECONDS: u32 = 5;
-
-/// A release archive carries a production `node_modules`, so it is tens of
-/// megabytes and the fetch happens on the host. The short host-channel clock
-/// is right for a probe and wrong for this, exactly as
-/// [`crate::deploy::host_release`] found for its own staging phase.
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 fn click(error: DeployError) -> CmdError {
     CmdError::click(error.to_string())

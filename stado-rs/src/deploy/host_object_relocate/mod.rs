@@ -50,8 +50,6 @@
 //! string: `\t` / `\n` inside it are the two literal characters the remote
 //! `printf` expands, not Rust escapes.
 
-use std::time::Duration;
-
 use serde_json::Value;
 
 use super::host_channel;
@@ -81,14 +79,6 @@ pub const OK_STATUS: &str = "ok";
 /// `$HOME` expands only on the far side. It is the object API's own backing
 /// directory on the always-on mac.
 pub const DEFAULT_STORE_ROOT: &str = ".stado/local-storage";
-
-/// Wall clock for one pass.
-///
-/// Deliberately not [`host_channel::remote_timeout`]'s two minutes: this pass
-/// hashes every body it moves twice, and the objects that made the command
-/// necessary are 134 MiB each. Half an hour covers the whole nested tree in
-/// one call; `--limit` bounds a pass that has to be shorter.
-pub const TIMEOUT_SECONDS: u64 = 1800;
 
 /// Relocate one key prefix to another inside one canonical registry host's
 /// store, or report what a pass would move.
@@ -136,13 +126,7 @@ pub async fn relocate_host(
         ),
     };
     let script = remote_script(&root, namespace, from, to, apply, limit);
-    let output = host_channel::run_script_with_timeout(
-        &target,
-        &script,
-        Duration::from_secs(TIMEOUT_SECONDS),
-        runner,
-    )
-    .await?;
+    let output = host_channel::run_script(&target, &script, runner).await?;
     let reading = parse_output(&output.stdout);
     let mut report = to_report(&target, &reading, namespace, apply);
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");

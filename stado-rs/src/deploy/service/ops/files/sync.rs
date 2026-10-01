@@ -56,9 +56,7 @@ printf 'STADO_SERVICE\tfile-sync\tfile_synced\t%s\n' "$target_path"
         )
         .replace("@CONTENT_B64@", &STANDARD.encode(content))
         .replace("@MODE@", &format!("{mode:04o}"));
-    let output =
-        host_channel::run_script_with_timeout(target, &body, sync_timeout(content.len()), runner)
-            .await?;
+    let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
 }
 

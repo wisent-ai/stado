@@ -2,66 +2,40 @@
 //! `/bin/bash -s` the ssh branch asks the login shell for, so the marker
 //! protocol is byte-identical whichever transport carried it.
 
-use std::time::Duration;
-
 use super::super::{
-    remote_timeout, select_connection_with_key, ssh_script_argv, target_is_this_host,
-    UsedConnection,
+    select_connection_with_key, ssh_script_argv, target_is_this_host, UsedConnection,
 };
 use crate::deploy::{host_access::ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-/// Run one fixed script (fed on stdin) on a resolved target.
+/// Run one fixed script (fed on stdin) on a resolved target, until it exits.
 ///
 /// The local branch runs the same `/bin/bash -s` the ssh branch asks the
 /// login shell for, so the marker protocol on the far side is byte-identical
-/// whichever transport carried it.
+/// whichever transport carried it. The script's exit code and output are the
+/// answer.
 pub async fn run_script(
     target: &ComputeTarget,
     script: &str,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    run_script_with_timeout(target, script, remote_timeout(), runner).await
+    Ok(run_script_with_connection(target, script, runner).await?.0)
 }
 
-/// Run a fixed script and wait for it to finish, however long its work takes:
-/// a pass whose length follows the data it reads (every byte of a replica
-/// hashed) is not cut short by a wall clock that knows nothing of that data.
+/// Run a fixed script until it exits, however long its work takes.
 pub async fn run_script_to_completion(
     target: &ComputeTarget,
     script: &str,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    Ok(run_script_with_bound(target, script, None, runner).await?.0)
+    run_script(target, script, runner).await
 }
 
-/// Run a fixed remote script with an operation-specific wall-clock bound.
-/// Connection setup remains bounded by the shared SSH options.
-pub async fn run_script_with_timeout(
-    target: &ComputeTarget,
-    script: &str,
-    timeout: Duration,
-    runner: &Runner,
-) -> Result<CommandOutput, DeployError> {
-    Ok(run_script_with_bound(target, script, Some(timeout), runner)
-        .await?
-        .0)
-}
-
-/// Run a fixed script and report which declared connection carried it.
-pub async fn run_script_with_timeout_and_connection<'a>(
+/// Run a fixed script until it exits and report which declared connection
+/// carried it.
+pub async fn run_script_with_connection<'a>(
     target: &'a ComputeTarget,
     script: &str,
-    timeout: Duration,
-    runner: &Runner,
-) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
-    run_script_with_bound(target, script, Some(timeout), runner).await
-}
-
-async fn run_script_with_bound<'a>(
-    target: &'a ComputeTarget,
-    script: &str,
-    bound: Option<Duration>,
     runner: &Runner,
 ) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
     let (argv, _key, used_connection) = if target_is_this_host(target) {

@@ -98,10 +98,9 @@ pub async fn activate_staged_release(
         return Ok(());
     }
 
-    let outcome = crate::deploy::host_channel::run_script_with_timeout(
+    let outcome = crate::deploy::host_channel::run_script(
         &resolved,
         &staged_release::activation_script(&archive, &coordinate.version),
-        std::time::Duration::from_secs(900),
         &runner,
     )
     .await

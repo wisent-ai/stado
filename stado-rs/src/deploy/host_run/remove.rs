@@ -1,8 +1,6 @@
 //! Recursive removal of one complete run directory, re-checked on the host
 //! against the login account's real home before anything is unlinked.
 
-use std::time::Duration;
-
 use serde::Serialize;
 
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
@@ -72,9 +70,7 @@ if [ "$physical_parent" != "$physical_home/{RUN_AREA}" ]; then report refused 'r
 if [ -e "$path" ] || [ -L "$path" ]; then report failed 'rm returned and the run directory is still present'; else report removed ''; fi
 "#
     );
-    let output =
-        host_channel::run_script_with_timeout(target, &script, Duration::from_secs(5 * 60), runner)
-            .await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     let (status, detail) = output
         .stdout
         .lines()

@@ -13,14 +13,9 @@ pub(crate) async fn apply_skarbiec_audit_repair(target: &str) -> Result<Value, C
         "{probes}{}",
         include_str!("../../../../host_payloads/recover-skarbiec-audit-lock.sh")
     );
-    let recovered = crate::deploy::host_channel::run_script_with_timeout(
-        &resolved,
-        &script,
-        std::time::Duration::from_secs(90),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let recovered = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     if !recovered.ok() {
         return Err(CmdError::click(format!(
             "{}: Skarbiec audit recovery failed: {}",
@@ -82,10 +77,9 @@ pub(crate) async fn apply_skarbiec_crypto_repair(target: &str) -> Result<Value, 
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+    let recovered = crate::deploy::host_channel::run_script(
         &resolved,
         include_str!("../../../../host_payloads/recover-skarbiec-crypto.sh"),
-        std::time::Duration::from_secs(240),
         &runner,
     )
     .await
@@ -111,10 +105,9 @@ pub(crate) async fn apply_skarbiec_acquisition_repair(target: &str) -> Result<Va
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+    let recovered = crate::deploy::host_channel::run_script(
         &resolved,
         include_str!("../../../../host_payloads/recover-skarbiec-acquisition-state.sh"),
-        std::time::Duration::from_secs(90),
         &runner,
     )
     .await

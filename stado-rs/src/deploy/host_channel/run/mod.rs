@@ -5,12 +5,7 @@
 //! `remote` holds the one-line primitives a caller composes instead of
 //! shipping a shell program; `script` holds the stdin-fed scripts.
 
-use std::time::Duration;
-
-use super::{
-    remote_timeout, select_connection_with_key, ssh_program_argv, target_is_this_host,
-    UsedConnection,
-};
+use super::{select_connection_with_key, ssh_program_argv, target_is_this_host, UsedConnection};
 use crate::deploy::{host_access::ssh_key, CommandOutput, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -21,12 +16,9 @@ pub use remote::{
     extract_semver, remote_home, remote_json_member, remote_program_version, remote_read_file,
     remote_test, run_command,
 };
-pub use script::{
-    run_script, run_script_to_completion, run_script_with_timeout,
-    run_script_with_timeout_and_connection,
-};
+pub use script::{run_script, run_script_to_completion, run_script_with_connection};
 
-/// Run one fixed program on a resolved target.
+/// Run one fixed program on a resolved target, until it exits.
 ///
 /// A target that IS this machine runs the program directly. The words are
 /// the same compile-time constants the ssh path sends, so the two transports
@@ -36,21 +28,7 @@ pub async fn run_program(
     program: &[&str],
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    run_program_with_timeout(target, program, remote_timeout(), runner).await
-}
-
-/// Run one fixed program with an operation-specific wall-clock bound.
-///
-/// The ordinary channel timeout is deliberately large enough for recovery.
-/// Small read-only probes use this form so a program that does not implement
-/// the requested CLI verb cannot occupy that entire recovery budget.
-pub async fn run_program_with_timeout(
-    target: &ComputeTarget,
-    program: &[&str],
-    timeout: Duration,
-    runner: &Runner,
-) -> Result<CommandOutput, DeployError> {
-    run_program_with_timeout_and_connection(target, program, timeout, runner)
+    run_program_with_connection(target, program, runner)
         .await
         .map(|(output, _)| output)
 }
@@ -60,15 +38,6 @@ pub async fn run_program_with_timeout(
 pub async fn run_program_with_connection<'a>(
     target: &'a ComputeTarget,
     program: &[&str],
-    runner: &Runner,
-) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
-    run_program_with_timeout_and_connection(target, program, remote_timeout(), runner).await
-}
-
-async fn run_program_with_timeout_and_connection<'a>(
-    target: &'a ComputeTarget,
-    program: &[&str],
-    timeout: Duration,
     runner: &Runner,
 ) -> Result<(CommandOutput, UsedConnection<'a>), DeployError> {
     if target_is_this_host(target) {

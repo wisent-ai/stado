@@ -84,13 +84,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn read_fence(
     transaction: &str,
     runner: &Runner,
 ) -> Result<Option<LifecycleFence>, DeployError> {
-    let output = host_channel::run_script_with_timeout(
-        target,
-        &bind_remote_script(READ_FENCE, transaction),
-        TIMEOUT,
-        runner,
-    )
-    .await?;
+    let output =
+        host_channel::run_script(target, &bind_remote_script(READ_FENCE, transaction), runner)
+            .await?;
     let value = parse_remote_payload(&output)?;
     if value.get("status").and_then(Value::as_str) == Some("absent") {
         return Ok(None);
@@ -159,12 +155,7 @@ pub(in crate::deploy::host_storage_reconcile) async fn remote_phase(
     phase: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let output = host_channel::run_script_with_timeout(
-        target,
-        &bind_remote_script(phase, transaction),
-        TIMEOUT,
-        runner,
-    )
-    .await?;
+    let output =
+        host_channel::run_script(target, &bind_remote_script(phase, transaction), runner).await?;
     parse_remote_payload(&output)
 }

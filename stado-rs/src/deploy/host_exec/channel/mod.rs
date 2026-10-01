@@ -37,14 +37,6 @@ pub struct AccountProgram {
     /// path. Compile-time constants of this module: an operator's words select
     /// an entry and never become part of this.
     environment: &'static [(&'static str, &'static str)],
-    /// The wall-clock budget for the whole run.
-    ///
-    /// [`crate::deploy::host_channel::remote_timeout`] is two minutes, which
-    /// is right for a read and wrong for a repair that walks a real
-    /// single-sign-on and a consent screen in a browser on the far side.
-    /// Cutting the channel mid-flight would leave the operator unable to tell
-    /// a refused sign-in from one still running.
-    pub timeout_seconds: u64,
 }
 
 /// The host's Stado prints `<active.release_dir>/RELATIVE` from the release
@@ -57,7 +49,6 @@ pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
         program: STADO_CLI,
         candidates: &[STADO_CLI],
         environment: &[],
-        timeout_seconds: 180,
         released_program: None,
     },
     AccountProgram {
@@ -92,7 +83,6 @@ pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
             ),
             ("BRAMA_RUNTIME_DIR", "~/.stado/work/brama-sign-in/runtime"),
         ],
-        timeout_seconds: 1500,
     },
     AccountProgram {
         program: KIMI_CLI,
@@ -106,7 +96,6 @@ pub const ACCOUNT_PROGRAMS: &[AccountProgram] = &[
         // Nothing. Its help is a read; giving it an environment would be
         // giving it a home and a session it has no business reading here.
         environment: &[],
-        timeout_seconds: 60,
     },
 ];
 

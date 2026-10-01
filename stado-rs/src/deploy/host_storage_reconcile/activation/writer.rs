@@ -62,13 +62,8 @@ pub(super) async fn restore_fenced_writer(
                 .ok_or_else(|| {
                     DeployError(format!("{label} has no prepared recovery configuration"))
                 })?;
-                let recovered = host_channel::run_script_with_timeout(
-                    storage_target,
-                    &prepared.body,
-                    Duration::from_secs(240),
-                    runner,
-                )
-                .await?;
+                let recovered =
+                    host_channel::run_script(storage_target, &prepared.body, runner).await?;
                 if !recovered.ok() {
                     return Err(DeployError(format!(
                         "{label} did not restore through its prepared configuration: {}",

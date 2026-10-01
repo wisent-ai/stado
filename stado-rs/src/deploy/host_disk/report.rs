@@ -66,45 +66,13 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
     }
 }
 
-/// The inventory traverses whole filesystems; it has an independent bound.
-const INVENTORY_BUDGET: std::time::Duration = std::time::Duration::from_secs(900);
-const INVENTORY_BUDGET_ENV: &str = "STADO_INVENTORY_BUDGET_SECONDS";
-
-/// The walk's own bound. `Some` is the time it may take; `None` is a declared
-/// zero, which is the operator asking for the cheap report without the
-/// attribution walk at all. Zero used to be refused as malformed, so the only
-/// way to reach the incomplete-inventory branch was to own a tree slow enough
-/// to exceed a one-second budget — a race on a warm machine, and no answer at
-/// all for an operator who already knows the walk costs minutes.
-fn inventory_budget() -> Result<Option<std::time::Duration>, DeployError> {
-    match std::env::var(INVENTORY_BUDGET_ENV) {
-        Err(std::env::VarError::NotPresent) => Ok(Some(INVENTORY_BUDGET)),
-        Ok(value) => value
-            .parse::<u64>()
-            .ok()
-            .map(|seconds| (seconds > 0).then(|| std::time::Duration::from_secs(seconds)))
-            .ok_or_else(|| {
-                DeployError(format!(
-                    "{INVENTORY_BUDGET_ENV} must be a whole number of seconds; 0 reads the \
-                     report without the attribution walk"
-                ))
-            }),
-        Err(error) => Err(DeployError(format!(
-            "cannot read {INVENTORY_BUDGET_ENV}: {error}"
-        ))),
-    }
-}
-
 /// Read the complete space report inputs for an already-resolved target.
 ///
 /// Two reads, deliberately. The cheap sections — usage, janitor state,
-/// snapshots — cost under a second, and an operator must never lose them
-/// because the attribution walk behind them is slow. They are read first on
-/// the shared bound and always reported; the walk is then attempted on its
-/// own budget, and when it does not finish the report says so instead of the
-/// whole command failing.
+/// snapshots — are read first and always reported; the attribution walk then
+/// runs until it ends, and when it fails the report carries its error instead
+/// of the whole command failing.
 pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
-    let budget = inventory_budget()?;
     let interval = target
         .disk_cleanup
         .as_ref()
@@ -115,31 +83,19 @@ pub async fn disk_target(target: &ComputeTarget, runner: &Runner) -> Result<Valu
         runner,
     )
     .await?;
-    let full = match budget {
-        Some(budget) => Some(
-            host_channel::run_script_with_timeout(target, &remote_script(), budget, runner).await,
-        ),
-        None => None,
-    };
-    let (output, attribution) = match full {
-        None => (
-            gates,
-            Some(format!(
-                "inventory not read: {INVENTORY_BUDGET_ENV} is 0, so the attribution walk was \
-                 not attempted"
-            )),
-        ),
-        Some(Ok(output)) if output.code == 0 => (output, None),
-        Some(Ok(output)) => (
-            gates,
-            Some(format!(
-                "inventory command exited {}: {}",
-                output.code,
-                output.stderr.trim()
-            )),
-        ),
-        Some(Err(error)) => (gates, Some(format!("inventory read failed: {error}"))),
-    };
+    let (output, attribution) =
+        match host_channel::run_script(target, &remote_script(), runner).await {
+            Ok(output) if output.code == 0 => (output, None),
+            Ok(output) => (
+                gates,
+                Some(format!(
+                    "inventory command exited {}: {}",
+                    output.code,
+                    output.stderr.trim()
+                )),
+            ),
+            Err(error) => (gates, Some(format!("inventory read failed: {error}"))),
+        };
     let reading = parse_output(&output.stdout, interval);
     let mut report = to_report(target, &reading);
     if let Some(detail) = attribution {

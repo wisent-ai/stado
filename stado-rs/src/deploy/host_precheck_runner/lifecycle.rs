@@ -1,7 +1,5 @@
 //! Restarting, repairing and removing a runner that is already installed.
 
-use std::time::Duration;
-
 use serde_json::{json, Value};
 
 use crate::deploy::host_precheck_runner::accounts::github::github_runner_token;
@@ -116,13 +114,7 @@ pub async fn restart_declared(target_name: &str, profile_name: &str) -> Result<V
         },
         profile,
     );
-    let output = host_channel::run_script_with_timeout(
-        &target,
-        &script,
-        Duration::from_secs(4 * 60),
-        &production_runner(),
-    )
-    .await?;
+    let output = host_channel::run_script(&target, &script, &production_runner()).await?;
     let value = report(&target, &output, "restart", profile);
     if !output.ok() {
         return Err(DeployError(format!(
@@ -154,13 +146,7 @@ async fn remove_profile(
         ),
         &[("__TOKEN__", shlex_quote(&token))],
     );
-    let output = host_channel::run_script_with_timeout(
-        &target,
-        &script,
-        Duration::from_secs(5 * 60),
-        &production_runner(),
-    )
-    .await?;
+    let output = host_channel::run_script(&target, &script, &production_runner()).await?;
     let value = report(&target, &output, "remove", profile);
     if !output.ok() {
         return Err(DeployError(format!(

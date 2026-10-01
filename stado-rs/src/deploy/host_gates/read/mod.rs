@@ -12,7 +12,7 @@ use crate::targets::ComputeTarget;
 
 mod observation;
 mod sources;
-pub(crate) use observation::{observe, READ_BUDGET};
+pub(crate) use observation::observe;
 pub use observation::{DiagnosticRead, ReadState};
 pub(in crate::deploy) use sources::resolves_to;
 use sources::{publication, waiting_jobs};
@@ -223,13 +223,8 @@ async fn disk_read(
     scope: host_disk::DiskScope,
     runner: &Runner,
 ) -> Result<host_disk::DiskReading, DeployError> {
-    let output = host_channel::run_script_with_timeout(
-        target,
-        &host_disk::remote_script_for(scope),
-        READ_BUDGET,
-        runner,
-    )
-    .await?;
+    let output =
+        host_channel::run_script(target, &host_disk::remote_script_for(scope), runner).await?;
     if !output.ok() {
         return Err(DeployError(format!(
             "host read exited {}: {} {}",

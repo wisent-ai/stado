@@ -9,9 +9,7 @@
 //! The home directory goes with the account unless `keep_home` is set; the
 //! remote script reports which of the two it did.
 
-use std::time::Duration;
-
-use crate::deploy::host_users::{validate_username, SSH_TIMEOUT_SECONDS};
+use crate::deploy::host_users::validate_username;
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -189,10 +187,9 @@ pub async fn delete_user(
         return result;
     }
 
-    let execution = host_channel::run_script_with_timeout_and_connection(
+    let execution = host_channel::run_script_with_connection(
         target,
         &remote_command(username, keep_home),
-        Duration::from_secs(SSH_TIMEOUT_SECONDS),
         runner,
     )
     .await;

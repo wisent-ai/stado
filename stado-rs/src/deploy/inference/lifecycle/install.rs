@@ -3,7 +3,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::Value;
 
-use crate::deploy::inference::support::{report, safe_runtime, startup_timeout, unit_name};
+use crate::deploy::inference::support::{report, safe_runtime, unit_name};
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};
 use crate::inference::{reservation::Reservation, schema::Deployment};
 use crate::targets::ComputeTarget;
@@ -135,8 +135,7 @@ printf 'STATUS\tstarted\n'
         raw_revision = deployment.model.revision,
         raw_endpoint_host = deployment.endpoint.host,
     );
-    let output =
-        host_channel::run_script_with_timeout(target, &script, startup_timeout(), runner).await?;
+    let output = host_channel::run_script(target, &script, runner).await?;
     Ok(report(target, &output, "started"))
 }
 

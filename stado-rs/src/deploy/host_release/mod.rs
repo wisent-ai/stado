@@ -93,8 +93,6 @@
 //!   the shipped `service restart` program. A product with no such units is
 //!   activated and reported as having no units, not silently "restarted".
 
-use std::time::Duration;
-
 use serde_json::Value;
 
 use super::products::{self, Product};
@@ -130,10 +128,6 @@ pub const ALREADY_ACTIVE_STATUS: &str = "already_active";
 /// `status` for a `--dry-run`: the plan was built and the host was probed
 /// read-only. No mutating program was sent.
 pub const PLANNED_STATUS: &str = "planned";
-/// A release archive can be hundreds of MiB. Keep the short host-channel
-/// timeout for probes and activation, but bound download, hashing and extract
-/// with enough time for the declared public release channel.
-const STAGE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Verified Stado archive retained beside its attestation image until every
 /// service-local reader has installed the same delivered bytes.
 pub const READER_ARCHIVE_NAME: &str = "stado-reader-convergence.tar.gz";

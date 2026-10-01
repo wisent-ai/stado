@@ -2,8 +2,6 @@
 //! authority, run the program under its own timeout, and record on the host
 //! whose disk changed what the run actually did.
 
-use std::time::Duration;
-
 use serde_json::{json, Value};
 
 use crate::deploy::host_channel;
@@ -15,13 +13,6 @@ use super::declaration::DECLARATION_PATH;
 use super::outcome::{parse_output, Reclamation};
 use super::program::{remote_script, remote_script_with_stado};
 use super::{AUDIT_LOG, DEFAULT_WORK_ROOTS};
-
-/// A reclaim includes the registry janitor (whose declared pass may take up
-/// to ten minutes) and removal of large, already-enumerated trees. The generic
-/// two-minute host-read bound killed the transport mid-pass and left the
-/// remote janitor running without a caller. This explicit operator command is
-/// bounded independently at one hour.
-const RECLAIM_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// The script that appends one audit record on the host whose disk changed.
 ///
@@ -204,8 +195,7 @@ pub async fn reclaim_host(
             target_free_gb,
         )
     };
-    let output =
-        host_channel::run_script_with_timeout(&target, &script, RECLAIM_TIMEOUT, runner).await?;
+    let output = host_channel::run_script(&target, &script, runner).await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,

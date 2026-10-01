@@ -81,14 +81,6 @@ fn parse_fields(stdout: &str) -> Map<String, Value> {
     flattened
 }
 
-/// Package installs and a `.deb` download need more than an ordinary host
-/// operation's bound.
-fn install_timeout() -> std::time::Duration {
-    // Wide enough for apt plus a package download, narrow enough that a wedged
-    // unit start is a five-minute answer rather than an hour of silence.
-    host_channel::remote_timeout().saturating_mul(u8::BITS.saturating_div(2))
-}
-
 fn library_dir(target: &ComputeTarget) -> String {
     target
         .display_stream

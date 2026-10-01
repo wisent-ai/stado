@@ -1,13 +1,10 @@
 //! Carrying one pass to the host, and resolving which host it may run on.
 
-use std::time::Duration;
-
 use serde_json::{json, Value};
 
 use super::plan::{plan_stable_binds, StableBindPlan};
 use super::program::remote_script_with_stable_binds;
 use super::report::parse_output;
-use super::TIMEOUT_SECONDS;
 use crate::deploy::{host_channel, py_str_repr, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
@@ -59,10 +56,9 @@ pub async fn recover_host_with_registry(
     // registry document rather than the target, and it is the part that can
     // put a serving port back after a roll left it unbound.
     let stable_binds: Vec<StableBindPlan> = plan_stable_binds(&registry.to_document(), target);
-    let output = host_channel::run_script_with_timeout(
+    let output = host_channel::run_script(
         target,
         &remote_script_with_stable_binds(target, &stable_binds),
-        Duration::from_secs(TIMEOUT_SECONDS),
         runner,
     )
     .await?;

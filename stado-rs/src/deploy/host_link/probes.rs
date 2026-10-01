@@ -1,7 +1,7 @@
 //! The probes: how wide a window one beacon reads, how one capped command
 //! is run, and how a tool is found on `PATH`.
 
-use super::{DEFAULT_WINDOW_SECONDS, MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS, PROBE_TIMEOUT};
+use super::{DEFAULT_WINDOW_SECONDS, MAX_WINDOW_SECONDS, MIN_WINDOW_SECONDS};
 use crate::deploy::{CommandOutput, CommandSpec, Runner};
 
 /// How far back the interface-change window reaches: one beacon interval, so
@@ -21,21 +21,10 @@ pub(super) fn window_minutes(window: i64) -> i64 {
     (window + 59) / 60
 }
 
-/// Run one probe. `None` covers every way a probe can fail to answer:
-/// missing binary, spawn error, timeout, non-zero exit.
+/// Run one probe until the tool exits. `None` covers every way a probe can
+/// fail to answer: missing binary, spawn error, non-zero exit.
 pub(super) async fn probe(runner: &Runner, argv: Vec<String>) -> Option<CommandOutput> {
-    probe_within(runner, argv, PROBE_TIMEOUT).await
-}
-
-/// The same probe under the caller's own cap, for a read whose cost is the
-/// size of a log rather than the reachability of a tool.
-pub(super) async fn probe_within(
-    runner: &Runner,
-    argv: Vec<String>,
-    cap: std::time::Duration,
-) -> Option<CommandOutput> {
-    let spec = CommandSpec::new(argv);
-    match runner(spec).await {
+    match runner(CommandSpec::new(argv)).await {
         Ok(output) if output.ok() => Some(output),
         _ => None,
     }

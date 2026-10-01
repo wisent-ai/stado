@@ -8,4 +8,3 @@ pub(super) mod support;
 pub use lifecycle::{
     install, inventory, logs, probe, retire, status, update_reservation, verify_completion,
 };
-pub use support::startup_timeout;

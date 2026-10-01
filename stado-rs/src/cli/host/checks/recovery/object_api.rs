@@ -39,14 +39,9 @@ printf '%s' '{}' | /usr/bin/base64 "$decode" |
   "$stado" host run-locked "$HOME/.stado/recovery/storage-root-reconcile.lock" -- /bin/bash"#,
         STANDARD.encode(RECOVERY_PROGRAM),
     );
-    let recovered = crate::deploy::host_channel::run_script_with_timeout(
-        resolved,
-        &script,
-        std::time::Duration::from_secs(300),
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let recovered = crate::deploy::host_channel::run_script(resolved, &script, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     if !recovered.ok() {
         return Err(CmdError::click(format!(
             "{}: object API recovery failed: {}",
@@ -92,14 +87,9 @@ pub(crate) async fn apply_release_store_repair(
          --config \"${{STADO_CONFIG:-$HOME/.config/stado/config.json}}\" --product {}\n",
         crate::deploy::shlex_quote(product),
     );
-    let repaired = crate::deploy::host_channel::run_script_with_timeout(
-        &resolved,
-        &script,
-        std::time::Duration::from_secs(60),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let repaired = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     if !repaired.ok() {
         return Err(CmdError::click(format!(
             "{}: release store repair failed: {}",

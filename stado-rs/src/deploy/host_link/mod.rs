@@ -11,9 +11,8 @@
 //! Two rules shape everything here:
 //!
 //! - A beacon that does not publish is the exact failure this block exists to
-//!   remove, so every external command is capped at [`PROBE_TIMEOUT`] and
-//!   every failure degrades to a null. [`collect_link`] cannot fail; it can
-//!   only come back thinner.
+//!   remove, so every failed probe degrades to a null. [`collect_link`]
+//!   cannot fail; it can only come back thinner.
 //! - Where a datum cannot be read, the block says so. No default ever stands
 //!   in for a measurement: an absent `pmset` yields a null sleep time, not
 //!   "never slept", and a host that is neither macOS nor Linux reports
@@ -23,8 +22,6 @@
 //! from a path written here, because "which tools does this beacon have" is
 //! the unit environment's answer, not this module's guess. The launchd plist
 //! and the collector scripts carry the directories Tailscale installs into.
-
-use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -42,22 +39,6 @@ use platform::{
 };
 use probes::window_seconds;
 use tailnet::tailnet_path;
-
-/// Wall-clock cap on one probe. `log show` scans a log store, so the cap is
-/// generous enough to succeed on a busy host and short enough that a wedged
-/// tool costs the beacon one field, not the tick.
-pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Wall-clock cap on reading the power log, which is a different measurement
-/// from the one above and was wrong for two years of log growth.
-///
-/// The comment on `PROBE_TIMEOUT` recorded `pmset -g log` at 1.9 s over 36k
-/// lines. On 2026-09-08 the same command on this workstation took 6.03 s, so
-/// the five second cap killed it and the beacon carried no sleep or wake at
-/// all — the two fields `host link` exists to answer with. The log only grows,
-/// so the cap has to leave room for that growth rather than sit beside the
-/// measurement it was taken from.
-pub const POWER_LOG_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Interface changes one beacon carries. The window is minutes long; a host
 /// flapping harder than this is telling its story with the first few lines,

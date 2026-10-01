@@ -12,8 +12,6 @@
 //! This module owns the managed-area constants, the timeouts, and the
 //! host-side confinement prelude the build and attached scripts share.
 
-use std::time::Duration;
-
 use super::shlex_quote;
 
 mod attached;
@@ -30,8 +28,6 @@ pub use validate::{
 
 const RUN_AREA: &str = ".stado/work/runs";
 const SIGNAL_AREA: &str = ".stado/work/run-signals";
-const BUILD_TIMEOUT: Duration = Duration::from_secs(45 * 60);
-const SIGNAL_TIMEOUT: Duration = Duration::from_secs(20);
 const PATH_REFUSAL: &str =
     "must be an absolute path below the target account's $HOME/.stado/work/runs, with no '.' or '..' component";
 

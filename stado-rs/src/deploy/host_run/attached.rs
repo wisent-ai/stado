@@ -12,7 +12,7 @@ use crate::deploy::{
 };
 use crate::targets::ComputeTarget;
 
-use super::{confined_file_prelude, SIGNAL_AREA, SIGNAL_TIMEOUT};
+use super::{confined_file_prelude, SIGNAL_AREA};
 
 #[derive(Debug, Serialize)]
 pub struct AttachedOutcome {

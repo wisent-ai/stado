@@ -1,8 +1,6 @@
 //! Whether the unit answers afterwards, asked from the host itself and
 //! bounded.
 
-use std::time::Duration;
-
 use crate::cli::web::deploy::{
     click, marker, READY_ATTEMPTS, READY_INTERVAL_SECONDS, READY_REQUEST_SECONDS,
 };
@@ -62,13 +60,7 @@ pub(in crate::cli::web::deploy) async fn wait_until_ready(
         "set -eu\nurl={}\nattempts={READY_ATTEMPTS}\ninterval={READY_INTERVAL_SECONDS}\nrequest_budget={READY_REQUEST_SECONDS}\n{WEB_READY_BODY}",
         crate::deploy::shlex_quote(url),
     );
-    // The host's own worst case, plus the channel's setup: every attempt may
-    // spend its full request budget and then sleep. A shorter budget here
-    // would kill the probe mid-wait and report a timeout as an unready unit.
-    let budget = Duration::from_secs(u64::from(
-        READY_ATTEMPTS * (READY_REQUEST_SECONDS + READY_INTERVAL_SECONDS) + 30,
-    ));
-    let output = host_channel::run_script_with_timeout(target, &script, budget, runner)
+    let output = host_channel::run_script(target, &script, runner)
         .await
         .map_err(click)?;
     if !output.ok() {

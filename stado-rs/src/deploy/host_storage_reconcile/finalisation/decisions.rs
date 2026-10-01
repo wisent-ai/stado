@@ -96,10 +96,9 @@ pub(in crate::deploy::host_storage_reconcile) async fn record_typed_lifecycle_de
         "typed lifecycle decisions",
         false,
     )?;
-    let output = host_channel::run_script_with_timeout(
+    let output = host_channel::run_script(
         target,
         &bind_remote_script(RECORD_LIFECYCLE_DECISIONS, transaction),
-        TIMEOUT,
         runner,
     )
     .await?;
@@ -160,12 +159,8 @@ pub(in crate::deploy::host_storage_reconcile) async fn record_typed_final_lifecy
         "typed final lifecycle observations",
         false,
     )?;
-    let output = host_channel::run_script_with_timeout(
-        target,
-        &bind_remote_script(FINALIZE, transaction),
-        TIMEOUT,
-        runner,
-    )
-    .await?;
+    let output =
+        host_channel::run_script(target, &bind_remote_script(FINALIZE, transaction), runner)
+            .await?;
     parse_remote_payload(&output)
 }

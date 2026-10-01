@@ -45,7 +45,6 @@ pub const ROLLBACK: &str = "rollback";
 pub const STATUS: &str = "status";
 pub const RUN: &str = "run";
 pub const RESUME: &str = "resume";
-const TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const PREFLIGHT: &str = "preflight";
 const ARM_ACTIVATION: &str = "arm-activation";
 const ARM_ROLLBACK: &str = "arm-rollback";
