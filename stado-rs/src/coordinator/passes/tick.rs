@@ -104,12 +104,17 @@ pub async fn run_tick(
         || reaped.requeued > 0
         || reaped.failed > 0
         || reaped.assignments_cleared > 0
+        || reaped.unreadable > 0
     {
         log(&format!(
             "lease-reaper: completed {} release job(s) from durable output, requeued {} \
              phantom job(s), failed {} on second expiry, cleared {} silent-worker \
-             assignment(s)",
-            reaped.release_completions, reaped.requeued, reaped.failed, reaped.assignments_cleared
+             assignment(s), could not read {} running job(s)",
+            reaped.release_completions,
+            reaped.requeued,
+            reaped.failed,
+            reaped.assignments_cleared,
+            reaped.unreadable
         ));
     }
     let autonomy_requires_routing = match crate::autonomy::storage::load_policy(store).await {

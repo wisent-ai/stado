@@ -91,6 +91,26 @@ pub struct ReaperSummary {
     /// and `running/` this pass, so the prefixes hold live work and not the
     /// history of every job that ever passed through.
     pub sentinels_retired: usize,
+    /// Running jobs this pass could not read or decide, each logged with its
+    /// error. Every other lease is still reaped: one record the reaper cannot
+    /// derive must not leave the dead jobs behind it holding their slots.
+    pub unreadable: usize,
+}
+
+/// Reap one job, and on failure log the job and its error and count it, so the
+/// pass goes on to the next lease.
+async fn reap_or_report(
+    store: &JobStorage,
+    job_id: &str,
+    lease_ttl_seconds: i64,
+    now: chrono::DateTime<Utc>,
+    log: &dyn Fn(&str),
+    summary: &mut ReaperSummary,
+) {
+    if let Err(error) = reap_one(store, job_id, lease_ttl_seconds, now, log, summary).await {
+        summary.unreadable += 1;
+        log(&format!("{job_id}: not reaped: {error}"));
+    }
 }
 
 /// One reaper pass over the queue: repair the marker index, recover phantom
@@ -122,7 +142,7 @@ pub async fn reap_expired_leases(
         if candidate.job_id.is_empty() {
             continue;
         }
-        reap_one(
+        reap_or_report(
             store,
             &candidate.job_id,
             lease_ttl_seconds,
@@ -130,7 +150,7 @@ pub async fn reap_expired_leases(
             log,
             &mut summary,
         )
-        .await?;
+        .await;
     }
     clear_silent_assignments(store, now, log, &mut summary).await?;
     // Last, because it is bookkeeping: a sentinel retired one tick later
@@ -173,7 +193,7 @@ pub async fn reap_named(
     let lease_ttl_seconds = config::HEARTBEAT_STALE_MINUTES * 60;
     let mut summary = ReaperSummary::default();
     for job_id in job_ids.iter().filter(|job_id| !job_id.is_empty()) {
-        reap_one(store, job_id, lease_ttl_seconds, now, log, &mut summary).await?;
+        reap_or_report(store, job_id, lease_ttl_seconds, now, log, &mut summary).await;
     }
     Ok(summary)
 }
