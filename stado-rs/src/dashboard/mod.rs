@@ -14,7 +14,7 @@
 //! GET/POST /api/host/storage-root-reconcile?target=...&transaction=...&phase=... - durable storage handoff
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
-//! GET /api/machine/status?job_id=... - read canonical machine status
+//! GET /api/machine/status?job_id=...[&until=terminal] - read canonical machine status; until=terminal holds the read until the job ends (local store only)
 //! POST /api/machine/cancel?job_id=... - durably cancel a machine job
 //! GET /api/service/status?name=... - read one managed service's beacon status
 //! POST /api/service/restart?name=... - restart one managed service on every declared host

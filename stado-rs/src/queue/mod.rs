@@ -62,7 +62,7 @@ pub mod tombstone;
 /// here rather than spelled again at each reader.
 pub const UPLOAD_PART_MARKER: &str = ".__stado_upload/";
 pub use azure_blob::AzureBlobBackend;
-pub use contract::{BlobBackend, BlobInfo, StorageError, VersionedText};
+pub use contract::{BlobBackend, BlobInfo, ChangeWatch, StorageError, VersionedText};
 pub use gcs::GcsBackend;
 pub use local_file::LocalBackend;
 pub use s3::S3Backend;

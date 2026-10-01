@@ -163,4 +163,23 @@ pub trait BlobBackend: Send + Sync {
     /// Name, updated-ts and metadata for every blob under `prefix`, so
     /// consumers can filter on metadata before downloading the full body.
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError>;
+
+    /// A watch that wakes when an object is created, replaced or removed
+    /// directly under any of `prefixes`, set before the caller reads, so a
+    /// read can hold until a state is written without re-reading on a timer.
+    /// A backend with no change notification refuses and names the prefixes.
+    fn watch_prefixes(&self, prefixes: &[&str]) -> Result<Box<dyn ChangeWatch>, StorageError> {
+        Err(StorageError::Other(format!(
+            "this storage backend has no change notification, so no read can hold until {} \
+             changes; hold reads need the local storage backend",
+            prefixes.join(", ")
+        )))
+    }
+}
+
+/// One armed change watch, returned by [`BlobBackend::watch_prefixes`].
+pub trait ChangeWatch: Send {
+    /// Block until something under a watched prefix changes. A failure of the
+    /// kernel watch is the error, never a silent wake.
+    fn next(&mut self) -> Result<(), StorageError>;
 }

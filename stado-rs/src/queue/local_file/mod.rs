@@ -15,6 +15,7 @@ use crate::queue::StorageError;
 
 mod atomic;
 mod blob_backend;
+mod change;
 mod paths;
 mod write_fence;
 

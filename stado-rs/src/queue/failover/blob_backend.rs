@@ -254,4 +254,12 @@ impl BlobBackend for ReadFailoverBackend {
             Err(_) => self.backup.list_blobs_with_meta(prefix).await,
         }
     }
+
+    /// The primary is the writer, so its changes are the ones to wait for.
+    fn watch_prefixes(
+        &self,
+        prefixes: &[&str],
+    ) -> Result<Box<dyn crate::queue::ChangeWatch>, StorageError> {
+        self.primary.watch_prefixes(prefixes)
+    }
 }

@@ -227,4 +227,11 @@ impl BlobBackend for LocalBackend {
         }
         Ok(out)
     }
+
+    fn watch_prefixes(
+        &self,
+        prefixes: &[&str],
+    ) -> Result<Box<dyn crate::queue::ChangeWatch>, StorageError> {
+        self.arm_watch(prefixes)
+    }
 }

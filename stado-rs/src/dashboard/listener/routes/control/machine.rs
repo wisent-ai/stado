@@ -38,19 +38,73 @@ impl Dashboard {
                 )))
             }
         };
-        let job_id = match machine_job_id(query) {
-            Ok(job_id) => job_id,
+        let (job_id, hold) = match machine_status_query(query) {
+            Ok(parsed) => parsed,
             Err(response) => return response,
         };
-        let result = self.machine_facade().status(job_id).await;
-        let target_allowed = result
-            .as_ref()
-            .ok()
-            .and_then(machine_result_target)
-            .is_some_and(|target| client.allows_target(target));
-        if !target_allowed {
-            return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
-        }
+        // A held read arms the store's change watch on the terminal prefixes
+        // before its first read, so a job that ends between that read and the
+        // wait still wakes it; it answers when the job's terminal record is
+        // written, by this process or any other on the store's device.
+        let mut watch = if hold {
+            match self
+                .store
+                .watch_prefixes(&crate::queue::runs::TERMINAL_PREFIXES)
+            {
+                Ok(watch) => Some(watch),
+                Err(error) => {
+                    return machine_result_response(Err(MachineError::new(
+                        "HOLD_UNAVAILABLE",
+                        format!("until=terminal cannot hold this read: {error}"),
+                    )))
+                }
+            }
+        } else {
+            None
+        };
+        let result = loop {
+            let result = self.machine_facade().status(job_id).await;
+            let target_allowed = result
+                .as_ref()
+                .ok()
+                .and_then(machine_result_target)
+                .is_some_and(|target| client.allows_target(target));
+            if !target_allowed {
+                return machine_result_response(Err(MachineError::new(
+                    "UNAUTHORIZED",
+                    "unauthorized",
+                )));
+            }
+            let running = result
+                .as_ref()
+                .ok()
+                .and_then(|value| value.pointer("/job/terminal"))
+                .and_then(Value::as_bool)
+                == Some(false);
+            let Some(armed) = watch.take().filter(|_| running) else {
+                break result;
+            };
+            let woken = tokio::task::spawn_blocking(move || {
+                let mut armed = armed;
+                armed.next().map(|()| armed)
+            })
+            .await;
+            match woken {
+                Ok(Ok(armed)) => watch = Some(armed),
+                Ok(Err(error)) => {
+                    return machine_result_response(Err(MachineError::new(
+                        "HOLD_FAILED",
+                        format!("the change watch holding {job_id} failed: {error}"),
+                    )))
+                }
+                Err(error) => {
+                    return machine_result_response(Err(MachineError::new(
+                        "HOLD_FAILED",
+                        format!("the change watch holding {job_id} stopped: {error}"),
+                    )))
+                }
+            }
+        };
         machine_result_response(result)
     }
 
@@ -210,6 +264,18 @@ fn machine_job_id(query: &str) -> Result<&str, Response> {
         return Err(invalid());
     }
     Ok(job_id)
+}
+
+/// `job_id=<id>`, optionally followed by `&until=terminal`, which holds the
+/// read until the job ends. Any other parameter or value is refused.
+fn machine_status_query(query: &str) -> Result<(&str, bool), Response> {
+    match query.split_once('&') {
+        None => machine_job_id(query).map(|job_id| (job_id, false)),
+        Some((job, "until=terminal")) => machine_job_id(job).map(|job_id| (job_id, true)),
+        Some(_) => Err(invalid_machine_request(
+            "query must be job_id=<id>, optionally followed by &until=terminal",
+        )),
+    }
 }
 
 fn validate_remote_machine_request(request: &Value) -> Result<(), MachineError> {

@@ -72,6 +72,15 @@ impl JobStorage {
         self.backend.download_text_versioned(blob_path).await
     }
 
+    /// Arm a change watch on `prefixes` before reading them; see
+    /// [`crate::queue::BlobBackend::watch_prefixes`].
+    pub fn watch_prefixes(
+        &self,
+        prefixes: &[&str],
+    ) -> Result<Box<dyn crate::queue::ChangeWatch>, StorageError> {
+        self.backend.watch_prefixes(prefixes)
+    }
+
     /// Replace text iff the version matches; returns the new version.
     ///
     /// Python raises `ValueError` for an empty `expected_version` and
