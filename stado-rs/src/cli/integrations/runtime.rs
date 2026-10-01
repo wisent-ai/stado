@@ -55,8 +55,13 @@ pub(crate) struct ServeArgs {
     #[arg(long)]
     pub port: Option<u16>,
     /// JSON primary/backup endpoints for the API, independent of worker storage.
-    #[arg(long, requires = "api")]
+    #[arg(long, requires = "api", conflicts_with = "api_local_store")]
     pub api_storage: Option<crate::queue::ServerStorage>,
+    /// The local root the API serves, independent of the storage the other
+    /// roles use: `--api-storage` for a local primary, spelled as a path so a
+    /// unit file can carry it (a unit argument cannot hold the JSON's quotes).
+    #[arg(long, requires = "api", value_name = "PATH")]
+    pub api_local_store: Option<std::path::PathBuf>,
     /// Enable release reconciliation at this declared cadence.
     #[arg(long)]
     pub release_interval_seconds: Option<NonZeroU64>,
@@ -108,10 +113,18 @@ pub(crate) struct ServeArgs {
 
 pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     let serve_api = args.api;
-    if !serve_api && (args.bind.is_some() || args.port.is_some() || args.api_storage.is_some()) {
+    if !serve_api
+        && (args.bind.is_some()
+            || args.port.is_some()
+            || args.api_storage.is_some()
+            || args.api_local_store.is_some())
+    {
         return Err(CmdError::usage(
-            "serve --bind, --port and --api-storage require --api",
+            "serve --bind, --port, --api-storage and --api-local-store require --api",
         ));
+    }
+    if let Some(root) = args.api_local_store.take() {
+        args.api_storage = Some(crate::queue::ServerStorage::local(root));
     }
     identity::validate(&args)?;
     let mutates_worker_environment =

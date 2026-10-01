@@ -45,7 +45,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     // size of the fleet is a column somebody eventually deletes.
     let records = crate::observations::load();
     let mut reports = Vec::new();
-    let mut failures = 0;
+    let mut failures: usize = 0;
     for (product, policy) in &control.products {
         if args
             .product

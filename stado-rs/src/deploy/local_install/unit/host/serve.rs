@@ -190,5 +190,11 @@ pub(super) fn merge(
             "{label} declares --api-storage; the host unit's API serves the host's own store"
         )));
     }
+    adopt(
+        &mut runtime.api_local_store,
+        theirs.api_local_store,
+        "--api-local-store",
+        label,
+    )?;
     Ok(runtime.run_worker)
 }

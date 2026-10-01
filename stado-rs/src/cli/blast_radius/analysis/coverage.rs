@@ -43,8 +43,8 @@ pub(in crate::cli::blast_radius) fn compare_coverage(
         };
     }
 
-    let mut missing = 0;
-    let mut extra = 0;
+    let mut missing: usize = 0;
+    let mut extra: usize = 0;
     for prefix in CANONICAL_PREFIXES {
         let primary_names = primary.names.get(*prefix).cloned().unwrap_or_default();
         let backup_names = backup.names.get(*prefix).cloned().unwrap_or_default();

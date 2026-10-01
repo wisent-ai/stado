@@ -28,6 +28,21 @@ impl FromStr for ServerStorage {
     }
 }
 
+impl ServerStorage {
+    /// A local primary at `root` with no backup: what `stado serve
+    /// --api-local-store PATH` declares.
+    pub fn local(root: std::path::PathBuf) -> Self {
+        Self {
+            primary: Endpoint {
+                kind: crate::capabilities::StorageAdapter::Local.id().to_string(),
+                path: root.display().to_string(),
+                ..Endpoint::default()
+            },
+            backup: None,
+        }
+    }
+}
+
 impl fmt::Display for ServerStorage {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         let json = serde_json::to_string(self).map_err(|_| fmt::Error)?;

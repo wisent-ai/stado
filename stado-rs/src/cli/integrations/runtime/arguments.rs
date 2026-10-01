@@ -104,6 +104,9 @@ impl ServeArgs {
         if let Some(storage) = &self.api_storage {
             args.push(format!("--api-storage={storage}"));
         }
+        if let Some(root) = &self.api_local_store {
+            args.push(format!("--api-local-store={}", root.display()));
+        }
         if self.watchdog {
             args.push("--watchdog".to_string());
             if let Some(interval) = self.watchdog_interval_seconds {
