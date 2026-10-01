@@ -9,9 +9,9 @@ use crate::cli::host::machine::releases::provenance::{
 /// `stado release provenance --host TARGET [--json]` — what TARGET carries,
 /// and who produced it.
 ///
-/// The command that did not exist on 2026-08-11, when the only record of what
-/// was running the control plane was a version string the repository had never
-/// heard of. Every artifact under the host's Stado bin directory gets a row,
+/// The command that was missing while the only record of what was running
+/// the control plane was a version string the repository had never heard
+/// of. Every artifact under the host's Stado bin directory gets a row,
 /// whether or not anything accounts for it, and an artifact with no manifest
 /// is reported `unprovenanced` -- absent from the table is the one outcome
 /// this must never produce, because that is precisely what the fleet did for

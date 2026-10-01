@@ -2,9 +2,9 @@
 //! `stado` grant back to the bearer file every Stado on the fleet holds.
 //!
 //! Skarbiec stores the hash of the token file a grant was issued with. When
-//! that record and the file disagree (on 2026-09-27 the vault owner's disk
-//! filled mid-write, and every read after it answered "consumer not
-//! authorized to read item field"), no Stado command could read a credential
+//! that record and the file disagree (a vault owner's disk filling mid-write
+//! leaves every read after it answering "consumer not authorized to read
+//! item field"), no Stado command can read a credential
 //! again, and the only repair was a hand-typed `skarbiec grant issue` on the
 //! owner. This is that repair as a command: the grant keeps exactly its
 //! capabilities, audience and remaining lifetime, and only the bearer it is

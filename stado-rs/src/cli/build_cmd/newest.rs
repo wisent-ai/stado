@@ -273,7 +273,6 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
         .map(|outcome| Refusal {
             product: &outcome.product,
             code: outcome.code,
-            failure: outcome.failure.as_deref(),
         })
         .collect();
     Err(batch_failure(&refusals))

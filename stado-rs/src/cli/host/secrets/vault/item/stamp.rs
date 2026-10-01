@@ -3,10 +3,10 @@
 //! Skarbiec 0.3.12 carries `stamp-fingerprints`, which describes every item
 //! written before payload fingerprints existed so that the duplicate report
 //! and the exact-duplicate refusal cover the whole vault. Running it on a
-//! machine that holds a replica is wasted work: on 2026-09-21 the pass
-//! stamped 658 items in this laptop's `~/.stado/skarbiec.vault.json`, the
-//! owner's next sync replaced the file, and the report was blind again within
-//! the hour. It is the same shape as a grant written by hand to a replica.
+//! machine that holds a replica is wasted work: the pass stamps every item
+//! in the replica, the owner's next sync replaces the file, and the report
+//! is blind again within the hour. It is the same shape as a grant written
+//! by hand to a replica.
 //!
 //! The owner key and the canonical vault live on one host, so the pass runs
 //! there and nowhere else, and this reports what that host answered.
