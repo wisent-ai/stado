@@ -8,6 +8,7 @@ mod baseline;
 mod cargo;
 mod check;
 mod javascript;
+mod python;
 mod surface;
 mod tuist;
 
@@ -22,7 +23,7 @@ use crate::cli::CmdError;
 pub struct AppSources {
     /// The bundle's Info.plist: `bundle-id:` and every `url-scheme:`; its
     /// CFBundleShortVersionString is the declared version
-    #[arg(long, required_unless_present_any = ["package_json", "tuist_project", "cargo_toml"])]
+    #[arg(long, required_unless_present_any = ["package_json", "tuist_project", "cargo_toml", "pyproject", "setup_py"])]
     pub info_plist: Option<String>,
     /// A package.json: `package:`, every `export:` key and every `bin:`
     /// command; its `version` is the declared version when no Info.plist is named
@@ -79,6 +80,29 @@ pub struct AppSources {
     /// each `name:` string is an `mcp:` name
     #[arg(long)]
     pub mcp_tools: Option<String>,
+    /// A pyproject.toml: every `[project.scripts]` key is a
+    /// `console-script:` name; its `[project]` version is the declared
+    /// version when nothing above declares one
+    #[arg(long)]
+    pub pyproject: Option<String>,
+    /// A setup.py whose literal `version="..."` is the declared version
+    #[arg(long, conflicts_with = "pyproject")]
+    pub setup_py: Option<String>,
+    /// A Python module whose `__all__` entries are `api:` names; repeatable
+    #[arg(long = "python-all")]
+    pub python_all: Vec<String>,
+    /// A Python module whose argparse subparsers registered with `help=`
+    /// are `cli:` names; repeatable
+    #[arg(long = "python-argparse")]
+    pub python_argparse: Vec<String>,
+    /// A directory of Python modules whose constants ending with a
+    /// --manifest-suffix assign dict or list literals: each string key is
+    /// `<family>:<key>`, the family being the first directory below it
+    #[arg(long = "python-manifests")]
+    pub python_manifests: Option<String>,
+    /// A constant-name suffix --python-manifests reads; repeatable
+    #[arg(long = "manifest-suffix", requires = "python_manifests")]
+    pub manifest_suffixes: Vec<String>,
 }
 
 impl AppSources {
@@ -88,8 +112,10 @@ impl AppSources {
             .as_deref()
             .or(self.tuist_project.as_deref())
             .or(self.cargo_toml.as_deref())
+            .or(self.pyproject.as_deref())
+            .or(self.setup_py.as_deref())
             .or(self.package_json.as_deref())
-            .expect("clap requires an Info.plist, a Tuist project, a Cargo.toml or a package.json")
+            .expect("clap requires an Info.plist, a Tuist project, a Cargo.toml, a pyproject.toml, a setup.py or a package.json")
     }
 }
 
@@ -106,11 +132,13 @@ fn pretty(document: &serde_json::Value) -> String {
     serde_json::to_string_pretty(document).expect("a JSON value serialises")
 }
 
-/// Print `{"surface": [...]}` of the tree.
+/// Print `{"version": "...", "surface": [...]}` of the tree: the version it
+/// declares and the surface it offers.
 pub(super) fn surface(tree: AppTree) -> Result<(), CmdError> {
     let load = surface::tree(&tree.root);
+    let version = surface::declared_version(&load, &tree.sources).map_err(CmdError::click)?;
     let names = surface::of(&load, &tree.sources).map_err(CmdError::click)?;
-    println!("{}", pretty(&serde_json::json!({ "surface": names })));
+    println!("{}", pretty(&serde_json::json!({ "version": version, "surface": names })));
     Ok(())
 }
 

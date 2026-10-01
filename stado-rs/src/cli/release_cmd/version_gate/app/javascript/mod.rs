@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 mod mask;
+pub(super) mod package;
 
 use super::surface::{Loader, Read};
 use mask::masked;
