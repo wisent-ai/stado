@@ -31,6 +31,10 @@ enum NativeCredentialOperations {
             .init(id: "service", label: "Unit serving the database plane", option: "--service", required: true),
             .init(id: "check", label: "Check only; write nothing and report a difference", option: "--check", flag: true, initial: "true"),
         ]),
+        .init(id: "database-destroy", title: "Destroy a fleet database: its unit, its vault item, then its declaration", path: ["database", "destroy"], hostPlacement: .none, fields: [
+            .init(id: "name", label: "Declared fleet database", required: true),
+            .init(id: "host", label: "Host it was placed on (blank: the vault owner)", option: "--host"),
+        ]),
         .init(id: "vault-sync", title: "Check or synchronize the declared vault", path: ["credentials", "vault", "sync"], fields: [
             .init(id: "check", label: "Check without replacing the vault", option: "--check", flag: true, initial: "true"),
         ]),
