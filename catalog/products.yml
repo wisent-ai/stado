@@ -468,10 +468,20 @@ products:
       WC_STORAGE_BACKEND: local
       WC_LOCAL_STORAGE_PATH: $HOME/.stado/local-storage
     summary: The one Stado process per host; serves the object API for registry, queue and release state.
+    # A second `stado dashboard` that served the object API for the Weles-only
+    # vault Skarbiec retired; nothing it served exists any more.
+    retired_units:
+    - com.wisent.compute.service.com.wisent.stado-weles-dashboard
     # The old resolver unit and the process's resolver bind the same ports, so
     # the flag proves nothing until the resolver publishes serving: its units
     # are handed over (readiness: resolver-state), not retired on the flag.
     role_units:
+    # A launcher that ran `stado dashboard` on 127.0.0.1:8765 over the same
+    # local storage, to receive published host health: the same API listener
+    # this process binds, retired by the same takeover.
+    - unit: com.wisent.stado-host-health-api
+      flag: --api
+      readiness: api-takeover
     # The unit this process ran under before it took every role. It runs the
     # same program on the same port, so no flag check retires it: only the
     # process started as com.wisent.stado retires it, as that unit's main
@@ -505,6 +515,10 @@ products:
     # the process's --forward-destination role keeps; it holds no local listener.
     - unit: com.wisent.stado-host-health-forward
       flag: --forward-destination
+    # The web edge's Caddy ran as its own unit; `--edge-caddy` and
+    # `--edge-caddyfile` run that program inside this process.
+    - unit: com.wisent.compute.service.stado-public-tls
+      flag: --edge-caddyfile
     # Host-health publication runs inside the one process
     # (`stado serve --health-interval-seconds`); the launchd agent and the
     # systemd timer that published it separately are its predecessors.
@@ -655,6 +669,8 @@ products:
     retired_units:
     - com.wisent.compute.service.probierz
     - com.wisent.probierz-intake
+    # A hand-made nightly agent whose script no longer exists in the repository.
+    - com.probierz.nightly
   dependencies:
   - product: brama
     surface: service
