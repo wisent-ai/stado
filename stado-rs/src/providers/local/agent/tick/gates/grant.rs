@@ -116,23 +116,35 @@ pub(crate) async fn renew_if_due(log_fn: &mut dyn FnMut(&str)) {
     renew(false, log_fn).await;
 }
 
+/// What one renewal pass did, so a caller decides on the outcome itself and
+/// never on the wording of the sentence it logged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenewOutcome {
+    /// The grant was reissued.
+    Renewed,
+    /// Nothing was due, or this host cannot issue grants and has nothing to do.
+    NothingToDo,
+    /// A step failed; the logged sentence names it.
+    Failed,
+}
+
 /// The renewal itself. `force` renews a grant that is not yet due, which is
 /// what `stado credentials grant agent-renew` asks for; the tick never does.
 /// Every sentence goes to `log_fn`, including why nothing was done.
-pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
+pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) -> RenewOutcome {
     let consumer = crate::config::agent_skarbiec_consumer();
     let token_file = crate::config::agent_skarbiec_token_file();
     if consumer.is_empty() || token_file.is_empty() {
         log_fn(
             "agent grant: agent.skarbiec.consumer or agent.skarbiec.token_file is not configured",
         );
-        return;
+        return RenewOutcome::Failed;
     }
     if !Path::new(token_file).is_file() {
         log_fn(&format!(
             "agent grant: the token file {token_file} is not a regular file on this host"
         ));
-        return;
+        return RenewOutcome::Failed;
     }
     let at = now();
     let vault = match crate::credential_store::owner::vault() {
@@ -143,7 +155,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
                     "agent grant: this host holds no owner vault, so nothing can be issued here: {error}"
                 ));
             }
-            return;
+            return RenewOutcome::NothingToDo;
         }
     };
     let launcher = match skarbiec_launcher() {
@@ -152,7 +164,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
             if force {
                 log_fn(&format!("agent grant: {error}"));
             }
-            return;
+            return RenewOutcome::Failed;
         }
     };
     let listing = match launcher_json(&launcher, &vault, &["grant", "list"]) {
@@ -161,7 +173,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
             log_fn(&format!(
                 "agent grant: cannot read the owner vault's grants for {consumer}: {error}"
             ));
-            return;
+            return RenewOutcome::Failed;
         }
     };
     let record = grant_record(&listing, consumer);
@@ -171,7 +183,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
         Some(expires_at) => expires_at.saturating_sub(at) < RENEWAL_WINDOW_SECONDS,
     };
     if !due && !force {
-        return;
+        return RenewOutcome::NothingToDo;
     }
     if !due {
         log_fn(&format!(
@@ -206,7 +218,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
                 log_fn(&format!(
                     "agent grant: {consumer} is absent and its declared roles cannot be granted: {error}"
                 ));
-                return;
+                return RenewOutcome::Failed;
             }
         }
     } else {
@@ -217,7 +229,7 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
         log_fn(&format!(
             "agent grant: {consumer} has no issued capabilities and declares no agent.skarbiec.secret_fields, so there is nothing to renew"
         ));
-        return;
+        return RenewOutcome::NothingToDo;
     }
     let state = match expiry {
         None => "is absent from the owner vault".to_string(),
@@ -234,11 +246,11 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
                 log_fn(&format!(
                     "agent grant: {consumer} {state} and the authoritative vault's host {bond} cannot be resolved: {error}"
                 ));
-                return;
+                return RenewOutcome::Failed;
             }
         };
         let runner = crate::deploy::production_runner();
-        match crate::deploy::service::remint_consumer_grant_on_host(
+        return match crate::deploy::service::remint_consumer_grant_on_host(
             &target,
             consumer,
             &capabilities,
@@ -250,18 +262,26 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
         )
         .await
         {
-            Ok(report) if report.succeeded("grant_synced") => log_fn(&format!(
-                "agent grant: {consumer} {state}; renewed on {bond} for {GRANT_TTL_SECONDS} seconds, this replica pulls it within its sync interval"
-            )),
-            Ok(report) => log_fn(&format!(
-                "agent grant: {consumer} {state} and renewal on {bond} failed: {}",
-                report.failure()
-            )),
-            Err(error) => log_fn(&format!(
-                "agent grant: {consumer} {state} and renewal on {bond} could not run: {error}"
-            )),
-        }
-        return;
+            Ok(report) if report.succeeded("grant_synced") => {
+                log_fn(&format!(
+                    "agent grant: {consumer} {state}; renewed on {bond} for {GRANT_TTL_SECONDS} seconds, this replica pulls it within its sync interval"
+                ));
+                RenewOutcome::Renewed
+            }
+            Ok(report) => {
+                log_fn(&format!(
+                    "agent grant: {consumer} {state} and renewal on {bond} failed: {}",
+                    report.failure()
+                ));
+                RenewOutcome::Failed
+            }
+            Err(error) => {
+                log_fn(&format!(
+                    "agent grant: {consumer} {state} and renewal on {bond} could not run: {error}"
+                ));
+                RenewOutcome::Failed
+            }
+        };
     }
     let home = std::env::var("HOME").unwrap_or_default();
     let output = Command::new(&launcher)
@@ -287,16 +307,23 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
                 "agent grant: {consumer} {state}; renewed for {GRANT_TTL_SECONDS} seconds, now ends at {}",
                 renewed.map(|value| value.to_string()).unwrap_or_else(|| "an unread time".into())
             ));
+            RenewOutcome::Renewed
         }
-        Ok(output) => log_fn(&format!(
-            "agent grant: {consumer} {state} and renewal failed: `{}` exited {}: {}",
-            renewal_command(consumer, &capabilities, token_file),
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )),
-        Err(error) => log_fn(&format!(
-            "agent grant: {consumer} {state} and renewal could not start: `{}`: {error}",
-            renewal_command(consumer, &capabilities, token_file)
-        )),
+        Ok(output) => {
+            log_fn(&format!(
+                "agent grant: {consumer} {state} and renewal failed: `{}` exited {}: {}",
+                renewal_command(consumer, &capabilities, token_file),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+            RenewOutcome::Failed
+        }
+        Err(error) => {
+            log_fn(&format!(
+                "agent grant: {consumer} {state} and renewal could not start: `{}`: {error}",
+                renewal_command(consumer, &capabilities, token_file)
+            ));
+            RenewOutcome::Failed
+        }
     }
 }
