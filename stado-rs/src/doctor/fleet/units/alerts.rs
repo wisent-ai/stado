@@ -50,12 +50,12 @@ pub(in crate::doctor) async fn check_alerts() -> Check {
     // What the operator declared, held apart from what resolved here.
     //
     // A vault that did not answer this second is not a deployment with no
-    // alerts. On 2026-09-02 at 19:31:04 this check FAILED a release delivery
-    // with "no alert channel is configured at all" while `alerts.channels`
-    // held `resend` and `alerts.email_to` its destination; the same check
-    // PASSED two minutes later against the same file, because that time the
-    // material read succeeded. Instance 9's shape, inside the preflight that
-    // gates delivery: absent and unreachable need opposite responses.
+    // alerts: this check used to FAIL a release delivery with "no alert
+    // channel is configured at all" while `alerts.channels` held `resend`
+    // and `alerts.email_to` its destination, and PASS minutes later against
+    // the same file, because that time the material read succeeded. Inside
+    // the preflight that gates delivery, absent and unreachable need
+    // opposite responses.
     let declared: Vec<&str> = config::alert_channels()
         .iter()
         .map(String::as_str)

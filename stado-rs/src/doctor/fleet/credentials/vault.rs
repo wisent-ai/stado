@@ -20,13 +20,13 @@ pub(in crate::doctor) const OWNER_VAULT_REMEDY: &str =
 /// Two vaults claiming one owner is not a curiosity, it is a write going
 /// somewhere no reader looks.
 ///
-/// On 2026-09-05 six `skarbiec set-json` writes landed in
+/// `skarbiec set-json` writes land in
 /// `~/.local/share/skarbiec/skarbiec.vault.json` — real, `active` on the host,
 /// and invisible to `stado repair stado --step release-verifier`, which reads
 /// `~/.stado/skarbiec.vault.json`. The fleet's release publication boundary
-/// closed for every product and the cause took a day to name, because nothing
-/// reported the split: `stado host vaults` answered "8 vault(s)" and said
-/// nothing about which one answers.
+/// closes for every product and the cause takes a day to name, because
+/// nothing reports the split: `stado host vaults` answers with a count and
+/// says nothing about which one answers.
 ///
 /// So this check asks the resolution question and then one more: whether the
 /// answer is also what a bare `skarbiec` on this machine would open. A

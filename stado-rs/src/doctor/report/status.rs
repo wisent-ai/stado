@@ -10,9 +10,9 @@ pub enum Status {
     /// The probe never answered, so this check says nothing about the world.
     ///
     /// Not a verdict. A probe that ran out of its budget used to be a FAIL,
-    /// and on 2026-09-03 that made `doctor` report six failures of which four
-    /// were 8- and 24-second timeouts under load the doctor itself was
-    /// generating — the same three checks passed five minutes later. An
+    /// and that makes `doctor` report failures most of which are probe
+    /// budgets exhausted under load the doctor itself is generating — the
+    /// same checks pass minutes later. An
     /// operator who is shown four wolves learns to ignore the shepherd, and
     /// "the probe did not answer" is a statement about the probe, never about
     /// the deployment. This is the `absent` versus `unreachable` distinction

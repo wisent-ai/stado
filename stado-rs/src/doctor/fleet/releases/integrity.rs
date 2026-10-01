@@ -33,9 +33,9 @@ const INTEGRITY_VERSIONS: usize = 6;
 /// Two failures are reported and both are permanent, because release objects
 /// are create-only. PARTIAL is a coordinate short of objects that can never be
 /// added. The second is a coordinate whose two publishers built different
-/// revisions, which no later publication can reconcile either — 0.13.27 on
-/// 2026-09-01 and 0.13.49 on 2026-09-03, both discovered by a delivery attempt
-/// long after the train had finished writing them.
+/// revisions, which no later publication can reconcile either, and which is
+/// otherwise discovered by a delivery attempt long after the train has
+/// finished writing it.
 ///
 /// A version with no claim and no artifacts has no keys in the store, so it
 /// never appears in this walk. A publisher now claims the version before any

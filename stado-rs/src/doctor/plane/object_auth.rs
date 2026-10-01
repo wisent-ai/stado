@@ -57,7 +57,7 @@ pub fn object_auth_verdict(
                     if let Err(error) = result {
                         // An unreachable or 5xx vault says nothing about mapping,
                         // grants or tokens, and reporting it as `FAIL` said the
-                        // opposite: on 2026-09-04 a wedged keyboxd made this row
+                        // opposite: a wedged keyboxd makes this row
                         // read "authorization fails closed because mapping,
                         // verifier grant, or mapped token validation failed" with
                         // `error_code=auth`, for a boundary whose mapping and

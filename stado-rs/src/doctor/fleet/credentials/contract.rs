@@ -19,11 +19,11 @@ pub(in crate::doctor) const CONTRACT_REMEDY: &str =
 /// operators to skim past `doctor`, which is how a real FAIL sat unread here
 /// for hours.
 ///
-/// The drift it exists for is real. On 2026-08-04 callers that asked for a
-/// whole item and picked fields out of it got `400 {"error":"field required"}`
-/// with no hint the contract had moved, and this machine's host-health beacon
-/// stayed down for twenty-one hours while `stado service list` reported a
-/// stale `active` for services that were not running. The repair is to move
+/// The drift it exists for is real: callers that ask for a whole item and
+/// pick fields out of it get `400 {"error":"field required"}` with no hint
+/// the contract has moved, and a host-health beacon stays down for most of
+/// a day while `stado service list` reports a
+/// stale `active` for services that are not running. The repair is to move
 /// those callers to per-field reads, which the remedy now says.
 ///
 /// The probe is unauthenticated on purpose: the handler validates `id` and
