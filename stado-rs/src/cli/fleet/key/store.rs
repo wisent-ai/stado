@@ -121,27 +121,21 @@ pub(crate) async fn settle_readable(
             );
         }
     }
-    read_back(client, id, verify, brokered).await
+    read_back(client, id, verify).await
 }
 
 /// Prove `verify`'s fields of `id` through `client`, the reader the SSH
-/// channel opens. `brokered` reads through the broker's per-item grant, which
-/// a caller must already have widened.
+/// channel opens. A brokered client reads through the broker's per-item grant,
+/// which a caller must already have widened.
 pub(crate) async fn read_back(
     client: &Client,
     id: &str,
     verify: &[(&str, &str)],
-    brokered: bool,
 ) -> Result<(), String> {
     for (field, expected) in verify {
-        let read = if brokered {
-            client
-                .read_field(id, field)
-                .await
-                .map(|value| value.as_str().map(str::to_string))
-        } else {
-            client.read_string(id, field).await
-        };
+        // The key item is the one Stado minted for this host, so it is read as
+        // named whether the client reaches the vault directly or brokered.
+        let read = client.read_declared_string(id, field).await;
         // Every way this can end badly says the same thing. The item was
         // written and its fields were granted a moment ago, so a reader that
         // refuses them, or answers with something else, is not reading the

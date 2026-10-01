@@ -53,7 +53,9 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
             async move {
                 (
                     namespace.as_str(),
-                    object_client.read_string(policy.item(), "token").await,
+                    object_client
+                        .read_declared_string(policy.item(), "token")
+                        .await,
                 )
             }
         }))
@@ -78,7 +80,7 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
             async move {
                 (
                     product.as_str(),
-                    client.read_string(policy.item(), "token").await,
+                    client.read_declared_string(policy.item(), "token").await,
                 )
             }
         }))

@@ -68,7 +68,7 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
     let verified_count = scope_items.len();
     for (scope, item) in scope_items {
         let token = client
-            .read_string(item, "token")
+            .read_declared_string(item, "token")
             .await
             // A vault that could not answer is not a deployment verdict. The
             // context is still worth having, so it is added only to the

@@ -179,6 +179,48 @@ impl Client {
             .map(str::to_string))
     }
 
+    /// Resolve one optional string field of the item a boundary declaration
+    /// names (`object_api.namespaces.*.item`, `release_api.publishers`,
+    /// `machine_api.clients`, `service_api.deployers`, `registry_api.clients`):
+    /// the configuration chose that item, so it is read as named and never
+    /// looked up as a role. Selecting it by role closed every boundary of the
+    /// object API with `503 object authorization unavailable`, because no
+    /// verifier item plays a role. `None` when the item or field is absent.
+    pub async fn read_declared_string(
+        &self,
+        item: &str,
+        field: &str,
+    ) -> Result<Option<String>, SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::read_declared_string_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                self.grant_mode,
+                item,
+                field,
+            ))
+            .await
+            .map_err(|error| error.naming(&self.consumer, item, field));
+        }
+        let response = self
+            .request(reqwest::Method::POST, "/v1/items/read")?
+            .json(&json!({"id": item, "field": field}))
+            .send()
+            .await
+            .map_err(|error| SkarbiecError::from(error).naming(&self.consumer, item, field))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let body = Self::response_json(response)
+            .await
+            .map_err(|error| error.naming(&self.consumer, item, field))?;
+        Ok(body
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::to_string))
+    }
+
     /// Read one item with the configured Stado consumer grant. Flows through
     /// the credential store selector: the default skarbiec backend calls this
     /// same client (byte-identical); the file backend answers from disk.

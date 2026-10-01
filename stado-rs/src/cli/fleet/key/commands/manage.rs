@@ -167,7 +167,7 @@ pub async fn rm(target: &str) -> Result<bool, String> {
 pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
     let client = configured_client()?;
     let public_key = client
-        .read_string(&item_id(target), "public_key")
+        .read_declared_string(&item_id(target), "public_key")
         .await
         .map_err(|exc| exc.to_string())?
         .ok_or_else(|| {

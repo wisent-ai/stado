@@ -181,7 +181,7 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
 async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, String> {
     let id = item_id(target);
     let stored = configured_client()?
-        .read_string(&id, "public_key")
+        .read_declared_string(&id, "public_key")
         .await
         .map_err(|exc| exc.to_string())?;
     if let Some(public_key) = stored.filter(|value| !value.trim().is_empty()) {
@@ -190,7 +190,7 @@ async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, Stri
     println!("no key pair for '{target}' yet; minting one into {id}");
     rotate::generate(runner, target).await?;
     configured_client()?
-        .read_string(&id, "public_key")
+        .read_declared_string(&id, "public_key")
         .await
         .map_err(|exc| exc.to_string())?
         .filter(|value| !value.trim().is_empty())

@@ -27,7 +27,9 @@ pub async fn authenticate(
     let configured = clients().map_err(|error| RateLimitError::Configuration(error.to_string()))?;
     let mut matched = None;
     for client in configured.values() {
-        let expected = verifier.read_string(client.item(), "token").await?;
+        let expected = verifier
+            .read_declared_string(client.item(), "token")
+            .await?;
         let Some(expected) = expected.filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
@@ -64,7 +66,7 @@ pub async fn validate_verifier() -> Result<usize, RateLimitError> {
     let mut tokens = BTreeSet::new();
     for client in configured.values() {
         let token = verifier
-            .read_string(client.item(), "token")
+            .read_declared_string(client.item(), "token")
             .await?
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {

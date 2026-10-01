@@ -121,7 +121,7 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
     // published nothing for twenty-one hours while `stado service list` went
     // on reporting its stale `active` for services that were not running.
     let token = client
-        .read_string("host-health-api", "token")
+        .read_declared_string(crate::config::HOST_HEALTH_API_ITEM, "token")
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .unwrap_or_default()

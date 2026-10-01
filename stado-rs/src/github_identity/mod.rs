@@ -257,7 +257,7 @@ pub async fn read(resolved: &ResolvedCredential) -> Result<String, String> {
     )
     .map_err(|error| error.to_string())?;
     client
-        .read_string(&resolved.item, &resolved.field)
+        .read_declared_string(&resolved.item, &resolved.field)
         .await
         .map_err(|error| error.to_string())?
         .filter(|value| !value.trim().is_empty())

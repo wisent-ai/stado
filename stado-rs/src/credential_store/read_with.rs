@@ -66,3 +66,28 @@ pub async fn read_string_with(
         Backend::File { path } => file::file_read_string(&path, id, field),
     }
 }
+
+/// [`read_string_with`] for the item a boundary declaration names: read as
+/// named, never selected by role. The file backend already reads by id.
+pub async fn read_declared_string_with(
+    url: &str,
+    consumer: &str,
+    token_file: &str,
+    grant_mode: crate::skarbiec::GrantMode,
+    item: &str,
+    field: &str,
+) -> Result<Option<String>, SkarbiecError> {
+    match selected()? {
+        Backend::Skarbiec { url: store_url } => {
+            Client::direct(
+                store_url.as_deref().unwrap_or(url),
+                consumer,
+                token_file,
+                grant_mode,
+            )?
+            .read_declared_string(item, field)
+            .await
+        }
+        Backend::File { path } => file::file_read_string(&path, item, field),
+    }
+}

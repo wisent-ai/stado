@@ -34,7 +34,7 @@ pub(crate) async fn read_token_fields(
     futures::stream::iter(
         items
             .into_iter()
-            .map(|item| client.read_string(item, "token")),
+            .map(|item| client.read_declared_string(item, "token")),
     )
     .buffered(in_flight)
     .collect::<Vec<_>>()
@@ -74,7 +74,7 @@ pub async fn validate_integration_verifier() -> Result<usize, SkarbiecError> {
     let mut bearer_digests = BTreeSet::new();
     for (name, policy) in clients {
         let bearer = verifier
-            .read_string(policy.item(), "token")
+            .read_declared_string(policy.item(), "token")
             .await?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {

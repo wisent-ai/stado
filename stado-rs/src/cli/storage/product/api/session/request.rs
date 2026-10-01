@@ -104,7 +104,7 @@ impl RemoteObjectApi {
                     ))
                     .stating(crate::primitives::failure::FailureCode::Refused)
                 })?
-                .read_string(publisher.item(), "token")
+                .read_declared_string(publisher.item(), "token")
                 .await
                 .map_err(|error| {
                     CmdError::click(format!(

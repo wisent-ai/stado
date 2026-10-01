@@ -40,7 +40,7 @@ pub(in crate::dashboard) async fn invite_key(store: &JobStorage, request: &Reque
         Ok(client) => client,
         Err(_) => return unavailable("enrollment key store is unavailable"),
     };
-    let stored = match client.read_string(&item, "public_key").await {
+    let stored = match client.read_declared_string(&item, "public_key").await {
         Ok(Some(value)) if !value.trim().is_empty() => value,
         Ok(_) => return unavailable("enrollment key is not available for this invite"),
         Err(_) => return unavailable("enrollment key store is unavailable"),

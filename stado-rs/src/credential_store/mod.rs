@@ -32,7 +32,7 @@ pub mod owner;
 mod read_with;
 pub mod write;
 
-pub use read_with::{read_item_with, read_string_with};
+pub use read_with::{read_declared_string_with, read_item_with, read_string_with};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Backend {

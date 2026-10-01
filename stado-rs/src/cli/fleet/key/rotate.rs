@@ -179,7 +179,7 @@ async fn store_on_owner(
                 error.message.as_deref().unwrap_or("no detail")
             )
         })?;
-    read_back(client, &id, &[("public_key", pair.public_key.trim())], true).await
+    read_back(client, &id, &[("public_key", pair.public_key.trim())]).await
 }
 
 /// `key generate TARGET` — store a fresh pair and print only the public key.
@@ -202,7 +202,7 @@ pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
     let mut old_fields = serde_json::Map::new();
     for field in ["private_key", "public_key"] {
         if let Some(value) = client
-            .read_string(&item_id(target), field)
+            .read_declared_string(&item_id(target), field)
             .await
             .map_err(|exc| exc.to_string())?
         {
