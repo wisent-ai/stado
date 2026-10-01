@@ -14,20 +14,20 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         Ok(payload) => payload,
         Err(error) => {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": format!("cannot read request JSON: {error}")}),
             )
         }
     };
     let Some(body) = payload.as_object() else {
         return send_json(
-            http_status("400"),
+            http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "request must be a JSON object"}),
         );
     };
     let Some(target) = body.get("target").and_then(Value::as_str) else {
         return send_json(
-            http_status("400"),
+            http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "request must name a target"}),
         );
     };
@@ -36,7 +36,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
     let requested_memory = body.get("memory_reclaim");
     if pinned_only.is_none() && requested_policy.is_none() && requested_memory.is_none() {
         return send_json(
-            http_status("400"),
+            http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "request must carry pinned_only, disk_cleanup or memory_reclaim"}),
         );
     }
@@ -46,7 +46,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
             "target" | "pinned_only" | "disk_cleanup" | "memory_reclaim"
         ) {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": format!("unsupported key {key:?}")}),
             );
         }
@@ -64,20 +64,20 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         };
         let Some(fields) = policy.as_object() else {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": format!("{name} must be an object")}),
             );
         };
         if fields.is_empty() {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": format!("{name} must name at least one field")}),
             );
         }
         for key in fields.keys() {
             if !allowed.contains(&key.as_str()) {
                 return send_json(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     &json!({"error": format!("{name}.{key} is not an operator-writable field")}),
                 );
             }
@@ -88,7 +88,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         Ok(store) => store,
         Err(error) => {
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": format!("registry store unavailable: {error}")}),
             )
         }
@@ -97,13 +97,13 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         Ok(Some(current)) => current,
         Ok(None) => {
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": "canonical registry generation unavailable"}),
             )
         }
         Err(error) => {
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": format!("canonical registry unreadable: {error}")}),
             )
         }
@@ -112,14 +112,14 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         Ok(document) => document,
         Err(error) => {
             return send_json(
-                http_status("500"),
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 &json!({"error": format!("canonical registry is not JSON: {error}")}),
             )
         }
     };
     let Some(entries) = document.get_mut("targets").and_then(Value::as_array_mut) else {
         return send_json(
-            http_status("500"),
+            http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
             &json!({"error": "registry.targets must be an array"}),
         );
     };
@@ -129,14 +129,14 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         .and_then(Value::as_object_mut)
     else {
         return send_json(
-            http_status("404"),
+            http_status(reqwest::StatusCode::NOT_FOUND),
             &json!({"error": format!("target not in registry: {target}")}),
         );
     };
     if let Some(pinned) = pinned_only {
         let Some(pinned) = pinned.as_bool() else {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "pinned_only must be a boolean"}),
             );
         };
@@ -157,7 +157,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
                 }
                 Err(error) => {
                     return send_json(
-                        http_status("500"),
+                        http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                         &json!({"error": format!("default cleanup policy unavailable: {error}")}),
                     )
                 }
@@ -165,7 +165,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         };
         let Some(policy_map) = policy.as_object_mut() else {
             return send_json(
-                http_status("500"),
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 &json!({"error": "registry target disk_cleanup must be an object"}),
             );
         };
@@ -193,7 +193,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
                 }
                 Err(error) => {
                     return send_json(
-                        http_status("500"),
+                        http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                         &json!({"error": format!("default memory policy unavailable: {error}")}),
                     )
                 }
@@ -201,7 +201,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         };
         let Some(policy_map) = policy.as_object_mut() else {
             return send_json(
-                http_status("500"),
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 &json!({"error": "registry target memory_reclaim must be an object"}),
             );
         };
@@ -216,24 +216,24 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
     }
 
     if let Err(error) = crate::targets::validate_registry(&document) {
-        return send_json(http_status("400"), &json!({"error": error.to_string()}));
+        return send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": error.to_string()}));
     }
     let payload = match serde_json::to_string_pretty(&document) {
         Ok(payload) => format!("{payload}\n"),
         Err(error) => {
             return send_json(
-                http_status("500"),
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 &json!({"error": format!("cannot serialize registry: {error}")}),
             )
         }
     };
     match store.compare_and_swap(&current.version, &payload).await {
         Ok(generation) => send_json(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             &json!({"ok": true, "target": target, "generation": generation}),
         ),
         Err(error) => send_json(
-            http_status("409"),
+            http_status(reqwest::StatusCode::CONFLICT),
             &json!({"error": format!("registry moved while writing: {error}")}),
         ),
     }

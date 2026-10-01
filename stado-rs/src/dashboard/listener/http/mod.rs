@@ -159,9 +159,6 @@ impl Dashboard {
     const KEEP_ALIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(120);
 
     async fn handle_connection(&self, mut stream: TcpStream) -> std::io::Result<()> {
-        // The peer is the reverse proxy's loopback address behind an HTTPS
-        // ingress; the invite routes only ever use it as a rate-limit bucket.
-        let peer = stream.peer_addr().ok().map(|address| address.ip());
         // Bytes already buffered past the request just served. Reusing one
         // connection is the whole point of this loop, so they have to survive
         // into the next read rather than be dropped with the buffer.
@@ -171,23 +168,19 @@ impl Dashboard {
             // reason before the connection closes: dropping it left the client
             // with "connection closed before message completed" and no word
             // about the size or framing that was refused.
-            let mut request =
+            let request =
                 match read_request(&mut stream, &mut carry, Self::KEEP_ALIVE_IDLE).await {
                     Ok(Some(request)) => request,
                     Ok(None) => return Ok(()),
                     Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
                         let status = if error.to_string().contains("accepts at most") {
-                            "413"
+                            reqwest::StatusCode::PAYLOAD_TOO_LARGE
                         } else {
-                            "400"
+                            reqwest::StatusCode::BAD_REQUEST
                         };
                         let mut response = Response::new(
                             http_status(status),
-                            if status == "413" {
-                                "Payload Too Large"
-                            } else {
-                                "Bad Request"
-                            },
+                            status.canonical_reason().unwrap_or_default(),
                             "text/plain; charset=utf-8",
                             error.to_string().as_bytes(),
                         );
@@ -201,7 +194,6 @@ impl Dashboard {
                         return Err(error);
                     }
                 };
-            request.peer = peer;
             // The mode gate is the FIRST thing that looks at the request, ahead
             // of the object PUT preflight, ahead of every Host check and
             // authorization, and ahead of any store or vault access. A refused
@@ -210,7 +202,7 @@ impl Dashboard {
             // being held warm for more of the same.
             if self.enrollment_only && !enrollment_route_allowed(&request.method, &request.path) {
                 let mut response = Response::new(
-                    http_status("404"),
+                    http_status(reqwest::StatusCode::NOT_FOUND),
                     "Not Found",
                     "text/plain; charset=utf-8",
                     ENROLLMENT_REFUSAL,

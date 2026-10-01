@@ -114,9 +114,8 @@ pub fn render_agent_startup_script(
         .get("STADO_AGENT_RUNTIME_BUNDLE_SHA256")
         .map(String::as_str)
         .unwrap_or_default();
-    if runtime_sha.len() != "64".parse::<usize>().expect("static SHA-256 hex length")
-        || !runtime_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    let digest_bytes = <sha2::Sha256 as sha2::Digest>::output_size();
+    if !hex::decode(runtime_sha).is_ok_and(|bytes| bytes.len() == digest_bytes) {
         return Err(SchedulerError::InvalidStartupSetting {
             key: "STADO_AGENT_RUNTIME_BUNDLE_SHA256".to_string(),
             env: "STADO_AGENT_RUNTIME_BUNDLE_SHA256",

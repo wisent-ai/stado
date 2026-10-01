@@ -16,7 +16,7 @@ pub(in crate::dashboard) fn join_script() -> Response {
         );
     }
     Response::new_with_headers(
-        http_status("200"),
+        http_status(reqwest::StatusCode::OK),
         "OK",
         "text/plain; charset=utf-8",
         JOIN_SCRIPT.as_bytes(),

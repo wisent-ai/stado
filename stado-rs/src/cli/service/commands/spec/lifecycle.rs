@@ -267,7 +267,7 @@ pub enum LifecycleCommands {
         #[arg(long)]
         host: Option<String>,
         /// Lines of tail to fetch.
-        #[arg(long, default_value_t = default_log_lines())]
+        #[arg(long)]
         lines: usize,
         #[arg(long)]
         json: bool,
@@ -289,10 +289,4 @@ pub enum LifecycleCommands {
         #[arg(long)]
         json: bool,
     },
-}
-
-/// Default `--lines` for `service logs`: one byte's worth of lines. Derived
-/// from `u8::MAX` rather than written as a number.
-fn default_log_lines() -> usize {
-    usize::from(u8::MAX)
 }

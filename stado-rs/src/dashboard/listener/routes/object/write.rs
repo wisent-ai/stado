@@ -21,7 +21,7 @@ impl Dashboard {
     pub(crate) async fn object_put_preflight(&self, request: &Request) -> Option<Response> {
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             return Some(send_json(
-                http_status("403"),
+                http_status(reqwest::StatusCode::FORBIDDEN),
                 &json!({"error": "forbidden"}),
             ));
         }
@@ -30,7 +30,7 @@ impl Dashboard {
             .split_once('?')
             .unwrap_or((request.path.as_str(), ""));
         if path != "/api/object" {
-            return Some(empty_response(http_status("404"), "Not Found"));
+            return Some(empty_response(http_status(reqwest::StatusCode::NOT_FOUND), "Not Found"));
         }
         let object = match object_from_query(query) {
             Ok(object) => object,
@@ -61,7 +61,7 @@ impl Dashboard {
         );
         if !self.satisfy_boundaries(&plan).await {
             return Some(send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": "object authorization unavailable"}),
             ));
         }
@@ -91,13 +91,13 @@ impl Dashboard {
             Ok(None) => {}
             Ok(Some(reason)) => {
                 return Some(send_json(
-                    http_status("401"),
+                    http_status(reqwest::StatusCode::UNAUTHORIZED),
                     &json!({"error": "unauthorized", "reason": reason}),
                 ))
             }
             Err(()) => {
                 return Some(send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "object authorization unavailable"}),
                 ))
             }
@@ -119,7 +119,7 @@ impl Dashboard {
             usize::from(if_absent) + usize::from(if_version.is_some()) + usize::from(metadata_only);
         if selected > 1 {
             return Ok(send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "if_absent, if_version, and metadata_only are mutually exclusive"}),
             ));
         }
@@ -127,7 +127,7 @@ impl Dashboard {
         if metadata_only {
             if !self.store.backend().exists(&path).await? {
                 return Ok(send_json(
-                    http_status("404"),
+                    http_status(reqwest::StatusCode::NOT_FOUND),
                     &json!({"state": "absent", "uri": object.to_string()}),
                 ));
             }
@@ -136,14 +136,14 @@ impl Dashboard {
                     Ok(metadata) => metadata,
                     Err(error) => {
                         return Ok(send_json(
-                            http_status("400"),
+                            http_status(reqwest::StatusCode::BAD_REQUEST),
                             &json!({"error": format!("invalid metadata: {error}")}),
                         ))
                     }
                 };
             self.store.backend().set_metadata(&path, &metadata).await?;
             return Ok(send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({"state": "metadata-updated", "uri": object.to_string()}),
             ));
         }
@@ -152,7 +152,7 @@ impl Dashboard {
                 Ok(content) => content,
                 Err(error) => {
                     return Ok(send_json(
-                        http_status("400"),
+                        http_status(reqwest::StatusCode::BAD_REQUEST),
                         &json!({"error": format!("conditional object writes require UTF-8: {error}")}),
                     ))
                 }
@@ -165,20 +165,20 @@ impl Dashboard {
                 Ok(version) => version,
                 Err(StorageError::StorageConflict(_)) => {
                     return Ok(send_json(
-                        http_status("409"),
+                        http_status(reqwest::StatusCode::CONFLICT),
                         &json!({"error": "object version changed", "uri": object.to_string()}),
                     ))
                 }
                 Err(StorageError::NotFound(_)) => {
                     return Ok(send_json(
-                        http_status("404"),
+                        http_status(reqwest::StatusCode::NOT_FOUND),
                         &json!({"state": "absent", "uri": object.to_string()}),
                     ))
                 }
                 Err(error) => return Err(error.into()),
             };
             return Ok(send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({
                     "state": "stored",
                     "uri": object.to_string(),
@@ -195,7 +195,7 @@ impl Dashboard {
                 Ok(value) => value,
                 Err(error) => {
                     return Ok(send_json(
-                        http_status("400"),
+                        http_status(reqwest::StatusCode::BAD_REQUEST),
                         &json!({"error": format!("invalid object metadata: {error}")}),
                     ))
                 }
@@ -204,7 +204,7 @@ impl Dashboard {
         };
         let metadata = match merged_object_metadata(object, &content_type, &extra) {
             Ok(metadata) => metadata,
-            Err(error) => return Ok(send_json(http_status("400"), &json!({"error": error}))),
+            Err(error) => return Ok(send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": error}))),
         };
         if if_absent {
             let mut source = tempfile::NamedTempFile::new()?;
@@ -215,7 +215,7 @@ impl Dashboard {
                 .await?
             {
                 return Ok(send_json(
-                    http_status("409"),
+                    http_status(reqwest::StatusCode::CONFLICT),
                     &json!({"error": "object exists", "uri": object.to_string()}),
                 ));
             }
@@ -239,7 +239,7 @@ impl Dashboard {
             )));
         }
         Ok(send_json(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             &json!({
                 "state": "stored",
                 "uri": object.to_string(),

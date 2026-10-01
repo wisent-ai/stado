@@ -32,7 +32,7 @@ impl Dashboard {
         };
         let mut staged = match tempfile::NamedTempFile::new() {
             Ok(staged) => staged,
-            Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+            Err(error) => return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string()),
         };
         let mut object_digest = Sha256::new();
         let mut assembled_size = 0usize;
@@ -41,40 +41,40 @@ impl Dashboard {
                 Ok(Some(bytes)) => bytes,
                 Ok(None) => {
                     return object_compose_response(
-                        http_status("404"),
+                        http_status(reqwest::StatusCode::NOT_FOUND),
                         json!({"state": "absent", "uri": chunk_object.to_string()}),
                     )
                 }
-                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+                Err(error) => return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string()),
             };
             let actual_digest: [u8; 32] = Sha256::digest(&bytes).into();
             if bytes.len() != declared.size || actual_digest != *expected_digest {
                 return object_compose_error(
-                    http_status("422"),
+                    http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
                     format!("stored chunk does not match {}", chunk_object),
                 );
             }
             if let Err(error) = staged.write_all(&bytes) {
-                return object_compose_error(http_status("500"), error.to_string());
+                return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string());
             }
             object_digest.update(&bytes);
             assembled_size += bytes.len();
         }
         if assembled_size != payload.size {
             return object_compose_error(
-                http_status("422"),
+                http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
                 "assembled object size differs from the composition request",
             );
         }
         let assembled_digest: [u8; 32] = object_digest.finalize().into();
         if assembled_digest != expected_upload_digest {
             return object_compose_error(
-                http_status("422"),
+                http_status(reqwest::StatusCode::UNPROCESSABLE_ENTITY),
                 "assembled object SHA-256 differs from upload_id",
             );
         }
         if let Err(error) = staged.flush() {
-            return object_compose_error(http_status("500"), error.to_string());
+            return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string());
         }
 
         let target_path = object.storage_path();
@@ -85,25 +85,25 @@ impl Dashboard {
                 .await
             {
                 Ok(created) => created,
-                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+                Err(error) => return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string()),
             };
             if !created {
                 let existing = match self.store.read_bytes(&target_path).await {
                     Ok(Some(existing)) => existing,
                     Ok(None) => {
                         return object_compose_error(
-                            http_status("500"),
+                            http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                             "object disappeared after create-only conflict",
                         )
                     }
                     Err(error) => {
-                        return object_compose_error(http_status("500"), error.to_string())
+                        return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string())
                     }
                 };
                 let existing_digest: [u8; 32] = Sha256::digest(&existing).into();
                 if existing.len() != payload.size || existing_digest != expected_upload_digest {
                     return object_compose_response(
-                        http_status("409"),
+                        http_status(reqwest::StatusCode::CONFLICT),
                         json!({
                             "error": "object exists with different content",
                             "uri": object.to_string(),
@@ -114,10 +114,10 @@ impl Dashboard {
         } else {
             let bytes = match std::fs::read(staged.path()) {
                 Ok(bytes) => bytes,
-                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+                Err(error) => return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string()),
             };
             if let Err(error) = self.store.upload_bytes(&target_path, &bytes).await {
-                return object_compose_error(http_status("500"), error.to_string());
+                return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string());
             }
         }
 
@@ -127,7 +127,7 @@ impl Dashboard {
             .set_metadata(&target_path, metadata)
             .await
         {
-            return object_compose_error(http_status("500"), error.to_string());
+            return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string());
         }
         let landed = match self
             .store
@@ -136,11 +136,11 @@ impl Dashboard {
             .await
         {
             Ok(landed) => landed,
-            Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+            Err(error) => return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string()),
         };
         let Some(blob) = landed.into_iter().find(|blob| blob.name == target_path) else {
             return object_compose_error(
-                http_status("500"),
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 format!("object metadata verification could not find {object}"),
             );
         };
@@ -150,7 +150,7 @@ impl Dashboard {
             .any(|(key, value)| blob.metadata.get(key) != Some(value))
         {
             return object_compose_error(
-                http_status("500"),
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 format!("object metadata verification failed for {object}"),
             );
         }
@@ -167,7 +167,7 @@ impl Dashboard {
                         })
                     })
                     .collect::<Vec<_>>(),
-                Err(error) => return object_compose_error(http_status("500"), error.to_string()),
+                Err(error) => return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string()),
             }
         } else {
             chunks
@@ -177,12 +177,12 @@ impl Dashboard {
         };
         for chunk_path in cleanup_paths {
             if let Err(error) = self.store.delete_blob(&chunk_path).await {
-                return object_compose_error(http_status("500"), error.to_string());
+                return object_compose_error(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), error.to_string());
             }
         }
 
         object_compose_response(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             json!({
                 "state": "stored",
                 "uri": object.to_string(),

@@ -37,29 +37,27 @@ pub fn compiles(command: &str) -> bool {
     command.contains(BUILD_VERSION_FILE) || command.contains(RELEASE_BUILD_PROGRAM)
 }
 
-/// How many of `commands` compile.
-pub fn compiling(commands: &[String]) -> usize {
-    commands.iter().filter(|command| compiles(command)).count()
-}
-
-/// Refuse or charge `wanted` compiles for submission `key`, under the
-/// registry's own fence.
+/// Refuse or charge the compiles among `commands` for submission `key`,
+/// under the registry's own fence.
 ///
 /// Read, refuse, record and write in one generation: two submissions racing
 /// cannot spend the same allowance, and a submission that is refused writes
 /// nothing. `key` is the submission's run id, and a key already charged today
 /// costs nothing again — the client that submits a build and the worker that
 /// claims it both come through here, and the day owes one charge for one
-/// build.
+/// build. An operator approval covers exactly one build, so it is consulted
+/// only when a single command compiles.
 pub async fn charge(
     key: &str,
-    wanted: usize,
+    commands: &[String],
     asked_by: &str,
     intent: Option<&BuildIntent<'_>>,
 ) -> Result<(), String> {
-    if wanted == 0 {
+    let builds: Vec<&String> = commands.iter().filter(|command| compiles(command)).collect();
+    if builds.is_empty() {
         return Ok(());
     }
+    let wanted = builds.len();
     let now = chrono::Utc::now();
     let (mut document, generation) = crate::cli::registry::fetch_versioned_document()
         .await
@@ -69,7 +67,7 @@ pub async fn charge(
         return Ok(());
     }
     let approved = if let Some(refusal) = budget.refusal(wanted, asked_by) {
-        let Some(intent) = intent.filter(|_| wanted == usize::from(true)) else {
+        let Some(intent) = intent.filter(|_| matches!(builds.as_slice(), [_])) else {
             return Err(refusal);
         };
         Some(

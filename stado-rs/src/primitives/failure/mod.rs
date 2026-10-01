@@ -41,17 +41,6 @@ use regex::Regex;
 /// changes.
 pub use wisent_errors::{Code as FailureCode, Severity};
 
-/// The technical detail carried into the structured log line is bounded: an
-/// upstream body pasted whole turns one failure into an unreadable log page.
-/// The operator still has the unbounded original on the line above it.
-///
-/// This bound stays local and stays tighter than the package's envelope bound:
-/// it governs the CLI's own log line, which the fleet's shippers have been
-/// ingesting at this width.
-fn max_detail_chars() -> usize {
-    "300".parse().expect("valid detail bound")
-}
-
 /// `EX_UNAVAILABLE`. The single fleet-wide signal for "this failure is worth
 /// retrying later", ratified across every Wisent CLI: a script branches on
 /// this one code instead of pattern-matching prose.
@@ -111,12 +100,6 @@ static UPSTREAM_STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 fn matches_any(haystack: &str, needles: &[String]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
-}
-
-/// Bounded technical detail for the structured log line. The width is this
-/// CLI's own; the cut is the package's, so the fleet has one trim rule.
-pub fn bounded_detail(text: &str) -> String {
-    wisent_errors::trim_detail(text, max_detail_chars())
 }
 
 /// The status an upstream answered with, if the message names one.
@@ -188,7 +171,7 @@ pub fn log_failure(point: &str, service: &str, code: FailureCode, detail: &str) 
         service = service,
         retryable = code.retryable(),
         severity = code.severity().as_str(),
-        detail = %bounded_detail(detail),
+        detail = %detail.trim(),
         "{}",
         code.operator_summary()
     );

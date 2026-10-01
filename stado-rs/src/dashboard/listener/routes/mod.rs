@@ -20,7 +20,7 @@ impl Dashboard {
             if !self
                 .trusted_request_host(request.header("host"), request.header("x-forwarded-proto"))
             {
-                return send_json(http_status("403"), &json!({"error": "forbidden"}));
+                return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
             }
             let available = self.boundaries_available(&[Boundary::Integration]).await;
             return integration::handle(request, available, &self.store).await;

@@ -9,21 +9,6 @@ mod process;
 mod read;
 mod routes;
 
-const DEFAULT_PORT: &str = "8001";
-const DEFAULT_CONTEXT: &str = "32768";
-
-fn default_port() -> u16 {
-    DEFAULT_PORT.parse().expect("static inference port")
-}
-
-fn default_context() -> u64 {
-    DEFAULT_CONTEXT.parse().expect("static inference context")
-}
-
-fn default_log_lines() -> usize {
-    usize::from(u8::MAX)
-}
-
 #[derive(Subcommand, Debug)]
 pub enum InferenceCommands {
     /// Inspect the target and persist an immutable, registry-bound plan.
@@ -43,9 +28,11 @@ pub enum InferenceCommands {
         /// whenever an eligible GPU job is queued and resumes it afterward.
         #[arg(long, default_value = "exclusive", value_parser = ["exclusive", "yieldable"])]
         gpu_mode: String,
-        #[arg(long, default_value_t = default_port())]
+        /// Port the vLLM endpoint listens on.
+        #[arg(long)]
         port: u16,
-        #[arg(long, default_value_t = default_context())]
+        /// Longest context the model is served with.
+        #[arg(long)]
         max_model_len: u64,
         /// Fixed vLLM KV-cache allocation in GiB; omit to use the image policy.
         #[arg(long)]
@@ -76,7 +63,8 @@ pub enum InferenceCommands {
     /// Read one deployment's systemd journal over the managed host channel.
     Logs {
         name: String,
-        #[arg(long, default_value_t = default_log_lines())]
+        /// Journal lines to read.
+        #[arg(long)]
         lines: usize,
         #[arg(long)]
         json: bool,
@@ -84,7 +72,8 @@ pub enum InferenceCommands {
     /// Read systemd logs for a runtime that has not committed its plan.
     PlanLogs {
         plan_id: String,
-        #[arg(long, default_value_t = default_log_lines())]
+        /// Journal lines to read.
+        #[arg(long)]
         lines: usize,
         #[arg(long)]
         json: bool,

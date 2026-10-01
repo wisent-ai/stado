@@ -70,7 +70,6 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         },
         resources: schema::Resources {
             gpu_mode: options.gpu_mode,
-            gpus: u16::from(true),
             max_model_len: options.max_model_len,
             kv_cache_memory_gb: options.kv_cache_memory_gb,
             cache_dir: options.cache_dir,

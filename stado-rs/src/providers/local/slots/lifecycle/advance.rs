@@ -123,20 +123,15 @@ pub async fn advance_slot(
     // which `stado host gui-automation status` reports as `granted`, and the
     // time goes into a permission that was never the problem.
     let classification_error = if job.state == job_state::FAILED && !slot.workdir_missing {
-        redacted_tail(
-            &job,
-            &output_dir.join("command_output.log"),
-            "4096".parse().expect("static error-tail size"),
-        )
-        .await?
+        redacted_output(&job, &output_dir.join("command_output.log")).await?
     } else {
         String::new()
     };
     if terminal_failed {
         job.failed_at = Some(ts);
-        // Collapsed to one line and bounded: this field is read in tables and
-        // in one-line log records, and a multi-line JSON blob there is as
-        // unreadable as no detail at all.
+        // Collapsed to one line: this field is read in tables and in one-line
+        // log records, and a multi-line JSON blob there is as unreadable as
+        // no detail at all.
         let said = classification_error
             .split_whitespace()
             .collect::<Vec<_>>()
@@ -146,9 +141,10 @@ pub async fn advance_slot(
                 "workdir_missing expected_path={} workload_exit_code={workload_exit_code}",
                 expected_work_dir.display()
             );
-            match tail_chars(&said, 400) {
-                said if said.trim().is_empty() => missing,
-                said => format!("{missing}; captured_output: {said}"),
+            if said.is_empty() {
+                missing
+            } else {
+                format!("{missing}; captured_output: {said}")
             }
         } else {
             let what = if verification_failed {
@@ -156,9 +152,10 @@ pub async fn advance_slot(
             } else {
                 "workload exited unsuccessfully"
             };
-            match tail_chars(&said, 400) {
-                said if said.trim().is_empty() => format!("{what} and wrote no output"),
-                said => format!("{what}: {said}"),
+            if said.is_empty() {
+                format!("{what} and wrote no output")
+            } else {
+                format!("{what}: {said}")
             }
         });
     } else {

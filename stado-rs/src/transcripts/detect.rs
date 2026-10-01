@@ -2,22 +2,6 @@
 //! which values look like key material, and how a `NAME=VALUE` or
 //! `"NAME": "VALUE"` pair is pulled out of a line of payload text.
 
-/// Minimum length before a value counts as secret-shaped. Short values are
-/// hostnames, flags and booleans; a credential is longer.
-pub(in crate::transcripts) fn min_secret_len() -> usize {
-    "24".parse().unwrap_or_default()
-}
-
-/// Distinct-character floor. A long run of one character, a path, or a repeated
-/// placeholder is not a credential; real key material spreads its alphabet.
-fn min_distinct_chars() -> usize {
-    "12".parse().unwrap_or_default()
-}
-
-pub(in crate::transcripts) fn one() -> usize {
-    "1".parse().unwrap_or_default()
-}
-
 /// Whether a name looks like it holds a credential rather than a setting.
 pub(in crate::transcripts) fn name_suggests_secret(name: &str) -> bool {
     const MARKERS: &[&str] = &[
@@ -44,7 +28,7 @@ pub(in crate::transcripts) fn name_suggests_secret(name: &str) -> bool {
 /// provider prefix list to fall behind, and no attempt to judge what the value
 /// unlocks.
 pub(in crate::transcripts) fn value_looks_secret(value: &str) -> bool {
-    if value.len() < min_secret_len() {
+    if value.is_empty() {
         return false;
     }
     // Placeholders and references are the common false positive: `op://…`,
@@ -59,16 +43,7 @@ pub(in crate::transcripts) fn value_looks_secret(value: &str) -> bool {
     if placeholder {
         return false;
     }
-    if value.contains(char::is_whitespace) {
-        return false;
-    }
-    let mut seen: Vec<char> = Vec::new();
-    for character in value.chars() {
-        if !seen.contains(&character) {
-            seen.push(character);
-        }
-    }
-    seen.len() >= min_distinct_chars()
+    !value.contains(char::is_whitespace)
 }
 
 /// Pull `NAME=VALUE` and `"NAME": "VALUE"` pairs out of one line of payload

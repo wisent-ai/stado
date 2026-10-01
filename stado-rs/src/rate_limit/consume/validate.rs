@@ -1,5 +1,7 @@
 //! What a consume request, and a restored record, must already be.
 
+use std::num::NonZeroU64;
+
 use sha2::{Digest, Sha256};
 
 use crate::rate_limit::{clients, ConsumeRequest, RateLimitClient, RateLimitError};
@@ -15,31 +17,28 @@ pub(super) fn validate_request(
             "namespace is outside the authenticated client policy".to_string(),
         ));
     }
-    if request.key.len() != Sha256::output_size()
-        || !request
-            .key
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    let lowercase_hex = request
+        .key
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !lowercase_hex
+        || !hex::decode(&request.key).is_ok_and(|bytes| bytes.len() == Sha256::output_size())
     {
         return Err(RateLimitError::InvalidRequest(
             "key must be a lowercase SHA-256 digest".to_string(),
         ));
     }
-    if request.limit == u64::MIN || request.window_ms == u64::MIN {
+    if NonZeroU64::new(request.limit).is_none() || NonZeroU64::new(request.window_ms).is_none() {
         return Err(RateLimitError::InvalidRequest(
             "limit and window_ms must be non-zero".to_string(),
-        ));
-    }
-    if request.limit > max_exact_json_integer() || request.window_ms > max_exact_json_integer() {
-        return Err(RateLimitError::InvalidRequest(
-            "limit and window_ms must be exact JSON integers".to_string(),
         ));
     }
     Ok(())
 }
 
-pub(super) fn max_exact_json_integer() -> u64 {
-    (u64::from(true) << f64::MANTISSA_DIGITS) - u64::from(true)
+/// How many requests this window has already allowed.
+pub(super) fn used(record: &Record) -> u64 {
+    u64::try_from(record.hits.len()).unwrap_or(u64::MAX)
 }
 
 pub(super) fn record_id(
@@ -65,10 +64,9 @@ pub(super) fn validate_record(id: &str, record: &Record) -> Result<(), RateLimit
         window_ms: record.window_ms,
     };
     if validate_request(client, &request).is_err()
-        || record.count == u64::MIN
-        || record.count > record.limit
-        || record.reset_at == u64::MIN
-        || record.reset_at > max_exact_json_integer()
+        || record.hits.is_empty()
+        || used(record) > record.limit
+        || NonZeroU64::new(record.reset_at).is_none()
         || id
             != record_id(
                 &record.client,

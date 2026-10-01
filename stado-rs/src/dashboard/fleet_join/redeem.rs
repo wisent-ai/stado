@@ -71,11 +71,7 @@ pub(super) async fn verify(store: &JobStorage, id: &str, secret: &str) -> Result
 /// lost race means the use went to another machine, which is an exhausted
 /// code, which is the same refusal as any other.
 pub(super) async fn spend(store: &JobStorage, accepted: &Accepted) -> Result<Value, Denial> {
-    let mut next = accepted.invite.clone();
-    next.uses_spent = next.uses_spent.saturating_add(u64::from(true));
-    if next.uses_spent >= next.uses_allowed {
-        next.status = invite::STATUS_SPENT.to_string();
-    }
+    let next = invite::with_one_use_spent(&accepted.invite);
     let document = invite::invite_document(&next);
     let body = serde_json::to_string_pretty(&document)
         .map_err(|_| Denial::Unavailable("enrollment store is unavailable"))?;

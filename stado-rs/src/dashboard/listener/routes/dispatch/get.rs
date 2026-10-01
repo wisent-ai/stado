@@ -38,7 +38,7 @@ impl Dashboard {
             if path_no_query == "/api/machine/status" {
                 return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
             }
-            return send_json(http_status("403"), &json!({"error": "forbidden"}));
+            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
         }
         if path_no_query == crate::dashboard::operator_console::stream::PATH {
             return crate::dashboard::operator_console::stream::upgrade(request).await;
@@ -56,7 +56,7 @@ impl Dashboard {
                 (!boundaries.all_ready(), boundaries.ready_json())
             };
             return send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({
                     "ok": true,
                     "degraded": degraded,
@@ -89,7 +89,7 @@ impl Dashboard {
                         .unwrap_or_else(|error| json!({"error": error.to_string()}))
                 });
             return send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({
                     "degraded": degraded,
                     "boundaries": boundaries,
@@ -149,7 +149,7 @@ impl Dashboard {
             let plan = boundary_plan(path_no_query, Some((&namespace, &key_or_prefix)));
             if !self.satisfy_boundaries(&plan).await {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "object authorization unavailable"}),
                 );
             }
@@ -173,13 +173,13 @@ impl Dashboard {
                 Ok(None) => {}
                 Ok(Some(reason)) => {
                     return send_json(
-                        http_status("401"),
+                        http_status(reqwest::StatusCode::UNAUTHORIZED),
                         &json!({"error": "unauthorized", "reason": reason}),
                     )
                 }
                 Err(()) => {
                     return send_json(
-                        http_status("503"),
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                         &json!({"error": "object authorization unavailable"}),
                     )
                 }
@@ -191,7 +191,7 @@ impl Dashboard {
                 && !self.boundaries_available(&[Boundary::Service]).await
             {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "service authorization unavailable"}),
                 );
             }
@@ -211,7 +211,7 @@ impl Dashboard {
             ) {
                 if !self.boundaries_available(&[Boundary::Registry]).await {
                     return send_json(
-                        http_status("503"),
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                         &json!({"error": "registry authorization unavailable"}),
                     );
                 }
@@ -237,11 +237,11 @@ impl Dashboard {
                 match authorize_service(request, service, "status").await {
                     Ok(true) => {}
                     Ok(false) => {
-                        return send_json(http_status("401"), &json!({"error": "unauthorized"}))
+                        return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"}))
                     }
                     Err(()) => {
                         return send_json(
-                            http_status("503"),
+                            http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                             &json!({"error": "service authorization unavailable"}),
                         )
                     }

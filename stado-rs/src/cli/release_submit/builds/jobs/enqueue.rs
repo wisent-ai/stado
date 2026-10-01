@@ -266,7 +266,7 @@ pub(crate) async fn enqueue(
         let _phase = phase(format!("{platform}: charge the fleet build budget"));
         crate::scheduler::builds::charge(
             &options.run_id,
-            usize::from(true),
+            std::slice::from_ref(&command),
             "a release build",
             Some(&intent),
         )

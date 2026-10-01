@@ -26,7 +26,7 @@ impl Dashboard {
             if matches!(path, "/api/machine/submit" | "/api/machine/cancel") {
                 return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
             }
-            return send_json(http_status("403"), &json!({"error": "forbidden"}));
+            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
         }
         // Enrollment by invite: authorized by the invite token alone, before
         // any operator authorization is reached, and never by it.
@@ -54,7 +54,7 @@ impl Dashboard {
                 )));
             }
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": "authorization boundary unavailable"}),
             );
         }
@@ -74,7 +74,7 @@ impl Dashboard {
         ) {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "registry authorization unavailable"}),
                 );
             }
@@ -107,11 +107,11 @@ impl Dashboard {
                 match authorize_service(request, service, "restart").await {
                     Ok(true) => {}
                     Ok(false) => {
-                        return send_json(http_status("401"), &json!({"error": "unauthorized"}))
+                        return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"}))
                     }
                     Err(()) => {
                         return send_json(
-                            http_status("503"),
+                            http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                             &json!({"error": "service authorization unavailable"}),
                         )
                     }
@@ -124,6 +124,6 @@ impl Dashboard {
                 self.post_machine_cancel(request, query).await
             };
         }
-        empty_response(http_status("404"), "Not Found")
+        empty_response(http_status(reqwest::StatusCode::NOT_FOUND), "Not Found")
     }
 }

@@ -162,18 +162,18 @@ impl Dashboard {
 pub(crate) fn machine_result_response(result: Result<Value, MachineError>) -> Response {
     match result {
         Ok(result) => send_json(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             &json!({"schema_version": MACHINE_SCHEMA_VERSION, "ok": true, "result": result}),
         ),
         Err(error) => {
             let status = match error.code.as_str() {
-                "INVALID_REQUEST" | "INVALID_SOURCE_ARCHIVE" => http_status("400"),
-                "NOT_FOUND" => http_status("404"),
-                "IDEMPOTENCY_CONFLICT" => http_status("409"),
-                "UNAUTHORIZED" => http_status("401"),
-                "FORBIDDEN" => http_status("403"),
-                _ if error.retryable => http_status("503"),
-                _ => http_status("500"),
+                "INVALID_REQUEST" | "INVALID_SOURCE_ARCHIVE" => http_status(reqwest::StatusCode::BAD_REQUEST),
+                "NOT_FOUND" => http_status(reqwest::StatusCode::NOT_FOUND),
+                "IDEMPOTENCY_CONFLICT" => http_status(reqwest::StatusCode::CONFLICT),
+                "UNAUTHORIZED" => http_status(reqwest::StatusCode::UNAUTHORIZED),
+                "FORBIDDEN" => http_status(reqwest::StatusCode::FORBIDDEN),
+                _ if error.retryable => http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                _ => http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
             };
             send_json(
                 status,

@@ -54,7 +54,7 @@ fn channel_failed(channel: &str, error: &str) {
         retryable = code.retryable(),
         severity = code.severity().as_str(),
         channel = channel,
-        detail = %crate::primitives::failure::bounded_detail(error),
+        detail = %error.trim(),
         "alert channel delivery failed; the remaining channels still fire"
     );
     log(&format!("{channel} failed: {error}"));

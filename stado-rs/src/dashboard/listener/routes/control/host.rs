@@ -21,7 +21,7 @@ impl Dashboard {
             || !request.body.is_empty()
         {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "storage reconciliation does not accept a request body"}),
             );
         }
@@ -48,10 +48,10 @@ impl Dashboard {
                 };
                 let mut envelope = json!({"exit_code": exit_code, "refusal": refusal});
                 envelope["report"] = result.report;
-                send_json(http_status("200"), &envelope)
+                send_json(http_status(reqwest::StatusCode::OK), &envelope)
             }
             Err(error) => send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({
                     "error_code": "STORAGE_RECONCILIATION_FAILED",
                     "error": error.to_string(),
@@ -63,7 +63,7 @@ impl Dashboard {
     pub(crate) async fn put_host_health(&self, request: &Request, query: &str) -> Response {
         match authorize_host_health(self, request).await {
             Ok(true) => {}
-            Ok(false) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Ok(false) => return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"})),
             // An unreadable authorization item is this service's failure, not
             // the caller's credential. Answering 401 for it told every host in
             // the fleet its beacon grant had been rejected while the real
@@ -71,7 +71,7 @@ impl Dashboard {
             // for seventeen hours behind that sentence.
             Err(()) => {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "host-health authorization unavailable"}),
                 )
             }
@@ -81,14 +81,14 @@ impl Dashboard {
             [(key, value)] if key == "host" => value.clone(),
             _ => {
                 return send_json(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     &json!({"error": "exactly one host query parameter is required"}),
                 )
             }
         };
         if !valid_beacon_host(&host) {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "host must be a lowercase DNS label"}),
             );
         }
@@ -107,7 +107,7 @@ impl Dashboard {
             || request.body.is_empty()
         {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "invalid JSON request framing"}),
             );
         }
@@ -115,14 +115,14 @@ impl Dashboard {
             Ok(value) => value,
             Err(error) => {
                 return send_json(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     &json!({"error": format!("invalid JSON: {error}")}),
                 )
             }
         };
         let Some(document) = payload.as_object() else {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "host beacon must be a JSON object"}),
             );
         };
@@ -134,14 +134,14 @@ impl Dashboard {
             || document.get("units").and_then(Value::as_object).is_none()
         {
             return send_json(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 &json!({"error": "beacon host must match the query and reported_at/units are required"}),
             );
         }
         let path = crate::monitor::host_health::beacon_object_path(&host);
         match self.store.upload_bytes(&path, &request.body).await {
             Ok(()) => send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({"state": "stored", "host": host, "path": path}),
             ),
             Err(error) => storage_error_response(error),
@@ -157,7 +157,7 @@ pub(crate) fn host_inventory_target(query: &str) -> Result<String, Response> {
     let values = parse_qs(query);
     if values.len() != 1 || values[0].0 != "target" || values[0].1.is_empty() {
         return Err(send_json(
-            http_status("400"),
+            http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "exactly one non-empty target is required"}),
         ));
     }
@@ -170,7 +170,7 @@ fn storage_reconciliation_query(
 ) -> Result<(String, String, String), Response> {
     let invalid = || {
         send_json(
-            http_status("400"),
+            http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({
                 "error": "query must contain exactly one non-empty target, transaction and phase; GET accepts status, POST accepts run, resume, rollback or finalize"
             }),

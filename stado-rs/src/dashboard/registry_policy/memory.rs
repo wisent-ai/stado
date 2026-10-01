@@ -22,7 +22,7 @@ use crate::providers::local::host_memory::declaration::policies;
 pub(crate) fn get_memory_policies() -> Response {
     match policies::all() {
         Ok(declared) => send_json(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             &json!({
                 "declaration": policies::DECLARATION_PATH,
                 "policies": declared
@@ -32,7 +32,7 @@ pub(crate) fn get_memory_policies() -> Response {
             }),
         ),
         Err(error) => send_json(
-            http_status("500"),
+            http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
             &json!({"error": format!("the declared memory policies are unreadable: {error}")}),
         ),
     }

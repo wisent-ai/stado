@@ -24,22 +24,10 @@
 //! once (keeping the version it needs for a compare-and-swap spend), and asks
 //! that module what the invite's status actually is.
 //!
-//! Refusals are uniform. Unknown, spent, revoked, expired, malformed, and
-//! rate-limited all produce the same status, the same body, and the same
-//! floor on elapsed time (`REFUSAL_FLOOR`), so a caller cannot use the
-//! endpoint to learn which of those states a code is in, nor to enumerate
-//! codes by timing.
-//!
-//! Rate limiting here is deliberately NOT `crate::rate_limit::RateLimiter`,
-//! the shared limiter the dashboard exposes on `/api/rate-limit/consume`, and
-//! it must not be "unified" with it later. That limiter (a) authenticates the
-//! caller as a configured `RateLimitClient` from Skarbiec, which a machine
-//! holding only an invite code cannot be, and (b) persists its window state to
-//! the object store on every allowed consume — so wiring an unauthenticated
-//! route into it converts a request flood into one object-store write per
-//! request. That is the cost this limiter exists to bound, not a way to bound
-//! it. The window below is process-local, checked before any store or vault
-//! read, and costs one mutex.
+//! Refusals are uniform. Unknown, spent, revoked, expired and malformed all
+//! produce the same status, the same body, and the same floor on elapsed time
+//! (`REFUSAL_FLOOR`), so a caller cannot use the endpoint to learn which of
+//! those states a code is in, nor to enumerate codes by timing.
 
 use crate::cli::fleet::invite;
 
@@ -48,7 +36,6 @@ use super::Request;
 mod redeem;
 mod refusals;
 mod routes;
-mod window;
 
 pub(super) use routes::{invite_key, join, join_script};
 
@@ -87,8 +74,7 @@ fn bearer(request: &Request) -> Option<&str> {
 }
 
 /// Token id and secret, owned, when the presented bearer has the right shape.
-/// Shape failures are refusals like any other; the id is kept because the
-/// limiter charges the request before anything else looks at it.
+/// Shape failures are refusals like any other.
 fn presented(request: &Request) -> Option<(String, String)> {
     let raw = bearer(request)?;
     invite::parse_token(raw)

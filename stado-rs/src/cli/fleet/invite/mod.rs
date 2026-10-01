@@ -58,8 +58,8 @@ pub use mint::command::invite;
 pub use record::listing::invites;
 pub use record::token::{digests_match, parse_token};
 pub use record::{
-    effective_status, invite_document, invite_path, parse_invite, secret_digest, Invite,
-    STATUS_OPEN, STATUS_SPENT,
+    effective_status, invite_document, invite_path, parse_invite, secret_digest,
+    with_one_use_spent, Invite, STATUS_OPEN,
 };
 pub use redeem::mark_spent;
 pub use redeem::offline_close::close_offline_for_target;

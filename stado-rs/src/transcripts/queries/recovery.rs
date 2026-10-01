@@ -2,7 +2,7 @@
 //! phrases for a passphrase-protected key. Both consult runtime payloads only,
 //! and neither prints anything.
 
-use crate::transcripts::detect::{min_secret_len, pairs_in_line, value_looks_secret};
+use crate::transcripts::detect::{pairs_in_line, value_looks_secret};
 use crate::transcripts::sources::events::payloads;
 use crate::transcripts::sources::files::transcript_files;
 use crate::transcripts::Origin;
@@ -32,13 +32,6 @@ pub fn value_for(name: &str) -> Option<String> {
     None
 }
 
-/// Longest string still plausible as a passphrase. Beyond this a token is a
-/// hash, a bearer, or base64 payload, not something a person or a generator
-/// produced as an unlock phrase.
-fn max_phrase_len() -> usize {
-    "128".parse().unwrap_or_default()
-}
-
 /// Candidate unlock phrases for a passphrase-protected key, newest first.
 ///
 /// A protected key is useless without its phrase, and the phrase is the one
@@ -65,8 +58,7 @@ pub fn unlock_candidates() -> Vec<(String, String)> {
             || payload.contains("skarbiec-unlock")
     };
     let plausible_phrase = |token: &str| {
-        let bounds = token.len() >= min_secret_len() && token.len() <= max_phrase_len();
-        bounds
+        !token.is_empty()
             && token.chars().all(|c| {
                 c.is_ascii_alphanumeric()
                     || c == '+'
@@ -93,7 +85,7 @@ pub fn unlock_candidates() -> Vec<(String, String)> {
             let bare_ok = about_unlock_file(&payload);
             for line in payload.lines() {
                 for (name, value) in pairs_in_line(line) {
-                    if interesting(&name) && value.len() >= min_secret_len() {
+                    if interesting(&name) && !value.is_empty() {
                         push(&name, &value, &mut candidates);
                     }
                 }

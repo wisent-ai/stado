@@ -51,8 +51,7 @@ pub async fn submit_batch(
     // sentences; this is the charge that makes the count true for the paths
     // nobody remembered — a rerun, a raw submit, a client older than the
     // ceiling itself.
-    let compiling = crate::scheduler::builds::compiling(commands);
-    crate::scheduler::builds::charge(&options.run_id, compiling, "a queue submission", None)
+    crate::scheduler::builds::charge(&options.run_id, commands, "a queue submission", None)
         .await
         .map_err(SubmitError::Validation)?;
     let run_id = options.run_id.clone();

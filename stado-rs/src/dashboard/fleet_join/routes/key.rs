@@ -12,7 +12,6 @@ use crate::queue::JobStorage;
 use super::super::presented;
 use super::super::redeem::verify;
 use super::super::refusals::{denied, refuse, unavailable};
-use super::super::window::accept_request;
 
 /// `GET /api/fleet/invite/key` — the public half of the fleet's channel key
 /// for this invite's target, plus the exact `authorized_keys` line to append.
@@ -20,9 +19,6 @@ use super::super::window::accept_request;
 pub(in crate::dashboard) async fn invite_key(store: &JobStorage, request: &Request) -> Response {
     let started = Instant::now();
     let token = presented(request);
-    if !accept_request(token.as_ref().map(|(id, _)| id.as_str()), request.peer) {
-        return refuse(started).await;
-    }
     let Some((id, secret)) = token else {
         return refuse(started).await;
     };
@@ -56,7 +52,7 @@ pub(in crate::dashboard) async fn invite_key(store: &JobStorage, request: &Reque
         _ => return unavailable("enrollment key is not available for this invite"),
     };
     send_json(
-        http_status("200"),
+        http_status(reqwest::StatusCode::OK),
         &json!({
             "target_name": target,
             "public_key": public_key,

@@ -20,4 +20,4 @@ mod budget;
 mod charge;
 
 pub use budget::{BuildBudget, BUILD_BUDGET_KEY, DEFAULT_DAILY_BUILD_LIMIT};
-pub use charge::{charge, compiles, compiling, BUILD_VERSION_FILE};
+pub use charge::{charge, compiles, BUILD_VERSION_FILE};

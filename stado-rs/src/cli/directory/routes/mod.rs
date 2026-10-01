@@ -51,9 +51,6 @@ pub(crate) fn service_port(entry: &Value, active: &str) -> Option<u16> {
 /// forward looks like from the outside.
 async fn answers(url: &str) -> Result<u16, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(
-            "5".parse().expect("static number"),
-        ))
         .no_proxy()
         .build()
         .map_err(|error| error.to_string())?;

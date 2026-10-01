@@ -36,7 +36,7 @@ fn cleanup_document() -> Value {
 /// `GET /api/cleanup.json`
 pub(crate) fn get_cleanup() -> Response {
     send_json(
-        http_status("200"),
+        http_status(reqwest::StatusCode::OK),
         &json!({"ok": true, "service": "disk-cleanup", "report": cleanup_document()}),
     )
 }
@@ -56,7 +56,7 @@ pub(crate) async fn run_cleanup() -> Response {
     )
     .await;
     send_json(
-        http_status("200"),
+        http_status(reqwest::StatusCode::OK),
         &json!({
             "ok": true,
             "service": "disk-cleanup",

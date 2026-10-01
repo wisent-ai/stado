@@ -16,7 +16,7 @@ use crate::dashboard::listener::{
 impl Dashboard {
     pub(crate) async fn do_put(&self, request: &Request) -> Response {
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return send_json(http_status("403"), &json!({"error": "forbidden"}));
+            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
         }
         let (path, query) = request
             .path
@@ -26,7 +26,7 @@ impl Dashboard {
             return self.put_host_health(request, query).await;
         }
         if path != "/api/object" {
-            return empty_response(http_status("404"), "Not Found");
+            return empty_response(http_status(reqwest::StatusCode::NOT_FOUND), "Not Found");
         }
         let object = match object_from_query(query) {
             Ok(object) => object,
@@ -36,7 +36,7 @@ impl Dashboard {
             && !self.boundaries_available(&[Boundary::Object]).await
         {
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": "object authorization unavailable"}),
             );
         }
@@ -66,13 +66,13 @@ impl Dashboard {
             Ok(None) => {}
             Ok(Some(reason)) => {
                 return send_json(
-                    http_status("401"),
+                    http_status(reqwest::StatusCode::UNAUTHORIZED),
                     &json!({"error": "unauthorized", "reason": reason}),
                 )
             }
             Err(()) => {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "object authorization unavailable"}),
                 )
             }
@@ -89,14 +89,14 @@ impl Dashboard {
 
     pub(crate) async fn do_delete(&self, request: &Request) -> Response {
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return send_json(http_status("403"), &json!({"error": "forbidden"}));
+            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
         }
         let (path, query) = request
             .path
             .split_once('?')
             .unwrap_or((request.path.as_str(), ""));
         if path != "/api/object" {
-            return empty_response(http_status("404"), "Not Found");
+            return empty_response(http_status(reqwest::StatusCode::NOT_FOUND), "Not Found");
         }
         let object = match object_from_query(query) {
             Ok(object) => object,
@@ -108,7 +108,7 @@ impl Dashboard {
             if release_object_namespace(object.namespace()) {
                 let Some(target_key) = release_upload_target_key(object.key()) else {
                     return send_json(
-                        http_status("403"),
+                        http_status(reqwest::StatusCode::FORBIDDEN),
                         &json!({"error": "release objects are immutable and cannot be deleted"}),
                     );
                 };
@@ -119,7 +119,7 @@ impl Dashboard {
         } else {
             if !self.boundaries_available(&[Boundary::Object]).await {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "object authorization unavailable"}),
                 );
             }
@@ -137,13 +137,13 @@ impl Dashboard {
             Ok(None) => {}
             Ok(Some(reason)) => {
                 return send_json(
-                    http_status("401"),
+                    http_status(reqwest::StatusCode::UNAUTHORIZED),
                     &json!({"error": "unauthorized", "reason": reason}),
                 )
             }
             Err(()) => {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "object authorization unavailable"}),
                 )
             }
@@ -155,7 +155,7 @@ impl Dashboard {
         let result = self.store.delete_blob(&object.storage_path()).await;
         match result {
             Ok(()) => send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({"state": "absent", "uri": object.to_string()}),
             ),
             Err(error) => storage_error_response(error),

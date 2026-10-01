@@ -62,7 +62,7 @@ fn single(values: &[(String, String)], name: &str) -> Option<String> {
     }
 }
 
-fn refused(status: &str, detail: String) -> Response {
+fn refused(status: reqwest::StatusCode, detail: String) -> Response {
     send_json(http_status(status), &json!({ "error": detail }))
 }
 
@@ -108,7 +108,7 @@ impl Dashboard {
         let values = parse_qs(query);
         let Some(product) = single(&values, "product") else {
             return Ok(refused(
-                "400",
+                reqwest::StatusCode::BAD_REQUEST,
                 "the query must name exactly one product".to_string(),
             ));
         };
@@ -127,13 +127,13 @@ impl Dashboard {
             single(&values, "file"),
         ) else {
             return Ok(refused(
-                "400",
+                reqwest::StatusCode::BAD_REQUEST,
                 "the query must name exactly one product, version and file".to_string(),
             ));
         };
         if !update_member(&file) {
             return Ok(refused(
-                "403",
+                reqwest::StatusCode::FORBIDDEN,
                 format!("only a release's {UPDATE_SUFFIX} update archive is served, not {file:?}"),
             ));
         }
@@ -152,7 +152,7 @@ impl Dashboard {
     ) -> Result<Response, DashboardError> {
         let Some(run) = self.newest_installable(product, version).await? else {
             return Ok(send_json(
-                http_status("404"),
+                http_status(reqwest::StatusCode::NOT_FOUND),
                 &json!({
                     "state": "absent",
                     "product": product,
@@ -170,7 +170,7 @@ impl Dashboard {
             .and_then(|platform| platform.artifact_sha256.clone());
         let Some(archive) = self.store.download_release(&uri).await? else {
             return Ok(refused(
-                "503",
+                reqwest::StatusCode::SERVICE_UNAVAILABLE,
                 format!(
                     "release run {} is published but {uri} is absent",
                     run.run_id
@@ -180,7 +180,7 @@ impl Dashboard {
         let digest = crate::release_control::sha256_bytes(&archive);
         if recorded.as_deref() != Some(digest.as_str()) {
             return Ok(refused(
-                "503",
+                reqwest::StatusCode::SERVICE_UNAVAILABLE,
                 format!(
                     "{uri} has SHA-256 {digest}, but release run {} recorded {}",
                     run.run_id,
@@ -190,12 +190,12 @@ impl Dashboard {
         }
         let Some(bytes) = member(&archive, name)? else {
             return Ok(send_json(
-                http_status("404"),
+                http_status(reqwest::StatusCode::NOT_FOUND),
                 &json!({"state": "absent", "uri": uri, "member": name}),
             ));
         };
         Ok(Response::new_with_headers(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             "OK",
             content_type,
             &bytes,

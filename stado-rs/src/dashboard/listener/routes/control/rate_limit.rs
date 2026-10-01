@@ -14,7 +14,7 @@ impl Dashboard {
             .map(str::trim);
         if content_type != Some("application/json") {
             return send_json(
-                http_status("415"),
+                http_status(reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE),
                 &json!({"error": "content-type must be application/json"}),
             );
         }
@@ -24,10 +24,10 @@ impl Dashboard {
             .unwrap_or_default();
         let client = match rate_limit::authenticate(supplied).await {
             Ok(Some(client)) => client,
-            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Ok(None) => return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"})),
             Err(_) => {
                 return send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "rate limiting unavailable"}),
                 )
             }
@@ -36,18 +36,18 @@ impl Dashboard {
             Ok(payload) => payload,
             Err(_) => {
                 return send_json(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     &json!({"error": "invalid rate-limit request"}),
                 )
             }
         };
         match self.rate_limiter.consume(client, &payload).await {
-            Ok(response) => send_json(http_status("200"), &json!(response)),
+            Ok(response) => send_json(http_status(reqwest::StatusCode::OK), &json!(response)),
             Err(RateLimitError::InvalidRequest(message)) => {
-                send_json(http_status("400"), &json!({"error": message}))
+                send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": message}))
             }
             Err(_) => send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": "rate limiting unavailable"}),
             ),
         }

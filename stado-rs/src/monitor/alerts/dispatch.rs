@@ -131,7 +131,7 @@ fn refused(channel: &'static str, error: &str) -> AlertDelivery {
     AlertDelivery {
         channel,
         delivered: false,
-        detail: crate::primitives::failure::bounded_detail(error),
+        detail: error.trim().to_string(),
     }
 }
 

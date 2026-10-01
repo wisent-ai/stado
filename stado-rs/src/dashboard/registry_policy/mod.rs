@@ -109,11 +109,11 @@ pub(super) async fn authorized(request: &Request, action: &str) -> Result<(), Re
     match authenticate(request, action).await {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(send_json(
-            http_status("401"),
+            http_status(reqwest::StatusCode::UNAUTHORIZED),
             &json!({"error": "unauthorized"}),
         )),
         Err(()) => Err(send_json(
-            http_status("503"),
+            http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
             &json!({"error": "registry authorization unavailable"}),
         )),
     }
@@ -173,7 +173,7 @@ pub(super) async fn get_policy() -> Response {
         Ok(store) => store,
         Err(error) => {
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": format!("registry store unavailable: {error}")}),
             )
         }
@@ -182,13 +182,13 @@ pub(super) async fn get_policy() -> Response {
         Ok(Some(current)) => current,
         Ok(None) => {
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": "canonical registry generation unavailable"}),
             )
         }
         Err(error) => {
             return send_json(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": format!("canonical registry unreadable: {error}")}),
             )
         }
@@ -197,7 +197,7 @@ pub(super) async fn get_policy() -> Response {
         Ok(document) => document,
         Err(error) => {
             return send_json(
-                http_status("500"),
+                http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
                 &json!({"error": format!("canonical registry is not JSON: {error}")}),
             )
         }
@@ -216,7 +216,7 @@ pub(super) async fn get_policy() -> Response {
         None => Value::Array(Vec::new()),
     };
     send_json(
-        http_status("200"),
+        http_status(reqwest::StatusCode::OK),
         &json!({
             "generation": current.version,
             "targets": targets,
@@ -237,22 +237,22 @@ pub(super) async fn import_registry(request: &Request) -> Response {
         .map(str::trim);
     if !matches!(content_type, Some(value) if value.eq_ignore_ascii_case("application/json")) {
         return send_json(
-            http_status("415"),
+            http_status(reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE),
             &json!({"error": "registry import requires Content-Type: application/json"}),
         );
     }
     match crate::registry_import::import_bytes(&request.body).await {
         Ok(receipt) => {
             let status = match receipt.state.as_str() {
-                "imported" | "unchanged" => "200",
-                "conflict" => "409",
-                "rejected" => "400",
-                _ => "500",
+                "imported" | "unchanged" => reqwest::StatusCode::OK,
+                "conflict" => reqwest::StatusCode::CONFLICT,
+                "rejected" => reqwest::StatusCode::BAD_REQUEST,
+                _ => reqwest::StatusCode::INTERNAL_SERVER_ERROR,
             };
             send_json(http_status(status), &json!(receipt))
         }
         Err(error) => send_json(
-            http_status("503"),
+            http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
             &json!({"error": format!("registry import unavailable: {error}")}),
         ),
     }

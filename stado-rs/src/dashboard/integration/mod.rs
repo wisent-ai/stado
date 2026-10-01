@@ -110,10 +110,10 @@ fn envelope(status: u16, value: Value, cap: usize) -> Response {
 
 fn error_response(error: HandlerError) -> Response {
     let (status, code) = match error {
-        HandlerError::BadRequest => (http_status("400"), "invalid_request"),
-        HandlerError::ProviderUnavailable => (http_status("503"), "integration_unavailable"),
-        HandlerError::UpstreamFailure => (http_status("502"), "upstream_failure"),
-        HandlerError::ResponseTooLarge => (http_status("502"), "response_too_large"),
+        HandlerError::BadRequest => (http_status(reqwest::StatusCode::BAD_REQUEST), "invalid_request"),
+        HandlerError::ProviderUnavailable => (http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "integration_unavailable"),
+        HandlerError::UpstreamFailure => (http_status(reqwest::StatusCode::BAD_GATEWAY), "upstream_failure"),
+        HandlerError::ResponseTooLarge => (http_status(reqwest::StatusCode::BAD_GATEWAY), "response_too_large"),
     };
     envelope_uncapped(status, json!({"ok": false, "error": {"code": code}}))
 }
@@ -176,7 +176,7 @@ pub(super) async fn handle(
 ) -> Response {
     let Some((domain, action)) = parse_path(&request.path) else {
         return envelope_uncapped(
-            http_status("404"),
+            http_status(reqwest::StatusCode::NOT_FOUND),
             json!({"ok": false, "error": {"code": "not_found"}}),
         );
     };
@@ -184,13 +184,13 @@ pub(super) async fn handle(
     // unknown domains/actions cannot be used as a secret oracle.
     if !supports(domain, action) {
         return envelope_uncapped(
-            http_status("404"),
+            http_status(reqwest::StatusCode::NOT_FOUND),
             json!({"ok": false, "error": {"code": "not_found"}}),
         );
     }
     if request.method != "POST" {
         return envelope_uncapped(
-            http_status("405"),
+            http_status(reqwest::StatusCode::METHOD_NOT_ALLOWED),
             json!({"ok": false, "error": {"code": "method_not_allowed"}}),
         );
     }
@@ -200,7 +200,7 @@ pub(super) async fn handle(
     let body_cap = request_body_limit();
     if request.content_length > body_cap {
         return envelope_uncapped(
-            http_status("413"),
+            http_status(reqwest::StatusCode::PAYLOAD_TOO_LARGE),
             json!({"ok": false, "error": {"code": "request_too_large"}}),
         );
     }
@@ -214,7 +214,7 @@ pub(super) async fn handle(
         Ok(true) => {}
         Ok(false) => {
             return envelope_uncapped(
-                http_status("401"),
+                http_status(reqwest::StatusCode::UNAUTHORIZED),
                 json!({"ok": false, "error": {"code": "unauthorized"}}),
             )
         }
@@ -222,7 +222,7 @@ pub(super) async fn handle(
     }
     match dispatch(domain, action, &request.body, store).await {
         Ok(value) => envelope(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             json!({"ok": true, "result": value}),
             response_body_limit(),
         ),

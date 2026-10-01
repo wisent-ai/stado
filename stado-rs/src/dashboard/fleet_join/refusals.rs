@@ -29,11 +29,11 @@ pub(super) async fn refuse(started: Instant) -> Response {
     if elapsed < REFUSAL_FLOOR {
         tokio::time::sleep(REFUSAL_FLOOR - elapsed).await;
     }
-    send_json(http_status("401"), &json!({"error": REFUSAL}))
+    send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": REFUSAL}))
 }
 
 pub(super) fn unavailable(message: &str) -> Response {
-    send_json(http_status("503"), &json!({"error": message}))
+    send_json(http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), &json!({"error": message}))
 }
 
 pub(super) async fn denied(started: Instant, denial: Denial) -> Response {

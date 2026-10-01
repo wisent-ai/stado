@@ -30,11 +30,11 @@ impl Dashboard {
         match crate::cli::service_converge::converge_result(&target, binary.as_deref(), apply).await
         {
             Ok(result) => send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({"exit_code": result.exit_code, "report": result.report_json()}),
             ),
             Err(error) => service_failure(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 "SERVICE_CONVERGE_FAILED",
                 error.to_string(),
                 true,
@@ -53,14 +53,14 @@ impl Dashboard {
         let store = match service_beacon_store().await {
             Ok(store) => store,
             Err(message) => {
-                return service_failure(http_status("503"), "SERVICE_STATUS_FAILED", message, true)
+                return service_failure(http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "SERVICE_STATUS_FAILED", message, true)
             }
         };
         let rows = match service::find_services(&store, name).await {
             Ok(rows) => rows,
             Err(error) => {
                 return service_failure(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     "SERVICE_STATUS_FAILED",
                     error.to_string(),
                     true,
@@ -69,7 +69,7 @@ impl Dashboard {
         };
         if rows.is_empty() {
             return service_failure(
-                http_status("404"),
+                http_status(reqwest::StatusCode::NOT_FOUND),
                 "NOT_FOUND",
                 format!("no registry-managed service named {name}"),
                 false,
@@ -94,12 +94,12 @@ impl Dashboard {
         let services = match declared_services_matching(name).await {
             Ok(services) => services,
             Err(message) => {
-                return service_failure(http_status("503"), "SERVICE_RESTART_FAILED", message, true)
+                return service_failure(http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "SERVICE_RESTART_FAILED", message, true)
             }
         };
         if services.is_empty() {
             return service_failure(
-                http_status("404"),
+                http_status(reqwest::StatusCode::NOT_FOUND),
                 "NOT_FOUND",
                 format!("no registry-managed service named {name}"),
                 false,
@@ -113,7 +113,7 @@ impl Dashboard {
                 Ok(target) => target,
                 Err(error) => {
                     return service_failure(
-                        http_status("503"),
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                         "SERVICE_RESTART_FAILED",
                         error.to_string(),
                         true,
@@ -124,7 +124,7 @@ impl Dashboard {
                 Ok(report) => report,
                 Err(error) => {
                     return service_failure(
-                        http_status("503"),
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                         "SERVICE_RESTART_FAILED",
                         error.to_string(),
                         true,
@@ -140,7 +140,7 @@ impl Dashboard {
         }
         if !failures.is_empty() {
             return service_failure(
-                http_status("503"),
+                http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 "SERVICE_RESTART_FAILED",
                 format!("restart failed on {}", failures.join("; ")),
                 true,
@@ -194,7 +194,7 @@ async fn declared_services_matching(name: &str) -> Result<Vec<service::ManagedSe
 }
 
 fn service_success(result: Value) -> Response {
-    send_json(http_status("200"), &json!({"ok": true, "result": result}))
+    send_json(http_status(reqwest::StatusCode::OK), &json!({"ok": true, "result": result}))
 }
 
 fn service_failure(
@@ -217,7 +217,7 @@ fn service_failure(
 }
 
 fn invalid_service_request(message: impl Into<String>) -> Response {
-    service_failure(http_status("400"), "INVALID_REQUEST", message, false)
+    service_failure(http_status(reqwest::StatusCode::BAD_REQUEST), "INVALID_REQUEST", message, false)
 }
 
 /// Exactly one canonical target and, optionally, one managed binary. Unknown,

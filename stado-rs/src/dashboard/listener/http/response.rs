@@ -72,19 +72,15 @@ impl Response {
 }
 
 pub(crate) fn parse_byte_range(value: &str, length: usize) -> Option<(usize, usize)> {
-    if length == usize::default() {
-        return None;
-    }
     let value = value.strip_prefix("bytes=")?;
     if value.contains(',') {
         return None;
     }
     let (start, end) = value.split_once('-')?;
     let start = start.parse::<usize>().ok()?;
-    if start >= length {
-        return None;
-    }
-    let last = length.saturating_sub(usize::from(true));
+    // The last byte that exists at or after `start`; none when the object is
+    // empty or the range starts past it.
+    let last = (start..length).last()?;
     let end = if end.is_empty() {
         last
     } else {
@@ -93,15 +89,15 @@ pub(crate) fn parse_byte_range(value: &str, length: usize) -> Option<(usize, usi
     (start <= end).then_some((start, end))
 }
 
-pub(crate) fn http_status(value: &str) -> u16 {
-    value.parse().expect("static HTTP status is valid")
+pub(crate) fn http_status(status: reqwest::StatusCode) -> u16 {
+    status.as_u16()
 }
 
 fn storage_error_status(error: &StorageError) -> u16 {
     if matches!(error, StorageError::Io(error) if error.kind() == std::io::ErrorKind::WouldBlock) {
-        http_status("503")
+        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE)
     } else {
-        http_status("500")
+        http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
@@ -115,7 +111,7 @@ pub(crate) fn storage_error_response(error: StorageError) -> Response {
 pub(crate) fn dashboard_error_response(error: DashboardError) -> Response {
     match error {
         DashboardError::Storage(error) => storage_error_response(error),
-        other => send_json(http_status("500"), &json!({"error": other.to_string()})),
+        other => send_json(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), &json!({"error": other.to_string()})),
     }
 }
 

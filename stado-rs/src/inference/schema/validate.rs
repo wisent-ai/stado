@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 use super::names::{
-    gateway_selector, identifier, immutable_revision, route_alias, safe_reference, sha256_image,
-    tailscale_ipv4,
+    gateway_selector, identifier, immutable_revision, ipv4, route_alias, safe_reference,
+    sha256_image,
 };
 use super::{
     parse, ENGINE_VLLM, GPU_EXCLUSIVE, GPU_YIELDABLE, LOCAL_PROVIDER_CREDENTIAL,
@@ -24,10 +24,6 @@ pub fn validate(document: &Value) -> Result<(), String> {
     let mut names = BTreeSet::new();
     let mut running_names = BTreeSet::new();
     let mut ports = BTreeSet::new();
-    let one = u16::from(true);
-    let two = one.saturating_add(one);
-    let four = two.saturating_add(two);
-    let minimum_port = u16::from(u8::MAX).saturating_add(one).saturating_mul(four);
     for deployment in &registry.deployments {
         let location = format!("registry.inference.deployments[{}]", names.len());
         if !identifier(&deployment.name) || !names.insert(deployment.name.as_str()) {
@@ -52,7 +48,8 @@ pub fn validate(document: &Value) -> Result<(), String> {
         let Some(target_vram_gb) = target
             .get("vram_gb")
             .and_then(Value::as_u64)
-            .filter(|value| *value > u64::MIN)
+            .and_then(std::num::NonZeroU64::new)
+            .map(std::num::NonZeroU64::get)
         else {
             return Err(format!("{location}.target: target declares no GPU VRAM"));
         };
@@ -79,13 +76,12 @@ pub fn validate(document: &Value) -> Result<(), String> {
         if !matches!(
             deployment.resources.gpu_mode.as_str(),
             GPU_EXCLUSIVE | GPU_YIELDABLE
-        ) || deployment.resources.gpus != one
-        {
+        ) {
             return Err(format!(
-                "{location}.resources: only one exclusive or yieldable GPU is supported"
+                "{location}.resources: gpu_mode must be exclusive or yieldable"
             ));
         }
-        if deployment.resources.max_model_len == u64::MIN {
+        if std::num::NonZeroU64::new(deployment.resources.max_model_len).is_none() {
             return Err(format!(
                 "{location}.resources.max_model_len: must be positive"
             ));
@@ -93,10 +89,10 @@ pub fn validate(document: &Value) -> Result<(), String> {
         if deployment
             .resources
             .kv_cache_memory_gb
-            .is_some_and(|value| value == u64::MIN || value > target_vram_gb)
+            .is_some_and(|value| std::num::NonZeroU64::new(value).is_none() || value > target_vram_gb)
         {
             return Err(format!(
-                "{location}.resources.kv_cache_memory_gb: must be between 1 and the target's {target_vram_gb} GiB VRAM"
+                "{location}.resources.kv_cache_memory_gb: must be positive and at most the target's {target_vram_gb} GiB VRAM"
             ));
         }
         if deployment
@@ -114,13 +110,12 @@ pub fn validate(document: &Value) -> Result<(), String> {
             ));
         }
         if deployment.endpoint.visibility != VISIBILITY_TAILSCALE
-            || !tailscale_ipv4(&deployment.endpoint.host)
+            || !ipv4(&deployment.endpoint.host)
             || deployment.endpoint.protocol != PROTOCOL_OPENAI_CHAT
-            || deployment.endpoint.port < minimum_port
             || !ports.insert((deployment.endpoint.host.as_str(), deployment.endpoint.port))
         {
             return Err(format!(
-                "{location}.endpoint: requires a unique Tailscale OpenAI chat endpoint"
+                "{location}.endpoint: requires a unique Tailscale IPv4 OpenAI chat endpoint"
             ));
         }
         if deployment.credential_item != LOCAL_PROVIDER_CREDENTIAL {

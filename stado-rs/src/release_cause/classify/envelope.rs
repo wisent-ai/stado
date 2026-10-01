@@ -66,49 +66,24 @@ pub(super) struct Named {
 /// Every JSON object in `text` that carries a failure point, outermost first.
 ///
 /// A log line puts the envelope after a field name (`envelope={…}`) or on its
-/// own, so the scan is for balanced braces rather than for a whole line that
-/// parses. Depth is tracked outside strings; a brace inside a quoted detail
-/// does not close the object.
+/// own, so each `{` is tried as the start of one JSON value; serde's stream
+/// reader says where that value ended, and the scan resumes there. A `{` that
+/// starts no valid value is stepped over.
 fn objects(text: &str) -> Vec<Value> {
-    let bytes: Vec<char> = text.chars().collect();
     let mut found = Vec::new();
-    let mut index = usize::default();
-    while index < bytes.len() {
-        if bytes[index] != '{' {
-            index += usize::from(true);
-            continue;
-        }
-        let mut depth = usize::default();
-        let mut quoted = false;
-        let mut escaped = false;
-        let mut end = None;
-        for (offset, ch) in bytes[index..].iter().enumerate() {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match ch {
-                '\\' if quoted => escaped = true,
-                '"' => quoted = !quoted,
-                '{' if !quoted => depth += usize::from(true),
-                '}' if !quoted => {
-                    depth -= usize::from(true);
-                    if depth == usize::default() {
-                        end = Some(index + offset + usize::from(true));
-                        break;
-                    }
+    let mut rest = text;
+    while let Some(start) = rest.find('{') {
+        let tail = &rest[start..];
+        let mut stream = serde_json::Deserializer::from_str(tail).into_iter::<Value>();
+        match stream.next() {
+            Some(Ok(value)) => {
+                rest = &tail[stream.byte_offset()..];
+                if value.get("failure_point").is_some() {
+                    found.push(value);
                 }
-                _ => {}
             }
+            _ => rest = tail.strip_prefix('{').unwrap_or_default(),
         }
-        let Some(end) = end else { break };
-        let candidate: String = bytes[index..end].iter().collect();
-        if let Ok(value) = serde_json::from_str::<Value>(&candidate) {
-            if value.get("failure_point").is_some() {
-                found.push(value);
-            }
-        }
-        index = end;
     }
     found
 }

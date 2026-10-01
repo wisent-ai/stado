@@ -30,9 +30,9 @@ impl Dashboard {
             let runner = crate::deploy::production_runner();
             return Ok(
                 match crate::deploy::host_inventory::inventory_host(&target, &runner).await {
-                    Ok(report) => send_json(http_status("200"), &report),
+                    Ok(report) => send_json(http_status(reqwest::StatusCode::OK), &report),
                     Err(error) => send_json(
-                        http_status("503"),
+                        http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                         &json!({
                             "target": target,
                             "status": crate::deploy::host_channel::FAILED_STATUS,
@@ -58,7 +58,7 @@ impl Dashboard {
             };
             if object.namespace() != "releases" {
                 return Ok(send_json(
-                    http_status("403"),
+                    http_status(reqwest::StatusCode::FORBIDDEN),
                     &json!({"error": "only stado://releases software artifacts are publicly readable"}),
                 ));
             }
@@ -91,7 +91,7 @@ impl Dashboard {
         if path == "/api/registry.json" {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return Ok(send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "registry authorization unavailable"}),
                 ));
             }
@@ -103,7 +103,7 @@ impl Dashboard {
         if path == "/api/cleanup.json" {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return Ok(send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "registry authorization unavailable"}),
                 ));
             }
@@ -115,7 +115,7 @@ impl Dashboard {
         if path == "/api/memory-policies.json" {
             if !self.boundaries_available(&[Boundary::Registry]).await {
                 return Ok(send_json(
-                    http_status("503"),
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                     &json!({"error": "registry authorization unavailable"}),
                 ));
             }

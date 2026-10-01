@@ -5,11 +5,7 @@ use sha2::{Digest, Sha256};
 
 pub(super) fn identifier(value: &str) -> bool {
     let edge = |ch: char| ch.is_ascii_lowercase() || ch.is_ascii_digit();
-    let one = usize::from(u8::from(true));
-    let two = one.saturating_add(one);
-    let maximum = usize::from(u8::MAX).saturating_add(one) / two;
-    value.len() <= maximum
-        && value.chars().next().is_some_and(edge)
+    value.chars().next().is_some_and(edge)
         && value.chars().next_back().is_some_and(edge)
         && value
             .chars()
@@ -68,28 +64,23 @@ pub fn gateway_selector(value: &str) -> bool {
     value == "best"
 }
 
-pub(super) fn tailscale_ipv4(value: &str) -> bool {
-    let Ok(address) = value.parse::<std::net::Ipv4Addr>() else {
-        return false;
-    };
-    let octets = address.octets();
-    let first = "100".parse::<u8>().expect("static Tailscale prefix");
-    let lower = "64".parse::<u8>().expect("static Tailscale range");
-    let upper = "128".parse::<u8>().expect("static Tailscale range");
-    octets[usize::MIN] == first && (lower..upper).contains(&octets[usize::from(true)])
+/// The endpoint host must be an IPv4 address; which network it sits on is the
+/// deployment's `visibility`.
+pub(super) fn ipv4(value: &str) -> bool {
+    value.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
+/// An image pinned by a SHA-256 digest: hex that decodes to exactly one
+/// SHA-256 output.
 pub(super) fn sha256_image(value: &str) -> bool {
     let Some((name, digest)) = value.rsplit_once("@sha256:") else {
         return false;
     };
-    let two = usize::from(u8::from(true)).saturating_add(usize::from(u8::from(true)));
-    let length = Sha256::output_size().saturating_mul(two);
     safe_reference(name, "/:")
-        && digest.len() == length
-        && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && hex::decode(digest).is_ok_and(|bytes| bytes.len() == Sha256::output_size())
 }
+
+/// A revision named by its commit hash rather than a branch or tag.
 pub(super) fn immutable_revision(value: &str) -> bool {
-    let length = Sha256::output_size().saturating_add(u8::BITS as usize);
-    value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    hex::decode(value).is_ok_and(|bytes| !bytes.is_empty())
 }

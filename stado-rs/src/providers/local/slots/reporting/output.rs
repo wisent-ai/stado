@@ -38,37 +38,26 @@ pub(crate) async fn output_redactions(job: &Job) -> Result<Vec<Vec<u8>>, Storage
 
 pub(crate) fn redact_secret_bytes(bytes: &mut [u8], secrets: &[Vec<u8>]) {
     for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
-        let mut offset = usize::default();
-        while offset <= bytes.len().saturating_sub(secret.len()) {
-            let Some(relative) = bytes[offset..]
-                .windows(secret.len())
-                .position(|window| window == secret.as_slice())
-            else {
-                break;
-            };
-            let start = offset + relative;
-            let end = start + secret.len();
-            bytes[start..end].fill(b'*');
-            offset = end;
+        let mut rest: &mut [u8] = bytes;
+        while let Some(start) = rest
+            .windows(secret.len())
+            .position(|window| window == secret.as_slice())
+        {
+            let (_, found) = std::mem::take(&mut rest).split_at_mut(start);
+            let (secret_bytes, after) = found.split_at_mut(secret.len());
+            secret_bytes.fill(b'*');
+            rest = after;
         }
     }
 }
 
-pub(crate) async fn redacted_tail(
-    job: &Job,
-    path: &Path,
-    max_bytes: u64,
-) -> Result<String, StorageError> {
-    let mut file = match tokio::fs::File::open(path).await {
-        Ok(file) => file,
+/// The workload's whole output, secrets replaced.
+pub(crate) async fn redacted_output(job: &Job, path: &Path) -> Result<String, StorageError> {
+    let mut bytes = match tokio::fs::read(path).await {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
         Err(error) => return Err(error.into()),
     };
-    let length = file.metadata().await?.len();
-    file.seek(std::io::SeekFrom::Start(length.saturating_sub(max_bytes)))
-        .await?;
-    let mut bytes = Vec::with_capacity(length.min(max_bytes) as usize);
-    file.read_to_end(&mut bytes).await?;
     let secrets = output_redactions(job).await?;
     redact_secret_bytes(&mut bytes, &secrets);
     Ok(String::from_utf8_lossy(&bytes).trim().to_string())

@@ -131,7 +131,6 @@ pub(super) fn mode_only_change(
         && current.desired_state == candidate.desired_state
         && current.engine == candidate.engine
         && current.model == candidate.model
-        && current.resources.gpus == candidate.resources.gpus
         && current.resources.max_model_len == candidate.resources.max_model_len
         && current.resources.kv_cache_memory_gb == candidate.resources.kv_cache_memory_gb
         && current.resources.cache_dir == candidate.resources.cache_dir

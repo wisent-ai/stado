@@ -109,17 +109,6 @@ fn main() {
         );
     }
 
-    println!("== bounded_detail ==");
-    let long = "x".repeat("4096".parse().expect("valid probe length"));
-    println!(
-        "bounded_detail_len={}",
-        failure::bounded_detail(&long).len()
-    );
-    println!(
-        "bounded_detail_trims={:?}",
-        failure::bounded_detail("   an upstream said no   ")
-    );
-
     println!("== full rendered failure ==");
     let message = "GCS API error HTTP 503: could not read queue/1a2b3c4d.json";
     let code = failure::classify_message(message);

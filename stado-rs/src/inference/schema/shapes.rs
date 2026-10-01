@@ -21,7 +21,6 @@ pub struct Model {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Resources {
     pub gpu_mode: String,
-    pub gpus: u16,
     pub max_model_len: u64,
     #[serde(default)]
     pub kv_cache_memory_gb: Option<u64>,

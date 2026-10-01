@@ -130,7 +130,7 @@ pub async fn start_slot(
     if crate::scheduler::builds::compiles(&cmd) {
         if let Err(refusal) = crate::scheduler::builds::charge(
             &job.run_id,
-            usize::from(true),
+            std::slice::from_ref(&cmd),
             "a build job claimed by a worker",
             None,
         )

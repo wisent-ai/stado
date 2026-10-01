@@ -153,3 +153,15 @@ pub fn effective_status(invite: &Invite, now: DateTime<Utc>) -> &'static str {
         Ok(_) => STATUS_OPEN,
     }
 }
+
+/// The invite after one more redemption, closed when the allowance runs out.
+/// The CLI's redemption route and the dashboard's join route both spend
+/// through this, so a use is counted one way.
+pub fn with_one_use_spent(invite: &Invite) -> Invite {
+    let mut spent = invite.clone();
+    spent.uses_spent = spent.uses_spent.saturating_add(1);
+    if spent.uses_spent >= spent.uses_allowed {
+        spent.status = STATUS_SPENT.to_string();
+    }
+    spent
+}

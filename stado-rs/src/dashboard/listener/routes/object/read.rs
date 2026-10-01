@@ -35,7 +35,7 @@ impl Dashboard {
         let (bytes, version) = if versioned {
             let Some(value) = self.store.read_text_versioned(&path).await? else {
                 return Ok(send_json(
-                    http_status("404"),
+                    http_status(reqwest::StatusCode::NOT_FOUND),
                     &json!({"state": "absent", "uri": object.to_string()}),
                 ));
             };
@@ -56,7 +56,7 @@ impl Dashboard {
             };
             let Some(bytes) = bytes else {
                 return Ok(send_json(
-                    http_status("404"),
+                    http_status(reqwest::StatusCode::NOT_FOUND),
                     &json!({"state": "absent", "uri": object.to_string()}),
                 ));
             };
@@ -78,7 +78,7 @@ impl Dashboard {
         if let Some(value) = request.header("range") {
             let Some((start, end)) = parse_byte_range(value, bytes.len()) else {
                 return Ok(Response::new_with_headers(
-                    http_status("416"),
+                    http_status(reqwest::StatusCode::RANGE_NOT_SATISFIABLE),
                     "Range Not Satisfiable",
                     content_type,
                     b"",
@@ -86,7 +86,7 @@ impl Dashboard {
                 ));
             };
             return Ok(Response::new_with_headers(
-                http_status("206"),
+                http_status(reqwest::StatusCode::PARTIAL_CONTENT),
                 "Partial Content",
                 content_type,
                 &bytes[start..=end],
@@ -104,7 +104,7 @@ impl Dashboard {
             headers.push(("X-Stado-Version", version));
         }
         Ok(Response::new_with_headers(
-            http_status("200"),
+            http_status(reqwest::StatusCode::OK),
             "OK",
             content_type,
             &bytes,
@@ -125,7 +125,7 @@ impl Dashboard {
         };
         let Some(prefix) = prefix else {
             return Ok(send_json(
-                http_status("401"),
+                http_status(reqwest::StatusCode::UNAUTHORIZED),
                 &json!({"error": "unauthorized"}),
             ));
         };
@@ -148,7 +148,7 @@ impl Dashboard {
                 "metadata": blob.metadata,
             }));
         }
-        Ok(send_json(http_status("200"), &json!({"objects": response})))
+        Ok(send_json(http_status(reqwest::StatusCode::OK), &json!({"objects": response})))
     }
 
     pub(crate) async fn stat_object(&self, query: &str) -> Result<Response, DashboardError> {
@@ -166,7 +166,7 @@ impl Dashboard {
             .find(|blob| blob.name == path);
         Ok(match blob {
             Some(blob) => send_json(
-                http_status("200"),
+                http_status(reqwest::StatusCode::OK),
                 &json!({
                     "state": "present",
                     "uri": object.to_string(),
@@ -176,7 +176,7 @@ impl Dashboard {
                 }),
             ),
             None => send_json(
-                http_status("404"),
+                http_status(reqwest::StatusCode::NOT_FOUND),
                 &json!({"state": "absent", "uri": object.to_string()}),
             ),
         })

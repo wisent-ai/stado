@@ -6,7 +6,8 @@ use chrono::Utc;
 use crate::cli::fleet::invite::record::store::{load_invite, store_invite};
 use crate::cli::fleet::invite::record::token::{digests_match, parse_token};
 use crate::cli::fleet::invite::record::{
-    effective_status, secret_digest, Invite, MODE_OFFLINE, STATUS_OPEN, STATUS_SPENT,
+    effective_status, secret_digest, with_one_use_spent, Invite, MODE_OFFLINE, STATUS_OPEN,
+    STATUS_SPENT,
 };
 use crate::cli::fleet::invite::REFUSED;
 use crate::queue::JobStorage;
@@ -40,11 +41,7 @@ pub async fn authorize(store: &JobStorage, token: &str) -> Result<Invite, String
 /// out. Called by the redemption route after the request it authorized has been
 /// filed.
 pub async fn spend(store: &JobStorage, invite: &Invite) -> Result<Invite, String> {
-    let mut spent = invite.clone();
-    spent.uses_spent = spent.uses_spent.saturating_add(1);
-    if spent.uses_spent >= spent.uses_allowed {
-        spent.status = STATUS_SPENT.to_string();
-    }
+    let spent = with_one_use_spent(invite);
     store_invite(store, &spent).await?;
     Ok(spent)
 }

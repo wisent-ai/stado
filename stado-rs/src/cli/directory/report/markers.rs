@@ -181,14 +181,11 @@ fn marker_age(metadata: &std::fs::Metadata) -> Option<i64> {
     i64::try_from(age.as_secs()).ok()
 }
 
+/// The marker holds the local forward's URL, nothing secret, so it keeps the
+/// permissions the process creates files with.
 pub(super) fn write_forward_marker(marker: &std::path::Path, url: &str) -> Result<(), CmdError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let owner_only = u32::from_str_radix("600", "8".parse().unwrap_or_default())
-        .map_err(|error| CmdError::click(error.to_string()))?;
     let staging = marker.with_extension("local.staging");
     std::fs::write(&staging, format!("{url}\n"))?;
-    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(owner_only))?;
     std::fs::rename(&staging, marker)?;
     Ok(())
 }

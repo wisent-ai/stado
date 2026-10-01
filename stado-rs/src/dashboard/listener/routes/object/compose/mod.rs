@@ -46,7 +46,7 @@ impl Dashboard {
             .map(str::trim);
         if request_content_type != Some("application/json") {
             return object_compose_error(
-                http_status("415"),
+                http_status(reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE),
                 "content-type must be application/json",
             );
         }
@@ -54,24 +54,24 @@ impl Dashboard {
             Ok(payload) => payload,
             Err(error) => {
                 return object_compose_error(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     format!("invalid object composition request: {error}"),
                 )
             }
         };
         let object = match ObjectRef::parse(&payload.uri) {
             Ok(object) => object,
-            Err(error) => return object_compose_error(http_status("400"), error.to_string()),
+            Err(error) => return object_compose_error(http_status(reqwest::StatusCode::BAD_REQUEST), error.to_string()),
         };
         if object.to_string() != payload.uri {
             return object_compose_error(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 "composition uri must use the canonical stado:// form",
             );
         }
         if object.key().contains(".__stado_upload/") {
             return object_compose_error(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 "a staged upload cannot be a composition target",
             );
         }
@@ -79,24 +79,24 @@ impl Dashboard {
             || payload.content_type.len() > MAX_HEAD_BYTES
             || payload.content_type.chars().any(char::is_control)
         {
-            return object_compose_error(http_status("400"), "invalid object content type");
+            return object_compose_error(http_status(reqwest::StatusCode::BAD_REQUEST), "invalid object content type");
         }
         let expected_upload_digest = match parse_sha256(&payload.upload_id) {
             Some(digest) => digest,
             None => {
                 return object_compose_error(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     "upload_id must be a lowercase SHA-256 digest",
                 )
             }
         };
         if payload.chunks.is_empty() {
-            return object_compose_error(http_status("400"), "composition names no chunks");
+            return object_compose_error(http_status(reqwest::StatusCode::BAD_REQUEST), "composition names no chunks");
         }
         let expected_chunk_count = payload.size.div_ceil(OBJECT_API_CHUNK_BYTES);
         if payload.chunks.len() != expected_chunk_count {
             return object_compose_error(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 format!(
                     "composition requires {expected_chunk_count} contiguous chunks for {} bytes",
                     payload.size
@@ -113,7 +113,7 @@ impl Dashboard {
                 .min(OBJECT_API_CHUNK_BYTES);
             if chunk.size != expected_size {
                 return object_compose_error(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     format!("chunk {index} must declare exactly {expected_size} bytes"),
                 );
             }
@@ -121,7 +121,7 @@ impl Dashboard {
                 Some(total) => total,
                 None => {
                     return object_compose_error(
-                        http_status("400"),
+                        http_status(reqwest::StatusCode::BAD_REQUEST),
                         "composition chunk sizes overflow",
                     )
                 }
@@ -130,7 +130,7 @@ impl Dashboard {
                 Some(digest) => digest,
                 None => {
                     return object_compose_error(
-                        http_status("400"),
+                        http_status(reqwest::StatusCode::BAD_REQUEST),
                         format!("chunk {index} sha256 must be a lowercase SHA-256 digest"),
                     )
                 }
@@ -139,7 +139,7 @@ impl Dashboard {
                 Ok(object) => object,
                 Err(error) => {
                     return object_compose_error(
-                        http_status("400"),
+                        http_status(reqwest::StatusCode::BAD_REQUEST),
                         format!("invalid chunk {index} uri: {error}"),
                     )
                 }
@@ -154,7 +154,7 @@ impl Dashboard {
                 || chunk_object.key() != expected_key
             {
                 return object_compose_error(
-                    http_status("400"),
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
                     format!("chunk {index} is outside the target upload"),
                 );
             }
@@ -162,20 +162,20 @@ impl Dashboard {
         }
         if declared_total != payload.size {
             return object_compose_error(
-                http_status("400"),
+                http_status(reqwest::StatusCode::BAD_REQUEST),
                 "composition chunk sizes do not equal the declared object size",
             );
         }
         let metadata =
             match merged_object_metadata(&object, &payload.content_type, &payload.metadata) {
                 Ok(metadata) => metadata,
-                Err(error) => return object_compose_error(http_status("400"), error),
+                Err(error) => return object_compose_error(http_status(reqwest::StatusCode::BAD_REQUEST), error),
             };
 
         if requires_object_boundary(object.namespace(), object.key())
             && !self.boundaries_available(&[Boundary::Object]).await
         {
-            return object_compose_error(http_status("503"), "object authorization unavailable");
+            return object_compose_error(http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "object authorization unavailable");
         }
         let authorized = if let Some(policy_key) =
             crate::remote::object_store::release_policy_key(object.namespace(), object.key())
@@ -198,9 +198,9 @@ impl Dashboard {
         };
         match authorized {
             Ok(None) => {}
-            Ok(Some(reason)) => return object_compose_error(http_status("401"), reason),
+            Ok(Some(reason)) => return object_compose_error(http_status(reqwest::StatusCode::UNAUTHORIZED), reason),
             Err(()) => {
-                return object_compose_error(http_status("503"), "object authorization unavailable")
+                return object_compose_error(http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "object authorization unavailable")
             }
         }
 
@@ -233,7 +233,7 @@ fn parse_sha256(value: &str) -> Option<[u8; 32]> {
 /// its exact retriable status without an intermediary replacing the JSON body.
 pub(crate) fn object_compose_response(status: u16, payload: Value) -> Response {
     send_json(
-        http_status("200"),
+        http_status(reqwest::StatusCode::OK),
         &json!({"status": status, "payload": payload}),
     )
 }

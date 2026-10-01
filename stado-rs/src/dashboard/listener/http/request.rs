@@ -27,9 +27,6 @@ pub(crate) struct Request {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) content_length: usize,
     pub(crate) body: Vec<u8>,
-    /// Connection peer, filled in by the accept path. `None` when the socket
-    /// no longer has one to report.
-    pub(crate) peer: Option<std::net::IpAddr>,
 }
 
 impl Request {
@@ -205,6 +202,5 @@ pub(crate) async fn read_request(
         headers,
         content_length,
         body,
-        peer: None,
     }))
 }

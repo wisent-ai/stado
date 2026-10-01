@@ -11,7 +11,6 @@ use crate::targets::normalize_hostname;
 
 use super::super::redeem::{refund, spend, verify};
 use super::super::refusals::{denied, refuse, unavailable};
-use super::super::window::accept_request;
 use super::super::{presented, request_path, MAX_REQUEST_BYTES, STATUS_PENDING};
 use super::report::{parse_report, valid_hostname};
 
@@ -22,9 +21,6 @@ use super::report::{parse_report, valid_hostname};
 pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) -> Response {
     let started = Instant::now();
     let token = presented(request);
-    if !accept_request(token.as_ref().map(|(id, _)| id.as_str()), request.peer) {
-        return refuse(started).await;
-    }
     let content_type = request
         .header("content-type")
         .and_then(|value| value.split(';').next())
@@ -32,24 +28,24 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
         .unwrap_or_default();
     if content_type != "application/json" {
         return send_json(
-            http_status("400"),
+            http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "join report requires Content-Type: application/json"}),
         );
     }
     if request.body.len() > MAX_REQUEST_BYTES {
         return send_json(
-            http_status("413"),
+            http_status(reqwest::StatusCode::PAYLOAD_TOO_LARGE),
             &json!({"error": "join report is too large"}),
         );
     }
     let report = match parse_report(&request.body) {
         Ok(report) => report,
-        Err(message) => return send_json(http_status("400"), &json!({"error": message})),
+        Err(message) => return send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": message})),
     };
     let hostname = normalize_hostname(&report.hostname);
     if !valid_hostname(&hostname) {
         return send_json(
-            http_status("400"),
+            http_status(reqwest::StatusCode::BAD_REQUEST),
             &json!({"error": "join report hostname is not a usable machine name"}),
         );
     }
@@ -80,7 +76,7 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
             .unwrap_or_default();
         if status != STATUS_PENDING {
             return send_json(
-                http_status("409"),
+                http_status(reqwest::StatusCode::CONFLICT),
                 &json!({
                     "error": format!(
                         "machine '{hostname}' already has a '{status}' enrollment request"
@@ -120,7 +116,7 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
         Ok(false) | Err(StorageError::StorageConflict(_)) => {
             refund(store, &accepted, &spent).await;
             return send_json(
-                http_status("409"),
+                http_status(reqwest::StatusCode::CONFLICT),
                 &json!({"error": format!("machine '{hostname}' is already enrolling")}),
             );
         }
@@ -130,7 +126,7 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
         }
     }
     send_json(
-        http_status("200"),
+        http_status(reqwest::StatusCode::OK),
         &json!({
             "status": STATUS_PENDING,
             "hostname": hostname,
