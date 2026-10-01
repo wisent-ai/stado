@@ -191,7 +191,7 @@ pub(super) fn merge_coordinator(
             component.label
         )));
     }
-    let name = super::coordinator_name(registry, target.as_deref())?;
+    let name = super::inputs::coordinator_name(registry, target.as_deref())?;
     if runtime
         .coordinator
         .as_ref()

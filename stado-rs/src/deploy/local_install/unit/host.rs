@@ -6,6 +6,7 @@ mod failure_fixer;
 mod inputs;
 mod install;
 mod merge;
+mod serve;
 
 use merge::{merge_control_plane, merge_environment, merge_watchdog};
 
@@ -84,7 +85,8 @@ pub(super) fn resident_role(plan: &InstallPlan) -> bool {
             | Commands::Platform(PlatformCommands::Resolver(ResolverCommands::Serve { .. }))
             | Commands::Platform(PlatformCommands::Release(ReleaseCommands::Agent(_)))
             | Commands::Planes(
-                PlaneCommands::Coordinator { .. }
+                PlaneCommands::Serve(_)
+                    | PlaneCommands::Coordinator { .. }
                     | PlaneCommands::LocalControlPlane { .. }
                     | PlaneCommands::CloudControlPlane { .. }
                     | PlaneCommands::Dashboard { .. }
@@ -99,25 +101,6 @@ fn check_target(expected: &str, actual: &str, label: &str) -> Result<(), DeployE
         )));
     }
     Ok(())
-}
-
-fn coordinator_name(registry: &Registry, selector: Option<&str>) -> Result<String, DeployError> {
-    if let Some(selector) = selector {
-        return registry
-            .lookup_coordinator_selector(selector)
-            .map(|entry| entry.name.clone())
-            .ok_or_else(|| DeployError(format!("coordinator {selector} is not declared")));
-    }
-    let mut active = registry.coordinators.iter().filter(|entry| entry.active);
-    let entry = active
-        .next()
-        .ok_or_else(|| DeployError("no active coordinator is declared".to_string()))?;
-    if active.next().is_some() {
-        return Err(DeployError(
-            "multiple active coordinators require an explicit selection".to_string(),
-        ));
-    }
-    Ok(entry.name.clone())
 }
 
 /// Merge only component plans whose native definitions have already been read.
@@ -273,6 +256,11 @@ pub(crate) fn merge(
             }) => {
                 merge::merge_dashboard(&mut runtime, component, bind, port, enrollment_only)?;
                 false
+            }
+            Commands::Planes(PlaneCommands::Serve(theirs)) => {
+                let worker = serve::merge(&mut runtime, *theirs, component, &host.name)?;
+                worker_seen = runtime.run_worker;
+                worker
             }
             _ => {
                 return Err(DeployError(format!(

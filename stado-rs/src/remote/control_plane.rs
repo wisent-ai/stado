@@ -32,7 +32,7 @@ pub enum ControlPlaneError {
     Other(String),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum CoordinatorMode {
     Local,
     Cloud,

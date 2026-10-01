@@ -147,6 +147,15 @@ pub struct ResolverAdapter {
     pub service: String,
     pub bind: String,
     pub consumer: String,
+    /// Declared by registries written before 2026-10-01, when an adapter
+    /// paced its connections itself; nothing reads them now. They are
+    /// accepted so a registry that still carries them stays readable by every
+    /// Stado in the fleet, instead of one resolver refusing the whole document
+    /// with `unknown field connect_seconds`.
+    #[serde(default, rename = "idle_seconds")]
+    pub retired_idle_seconds: Option<u64>,
+    #[serde(default, rename = "connect_seconds")]
+    pub retired_connect_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
