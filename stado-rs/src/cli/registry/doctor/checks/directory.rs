@@ -14,10 +14,10 @@ pub(in crate::cli::registry::doctor) fn directory_candidate_ports(
     // A blue-green product serves consumers on its stable bind; its candidate
     // ports belong to the rollout and change with every version. A service
     // directory that hands consumers a candidate port therefore works only
-    // until the next release: on 2026-09-06 the directory named brama's
-    // 127.0.0.1:18080 while the policy declared 127.0.0.1:8080, and three
-    // rollouts in one evening each took product chat down the moment the
-    // rollout moved to the other candidate port.
+    // until the next release: a directory naming a product's candidate port
+    // while the policy declares its stable bind has every rollout take
+    // product chat down the moment the rollout moves to the other candidate
+    // port.
     if let Some(control) = release_control {
         for (product, policy) in &control.products {
             for (host, target) in &policy.targets {

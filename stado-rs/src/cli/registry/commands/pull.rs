@@ -110,9 +110,9 @@ pub fn select<'a>(document: &'a Value, path: &str) -> Result<&'a Value, CmdError
 /// — print the canonical registry, or one part of it.
 ///
 /// Bare, it prints the pretty document and nothing else. `--path` prints one
-/// subtree, a string bare and anything else as pretty JSON: on 2026-09-14
-/// one session pulled the whole document into `~/.oko/registry-pull.json`
-/// eleven times to grep one host's block out of it. `--with-generation`
+/// subtree, a string bare and anything else as pretty JSON, instead of the
+/// whole document being pulled into a file repeatedly to grep one host's
+/// block out of it. `--with-generation`
 /// prints one `stado.registry-pull-receipt.v1` object carrying the document
 /// and the token `push --if-generation` spends, and `--generation-only`
 /// prints just the token. Both come from ONE versioned read, because a

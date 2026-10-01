@@ -2,7 +2,7 @@
 //! Vast.ai, and when it cannot, which provisioning step is missing.
 //!
 //! Every other command in this group answered the same sentence for three
-//! different states. On 2026-09-20 `stado vast status` said `Skarbiec item
+//! different states: `stado vast status` says `Skarbiec item
 //! stado-vast field api_key is required` under a `403 consumer not authorized
 //! to read item field`, while the fleet vault on the host serving Skarbiec
 //! declared no `stado-vast` item at all: the refusal named a grant that could

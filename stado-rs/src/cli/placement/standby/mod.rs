@@ -1,14 +1,14 @@
 //! `stado placement standby PROFILE --host HOST` — make a registered host a
 //! place a placement profile may move to.
 //!
-//! A profile declares the hosts it may run on, and until 2026-09-18 that
-//! list grew only by hand: an operator delivered each product to the host,
-//! asserted each unit, and edited the profile and the directory. The
-//! `brama-skarbiec` profile declared the 16 GiB control host and a laptop
-//! while a workstation with 123 GiB sat in the same registry, undeclared,
-//! because nobody had typed the six commands. Placement relief moves a
-//! profile only between declared hosts, so the fleet's largest machine was
-//! not a place it could move to.
+//! A profile declares the hosts it may run on, and that list used to grow
+//! only by hand: an operator delivered each product to the host, asserted
+//! each unit, and edited the profile and the directory. A profile can
+//! declare a small control host and a laptop while a workstation with many
+//! times the memory sits in the same registry, undeclared, because nobody
+//! typed the six commands. Placement relief moves a profile only between
+//! declared hosts, so the fleet's largest machine is not a place it can
+//! move to.
 //!
 //! This command is those six steps as one idempotent pass, each step named
 //! in the receipt and refused by name, so the autonomy cycle can run it too

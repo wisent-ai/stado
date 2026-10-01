@@ -114,7 +114,7 @@ fn now_utc_iso_z() -> String {
 }
 
 /// One snapshot: what Vast says about our machine, what the queue holds, and
-/// — since 2026-09-20 — which Skarbiec channel the credential came through.
+/// which Skarbiec channel the credential came through.
 ///
 /// The credential block is here because the snapshot's `vast_machine.error`
 /// was the only signal an operator had, and it named neither the consumer

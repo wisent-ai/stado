@@ -100,9 +100,9 @@ pub(in crate::cli::identity) async fn observe_user_apple_accounts(
     // The order below is the correction. `test -f` inside another user's home
     // fails on macOS for lack of search permission — homes are 700 — and this
     // returned that as `Some(vec![])`, which reads as "that user is not signed
-    // in". On 2026-09-04 it said exactly that about an account the operator
-    // had been signed into on that Mac for weeks, and the Developer ID run
-    // refused with `no host holds apple-account`. The `-r` test meant to catch
+    // in" — about an account that has been signed into that Mac for weeks,
+    // so the Developer ID run refuses with `no host holds apple-account`.
+    // The `-r` test meant to catch
     // it sat BEHIND the `-f` test, so it could never fire. Absence is only
     // claimed once the directory has been shown to be searchable.
     let plist = format!("/Users/{user}/Library/Preferences/MobileMeAccounts.plist");

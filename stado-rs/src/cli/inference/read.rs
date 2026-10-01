@@ -149,9 +149,9 @@ pub async fn verify(name: &str, from: Option<&str>, json_output: bool) -> Result
     let (_, deployment) = document_and_deployment(name).await?;
     let bearer = super::credential::read().await?;
     // The endpoint stays the deployment's; only the host the call leaves from
-    // changes. On 2026-09-05 every product chat failed while this command,
-    // sending from the model's own host, answered `verified` - the model was
-    // up and the consumer's hop to it was not, and one report covered both.
+    // changes. Every product chat can fail while this command, sending from
+    // the model's own host, answers `verified` - the model is up and the
+    // consumer's hop to it is not, and one report covers both.
     let sender = from.unwrap_or(&deployment.target);
     let target = host_channel::canonical_target(sender)
         .await

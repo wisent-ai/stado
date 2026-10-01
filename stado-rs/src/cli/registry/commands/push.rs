@@ -52,8 +52,8 @@ pub async fn push(
     // This command takes a PATH, and with no path it falls back to the
     // repository's bundled document. A caller who pipes a body is therefore
     // silently ignored and something else is uploaded in its place - which is
-    // exactly how the bundled 65-byte skeleton reached the canonical registry
-    // on 2026-09-01. Refuse the ambiguity rather than resolve it silently,
+    // exactly how the bundled skeleton can reach the canonical registry.
+    // Refuse the ambiguity rather than resolve it silently,
     // and let `-` mean stdin for a caller who meant to pipe.
     let from_stdin = path.as_deref() == Some("-");
     if !from_stdin && path.is_none() && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {

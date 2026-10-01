@@ -3,11 +3,10 @@
 //!
 //! Every product declares its gates in `.wisent-release.json`, and the first
 //! of them reads the tree without changing it: `cargo fmt … -- --check`. When
-//! that gate refuses, something has to do the writing, and until 2026-09-21
-//! that something was a person typing `cargo fmt` — a command whose effect is
-//! a tree-wide rewrite nobody reviewed, which on that day swept three other
-//! sessions' unformatted files into one commit. Tama refuses it for that
-//! reason.
+//! that gate refuses, something has to do the writing, and that something
+//! used to be a person typing `cargo fmt` — a command whose effect is a
+//! tree-wide rewrite nobody reviewed, which sweeps other sessions'
+//! unformatted files into one commit. Tama refuses it for that reason.
 //!
 //! So the writing belongs here, to the product, driven by the same declaration
 //! the gate reads: the checking argv with its `--check` removed. A product

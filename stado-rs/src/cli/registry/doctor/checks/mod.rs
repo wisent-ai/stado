@@ -17,11 +17,11 @@ pub(super) fn resolver_refusal(document: &Value, findings: &mut Vec<Finding>) {
     // A document the inference contract refuses is not a cosmetic fault: every
     // resolver on the fleet validates the same way before it adopts a
     // generation, so it keeps serving the last copy it accepted and hands
-    // consumers an address the fleet has since moved away from. On 2026-09-06 a
-    // route alias without a namespace ("wisent-backend") published that state:
-    // the always-on host's resolver froze eleven generations back, every chat
-    // took `connection refused` from a candidate port nothing served any more,
-    // and the only trace was one line in that resolver's log.
+    // consumers an address the fleet has since moved away from. A route
+    // alias without a namespace publishes that state: the always-on host's
+    // resolver freezes many generations back, every chat takes `connection
+    // refused` from a candidate port nothing serves any more, and the only
+    // trace is one line in that resolver's log.
     if let Err(error) = crate::inference::schema::validate(document) {
         findings.push(Finding::new(
             "resolver-refuses-registry",
