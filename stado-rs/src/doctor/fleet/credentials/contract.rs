@@ -75,16 +75,22 @@ pub(in crate::doctor) async fn skarbiec_contract_check() -> Check {
             CONTRACT_REMEDY,
         ),
         Ok(response) => {
-            let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            if body.contains("field required") {
+            let status = response.status();
+            // A read that names no field is rejected as an invalid request
+            // (400 or 422) by a broker that grants per field; one it answers
+            // hands back fields nobody was granted. The status says which,
+            // not the body's words.
+            if status == reqwest::StatusCode::BAD_REQUEST
+                || status == reqwest::StatusCode::UNPROCESSABLE_ENTITY
+            {
                 Check::pass(
                     CONTRACT_ID,
                     CONTRACT_TITLE,
                     format!(
-                        "{endpoint} requires a named field (HTTP {status}), which is the \
+                        "{endpoint} refused a read that named no field (HTTP {}), which is the \
                          contract in force: the authority grants read per field, so an \
-                         item-wide read would hand back fields nobody was granted"
+                         item-wide read would hand back fields nobody was granted",
+                        status.as_u16()
                     ),
                     CONTRACT_REMEDY,
                 )
@@ -94,9 +100,10 @@ pub(in crate::doctor) async fn skarbiec_contract_check() -> Check {
                     CONTRACT_TITLE,
                     Status::Warn,
                     format!(
-                        "{endpoint} answered a read that named no field (HTTP {status}); read \
+                        "{endpoint} answered a read that named no field (HTTP {}); read \
                          grants are per field, so something here can return fields the caller \
-                         was never granted"
+                         was never granted",
+                        status.as_u16()
                     ),
                     CONTRACT_REMEDY,
                 )

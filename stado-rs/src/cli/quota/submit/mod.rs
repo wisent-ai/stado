@@ -3,8 +3,9 @@
 //! (`request`, `request-all`); the Azure support-ticket flows that carry
 //! a submitted request the rest of the way — `azure-replies` answering
 //! the tickets awaiting customer info, `azure-escalate` posting the
-//! credit-funded-subscription escalation on billing declines — stay here
-//! beside the Forbidden/permission detection both share.
+//! credit-funded-subscription escalation on billing declines — stay here.
+//! An `az` failure is reported with az's own stderr; it is not sorted by its
+//! words.
 
 // ---- write-side subcommands ----
 
@@ -17,21 +18,6 @@ use serde_json::Value;
 use super::common::{contact_email, take};
 use crate::cli::CmdError;
 use crate::scheduler::dispatch::quota_replies;
-
-/// The Python CLI's Forbidden/permission detection on az failures.
-fn support_permission_error(err: &quota_replies::RepliesError) -> Option<CmdError> {
-    let stderr = err.stderr().trim();
-    if stderr.contains("Forbidden") && stderr.contains("permission") {
-        return Some(CmdError::click(
-            "Microsoft.Support API returned Forbidden for the current \
-             Azure credential. Owner on the subscription is NOT \
-             sufficient — assign 'Support Request Contributor' on \
-             subscription 9ae7cfa4-… to the user or service principal \
-             running this command, then retry.",
-        ));
-    }
-    None
-}
 
 /// Python `quota_azure_replies`: respond to Open Azure quota tickets
 /// awaiting customer info.
@@ -50,12 +36,7 @@ pub(super) async fn azure_replies(dry_run: bool, email_arg: &str) -> Result<(), 
         false,
     ) {
         Ok(results) => results,
-        Err(err) => {
-            if let Some(cmd) = support_permission_error(&err) {
-                return Err(cmd);
-            }
-            return Err(CmdError::click(err.to_string()));
-        }
+        Err(err) => return Err(CmdError::click(err.to_string())),
     };
     if results.is_empty() {
         println!("(no Open Azure quota tickets requiring reply)");
@@ -105,12 +86,7 @@ pub(super) async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(),
         true,
     ) {
         Ok(results) => results,
-        Err(err) => {
-            if let Some(cmd) = support_permission_error(&err) {
-                return Err(cmd);
-            }
-            return Err(CmdError::click(err.to_string()));
-        }
+        Err(err) => return Err(CmdError::click(err.to_string())),
     };
     // Filter to rows that represent an escalation outcome only. Dry-run
     // rows carry a `would` field that says "escalated" vs "replied" —

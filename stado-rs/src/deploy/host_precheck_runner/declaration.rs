@@ -190,27 +190,9 @@ pub fn runner_profile(name: &str) -> Result<&'static RunnerProfile, DeployError>
         })
 }
 
+/// The host a runner profile names, as the canonical registry resolves it;
+/// a target the registry cannot resolve is refused with the resolver's own
+/// sentence, which already names what is missing.
 pub(crate) async fn runner_target(name: &str) -> Result<ComputeTarget, DeployError> {
-    match host_channel::canonical_target(name).await {
-        Ok(target) => Ok(target),
-        Err(error) => {
-            let detail = error.to_string();
-            if detail.contains("is not in the canonical registry") {
-                return Err(DeployError(format!(
-                    "{name} declares no host target; add it to the canonical fleet registry"
-                )));
-            }
-            if detail.contains("is not a local host") {
-                return Err(DeployError(format!(
-                    "{name} declares no local host provider; set its kind to a local host capability in the canonical fleet registry or select a local host target"
-                )));
-            }
-            if detail.contains("has no registry-managed ssh destination and is not this host") {
-                return Err(DeployError(format!(
-                    "{name} declares no reachable host destination; add a registry-managed ssh destination to the canonical fleet registry or run the command on that host"
-                )));
-            }
-            Err(error)
-        }
-    }
+    host_channel::canonical_target(name).await
 }

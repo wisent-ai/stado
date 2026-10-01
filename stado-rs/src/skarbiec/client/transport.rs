@@ -44,13 +44,11 @@ impl Client {
         let body = response.text().await?;
         if !status.is_success() {
             let mut detail: String = body.chars().take(usize::from(u16::MAX)).collect();
-            // Every read answering this for the stado consumer means the grant
-            // on the vault owner and the bearer file the fleet holds diverged
-            // (2026-09-27: the owner's disk filled mid-write). Name the repair
-            // where the failure is read instead of leaving a bare 403.
-            if status == reqwest::StatusCode::FORBIDDEN
-                && detail.contains("consumer not authorized")
-            {
+            // A 403 is the broker refusing this consumer. When every stado read
+            // answers it, the grant on the vault owner and the bearer file the
+            // fleet holds have diverged; the repair is named where the status
+            // is read, without looking for words in the broker's body.
+            if status == reqwest::StatusCode::FORBIDDEN {
                 detail.push_str(
                     " — if every stado read answers this, the stado grant no longer matches the \
                      bearer file: `stado credentials grant rebind --host <vault owner> --token-file \
