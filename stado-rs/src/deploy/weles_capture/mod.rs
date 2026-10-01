@@ -91,12 +91,12 @@ pub const AXES: [&str; 5] = [
 /// The step vocabulary a capture may ask the worker for.
 const STEP_OPS: [&str; 8] = [
     "wait_selector",
+    "settle",
     "click",
     "hover",
     "focus",
     "press",
     "scroll",
-    "wait_ms",
     "goto",
 ];
 
