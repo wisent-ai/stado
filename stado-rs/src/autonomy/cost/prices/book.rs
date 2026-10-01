@@ -21,7 +21,7 @@ impl PriceBook {
         let purchase = if preemptible { "spot" } else { "on_demand" };
         let matching = |quote: &&PriceQuote| {
             quote.provider == provider
-                && quote.hourly_usd > f64::default()
+                && quote.hourly_usd > 0.0
                 && quote.purchase_option == purchase
                 && region.is_none_or(|wanted| {
                     quote
@@ -116,7 +116,7 @@ impl PriceBook {
             .filter(|quote| {
                 quote.provider == ProviderId::Gcp
                     && quote.purchase_option == purchase
-                    && quote.hourly_usd > f64::default()
+                    && quote.hourly_usd > 0.0
                     && region.is_none_or(|wanted| {
                         quote
                             .region

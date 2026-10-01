@@ -140,7 +140,7 @@ pub(super) fn placement_constraints(job: &Job, policy: &AutonomyPolicy) -> Vec<S
     if !job.gpu_type.is_empty() {
         constraints.push(format!("gpu_type = {}", job.gpu_type));
     }
-    if job.max_cost_per_hour_usd > f64::default() {
+    if job.max_cost_per_hour_usd > 0.0 {
         constraints.push(format!("hourly_usd <= {:.6}", job.max_cost_per_hour_usd));
     }
     if job.pin_to_provider {

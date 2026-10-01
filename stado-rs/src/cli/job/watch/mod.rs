@@ -22,7 +22,7 @@ use self::outcome::outcome;
 /// own reason.
 pub(super) async fn watch(job_id: &str, follow: bool, json: bool) -> Result<(), CmdError> {
     let facade = MachineFacade::new().await.map_err(cmd_error)?;
-    let mut cursor = i64::default();
+    let mut cursor = 0;
     let mut buffered = String::new();
     // Armed before the first read, so a change between that read and the
     // wait still wakes it.

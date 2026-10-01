@@ -36,7 +36,7 @@ pub fn scan(include_file_quotes: bool) -> Vec<Finding> {
                         continue;
                     }
                     let entry = by_name.entry(name).or_insert_with(|| Accumulator {
-                        occurrences: usize::default(),
+                        occurrences: 0,
                         values: Vec::new(),
                         newest: stamp.clone(),
                         sources: Vec::new(),

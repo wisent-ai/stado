@@ -54,8 +54,8 @@ fn slots(version: &str) -> Vec<u64> {
 pub(in super::super) fn order(left: &str, right: &str) -> Ordering {
     let (mut left, mut right) = (slots(left), slots(right));
     let width = left.len().max(right.len());
-    left.resize(width, u64::default());
-    right.resize(width, u64::default());
+    left.resize(width, 0);
+    right.resize(width, 0);
     left.cmp(&right)
 }
 
@@ -80,7 +80,7 @@ fn ranked(tags: Vec<(String, String)>) -> Vec<(String, String, String)> {
             let found = TAG_PATTERN.captures(&name)?;
             let version = found["version"].to_string();
             let mut padded = slots(&version);
-            padded.resize(padded.len().max(SLOTS), u64::default());
+            padded.resize(padded.len().max(SLOTS), 0);
             Some(((padded, slots(&found["build"])), name, version, sha))
         })
         .collect::<Vec<_>>();

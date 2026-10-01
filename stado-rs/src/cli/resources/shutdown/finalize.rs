@@ -41,7 +41,7 @@ pub(super) fn finalize(mut action: Action, observed: Value) -> Result<Option<Act
                 .get("target_size")
                 .and_then(Value::as_i64)
                 .ok_or_else(|| CmdError::click("managed group has no target size"))?;
-            if target == i64::default() {
+            if target == 0 {
                 return Ok(None);
             }
             action.parameters["target_size"] = json!(i64::default());

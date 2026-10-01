@@ -18,7 +18,7 @@ impl Dashboard {
         apply: bool,
     ) -> Response {
         if request.header("transfer-encoding").is_some()
-            || request.content_length != usize::default()
+            || request.content_length != 0
             || !request.body.is_empty()
         {
             return invalid_service_request("service converge does not accept a request body");
@@ -43,7 +43,7 @@ impl Dashboard {
     }
 
     pub(crate) async fn get_service_status(&self, request: &Request, query: &str) -> Response {
-        if request.content_length != usize::default() || !request.body.is_empty() {
+        if request.content_length != 0 || !request.body.is_empty() {
             return invalid_service_request("service status does not accept a request body");
         }
         let name = match service_name(query) {
@@ -87,7 +87,7 @@ impl Dashboard {
 
     pub(crate) async fn post_service_restart(&self, request: &Request, query: &str) -> Response {
         if request.header("transfer-encoding").is_some()
-            || request.content_length != usize::default()
+            || request.content_length != 0
             || !request.body.is_empty()
         {
             return invalid_service_request("service restart does not accept a request body");

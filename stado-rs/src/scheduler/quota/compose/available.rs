@@ -44,7 +44,7 @@ async fn available_instances_from_quotas(
         let used = running_counts.get(accel_type).copied().unwrap_or_default();
         available.insert(
             accel_type.clone(),
-            (total - reserved - used).max(i64::default()),
+            (total - reserved - used).max(0),
         );
     }
     Ok(available)

@@ -68,7 +68,7 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
                 .or_else(|| item.get("unitPrice"))
                 .and_then(Value::as_f64)
                 .unwrap_or_default();
-            if rate <= f64::default() {
+            if rate <= 0.0 {
                 continue;
             }
             let description = item

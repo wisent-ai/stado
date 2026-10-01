@@ -88,8 +88,8 @@ pub(crate) fn archive_entry(
     let mut header = tar::Header::new_ustar();
     header.set_size(bytes.len() as u64);
     header.set_mode(if executable { 0o755 } else { 0o644 });
-    header.set_uid(u64::MIN);
-    header.set_gid(u64::MIN);
+    header.set_uid(0);
+    header.set_gid(0);
     header.set_mtime(ARCHIVE_EPOCH);
     header.set_entry_type(tar::EntryType::Regular);
     archive

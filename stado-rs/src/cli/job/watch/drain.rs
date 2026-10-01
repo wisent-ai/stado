@@ -36,8 +36,8 @@ pub(super) async fn drain(
             // up past the new end. Rewind and replay rather than dying
             // mid-tail. Guarded on a non-zero cursor: read_logs cannot
             // reject offset zero, so this can never spin.
-            Err(exc) if exc.code == "INVALID_CURSOR" && *cursor != i64::default() => {
-                *cursor = i64::default();
+            Err(exc) if exc.code == "INVALID_CURSOR" && *cursor != 0 => {
+                *cursor = 0;
                 eprintln!("-- log restarted from the beginning; rewinding --");
                 continue;
             }

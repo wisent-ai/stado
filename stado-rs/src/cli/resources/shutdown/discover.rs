@@ -21,7 +21,7 @@ pub(super) async fn discover_owned(
     let mut options = blast_radius::gcp_inventory_options(&primary, backup.as_ref());
     options.project = args.project.clone();
     let report = gcp_inventory::inspect(options).await;
-    if report.summary.critical_failures != usize::default() {
+    if report.summary.critical_failures != 0 {
         return Err(CmdError::click(format!(
             "cannot prove complete Stado ownership: GCP inventory has {} critical failure(s)",
             report.summary.critical_failures

@@ -20,7 +20,7 @@ impl Dashboard {
     }
 
     pub(crate) async fn get_machine_status(&self, request: &Request, query: &str) -> Response {
-        if request.content_length != usize::default() || !request.body.is_empty() {
+        if request.content_length != 0 || !request.body.is_empty() {
             return invalid_machine_request("machine status does not accept a request body");
         }
         let client = match authenticate_machine_client(request, "status").await {
@@ -126,7 +126,7 @@ impl Dashboard {
 
     pub(crate) async fn post_machine_cancel(&self, request: &Request, query: &str) -> Response {
         if request.header("transfer-encoding").is_some()
-            || request.content_length != usize::default()
+            || request.content_length != 0
             || !request.body.is_empty()
         {
             return invalid_machine_request("machine cancel does not accept a request body");

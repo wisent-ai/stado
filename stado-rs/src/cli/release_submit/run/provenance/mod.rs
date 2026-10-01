@@ -57,7 +57,7 @@ pub(crate) fn append_records<W: std::io::Write>(
         let mut header = tar::Header::new_gnu();
         header.set_size(record.len() as u64);
         header.set_mode(RECORD_MODE);
-        header.set_mtime(u64::default());
+        header.set_mtime(0);
         header.set_cksum();
         files.append_data(&mut header, path, &record[..])?;
     }

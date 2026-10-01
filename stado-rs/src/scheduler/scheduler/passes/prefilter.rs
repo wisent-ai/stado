@@ -29,7 +29,7 @@ pub(super) fn prefilter_candidates_with_routing(
 ) -> (Vec<String>, usize) {
     let in_quota: BTreeSet<&str> = available
         .iter()
-        .filter(|(_, available)| **available > i64::default())
+        .filter(|(_, available)| **available > 0)
         .map(|(accelerator, _)| accelerator.as_str())
         .collect();
     let mut cand: Vec<(i64, i64, String)> = Vec::new();
@@ -50,7 +50,7 @@ pub(super) fn prefilter_candidates_with_routing(
             .and_then(|value| value.parse().ok())
             .unwrap_or_default();
         let explicit_accel = meta.get("gpu_type").map(|value| value.trim()).unwrap_or("");
-        let derived = if gm > i64::default() {
+        let derived = if gm > 0 {
             let (_, accelerator) = config::lookup_instance_type(provider_name, gm);
             accelerator
         } else {

@@ -38,8 +38,8 @@ pub(in crate::cli::registry::doctor) async fn requirement_findings(
                 .map(move |claim| (target, claim))
         })
         .collect();
-    let mut measured_hosts = usize::default();
-    let mut roster = usize::default();
+    let mut measured_hosts = 0;
+    let mut roster = 0;
     // An unreadable prefix is not an absent object, and reporting it as one would
     // say a host cannot do something when the truth is that nobody here may look.
     // Both reads share that reasoning, so both report the store's own words.

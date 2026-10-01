@@ -68,8 +68,8 @@ async fn copy_object(
     let body = match source.download_bytes(&blob.name).await {
         Ok(Some(body)) => body,
         // Listed a moment ago, gone now: a live queue moved the job.
-        Ok(None) => return report(u64::default(), Outcome::Vanished),
-        Err(err) => return report(u64::default(), failed("source read failed", err)),
+        Ok(None) => return report(0, Outcome::Vanished),
+        Err(err) => return report(0, failed("source read failed", err)),
     };
     let size = body.len() as u64;
 
@@ -80,28 +80,28 @@ async fn copy_object(
     if let Some(landed) = landed {
         let existing = match destination.download_bytes(&blob.name).await {
             Ok(existing) => existing,
-            Err(err) => return report(u64::default(), failed("destination read failed", err)),
+            Err(err) => return report(0, failed("destination read failed", err)),
         };
         if existing.as_ref() == Some(&body) {
             if metadata_satisfied(landed, &blob.metadata) {
-                return report(u64::default(), Outcome::Skipped);
+                return report(0, Outcome::Skipped);
             }
             // Body is already right, metadata is not — the exact residue of
             // an earlier run whose Azure metadata PUT was swallowed. Repair
             // the metadata without rewriting the body.
             if let Err(err) = destination.set_metadata(&blob.name, &blob.metadata).await {
-                return report(u64::default(), failed("metadata write failed", err));
+                return report(0, failed("metadata write failed", err));
             }
-            return report(u64::default(), Outcome::MetadataRepaired);
+            return report(0, Outcome::MetadataRepaired);
         }
     }
 
     if let Err(err) = destination.upload_bytes(&blob.name, &body).await {
-        return report(u64::default(), failed("destination write failed", err));
+        return report(0, failed("destination write failed", err));
     }
     if !blob.metadata.is_empty() {
         if let Err(err) = destination.set_metadata(&blob.name, &blob.metadata).await {
-            return report(u64::default(), failed("metadata write failed", err));
+            return report(0, failed("metadata write failed", err));
         }
     }
     report(size, Outcome::Copied)
@@ -183,13 +183,13 @@ async fn verify_metadata(
         }
         match landed.get(&blob.name) {
             None => {
-                object.bytes = u64::default();
+                object.bytes = 0;
                 object.outcome = Outcome::Failed(
                     "object is absent from the destination listing after the write".into(),
                 );
             }
             Some(found) if !metadata_satisfied(found, &blob.metadata) => {
-                object.bytes = u64::default();
+                object.bytes = 0;
                 object.outcome = Outcome::Failed(format!(
                     "metadata did not land: wanted {:?}, destination has {found:?}",
                     blob.metadata

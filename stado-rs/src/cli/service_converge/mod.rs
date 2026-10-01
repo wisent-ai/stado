@@ -223,7 +223,7 @@ pub async fn converge(
         Some(pass) => apply_gate_diagnostics(&result.rows, pass, result.exit_code),
         None => report_gate_diagnostics(&result.rows, result.exit_code),
     }
-    if result.exit_code == i32::default() {
+    if result.exit_code == 0 {
         Ok(())
     } else {
         Err(CmdError::silent(result.exit_code))

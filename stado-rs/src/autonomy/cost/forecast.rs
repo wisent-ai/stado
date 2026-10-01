@@ -50,9 +50,9 @@ pub fn forecast(
     let month_hours = f64::from(now.num_days_in_month()) * HOURS_PER_DAY;
     let elapsed_month_hours =
         (now - month_start).as_seconds_f64() / crate::monitor::billing::SECONDS_PER_HOUR as f64;
-    let remaining_month_hours = (month_hours - elapsed_month_hours).max(f64::default());
+    let remaining_month_hours = (month_hours - elapsed_month_hours).max(0.0);
     let spent = billing_net_cost(billing_snapshot).unwrap_or_default();
-    if elapsed_month_hours > f64::default() {
+    if elapsed_month_hours > 0.0 {
         current_hourly = current_hourly.max(spent / elapsed_month_hours);
     }
     let end_of_month = spent + current_hourly * remaining_month_hours;
@@ -60,12 +60,12 @@ pub fn forecast(
     let hourly_overrun = policy
         .budgets
         .hourly_usd
-        .map(|limit| (current_hourly - limit).max(f64::default()))
+        .map(|limit| (current_hourly - limit).max(0.0))
         .unwrap_or_default();
     let daily_overrun = policy
         .budgets
         .daily_usd
-        .map(|limit| (end_of_day - limit).max(f64::default()))
+        .map(|limit| (end_of_day - limit).max(0.0))
         .unwrap_or_default();
     let budget = policy.budgets.monthly_usd;
     CostForecast {
@@ -77,16 +77,16 @@ pub fn forecast(
         daily_budget_usd: policy.budgets.daily_usd,
         monthly_budget_usd: budget,
         projected_overrun_usd: budget
-            .map(|limit| (end_of_month - limit).max(f64::default()))
+            .map(|limit| (end_of_month - limit).max(0.0))
             .unwrap_or_default(),
         hourly_overrun_usd: hourly_overrun,
         daily_overrun_usd: daily_overrun,
-        budget_exceeded: hourly_overrun > f64::default()
-            || daily_overrun > f64::default()
+        budget_exceeded: hourly_overrun > 0.0
+            || daily_overrun > 0.0
             || budget.is_some_and(|limit| end_of_month > limit),
         credit_runway_days: credit_balance(billing_snapshot).and_then(|balance| {
             let daily = current_hourly * HOURS_PER_DAY;
-            (daily > f64::default()).then_some(balance / daily)
+            (daily > 0.0).then_some(balance / daily)
         }),
     }
 }
@@ -108,7 +108,7 @@ pub fn detect_anomalies(
     forecast: &CostForecast,
 ) -> Vec<CostAnomaly> {
     let mut anomalies = Vec::new();
-    if forecast.hourly_overrun_usd > f64::default() {
+    if forecast.hourly_overrun_usd > 0.0 {
         anomalies.push(anomaly(
             "hourly-budget-overrun",
             "critical",
@@ -119,7 +119,7 @@ pub fn detect_anomalies(
             forecast.hourly_budget_usd.unwrap_or_default(),
         ));
     }
-    if forecast.daily_overrun_usd > f64::default() {
+    if forecast.daily_overrun_usd > 0.0 {
         anomalies.push(anomaly(
             "daily-budget-overrun",
             "critical",
@@ -130,7 +130,7 @@ pub fn detect_anomalies(
             forecast.daily_budget_usd.unwrap_or_default(),
         ));
     }
-    if forecast.projected_overrun_usd > f64::default() {
+    if forecast.projected_overrun_usd > 0.0 {
         anomalies.push(anomaly(
             "budget-overrun",
             "critical",
@@ -141,7 +141,7 @@ pub fn detect_anomalies(
             forecast.monthly_budget_usd.unwrap_or_default(),
         ));
     }
-    if allocation.unallocated.net_cost_usd > f64::default() {
+    if allocation.unallocated.net_cost_usd > 0.0 {
         anomalies.push(anomaly(
             "unallocated-spend",
             "high",
@@ -149,12 +149,12 @@ pub fn detect_anomalies(
             "cost-ledger",
             "cost exists without an owner or workload attribution",
             allocation.unallocated.net_cost_usd,
-            f64::default(),
+            0.0,
         ));
     }
     for resource in &inventory.resources {
         let hourly = resource.current_hourly_cost_usd.unwrap_or_default();
-        if hourly <= f64::default() {
+        if hourly <= 0.0 {
             continue;
         }
         let utilization = resource
@@ -170,7 +170,7 @@ pub fn detect_anomalies(
                 &resource.resource_id,
                 "paid resource reports no utilization",
                 hourly,
-                f64::default(),
+                0.0,
             ));
         }
         if resource.ownership == super::model::Ownership::Unknown {
@@ -181,7 +181,7 @@ pub fn detect_anomalies(
                 &resource.resource_id,
                 "paid resource has no Stado ownership contract",
                 hourly,
-                f64::default(),
+                0.0,
             ));
         }
     }
@@ -190,7 +190,7 @@ pub fn detect_anomalies(
             entry.provider.as_str() == provider
                 && (entry.workload.is_some() || entry.job_id.is_some())
         });
-        if bucket.net_cost_usd > f64::default() && !attributed {
+        if bucket.net_cost_usd > 0.0 && !attributed {
             anomalies.push(anomaly(
                 &format!("provider-without-workload:{provider}"),
                 "medium",
@@ -198,7 +198,7 @@ pub fn detect_anomalies(
                 provider,
                 "provider cost exists without workload attribution",
                 bucket.net_cost_usd,
-                f64::default(),
+                0.0,
             ));
         }
     }

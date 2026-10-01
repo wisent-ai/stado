@@ -24,7 +24,7 @@ pub fn parse_interval(raw: &str) -> Result<Duration, String> {
         _ => return Err(invalid(raw)),
     };
     let seconds = count.checked_mul(scale).ok_or_else(|| invalid(raw))?;
-    if seconds == u64::default() {
+    if seconds == 0 {
         return Err(format!(
             "invalid interval '{raw}': must be greater than zero"
         ));

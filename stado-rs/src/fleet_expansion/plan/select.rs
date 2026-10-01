@@ -83,7 +83,7 @@ pub(crate) fn select(candidates: &[Candidate], budget_cents: i64) -> Portfolio {
         .map(|a| {
             rows.iter()
                 .enumerate()
-                .fold(u32::default(), |mask, (index, b)| {
+                .fold(0, |mask, (index, b)| {
                     if a.option.benefit_group == b.option.benefit_group
                         || a.option
                             .need_keys

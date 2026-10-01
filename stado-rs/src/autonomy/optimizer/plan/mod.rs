@@ -70,8 +70,8 @@ pub async fn plan_queued(
         .list_claimable_jobs(
             "queue",
             &crate::queue::listing::JobScan {
-                want: usize::default(),
-                scan_budget: usize::default(),
+                want: 0,
+                scan_budget: 0,
                 max_gpu_mem_gb: i64::MAX,
                 eligible: &|_| true,
                 // Unbounded: this walk covers the whole index from the head
@@ -168,13 +168,13 @@ pub async fn plan_queued(
                         new_cloud_hourly_budget_usd.as_mut(),
                         selected.hourly_compute_usd,
                     ) {
-                        *remaining = (*remaining - hourly).max(f64::default());
+                        *remaining = (*remaining - hourly).max(0.0);
                     }
                     if let (Some(remaining), Some(cost)) = (
                         new_cloud_cost_budget_usd.as_mut(),
                         selected.expected_total_cost_usd,
                     ) {
-                        *remaining = (*remaining - cost).max(f64::default());
+                        *remaining = (*remaining - cost).max(0.0);
                     }
                 }
             }

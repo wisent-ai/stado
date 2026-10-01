@@ -69,7 +69,7 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
     let dependency_owns_primary = dependency_owns_backend(dependency, config::wc_storage_backend());
     let infrastructure_critical = infrastructure
         .as_ref()
-        .is_some_and(|report| report.summary.critical_failures != usize::default());
+        .is_some_and(|report| report.summary.critical_failures != 0);
     let credential_store_critical = credential_store.state != "reachable";
     let state = if infrastructure_critical
         || credential_store_critical
@@ -78,7 +78,7 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
         "critical_outage"
     } else if dependency_owns_primary {
         "primary_at_risk"
-    } else if affected_components == usize::default() {
+    } else if affected_components == 0 {
         "unaffected"
     } else {
         "degraded"
@@ -104,8 +104,8 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
         .map(|report| report.summary.state.clone());
     let infrastructure_checks = infrastructure
         .as_ref()
-        .map_or(usize::default(), |report| report.summary.probes);
-    let infrastructure_failures = infrastructure.as_ref().map_or(usize::default(), |report| {
+        .map_or(0, |report| report.summary.probes);
+    let infrastructure_failures = infrastructure.as_ref().map_or(0, |report| {
         report
             .probes
             .iter()

@@ -105,7 +105,7 @@ pub(crate) async fn build(args: &ShowArgs) -> Result<ResourcesReport, CmdError> 
         .map(|count| count as usize)
         .sum();
     let summary = Summary {
-        state: if incomplete_sources == usize::default() {
+        state: if incomplete_sources == 0 {
             "complete"
         } else {
             "incomplete"

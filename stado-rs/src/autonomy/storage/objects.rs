@@ -86,7 +86,7 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let mut records = Vec::new();
-    for path in store.list_paths(prefix, usize::default()).await? {
+    for path in store.list_paths(prefix, 0).await? {
         let Some(raw) = store.download_text(&path).await? else {
             continue;
         };

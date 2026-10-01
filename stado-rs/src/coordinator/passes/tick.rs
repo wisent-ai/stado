@@ -133,7 +133,7 @@ pub async fn run_tick(
         // autonomy has already selected a provider/consumer atomically;
         // running this matcher afterwards would overwrite that decision.
         let n_assigned = assign_jobs(store, log).await?;
-        if n_assigned > usize::default() {
+        if n_assigned > 0 {
             log(&format!(
                 "assignment: matched {n_assigned} queued jobs to agents"
             ));

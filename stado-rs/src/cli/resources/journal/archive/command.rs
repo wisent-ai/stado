@@ -23,7 +23,7 @@ pub async fn dispatch(command: OperationsCommands) -> Result<(), CmdError> {
 async fn list(journal: &Journal) -> Result<(), CmdError> {
     let names = journal
         .store
-        .list_paths("operations/", usize::default())
+        .list_paths("operations/", 0)
         .await?;
     let mut ids = BTreeSet::new();
     for name in names {
@@ -63,7 +63,7 @@ async fn show(journal: &Journal, operation_id: &str) -> Result<(), CmdError> {
         .store
         .list_paths(
             &format!("operations/{operation_id}/events/"),
-            usize::default(),
+            0,
         )
         .await?;
     let mut events = Vec::new();

@@ -139,7 +139,7 @@ pub(in crate::cli::directory) async fn publish(
         .collect();
     let sweep = sweep_markers(&forwards, &declared)?;
     let mut pruned: Vec<Value> = Vec::new();
-    let mut failed = usize::default();
+    let mut failed = 0;
     if prune {
         // One unlink that will not go through does not end the sweep. The
         // markers already removed are removed, the rest are still findings,

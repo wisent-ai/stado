@@ -156,7 +156,7 @@ fn spawn_fleet_flush_with_token(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(err_file))
-        .process_group(i32::default());
+        .process_group(0);
     if !token.is_empty() {
         command
             .env("HF_TOKEN", token)

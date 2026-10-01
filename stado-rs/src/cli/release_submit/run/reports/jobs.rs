@@ -123,7 +123,7 @@ pub(super) async fn previous_compile_total(
             continue;
         };
         if let Some(count) = compiling_count(store, job_id).await {
-            if count > u64::default() {
+            if count > 0 {
                 return Some(count);
             }
         }

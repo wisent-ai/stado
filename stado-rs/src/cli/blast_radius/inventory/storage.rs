@@ -65,7 +65,7 @@ async fn inspect_backend(
     let mut reports = Vec::new();
     let mut names = BTreeMap::new();
     let mut newest = None;
-    let mut total = usize::default();
+    let mut total = 0;
     let mut first_error = None;
 
     for prefix in CANONICAL_PREFIXES {

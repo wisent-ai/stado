@@ -11,7 +11,7 @@ use crate::host_software::HostSoftware;
 /// add a field without a matching release here.
 pub fn parse(stdout: &str) -> (Vec<HostSoftware>, usize) {
     let mut rows: Vec<HostSoftware> = Vec::new();
-    let mut scripts = usize::default();
+    let mut scripts = 0;
     for line in stdout.lines() {
         let line = line.trim();
         if let Some(body) = line.strip_prefix("software ") {

@@ -78,7 +78,7 @@ fn roster(records: &[Observation], host: &str) -> Option<(Freshness, BTreeSet<St
         Freshness::Never => return None,
     };
     let mut names: BTreeSet<String> = BTreeSet::new();
-    let mut scripts = usize::default();
+    let mut scripts = 0;
     for token in row.detail.split_whitespace() {
         if let Some(value) = token.strip_prefix("names=") {
             names.extend(

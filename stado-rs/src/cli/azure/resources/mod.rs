@@ -176,7 +176,7 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
             "deny_assignments": deny_assignments
         }))?
     );
-    if failed == usize::default() {
+    if failed == 0 {
         Ok(())
     } else {
         Err(CmdError::silent(crate::cli::CLICK_ERROR_CODE))

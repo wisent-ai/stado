@@ -30,7 +30,7 @@ fn is_failing_stray(unit: &UndeclaredUnit) -> bool {
     let exited_nonzero = unit
         .last_exit
         .or_else(|| unit.status.trim().parse::<i64>().ok())
-        .is_some_and(|code| code != i64::default());
+        .is_some_and(|code| code != 0);
     unit.classification() == "undeclared"
         && unit.pid.trim().is_empty()
         && exited_nonzero

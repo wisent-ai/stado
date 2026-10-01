@@ -84,14 +84,14 @@ pub(crate) async fn run_autonomy_once(
         (None, None) => None,
     };
     let mut new_cloud_hourly_budget_usd =
-        hourly_limit.map(|limit| (limit - budget_forecast.current_hourly_usd).max(f64::default()));
+        hourly_limit.map(|limit| (limit - budget_forecast.current_hourly_usd).max(0.0));
     let mut new_cloud_cost_budget_usd = policy
         .budgets
         .monthly_usd
-        .map(|limit| (limit - budget_forecast.end_of_month_usd).max(f64::default()));
+        .map(|limit| (limit - budget_forecast.end_of_month_usd).max(0.0));
     if !new_cloud_allowed || policy.mode != crate::autonomy::AutonomyMode::EnforceOwned {
-        new_cloud_hourly_budget_usd = Some(f64::default());
-        new_cloud_cost_budget_usd = Some(f64::default());
+        new_cloud_hourly_budget_usd = Some(0.0);
+        new_cloud_cost_budget_usd = Some(0.0);
     }
     if !new_cloud_allowed {
         log(&format!(
@@ -203,6 +203,6 @@ fn timestamp_fresh(raw: &str, max_age_seconds: u64, now: chrono::DateTime<Utc>) 
                 .num_seconds()
         })
         .is_ok_and(|age| {
-            age >= i64::default() && age <= i64::try_from(max_age_seconds).unwrap_or(i64::MAX)
+            age >= 0 && age <= i64::try_from(max_age_seconds).unwrap_or(i64::MAX)
         })
 }

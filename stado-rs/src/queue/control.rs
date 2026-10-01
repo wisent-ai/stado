@@ -79,7 +79,7 @@ pub const WATCHED_PREFIXES: &[&str] = &[QUEUED_PREFIX, RUNNING_PREFIX];
 
 /// `JobStorage::list_paths`'s "no oldest-first bound" sentinel — the
 /// parameter caps the listing only when it is greater than zero.
-const UNBOUNDED_LISTING: usize = usize::MIN;
+const UNBOUNDED_LISTING: usize = 0;
 
 /// The pause switch. Absent blob == every field defaulted == not paused,
 /// so a fleet that has never been paused needs no bootstrap write.

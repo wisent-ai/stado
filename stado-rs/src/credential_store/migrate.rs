@@ -225,7 +225,7 @@ pub async fn migrate(
         return Ok(MigrationReport {
             source: source.locator(),
             destination: destination.locator(),
-            moved_items: usize::default(),
+            moved_items: 0,
         });
     }
 

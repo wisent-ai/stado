@@ -32,7 +32,7 @@ pub async fn dispatch_box_jobs(
             "[box] queue paused ({}); admitting no new jobs",
             queue_control.pause_summary()
         );
-        return Ok(i64::default());
+        return Ok(0);
     }
     let leases = ProviderLeaseStore::new(store.clone());
     let mut scheduled: i64 = 0;

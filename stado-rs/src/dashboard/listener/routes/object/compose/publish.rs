@@ -197,7 +197,7 @@ impl Dashboard {
 
         let cleanup_paths = if payload.if_absent {
             let prefix = format!("{target_path}.__stado_upload/");
-            match self.store.list_paths(&prefix, usize::default()).await {
+            match self.store.list_paths(&prefix, 0).await {
                 Ok(paths) => paths
                     .into_iter()
                     .filter(|path| {

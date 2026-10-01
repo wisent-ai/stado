@@ -77,7 +77,7 @@ async fn batch_artifacts(batch: &str) -> Result<Vec<String>, DeployError> {
 pub fn totals(states: &[CaptureState]) -> Vec<(String, usize)> {
     let mut totals: Vec<(String, usize)> = [STATE_DONE, STATE_FAILED]
         .iter()
-        .map(|state| ((*state).to_string(), usize::default()))
+        .map(|state| ((*state).to_string(), 0))
         .collect();
     for state in states {
         match totals.iter_mut().find(|(name, _)| name == &state.state) {

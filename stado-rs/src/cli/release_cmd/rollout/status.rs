@@ -45,7 +45,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
     // size of the fleet is a column somebody eventually deletes.
     let records = crate::observations::load();
     let mut reports = Vec::new();
-    let mut failures = usize::default();
+    let mut failures = 0;
     for (product, policy) in &control.products {
         if args
             .product
@@ -138,7 +138,7 @@ pub(in crate::cli::release_cmd) async fn status(args: &ReleaseStatusArgs) -> Res
         }
         print_runs(&runs);
     }
-    if failures == usize::default() {
+    if failures == 0 {
         return Ok(());
     }
     // Silence is the failure. Every sentence is already printed beside its row,

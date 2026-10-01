@@ -134,7 +134,7 @@ fn resource_cost_entry(resource: &ResourceRecord, hourly: f64) -> CostEntry {
         usage_started_at: None,
         usage_ended_at: None,
         gross_cost_usd: hourly,
-        credits_usd: f64::default(),
+        credits_usd: 0.0,
         net_cost_usd: hourly,
         source: "live hourly price".to_string(),
         allocated: resource.owner.is_some() || resource.workload.is_some(),

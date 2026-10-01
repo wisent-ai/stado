@@ -55,7 +55,7 @@ pub(super) fn validate_rollback(action: &Action, rollback: &Rollback) -> Result<
                 .parameters
                 .get("target_size")
                 .and_then(Value::as_i64)
-                .is_some_and(|size| size >= i64::default())
+                .is_some_and(|size| size >= 0)
                 && rollback.parameters.get("scope") == action.parameters.get("scope")
         }
         (ActionKind::SuspendCloudSql, ActionKind::RestoreCloudSql) => rollback

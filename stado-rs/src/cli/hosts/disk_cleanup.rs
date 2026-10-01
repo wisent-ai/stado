@@ -70,7 +70,7 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
         // task on every tick — so that neither needs an autonomy mode change
         // or an operator gesture to reach a host.
         let memory = host_memory::run_memory_pass_once(
-            i64::default(),
+            0,
             host_memory::MemoryWriter::Cli,
             &mut |_message| {},
         )

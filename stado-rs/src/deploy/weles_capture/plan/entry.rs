@@ -50,7 +50,7 @@ pub(super) fn parse_capture(
         viewport
             .and_then(|viewport| viewport.get(key))
             .and_then(Value::as_f64)
-            .is_some_and(|value| value > f64::default())
+            .is_some_and(|value| value > 0.0)
     };
     if !positive("width") || !positive("height") || !positive("device_scale_factor") {
         return Err(DeployError(format!(
@@ -65,7 +65,7 @@ pub(super) fn parse_capture(
     if !object
         .get("record_seconds")
         .and_then(Value::as_f64)
-        .is_some_and(|seconds| seconds >= f64::default())
+        .is_some_and(|seconds| seconds >= 0.0)
     {
         return Err(DeployError(format!(
             "capture {index} record_seconds must be a number of seconds that is zero or more"

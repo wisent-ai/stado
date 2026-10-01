@@ -17,7 +17,7 @@ impl Dashboard {
         write: bool,
     ) -> Response {
         if request.header("transfer-encoding").is_some()
-            || request.content_length != usize::default()
+            || request.content_length != 0
             || !request.body.is_empty()
         {
             return send_json(

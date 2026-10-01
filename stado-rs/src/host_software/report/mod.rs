@@ -38,7 +38,7 @@ impl Report {
         Self {
             host: host.to_string(),
             rows: Vec::new(),
-            scripts: usize::default(),
+            scripts: 0,
             freshness: Freshness::Never,
         }
     }

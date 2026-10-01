@@ -64,7 +64,7 @@ async fn schedule_queued_jobs_inner(
             "Queue paused ({}); dispatching nothing",
             queue_control.pause_summary()
         ));
-        return Ok(i64::default());
+        return Ok(0);
     }
 
     let available = get_available_instances(store, provider, provider_name).await?;

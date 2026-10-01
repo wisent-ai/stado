@@ -14,7 +14,7 @@ pub(in crate::providers::gcp::inventory) fn disks_detail(
             let users = disk
                 .get("users")
                 .and_then(Value::as_array)
-                .map_or(usize::default(), Vec::len);
+                .map_or(0, Vec::len);
             json!({
                 "name": disk.get("name"),
                 "id": disk.get("id"),

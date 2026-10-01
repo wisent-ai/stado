@@ -110,7 +110,7 @@ pub async fn read_plan(store: &JobStorage, id: &str) -> Result<ExpansionReport, 
 
 pub async fn history(store: &JobStorage) -> Result<Vec<ExpansionReport>, String> {
     let paths = store
-        .list_paths(PLAN_PREFIX, usize::default())
+        .list_paths(PLAN_PREFIX, 0)
         .await
         .map_err(|e| format!("list {PLAN_PREFIX}: {e}"))?;
     let mut plans = Vec::new();

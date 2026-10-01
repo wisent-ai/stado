@@ -114,7 +114,7 @@ pub(crate) fn portfolio_payback(rows: &[&Candidate]) -> Option<f64> {
     starts.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut balance = -upfront;
     let mut slope = -monthly_cost;
-    let mut time = f64::default();
+    let mut time = 0.0;
     for (start, benefit) in starts {
         if slope > 0.0 && balance <= 0.0 {
             let crossing = time - balance / slope;

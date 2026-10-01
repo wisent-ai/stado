@@ -43,15 +43,15 @@ pub(in crate::cli::blast_radius) fn compare_coverage(
         };
     }
 
-    let mut missing = usize::default();
-    let mut extra = usize::default();
+    let mut missing = 0;
+    let mut extra = 0;
     for prefix in CANONICAL_PREFIXES {
         let primary_names = primary.names.get(*prefix).cloned().unwrap_or_default();
         let backup_names = backup.names.get(*prefix).cloned().unwrap_or_default();
         missing = missing.saturating_add(primary_names.difference(&backup_names).count());
         extra = extra.saturating_add(backup_names.difference(&primary_names).count());
     }
-    let state = if missing == usize::default() {
+    let state = if missing == 0 {
         "namespace_covered"
     } else {
         "incomplete"

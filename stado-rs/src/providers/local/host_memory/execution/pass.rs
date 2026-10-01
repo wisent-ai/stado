@@ -58,7 +58,7 @@ fn base_report(writer: MemoryWriter, hostname: String, started_at: String) -> Me
         mode: None,
         check_interval_seconds: None,
         started_at,
-        duration_ms: i64::default(),
+        duration_ms: 0,
         outcome: report::NEVER_RUN.to_string(),
         before: MemoryReading::default(),
         after: None,
@@ -72,7 +72,7 @@ fn base_report(writer: MemoryWriter, hostname: String, started_at: String) -> Me
         examined_repairs: false,
         caps: MemoryCaps::default(),
         lock_busy: false,
-        active_job_count: i64::default(),
+        active_job_count: 0,
         last_success_at: None,
         errors: Vec::new(),
     }
@@ -233,7 +233,7 @@ fn finish_pass(
         report.errors.extend(errors);
         report.repairs.insert(name.to_string(), result);
     }
-    if enforce && budget <= i64::default() {
+    if enforce && budget <= 0 {
         report.caps.repairs = true;
     }
     report.after = Some(reading::read_host_memory());
@@ -253,7 +253,7 @@ fn conclude(
         .as_ref()
         .and_then(|after| after.at_target(policy))
         .unwrap_or(false);
-    let none = i64::default();
+    let none = 0;
     report.outcome = if !report.errors.is_empty() && repaired == none {
         report::PARTIAL_ERROR.to_string()
     } else if !enforce {

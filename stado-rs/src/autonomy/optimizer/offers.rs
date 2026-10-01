@@ -55,7 +55,7 @@ pub(super) async fn collect_offers(
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        if available.is_empty() && free_vram > i64::default() {
+        if available.is_empty() && free_vram > 0 {
             let accelerator = payload_text(&payload, "gpu_type").unwrap_or("");
             offers.push(CapacityOffer {
                 target_id: consumer_id,
@@ -79,7 +79,7 @@ pub(super) async fn collect_offers(
         }
         for (accelerator, count) in available {
             let count = count.as_i64().unwrap_or_default();
-            if count <= i64::default() {
+            if count <= 0 {
                 continue;
             }
             offers.push(CapacityOffer {
@@ -113,7 +113,7 @@ pub(super) async fn collect_offers(
         {
             Ok(available) => {
                 for (accelerator, count) in available {
-                    if count <= i64::default() {
+                    if count <= 0 {
                         continue;
                     }
                     let Some((vram, machine)) = sizing_for_accelerator(name, &accelerator) else {

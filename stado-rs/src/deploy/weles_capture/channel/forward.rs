@@ -15,7 +15,7 @@ use crate::deploy::DeployError;
 /// this probe and ssh's bind — into an immediate refusal instead of a silent
 /// misroute to whatever took it.
 pub(super) fn free_loopback_port() -> Result<u16, DeployError> {
-    let listener = TcpListener::bind(("127.0.0.1", u16::default())).map_err(|error| {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
         DeployError(format!(
             "cannot reserve a loopback port for the admission forward: {error}"
         ))

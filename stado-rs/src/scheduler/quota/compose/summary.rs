@@ -107,7 +107,7 @@ async fn summarize_quotas_with(
                     total,
                     reserved,
                     used,
-                    available: (total - reserved - used).max(i64::default()),
+                    available: (total - reserved - used).max(0),
                 },
             );
         }

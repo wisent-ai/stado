@@ -41,7 +41,7 @@ pub(super) fn fold_provider(
             detail,
             last_ok: Some(stamp.to_string()),
             failing_since: None,
-            failing_seconds: i64::default(),
+            failing_seconds: 0,
             degraded: false,
         };
     }
@@ -79,7 +79,7 @@ fn elapsed_seconds(since: &str, now: DateTime<Utc>) -> i64 {
         .map(|start| {
             (now - start.with_timezone(&Utc))
                 .num_seconds()
-                .max(i64::default())
+                .max(0)
         })
         .unwrap_or_default()
 }
@@ -92,13 +92,13 @@ pub fn humanize(seconds: i64) -> String {
     let hours = (total % SECONDS_PER_DAY) / SECONDS_PER_HOUR;
     let minutes = (total % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
     let mut parts = Vec::new();
-    if days > u64::default() {
+    if days > 0 {
         parts.push(format!("{days}d"));
     }
-    if hours > u64::default() {
+    if hours > 0 {
         parts.push(format!("{hours}h"));
     }
-    if minutes > u64::default() || parts.is_empty() {
+    if minutes > 0 || parts.is_empty() {
         parts.push(format!("{minutes}m"));
     }
     parts.join(" ")

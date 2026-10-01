@@ -176,9 +176,9 @@ fn summarize(probes: &[ProbeReport]) -> InventorySummary {
         .iter()
         .filter(|probe| probe.severity == "critical" && !matches!(probe.state.as_str(), "ok"))
         .count();
-    let state = if critical_failures != usize::default() {
+    let state = if critical_failures != 0 {
         "critical"
-    } else if degraded + blocked + missing + errors + failed != usize::default() {
+    } else if degraded + blocked + missing + errors + failed != 0 {
         "degraded"
     } else {
         "healthy"

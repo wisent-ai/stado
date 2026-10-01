@@ -225,7 +225,7 @@ impl Ec2Api for Ec2Client {
                     let age = instance
                         .launch_time()
                         .map(|created| {
-                            now.saturating_sub(created.secs()).max(i64::default()) as f64
+                            now.saturating_sub(created.secs()).max(0) as f64
                         })
                         .unwrap_or_default();
                     out.push((instance_id.to_string(), age));

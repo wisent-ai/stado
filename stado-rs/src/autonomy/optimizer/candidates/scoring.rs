@@ -36,14 +36,14 @@ pub(super) fn candidate(
     let new_cloud_hourly_budget_usd = context.budget.hourly_usd;
     let new_cloud_cost_budget_usd = context.budget.total_usd;
     let startup = if offer.existing {
-        f64::default()
+        0.0
     } else {
         observed_startup_seconds(feedback, &offer.target_id).unwrap_or_default()
     };
     let failure_probability =
         observed_failure_probability(feedback, &offer.target_id).unwrap_or_default();
     let hourly = if offer.provider == ProviderId::Local && quote.is_none() {
-        policy.local_hourly_cost_usd.or(Some(f64::default()))
+        policy.local_hourly_cost_usd.or(Some(0.0))
     } else {
         quote.map(|price| price.hourly_usd)
     };
@@ -55,8 +55,8 @@ pub(super) fn candidate(
         .map(|raw| match chrono::DateTime::parse_from_rfc3339(raw) {
             Ok(deadline) => {
                 let remaining = (deadline.with_timezone(&Utc) - context.now).as_seconds_f64();
-                let lateness = (expected_finish - remaining).max(f64::default());
-                if lateness > f64::default() {
+                let lateness = (expected_finish - remaining).max(0.0);
+                if lateness > 0.0 {
                     deadline_rejection = Some(format!(
                         "completion deadline would be missed by {lateness} seconds"
                     ));
@@ -66,7 +66,7 @@ pub(super) fn candidate(
             }
             Err(error) => {
                 deadline_rejection = Some(format!("invalid completion deadline: {error}"));
-                f64::default()
+                0.0
             }
         })
         .unwrap_or_default();
@@ -77,7 +77,7 @@ pub(super) fn candidate(
         if policy.placement.account_for_egress && crosses_provider_boundary(job, offer.provider) {
             None
         } else {
-            Some(f64::default())
+            Some(0.0)
         };
     let total = compute
         .zip(egress)
@@ -87,10 +87,10 @@ pub(super) fn candidate(
     if let Some(reason) = deadline_rejection {
         rejected.push(reason);
     }
-    if offer.available_instances <= i64::default() {
+    if offer.available_instances <= 0 {
         rejected.push("no available instances".to_string());
     }
-    if offer.free_vram_gb > i64::default() && offer.free_vram_gb < job.gpu_mem_gb {
+    if offer.free_vram_gb > 0 && offer.free_vram_gb < job.gpu_mem_gb {
         rejected.push(format!(
             "free VRAM {} GiB is below required {} GiB",
             offer.free_vram_gb, job.gpu_mem_gb
@@ -135,7 +135,7 @@ pub(super) fn candidate(
             job.region
         ));
     }
-    if job.cpu_cores > i64::default() || job.memory_gb > i64::default() {
+    if job.cpu_cores > 0 || job.memory_gb > 0 {
         // No offer reports the CPU and memory of its shape, so an explicit
         // constraint cannot be checked against one.
         rejected.push(
@@ -173,7 +173,7 @@ pub(super) fn candidate(
     if egress.is_none() {
         rejected.push("cross-provider data egress cannot be priced from job metadata".to_string());
     }
-    if job.max_cost_per_hour_usd > f64::default()
+    if job.max_cost_per_hour_usd > 0.0
         && hourly.is_some_and(|rate| rate > job.max_cost_per_hour_usd)
     {
         rejected.push(format!(
@@ -205,7 +205,7 @@ pub(super) fn candidate(
         runtime_seconds: runtime,
         hourly_compute_usd: hourly,
         compute_cost_usd: compute,
-        storage_cost_usd: f64::default(),
+        storage_cost_usd: 0.0,
         egress_cost_usd: egress,
         retry_risk_cost_usd: retry,
         slo_penalty_usd: slo_penalty,

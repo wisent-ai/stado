@@ -37,9 +37,9 @@ pub fn digests_match(stored: &str, presented: &str) -> bool {
     if stored.len() != presented.len() {
         return false;
     }
-    let mut difference = u8::default();
+    let mut difference = 0;
     for (left, right) in stored.iter().zip(&presented) {
         difference |= left ^ right;
     }
-    difference == u8::default()
+    difference == 0
 }

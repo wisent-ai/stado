@@ -147,7 +147,7 @@ pub(super) fn require_free_space(
     recipe: &crate::release_pipeline::PlatformRecipe,
     work: &Path,
 ) -> Result<(), CmdError> {
-    if recipe.min_free_gb == u64::default() {
+    if recipe.min_free_gb == 0 {
         return Ok(());
     }
     let free = free_gibibytes(work).ok_or_else(|| {

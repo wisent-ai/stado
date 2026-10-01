@@ -36,7 +36,7 @@ pub(super) fn candidates_for_job(
     offers
         .iter()
         .map(|offer| {
-            let runtime = if job.runtime_seconds_estimate > f64::default() {
+            let runtime = if job.runtime_seconds_estimate > 0.0 {
                 job.runtime_seconds_estimate
             } else {
                 crate::scheduler::cost::estimate_wall_time(
@@ -49,7 +49,7 @@ pub(super) fn candidates_for_job(
             let preemptible = job.preemptible
                 && policy.placement.allow_spot
                 && (!policy.placement.require_checkpoint_for_spot
-                    || job.max_preempts_before_ondemand > i64::default());
+                    || job.max_preempts_before_ondemand > 0);
             let possible_regions = offer_regions(offer);
             let quote = possible_regions
                 .iter()

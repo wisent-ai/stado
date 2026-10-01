@@ -54,7 +54,7 @@ pub async fn collect_completed_dynamic(store: &JobStorage) -> Result<Vec<CostRow
     };
     let mut rows = Vec::new();
     for state in ["completed", "failed"] {
-        for job in store.list_jobs(state, usize::default()).await? {
+        for job in store.list_jobs(state, 0).await? {
             let Some(wall) = wall_seconds(&job) else {
                 continue;
             };
@@ -69,7 +69,7 @@ pub async fn collect_completed_dynamic(store: &JobStorage) -> Result<Vec<CostRow
                 _ => continue,
             };
             let rate = if provider == crate::capabilities::ProviderId::Local {
-                f64::default()
+                0.0
             } else {
                 let Some(quote) = prices.find_hourly(
                     provider,

@@ -14,7 +14,7 @@ pub(super) async fn execute_with_circuit(
     policy: &AutonomyPolicy,
 ) -> Result<(), StorageError> {
     let mut mutation_lease = None;
-    for slot in usize::default()..policy.limits.max_concurrent_mutations {
+    for slot in 0..policy.limits.max_concurrent_mutations {
         let subject = format!("mutation-slot-{slot}");
         if let Some(lease) = super::storage::acquire_placement_lease(
             store,

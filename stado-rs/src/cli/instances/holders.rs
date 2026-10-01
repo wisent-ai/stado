@@ -16,7 +16,7 @@ use crate::queue::JobStorage;
 /// `JobStorage::list_jobs` / `list_paths` take `oldest_first = 0` for "no
 /// bound" (Python `limit=None`); naming the sentinel keeps the call sites
 /// honest about what zero means there.
-const UNBOUNDED: usize = usize::MIN;
+const UNBOUNDED: usize = 0;
 
 /// The blob prefix `queue/leases.rs::ProviderLeaseStore::path` writes under.
 /// Already carried by `queue/copy.rs::CANONICAL_PREFIXES`; these commands

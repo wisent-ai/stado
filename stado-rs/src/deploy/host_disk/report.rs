@@ -34,7 +34,7 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
     let last_attempt = document.get("last_attempt_at").and_then(Value::as_f64);
     let next_pass_at = match (last_attempt, policy_interval_seconds) {
         (Some(attempt), Some(interval)) => {
-            DateTime::from_timestamp(attempt.trunc() as i64, u32::default())
+            DateTime::from_timestamp(attempt.trunc() as i64, 0)
                 .and_then(|stamp| stamp.checked_add_signed(TimeDelta::seconds(interval)))
                 .map(crate::models::isoformat_utc)
         }

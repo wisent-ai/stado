@@ -27,7 +27,7 @@ pub(crate) async fn update(
     // the new version lands where the running one is actually read, instead of
     // beside it under a directory that only matches the name.
     let runner = production_runner();
-    let declared = &services[usize::default()];
+    let declared = &services[0];
     // Archive membership follows the actual executable vector in the unit.
     // `service show` is deliberately human presentation and may contain
     // spaces in paths and arguments plus a resolved-link annotation.

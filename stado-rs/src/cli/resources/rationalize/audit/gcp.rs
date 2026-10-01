@@ -69,7 +69,7 @@ pub(super) fn gcp_findings(
         let name = string_field(group, "name");
         let stado_owned = name.starts_with("wisent") || name.starts_with("stado");
         if !stado_owned
-            || number_field(group, "target_size") != Some(u64::default())
+            || number_field(group, "target_size") != Some(0)
             || !old_enough(group.get("creation_timestamp"), min_age_seconds, now)
         {
             continue;

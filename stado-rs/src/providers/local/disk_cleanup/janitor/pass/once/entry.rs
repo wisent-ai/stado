@@ -91,7 +91,7 @@ pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.
     cleanup_once(
-        i64::default(),
+        0,
         true,
         true,
         false,

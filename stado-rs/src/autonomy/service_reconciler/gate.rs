@@ -40,7 +40,7 @@ impl<'a> MutationGate<'a> {
             store,
             policy,
             decision_id,
-            mutations: usize::default(),
+            mutations: 0,
         }
     }
 

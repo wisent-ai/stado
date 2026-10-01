@@ -10,11 +10,11 @@ use crate::skarbiec::Client as SkarbiecClient;
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let left = Sha256::digest(left);
     let right = Sha256::digest(right);
-    let mut difference = u8::default();
+    let mut difference = 0;
     for (left, right) in left.iter().zip(right) {
         difference |= left ^ right;
     }
-    difference == u8::default()
+    difference == 0
 }
 
 pub async fn authenticate(

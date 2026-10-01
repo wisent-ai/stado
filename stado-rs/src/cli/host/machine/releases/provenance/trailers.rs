@@ -35,14 +35,14 @@ pub(super) fn print(
              answered; run this from the stado source tree to resolve it"
         );
     }
-    if counts.drifted != usize::default() {
+    if counts.drifted != 0 {
         println!(
             "{target}: {} of {rows} artifacts name a producing commit that is not reachable \
              from origin/main",
             counts.drifted
         );
     }
-    if counts.unresolved != usize::default() {
+    if counts.unresolved != 0 {
         // Unknown, never folded into drift. An operator told "no" walks a
         // build back; one told "unknown" clones the repository first, and the
         // trailer used to say the first about artifacts nobody had asked
@@ -57,7 +57,7 @@ pub(super) fn print(
         .iter()
         .filter(|item| item.describes == Some(false))
         .count();
-    if replaced != usize::default() {
+    if replaced != 0 {
         // Louder than drift, because the record is not merely absent: it
         // answers the provenance question, and its answer is about bytes that
         // are gone. Every reader downstream inherits that wrong answer.
@@ -66,7 +66,7 @@ pub(super) fn print(
              the commit shown for them describes bytes that are no longer on the host"
         );
     }
-    if counts.helpers != usize::default() {
+    if counts.helpers != 0 {
         // Not drift, and not nothing. Helpers are delivered one at a time to
         // solve one incident and are never removed, so the population only
         // grows; naming the count is what makes an operator notice that a
@@ -77,7 +77,7 @@ pub(super) fn print(
             counts.helpers
         );
     }
-    if counts.markers != usize::default() {
+    if counts.markers != 0 {
         // The release path's own version marker, and anything else in the bin
         // directory that is not executable. Named rather than listed: a file
         // the delivery wrote is not an artifact whose provenance can be

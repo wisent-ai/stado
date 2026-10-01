@@ -197,14 +197,14 @@ impl Context {
         >(&self.store, "state/autonomy/inventory/latest.json")
         .await?
         else {
-            return Ok(Some((false, u64::default())));
+            return Ok(Some((false, 0)));
         };
         let Some(resource) = snapshot
             .resources
             .iter()
             .find(|resource| resource.resource_id == resource_id)
         else {
-            return Ok(Some((false, u64::default())));
+            return Ok(Some((false, 0)));
         };
         let revision_matches = action
             .parameters
@@ -219,7 +219,7 @@ impl Context {
                 chrono::Utc::now()
                     .signed_duration_since(created.with_timezone(&chrono::Utc))
                     .num_seconds()
-                    .max(i64::default())
+                    .max(0)
             })
             .and_then(|seconds| u64::try_from(seconds).ok())
             .unwrap_or_default();

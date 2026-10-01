@@ -78,7 +78,7 @@ pub(super) fn compile_plan(
     let snapshot_id = hex::encode(sha2::Sha256::digest(serde_json::to_vec(&report_value)?));
     let inventory = InventorySnapshot {
         snapshot_id,
-        complete: report.summary.incomplete_sources == usize::default(),
+        complete: report.summary.incomplete_sources == 0,
         sources: report
             .sources
             .iter()

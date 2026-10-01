@@ -148,7 +148,7 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_revisions_detail(
         .count();
     let count = revisions.len();
     (
-        if unhealthy == usize::default() {
+        if unhealthy == 0 {
             "ok"
         } else {
             "degraded"

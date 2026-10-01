@@ -12,12 +12,12 @@ pub(super) fn summarize(findings: &[Finding], incomplete_sources: usize) -> Summ
     for finding in findings {
         *by_severity
             .entry(finding.severity.to_string())
-            .or_insert(usize::default()) += 1;
+            .or_insert(0) += 1;
         *by_action
             .entry(finding.action.to_string())
-            .or_insert(usize::default()) += 1;
+            .or_insert(0) += 1;
     }
-    let state = match (findings.is_empty(), incomplete_sources == usize::default()) {
+    let state = match (findings.is_empty(), incomplete_sources == 0) {
         (true, true) => "clean",
         (false, true) => "recommendations",
         (true, false) => "incomplete",

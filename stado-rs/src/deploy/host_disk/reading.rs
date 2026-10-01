@@ -240,5 +240,5 @@ pub struct DiskReading {
 
 /// Epoch seconds as the ISO-8601 spelling the rest of the fleet uses.
 pub(super) fn iso_from_epoch(epoch: f64) -> Option<String> {
-    DateTime::from_timestamp(epoch.trunc() as i64, u32::default()).map(crate::models::isoformat_utc)
+    DateTime::from_timestamp(epoch.trunc() as i64, 0).map(crate::models::isoformat_utc)
 }

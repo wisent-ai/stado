@@ -26,7 +26,7 @@ pub(in crate::cli::service_converge) fn report_exit_code(rows: &[Row]) -> i32 {
     }) {
         CLICK_ERROR_CODE
     } else {
-        i32::default()
+        0
     }
 }
 
@@ -38,7 +38,7 @@ pub(in crate::cli::service_converge) fn report_gate_diagnostics(rows: &[Row], ex
             row.binary, row.declared, row.detail
         );
     }
-    if exit_code == i32::default() {
+    if exit_code == 0 {
         return;
     }
     let behind = rows.iter().filter(|row| row.verdict == HOST_BEHIND).count();
@@ -93,7 +93,7 @@ pub(in crate::cli::service_converge) fn apply_exit_code(rows: &[Row], pass: &App
         && pass.undeliverable.is_empty()
         && pass.refused.is_empty()
     {
-        i32::default()
+        0
     } else {
         CLICK_ERROR_CODE
     }
@@ -104,7 +104,7 @@ pub(in crate::cli::service_converge) fn apply_gate_diagnostics(
     pass: &AppliedPass,
     exit_code: i32,
 ) {
-    if exit_code == i32::default() {
+    if exit_code == 0 {
         return;
     }
     let unresolved: Vec<&Row> = rows.iter().filter(|row| row.verdict != IN_SYNC).collect();

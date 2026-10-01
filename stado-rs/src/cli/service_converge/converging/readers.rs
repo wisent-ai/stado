@@ -37,7 +37,7 @@ pub(in crate::cli::service_converge) async fn converge_native_readers(
     // registry document at :registry.json`, reported as a failed delivery on
     // every apply against such a host. Recorded rather than silent, because a
     // leg that did not run is a fact about the pass.
-    if declared_services(target) == usize::default() {
+    if declared_services(target) == 0 {
         pass.releases.push(Released {
             binary: "stado-readers".to_string(),
             version,

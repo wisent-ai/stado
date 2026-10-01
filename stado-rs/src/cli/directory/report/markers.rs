@@ -59,7 +59,7 @@ pub(super) fn adapter_url(target_entry: &Value, service: &str) -> Result<Option<
 /// still true when an unlink fails -- but the command must not exit zero, or a
 /// caller that runs this to convergence will believe the directory is clean.
 pub(super) fn prune_outcome(failed: usize) -> Result<(), CmdError> {
-    if failed == usize::default() {
+    if failed == 0 {
         return Ok(());
     }
     Err(CmdError::click(format!(
@@ -117,7 +117,7 @@ pub(super) fn sweep_markers(
     declared: &std::collections::BTreeSet<&str>,
 ) -> Result<MarkerSweep, CmdError> {
     let mut sweep = MarkerSweep {
-        present: usize::default(),
+        present: 0,
         fossil: Vec::new(),
     };
     for entry in std::fs::read_dir(forwards)? {

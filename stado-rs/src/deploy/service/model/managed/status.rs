@@ -103,7 +103,7 @@ fn stale_beacon_detail(reported_at: &str, now: DateTime<Utc>) -> Option<String> 
         return Some("health beacon has no usable reported_at; unit state is unknown".to_string());
     };
     let age = now.signed_duration_since(stamp).num_seconds();
-    if age < i64::default() || age <= threshold {
+    if age < 0 || age <= threshold {
         return None;
     }
     Some(format!(
