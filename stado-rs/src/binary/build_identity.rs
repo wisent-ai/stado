@@ -1,13 +1,13 @@
 //! Which tree this binary was built from.
 //!
-//! The semantic version does not identify content. On 2026-09-03 `0.14.6`
-//! named four materially different trees of this crate: the binary the fleet
-//! was running (without the janitor workload-hold fix or the builder
-//! claimability fix), two separate commits each declaring `version = "0.14.6"`
-//! in `Cargo.toml`, and a local build with a fourth combination. No release
-//! object existed for `0.14.6` to tell them apart, only a coordinate claim, so
-//! establishing what the running control plane carried meant reading string
-//! literals and mangled symbols out of the binary with `strings` and `nm`.
+//! The semantic version does not identify content. One version string can
+//! name several materially different trees of this crate at once: the binary
+//! the fleet is running, separate commits each declaring that version in
+//! `Cargo.toml`, and a local build with yet another combination. With no
+//! release object for the version to tell them apart, only a coordinate
+//! claim, establishing what the running control plane carries means reading
+//! string literals and mangled symbols out of the binary with `strings` and
+//! `nm`.
 //!
 //! [`BUILD_IDENTITY`] is the answer to that question as a read. It is what
 //! `stado --version` prints and what the agent publishes for itself, so every

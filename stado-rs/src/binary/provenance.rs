@@ -1,14 +1,12 @@
 //! Who built this artifact, and can anyone still find the source it came from?
 //!
-//! On 2026-08-11 `stado host install-binary` reported
-//! `control-host: stado 0.7.1 -> stado 0.7.0`. No commit on any branch of
-//! this repository has ever carried the version 0.7.1, so the binary that had
-//! been running the fleet's control plane came out of a source tree nobody
-//! else can produce. Nothing on the host and nothing in this repository could
-//! say otherwise: the install had recorded a name, a size and a timestamp,
-//! none of which is a producer. The Weles worker on the same host is the same
-//! story with a different artifact -- release `main-objapi-fix`, built on a
-//! laptop and never published.
+//! An install can report a version no commit on any branch of this
+//! repository has ever carried, which means the binary running the fleet's
+//! control plane came out of a source tree nobody else can produce. Nothing
+//! on the host and nothing in this repository can say otherwise: the install
+//! recorded a name, a size and a timestamp, none of which is a producer. A
+//! worker release built on a laptop and never published is the same story
+//! with a different artifact.
 //!
 //! Both happened because installing is one command and releasing is a
 //! pipeline, and nothing ever asked the cheaper path for its receipts. This

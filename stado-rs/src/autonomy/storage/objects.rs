@@ -43,11 +43,11 @@ pub async fn read_json<T: DeserializeOwned>(
 ///
 /// Every record type in this module is keyed by its own id in its object name,
 /// so "does this id exist" and "how old is it" are questions the listing
-/// already answers. Asking them by downloading each body is what made one
-/// coordinator tick 11,514 serial object GETs on 2026-09-02 — 8,129 decisions
-/// and 3,385 feedback records, re-read every tick for work finished months
-/// earlier. The fleet store serves the release channel too, so that tick is
-/// what starved the 0.13.42 release download to 570 KB/s.
+/// already answers. Asking them by downloading each body makes one
+/// coordinator tick thousands of serial object GETs — every decision and
+/// feedback record re-read every tick for work finished months earlier. The
+/// fleet store serves the release channel too, so such a tick starves a
+/// release download.
 pub(in crate::autonomy::storage) async fn list_record_index(
     store: &JobStorage,
     prefix: &str,

@@ -44,7 +44,7 @@ pub use records::policy::{load_policy, load_policy_versioned, write_policy};
 /// `401 {"error":"unauthorized or non-immutable release write"}` — a sentence
 /// naming neither the namespace, the prefix, nor the grant. Reads kept working
 /// from the `local` backup backend, so `optimize status` printed a forecast
-/// while the whole layer had been unable to persist since 2026-08-19.
+/// while the whole layer had been unable to persist for weeks.
 ///
 /// `state/` is authorized, and this is the same move
 /// [`crate::monitor::host_silence::SILENCE_PREFIX`] already made after the same

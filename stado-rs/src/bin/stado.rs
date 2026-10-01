@@ -16,15 +16,15 @@ use tracing_subscriber::EnvFilter;
 /// `#[tokio::main]` blocks on the entry future on the process's main thread,
 /// and macOS gives that thread 8 MiB that no `ulimit` can raise after exec. A
 /// debug build's future for `main_entry` is one state machine holding every
-/// awaited command's locals inlined, and on 2026-08-31 it crossed that
-/// boundary: `./target/debug/stado service list`, `service show`,
-/// `service env`, `service reap` and `doctor` all died with
-/// `thread 'main' has overflowed its stack` before parsing finished, while the
-/// release binary at the same commit ran them fine.
+/// awaited command's locals inlined, and it can cross that boundary: a debug
+/// `stado service list`, `service show`, `service env`, `service reap` or
+/// `doctor` dies with `thread 'main' has overflowed its stack` before
+/// parsing finishes, while the release binary at the same commit runs them
+/// fine.
 ///
 /// A verification instrument that aborts is worse than a slow one: every agent
-/// working in this repository verifies through `./target/debug/stado`, and for
-/// part of that day the answer to "is the fleet healthy" was a SIGSEGV that
+/// working in this repository verifies through `./target/debug/stado`, and
+/// the answer to "is the fleet healthy" then becomes a SIGSEGV that
 /// looked like a host problem. The runtime is built on a thread this file
 /// sizes, so the limit is a number in the product rather than whatever the
 /// kernel hands the main thread.

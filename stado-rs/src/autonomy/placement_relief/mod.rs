@@ -3,13 +3,12 @@
 //! A host's memory policy repairs the host from the inside: it ends session
 //! processes, restarts the units it was told it may restart, and publishes
 //! `memory_pressure_active` while it is still over its watermark. Nothing
-//! above it ever read that word and acted across the fleet. On 2026-09-18 the
-//! 16 GiB control host carried Brama, its entitlements router, Skarbiec, a
-//! Weles browser and the fleet's object store; it sat at 1.4 GiB available
-//! with swap at 71%, its janitor reported progress every pass, its object
-//! store closed connections on every release write, and a laptop declared in
-//! the same placement profile with four times the memory did nothing, because
-//! `stado placement move` waited for an operator to type it.
+//! above it ever read that word and acted across the fleet: a small control
+//! host carrying the gateway, the vault, a browser and the object store sits
+//! over its watermark with its janitor reporting progress every pass and its
+//! object store closing connections on every release write, while a host
+//! declared in the same placement profile with several times the memory does
+//! nothing, because `stado placement move` waits for an operator to type it.
 //!
 //! This stage is that operator. Each autonomy tick it reads every placement
 //! profile, the host it is placed on and the memory every declared host
