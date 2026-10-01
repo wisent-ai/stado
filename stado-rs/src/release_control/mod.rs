@@ -69,12 +69,11 @@ const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// executables and their manifests, so a payload past this is not a release.
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
 /// Entries one source snapshot may carry. A snapshot is a whole repository -
-/// `git archive` of `wisent-ai/stado` listed 4,230 entries at `07fd9ba7`,
-/// files and directories together - and the build worker used to extract it
-/// under [`MAX_ARCHIVE_ENTRIES`], the bound sized for a release payload. On
-/// 2026-09-10 the 0.20.9 build was refused on every builder with `release
-/// archive exceeds 4096 entries` the moment the module split pushed the tree
-/// over, and the coordinate stayed bound to a commit no installed worker
-/// could unpack. The byte bounds still apply; only the count is sized for
-/// what a repository is.
+/// `git archive` of a product repository lists thousands of entries, files
+/// and directories together - and a build worker that extracts it under
+/// [`MAX_ARCHIVE_ENTRIES`], the bound sized for a release payload, refuses
+/// every build with `release archive exceeds 4096 entries` the moment a
+/// module split pushes the tree over, leaving the coordinate bound to a
+/// commit no installed worker can unpack. The byte bounds still apply; only
+/// the count is sized for what a repository is.
 const MAX_SOURCE_ARCHIVE_ENTRIES: usize = 65_536;

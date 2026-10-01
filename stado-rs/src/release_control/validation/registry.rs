@@ -104,21 +104,17 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             //
             // A replace target may OMIT `readiness_path` and take
             // [`DEFAULT_REPLACE_READINESS_PATH`]. That is not a convenience:
-            // requiring the key here made this document unwritable by the
-            // fleet that has to obey it. Stado 0.13.20 and 0.13.23 REFUSE a
-            // replace target carrying `readiness_path` at all — "replace
-            // rollout forbids stable_bind, candidate_ports and
-            // readiness_path" — and this validator required it, so on
-            // 2026-09-01 no single registry document satisfied both: with the
-            // key present the always-on Mac's 0.13.20 queue agent could
-            // resolve no policy and stopped scanning its disk for twelve
-            // minutes; with it absent every write from the operator's own
-            // installed 0.13.26 binary was refused. The fleet could only be
-            // written by a build older than the one it was running, and the
-            // workaround was to keep that older build around. Validation is
-            // whole-document, so one field in one product's rollout froze
-            // every domain — instance 16's blast radius with instance 17's
-            // version skew.
+            // requiring the key here makes this document unwritable by the
+            // fleet that has to obey it. A build that REFUSES a replace target
+            // carrying `readiness_path` at all — "replace rollout forbids
+            // stable_bind, candidate_ports and readiness_path" — beside a
+            // validator that requires it leaves no single registry document
+            // satisfying both: with the key present an older queue agent can
+            // resolve no policy and stops scanning its disk; with it absent
+            // every write from the newer installed binary is refused. The
+            // fleet can then only be written by a build older than the one it
+            // is running. Validation is whole-document, so one field in one
+            // product's rollout freezes every domain.
             //
             // Accepting the absence is the additive shape: it admits both the
             // old constraint and the new one, and any document written for

@@ -83,9 +83,9 @@ pub async fn dispatch_agent_vms_with_template(
     // Time budget: each create_instance can spend ~10s/zone × 7+ zones
     // for first-encounter stockouts, plus a full retry on the larger tier
     // in the escalation branch. With n_to_dispatch=2-3 per bucket, the
-    // autoscaler can easily eat 300+ seconds — confirmed live 03:39Z
-    // 2026-05-15 tick 504'd at 540s. Bail out after 120s in the
-    // dispatcher and let the next tick try again (caches will be warm).
+    // autoscaler can easily eat 300+ seconds and 504 the tick. Bail out
+    // after 120s in the dispatcher and let the next tick try again (caches
+    // will be warm).
     const DISPATCH_BUDGET_S: u64 = 120;
     let start = Instant::now();
     'buckets: for ((accel, mt), jobs) in &buckets {

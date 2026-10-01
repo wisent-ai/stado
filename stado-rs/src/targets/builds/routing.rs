@@ -1,11 +1,11 @@
 //! Which host may run a job that names a platform.
 //!
-//! This table lived beside the build recipes until they were removed on
-//! 2026-09-21, and it went with them — but it was never about recipes. The
-//! claiming agent reads it on every job (`providers::local::helpers::claims`)
-//! and the managed-service model reads it to decide whether a target carries
-//! the macOS agents, so removing it left the product unable to compile at all.
-//! It lives on its own now, where nothing that is deleted can take it along.
+//! This table is not about build recipes, although it once sat beside them:
+//! the claiming agent reads it on every job
+//! (`providers::local::helpers::claims`) and the managed-service model reads
+//! it to decide whether a target carries the macOS agents, so removing it
+//! with anything else leaves the product unable to compile at all. It lives
+//! on its own, where nothing that is deleted can take it along.
 
 /// One release platform's job-routing coordinates: every spelling of its
 /// operating system and architecture the fleet writes down, canonical first.

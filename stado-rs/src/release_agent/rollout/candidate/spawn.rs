@@ -64,14 +64,13 @@ pub(crate) fn spawn_release(
         // candidate without it is the only shape of the process that has ever
         // run without a PATH.
         //
-        // It cost this fleet three days. Every skarbiec candidate from
-        // 2026-09-01 onward failed readiness with `stored item cannot be
-        // decrypted: spawn gpg: No such file or directory`, was quarantined,
-        // and left the vault unreadable; the object plane's verifiers read
-        // Skarbiec, so the whole control plane answered `503 object
-        // authorization unavailable`, and every Brama agent identity 401'd
-        // behind it. The launchd unit had the PATH, the rollout did not, and
-        // nothing compared the two declarations.
+        // A candidate spawned without it fails readiness with `stored item
+        // cannot be decrypted: spawn gpg: No such file or directory`, is
+        // quarantined, and leaves the vault unreadable; the object plane's
+        // verifiers read Skarbiec, so the whole control plane then answers
+        // `503 object authorization unavailable`, and every Brama agent
+        // identity 401s behind it — the launchd unit has the PATH, the rollout
+        // does not, and nothing compares the two declarations.
         //
         // `policy.environment` is applied after this, so a product that needs
         // a different PATH still declares one and wins.
