@@ -121,15 +121,11 @@ pub(crate) async fn not_ready_because(record: &ProcessRecord, path: &str) -> Opt
         return Some(format!("pid {} is gone", record.pid));
     }
     let url = format!("http://127.0.0.1:{}{}", record.port, path);
-    match reqwest::Client::new()
-        .get(&url)
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await
-    {
+    // The probe waits for the candidate's answer: a release working through a
+    // long sweep is slow, not lost, and only its own answer says which.
+    match reqwest::Client::new().get(&url).send().await {
         Ok(response) if response.status().is_success() => None,
         Ok(response) => Some(format!("{url} answered HTTP {}", response.status())),
-        Err(error) if error.is_timeout() => Some(format!("{url} did not answer within 3s")),
         Err(error) if error.is_connect() => Some(format!("{url} refused the connection")),
         Err(error) => Some(format!("{url} failed: {error}")),
     }
