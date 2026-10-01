@@ -35,8 +35,7 @@ final class HostSpaceReportStore: ObservableObject {
         do {
             let result = try await fleet.client.run(
                 arguments: Self.arguments(host: host), confirmsMutation: false,
-                at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds
+                at: address, authorizationToken: fleet.authorizationToken
             )
             guard requestedGeneration == generation,
                   sourceGeneration == fleet.requestGeneration else { return }

@@ -1,30 +1,7 @@
 import Foundation
 
 extension StadoCLI {
-    /// The process, and the one thing another thread is allowed to do to it.
-    ///
-    /// A `stado release doctor` reaches a host over its channel; a host that
-    /// has stopped answering makes that read hang, and a hung read with no
-    /// deadline is a screen that never finishes loading and never says why.
-    private final class Invocation: @unchecked Sendable {
-        let process = Process()
-        private let lock = NSLock()
-        private var expired = false
-
-        var didTimeOut: Bool {
-            lock.withLock { expired }
-        }
-
-        func terminateForTimeout() {
-            lock.withLock {
-                guard process.isRunning else { return }
-                expired = true
-                process.terminate()
-            }
-        }
-    }
-
-    /// Everything the reader thread and the timer thread share, behind a lock.
+    /// Everything the stderr reader thread hands back, behind a lock.
     private final class ErrorOutput: @unchecked Sendable {
         private let lock = NSLock()
         private var data = Data()
@@ -38,27 +15,14 @@ extension StadoCLI {
         }
     }
 
+    /// Run `stado` until it exits. Its exit code, stdout and stderr are the
+    /// answer; no timer stops it.
     static func capture(
         executable: URL,
-        arguments: [String],
-        timeoutSeconds: Int?
+        arguments: [String]
     ) async throws -> Completion {
-        let invocation = Invocation()
-        let watchdog = timeoutSeconds.map { seconds in
-            Task.detached(priority: .utility) {
-                try? await Task.sleep(for: .seconds(seconds))
-                invocation.terminateForTimeout()
-            }
-        }
-        defer { watchdog?.cancel() }
-
-        return try await Task.detached(priority: .userInitiated) {
-            try runToCompletion(
-                invocation: invocation,
-                executable: executable,
-                arguments: arguments,
-                timeoutSeconds: timeoutSeconds
-            )
+        try await Task.detached(priority: .userInitiated) {
+            try runToCompletion(executable: executable, arguments: arguments)
         }.value
     }
 
@@ -70,12 +34,10 @@ extension StadoCLI {
     /// this plain function, which states where the blocking happens instead of
     /// hiding it behind a timed wait.
     private static func runToCompletion(
-        invocation: Invocation,
         executable: URL,
-        arguments: [String],
-        timeoutSeconds: Int?
+        arguments: [String]
     ) throws -> Completion {
-        let process = invocation.process
+        let process = Process()
         let output = Pipe()
         let errors = Pipe()
         process.executableURL = executable
@@ -122,9 +84,7 @@ extension StadoCLI {
                     exitCode: exitCode,
                     stdout: data,
                     stderr: String(data: errorData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-                    timedOut: invocation.didTimeOut,
-                    timeoutSeconds: timeoutSeconds
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 ),
                 exitCode: exitCode
             )
@@ -142,16 +102,8 @@ extension StadoCLI {
         arguments: [String],
         exitCode: Int32,
         stdout: Data,
-        stderr: String,
-        timedOut: Bool,
-        timeoutSeconds: Int?
+        stderr: String
     ) -> StadoCLIError {
-        if timedOut, let timeoutSeconds {
-            return .failed(
-                exitCode: exitCode,
-                message: "\(commandLine(arguments)) gave no answer within \(timeoutSeconds) s and was stopped. This does not show whether the command changed anything."
-            )
-        }
         let stdoutText = String(data: stdout, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let message = stderr.isEmpty ? stdoutText : stderr

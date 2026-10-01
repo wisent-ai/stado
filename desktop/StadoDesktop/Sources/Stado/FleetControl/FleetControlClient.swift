@@ -1,8 +1,6 @@
 import Foundation
 
 actor FleetControlClient {
-    /// The native API grants inventory and scratch commands this longer bound.
-    nonisolated static let spaceCommandSeconds = 1200
     private let session: URLSession
     private let maximumResponseBytes = 2 * 1_024 * 1_024
 
@@ -12,13 +10,11 @@ actor FleetControlClient {
             configuration.httpCookieStorage = nil
             configuration.httpShouldSetCookies = false
             configuration.urlCredentialStorage = nil
-            configuration.timeoutIntervalForRequest = 30
-            // The resource ceiling has to clear the longest command the bridge
-            // allows (300 s) — `fleet ingress up` and `fleet enroll --bootstrap`
-            // legitimately run for minutes and print nothing until they finish.
-            // Short reads keep their 30 s idle limit above; run() raises its own
-            // request interval per call instead.
-            configuration.timeoutIntervalForResource = TimeInterval(Self.spaceCommandSeconds + 60)
+            // URLSession's own idle and resource limits are switched off: a
+            // command that prints nothing until it finishes is still running,
+            // and its exit code and output are the answer.
+            configuration.timeoutIntervalForRequest = .greatestFiniteMagnitude
+            configuration.timeoutIntervalForResource = .greatestFiniteMagnitude
             self.session = URLSession(configuration: configuration)
             return
         }
@@ -137,14 +133,10 @@ actor FleetControlClient {
         confirmsMutation: Bool,
         at address: OperationsDashboardAddress,
         authorizationToken: String?,
-        timeoutSeconds: Int = 120,
         input: String? = nil,
         standardInput: String? = nil
     ) async throws -> OperatorCommandResult {
-        let isSpace = arguments.first == "space" || arguments.first == "workdirs"
-        let maximum = isSpace ? Self.spaceCommandSeconds : 300
-        let budget = min(max(timeoutSeconds, 1), maximum)
-        var body: [String: Any] = ["args": arguments, "timeout_seconds": budget]
+        var body: [String: Any] = ["args": arguments]
         if let input { body["input"] = input }
         if let standardInput { body["stdin"] = standardInput }
         if confirmsMutation {
@@ -152,10 +144,7 @@ actor FleetControlClient {
         }
         var request = URLRequest(url: address.endpoint("api/operator/run"))
         request.httpMethod = "POST"
-        // The session's 30 s idle timeout would kill a long command that
-        // prints nothing until it finishes — `fleet ingress up` waits for a
-        // tunnel and DNS for up to a minute. The request's own interval wins.
-        request.timeoutInterval = TimeInterval(budget + 30)
+        request.timeoutInterval = .greatestFiniteMagnitude
         request.setValue("operator-command", forHTTPHeaderField: "X-Stado-Action")
         try attach(body, to: &request)
         apply(authorizationToken, to: &request)

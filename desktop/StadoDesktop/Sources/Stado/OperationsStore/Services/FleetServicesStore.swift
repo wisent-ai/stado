@@ -172,9 +172,7 @@ final class FleetServicesStore: ObservableObject {
         do {
             let report = try await cli.json(
                 ServiceDeployReport.self,
-                arguments: Self.deployArguments(name: entry.name, host: entry.host),
-                timeoutSeconds:
-                    900
+                arguments: Self.deployArguments(name: entry.name, host: entry.host)
             )
             mutation = report.succeeded
                 ? .succeeded("Deployed \(entry.name) on \(entry.host).")
@@ -251,9 +249,7 @@ final class FleetServicesStore: ObservableObject {
         do {
             let report = try await cli.json(
                 ServiceRunnerRuntimeReport.self,
-                arguments: Self.repairRunnerRuntimeArguments(name: entry.name, host: entry.host),
-                timeoutSeconds:
-                    360
+                arguments: Self.repairRunnerRuntimeArguments(name: entry.name, host: entry.host)
             )
             mutation = .succeeded(report.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         } catch {

@@ -191,7 +191,7 @@ final class ScratchStore: ObservableObject {
         guard !mutation.isWorking else { return nil }
         mutation = .working(working)
         do {
-            let answer = try await cli.jsonResult(type, arguments: arguments, timeoutSeconds: nil)
+            let answer = try await cli.jsonResult(type, arguments: arguments)
             refusal = answer.refusal
             if let refused = answer.refusal, answer.exitCode != 0 {
                 mutation = .failed(refused)

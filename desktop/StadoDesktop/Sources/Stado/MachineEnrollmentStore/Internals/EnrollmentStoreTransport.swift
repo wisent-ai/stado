@@ -10,10 +10,7 @@ extension MachineEnrollmentStore {
     /// does not list as read-only as a mutation, and `fleet` is such a family,
     /// so every call here carries the confirmation the operator gave by
     /// pressing the button that started it.
-    func run(
-        _ arguments: [String],
-        timeoutSeconds: Int = 120
-    ) async throws -> OperatorCommandResult {
+    func run(_ arguments: [String]) async throws -> OperatorCommandResult {
         guard let address else {
             throw FleetControlError.backend(
                 status:
@@ -25,8 +22,7 @@ extension MachineEnrollmentStore {
             arguments: arguments,
             confirmsMutation: true,
             at: address,
-            authorizationToken: authorizationToken,
-            timeoutSeconds: timeoutSeconds
+            authorizationToken: authorizationToken
         )
     }
 

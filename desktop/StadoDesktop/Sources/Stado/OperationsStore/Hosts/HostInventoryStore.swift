@@ -120,9 +120,7 @@ final class HostForwardStore: ObservableObject {
         do {
             let report = try await cli.json(
                 InventoryReport.self,
-                arguments: Self.arguments(host: name),
-                timeoutSeconds:
-                    240
+                arguments: Self.arguments(host: name)
             )
             markers = report.forwards
         } catch {

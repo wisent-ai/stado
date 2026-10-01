@@ -65,8 +65,7 @@ final class RunnerStore: ObservableObject {
         do {
             let result = try await fleet.client.run(
                 arguments: ["runner", "diagnostics", target, "--profile", profile, "--json"],
-                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken)
             guard current == generation, source == fleet.requestGeneration else { return }
             lastReceipt = result
             guard result.ok else { failure = result.message; return }

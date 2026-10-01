@@ -107,8 +107,7 @@ final class WorkloadStore: ObservableObject {
         do {
             let result = try await fleet.client.run(
                 arguments: ["workload", "status", selector, "--target", target, "--json"],
-                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken)
             guard current == generation, source == fleet.requestGeneration else { return }
             lastReceipt = result
             if !result.ok { failure = result.message }
@@ -140,8 +139,7 @@ final class WorkloadStore: ObservableObject {
         defer { isLoading = false }
         do {
             let result = try await fleet.client.run(arguments: arguments, confirmsMutation: true,
-                at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                at: address, authorizationToken: fleet.authorizationToken)
             lastReceipt = result
             if !result.ok { failure = result.message }
             await loadSessions(fleet: fleet)
@@ -159,8 +157,7 @@ final class WorkloadStore: ObservableObject {
         sessionsFailure = nil
         do {
             let result = try await fleet.client.run(arguments: ["workload", "sessions", "--json"],
-                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken)
             guard result.ok else {
                 sessions = []
                 sessionsFailure = result.message
@@ -182,8 +179,7 @@ final class WorkloadStore: ObservableObject {
         }
         do {
             let result = try await fleet.client.run(arguments: ["cancel", jobID],
-                confirmsMutation: true, at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                confirmsMutation: true, at: address, authorizationToken: fleet.authorizationToken)
             lastReceipt = result
             sessionsFailure = result.ok ? nil : result.message
             await loadSessions(fleet: fleet)

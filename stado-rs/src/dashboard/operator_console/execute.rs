@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
@@ -165,15 +165,9 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
             .map(|error| format!("could not write command stdin: {error}"));
         Ok::<_, ConsoleError>((stdout, stderr, status, stdin_error))
     };
+    // The command runs until it exits; its exit code and output are the answer.
     let ((stdout, stdout_truncated), (stderr, stderr_truncated), status, stdin_error) =
-        tokio::time::timeout(Duration::from_secs(request.timeout_seconds), execution)
-            .await
-            .map_err(|_| {
-                ConsoleError::unavailable(format!(
-                    "command exceeded the {} second Desktop limit",
-                    request.timeout_seconds
-                ))
-            })??;
+        execution.await?;
     let stdout = String::from_utf8_lossy(&stdout).into_owned();
     let stderr = String::from_utf8_lossy(&stderr).into_owned();
     let structured = serde_json::from_str::<Value>(stdout.trim()).ok();

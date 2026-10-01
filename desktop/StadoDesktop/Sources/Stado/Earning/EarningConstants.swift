@@ -1,19 +1,9 @@
 import Foundation
 
-/// The deadlines and defaults the earning screen runs `stado vast` with.
-///
-/// They are here rather than at the call sites because each one is a claim
-/// about a real measurement: readiness reads a fleet host's vault over its
-/// own channel, which takes several seconds and is bounded well above that;
-/// the marketplace calls reach
-/// console.vast.ai over the internet. The price and the idle window are the
-/// CLI's own defaults, repeated here so the form opens on what the daemon
+/// The defaults the earning screen runs `stado vast` with: the CLI's own
+/// price and idle window, repeated here so the form opens on what the daemon
 /// would do unattended.
 enum EarningConstants {
-    /// Readiness asks the channel, the vault host and Vast.ai in one run.
-    static let readinessTimeoutSeconds: Int = 180
-    /// A listing call crosses the public internet to console.vast.ai.
-    static let marketplaceTimeoutSeconds: Int = 180
     /// `stado vast auto-list --price-gpu` default, in US dollars per hour.
     static let defaultPriceGPU: Double = 0.50
     /// `stado vast auto-list --idle-window-s` default.

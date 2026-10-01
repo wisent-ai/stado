@@ -61,8 +61,7 @@ struct WorkdirsSection: View {
             let arguments = apply ? ["workdirs", "--apply", "--json"] : ["workdirs", "--json"]
             let result = try await fleetStore.client.run(
                 arguments: arguments, confirmsMutation: apply, at: address,
-                authorizationToken: fleetStore.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds
+                authorizationToken: fleetStore.authorizationToken
             )
             guard generation == fleetStore.requestGeneration else { return }
             receipt = result

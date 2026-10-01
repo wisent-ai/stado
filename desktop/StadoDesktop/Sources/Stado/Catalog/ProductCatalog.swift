@@ -118,8 +118,7 @@ final class ProductsStore: ObservableObject {
             let state = try await cli.json(
                 ProductLifecycleState.self,
                 arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host,
-                                                   releaseVersion: releaseVersion, sourceCommit: sourceCommit),
-                timeoutSeconds: 900
+                                                   releaseVersion: releaseVersion, sourceCommit: sourceCommit)
             )
             states[key(product, surface)] = state
             mutation = .succeeded("\(product) \(surface): \(state.status)")

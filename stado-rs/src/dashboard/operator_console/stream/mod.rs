@@ -19,9 +19,9 @@ use tokio_tungstenite::{
 };
 
 use super::{
-    default_timeout, operator_auth, send_json, validate, Request, Response, RunRequest,
-    MAX_REQUEST_BYTES, MUTATION_CONFIRMATION, STATUS_BAD_REQUEST, STATUS_FORBIDDEN,
-    STATUS_UNAUTHORIZED, STATUS_UNAVAILABLE,
+    operator_auth, send_json, validate, Request, Response, RunRequest, MAX_REQUEST_BYTES,
+    MUTATION_CONFIRMATION, STATUS_BAD_REQUEST, STATUS_FORBIDDEN, STATUS_UNAUTHORIZED,
+    STATUS_UNAVAILABLE,
 };
 
 pub(crate) const PATH: &str = "/api/operator/workload/attach";
@@ -58,7 +58,6 @@ impl AttachmentRequest {
             input: None,
             stdin: None,
             confirmation: self.confirmation,
-            timeout_seconds: default_timeout(),
         };
         validate(&request).map_err(|error| error.message)?;
         Ok(request)
@@ -153,26 +152,14 @@ pub(crate) async fn serve(stream: TcpStream, carry: Vec<u8>) -> std::io::Result<
     config.max_frame_size = Some(MAX_REQUEST_BYTES);
     let mut socket =
         WebSocketStream::from_partially_read(stream, carry, Role::Server, Some(config)).await;
-    let request = tokio::time::timeout(
-        std::time::Duration::from_secs(default_timeout()),
-        setup(&mut socket),
-    )
-    .await;
-    match request {
-        Ok(Ok(Some(request))) => {
+    match setup(&mut socket).await {
+        Ok(Some(request)) => {
             if let Err(detail) = bridge::run(&mut socket, &request.args).await {
                 error(&mut socket, &detail).await;
             }
         }
-        Ok(Ok(None)) => return Ok(()),
-        Ok(Err(detail)) => error(&mut socket, &detail).await,
-        Err(_) => {
-            error(
-                &mut socket,
-                "no attachment request arrived before the connection deadline",
-            )
-            .await
-        }
+        Ok(None) => return Ok(()),
+        Err(detail) => error(&mut socket, &detail).await,
     }
     let _ = socket.close(None).await;
     Ok(())

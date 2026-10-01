@@ -30,7 +30,6 @@ final class NativeCapabilityStore: ObservableObject {
             let result = try await fleet.client.run(
                 arguments: request.arguments, confirmsMutation: request.mutates,
                 at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds,
                 input: request.input, standardInput: request.standardInput)
             guard current == generation, expectedSource == fleet.requestGeneration else { return false }
             receipt = result

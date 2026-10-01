@@ -87,8 +87,7 @@ final class RepairStore: ObservableObject {
         do {
             let result = try await fleet.client.run(
                 arguments: Self.runArguments(service: service, host: host, step: step, apply: apply),
-                confirmsMutation: apply, at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                confirmsMutation: apply, at: address, authorizationToken: fleet.authorizationToken)
             guard current == generation, source == fleet.requestGeneration else { return }
             receipts[key] = result
             reports[key] = try? JSONDecoder().decode(RepairReport.self, from: Data(result.standardOutput.utf8))

@@ -57,8 +57,7 @@ extension FleetControlStore {
                 ),
                 confirmsMutation: action != "status",
                 at: address,
-                authorizationToken: authorizationToken,
-                timeoutSeconds: 1_200
+                authorizationToken: authorizationToken
             )
             guard requestGeneration == generation else { return }
             let report: HostRunnerReport
@@ -132,7 +131,7 @@ extension FleetControlStore {
         do {
             let result = try await client.run(
                 arguments: arguments, confirmsMutation: mutates, at: address,
-                authorizationToken: authorizationToken, timeoutSeconds: 1_200
+                authorizationToken: authorizationToken
             )
             guard requestGeneration == generation else { return }
             runnerMutation = result.ok

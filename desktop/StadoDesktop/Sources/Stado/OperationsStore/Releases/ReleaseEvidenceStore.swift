@@ -261,8 +261,7 @@ final class ReleaseEvidenceStore: ObservableObject {
         do {
             let result = try await fleet.client.run(
                 arguments: Self.resumeArguments(runID: run.runID),
-                confirmsMutation: true, at: address, authorizationToken: token,
-                timeoutSeconds: 300
+                confirmsMutation: true, at: address, authorizationToken: token
             )
             guard generation == fleet.requestGeneration else { return }
             resumeDetails = result.standardOutput + "\n" + result.standardError

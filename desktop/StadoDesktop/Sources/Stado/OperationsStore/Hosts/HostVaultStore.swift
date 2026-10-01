@@ -41,8 +41,7 @@ final class HostVaultStore: ObservableObject {
         defer { if current == generation { isLoading = false } }
         do {
             let result = try await fleet.client.run(arguments: Self.arguments(host: name),
-                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                confirmsMutation: false, at: address, authorizationToken: fleet.authorizationToken)
             guard current == generation, source == fleet.requestGeneration else { return }
             receipt = result
             guard result.ok else { problem = result.message; return }

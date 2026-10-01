@@ -70,8 +70,7 @@ final class HostVaultBearerStore: ObservableObject {
             : "Registering the stored bearer on \(request.host)")
         do {
             let result = try await fleet.client.run(arguments: Self.arguments(request),
-                confirmsMutation: true, at: address, authorizationToken: fleet.authorizationToken,
-                timeoutSeconds: FleetControlClient.spaceCommandSeconds)
+                confirmsMutation: true, at: address, authorizationToken: fleet.authorizationToken)
             guard current == generation, expectedSource == fleet.requestGeneration else { return }
             operationReceipt = result
             guard result.ok else { mutation = .failed(result.message); return }

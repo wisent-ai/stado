@@ -175,8 +175,7 @@ final class VastStore: ObservableObject {
         do {
             let result = try await cli.jsonResult(
                 VastReadiness.self,
-                arguments: Self.readinessArguments(vaultHost: vaultHost),
-                timeoutSeconds: EarningConstants.readinessTimeoutSeconds
+                arguments: Self.readinessArguments(vaultHost: vaultHost)
             )
             guard requested == generation else { return }
             readiness = result.value
@@ -233,8 +232,7 @@ final class VastStore: ObservableObject {
         defer { isWorking = false }
         do {
             let answer = try await cli.text(
-                arguments: arguments,
-                timeoutSeconds: EarningConstants.marketplaceTimeoutSeconds
+                arguments: arguments
             )
             actionOutcome = "\(what). Vast answered: \(answer)"
             problem = nil

@@ -39,9 +39,7 @@ extension FleetControlStore {
                     : Self.appleChallengeStatusArguments(host: host),
                 confirmsMutation: prepare,
                 at: address,
-                authorizationToken: authorizationToken,
-                timeoutSeconds:
-                    300
+                authorizationToken: authorizationToken
             )
             guard requestGeneration == generation else { return }
             let receipt: AppleChallengePreparationReceipt

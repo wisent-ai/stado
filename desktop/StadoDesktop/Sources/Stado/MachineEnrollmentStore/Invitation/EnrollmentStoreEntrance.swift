@@ -53,11 +53,7 @@ extension MachineEnrollmentStore {
         entranceBusy = "Standing the entrance up: starting the listener and the tunnel, then verifying the address from the internet. This takes up to a minute."
         defer { entranceBusy = nil }
         do {
-            let result = try await run(
-                ["fleet", "ingress", "up"],
-                timeoutSeconds:
-                    240
-            )
+            let result = try await run(["fleet", "ingress", "up"])
             if !result.ok {
                 failure = .transport(result.message)
             }
@@ -74,11 +70,7 @@ extension MachineEnrollmentStore {
         entranceBusy = "Tearing the entrance down."
         defer { entranceBusy = nil }
         do {
-            let result = try await run(
-                ["fleet", "ingress", "down"],
-                timeoutSeconds:
-                    120
-            )
+            let result = try await run(["fleet", "ingress", "down"])
             if !result.ok {
                 failure = .transport(result.message)
             }

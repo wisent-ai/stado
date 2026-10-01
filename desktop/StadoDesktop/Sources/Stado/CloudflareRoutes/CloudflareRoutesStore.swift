@@ -110,9 +110,7 @@ final class CloudflareRoutesStore: ObservableObject {
         do {
             let report = try await cli.json(
                 CloudflareRouteListReceipt.self,
-                arguments: value.listArguments,
-                timeoutSeconds:
-                    120
+                arguments: value.listArguments
             )
             inventoryScope = value
             tunnelID = report.tunnelID
@@ -137,9 +135,7 @@ final class CloudflareRoutesStore: ObservableObject {
         do {
             let report = try await cli.json(
                 CloudflareRouteStatusReceipt.self,
-                arguments: value.statusArguments(hostname: route.hostname),
-                timeoutSeconds:
-                    120
+                arguments: value.statusArguments(hostname: route.hostname)
             )
             inventoryScope = value
             tunnelID = report.tunnelID
@@ -166,9 +162,7 @@ final class CloudflareRoutesStore: ObservableObject {
         do {
             lastRouteReceipt = try await cli.json(
                 CloudflareRouteReceipt.self,
-                arguments: draft.arguments,
-                timeoutSeconds:
-                    300
+                arguments: draft.arguments
             )
             lastRemovalReceipt = nil
             await refreshRoutes(draft.scope)
@@ -186,9 +180,7 @@ final class CloudflareRoutesStore: ObservableObject {
         do {
             lastRemovalReceipt = try await cli.json(
                 CloudflareRouteRemovalReceipt.self,
-                arguments: value.removeArguments(hostname: route.hostname),
-                timeoutSeconds:
-                    120
+                arguments: value.removeArguments(hostname: route.hostname)
             )
             lastRouteReceipt = nil
             routes.removeAll { $0.hostname == route.hostname }
