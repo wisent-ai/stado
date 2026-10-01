@@ -224,10 +224,8 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
         argv: &["/usr/bin/lscpu"],
         why: "reads the processor the kernel found: model, socket count, cores, threads and \
               caches. Takes no argument, opens no path an operator names, and writes nothing. \
-              Added 2026-09-11: an operator asked what his own GPU host actually is before \
-              buying parts for it, and the fleet could answer disk and services but not one \
-              fact about the processor, so the only routes left were an unapproved command \
-              or a guess",
+              Without it the fleet can answer disk and services but not one fact about the \
+              processor, so the only routes left are an unapproved command or a guess",
     },
     ApprovedCommand {
         argv: &["/usr/bin/free", "-h"],

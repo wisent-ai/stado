@@ -93,9 +93,9 @@ pub const OK_STATUS: &str = "ok";
 /// What an approved command's failure says: the command, the status it
 /// exited with, and the remote's own last line quoted as context.
 ///
-/// The last line alone was the whole sentence until 2026-09-20, and a
-/// program that logs after its verdict made that sentence name the wrong
-/// thing every time.
+/// The last line alone used to be the whole sentence, and a program that
+/// logs after its verdict made that sentence name the wrong thing every
+/// time.
 fn exec_failure_sentence(command: &str, code: i32, last_line: &str) -> String {
     let last_line = last_line.trim();
     if last_line.is_empty() {
@@ -182,10 +182,8 @@ pub async fn exec_host(
     // The remote's own last stderr line, quoted as context inside a sentence
     // that names what actually failed. Presenting that line AS the failure
     // reads as a lie whenever the program logs diagnostics after its verdict:
-    // on 2026-09-20 a codex sign-in whose real failure was
-    // `AUTH_FAILURE ... stage openai_email_first` was reported to the operator
-    // as `Error: [google_sso] 2fa-diag host=myaccount.google.com ...`, a dump
-    // of the page it had already walked past.
+    // a sign-in whose real failure is an authentication stage gets reported
+    // as a diagnostic dump of the page it had already walked past.
     let error = (!ok).then(|| {
         exec_failure_sentence(
             &approved.display(),

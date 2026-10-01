@@ -34,12 +34,12 @@ pub const POSTCONDITION_UNOBSERVED: &str = "unobserved";
 /// reported `restart_failed: disowned process survived` and left the unit
 /// UNLOADED. Every step of that script did exactly what it was written to
 /// do. Nothing at all asked whether the machine had ended up in the state
-/// the operator asked for, so the one fact that mattered — the listeners are
+/// that was requested, so the one fact that mattered — the listeners are
 /// gone — was the one fact no report carried. An operation that states its
 /// intended end state and never compares it against the world is a
 /// declaration, not a check.
 ///
-/// `describe` is the intent in the operator's words ("the unit is loaded and
+/// `describe` is the intent in plain words ("the unit is loaded and
 /// has a pid"), and doubles as the probe's identity in the output so a line
 /// printed by some other program cannot be read as this operation's verdict.
 /// `probe` is a POSIX sh fragment that prints exactly

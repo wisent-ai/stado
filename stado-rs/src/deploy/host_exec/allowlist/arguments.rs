@@ -194,8 +194,8 @@ mod tests {
         }
     }
 
-    /// The reads that were unavailable on 2026-09-02 are the reads that now
-    /// exist, addressed the way the running unit addresses the same tree.
+    /// The admission reads exist and are addressed the way the running unit
+    /// addresses the same tree.
     #[test]
     fn the_admission_reads_reach_current_the_way_the_unit_does() {
         assert_eq!(

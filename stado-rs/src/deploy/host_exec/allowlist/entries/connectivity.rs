@@ -50,8 +50,8 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               read-only verb; the forms that change anything (`serve --bg`, `funnel`, `reset`) \
               are absent from this table because the allowlist matches an entry exactly. This \
               is the read that says a published endpoint 404s because its rule was lost, which \
-              on 2026-08-24 left Jeden reading bare 404s from Brama while every beacon said \
-              active, and could only be diagnosed from outside the host",
+              leaves a consumer reading bare 404s from the gateway while every beacon says \
+              active, and can only be diagnosed from outside the host",
     },
     ApprovedCommand {
         argv: &[TAILSCALE_PROGRAM, "funnel", "status"],
@@ -110,12 +110,12 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
     // they change cannot be reached any other way: a provider grant the vendor
     // has disowned is replaced by one browser sign-in, that sign-in belongs to
     // Brama's own CLI on the host whose vault the gateway reads, and the vault
-    // that matters is never this control plane's. `brama-sub-wisent-app-codex-primary`
-    // was recorded `needs_reauthorization` on 2026-08-27 with the provider's own
-    // sentence -- "Your session has ended. Please log in again." -- and from that
-    // moment every model call the fleet routed through that gateway had one live
-    // provider and no way for an operator to repair it without a private ssh
-    // session outside the registry-authorized channel. Each entry names one
+    // that matters is never this control plane's. A primary subscription
+    // recorded `needs_reauthorization` with the provider's own sentence --
+    // "Your session has ended. Please log in again." -- leaves every model
+    // call the fleet routes through that gateway with one live provider and
+    // no way for an operator to repair it without a private ssh session
+    // outside the registry-authorized channel. Each entry names one
     // provider, one exact Weles sign-in row, and its own fixed reason. The row
     // is named rather than inferred because Weles holds seven codex accounts
     // and two claude ones, and the cost of getting that wrong is one real
@@ -181,9 +181,9 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
         why: "the same repair for claude-code, whose stored document is account metadata \
               carrying no credential material: its pool contributes no model at all, and a \
               sign-in is what would put a credential there. A gateway with one live provider \
-              is a gateway that stops serving at the next lapsed session, which is the state \
-              this fleet was in on 2026-08-27. The row is Weles's declared primary for \
-              claude, mapped to `brama-sub-wisent-app-claude-primary`. Same guarantees as \
+              is a gateway that stops serving at the next lapsed session. The row is \
+              Weles's declared primary for claude, mapped to the gateway's primary claude \
+              subscription. Same guarantees as \
               the codex entry: no argument, no purchase, no secret in argv or output",
     },
     ApprovedCommand {

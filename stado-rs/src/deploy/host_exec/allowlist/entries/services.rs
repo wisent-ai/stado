@@ -36,8 +36,8 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
         why: "prints the release directory the Weles unit `com.wisent.weles` executes through. \
               The unit's program is that link plus a platform directory, so this name is the \
               whole answer to which release is running, and it is the fact `release status` \
-              cannot give: that verb reports what a rollout recorded, and on 2026-09-02 the \
-              two disagreed by four releases. `readlink` reads one link and writes nothing; \
+              cannot give: that verb reports what a rollout recorded, and the two can \
+              disagree by several releases. `readlink` reads one link and writes nothing; \
               the path is a compile-time constant naming this one managed service",
     },
     ApprovedCommand {

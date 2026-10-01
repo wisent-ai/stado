@@ -33,8 +33,8 @@ pub const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[
     // The four programs a Spis crawl placement needs, each at the paths this
     // fleet actually installs it at, home-relative first. A single-path entry
     // would report "no such file" for a host that has the program one prefix
-    // over, and the first probe run of these entries on 2026-09-03 proved that
-    // the system prefixes alone answer "missing" for a program that is present:
+    // over, and the system prefixes alone answer "missing" for a program
+    // that is present:
     // rustup writes cargo into `~/.cargo/bin`, and
     // `~/.stado/bin/install-cua-driver` links its CLI into `~/.local/bin` off
     // the bundle it dittos into `/Applications/CuaDriver.app`.

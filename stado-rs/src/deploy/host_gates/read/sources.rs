@@ -13,9 +13,9 @@ use crate::targets::{ComputeTarget, Registry};
 /// documents it may download to find them. The read walks the priority
 /// index — `queue_priority/`, which names queued jobs and nothing else — the
 /// same way a worker poll does, so a `queue/` prefix full of settled
-/// transition sentinels costs it nothing. On 2026-09-17 that prefix held 779
-/// objects for 15 queued jobs, the old whole-prefix download took every
-/// host's gates read past its ten-second budget, and every verdict was
+/// transition sentinels costs it nothing. That prefix can hold many times
+/// more objects than there are queued jobs, and a whole-prefix download then
+/// takes every host's gates read past its budget, leaving every verdict
 /// `claiming: unknown`. A read that fills its window says so in
 /// `WaitingRead::partial` instead of pretending the answer is whole.
 pub const GATES_QUEUE_WINDOW: usize = 200;
