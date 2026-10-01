@@ -517,14 +517,12 @@ jobs:
     # through that hole inside one week, each of them found by the RELEASE
     # instead:
     #
-    #   #212  nine `pub mod` declarations deleted while their files stayed on
-    #         disk, so `main` did not compile
-    #   #249  `stado-rs/src/targets.rs` and `stado-rs/tests/registry_cache/main.rs`
-    #         merged unformatted; the 0.13.27 product-release run refused on
-    #         them at 06:13Z on 2026-09-01, six hours before anyone was looking
-    #   #250  `clippy::empty_line_after_doc_comments` in
-    #         `src/cli/registry.rs`, which left `main` unable to pass its own
-    #         release gate at all
+    #   - `pub mod` declarations deleted while their files stayed on disk, so
+    #     `main` did not compile
+    #   - source and test files merged unformatted, so the product-release
+    #     run refused on them hours before anyone was looking
+    #   - a clippy lint in `src/cli/registry.rs` that left `main` unable to
+    #     pass its own release gate at all
     #   and a test tree that nothing in CI had ever compiled
     #
     # The definition of "good" is NOT restated here. `.wisent-release.json` is
@@ -582,8 +580,8 @@ jobs:
         # against the base in its own worktree -- because a pull request is
         # judged on its merge result, so a step already refusing `main` refuses
         # every pull request opened against it, for files their authors never
-        # touched. That happened three times on 2026-09-04/05 and each time the
-        # gate said "fix the tree" to the wrong person.
+        # touched, and each time the gate says "fix the tree" to the wrong
+        # person.
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/stado-quality-gate.sh" <<'STADO_QUALITY_EOF'
@@ -599,12 +597,11 @@ jobs:
           #
           # What it adds is attribution. A pull request is judged on its MERGE result, so
           # a step that already refuses the base branch refuses every pull request opened
-          # against it — for files the author never touched. On 2026-09-04 and 2026-09-05
-          # that happened three times in one day on this repository: `main` carried
-          # unformatted `cli/onboarding.rs`, then `cli/identity.rs`, then
-          # `dashboard/mod.rs`, and each time the gate told the author of an unrelated
-          # change to "fix the tree". Three authors reformatted somebody else's code to
-          # get their own work through, and the revision that introduced it was never
+          # against it — for files the author never touched. On this repository `main`
+          # has carried unformatted files more than once in a day, and each time the
+          # gate told the author of an unrelated change to "fix the tree". Authors then
+          # reformat somebody else's code to get their own work through, and the
+          # revision that introduced it is never
           # named. So on a refusal this script runs the same step against the base
           # revision in its own worktree and reports one of two verdicts:
           #

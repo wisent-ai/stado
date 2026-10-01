@@ -13,8 +13,8 @@ extension HostsView {
     /// Why this host went quiet, under the gates that decide whether it works.
     ///
     /// The gates answer "is it taking jobs"; this answers "is it there at all",
-    /// which is the question that had no surface anywhere in the product when
-    /// `control-host` dropped for six minutes on 2026-08-19. A healthy link
+    /// which is the question that has no surface anywhere else when a host
+    /// drops off the network for minutes. A healthy link
     /// is one line and no card: absence of an incident is not an incident.
     @ViewBuilder
     func linkSection(for host: WorkerNode) -> some View {

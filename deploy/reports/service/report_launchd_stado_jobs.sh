@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Report every loaded launchd job whose program is Stado, in both domains.
 #
-# A `stado release agent` has run since 2026-08-14 with ppid 1, and the label whose
-# plist mentions it is loaded in neither `gui/<uid>` nor `system`. Either the label
-# differs from the file name or the job was unloaded and the process was adopted by
-# launchd -- an unsupervised reconciler writing release state every fifteen seconds
-# from a four-day-old binary image. Which of those it is decides whether it can be
+# A `stado release agent` can run for days with ppid 1 while the label whose
+# plist mentions it is loaded in neither `gui/<uid>` nor `system`. Either the
+# label differs from the file name or the job was unloaded and the process was
+# adopted by launchd -- an unsupervised reconciler writing release state every
+# fifteen seconds from a stale binary image. Which of those it is decides whether it can be
 # restarted or has to be stopped.
 #
 # Written without mid-pipeline `head`: under `pipefail` that closes the pipe, the

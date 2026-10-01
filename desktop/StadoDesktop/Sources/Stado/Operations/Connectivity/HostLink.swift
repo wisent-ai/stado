@@ -4,10 +4,10 @@ import Foundation
 
 /// `stado host link <host> --json`.
 ///
-/// The reading that did not exist on 2026-08-19, when `control-host` went
-/// unreachable for six minutes and the only evidence anywhere was an operator's
-/// two ping packets: the product recorded nothing, and the reader-side refusals
-/// went to a log file nobody was watching. Every field here is the CLI's own
+/// The reading that is otherwise missing when a host goes unreachable for
+/// minutes and the only evidence anywhere is an operator's ping packets: the
+/// product records nothing, and the reader-side refusals go to a log file
+/// nobody is watching. Every field here is the CLI's own
 /// answer. Nothing is derived from a second source, and nothing absent is
 /// rendered as a zero — a host whose beacon carries no `link` block has not
 /// reported its path, which is a different fact from reporting `unknown`.

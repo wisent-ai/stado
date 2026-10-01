@@ -10,11 +10,11 @@
 # installing verified bytes and throwing the evidence away.
 #
 # The control-plane delivery in `deploy_stado_rust.sh` was the third path and it
-# staged nothing: on 2026-09-02 the release train published 0.13.46 on both
-# platforms, delivered it here, and then `deploy-fleet` refused the run with
-# `unattested` — "the host runs 0.13.46 and no delivered copy of 0.13.46 is
-# staged at $HOME/.stado/releases" — for bytes this same train had verified
-# against the canonical manifest twice.
+# staged nothing: a release train publishes a version on both platforms,
+# delivers it here, and then `deploy-fleet` refuses the run with
+# `unattested` — "the host runs <version> and no delivered copy of <version>
+# is staged at $HOME/.stado/releases" — for bytes this same train had
+# verified against the canonical manifest twice.
 #
 # Kept as its own script so both the delivery path and an operator repairing one
 # host run the same code, and so staging can be performed without re-running the

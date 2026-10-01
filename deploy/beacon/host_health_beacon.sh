@@ -182,7 +182,7 @@ launchd_field() {
 }
 # Per-unit state, from whichever manager on this host actually holds the unit.
 #
-# Branched on the OS because until 2026-09-03 it was not: the loop asked
+# Branched on the OS because it used not to be: the loop asked
 # `/usr/bin/systemctl` on every host, so on the macOS boxes -- where every
 # managed unit is a launchd job -- it asked a binary that does not exist and
 # recorded `inactive` for all of them.

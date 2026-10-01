@@ -51,8 +51,8 @@ jobs:
           # Presence is decided by `storage stat`, not by whether a download
           # succeeded. `storage get` failing cannot tell "this coordinate is
           # incomplete" apart from "the writer did not answer", and those need
-          # opposite responses: skip the first, stop on the second. On 2026-08-31
-          # the writer was unreachable for thirteen minutes; a get-based walk
+          # opposite responses: skip the first, stop on the second. When the
+          # writer is unreachable for minutes, a get-based walk
           # would have skipped every coordinate in the channel, printed a tidy
           # list of them, and then failed as though no release had ever been
           # published. `storage stat` answers present or absent with exit status

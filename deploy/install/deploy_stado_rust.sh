@@ -133,11 +133,11 @@ export STADO_RELEASE_VERSION
 # config error before that refusal is reached.
 #
 # And it never decides the delivery. `config set` validates the WHOLE profile,
-# so an unrelated defect elsewhere in it refuses this write — on 2026-09-03 the
-# 0.14.5 train published both platforms and then died here on
-# "release.version rejected, config unchanged: object_api.namespaces.probierz
-# does not grant the queue prefix(es) job-transitions/", a finding about the
-# queue's own grants and not about the version being recorded. The release gate
+# so an unrelated defect elsewhere in it refuses this write — a train can
+# publish both platforms and then die here on "release.version rejected,
+# config unchanged: object_api.namespaces.<ns> does not grant the queue
+# prefix(es) …", a finding about the queue's own grants and not about the
+# version being recorded. The release gate
 # downstream reads the coordinate from the environment this script exports, not
 # from the file, so a refused declaration is reported and the deploy carries on.
 if [ -n "${STADO_CONFIG:-}" ] && [ -r "${STADO_CONFIG:-}" ]; then

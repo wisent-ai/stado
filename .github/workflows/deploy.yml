@@ -20,10 +20,10 @@ concurrency:
   # puts mean a cancelled train leaves an empty or partial coordinate that no
   # later attempt can ever complete, because the objects are immutable.
   #
-  # It cost eight version numbers on 2026-08-30. Tags arrived every 2-4 minutes
-  # while a train needs ~30 (about 6 to build, then an 80 MB archive per
-  # platform at roughly half a megabyte a second), so no train ever reached its
-  # publish step and 0.13.2/darwin-arm64 was left permanently at 1 object of 9.
+  # It costs version numbers. Tags arriving every few minutes while a train
+  # needs ~30 (about 6 to build, then an 80 MB archive per platform at
+  # roughly half a megabyte a second) mean no train ever reaches its publish
+  # step and a coordinate is left permanently short of objects.
   #
   # This is #172's argument one level up: independent immutable coordinates are
   # independent work, and the pipeline must stop letting one destroy another.
@@ -907,10 +907,10 @@ jobs:
               # residue: `put` writes a large body as
               # `<key>.__stado_upload/<id>/<index>` parts and only
               # composition promotes them, so a publish that never composed
-              # leaves parts and no object. On 2026-09-04 the 0.15.25
-              # darwin-arm64 archive was left as 19 such parts, 57 MiB the
-              # release-store janitor cannot even see as a version and no
-              # reader can resolve. Discard them here, where the target URI
+              # leaves parts and no object: an archive left as unfinalised
+              # parts is tens of MiB the release-store janitor cannot even
+              # see as a version and no reader can resolve. Discard them
+              # here, where the target URI
               # is still known, and then fail.
               "$stado_bin" storage abort-upload "$uri" --json || true
               echo "::error::Could not create and verify $uri after $max_attempts attempts"

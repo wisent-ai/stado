@@ -21,7 +21,7 @@ struct HostGates: Decodable, Identifiable, Sendable {
     /// What this host published about its own memory. The disk half of this
     /// panel has always been complete; a host refusing every job for memory
     /// pressure showed two RAM totals and no reason at all, which is how a
-    /// `skarbiec` Linux publication failed unexplained on 2026-09-10.
+    /// publication fails unexplained.
     let memory: HostGatesMemory?
     let capacity: HostGatesCapacity?
     /// Queued jobs pinned to this host, oldest first — the refusal's own

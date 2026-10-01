@@ -135,8 +135,8 @@ struct ReleaseCandidate: Decodable, Sendable {
 /// The host's claiming gates as `release doctor` reports them. A rollout on a
 /// host that stopped claiming is blocked by whichever watermark stopped it,
 /// and this is the section that says so where the rollout is being read. The
-/// memory half is here because on 2026-09-10 a builder refusing every job for
-/// memory pressure showed nothing but its disk on this screen.
+/// memory half is here because a builder refusing every job for memory
+/// pressure otherwise shows nothing but its disk on this screen.
 struct ReleaseGates: Decodable, Sendable {
     let diskPressureUnresolved: Bool
     let freeGB: Double?
