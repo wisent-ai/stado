@@ -16,14 +16,15 @@ use super::request::{
 use super::request::{REQUESTS_PREFIX, STATUS_APPROVED, STATUS_PENDING};
 
 /// `stado fleet join` — run on the machine being added. Announces itself
-/// in the store and prints the request for carry-over setups.
-pub async fn join() -> Result<bool, String> {
+/// in the store and prints the request for carry-over setups: `key: value`
+/// lines, or with `--json` one `{recorded, request, approve_with}` document.
+pub async fn join(as_json: bool) -> Result<bool, String> {
     let hostname = normalize_hostname(&crate::providers::vast::system_hostname());
     // The catalog gates join wherever the registry is readable from here;
     // on carry-over setups the control plane gates at approve instead.
     match fetch_document().await {
         Ok(document) => catalog::require_join_allowed(&document)?,
-        Err(_) => println!("note: registry not readable here; the catalog gates at approve"),
+        Err(_) => eprintln!("note: registry not readable here; the catalog gates at approve"),
     }
     release_platform(std::env::consts::OS, std::env::consts::ARCH)?;
     let request = build_request(&hostname, std::env::consts::OS, std::env::consts::ARCH);
@@ -35,19 +36,22 @@ pub async fn join() -> Result<bool, String> {
         )
         .await
         .map_err(|exc| exc.to_string())?;
+    let approve_with = format!("stado fleet approve '{}'", target_name_for(&hostname));
+    if as_json {
+        crate::cli::print_answer(
+            &json!({ "recorded": created, "request": request, "approve_with": approve_with }),
+            true,
+        )
+        .map_err(|exc| exc.to_string())?;
+        return Ok(true);
+    }
     if created {
         println!("join request recorded for '{hostname}'");
     } else {
         println!("a join request for '{hostname}' already exists");
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&request).map_err(|exc| exc.to_string())?
-    );
-    println!(
-        "next step, on the control plane: stado fleet approve '{}'",
-        target_name_for(&hostname)
-    );
+    crate::cli::print_answer(&request, false).map_err(|exc| exc.to_string())?;
+    println!("next step, on the control plane: {approve_with}");
     Ok(true)
 }
 
@@ -245,12 +249,17 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
 }
 
 /// `stado fleet reject HOSTNAME` — drop a pending join request.
-pub async fn reject(hostname: &str) -> Result<bool, String> {
+pub async fn reject(hostname: &str, as_json: bool) -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     store
         .delete_blob(&request_path(hostname))
         .await
         .map_err(|exc| exc.to_string())?;
-    println!("rejected join request for '{hostname}'");
+    if as_json {
+        crate::cli::print_answer(&json!({ "rejected": hostname }), true)
+            .map_err(|exc| exc.to_string())?;
+    } else {
+        println!("rejected join request for '{hostname}'");
+    }
     Ok(true)
 }

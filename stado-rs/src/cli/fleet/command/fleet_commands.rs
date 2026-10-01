@@ -142,7 +142,11 @@ pub enum FleetCommands {
         json: bool,
     },
     /// Announce this machine to the fleet (run on the machine being added).
-    Join,
+    Join {
+        /// Emit the machine-readable document instead of lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// List unanswered join requests.
     Pending {
         /// Emit the machine-readable document instead of the table.
@@ -161,6 +165,9 @@ pub enum FleetCommands {
     Reject {
         /// Hostname from the join request.
         hostname: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Print the central enrollment and communication catalog.
     Catalog {
