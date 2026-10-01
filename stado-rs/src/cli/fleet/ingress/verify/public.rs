@@ -2,16 +2,14 @@
 //! that says it was this listener that answered.
 
 use crate::cli::fleet::ingress::runtime::process::with_causes;
-use crate::cli::fleet::ingress::{POLL, PUBLIC_DEADLINE};
 
 /// Fetch `/join.sh` through the public address and prove it is this listener's.
 ///
 /// Two things are checked and both matter. A `200` says something answered the
 /// route; the byte count says it answered with *the script this binary would
 /// have served*, not with a captive portal, an error page or some other
-/// deployment that happens to know the path. Retried until the edge has
-/// propagated the new hostname, because a fresh quick tunnel is legitimately
-/// unreachable for the first few seconds.
+/// deployment that happens to know the path. The fetch is made once, and its
+/// failure is reported with the transport's own causes or the status served.
 pub async fn verify_public(base: &str) -> Result<(usize, usize), String> {
     let expected = crate::dashboard::join_script_source().len();
     if expected == 0 {
@@ -22,37 +20,29 @@ pub async fn verify_public(base: &str) -> Result<(usize, usize), String> {
         );
     }
     let endpoint = format!("{base}/join.sh");
-    let client = reqwest::Client::builder()
-        .build()
-        .map_err(|exc| format!("could not build an HTTP client: {exc}"))?;
-    let deadline = tokio::time::Instant::now() + PUBLIC_DEADLINE;
-    loop {
-        // Bound per attempt, so the deadline error carries the reason the LAST
-        // fetch failed rather than the first.
-        let last = match client.get(&endpoint).send().await {
-            Ok(response) if response.status().as_u16() == 200 => {
-                let served = response.bytes().await.map_err(|exc| {
-                    format!("{endpoint} answered 200 but the body could not be read: {exc}")
-                })?;
-                if served.len() == expected {
-                    return Ok((served.len(), expected));
-                }
-                return Err(format!(
-                    "{endpoint} answered 200 with {} bytes, not the {expected} bytes this build \
-                     serves at /join.sh: whatever is behind that address is not the enrollment \
-                     listener this command started",
-                    served.len()
-                ));
-            }
-            Ok(response) => format!("HTTP {}", response.status().as_u16()),
-            Err(exc) => with_causes(&exc.without_url()),
-        };
-        if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "{endpoint} did not answer 200 from the internet within {}s (last: {last})",
-                PUBLIC_DEADLINE.as_secs()
-            ));
-        }
-        tokio::time::sleep(POLL).await;
+    let response = reqwest::get(&endpoint).await.map_err(|exc| {
+        format!(
+            "{endpoint} could not be fetched from the internet: {}",
+            with_causes(&exc.without_url())
+        )
+    })?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(format!(
+            "{endpoint} answered HTTP {} from the internet, not 200",
+            response.status()
+        ));
     }
+    let served = response
+        .bytes()
+        .await
+        .map_err(|exc| format!("{endpoint} answered 200 but the body could not be read: {exc}"))?;
+    if served.len() == expected {
+        return Ok((served.len(), expected));
+    }
+    Err(format!(
+        "{endpoint} answered 200 with {} bytes, not the {expected} bytes this build serves at \
+         /join.sh: whatever is behind that address is not the enrollment listener this command \
+         started",
+        served.len()
+    ))
 }

@@ -1,12 +1,17 @@
 //! `stado fleet ingress up` — stand the entrance up, prove it from the
 //! internet, and publish it in that order.
 
+use std::os::fd::OwnedFd;
+use std::process::Stdio;
+
 use chrono::Utc;
 
 use crate::cli::fleet::ingress::record::{ingress_document, published, Ingress, PidHint};
 use crate::cli::fleet::ingress::runtime::binaries::{cloudflared_binary, stado_binary};
 use crate::cli::fleet::ingress::runtime::port::reserve_port;
-use crate::cli::fleet::ingress::runtime::process::{runtime_dir, spawn_detached, terminate_child};
+use crate::cli::fleet::ingress::runtime::process::{
+    runtime_dir, spawn_detached, spawn_tunnel, terminate_child,
+};
 use crate::cli::fleet::ingress::verify::children::{await_listener, await_tunnel};
 use crate::cli::fleet::ingress::verify::dns::await_public_dns;
 use crate::cli::fleet::ingress::verify::public::verify_public;
@@ -41,7 +46,11 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     let directory = runtime_dir()?;
     let listener_log = directory.join("listener.log");
     let tunnel_log = directory.join("tunnel.log");
-    let port = reserve_port(port)?;
+    let socket = reserve_port(port)?;
+    let port = socket
+        .local_addr()
+        .map_err(|exc| format!("the bound loopback socket has no address: {exc}"))?
+        .port();
 
     let started_at = Utc::now();
     let mut listener = spawn_detached(
@@ -49,11 +58,9 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         &[
             "dashboard".to_string(),
             "--enrollment-only".to_string(),
-            "--bind".to_string(),
-            "127.0.0.1".to_string(),
-            "--port".to_string(),
-            port.to_string(),
+            "--inherited-listener".to_string(),
         ],
+        Stdio::from(OwnedFd::from(socket)),
         &listener_log,
     )?;
     let listener_pgid = listener.id() as i32;
@@ -76,7 +83,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     // what this flag does and what any reverse proxy in front of a loopback
     // bind does. Nothing about the guard changes, and nothing else on this
     // machine becomes reachable.
-    let mut tunnel = match spawn_detached(
+    let (mut tunnel, tunnel_output) = match spawn_tunnel(
         &cloudflared,
         &[
             "tunnel".to_string(),
@@ -88,7 +95,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         ],
         &tunnel_log,
     ) {
-        Ok(child) => child,
+        Ok(started) => started,
         Err(detail) => {
             terminate_child(&mut listener, "dashboard");
             return Err(format!("ingress failed at the tunnel stage: {detail}"));
@@ -100,7 +107,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         cloudflared.display()
     );
 
-    let base_url = match await_tunnel(&mut tunnel, &tunnel_log).await {
+    let base_url = match await_tunnel(&mut tunnel, tunnel_output, &tunnel_log) {
         Ok(address) => address,
         Err(detail) => {
             terminate_child(&mut tunnel, "cloudflared");
@@ -116,7 +123,7 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_string))
         .unwrap_or_default();
-    println!("waiting for Cloudflare to publish DNS for {host} (asking its resolver, not this machine's)...");
+    println!("asking Cloudflare's resolver, not this machine's, whether {host} is published...");
     if let Err(detail) = await_public_dns(&host).await {
         terminate_child(&mut tunnel, "cloudflared");
         terminate_child(&mut listener, "dashboard");

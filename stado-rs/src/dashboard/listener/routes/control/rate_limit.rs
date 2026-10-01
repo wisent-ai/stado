@@ -24,7 +24,12 @@ impl Dashboard {
             .unwrap_or_default();
         let client = match rate_limit::authenticate(supplied).await {
             Ok(Some(client)) => client,
-            Ok(None) => return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"})),
+            Ok(None) => {
+                return send_json(
+                    http_status(reqwest::StatusCode::UNAUTHORIZED),
+                    &json!({"error": "unauthorized"}),
+                )
+            }
             Err(_) => {
                 return send_json(
                     http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
@@ -43,9 +48,10 @@ impl Dashboard {
         };
         match self.rate_limiter.consume(client, &payload).await {
             Ok(response) => send_json(http_status(reqwest::StatusCode::OK), &json!(response)),
-            Err(RateLimitError::InvalidRequest(message)) => {
-                send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": message}))
-            }
+            Err(RateLimitError::InvalidRequest(message)) => send_json(
+                http_status(reqwest::StatusCode::BAD_REQUEST),
+                &json!({"error": message}),
+            ),
             Err(_) => send_json(
                 http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
                 &json!({"error": "rate limiting unavailable"}),

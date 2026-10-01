@@ -4,12 +4,10 @@
 
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStderr, Command, Stdio};
 
 use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
-
-use crate::cli::fleet::ingress::{POLL, TERMINATE_GRACE};
 
 /// Directory the two children's output goes to, following the same
 /// `$HOME/.stado/<thing>` layout the rest of the installation uses.
@@ -25,14 +23,18 @@ pub fn runtime_dir() -> Result<PathBuf, String> {
     Ok(directory)
 }
 
-/// Start one child as its own process-group leader, with its output going to a
-/// file rather than to a pipe.
+/// Start one child as its own process-group leader, with `stdin` as given and
+/// its output going to a file rather than to a pipe.
 ///
-/// A pipe would be the obvious way to read `cloudflared`'s address, and it is
-/// the wrong one: this command exits while the child keeps running, and a child
-/// writing into a pipe nobody drains eventually blocks on its own logging. A
-/// file has no reader to lose.
-pub fn spawn_detached(program: &Path, args: &[String], log: &Path) -> Result<Child, String> {
+/// This command exits while the child keeps running, and a child writing into
+/// a pipe nobody drains eventually blocks on its own logging. A file has no
+/// reader to lose.
+pub fn spawn_detached(
+    program: &Path,
+    args: &[String],
+    stdin: Stdio,
+    log: &Path,
+) -> Result<Child, String> {
     let file = std::fs::File::create(log)
         .map_err(|exc| format!("could not open {} for writing: {exc}", log.display()))?;
     let errors = file.try_clone().map_err(|exc| {
@@ -43,7 +45,7 @@ pub fn spawn_detached(program: &Path, args: &[String], log: &Path) -> Result<Chi
     })?;
     Command::new(program)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::from(file))
         .stderr(Stdio::from(errors))
         // Leader of a fresh group: the pid is the group id, the group is what
@@ -52,6 +54,35 @@ pub fn spawn_detached(program: &Path, args: &[String], log: &Path) -> Result<Chi
         .process_group(0)
         .spawn()
         .map_err(|exc| format!("could not start {}: {exc}", program.display()))
+}
+
+/// Start `cloudflared` as its own process-group leader with its stdout going
+/// to the log and its stderr — where it prints the address and every
+/// connection it registers — piped here, so the tunnel stage reads those lines
+/// as they are written. [`crate::cli::fleet::ingress::verify::children`]
+/// hands the pipe on to a drain in the same group before this command exits.
+pub fn spawn_tunnel(
+    program: &Path,
+    args: &[String],
+    log: &Path,
+) -> Result<(Child, ChildStderr), String> {
+    let file = std::fs::File::create(log)
+        .map_err(|exc| format!("could not open {} for writing: {exc}", log.display()))?;
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(file))
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|exc| format!("could not start {}: {exc}", program.display()))?;
+    match child.stderr.take() {
+        Some(stderr) => Ok((child, stderr)),
+        None => Err(format!(
+            "{} started without the stderr pipe it was given",
+            program.display()
+        )),
+    }
 }
 
 /// The command line of a live process, or `None` when there is none. Used to
@@ -77,50 +108,28 @@ pub fn group_alive(pgid: i32, marker: &str) -> bool {
     process_command(pgid).is_some_and(|command| command.contains(marker))
 }
 
-/// Signal a whole process group away, refusing to touch a pid that no longer
-/// looks like what it was. Returns whether anything was actually signalled.
-pub fn terminate_group(pgid: i32, marker: &str) -> bool {
+/// Signal a whole process group with `SIGTERM`, refusing to touch a pid that
+/// no longer looks like what it was. Returns whether anything was signalled.
+pub fn terminate_group(pgid: i32, marker: &str) -> Result<bool, String> {
     if !group_alive(pgid, marker) {
-        return false;
+        return Ok(false);
     }
-    let group = Pid::from_raw(pgid);
-    let _ = killpg(group, Signal::SIGTERM);
-    let deadline = std::time::Instant::now() + TERMINATE_GRACE;
-    while std::time::Instant::now() < deadline {
-        if process_command(pgid).is_none() {
-            return true;
-        }
-        std::thread::sleep(POLL);
-    }
-    let _ = killpg(group, Signal::SIGKILL);
-    true
+    killpg(Pid::from_raw(pgid), Signal::SIGTERM)
+        .map_err(|errno| format!("SIGTERM to process group {pgid} failed: {errno}"))?;
+    Ok(true)
 }
 
 /// Stop a child this process started, and reap it.
 ///
 /// The reaping is not tidiness. A killed child of a still-running parent stays
-/// in the process table as a zombie: `ps` keeps printing it, so
-/// [`terminate_group`]'s "has it gone?" poll would never succeed, burn its
-/// whole grace period, and end in a pointless `SIGKILL` — and an operator
-/// running `ps` in the middle of a failed `up` would see the process the
-/// command just claimed to have stopped. Waiting on the handle we still hold
-/// answers the question exactly instead of inferring it.
+/// in the process table as a zombie, so an operator running `ps` in the middle
+/// of a failed `up` would see the process the command just claimed to have
+/// stopped. Waiting on the handle we still hold answers the question exactly.
 pub fn terminate_child(child: &mut Child, marker: &str) {
-    let group = Pid::from_raw(child.id() as i32);
-    if group_alive(child.id() as i32, marker) {
-        let _ = killpg(group, Signal::SIGTERM);
+    let pgid = child.id() as i32;
+    if group_alive(pgid, marker) {
+        let _ = killpg(Pid::from_raw(pgid), Signal::SIGTERM);
     }
-    let deadline = std::time::Instant::now() + TERMINATE_GRACE;
-    loop {
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return;
-        }
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(POLL);
-    }
-    let _ = killpg(group, Signal::SIGKILL);
     let _ = child.wait();
 }
 

@@ -2,9 +2,8 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
@@ -14,7 +13,6 @@ use crate::cli::resolver::authority::paths::resolved_ssh_paths;
 use crate::cli::resolver::serve::state::ResolverState;
 use crate::service_resolution::ResolverAdapter;
 
-use super::idle::{copy_until_idle, Activity};
 use super::refusal::refuse_connection;
 
 enum Upstream {
@@ -101,28 +99,24 @@ pub(super) async fn proxy_connection(
         Ok(upstream) => upstream,
         Err(cause) => {
             refuse_connection(
-                &mut client_read,
                 &mut client_write,
                 adapter,
                 &format!("{host}:{port}"),
                 &cause,
-                None,
             )
             .await;
             return Ok(());
         }
     };
     match upstream {
-        Upstream::Local(stream) => {
-            relay(client_read, client_write, stream, adapter, host, port).await
-        }
+        Upstream::Local(stream) => relay(client_read, client_write, stream, host, port).await,
         Upstream::Remote(stream, session) => {
             let started = std::time::Instant::now();
             // `channel closed` alone cannot say whether the service on the
             // remote host dropped this one connection or the whole SSH
             // session to that host died under every channel at once; the
             // session's own state after the failure is that answer.
-            let result = relay(client_read, client_write, stream, adapter, host, port)
+            let result = relay(client_read, client_write, stream, host, port)
                 .await
                 .map_err(|error| {
                     let session_state = if session.usable() {
@@ -142,54 +136,28 @@ pub(super) async fn proxy_connection(
     }
 }
 
+/// Copy both directions until each side closes. A connection ends when its
+/// client or its service ends it, and a failed copy is reported with the
+/// transport's own error.
 async fn relay<S: AsyncRead + AsyncWrite + Unpin>(
     mut client_read: OwnedReadHalf,
     mut client_write: OwnedWriteHalf,
     upstream: S,
-    adapter: &ResolverAdapter,
     host: &str,
     port: u16,
 ) -> Result<(), String> {
-    let idle = Duration::from_secs(adapter.idle_seconds);
     let (mut upstream_read, mut upstream_write) = tokio::io::split(upstream);
-    let activity = Activity::new();
-    // What a client reads instead of a silent close: the service that did not
-    // answer, and the window it was measured against. `Connection: close` and
-    // an exact length, so a client library parses it as a complete message.
-    let body = format!(
-        "service {} did not answer within the {}s idle window this adapter declares\n",
-        adapter.service,
-        idle.as_secs()
-    );
-    let timeout_answer = format!(
-        "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle, &activity, None);
-    let download = copy_until_idle(
-        &mut upstream_read,
-        &mut client_write,
-        idle,
-        &activity,
-        Some(timeout_answer.as_bytes()),
-    );
-    let (sent, received) =
-        tokio::try_join!(upload, download).map_err(|error| format!("proxy failed: {error}"))?;
-    // A cut connection is the proxy's decision, and a client that received a
-    // truncated answer has to be able to read whose decision it was and after
-    // how long. Silence here is what made `connection closed before message
-    // completed` unattributable for four release runs.
-    if sent.cut || received.cut {
-        eprintln!(
-            "stado resolver service={} consumer={} endpoint={host}:{port} closed an idle \
-             connection after {}s with nothing moving in either direction: {} byte(s) to the \
-             service, {} byte(s) back",
-            adapter.service,
-            adapter.consumer,
-            idle.as_secs(),
-            sent.bytes,
-            received.bytes,
-        );
-    }
-    Ok(())
+    let upload = async {
+        let sent = tokio::io::copy(&mut client_read, &mut upstream_write).await?;
+        upstream_write.shutdown().await?;
+        Ok::<u64, std::io::Error>(sent)
+    };
+    let download = async {
+        let received = tokio::io::copy(&mut upstream_read, &mut client_write).await?;
+        client_write.shutdown().await?;
+        Ok::<u64, std::io::Error>(received)
+    };
+    tokio::try_join!(upload, download)
+        .map(|_| ())
+        .map_err(|error| format!("proxy to {host}:{port} failed: {error}"))
 }

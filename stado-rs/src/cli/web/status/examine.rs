@@ -6,9 +6,8 @@ use serde_json::{json, Value};
 
 use super::readers::{expected_address, resolve_hostname, upstream_service_state};
 use super::{
-    Verdict, DNS_TIMEOUT, DNS_UNREADABLE, DNS_UNRESOLVED, VERDICT_DNS_ELSEWHERE,
-    VERDICT_EDGE_UNCONFIGURED, VERDICT_NOT_DEPLOYED, VERDICT_PORT_UNHELD, VERDICT_SERVING,
-    VERDICT_UNIT_DOWN,
+    Verdict, DNS_UNREADABLE, DNS_UNRESOLVED, VERDICT_DNS_ELSEWHERE, VERDICT_EDGE_UNCONFIGURED,
+    VERDICT_NOT_DEPLOYED, VERDICT_PORT_UNHELD, VERDICT_SERVING, VERDICT_UNIT_DOWN,
 };
 use crate::config::WebApiProduct;
 use crate::deploy::service::{self, ServiceStatus};
@@ -201,9 +200,8 @@ pub(super) async fn examine(
     // pointing at the wrong place.
     let dns_detail = match (expected, dns_state) {
         (_, DNS_UNREADABLE) => format!(
-            "{} could not be resolved inside {}s",
-            declared.hostname(),
-            DNS_TIMEOUT.as_secs()
+            "{} could not be resolved by this host's resolver",
+            declared.hostname()
         ),
         (_, DNS_UNRESOLVED) => format!("{} resolves to no address", declared.hostname()),
         (Some(address), _) if !addresses.iter().any(|found| found == address) => format!(

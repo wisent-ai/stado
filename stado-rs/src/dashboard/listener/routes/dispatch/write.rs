@@ -16,7 +16,10 @@ use crate::dashboard::listener::{
 impl Dashboard {
     pub(crate) async fn do_put(&self, request: &Request) -> Response {
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
+            return send_json(
+                http_status(reqwest::StatusCode::FORBIDDEN),
+                &json!({"error": "forbidden"}),
+            );
         }
         let (path, query) = request
             .path
@@ -89,7 +92,10 @@ impl Dashboard {
 
     pub(crate) async fn do_delete(&self, request: &Request) -> Response {
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
+            return send_json(
+                http_status(reqwest::StatusCode::FORBIDDEN),
+                &json!({"error": "forbidden"}),
+            );
         }
         let (path, query) = request
             .path

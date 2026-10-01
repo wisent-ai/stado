@@ -111,7 +111,10 @@ pub(crate) fn storage_error_response(error: StorageError) -> Response {
 pub(crate) fn dashboard_error_response(error: DashboardError) -> Response {
     match error {
         DashboardError::Storage(error) => storage_error_response(error),
-        other => send_json(http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR), &json!({"error": other.to_string()})),
+        other => send_json(
+            http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+            &json!({"error": other.to_string()}),
+        ),
     }
 }
 

@@ -10,8 +10,9 @@ pub async fn run(
     bind: Option<String>,
     port: Option<i64>,
     enrollment_only: bool,
+    inherited_listener: bool,
 ) -> Result<(), CmdError> {
-    crate::dashboard::serve(bind.as_deref(), port, enrollment_only)
+    crate::dashboard::serve(bind.as_deref(), port, enrollment_only, inherited_listener)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))
 }

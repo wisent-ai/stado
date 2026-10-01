@@ -267,14 +267,6 @@ pub(super) fn validate_resolver_config(
         let adapter_location = format!("{location}.adapters[{index}]");
         validate_identifier(&adapter.service, &format!("{adapter_location}.service"))?;
         validate_identifier(&adapter.consumer, &format!("{adapter_location}.consumer"))?;
-        if adapter.idle_seconds == 0 {
-            return Err(format!("{adapter_location}.idle_seconds: must be positive"));
-        }
-        if adapter.connect_seconds == 0 {
-            return Err(format!(
-                "{adapter_location}.connect_seconds: must be positive"
-            ));
-        }
         let bind: std::net::SocketAddr = adapter
             .bind
             .parse()

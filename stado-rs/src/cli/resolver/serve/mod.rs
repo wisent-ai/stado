@@ -16,7 +16,6 @@ mod proxy;
 mod startup;
 mod state;
 
-use crate::cli::resolver::report::published::backoff_delay;
 use crate::cli::resolver::report::published::now_iso;
 use crate::cli::resolver::report::published::publish;
 use crate::cli::resolver::report::published::PublishedState;
@@ -179,19 +178,15 @@ async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
     })
 }
 
-/// Reload the snapshot on the declared interval, backing off when the
-/// upstream will not answer.
+/// Reload the snapshot on the declared interval.
 ///
-/// The plain interval hammered a dead authority at `refresh_seconds`: on
-/// 2026-08-19 that produced seven identical `registry authority exited with
-/// exit status: 255: ssh: connect to host 100.120.25.24 port 22: Operation
-/// timed out` lines, each costing a ten second ssh connect, and told nobody
-/// anything the first had not. The reason is published once per attempt now,
-/// and the wait between attempts grows to [`BACKOFF_CAP`]. Adapters keep
-/// refusing with `service directory cache is stale` while this loop backs
-/// off, which is the correct answer and no longer an unexplained one.
+/// A failed refresh is published with the upstream's own error, and the next
+/// read is the next declared tick. Adapters keep refusing with `service
+/// directory cache is stale` meanwhile, which is the correct answer and no
+/// longer an unexplained one.
 async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Result<(), String> {
-    let mut interval = tokio::time::interval(Duration::from_secs(refresh_seconds));
+    let refresh = Duration::from_secs(refresh_seconds);
+    let mut interval = tokio::time::interval(refresh);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval.tick().await;
     let mut attempt = 0_u32;
@@ -212,17 +207,15 @@ async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Resu
             }
             Err(error) => {
                 attempt = attempt.saturating_add(1);
-                let delay = backoff_delay(attempt);
                 eprintln!(
-                    "stado resolver refresh failed, attempt {attempt}, next in {}s: {error}",
-                    delay.as_secs()
+                    "stado resolver refresh failed, attempt {attempt}, next on the declared \
+                     {refresh_seconds}s interval: {error}"
                 );
                 // The listeners stay bound through a failed refresh.
                 publish(
-                    &PublishedState::backing_off(&state.local_target, attempt, &error, delay)
+                    &PublishedState::backing_off(&state.local_target, attempt, &error, refresh)
                         .bound(),
                 );
-                tokio::time::sleep(delay).await;
             }
         }
     }

@@ -25,39 +25,14 @@ const STATE_FILE_ENV: &str = "STADO_RESOLVER_STATE_FILE";
 pub(super) const RESOLVER_SERVING: &str = "serving";
 /// Reading its first snapshot; no port is bound yet.
 const RESOLVER_STARTING: &str = "starting";
-/// An upstream read failed and the next attempt is scheduled.
+/// An upstream read failed; the next one is due on the declared refresh
+/// interval.
 const RESOLVER_BACKING_OFF: &str = "backing_off";
 /// Stopped for a reason no retry clears.
 const RESOLVER_FAILED: &str = "failed";
 /// No state file exists: no resolver has run since one was last removed.
 /// Never written, only reported by [`status`].
 pub(super) const RESOLVER_UNPUBLISHED: &str = "unpublished";
-
-/// First delay after a failed upstream read.
-const BACKOFF_BASE: Duration = Duration::from_secs(1);
-
-/// Ceiling on that delay.
-///
-/// Bounded in both directions, deliberately. The behaviour this replaces was
-/// unbounded upward in restarts and downward in patience: `serve` exited 69,
-/// launchd restarted it five seconds later, and the loop neither slowed down
-/// nor said why. Retrying in place at a capped interval keeps one pid, one
-/// log and one published reason, and a resolver that has been waiting an hour
-/// still retries within the minute the authority comes back.
-const BACKOFF_CAP: Duration = Duration::from_secs(60);
-
-/// [`BACKOFF_BASE`] doubled per consecutive failure, capped at
-/// [`BACKOFF_CAP`].
-pub(crate) fn backoff_delay(attempt: u32) -> Duration {
-    let doublings = attempt.saturating_sub(1);
-    Duration::from_secs(
-        BACKOFF_BASE
-            .as_secs()
-            .checked_shl(doublings)
-            .unwrap_or(u64::MAX)
-            .min(BACKOFF_CAP.as_secs()),
-    )
-}
 
 /// `datetime.now(timezone.utc).isoformat()`, as every other writer in the
 /// crate stamps it (`queue/leases.rs::now_iso`).
@@ -94,7 +69,7 @@ pub(crate) struct PublishedState {
     pub(super) reason: Option<String>,
     /// Consecutive failed upstream reads.
     pub(super) attempt: u32,
-    /// When the next upstream read is due.
+    /// When the next upstream read is due, on the declared refresh interval.
     pub(super) next_attempt_at: Option<String>,
     /// Why this host last refused to refresh its last-known-good registry
     /// copy ([`targets::LastGoodRefusal::kind`]), absent while the copy is
@@ -142,8 +117,9 @@ impl PublishedState {
         }
     }
 
-    pub(crate) fn backing_off(target: &str, attempt: u32, reason: &str, delay: Duration) -> Self {
-        let ahead = chrono::Duration::from_std(delay).unwrap_or_else(|_| chrono::Duration::zero());
+    pub(crate) fn backing_off(target: &str, attempt: u32, reason: &str, refresh: Duration) -> Self {
+        let ahead =
+            chrono::Duration::from_std(refresh).unwrap_or_else(|_| chrono::Duration::zero());
         Self {
             updated_at: now_iso(),
             target: target.to_string(),

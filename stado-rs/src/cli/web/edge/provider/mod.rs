@@ -1,8 +1,6 @@
 //! The provider API calls: what the edge is made of on Azure, and what it
 //! takes to remove one of those resources and know it is gone.
 
-use std::time::Duration;
-
 use super::{mutate_web, CmdError};
 use crate::providers::azure;
 
@@ -13,27 +11,26 @@ mod requests;
 pub(in crate::cli::web::edge) use provision::provision;
 pub(in crate::cli::web::edge) use removal::remove;
 
-/// Delete one ARM resource and wait until reading it answers 404.
+/// Delete one ARM resource, follow Azure's own long-running operation to its
+/// end, and confirm reading it answers 404.
 ///
-/// The provider's own delete does not wait, and here it has to: a public
-/// address cannot be removed while the interface still references it, so a
-/// rollback that fired three deletes at once would leave the address behind —
-/// billed, unattached, and belonging to nothing. `get_allow_404` returning
-/// `None` is the only evidence that the resource is actually gone.
+/// A public address cannot be removed while the interface still references
+/// it, so a rollback that fired three deletes at once would leave the address
+/// behind — billed, unattached, and belonging to nothing. `get_allow_404`
+/// returning `None` is the only evidence that the resource is actually gone;
+/// a resource Azure still returns after its delete operation finished is an
+/// error naming it.
 async fn discard(client: &azure::ArmClient, path: &str, description: &str) -> Result<(), String> {
     client
         .delete_allow_404(path, description)
         .await
         .map_err(|error| error.to_string())?;
-    // Azure removes it when it removes it; `get_allow_404` answering `None`
-    // is the only evidence the resource is actually gone, and that answer is
-    // what ends this loop.
-    loop {
-        match client.get_allow_404(path, description).await {
-            Ok(None) => return Ok(()),
-            Ok(Some(_)) => tokio::time::sleep(Duration::from_secs(2)).await,
-            Err(error) => return Err(error.to_string()),
-        }
+    match client.get_allow_404(path, description).await {
+        Ok(None) => Ok(()),
+        Ok(Some(_)) => Err(format!(
+            "Azure finished deleting {description} ({path}) and still returns it"
+        )),
+        Err(error) => Err(error.to_string()),
     }
 }
 

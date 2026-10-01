@@ -151,33 +151,9 @@ impl StadoObjectBackend {
     /// The certificate is added, never substituted: publicly signed endpoints keep
     /// working, and this cannot become a way to disable verification.
     fn client(host: &str, ca_file: &str) -> Result<Client, StorageError> {
-        // Bounded like `fleet_https_client`, and for the same incident: a
-        // release submit's queue write to the fleet store held one ESTABLISHED
-        // connection for eight minutes with no error and no progress, because
-        // this client had no timeout at all. The store is on the tailnet or the
-        // same machine; five minutes covers a multi-megabyte artifact there, and
-        // a hang converted into a named error reaches callers that already
-        // handle storage failures.
-        let mut builder = Client::builder()
-            // Sharing the client is what makes a pool possible; these three
-            // state what the pool is for. The idle timeout is the contract
-            // with the object API, which holds a reused connection for 120 s
-            // (`Dashboard::KEEP_ALIVE_IDLE`): this side must retire the socket
-            // FIRST, because a connection retired by the server between the
-            // pool checkout and the write fails or re-dials -- the cost this
-            // sharing exists to remove. 90 s against the server's 120 s leaves
-            // a 30 s margin and is also reqwest's own default, so the value is
-            // unchanged and only its reason is now written down.
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            // A tick reads a handful of objects; eight warm connections per
-            // host serve that with room for the concurrent janitor read,
-            // instead of reqwest's unbounded idle set.
-            .pool_max_idle_per_host(8)
-            // A pooled connection dropped silently -- by the tailnet, by a
-            // NAT table, by a service restart -- is otherwise discovered only
-            // when a request is written into it, which surfaces as an
-            // occasional failed object operation rather than a clean re-dial.
-            .tcp_keepalive(std::time::Duration::from_secs(60));
+        // Shared, so connections are reused; a pooled connection stays until
+        // the server closes it.
+        let mut builder = Client::builder().pool_idle_timeout(None);
         if let Some(address) = crate::remote::tailnet::address_of(host) {
             // Use the same tailnet map as the artifact client. The hostname
             // remains unchanged for SNI and certificate verification.

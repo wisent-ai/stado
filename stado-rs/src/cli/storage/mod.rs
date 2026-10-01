@@ -36,7 +36,6 @@ use std::num::NonZeroUsize;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Args, Subcommand};

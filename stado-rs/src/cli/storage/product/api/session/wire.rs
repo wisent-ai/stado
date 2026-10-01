@@ -21,9 +21,7 @@ impl RemoteObjectApi {
         T: serde::de::DeserializeOwned,
     {
         let status = response.status();
-        let body = self
-            .success_body(response, operation, bearer)
-            .await?;
+        let body = self.success_body(response, operation, bearer).await?;
         serde_json::from_slice(&body).map_err(|error| {
             CmdError::click(format!(
                 "Stado object API returned invalid JSON for {operation} (HTTP {status}): {error}"

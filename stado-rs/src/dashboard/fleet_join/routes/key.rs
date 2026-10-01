@@ -2,8 +2,6 @@
 //! private half never leaves the operator's vault, and this route never reads
 //! it.
 
-use std::time::Instant;
-
 use serde_json::json;
 
 use crate::dashboard::{http_status, send_json, Request, Response};
@@ -17,17 +15,16 @@ use super::super::refusals::{denied, refuse, unavailable};
 /// for this invite's target, plus the exact `authorized_keys` line to append.
 /// Reads no registry, writes nothing, spends nothing.
 pub(in crate::dashboard) async fn invite_key(store: &JobStorage, request: &Request) -> Response {
-    let started = Instant::now();
     let token = presented(request);
     let Some((id, secret)) = token else {
-        return refuse(started).await;
+        return refuse();
     };
     if !request.body.is_empty() {
-        return refuse(started).await;
+        return refuse();
     }
     let accepted = match verify(store, &id, &secret).await {
         Ok(accepted) => accepted,
-        Err(denial) => return denied(started, denial).await,
+        Err(denial) => return denied(denial),
     };
 
     let target = accepted.invite.target_name;

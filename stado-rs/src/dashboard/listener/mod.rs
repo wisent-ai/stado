@@ -138,12 +138,30 @@ impl Dashboard {
 /// `config::dashboard_port()`; storage from `config::bucket()`.
 ///
 /// `enrollment_only` narrows the listener to `ENROLLMENT_ROUTES` — the mode
-/// that is safe to publish through a tunnel.
+/// that is safe to publish through a tunnel. `inherited_listener` serves the
+/// listening socket this process was given as its standard input, the way
+/// `stado fleet ingress up` hands over the port it bound.
 pub async fn serve(
     host: Option<&str>,
     port: Option<i64>,
     enrollment_only: bool,
+    inherited_listener: bool,
 ) -> Result<(), DashboardError> {
+    if inherited_listener {
+        if host.is_some() || port.is_some() {
+            return Err(DashboardError::Other(
+                "--inherited-listener serves the socket on standard input; --bind and --port \
+                 name a socket to bind and cannot be combined with it"
+                    .to_string(),
+            ));
+        }
+        let listener = PreparedListener::inherited()?;
+        let store = JobStorage::for_server().await?;
+        return Dashboard::new(store)
+            .with_enrollment_only(enrollment_only)
+            .serve_prepared(listener)
+            .await;
+    }
     let host = host
         .map(str::to_string)
         .unwrap_or_else(|| config::dashboard_bind().to_string());

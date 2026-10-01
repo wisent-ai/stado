@@ -259,9 +259,19 @@ pub(crate) fn merge(
                 false
             }
             Commands::Planes(PlaneCommands::Dashboard {
+                inherited_listener: true,
+                ..
+            }) => {
+                return Err(DeployError(format!(
+                    "{} declares --inherited-listener; a resident listener binds its own port",
+                    component.label
+                )))
+            }
+            Commands::Planes(PlaneCommands::Dashboard {
                 bind,
                 port,
                 enrollment_only,
+                inherited_listener: false,
             }) => {
                 merge::merge_dashboard(&mut runtime, component, bind, port, enrollment_only)?;
                 false

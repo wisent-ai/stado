@@ -167,7 +167,9 @@ pub(crate) fn machine_result_response(result: Result<Value, MachineError>) -> Re
         ),
         Err(error) => {
             let status = match error.code.as_str() {
-                "INVALID_REQUEST" | "INVALID_SOURCE_ARCHIVE" => http_status(reqwest::StatusCode::BAD_REQUEST),
+                "INVALID_REQUEST" | "INVALID_SOURCE_ARCHIVE" => {
+                    http_status(reqwest::StatusCode::BAD_REQUEST)
+                }
                 "NOT_FOUND" => http_status(reqwest::StatusCode::NOT_FOUND),
                 "IDEMPOTENCY_CONFLICT" => http_status(reqwest::StatusCode::CONFLICT),
                 "UNAUTHORIZED" => http_status(reqwest::StatusCode::UNAUTHORIZED),

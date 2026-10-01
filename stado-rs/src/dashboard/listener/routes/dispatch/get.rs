@@ -38,7 +38,10 @@ impl Dashboard {
             if path_no_query == "/api/machine/status" {
                 return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
             }
-            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
+            return send_json(
+                http_status(reqwest::StatusCode::FORBIDDEN),
+                &json!({"error": "forbidden"}),
+            );
         }
         if path_no_query == crate::dashboard::operator_console::stream::PATH {
             return crate::dashboard::operator_console::stream::upgrade(request).await;
@@ -237,7 +240,10 @@ impl Dashboard {
                 match authorize_service(request, service, "status").await {
                     Ok(true) => {}
                     Ok(false) => {
-                        return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"}))
+                        return send_json(
+                            http_status(reqwest::StatusCode::UNAUTHORIZED),
+                            &json!({"error": "unauthorized"}),
+                        )
                     }
                     Err(()) => {
                         return send_json(

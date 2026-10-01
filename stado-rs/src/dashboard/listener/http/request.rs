@@ -61,20 +61,16 @@ pub(crate) fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Read one request with a bounded head and body. Body framing is deliberately
 /// limited to Content-Length; mutating routes reject Transfer-Encoding.
 ///
-/// `head_idle` bounds the wait for a complete head, and nothing else: the head
-/// is what an idle or abandoned connection is failing to send, while a body
-/// still arriving is a transfer that may legitimately outlast any idle limit.
-/// A connection that goes quiet before saying anything reads as a clean close,
-/// the same as an EOF between requests.
+/// The connection is read until the head is complete or the client closes
+/// it. A close before any byte of a new request is a clean end, the same as
+/// an EOF between requests.
 pub(crate) async fn read_request(
     stream: &mut TcpStream,
     carry: &mut Vec<u8>,
-    head_idle: std::time::Duration,
 ) -> std::io::Result<Option<Request>> {
     // Whatever the previous request on this connection read past its own body.
     let mut buf: Vec<u8> = std::mem::take(carry);
     let mut tmp = [0u8; 8192];
-    let head_deadline = tokio::time::Instant::now() + head_idle;
     let head_end = loop {
         // Check before reading: a pipelined head may already be complete in
         // the bytes carried over, and blocking on the socket would deadlock
@@ -88,16 +84,7 @@ pub(crate) async fn read_request(
                 "HTTP request head too large",
             ));
         }
-        let n = match tokio::time::timeout_at(head_deadline, stream.read(&mut tmp)).await {
-            Ok(read) => read?,
-            Err(_) if buf.is_empty() => return Ok(None),
-            Err(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "HTTP request head timed out",
-                ));
-            }
-        };
+        let n = stream.read(&mut tmp).await?;
         if n == 0 {
             if buf.is_empty() {
                 return Ok(None);

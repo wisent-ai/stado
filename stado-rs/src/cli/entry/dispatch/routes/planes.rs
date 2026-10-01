@@ -20,7 +20,8 @@ pub(crate) async fn dispatch(command: PlaneCommands) -> Result<(), CmdError> {
             bind,
             port,
             enrollment_only,
-        } => dashboard::run(bind, port, enrollment_only).await,
+            inherited_listener,
+        } => dashboard::run(bind, port, enrollment_only, inherited_listener).await,
         PlaneCommands::LocalControlPlane {
             bind,
             port,

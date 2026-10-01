@@ -37,8 +37,6 @@ mod examine;
 mod readers;
 mod report;
 
-use std::time::Duration;
-
 use serde_json::Value;
 
 // `super` inside a component of this module is `status`, not `web`, so the
@@ -73,14 +71,6 @@ const DNS_UNRESOLVED: &str = "unresolved";
 /// into [`DNS_UNRESOLVED`]: "this name has no address" and "nobody could ask"
 /// are opposite findings, and only one of them is the product's fault.
 const DNS_UNREADABLE: &str = "unreadable";
-
-/// How long one hostname lookup may take.
-///
-/// Bounded because a status read over every declared product must not hang on
-/// one unreachable resolver, and short because a name that needs longer than
-/// this is already the finding. Two seconds is the window `doctor.rs` puts
-/// around its own reachability lookups.
-const DNS_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// One product's verdict and the row that explains it.
 struct Verdict {

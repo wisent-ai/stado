@@ -5,8 +5,6 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::cli::resolver::serve::proxy::accept_backoff;
-use crate::cli::resolver::serve::proxy::ACCEPT_FAILURE_LIMIT;
 use crate::cli::resolver::serve::state::ResolverState;
 
 const REQUEST_HEAD_LIMIT: usize = 16 * 1024;
@@ -15,24 +13,11 @@ pub(super) async fn serve_api(
     listener: TcpListener,
     state: Arc<ResolverState>,
 ) -> Result<(), String> {
-    let mut failures = 0_u32;
     loop {
-        let (mut stream, _) = match listener.accept().await {
-            Ok(accepted) => {
-                failures = 0;
-                accepted
-            }
-            Err(error) => {
-                failures = failures.saturating_add(1);
-                if failures >= ACCEPT_FAILURE_LIMIT {
-                    return Err(format!(
-                        "resolution API accept failed {failures} times in a row: {error}"
-                    ));
-                }
-                accept_backoff("resolution API", &error, failures).await;
-                continue;
-            }
-        };
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .map_err(|error| format!("resolution API accept failed: {error}"))?;
         let state = Arc::clone(&state);
         tokio::spawn(async move {
             let response = match read_request(&mut stream).await {

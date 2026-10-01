@@ -1,8 +1,6 @@
 //! The enrollment write: one pending request filed under `enrollments/`,
 //! paid for with one use of the invite and refunded if it cannot be recorded.
 
-use std::time::Instant;
-
 use serde_json::{json, Value};
 
 use crate::dashboard::{http_status, json_dumps_sorted_compact, send_json, Request, Response};
@@ -19,7 +17,6 @@ use super::report::{parse_report, valid_hostname};
 /// registry is untouched until an operator approves, and approval re-probes
 /// the machine over the channel this request names.
 pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) -> Response {
-    let started = Instant::now();
     let token = presented(request);
     let content_type = request
         .header("content-type")
@@ -40,7 +37,12 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
     }
     let report = match parse_report(&request.body) {
         Ok(report) => report,
-        Err(message) => return send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": message})),
+        Err(message) => {
+            return send_json(
+                http_status(reqwest::StatusCode::BAD_REQUEST),
+                &json!({"error": message}),
+            )
+        }
     };
     let hostname = normalize_hostname(&report.hostname);
     if !valid_hostname(&hostname) {
@@ -50,11 +52,11 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
         );
     }
     let Some((id, secret)) = token else {
-        return refuse(started).await;
+        return refuse();
     };
     let accepted = match verify(store, &id, &secret).await {
         Ok(accepted) => accepted,
-        Err(denial) => return denied(started, denial).await,
+        Err(denial) => return denied(denial),
     };
 
     // A machine whose request was already decided is never silently reopened
@@ -88,7 +90,7 @@ pub(in crate::dashboard) async fn join(store: &JobStorage, request: &Request) ->
 
     let spent = match spend(store, &accepted).await {
         Ok(spent) => spent,
-        Err(denial) => return denied(started, denial).await,
+        Err(denial) => return denied(denial),
     };
 
     let mut document = crate::cli::fleet::enroll::build_invited_request(

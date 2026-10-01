@@ -47,6 +47,12 @@ pub(crate) enum PlaneCommands {
         /// Publish this listener through a tunnel, never the full dashboard.
         #[arg(long)]
         enrollment_only: bool,
+        /// Serve the listening TCP socket this process was given as its
+        /// standard input instead of binding one. The parent that bound the
+        /// socket keeps the port reserved until this listener serves it.
+        /// Refused together with --bind or --port.
+        #[arg(long)]
+        inherited_listener: bool,
     },
 
     /// Run a device-local API listener, scheduler, and worker.

@@ -12,14 +12,21 @@
 //! log. That is not a feature, it is a runbook, and a runbook is what nobody
 //! executes at the moment somebody's laptop needs adding.
 //!
-//! So this is the entrance as a command. `up` picks its own loopback port,
-//! starts the narrow listener on it, starts a Cloudflare quick tunnel in front
-//! of it, waits for the address that tunnel prints, and then — the part that
-//! makes the difference between a feature and a hope — fetches `/join.sh`
-//! **from the internet, through that address** and compares what came back
-//! with the script this very binary would have served. Only then is anything
-//! published. A verification that did not pass is a teardown and an error
-//! naming the stage that failed; it is never "it is probably up".
+//! So this is the entrance as a command. `up` binds its own loopback port and
+//! hands that bound socket to the narrow listener, starts a Cloudflare quick
+//! tunnel in front of it, reads the address that tunnel prints on its own
+//! output, and then — the part that makes the difference between a feature
+//! and a hope — fetches `/join.sh` **from the internet, through that
+//! address** and compares what came back with the script this very binary
+//! would have served. Only then is anything published. A verification that
+//! did not pass is a teardown and an error naming the stage that failed and
+//! what that stage observed; it is never "it is probably up".
+//!
+//! No stage waits on a clock. The listener stage asks a socket that is already
+//! bound, so its answer is the listener's own; the tunnel stage reads
+//! `cloudflared`'s output until it has printed the address and registered a
+//! connection, or exited; the DNS and public stages ask once and report what
+//! they were told.
 //!
 //! ## What a quick tunnel is, said out loud
 //!
@@ -59,11 +66,8 @@
 //! The seams are the components: `record` is the entrance as published and the
 //! one read every subcommand starts from, `runtime` is what an entrance is made
 //! of on this machine — binaries, port, process groups — `verify` is the part
-//! that decides, and `command` is the three subcommands themselves. The
-//! deadlines and the two mode names stay here, because the stages read them
-//! and no stage owns them.
-
-use std::time::Duration;
+//! that decides, and `command` is the three subcommands themselves. The two
+//! mode names stay here, because the stages read them and no stage owns them.
 
 mod command;
 mod record;
@@ -109,29 +113,3 @@ const CLOUDFLARED_CANDIDATES: &[&str] = &[
     "/opt/homebrew/bin/cloudflared",
     "/usr/local/bin/cloudflared",
 ];
-
-/// How long the loopback listener gets to answer its own port. It serves three
-/// routes and touches neither store nor vault before answering `/join.sh`, so
-/// this is generous by an order of magnitude and only ever spent when something
-/// is actually wrong.
-const LISTENER_DEADLINE: Duration = Duration::from_secs(15);
-/// How long `cloudflared` gets to print the address it was given.
-const TUNNEL_DEADLINE: Duration = Duration::from_secs(45);
-/// How long the freshly minted name gets to appear in Cloudflare's own DNS.
-/// Measured on this fleet's operator machine: about six seconds after
-/// `cloudflared` prints the address. The allowance is an order of magnitude
-/// wider because the cost of giving up early is a torn-down tunnel that was
-/// about to work.
-const DNS_DEADLINE: Duration = Duration::from_secs(90);
-/// How long the published address then gets to answer `/join.sh`. The name
-/// resolves by this point, so this is spent only on the edge finishing its own
-/// propagation.
-const PUBLIC_DEADLINE: Duration = Duration::from_secs(60);
-/// Gap between DNS-publication polls. Deliberately slower than [`POLL`]: this
-/// one asks a public resolver a question, and asking it three times a second
-/// would be rude for no gain when the answer changes once.
-const DNS_POLL: Duration = Duration::from_secs(2);
-/// Gap between polls of the listener, tunnel and verification deadlines.
-const POLL: Duration = Duration::from_millis(400);
-/// How long a signalled process group gets to go away before it is killed.
-const TERMINATE_GRACE: Duration = Duration::from_secs(5);

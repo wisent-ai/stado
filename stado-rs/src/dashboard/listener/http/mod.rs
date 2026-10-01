@@ -34,6 +34,35 @@ impl PreparedListener {
                 "could not bind API listener {host}:{port}: {error}"
             ))
         })?;
+        Self::loopback(listener)
+    }
+
+    /// The listening socket this process was given as its standard input.
+    pub(crate) fn inherited() -> Result<Self, DashboardError> {
+        use std::os::fd::AsFd;
+        let descriptor = std::io::stdin()
+            .as_fd()
+            .try_clone_to_owned()
+            .map_err(|error| {
+                DashboardError::Other(format!(
+                    "standard input could not be taken as the inherited listener: {error}"
+                ))
+            })?;
+        let listener = std::net::TcpListener::from(descriptor);
+        listener.set_nonblocking(true).map_err(|error| {
+            DashboardError::Other(format!(
+                "the inherited listener could not be made non-blocking: {error}"
+            ))
+        })?;
+        let listener = TcpListener::from_std(listener).map_err(|error| {
+            DashboardError::Other(format!(
+                "standard input is not a listening TCP socket: {error}"
+            ))
+        })?;
+        Self::loopback(listener)
+    }
+
+    fn loopback(listener: TcpListener) -> Result<Self, DashboardError> {
         let local_addr = listener.local_addr()?;
         if !local_addr.ip().is_loopback() {
             return Err(DashboardError::Other(format!(
@@ -140,24 +169,6 @@ impl Dashboard {
         }
     }
 
-    /// How long this side waits for a request head before it closes the socket.
-    ///
-    /// It bounds the first request as much as a reused one: a connection that
-    /// is opened and then abandoned holds a task and a file descriptor exactly
-    /// like an idle reused one, and the accept loop puts no bound on how many
-    /// of those may exist. Only the head is bounded, never the body -- an
-    /// object PUT may carry any size, and a slow upload is progress rather
-    /// than idleness.
-    ///
-    /// It must stay strictly LONGER than the object client's pool idle timeout
-    /// (90 s: reqwest's default, made explicit alongside the keyed client).
-    /// Equal timers race -- the client takes a warm connection out of its pool
-    /// in the same instant this side sends FIN, and the request written into it
-    /// then fails or re-dials, which is the cost this change exists to remove.
-    /// With the client retiring first, the socket is always closed by the side
-    /// that is not about to write to it.
-    const KEEP_ALIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(120);
-
     async fn handle_connection(&self, mut stream: TcpStream) -> std::io::Result<()> {
         // Bytes already buffered past the request just served. Reusing one
         // connection is the whole point of this loop, so they have to survive
@@ -168,32 +179,31 @@ impl Dashboard {
             // reason before the connection closes: dropping it left the client
             // with "connection closed before message completed" and no word
             // about the size or framing that was refused.
-            let request =
-                match read_request(&mut stream, &mut carry, Self::KEEP_ALIVE_IDLE).await {
-                    Ok(Some(request)) => request,
-                    Ok(None) => return Ok(()),
-                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                        let status = if error.to_string().contains("accepts at most") {
-                            reqwest::StatusCode::PAYLOAD_TOO_LARGE
-                        } else {
-                            reqwest::StatusCode::BAD_REQUEST
-                        };
-                        let mut response = Response::new(
-                            http_status(status),
-                            status.canonical_reason().unwrap_or_default(),
-                            "text/plain; charset=utf-8",
-                            error.to_string().as_bytes(),
-                        );
-                        eprintln!("[dashboard] refused request: {error}");
-                        response.close_connection();
-                        stream.write_all(&response.bytes).await?;
-                        return stream.shutdown().await;
-                    }
-                    Err(error) => {
-                        eprintln!("[dashboard] request read failed: {error}");
-                        return Err(error);
-                    }
-                };
+            let request = match read_request(&mut stream, &mut carry).await {
+                Ok(Some(request)) => request,
+                Ok(None) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                    let status = if error.to_string().contains("accepts at most") {
+                        reqwest::StatusCode::PAYLOAD_TOO_LARGE
+                    } else {
+                        reqwest::StatusCode::BAD_REQUEST
+                    };
+                    let mut response = Response::new(
+                        http_status(status),
+                        status.canonical_reason().unwrap_or_default(),
+                        "text/plain; charset=utf-8",
+                        error.to_string().as_bytes(),
+                    );
+                    eprintln!("[dashboard] refused request: {error}");
+                    response.close_connection();
+                    stream.write_all(&response.bytes).await?;
+                    return stream.shutdown().await;
+                }
+                Err(error) => {
+                    eprintln!("[dashboard] request read failed: {error}");
+                    return Err(error);
+                }
+            };
             // The mode gate is the FIRST thing that looks at the request, ahead
             // of the object PUT preflight, ahead of every Host check and
             // authorization, and ahead of any store or vault access. A refused

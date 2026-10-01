@@ -49,28 +49,11 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
 }
 
 fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
-    // One bound, on the whole request. Two bounds that each cover a phase —
-    // establishment, and a body that has gone quiet — together bound
-    // nothing: a peer that stops answering without ever sending FIN or RST is
-    // outside both, and a process can then live for hours holding sockets.
-    // When that process holds the disk janitor's exclusive run lock, cleanup
-    // completes no pass, `disk_cleanup_stalled` latches, and the host claims
-    // nothing. The ceiling below is outside no phase: it covers the call.
+    // One client per configuration, so connections are reused. A pooled
+    // connection stays until the server closes it.
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        // The pool contract of
-        // `queue::stado_object::StadoObjectBackend::client`, and for the same
-        // reason: the object API holds a reused connection for 120 s
-        // (`Dashboard::KEEP_ALIVE_IDLE`), so this side retires it first at
-        // 90 s and never writes into a socket the server is closing. Eight
-        // warm connections per host bound the idle set.
-        .pool_idle_timeout(Duration::from_secs(90))
-        .pool_max_idle_per_host(8)
-        // Prove the peer is still there. A vanished peer leaves an
-        // ESTABLISHED socket that reads forever, which is exactly what was
-        // measured today; keep-alive probes turn that into an error the
-        // caller can act on.
-        .tcp_keepalive(Duration::from_secs(60));
+        .pool_idle_timeout(None);
     for host in configured_origin_hosts() {
         // The tailnet states where its own names live. Asking the system
         // resolver about a MagicDNS name is asking a witness that may not have

@@ -23,27 +23,42 @@ struct ArmInner {
     base_url: String,
     /// True in prod (token chain attached); false on loopback test mocks.
     auth: bool,
-    /// Delay between LRO polls (near-zero in tests).
-    poll_interval: Duration,
+}
+
+/// The wait Azure names in a poll response's `Retry-After` header. A
+/// long-running operation that is still running and names no wait is an
+/// error naming the operation, never a wait this client invents.
+fn retry_after(response: &reqwest::Response, desc: &str) -> Result<Duration, AzureError> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .ok_or_else(|| {
+            AzureError::Api(format!(
+                "Azure {desc} is still running and its poll answer (HTTP {}) names no \
+                 Retry-After",
+                response.status()
+            ))
+        })
 }
 
 impl ArmClient {
     /// Bind to the public ARM API; the token chain resolves on the first
     /// request.
     pub fn new(subscription: &str) -> Self {
-        Self::assemble(subscription, ARM_API_BASE, true, Duration::from_secs(2))
+        Self::assemble(subscription, ARM_API_BASE, true)
     }
 
-    /// Bind to an explicit base URL without auth (loopback mocks in
-    /// tests) and with a near-zero LRO poll interval.
-    fn assemble(subscription: &str, base_url: &str, auth: bool, poll_interval: Duration) -> Self {
+    /// Bind to an explicit base URL without auth (loopback mocks in tests).
+    fn assemble(subscription: &str, base_url: &str, auth: bool) -> Self {
         ArmClient {
             inner: Arc::new(ArmInner {
                 http: reqwest::Client::new(),
                 subscription: subscription.to_string(),
                 base_url: base_url.trim_end_matches('/').to_string(),
                 auth,
-                poll_interval,
             }),
         }
     }
@@ -104,14 +119,23 @@ impl ArmClient {
         AzureError::Api(format!("Azure {desc} -> HTTP {status}: {detail}"))
     }
 
-    /// Poll an Azure-AsyncOperation URL until Succeeded/Failed/Canceled.
+    /// Poll an Azure-AsyncOperation URL until Succeeded/Failed/Canceled, at
+    /// the interval each answer's `Retry-After` names.
     pub(super) async fn poll_async_operation(
         &self,
         url: &str,
         desc: &str,
     ) -> Result<(), AzureError> {
         loop {
-            let body = self.get(url, &format!("poll {desc}")).await?;
+            let response = self.send(reqwest::Method::GET, url, None).await?;
+            if !response.status().is_success() {
+                return Err(Self::api_error(response, &format!("poll {desc}")).await);
+            }
+            let wait = retry_after(&response, desc);
+            let text = response.text().await?;
+            let body: Value = serde_json::from_str(&text).map_err(|err| {
+                AzureError::Api(format!("Azure poll {desc} -> invalid JSON: {err}"))
+            })?;
             let status = body.get("status").and_then(Value::as_str).unwrap_or("");
             match status {
                 "Succeeded" => return Ok(()),
@@ -124,17 +148,18 @@ impl ArmClient {
                         format!("{code} {message}").trim()
                     )));
                 }
-                _ => tokio::time::sleep(self.inner.poll_interval).await,
+                _ => tokio::time::sleep(wait?).await,
             }
         }
     }
 
-    /// Poll a Location header URL until it stops returning 202.
+    /// Poll a Location header URL until it stops returning 202, at the
+    /// interval each `202` answer's `Retry-After` names.
     pub(super) async fn poll_location(&self, url: &str, desc: &str) -> Result<(), AzureError> {
         loop {
             let response = self.send(reqwest::Method::GET, url, None).await?;
             if response.status() == reqwest::StatusCode::ACCEPTED {
-                tokio::time::sleep(self.inner.poll_interval).await;
+                tokio::time::sleep(retry_after(&response, desc)?).await;
                 continue;
             }
             if !response.status().is_success() {

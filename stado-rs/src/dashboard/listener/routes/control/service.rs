@@ -53,7 +53,12 @@ impl Dashboard {
         let store = match service_beacon_store().await {
             Ok(store) => store,
             Err(message) => {
-                return service_failure(http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "SERVICE_STATUS_FAILED", message, true)
+                return service_failure(
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                    "SERVICE_STATUS_FAILED",
+                    message,
+                    true,
+                )
             }
         };
         let rows = match service::find_services(&store, name).await {
@@ -94,7 +99,12 @@ impl Dashboard {
         let services = match declared_services_matching(name).await {
             Ok(services) => services,
             Err(message) => {
-                return service_failure(http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "SERVICE_RESTART_FAILED", message, true)
+                return service_failure(
+                    http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+                    "SERVICE_RESTART_FAILED",
+                    message,
+                    true,
+                )
             }
         };
         if services.is_empty() {
@@ -194,7 +204,10 @@ async fn declared_services_matching(name: &str) -> Result<Vec<service::ManagedSe
 }
 
 fn service_success(result: Value) -> Response {
-    send_json(http_status(reqwest::StatusCode::OK), &json!({"ok": true, "result": result}))
+    send_json(
+        http_status(reqwest::StatusCode::OK),
+        &json!({"ok": true, "result": result}),
+    )
 }
 
 fn service_failure(
@@ -217,7 +230,12 @@ fn service_failure(
 }
 
 fn invalid_service_request(message: impl Into<String>) -> Response {
-    service_failure(http_status(reqwest::StatusCode::BAD_REQUEST), "INVALID_REQUEST", message, false)
+    service_failure(
+        http_status(reqwest::StatusCode::BAD_REQUEST),
+        "INVALID_REQUEST",
+        message,
+        false,
+    )
 }
 
 /// Exactly one canonical target and, optionally, one managed binary. Unknown,

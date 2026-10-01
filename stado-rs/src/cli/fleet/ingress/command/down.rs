@@ -33,8 +33,8 @@ pub async fn down() -> Result<bool, String> {
             ingress.pid_hint.machine
         ));
     }
-    let tunnel_stopped = terminate_group(ingress.pid_hint.tunnel_pgid, "cloudflared");
-    let listener_stopped = terminate_group(ingress.pid_hint.listener_pgid, "dashboard");
+    let tunnel_stopped = terminate_group(ingress.pid_hint.tunnel_pgid, "cloudflared")?;
+    let listener_stopped = terminate_group(ingress.pid_hint.listener_pgid, "dashboard")?;
     store.delete_blob(INGRESS_PATH).await.map_err(|exc| {
         format!("both processes were stopped but {INGRESS_PATH} could not be removed: {exc}")
     })?;
@@ -42,7 +42,7 @@ pub async fn down() -> Result<bool, String> {
     println!(
         "  tunnel:   {}",
         if tunnel_stopped {
-            format!("stopped (pgid {})", ingress.pid_hint.tunnel_pgid)
+            format!("signalled (pgid {})", ingress.pid_hint.tunnel_pgid)
         } else {
             "was not running".to_string()
         }
@@ -51,7 +51,7 @@ pub async fn down() -> Result<bool, String> {
         "  listener: {}",
         if listener_stopped {
             format!(
-                "stopped (pgid {}, port {})",
+                "signalled (pgid {}, port {})",
                 ingress.pid_hint.listener_pgid, ingress.listener_port
             )
         } else {

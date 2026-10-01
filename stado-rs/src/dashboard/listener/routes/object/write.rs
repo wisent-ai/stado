@@ -30,7 +30,10 @@ impl Dashboard {
             .split_once('?')
             .unwrap_or((request.path.as_str(), ""));
         if path != "/api/object" {
-            return Some(empty_response(http_status(reqwest::StatusCode::NOT_FOUND), "Not Found"));
+            return Some(empty_response(
+                http_status(reqwest::StatusCode::NOT_FOUND),
+                "Not Found",
+            ));
         }
         let object = match object_from_query(query) {
             Ok(object) => object,
@@ -204,7 +207,12 @@ impl Dashboard {
         };
         let metadata = match merged_object_metadata(object, &content_type, &extra) {
             Ok(metadata) => metadata,
-            Err(error) => return Ok(send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": error}))),
+            Err(error) => {
+                return Ok(send_json(
+                    http_status(reqwest::StatusCode::BAD_REQUEST),
+                    &json!({"error": error}),
+                ))
+            }
         };
         if if_absent {
             let mut source = tempfile::NamedTempFile::new()?;

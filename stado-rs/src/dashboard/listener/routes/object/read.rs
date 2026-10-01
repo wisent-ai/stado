@@ -148,7 +148,10 @@ impl Dashboard {
                 "metadata": blob.metadata,
             }));
         }
-        Ok(send_json(http_status(reqwest::StatusCode::OK), &json!({"objects": response})))
+        Ok(send_json(
+            http_status(reqwest::StatusCode::OK),
+            &json!({"objects": response}),
+        ))
     }
 
     pub(crate) async fn stat_object(&self, query: &str) -> Result<Response, DashboardError> {

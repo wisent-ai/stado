@@ -134,9 +134,9 @@ pub struct ServiceConsumer {
 #[serde(deny_unknown_fields)]
 pub struct ResolverConfig {
     pub api_bind: String,
-    #[serde(default = "default_refresh_seconds")]
+    /// Seconds between directory refreshes, as the registry declares them.
     pub refresh_seconds: u64,
-    #[serde(default = "default_max_stale_seconds")]
+    /// Seconds a held directory stays fresh, as the registry declares them.
     pub max_stale_seconds: u64,
     pub adapters: Vec<ResolverAdapter>,
 }
@@ -147,10 +147,6 @@ pub struct ResolverAdapter {
     pub service: String,
     pub bind: String,
     pub consumer: String,
-    #[serde(default = "default_adapter_idle_seconds")]
-    pub idle_seconds: u64,
-    #[serde(default = "default_adapter_connect_seconds")]
-    pub connect_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,39 +158,4 @@ pub struct ResolvedService {
     pub ssh: Option<String>,
     pub ssh_fallbacks: Vec<crate::targets::SshConnectionPath>,
     pub capabilities: Vec<String>,
-}
-
-fn default_refresh_seconds() -> u64 {
-    5
-}
-
-fn default_max_stale_seconds() -> u64 {
-    60
-}
-
-/// Short enough that retained sockets stay bounded: two directory-freshness
-/// windows.
-///
-/// A request/response connection sends nothing in either direction while the
-/// service works, so this window is also a cap on how long a proxied service may
-/// take to answer. Model dispatch legitimately exceeds two minutes, and raising
-/// this default to cover it tripled retention for every adapter on the fleet --
-/// which exhausted the resolver's file descriptors and took the whole local data
-/// plane down with `Too many open files`. The long window belongs on the
-/// adapters that need it, declared per adapter in the registry, not on
-/// everything.
-fn default_adapter_idle_seconds() -> u64 {
-    default_max_stale_seconds().saturating_add(default_max_stale_seconds())
-}
-
-/// Budget for the first upstream byte on a freshly proxied connection.
-///
-/// Establishment is the one window where `idle_seconds` cannot help: nothing
-/// has flowed yet, so a dead backend would otherwise hold the client until the
-/// idle window lapses. Ten seconds is generous for a healthy TCP connect plus
-/// SSH channel open, and adapters fronting a service that legitimately answers
-/// slowly declare a larger budget per adapter, the same way they declare
-/// `idle_seconds`.
-fn default_adapter_connect_seconds() -> u64 {
-    10
 }

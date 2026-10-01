@@ -26,7 +26,10 @@ impl Dashboard {
             if matches!(path, "/api/machine/submit" | "/api/machine/cancel") {
                 return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
             }
-            return send_json(http_status(reqwest::StatusCode::FORBIDDEN), &json!({"error": "forbidden"}));
+            return send_json(
+                http_status(reqwest::StatusCode::FORBIDDEN),
+                &json!({"error": "forbidden"}),
+            );
         }
         // Enrollment by invite: authorized by the invite token alone, before
         // any operator authorization is reached, and never by it.
@@ -107,7 +110,10 @@ impl Dashboard {
                 match authorize_service(request, service, "restart").await {
                     Ok(true) => {}
                     Ok(false) => {
-                        return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"}))
+                        return send_json(
+                            http_status(reqwest::StatusCode::UNAUTHORIZED),
+                            &json!({"error": "unauthorized"}),
+                        )
                     }
                     Err(()) => {
                         return send_json(

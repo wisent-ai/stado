@@ -39,12 +39,10 @@
 //! choose.
 //!
 //! One step per file, in the order the command takes them: `publish/` holds
-//! the edge, the record and the proof, `publish/verification.rs` the wait,
+//! the edge, the record and the proof, `publish/verification.rs` the proof,
 //! `planning.rs` the DNS half read without writing, `retract.rs` the reverse
 //! for `stado web remove`, and `cloudflare.rs` the other edge's refusal. The
 //! constants below are the vocabulary all of them share.
-
-use std::time::Duration;
 
 use super::CmdError;
 
@@ -76,20 +74,6 @@ const REGISTRAR_CREDENTIAL: &str = "namecheap_auto";
 /// The header a Vercel edge stamps on every response it serves. Its presence
 /// is the one unambiguous proof that a hostname has not moved to the fleet.
 const VERCEL_HEADER: &str = "x-vercel-id";
-
-/// How long the hostname is given to answer over TLS from the edge.
-///
-/// Three things happen inside this window, in order: the previous record's
-/// TTL expires, the new record propagates, and Let's Encrypt answers a
-/// challenge it delivers to the edge over the record that just moved. The
-/// record this command writes carries [`RECORD_TTL`], but the one that governs
-/// the wait is whatever TTL the *previous* record carried, and a first-time
-/// issuance adds its own. Five minutes covers all three; beyond that something
-/// is wrong and saying so beats waiting.
-const VERIFY_BUDGET: Duration = Duration::from_secs(300);
-
-/// Gap between verification attempts.
-const VERIFY_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) async fn route(name: &str, check: bool, json: bool) -> Result<(), CmdError> {
     let declared = super::product(name)?;
