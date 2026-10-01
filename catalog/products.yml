@@ -45,12 +45,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:02Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: jeden
   name: Jeden
   status: active
@@ -122,12 +117,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: brama
   name: Brama
   status: active
@@ -168,12 +158,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   service:
     installable: true
     program: $HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec
@@ -256,12 +241,7 @@ products:
     - com.wisent.compute.service.weles-release-cutover
   approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   dependencies:
   - product: brama
     surface: service
@@ -311,12 +291,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   service:
     installable: true
     unit: com.wisent.skarbiec
@@ -381,12 +356,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: stado
   name: Stado
   status: active
@@ -482,12 +452,7 @@ products:
     bundle_path: desktop/StadoDesktop/.build/Stado.app
   approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   service:
     installable: true
     unit: com.wisent.stado
@@ -584,12 +549,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:05Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: echo
   name: Echo
   status: active
@@ -622,12 +582,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:05Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: probierz
   name: Probierz
   status: active
@@ -671,12 +626,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:05Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   service:
     installable: true
     unit: com.wisent.probierz
@@ -730,12 +680,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:06Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   dependencies:
   - product: tama
     surface: cli
@@ -774,12 +719,7 @@ products:
     - byk
   approved_by: operator
   approved_at: '2026-09-02T19:53:06Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: las
   name: Las
   status: active
@@ -843,12 +783,7 @@ products:
     - las-mcp
   approved_by: operator
   approved_at: '2026-09-02T19:53:06Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: skrzynka
   name: Skrzynka
   status: active
@@ -906,12 +841,7 @@ products:
     - com.wisent.always-on.skrzynka
   approved_by: operator
   approved_at: '2026-09-02T19:53:07Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: oko
   name: Oko
   status: active
@@ -971,12 +901,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:07Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   service:
     installable: true
     unit: com.wisent.oko
@@ -1035,12 +960,7 @@ products:
     manifest: .wisent-desktop-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: transcript-lake
   name: Transcript Lake
   status: active
@@ -1077,12 +997,7 @@ products:
     manifest: .wisent-release.json
   approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
   service:
     installable: true
     unit: com.wisent.transcript-lake
@@ -1095,10 +1010,9 @@ products:
     retired_units:
     - com.wisent.compute.service.transcript-lake
     - com.wisent.transcript-lake-stream
-    # An hourly python3 scrub an agent installed by hand on 2026-08-31; the
-    # operator's answer was that tokens in transcripts are not a problem
-    # (~/agents/policy.md, "Secrets in transcripts and logs are not an
-    # incident"), so its work is retired, not moved into this process.
+    # A hand-installed hourly secret scrub; secrets in transcripts are not
+    # an incident by policy, so its work is retired, not moved into this
+    # process.
     - com.wisent.transcript-lake-secret-scrub
 - id: kronika
   name: Kronika
@@ -1137,12 +1051,7 @@ products:
     - kronika
   approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
-  approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
-    zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
-    5. Skarbiec 6. Most 7. Stado 8. Lem 9. Echo 10. Probierz 11. Tama 12. Byk 13.
-    Las 14. Skrzynka 15. Oko 16. Singularity 17. Transcript Lake 18. Kronika", then
-    at 21:12:48Z: "dobra to dodaj to wszystko tam. pamietaj o tym zeby dodac zarowno
-    cli jak i aplikacje desktopowa".'
+  approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
 - id: spis
   name: Spis
   status: active
