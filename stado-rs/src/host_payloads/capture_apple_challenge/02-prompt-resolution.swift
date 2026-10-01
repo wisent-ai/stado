@@ -158,68 +158,115 @@ var clickedAllow = false
 var clickedDone = false
 var code = ""
 var errorMessage: String?
+var verifiedPid: pid_t?
+var captureFailure: Error?
+var observedPids: Set<pid_t> = []
+var observers: [AXObserver] = []
+
+// One look at the Apple prompts on screen. True when the run has its answer:
+// the code, or a failure that names what was seen.
+func examinePrompts() -> Bool {
+  do {
+    let snapshots = promptSnapshots()
+
+    if clickAllow && !clickedAllow {
+      let allowPrompts = snapshots.filter(isAppleTrustedDeviceAllowPrompt)
+      if allowPrompts.count > 1 {
+        throw CaptureFailure.message("multiple Apple trusted-device Allow prompts are visible")
+      }
+      if let allowPrompt = allowPrompts.first {
+        let label = try pressUniqueButton(
+          in: allowPrompt,
+          labels: ["Allow"],
+          actionName: "Allow"
+        )
+        clicked.append(label)
+        clickedAllow = true
+        verifiedPid = allowPrompt.target.pid
+      }
+    }
+
+    let codePrompts = snapshots.filter(isAppleVerificationCodePrompt)
+    if codePrompts.count > 1 {
+      throw CaptureFailure.message("multiple Apple verification-code prompts are visible")
+    }
+    if let codePrompt = codePrompts.first {
+      if let verifiedPid, codePrompt.target.pid != verifiedPid {
+        throw CaptureFailure.message("Apple verification code appeared in a different process")
+      }
+      let candidates = sixDigitCodes(codePrompt.text)
+      if candidates.count > 1 {
+        throw CaptureFailure.message("Apple verification prompt contains multiple six-digit codes")
+      }
+      if let capturedCode = candidates.first {
+        code = capturedCode
+        if clickDone,
+           let label = try? pressUniqueButton(
+             in: codePrompt,
+             labels: ["Done", "OK"],
+             actionName: "Done/OK"
+           ) {
+          clicked.append(label)
+          clickedDone = true
+        }
+        return true
+      }
+    }
+    observePromptProcesses()
+    return false
+  } catch {
+    captureFailure = error
+    return true
+  }
+}
+
+// Accessibility tells this helper when a watched process creates a window or
+// changes what it shows; each notice is one more look at the prompts.
+let promptChanged: AXObserverCallback = { _, _, _, _ in
+  if examinePrompts() { CFRunLoopStop(CFRunLoopGetMain()) }
+}
+
+func observePromptProcesses() {
+  for target in processTargets() where !observedPids.contains(target.pid) {
+    var observer: AXObserver?
+    guard AXObserverCreate(target.pid, promptChanged, &observer) == .success, let observer else {
+      continue
+    }
+    let app = AXUIElementCreateApplication(target.pid)
+    for notification in [
+      kAXWindowCreatedNotification,
+      kAXFocusedWindowChangedNotification,
+      kAXFocusedUIElementChangedNotification,
+      kAXValueChangedNotification,
+      kAXTitleChangedNotification,
+    ] {
+      AXObserverAddNotification(observer, app, notification as CFString, nil)
+    }
+    CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+    observers.append(observer)
+    observedPids.insert(target.pid)
+  }
+}
 
 if !trusted {
   errorMessage = "Accessibility permission is not granted"
 } else {
-  do {
-    let deadline = Date().addingTimeInterval(waitSeconds)
-    var verifiedPid: pid_t?
-
-    while code.isEmpty && Date() < deadline {
-      let snapshots = promptSnapshots()
-
-      if clickAllow && !clickedAllow {
-        let allowPrompts = snapshots.filter(isAppleTrustedDeviceAllowPrompt)
-        if allowPrompts.count > 1 {
-          throw CaptureFailure.message("multiple Apple trusted-device Allow prompts are visible")
-        }
-        if let allowPrompt = allowPrompts.first {
-          let label = try pressUniqueButton(
-            in: allowPrompt,
-            labels: ["Allow"],
-            actionName: "Allow"
-          )
-          clicked.append(label)
-          clickedAllow = true
-          verifiedPid = allowPrompt.target.pid
-        }
+  // No clock decides when to give up: the run ends when the code is read or a
+  // prompt shows something this helper refuses. A process that appears later
+  // (the Apple prompt agents start on demand) is picked up on launch.
+  if !examinePrompts() {
+    let center = NSWorkspace.shared.notificationCenter
+    for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didActivateApplicationNotification] {
+      center.addObserver(forName: name, object: nil, queue: .main) { _ in
+        if examinePrompts() { CFRunLoopStop(CFRunLoopGetMain()) }
       }
-
-      let codePrompts = snapshots.filter(isAppleVerificationCodePrompt)
-      if codePrompts.count > 1 {
-        throw CaptureFailure.message("multiple Apple verification-code prompts are visible")
-      }
-      if let codePrompt = codePrompts.first {
-        if let verifiedPid, codePrompt.target.pid != verifiedPid {
-          throw CaptureFailure.message("Apple verification code appeared in a different process")
-        }
-        let candidates = sixDigitCodes(codePrompt.text)
-        if candidates.count > 1 {
-          throw CaptureFailure.message("Apple verification prompt contains multiple six-digit codes")
-        }
-        if let capturedCode = candidates.first {
-          code = capturedCode
-          if clickDone,
-             let label = try? pressUniqueButton(
-               in: codePrompt,
-               labels: ["Done", "OK"],
-               actionName: "Done/OK"
-             ) {
-            clicked.append(label)
-            clickedDone = true
-          }
-          break
-        }
-      }
-
-      Thread.sleep(forTimeInterval: 0.2)
     }
-
+    CFRunLoopRun()
+  }
+  do {
+    if let captureFailure { throw captureFailure }
     guard !code.isEmpty else {
-      throw CaptureFailure.message(
-        "expected one Apple verification-code prompt with one code before the deadline"
-      )
+      throw CaptureFailure.message("the run ended without an Apple verification code")
     }
     try writeOwnerOnlyCode(code, to: outputFile)
   } catch CaptureFailure.message(let message) {

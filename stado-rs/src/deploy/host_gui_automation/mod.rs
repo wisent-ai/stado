@@ -36,7 +36,7 @@ pub const CUA_DRIVER_ARCHIVE_SHA256: &str =
 pub const CUA_DRIVER_ARCHIVE_URL: &str = "https://github.com/trycua/cua/releases/download/\
     cua-driver-rs-v0.23.2/cua-driver-rs-0.23.2-darwin-universal.tar.gz";
 
-pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "2";
+pub const APPLE_CHALLENGE_HELPER_VERSION: &str = "3";
 pub const APPLE_CHALLENGE_HELPER: &str = "/usr/local/libexec/stado-apple-challenge-capture";
 const APPLE_CHALLENGE_HELPER_BUNDLE_ID: &str = "com.wisent.stado.apple-challenge-capture";
 const APPLE_CHALLENGE_HELPER_SOURCE: &str = concat!(

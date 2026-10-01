@@ -2,22 +2,17 @@ use super::*;
 
 /// Capture one Apple trusted-device code inside the verified GUI user's Aqua
 /// session. The code exists only in an owner-only file on that host and in the
-/// returned in-memory value; diagnostics never include it.
+/// returned in-memory value; diagnostics never include it. The helper answers
+/// when the code prompt appears or a prompt it refuses does; no clock ends it.
 pub async fn capture_apple_challenge(
     target: &ComputeTarget,
     expected_user: &str,
     capture_id: &str,
-    wait_seconds: u64,
     password: Option<&str>,
     runner: &Runner,
 ) -> Result<String, DeployError> {
     safe_identity(expected_user, "GUI user")?;
     safe_identity(capture_id, "Apple challenge capture id")?;
-    if !(1..=90).contains(&wait_seconds) {
-        return Err(DeployError(
-            "Apple challenge wait must be between 1 and 90 seconds".to_string(),
-        ));
-    }
     let session = preflight_apple_challenge(target, expected_user, password, runner).await?;
     let user = session.user;
     let uid = session.uid;
@@ -55,7 +50,6 @@ pub async fn capture_apple_challenge(
     )
     .await?;
 
-    let wait = wait_seconds.to_string();
     let capture = invoke_in_gui_session(
         target,
         &user,
@@ -66,8 +60,6 @@ pub async fn capture_apple_challenge(
             &output_file,
             "--click-allow",
             "--click-done",
-            "--wait-seconds",
-            &wait,
         ],
         password,
         runner,

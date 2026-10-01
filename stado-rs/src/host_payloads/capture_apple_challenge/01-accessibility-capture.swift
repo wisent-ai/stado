@@ -4,7 +4,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-let helperVersion = "2"
+let helperVersion = "3"
 let arguments = CommandLine.arguments
 if arguments.contains("--version") {
   print("stado-apple-challenge-capture \(helperVersion)")
@@ -38,7 +38,6 @@ func validatedOutputFile() -> String {
 let outputFile = preflightOnly ? "" : validatedOutputFile()
 let clickAllow = arguments.contains("--click-allow")
 let clickDone = arguments.contains("--click-done")
-let waitSeconds = min(max(Double(argumentValue("--wait-seconds") ?? "120") ?? 120, 1), 120)
 let maxDepth = 12
 let pidArgs: [pid_t] = arguments.enumerated().compactMap { index, value in
   guard value == "--pid", arguments.indices.contains(index + 1) else { return nil }

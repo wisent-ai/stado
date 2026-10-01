@@ -130,7 +130,6 @@ pub async fn relay_apple_challenge(
         holder_target,
         holder_user,
         &authorization_id,
-        90,
         password.as_deref(),
         &runner,
     )
