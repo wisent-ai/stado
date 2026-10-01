@@ -10,7 +10,9 @@ pub use publishers::*;
 pub const ACTIVE_RELEASE_PUBLISHERS: &[&str] = &[
     "brama",
     "compute-marketplace",
+    "film",
     "image-video-router",
+    "obraz",
     "oko",
     "skarbiec",
     "stado",

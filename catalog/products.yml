@@ -1756,3 +1756,48 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
+- id: film
+  name: Film
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/film
+  description: 'Film renders a Wisent video: one service that owns which renderer
+    does it, what that renderer is asked for, who owns the identifier that comes back,
+    and what still rendering means.'
+  roadmap: []
+  integrations:
+  - product: brama
+    description: Vendor-hosted video models are Brama's (video-model); Film holds the
+      creators' renderers behind one surface.
+    source: film/README.md
+  evidence:
+  - wisent-ai/film/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/film
+  - kind: service
+    repository: wisent-ai/film
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/film
+    manifest: Cargo.toml
+    binaries:
+    - film
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/film
+    manifest: .wisent-release.json
+  service:
+    installable: true
+    unit: com.wisent.film
+    program: $HOME/.stado/services/film/current/$STADO_PLATFORM/bin/start
+    args: []
+    summary: The one Film process per host; renderers reached with the keys the
+      deployment's environment file carries, held reads on GET /v1/videos/{id}?wait=terminal.
+    retired_units: []
+  dependencies:
+  - product: skarbiec
+    surface: service
+    for_surface: service
