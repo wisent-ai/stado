@@ -14,8 +14,11 @@ use crate::targets::ComputeTarget;
 /// Whether `plan`, acted on at `target`, is this machine's own resolver and
 /// this process reads the registry through a resolver adapter.
 fn carries_this_process_route(target: &ComputeTarget, plan: &DeployPlan) -> bool {
-    let hostname = crate::providers::vast::system_hostname();
-    let this_machine = target.hostnames.contains(&hostname);
+    let identity = crate::targets::normalize_hostname(&crate::providers::vast::system_hostname());
+    let this_machine = target
+        .hostnames
+        .iter()
+        .any(|name| crate::targets::normalize_hostname(name) == identity);
     let runs_resolver = plan
         .argv
         .split_whitespace()
