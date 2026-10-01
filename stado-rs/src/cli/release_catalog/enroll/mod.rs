@@ -4,11 +4,10 @@
 //!
 //! A new product used to learn what it needed one refusal at a time: no
 //! publisher (`release_api.publishers declares no publisher`), a build secret
-//! no agent was allowed to read (the job was never claimed), a platform
-//! without post-build tests (every task stayed `awaiting_tests`), each
-//! repaired by hand by whoever hit it, and a service's own bearer was minted
-//! by hand after its first start failed. The manifest states all of it, so
-//! this step reads them from it:
+//! no agent was allowed to read (the job was never claimed), each repaired by
+//! hand by whoever hit it, and a service's own bearer was minted by hand after
+//! its first start failed. The manifest states all of it, so this step reads
+//! them from it:
 //!
 //! 1. the release publisher, through `declare_publisher`, and the publisher
 //!    of every pinned build input Stado cannot read (`publishers.rs`);
@@ -16,11 +15,9 @@
 //!    the workload secret declaration on the vault owner, this host and every
 //!    registry target that builds the platform (`host_grant.rs`), and
 //!    granted to the workload agent in the owner's vault;
-//! 3. the post-build tests each required platform must declare for a build
-//!    to qualify a task, reported by name when missing;
-//! 4. for a product with a `runtime`, its rollout policy in the registry,
+//! 3. for a product with a `runtime`, its rollout policy in the registry,
 //!    created when absent (`rollout.rs`);
-//! 5. `runtime.grants`: the running service's own consumer, named after the
+//! 4. `runtime.grants`: the running service's own consumer, named after the
 //!    product, granted exactly those capabilities on the vault owner, and its
 //!    bearer delivered to every host the product's release policy rolls out
 //!    to (`runtime.rs`).
@@ -49,8 +46,6 @@ mod runtime;
 /// What enrolling one product found and did, step by step.
 pub(crate) struct Enrollment {
     pub steps: Vec<Value>,
-    /// Required platforms that declare no post-build tests.
-    pub untested: Vec<String>,
 }
 
 /// Enroll `manifest`'s product: every step below, in order.
@@ -99,9 +94,7 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
         )));
     }
 
-    let untested = untested_platforms(manifest);
-    steps.push(json!({ "step": "tests", "untested_required_platforms": untested }));
-    Ok(Enrollment { steps, untested })
+    Ok(Enrollment { steps })
 }
 
 /// The operator's ruling of 2026-09-30: web products move to Stado hosting,
@@ -196,17 +189,6 @@ pub(crate) fn missing_programs_refusal(product: &str, missing: &[String]) -> Res
          the checkout holds, and each stage key at a path inside WISENT_OUTPUT_DIR",
         missing.join("; ")
     )))
-}
-
-/// Required platforms whose manifest names no post-build test, so none of
-/// their builds can ever qualify a task.
-pub(super) fn untested_platforms(manifest: &ReleasePipelineManifest) -> Vec<String> {
-    manifest
-        .platforms
-        .iter()
-        .filter(|(_, platform)| platform.required && platform.tests.is_empty())
-        .map(|(name, _)| name.clone())
-        .collect()
 }
 
 /// Declare the product's build secrets for the workload agent and grant them.

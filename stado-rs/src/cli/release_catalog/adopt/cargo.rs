@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::{json, Map, Value};
 
-use super::{fill, Planned, CARGO_BUILD, CARGO_TEST};
+use super::{fill, Planned, CARGO_BUILD};
 use crate::cli::CmdError;
 use crate::release_pipeline::PRODUCT_MANIFEST;
 
@@ -16,9 +16,9 @@ use crate::release_pipeline::PRODUCT_MANIFEST;
 /// declare them.
 const PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-amd64"];
 
-/// The manifest and scripts a Rust checkout is released with: every binary
-/// target is built and staged, the version is read from Cargo.toml, and the
-/// package's own test suite is the post-build test.
+/// The manifest and script a Rust checkout is released with: every binary
+/// target is built and staged and the version is read from Cargo.toml. No
+/// post-build test is declared until the operator approves one.
 pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdError> {
     let package = read(checkout)?;
     if package.name != product {
@@ -37,7 +37,6 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
     let platform = json!({
         "quality": [],
         "build": {"argv": ["bash", "release/build.sh"]},
-        "tests": [{"name": "cargo-test", "argv": ["bash", "release/test.sh"]}],
         "stage": stage,
     });
     let platforms: Map<String, Value> = PLATFORMS
@@ -78,11 +77,6 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
         Planned {
             path: checkout.join("release/build.sh"),
             text: fill(CARGO_BUILD, &values),
-            executable: true,
-        },
-        Planned {
-            path: checkout.join("release/test.sh"),
-            text: fill(CARGO_TEST, &values),
             executable: true,
         },
     ])

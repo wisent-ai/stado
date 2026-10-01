@@ -38,8 +38,7 @@ enum CatalogCommands {
     /// read (declared for and granted to the workload agent), for a service
     /// its rollout policy (created from runtime.port when absent) and its own
     /// consumer with exactly `runtime.grants` and its bearer on every rollout
-    /// target, a check that every required platform declares post-build
-    /// tests, and the product's entry in the release catalog the daily batch
+    /// target, and the product's entry in the release catalog the daily batch
     /// builds from. `build submit` and `release submit` run the same steps
     /// before their first write.
     Enroll {
@@ -58,9 +57,8 @@ enum CatalogCommands {
         json: bool,
     },
     /// Audit Stado's catalog without contacting repository hosts: every declared
-    /// publisher must have a catalog entry, and every catalogued release must
-    /// declare post-build tests on each required platform, or its builds never
-    /// qualify a task. Exits nonzero and names each finding on any refusal.
+    /// publisher must have a catalog entry. Exits nonzero and names each
+    /// finding on any refusal.
     Audit {
         #[arg(long)]
         json: bool,
@@ -222,22 +220,7 @@ async fn enroll_checkout(checkout: &std::path::Path, json: bool) -> Result<(), C
             println!("{}: {step}", manifest.product);
         }
     }
-    untested_refusal(&manifest.product, &enrollment.untested)?;
     sync(checkout, json).await
-}
-
-/// The refusal for required platforms without post-build tests: their builds
-/// pass, and no task they carry can ever be qualified.
-pub(crate) fn untested_refusal(product: &str, untested: &[String]) -> Result<(), CmdError> {
-    if untested.is_empty() {
-        return Ok(());
-    }
-    Err(CmdError::click(format!(
-        "{product}: required platform(s) {} declare no post-build tests, so no build of them can \
-         qualify a task (it stays awaiting_tests); add a `tests` list of real product journeys to \
-         each in .wisent-release.json",
-        untested.join(", ")
-    )))
 }
 
 pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {

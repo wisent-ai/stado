@@ -1,11 +1,10 @@
 //! What an npm package's own `package.json` says about what it publishes: the
-//! name the release reads (its scope dropped), the version, the paths it ships
-//! (`files`), and its test script. The release is the package's source
-//! bundle, as echo's is: an npm package is not compiled, so the build packs
-//! the shipped paths reproducibly and the post-build test is the package's own
-//! `npm test`. A checkout without a readable `package.json`, a version, a
-//! `files` list or a test script is refused rather than guessed: a release
-//! with no post-build test waits at awaiting_tests forever.
+//! name the release reads (its scope dropped), the version and the paths it
+//! ships (`files`). The release is the package's source bundle, as echo's is:
+//! an npm package is not compiled, so the build packs the shipped paths
+//! reproducibly. A checkout without a readable `package.json`, a version or a
+//! `files` list is refused rather than guessed. The manifest declares no
+//! post-build test: a test is added only once the operator approves it.
 
 use std::path::Path;
 
@@ -75,14 +74,6 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
     for include in [PACKAGE].iter().chain(locks).chain(shipped.iter()) {
         build.extend(["--include", *include]);
     }
-    if !matches!(package["scripts"]["test"].as_str(), Some(script) if !script.trim().is_empty()) {
-        return Err(CmdError::click(format!(
-            "{} declares no scripts.test; a release qualifies only on its post-build test, \
-             so add the package's test script before adopting it",
-            path.display()
-        )));
-    }
-    let tests = json!([{"name": "npm-test", "argv": ["npm", "test"]}]);
     let manifest = json!({
         "schema_version": 1,
         "product": product,
@@ -93,7 +84,6 @@ pub(super) fn files(checkout: &Path, product: &str) -> Result<Vec<Planned>, CmdE
                 "runner_platform": RUNNER,
                 "quality": [],
                 "build": {"argv": build},
-                "tests": tests,
                 "stage": {
                     format!("release/{bundle}"): bundle,
                     "release/SOURCE_REVISION": "SOURCE_REVISION"

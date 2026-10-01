@@ -117,10 +117,7 @@ async fn batch_observation(
         return Err(CmdError::click("build batch product mismatch"));
     }
     // Settled means nothing it is built from can change: the run is terminal
-    // and no platform, optional ones included, is still building. The
-    // observation's own state is not the test: a build that passed without
-    // declared post-build tests reads `awaiting_tests` for good, and leaving
-    // those out left half of all batches re-read on every list.
+    // and no platform, optional ones included, is still building.
     let settled = matches!(run.state, BuildRunState::Passed | BuildRunState::Failed)
         && run
             .platforms
@@ -219,16 +216,17 @@ async fn observe(store: &JobStorage, run: &mut BuildRun) -> Result<Observation, 
             result.evidence.push(receipt);
             continue;
         }
-        let complete = !recipe.tests.is_empty()
-            && recipe.tests.iter().all(|test| {
-                let name = format!("test:{}", test.name);
-                let mut recorded = receipt.quality.iter().filter(|step| step.name == name);
-                recorded.next().is_some_and(|step| {
-                    step.argv == test.argv
-                        && step.status == StepStatus::Passed
-                        && step.exit_code == Some(0)
-                }) && recorded.next().is_none()
-            });
+        // A platform qualifies on the tests it declares; one that declares
+        // none (no test the operator approved) qualifies on its build alone.
+        let complete = recipe.tests.iter().all(|test| {
+            let name = format!("test:{}", test.name);
+            let mut recorded = receipt.quality.iter().filter(|step| step.name == name);
+            recorded.next().is_some_and(|step| {
+                step.argv == test.argv
+                    && step.status == StepStatus::Passed
+                    && step.exit_code == Some(0)
+            }) && recorded.next().is_none()
+        });
         if receipt.status == StepStatus::Failed {
             result.state = "failed".into();
             result.failure = Some(format!(

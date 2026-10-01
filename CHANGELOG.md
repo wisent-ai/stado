@@ -19,3 +19,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- Stado carries no tests the operator has not approved with `tama tests approve`: the integration tests, the `stado-source-checks` package, Stado Desktop's test targets, the inline test modules, the recipe's `tests` stages and the post-build qualification in `deploy/release/build_stado.sh` are removed, and `stado release verify-platform`, which only ran those journeys, is gone from the CLI and Stado Desktop.
+- A required platform that declares no post-build test qualifies on its passing build: `stado release changes` no longer leaves it `awaiting_tests`, `stado release catalog enroll` and `audit` no longer refuse it, and `build submit` no longer warns about it. A platform that declares tests still qualifies only on all of them passing.
+- `stado release catalog adopt` writes no test stage and no `release/test.sh`, and `--kind npm` no longer requires `scripts.test`.
+- `stado web smoke` is removed: starting a site and fetching a page is a smoke check, which does not count as a test.

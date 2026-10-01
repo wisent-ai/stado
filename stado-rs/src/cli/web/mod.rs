@@ -124,7 +124,6 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
         WebCommands::Origin(command) => origin::dispatch(command).await,
         WebCommands::Quality { root } => builds::quality(root.as_deref()),
         WebCommands::Build { root } => builds::build(root.as_deref()),
-        WebCommands::Smoke { paths } => builds::smoke(&paths).await,
         WebCommands::Vercel(command) => vercel::dispatch(command).await,
     }
 }

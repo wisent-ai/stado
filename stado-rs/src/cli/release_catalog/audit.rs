@@ -1,13 +1,11 @@
 //! `stado release catalog audit`: every declared publisher checked against
-//! the release catalog, and every catalogued release manifest checked for
-//! required platforms without post-build tests, whose builds pass and never
-//! qualify a task, without contacting repository hosts.
+//! the release catalog, without contacting repository hosts.
 
 use std::collections::BTreeSet;
 
-use crate::release_pipeline::{self, ProductManifest, ReleaseCatalogEntry};
+use crate::release_pipeline::{self, ReleaseCatalogEntry};
 
-use super::{catalog_uri, enroll::untested_platforms, untested_refusal};
+use super::catalog_uri;
 use crate::cli::CmdError;
 
 /// The human-readable form of one audit: the tally on stdout, then every
@@ -62,16 +60,7 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
                 }
                 Ok(entry)
             }) {
-            Ok(entry) if products.insert(entry.product.clone()) => {
-                if let ProductManifest::Release(manifest) = &entry.manifest {
-                    if let Err(refusal) =
-                        untested_refusal(&entry.product, &untested_platforms(manifest))
-                    {
-                        failures.push(refusal.to_string());
-                    }
-                }
-                entries.push(entry)
-            }
+            Ok(entry) if products.insert(entry.product.clone()) => entries.push(entry),
             Ok(entry) => failures.push(format!("duplicate catalog product {}", entry.product)),
             Err(error) => failures.push(format!("{uri}: {error}")),
         }
@@ -93,7 +82,7 @@ pub(super) async fn audit(json: bool) -> Result<(), CmdError> {
         Ok(())
     } else {
         Err(CmdError::click(
-            "release catalog audit refused malformed, duplicate, silent or untested entries",
+            "release catalog audit refused malformed, duplicate or silent entries",
         ))
     }
 }

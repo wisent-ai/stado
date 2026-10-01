@@ -25,7 +25,6 @@ const MANIFEST: &str = include_str!("templates/manifest.json");
 const BUILD: &str = include_str!("templates/build.sh");
 const QUALITY: &str = include_str!("templates/quality.sh");
 const CARGO_BUILD: &str = include_str!("templates/cargo-build.sh");
-const CARGO_TEST: &str = include_str!("templates/cargo-test.sh");
 
 #[derive(Clone, Copy, ValueEnum)]
 pub(super) enum Kind {
@@ -34,7 +33,7 @@ pub(super) enum Kind {
     /// A Rust package whose root `Cargo.toml` declares the binaries it ships.
     Cargo,
     /// An npm package whose `package.json` declares the files it publishes;
-    /// the release is its source bundle and its own `npm test`.
+    /// the release is its source bundle.
     Npm,
 }
 
