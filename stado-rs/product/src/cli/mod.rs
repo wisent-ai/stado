@@ -86,6 +86,7 @@ pub fn augment(command: Command) -> Command {
                 .arg(clap::Arg::new("output").long("output").required(true).help("The .tar.gz written")),
         )
         .subcommand(native::swift())
+        .subcommand(native::surface())
         .subcommand(native::documentation())
         .subcommand(
             Command::new("changelog")
@@ -201,6 +202,7 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
             &arguments,
         ),
         "swift" => crate::native::run(arguments, &runtime),
+        "surface" => crate::surface::run(&arguments, &runtime),
         "documentation" => {
             let (action, arguments) = arguments
                 .remove_subcommand()

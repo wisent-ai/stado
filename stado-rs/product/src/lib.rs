@@ -22,6 +22,7 @@ mod schedule;
 mod signing;
 mod source;
 mod state;
+mod surface;
 
 /// The committed tree of a revision as plain files, the tree an install
 /// builds; `stado quality check` reads its gates there too.

@@ -203,6 +203,20 @@ pub fn swift() -> Command {
         .arg(forwarded())
 }
 
+pub fn surface() -> Command {
+    Command::new("surface")
+        .about("Refuse a Swift package revision whose version tag disagrees with what it did to the library's public API, as swift api-digester reads it against the released tag")
+        .arg(value(
+            "package-path",
+            "Package directory; defaults to the current directory",
+        ))
+        .arg(value(
+            "module",
+            "The library module to read; defaults to the manifest's single library product",
+        ))
+        .arg(flag("json", "Print the dumps, the digester's diagnosis and the verdict"))
+}
+
 pub fn documentation() -> Command {
     Command::new("documentation")
         .about("Check actual published documentation and GitHub repository policy, or generate a documentation site's search index")
