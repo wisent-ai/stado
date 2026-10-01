@@ -67,7 +67,7 @@ pub async fn run_tick(
     // visible to the assignment + dispatch passes below, instead of waiting a
     // full interval_seconds to be picked up. One malformed or concurrently
     // retired schedule occurrence is not allowed to suppress queue recovery:
-    // on 2026-09-05 a missing Spis run manifest made launchd restart this
+    // a missing run manifest would otherwise make launchd restart this
     // coordinator before it could reap a dead release worker on every tick.
     match fire_due_schedules(store, log, Utc::now()).await {
         Ok(n_fired) if n_fired > 0 => log(&format!("schedules: fired {n_fired} due schedule(s)")),

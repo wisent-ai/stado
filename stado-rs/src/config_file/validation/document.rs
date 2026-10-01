@@ -66,9 +66,9 @@ pub(super) fn storage_backends(root: &Map<String, Value>, problems: &mut Vec<Str
     // returns `None` for. Validation rejected it anyway, because the catalog
     // lookup only skips `null`, so the one decision an operator might have to
     // make about a replica — that this host should not have one — could not be
-    // written down. On 2026-08-30 that host's mis-addressed replication had to
-    // be stopped by pointing the backup at the primary's own store instead, so
-    // the same-store guard would refuse it: a workaround standing in for a
+    // written down, and a mis-addressed replication had to be stopped by
+    // pointing the backup at the primary's own store instead, so the
+    // same-store guard would refuse it: a workaround standing in for a
     // setting that already existed everywhere except here. The primary keeps
     // rejecting empty, because a queue store is required and always was.
     let backup_declared = binding_in(root, primary_field.backup_path)

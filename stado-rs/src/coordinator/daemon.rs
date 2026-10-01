@@ -165,10 +165,10 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
         // declaration, observation and fix, because a tick log is the only
         // place some of these will ever be read.
         //
-        // On 2026-08-30 seven defects of one shape — a declaration nothing
-        // compared against reality — were found and fixed by hand in one
-        // evening, and nothing in the product would have caught the eighth.
-        // This is what catches it.
+        // Defects of one shape — a declaration nothing compares against
+        // reality — get found and fixed by hand one evening at a time, and
+        // nothing in the product catches the next one. This is what catches
+        // it.
         {
             let runner = crate::deploy::production_runner();
             let mut shape = crate::fleet_shape::sweep(&runner).await;

@@ -33,11 +33,11 @@ pub const VAULT_CANDIDATE_TAILS: &[&str] = &[
 /// searches. Stado used to name `$HOME/.stado/skarbiec.vault.json` alone,
 /// while the `skarbiec` CLI defaults to `.local/share/skarbiec`. Two tools on
 /// one machine, two answers, and no way for an operator to see the
-/// disagreement: on 2026-09-05 six `skarbiec set-json` writes went to
-/// `.local/share/skarbiec` and were simultaneously real, `active` on the
-/// host, and invisible to `stado repair stado --step release-verifier`, which read
-/// the other file. That closed the fleet's release publication boundary for
-/// every product until the declarations were retracted.
+/// disagreement: `skarbiec set-json` writes go to `.local/share/skarbiec`
+/// and are simultaneously real, `active` on the host, and invisible to
+/// `stado repair stado --step release-verifier`, which reads the other file.
+/// That closes the fleet's release publication boundary for every product
+/// until the declarations are retracted.
 ///
 /// When two candidates carry the SAME owner identity the machine has no
 /// single authoritative vault, and picking either silently is exactly the
