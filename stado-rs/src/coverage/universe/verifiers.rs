@@ -3,7 +3,6 @@
 
 use async_trait::async_trait;
 
-use crate::config;
 use crate::coverage::{CoverageError, MISSING, PRESENT};
 use crate::queue::JobStorage;
 
@@ -16,9 +15,8 @@ pub trait Verifier: Send + Sync {
 }
 
 /// HEAD against an http(s) URI; optional bearer token for HF/private
-/// (Python `URIExistsVerifier`). status < 400 -> PRESENT, 404 -> MISSING,
-/// 429 -> backoff `COVERAGE_VERIFY_BACKOFF_BASE ** attempt` and retry up to
-/// `COVERAGE_HTTP_RETRY_CAP` times; anything else raises.
+/// (Python `URIExistsVerifier`). status < 400 -> PRESENT, 404 -> MISSING;
+/// anything else, including a 429 rate limit, raises with the status.
 pub struct URIExistsVerifier {
     bearer_token: String,
     client: reqwest::Client,
@@ -36,31 +34,20 @@ impl URIExistsVerifier {
 #[async_trait]
 impl Verifier for URIExistsVerifier {
     async fn check(&self, expected_uri: &str) -> Result<String, CoverageError> {
-        for attempt in 0..config::COVERAGE_HTTP_RETRY_CAP {
-            let mut request = self.client.head(expected_uri);
-            if !self.bearer_token.is_empty() {
-                request = request.header("Authorization", format!("Bearer {}", self.bearer_token));
-            }
-            let response = request.send().await?;
-            let status = response.status().as_u16();
-            if status < 400 {
-                return Ok(PRESENT.to_string());
-            }
-            if status == 404 {
-                return Ok(MISSING.to_string());
-            }
-            if status == 429 {
-                let backoff =
-                    config::COVERAGE_VERIFY_BACKOFF_BASE.pow(u32::try_from(attempt).unwrap_or(31));
-                tokio::time::sleep(std::time::Duration::from_secs(backoff as u64)).await;
-                continue;
-            }
-            // Python re-raises the urllib HTTPError for other statuses.
-            return Err(CoverageError::Other(format!(
-                "HEAD {expected_uri}: HTTP {status}"
-            )));
+        let mut request = self.client.head(expected_uri);
+        if !self.bearer_token.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.bearer_token));
         }
-        Err(format!("HEAD {expected_uri}: retry-cap exceeded").into())
+        let status = request.send().await?.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(MISSING.to_string());
+        }
+        if !status.is_client_error() && !status.is_server_error() {
+            return Ok(PRESENT.to_string());
+        }
+        Err(CoverageError::Other(format!(
+            "HEAD {expected_uri}: HTTP {status}"
+        )))
     }
 }
 

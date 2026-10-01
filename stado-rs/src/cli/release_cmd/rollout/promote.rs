@@ -24,8 +24,7 @@ pub(in crate::cli::release_cmd) async fn promote(
     args: &ReleasePromoteArgs,
     exact_is_noop: bool,
 ) -> Result<(), CmdError> {
-    let mut last_conflict = None;
-    for attempt in 0..3 {
+    {
         let (document, expected_generation) =
             crate::cli::registry::fetch_versioned_document().await?;
         let mut control = release_control::control(&document)?
@@ -97,22 +96,7 @@ pub(in crate::cli::release_cmd) async fn promote(
         let mut updated = document;
         updated[release_control::RELEASE_CONTROL_KEY] = serde_json::to_value(&control)?;
         let stored_generation =
-            match crate::cli::registry::push_document_if(&updated, &expected_generation).await {
-                Ok(generation) => generation,
-                Err(error)
-                    if error
-                        .to_string()
-                        .contains("storage version changed for registry.json") =>
-                {
-                    last_conflict = Some(error);
-                    if attempt < 2 {
-                        tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1)))
-                            .await;
-                    }
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            crate::cli::registry::push_document_if(&updated, &expected_generation).await?;
         let report = json!({
             "product": args.product,
             "version": args.version,
@@ -129,10 +113,8 @@ pub(in crate::cli::release_cmd) async fn promote(
                 args.product, args.version, channel, rollout_generation, control.generation
             );
         }
-        return Ok(());
+        Ok(())
     }
-    Err(last_conflict
-        .unwrap_or_else(|| CmdError::click("release promotion exhausted registry retries")))
 }
 
 pub(crate) async fn promote_for_submit(

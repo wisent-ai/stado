@@ -9,11 +9,10 @@ pub mod daemon;
 pub mod owner_log;
 
 use std::path::Path;
-use std::time::Duration;
 
 use crate::deploy::local_install::unit::InstallPlan;
 use crate::deploy::local_install::LocalOs;
-use crate::deploy::{write_if_changed, CommandOutput, CommandSpec, DeployError, Runner};
+use crate::deploy::{write_if_changed, CommandSpec, DeployError, Runner};
 
 use self::commands::{darwin_commands, linux_commands};
 use self::cron::install_cron_job;
@@ -53,24 +52,7 @@ pub async fn execute_plan(
             echo(&format!("[plist] {verb} {}", path.display()));
             let [bootout, bootstrap, kickstart] = darwin_commands(&plan.label, &path, uid);
             let _ = runner(bootout).await.map_err(DeployError)?;
-            // Retry bootstrap: launchd sporadically rejects a fresh domain
-            // right after bootout (Python:
-            // 5 attempts, 0.5s apart).
-            let mut last: Option<CommandOutput> = None;
-            for attempt in 0..5 {
-                let output = runner(bootstrap.clone()).await.map_err(DeployError)?;
-                let ok = output.ok();
-                last = Some(output);
-                if ok {
-                    break;
-                }
-                if attempt < 4 {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            }
-            let Some(output) = last else {
-                return Err("launchctl did not run".into());
-            };
+            let output = runner(bootstrap).await.map_err(DeployError)?;
             if output.ok() {
                 let _ = runner(kickstart).await.map_err(DeployError)?;
             } else {

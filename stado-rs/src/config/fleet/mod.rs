@@ -61,8 +61,6 @@ pub const SETTLED_SENTINEL_RETIRE_PER_TICK: usize = 100;
 /// After this many submit attempts on the same group_key the orchestrator
 /// marks the tuple UNFIXABLE and stops retrying.
 pub const COVERAGE_ATTEMPT_CAP: i64 = 5;
-/// HTTP 429 backoff base; sleep = COVERAGE_VERIFY_BACKOFF_BASE ** attempt.
-pub const COVERAGE_VERIFY_BACKOFF_BASE: i64 = 2;
 /// Parallel verifier workers. Stays low to avoid HF rate-limit cap
 /// (1000 requests / 300 s default).
 pub const COVERAGE_VERIFY_THREADS: i64 = 4;
@@ -70,5 +68,3 @@ pub const COVERAGE_VERIFY_THREADS: i64 = 4;
 pub const COVERAGE_PROGRESS_LOG_EVERY: i64 = 200;
 /// GCS prefix under BUCKET for per-universe coverage state.
 pub const COVERAGE_STATE_PREFIX: &str = "coverage";
-/// Max retry-loop iterations for verify_request before re-raising 429.
-pub const COVERAGE_HTTP_RETRY_CAP: i64 = 8;
