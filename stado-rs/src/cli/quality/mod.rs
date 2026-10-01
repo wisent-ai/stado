@@ -69,7 +69,7 @@ fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> {
             manifest_path.display()
         )));
     };
-    let recipe = recipe_for_this_host(&manifest.platforms)?;
+    let (platform, recipe) = recipe_for_this_host(&manifest.platforms)?;
     let gates: Vec<QualityGate> = recipe
         .quality
         .iter()
@@ -77,9 +77,16 @@ fn format_gates(root: Option<&str>) -> Result<FormatGates, CmdError> {
         .cloned()
         .collect();
     if gates.is_empty() {
-        return Err(CmdError::click(format!(
-            "{} declares no formatting gate for this platform",
-            manifest_path.display()
+        let declared: Vec<&str> = recipe
+            .quality
+            .iter()
+            .map(|gate| gate.name.as_str())
+            .collect();
+        return Err(CmdError::refused(format!(
+            "{} declares no formatting gate for platform {platform}: its quality gates are [{}]; \
+             add a gate named {FORMAT_GATE} to platforms.{platform}.quality",
+            manifest_path.display(),
+            declared.join(", ")
         )));
     }
     Ok(FormatGates {
@@ -196,21 +203,28 @@ fn git(checkout: &Path, args: &[&str]) -> Result<String, CmdError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// The recipe this host can actually run, or the refusal that says why not.
+/// The platform name and recipe this host can actually run, or the refusal
+/// that says why not.
 fn recipe_for_this_host(
     platforms: &std::collections::BTreeMap<String, PlatformRecipe>,
-) -> Result<&PlatformRecipe, CmdError> {
+) -> Result<(&str, &PlatformRecipe), CmdError> {
     let here =
         crate::cli::fleet::enroll::release_platform(std::env::consts::OS, std::env::consts::ARCH)
             .unwrap_or_default();
-    if let Some(recipe) = platforms.get(here) {
-        return Ok(recipe);
+    if let Some((name, recipe)) = platforms.get_key_value(here) {
+        return Ok((name.as_str(), recipe));
     }
     // rustfmt reads the same source and writes the same bytes on every
     // platform. A product built only for Linux is still formatted here.
-    platforms.values().next().ok_or_else(|| {
-        CmdError::refused("the manifest declares no platform, so it declares no gates".to_string())
-    })
+    platforms
+        .iter()
+        .next()
+        .map(|(name, recipe)| (name.as_str(), recipe))
+        .ok_or_else(|| {
+            CmdError::refused(
+                "the manifest declares no platform, so it declares no gates".to_string(),
+            )
+        })
 }
 
 /// The checking argv turned into the writing one: `--check` removed, and the
