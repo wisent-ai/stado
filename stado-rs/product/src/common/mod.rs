@@ -74,6 +74,35 @@ pub fn stado() -> std::process::Command {
     std::process::Command::new(env::current_exe().unwrap_or_else(|_| PathBuf::from("stado")))
 }
 
+/// One string field of one credential item, read through this build's
+/// `stado credentials get`, so it comes from the store `credentials.store`
+/// selects — Skarbiec or a credential file — rather than from a Skarbiec that
+/// may not be installed. The value stays in memory: it is never logged or
+/// passed on as an argument.
+pub fn credential_field(item: &str, field: &str) -> Result<String> {
+    let output = stado()
+        .args(["credentials", "get", item, "--field", field])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .with_context(|| {
+            format!("stado credentials get {item} --field {field} could not be started")
+        })?;
+    if !output.status.success() {
+        bail!(
+            "stado credentials get {item} --field {field} exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let value = String::from_utf8(output.stdout)?
+        .trim_end_matches(['\r', '\n'])
+        .to_owned();
+    if value.is_empty() {
+        bail!("credential {item}#{field} is empty");
+    }
+    Ok(value)
+}
+
 pub fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }

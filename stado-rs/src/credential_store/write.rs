@@ -132,30 +132,34 @@ pub(crate) async fn list_items_at(
                 .list_items()
                 .await
         }
-        Backend::File { path } => {
-            let document = super::file::file_load(path)?;
-            let types = type_map(&document);
-            let mut items = document
-                .as_object()
-                .into_iter()
-                .flat_map(|values| values.keys())
-                .filter(|id| id.as_str() != TYPE_METADATA)
-                .map(|id| ItemInfo {
-                    id: id.clone(),
-                    item_type: types
-                        .and_then(|values| values.get(id))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    tags: None,
-                    updated_at: None,
-                    deleted: None,
-                    versions: None,
-                })
-                .collect::<Vec<_>>();
-            items.sort_by(|left, right| left.id.cmp(&right.id));
-            Ok(items)
-        }
+        Backend::File { path } => file_items(path),
     }
+}
+
+/// Every item of the file store at `path`, by id, with the type it was
+/// written as.
+pub(crate) fn file_items(path: &std::path::Path) -> Result<Vec<ItemInfo>, SkarbiecError> {
+    let document = super::file::file_load(path)?;
+    let types = type_map(&document);
+    let mut items = document
+        .as_object()
+        .into_iter()
+        .flat_map(|values| values.keys())
+        .filter(|id| id.as_str() != TYPE_METADATA)
+        .map(|id| ItemInfo {
+            id: id.clone(),
+            item_type: types
+                .and_then(|values| values.get(id))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            tags: None,
+            updated_at: None,
+            deleted: None,
+            versions: None,
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(items)
 }
 
 pub async fn write_item_with(

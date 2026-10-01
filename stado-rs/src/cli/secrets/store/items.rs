@@ -1,13 +1,38 @@
 //! Field delivery and its refusals: one item in, one item or one exact string
-//! field out, the visible inventory, and one removal.
+//! field out, the visible inventory, and one removal — against the store
+//! `credentials.store` selects. A file store needs no Skarbiec: these verbs
+//! read and write that file, and only a Skarbiec store builds the store
+//! administrator's client.
 
 use std::io::Read;
+use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
 use crate::cli::{reporting::table, CmdError};
+use crate::credential_store::Backend;
+use crate::skarbiec::Client;
 
-use crate::cli::secrets::store::resolve::unknown;
+use crate::cli::secrets::store::resolve::{client, unknown};
+
+/// Where `stado credentials get|put|ls|rm` act.
+pub(crate) enum Store {
+    File(PathBuf),
+    Skarbiec(Client),
+}
+
+fn refused(error: impl std::fmt::Display) -> CmdError {
+    CmdError::click(error.to_string())
+}
+
+/// The selected store; a Skarbiec store is reached with the store
+/// administrator's grant.
+pub(crate) fn store() -> Result<Store, CmdError> {
+    match crate::credential_store::selected().map_err(refused)? {
+        Backend::File { path } => Ok(Store::File(path)),
+        Backend::Skarbiec { .. } => Ok(Store::Skarbiec(client()?)),
+    }
+}
 
 fn read_value_from_stdin() -> Result<String, CmdError> {
     let mut value = String::new();
@@ -17,7 +42,7 @@ fn read_value_from_stdin() -> Result<String, CmdError> {
 }
 
 pub(crate) async fn put(
-    vault: &crate::skarbiec::Client,
+    store: &Store,
     name: &str,
     item_type: Option<&str>,
 ) -> Result<(), CmdError> {
@@ -36,38 +61,51 @@ pub(crate) async fn put(
         .and_then(Value::as_str)
         .filter(|kind| !kind.trim().is_empty());
     let item_kind = item_type.or(declared).unwrap_or("stado-secret");
-    vault
-        .write_item(name, item_kind, &value)
+    match store {
+        Store::Skarbiec(vault) => vault
+            .write_item(name, item_kind, &value)
+            .await
+            .map_err(refused)?,
+        Store::File(path) => crate::credential_store::write::write_item_at(
+            &Backend::File { path: path.clone() },
+            name,
+            item_kind,
+            &value,
+            &Value::Null,
+        )
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+        .map_err(refused)?,
+    }
     println!("stored credential item {name:?} as {item_kind:?}");
     Ok(())
 }
 
-pub(crate) async fn get(
-    vault: &crate::skarbiec::Client,
-    name: &str,
-    field: Option<&str>,
-) -> Result<(), CmdError> {
+pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Result<(), CmdError> {
     if let Some(field) = field {
-        let raw = vault
-            .read_string(name, field)
-            .await
-            .map_err(|err| CmdError::click(err.to_string()))?
-            .filter(|raw| !raw.is_empty())
-            .ok_or_else(|| {
-                CmdError::click(format!(
-                    "credential item {name:?} has no non-empty string field {field:?}"
-                ))
-            })?;
+        let raw = match store {
+            Store::Skarbiec(vault) => vault.read_string(name, field).await,
+            Store::File(_) => crate::credential_store::read_string(name, field).await,
+        }
+        .map_err(refused)?
+        .filter(|raw| !raw.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "credential item {name:?} has no non-empty string field {field:?}"
+            ))
+        })?;
         println!("{raw}");
         return Ok(());
     }
-    let value = vault.read_item(name).await.map_err(|err| {
-        CmdError::click(format!(
-            "{err}; this store answers per field: name one with --field"
-        ))
-    })?;
+    let value = match store {
+        Store::Skarbiec(vault) => vault.read_item(name).await.map_err(|err| {
+            CmdError::click(format!(
+                "{err}; this store answers per field: name one with --field"
+            ))
+        })?,
+        Store::File(_) => crate::credential_store::read_item(name)
+            .await
+            .map_err(refused)?,
+    };
     if let Some(object) = value.as_object() {
         if let (Some(raw), [_]) = (
             object.get("value").and_then(Value::as_str),
@@ -81,11 +119,12 @@ pub(crate) async fn get(
     Ok(())
 }
 
-pub(crate) async fn ls(vault: &crate::skarbiec::Client, as_json: bool) -> Result<(), CmdError> {
-    let stored = vault
-        .list_items()
-        .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+pub(crate) async fn ls(store: &Store, as_json: bool) -> Result<(), CmdError> {
+    let stored = match store {
+        Store::Skarbiec(vault) => vault.list_items().await,
+        Store::File(path) => crate::credential_store::write::file_items(path),
+    }
+    .map_err(refused)?;
     if as_json {
         println!("{}", serde_json::to_string_pretty(&stored)?);
         return Ok(());
@@ -113,11 +152,18 @@ pub(crate) async fn ls(vault: &crate::skarbiec::Client, as_json: bool) -> Result
     Ok(())
 }
 
-pub(crate) async fn rm(vault: &crate::skarbiec::Client, name: &str) -> Result<(), CmdError> {
-    vault
-        .delete_item(name)
-        .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+pub(crate) async fn rm(store: &Store, name: &str) -> Result<(), CmdError> {
+    match store {
+        Store::Skarbiec(vault) => vault.delete_item(name).await,
+        Store::File(path) => {
+            crate::credential_store::write::delete_item_at(
+                &Backend::File { path: path.clone() },
+                name,
+            )
+            .await
+        }
+    }
+    .map_err(refused)?;
     println!("removed credential item {name:?}");
     Ok(())
 }

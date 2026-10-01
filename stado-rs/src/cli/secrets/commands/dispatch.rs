@@ -12,8 +12,7 @@ use crate::cli::secrets::diagnostics::harvest::harvest;
 use crate::cli::secrets::diagnostics::unlock::try_unlock;
 use crate::cli::secrets::store::grants::{migrate, mint_acquisition_token};
 use crate::cli::secrets::store::inventory::{inspect_host_vault, inspect_vault};
-use crate::cli::secrets::store::items::{get, ls, put, rm};
-use crate::cli::secrets::store::resolve::client;
+use crate::cli::secrets::store::items::{get, ls, put, rm, store};
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
     match command {
@@ -64,11 +63,11 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         } => try_unlock(host.as_deref(), keychain_only).await,
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
         SecretsCommands::Put { name, item_type } => {
-            put(&client()?, &name, item_type.as_deref()).await
+            put(&store()?, &name, item_type.as_deref()).await
         }
-        SecretsCommands::Get { name, field } => get(&client()?, &name, field.as_deref()).await,
-        SecretsCommands::Ls { json } => ls(&client()?, json).await,
-        SecretsCommands::Rm { name } => rm(&client()?, &name).await,
+        SecretsCommands::Get { name, field } => get(&store()?, &name, field.as_deref()).await,
+        SecretsCommands::Ls { json } => ls(&store()?, json).await,
+        SecretsCommands::Rm { name } => rm(&store()?, &name).await,
         SecretsCommands::MintAcquisitionToken {
             consumer,
             item,

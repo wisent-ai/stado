@@ -5,7 +5,6 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 pub fn inside(root: &Path, name: &str) -> Result<PathBuf> {
@@ -96,24 +95,13 @@ pub fn secrets(sources: &[&Value]) -> Result<BTreeMap<String, String>> {
             .split_once('#')
             .filter(|(item, field)| !item.is_empty() && !field.is_empty())
             .with_context(|| format!("{name} <- {coordinate}: expected item#field"))?;
-        // Secret bytes are carried only in memory and the child's environment, never command logs or arguments.
-        let output = Command::new("skarbiec")
-            .args(["get", item, "--field", field])
-            .output()
-            .with_context(|| format!("resolving {name} from {coordinate}"))?;
-        if !output.status.success() {
-            eprintln!(
-                "build secret unavailable: {name} <- {coordinate}: {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            continue;
-        }
-        let value = String::from_utf8(output.stdout)?.trim().to_owned();
-        if value.is_empty() {
-            eprintln!("build secret unavailable: {name} <- {coordinate}: no value");
-        } else {
-            resolved.insert(name, value);
+        // Secret bytes are carried only in memory and the child's environment,
+        // never command logs or arguments; they come from the selected store.
+        match crate::common::credential_field(item, field) {
+            Ok(value) => {
+                resolved.insert(name, value);
+            }
+            Err(error) => eprintln!("build secret unavailable: {name} <- {coordinate}: {error:#}"),
         }
     }
     Ok(resolved)

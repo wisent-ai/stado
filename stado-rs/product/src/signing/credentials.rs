@@ -9,7 +9,6 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 pub struct Credentials {
@@ -21,19 +20,9 @@ pub struct Credentials {
 }
 
 fn secret(item: &str, field: &str) -> Result<String> {
-    // Secret stdout stays in memory; the general command recorder must not receive it.
-    let result = Command::new("skarbiec")
-        .args(["get", item, "--field", field])
-        .stdin(Stdio::null())
-        .output()?;
-    if !result.status.success() {
-        bail!("signing credential {item}#{field}: Skarbiec exited {}; no other identity was attempted", result.status);
-    }
-    let value = String::from_utf8(result.stdout)?;
-    if value.trim().is_empty() {
-        bail!("signing credential {item}#{field}: Skarbiec returned no value");
-    }
-    Ok(value)
+    crate::common::credential_field(item, field).with_context(|| {
+        format!("signing credential {item}#{field}; no other identity was attempted")
+    })
 }
 
 fn blocks(text: &str) -> Result<Vec<String>> {
