@@ -29,7 +29,9 @@ extension BackendProvisioner {
 
         let port = stablePort(for: deployment.id)
         let endpoint = "http://127.0.0.1:\(port)"
-        let label = "ai.wisent.stado.deployment.\(deployment.id.lowercased().replacingOccurrences(of: "-", with: ""))"
+        // Stado runs on a host as one process, com.wisent.stado; a deployment
+        // on this Mac is that process with this deployment's storage.
+        let label = Self.stadoUnit
         let launchAgents = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
         try fileManager.createDirectory(at: launchAgents, withIntermediateDirectories: true)
@@ -93,6 +95,7 @@ extension BackendProvisioner {
                     "launchctl print \(target) exited \(probe.status): \(probe.error)"
                 )
             }
+            try await retirePerDeploymentUnits(domain: domain, launchAgents: launchAgents)
             // RunAtLoad starts the one process this install reads readiness from.
             try await run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
         } catch {
@@ -105,5 +108,33 @@ extension BackendProvisioner {
         await onUpdate(.init(phase: "Ready", detail: "This device is running the Stado backend", fraction:
             1))
         return ProvisionedBackend(endpoint: endpoint, region: "This Mac")
+    }
+
+    /// The one unit Stado runs under, as the Stado catalog names it.
+    static let stadoUnit = "com.wisent.stado"
+
+    /// The label prefix earlier releases gave a separate unit per deployment.
+    static let retiredDeploymentPrefix = "ai.wisent.stado.deployment."
+
+    /// Boot out and remove every per-deployment unit an earlier release
+    /// installed, so com.wisent.stado is the only Stado unit this user runs.
+    /// A unit launchd refuses to unload is reported with launchd's words.
+    func retirePerDeploymentUnits(domain: String, launchAgents: URL) async throws {
+        let names = try fileManager.contentsOfDirectory(atPath: launchAgents.path)
+        for name in names where name.hasPrefix(Self.retiredDeploymentPrefix) && name.hasSuffix(".plist") {
+            let label = String(name.dropLast(".plist".count))
+            let probe = try await runStatus("/bin/launchctl", ["print", "\(domain)/\(label)"])
+            switch probe.status {
+            case 0:
+                try await run("/bin/launchctl", ["bootout", "\(domain)/\(label)"])
+            case Self.launchdServiceNotFound:
+                break
+            default:
+                throw BackendProvisioningError.commandFailed(
+                    "launchctl print \(domain)/\(label) exited \(probe.status): \(probe.error)"
+                )
+            }
+            try fileManager.removeItem(at: launchAgents.appendingPathComponent(name))
+        }
     }
 }
