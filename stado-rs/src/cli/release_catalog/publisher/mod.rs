@@ -169,13 +169,9 @@ pub(super) async fn declare_publisher(
             "--apply",
         ];
         let repaired = if client_reads_owner {
-            crate::cli::host::remote_stado_output(
-                owner,
-                &arguments,
-                std::time::Duration::from_secs(600),
-            )
-            .await
-            .map(|_| ())
+            crate::cli::host::remote_stado_output(owner, &arguments)
+                .await
+                .map(|_| ())
         } else {
             let repair = std::process::Command::new(std::env::current_exe()?)
                 .args(arguments)
@@ -194,7 +190,6 @@ pub(super) async fn declare_publisher(
                 let outcome = crate::cli::host::remote_stado_output(
                     declared_host,
                     &["config", "unset", &key],
-                    std::time::Duration::from_secs(60),
                 )
                 .await;
                 retracted.push(match outcome {

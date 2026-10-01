@@ -14,12 +14,6 @@ use crate::cli::CmdError;
 
 use super::{fleet_hosts, this_host};
 
-/// Seconds one host gets to remove the key; a config write is local and quick.
-const UNSET_SECONDS: u64 = 60;
-/// Seconds one verifier reconciliation gets, the bound `declare-publisher`
-/// gives the same repair.
-const REPAIR_SECONDS: u64 = 600;
-
 /// Withdraw `product`'s publisher declaration from the fleet.
 ///
 /// Refuses while the release catalog still holds the product: a catalogued
@@ -54,13 +48,7 @@ pub(crate) async fn withdraw_publisher(
     let mut failures = Vec::new();
     let mut withdrawn = 0usize;
     for host in &hosts {
-        match remote_stado_output(
-            host,
-            &["config", "unset", &key],
-            std::time::Duration::from_secs(UNSET_SECONDS),
-        )
-        .await
-        {
+        match remote_stado_output(host, &["config", "unset", &key]).await {
             Ok(output) => {
                 withdrawn += 1;
                 report.push(json!({ "step": "withdraw", "host": host, "key": key, "result": output.trim() }))
@@ -90,13 +78,7 @@ pub(crate) async fn withdraw_publisher(
             host.as_str(),
             "--apply",
         ];
-        match remote_stado_output(
-            &owner,
-            &arguments,
-            std::time::Duration::from_secs(REPAIR_SECONDS),
-        )
-        .await
-        {
+        match remote_stado_output(&owner, &arguments).await {
             Ok(_) => report.push(json!({ "step": "verifier", "host": host, "ran_on": owner })),
             Err(error) => failures.push(format!(
                 "{host}: release-verifier repair (run on {owner}) failed: {error}"

@@ -24,10 +24,6 @@ mod postgres;
 
 pub(super) use destroy::destroy;
 
-/// How long `place` may run on the placed host: initdb, the certificate and
-/// the unit install together.
-const PLACE_SECONDS: u64 = 600;
-
 pub(super) async fn create(
     name: &str,
     engine: &str,
@@ -49,13 +45,11 @@ pub(super) async fn create(
             line.push_str(&format!(" --port {port}"));
         }
         let arguments: Vec<&str> = line.split_whitespace().collect();
-        let output = crate::cli::host::remote_stado_output(
-            &host,
-            &arguments,
-            std::time::Duration::from_secs(PLACE_SECONDS),
-        )
-        .await
-        .map_err(|error| CmdError::click(format!("{name} was not placed on {host}: {error}")))?;
+        let output = crate::cli::host::remote_stado_output(&host, &arguments)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!("{name} was not placed on {host}: {error}"))
+            })?;
         last_json(&output).ok_or_else(|| {
             CmdError::click(format!(
                 "{name}: stado database place on {host} printed no placement report: {}",

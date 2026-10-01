@@ -88,7 +88,9 @@ pub(crate) async fn remote_config_output(
 }
 
 /// Run the host's own installed Stado with `arguments`, each carried base64
-/// encoded and decoded into its own argv word, and return its output.
+/// encoded and decoded into its own argv word, and return its output. The
+/// command runs until it exits on the host; its exit code and output are the
+/// answer.
 ///
 /// A release client that holds no vault cannot reconcile a verifier: the
 /// reconciliation reads the authoritative publisher items from the vault on
@@ -97,7 +99,6 @@ pub(crate) async fn remote_config_output(
 pub(crate) async fn remote_stado_output(
     target: &str,
     arguments: &[&str],
-    timeout: std::time::Duration,
 ) -> Result<String, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -112,10 +113,9 @@ pub(crate) async fn remote_stado_output(
         words.push(format!("\"$a{index}\""));
     }
     script.push_str(&format!("\"$binary\" {}\n", words.join(" ")));
-    let output = crate::deploy::host_channel::run_script_with_timeout(
+    let output = crate::deploy::host_channel::run_script_to_completion(
         &resolved,
         &script,
-        timeout,
         &crate::deploy::production_runner(),
     )
     .await
