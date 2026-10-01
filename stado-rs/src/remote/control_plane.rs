@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::coordinator::{resolve_providers, run_tick};
-use crate::dashboard::{Dashboard, DashboardError};
+use crate::dashboard::{Dashboard, DashboardError, PreparedListener};
 use crate::providers::local::agent::run_agent;
 use crate::queue::{JobStorage, StorageError};
 
@@ -163,10 +163,17 @@ async fn coordinator_loop(
     }
 }
 
+/// The line a control plane writes to standard error once its API listener is
+/// bound and every daemon it runs has started. Stado Desktop reads the
+/// service log for this line instead of polling `/healthz`; a process that
+/// exits before writing it is reported with its own error log.
+pub const READY_MARKER: &str = "listening=";
+
 /// Single-device Stado control plane used by desktop onboarding (Python
 /// `deploy.local_control_plane.run`): API listener, scheduler, and worker on
 /// this device.
 pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
+    let listener = PreparedListener::bind(host, checked_port(port)?).await?;
     let store = JobStorage::new().await?;
     let coordinator =
         ResidentCoordinator::prepare(CoordinatorMode::Local, store.clone(), interval).await?;
@@ -180,26 +187,23 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
             local_log(&format!("agent exited: {exc}"));
         }
     })?;
-    local_log(&format!("dashboard=http://{host}:{port}"));
-    Dashboard::new(store)
-        .serve_with(host, checked_port(port)?)
-        .await?;
+    local_log(&format!("{READY_MARKER}http://{host}:{port}"));
+    Dashboard::new(store).serve_prepared(listener).await?;
     Ok(())
 }
 
 /// Cloud-hosted Stado coordinator and authenticated API listener (Python
 /// `deploy.cloud_control_plane.run`).
 pub async fn run_cloud(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
+    let listener = PreparedListener::bind(host, checked_port(port)?).await?;
     let store = JobStorage::new().await?;
     let coordinator =
         ResidentCoordinator::prepare(CoordinatorMode::Cloud, store.clone(), interval).await?;
     spawn_daemon("stado-cloud-coordinator", move || coordinator.run())?;
     cloud_log(&format!(
-        "dashboard={host}:{port} storage={}",
+        "{READY_MARKER}{host}:{port} storage={}",
         store.backend_name()
     ));
-    Dashboard::new(store)
-        .serve_with(host, checked_port(port)?)
-        .await?;
+    Dashboard::new(store).serve_prepared(listener).await?;
     Ok(())
 }

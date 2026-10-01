@@ -178,7 +178,7 @@ extension BackendProvisioner {
         let endpoint = "https://\(hostname)"
         await onUpdate(.init(phase: "Checking health", detail: endpoint, fraction:
             0.92))
-        try await waitUntilHealthy(endpoint: endpoint)
+        try await confirmHealthy(endpoint: endpoint)
         await onUpdate(.init(
             phase: "Ready",
             detail: "Amazon Web Services is running this Stado deployment",

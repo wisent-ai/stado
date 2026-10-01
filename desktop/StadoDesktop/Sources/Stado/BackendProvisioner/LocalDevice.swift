@@ -70,6 +70,11 @@ extension BackendProvisioner {
 
         await onUpdate(.init(phase: "Starting Stado", detail: "Installing the per-user control-plane service", fraction:
             0.45))
+        let errorLog = logs.appendingPathComponent("service-error.log")
+        let offset = logOffset(errorLog)
+        if !fileManager.fileExists(atPath: errorLog.path) {
+            fileManager.createFile(atPath: errorLog.path, contents: nil)
+        }
         let domain = "gui/\(getuid())"
         let target = "\(domain)/\(label)"
         do {
@@ -88,15 +93,15 @@ extension BackendProvisioner {
                     "launchctl print \(target) exited \(probe.status): \(probe.error)"
                 )
             }
+            // RunAtLoad starts the one process this install reads readiness from.
             try await run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
-            try await run("/bin/launchctl", ["kickstart", "-k", target])
         } catch {
             throw BackendProvisioningError.commandFailed(error.localizedDescription)
         }
 
         await onUpdate(.init(phase: "Checking health", detail: endpoint, fraction:
             0.75))
-        try await waitUntilHealthy(endpoint: endpoint)
+        try await awaitLocalServiceReady(target: target, log: errorLog, from: offset)
         await onUpdate(.init(phase: "Ready", detail: "This device is running the Stado backend", fraction:
             1))
         return ProvisionedBackend(endpoint: endpoint, region: "This Mac")

@@ -15,7 +15,8 @@ enum BackendProvisioningError: LocalizedError {
     case cliUnavailable
     case unsupportedProvider(String)
     case commandFailed(String)
-    case healthCheckFailed(String)
+    case healthCheckFailed(String, String)
+    case serviceExited(String, String, String)
 
     var errorDescription: String? {
         switch self {
@@ -25,8 +26,12 @@ enum BackendProvisioningError: LocalizedError {
             "Automatic provisioning for \(provider) is not available in this build."
         case let .commandFailed(detail):
             "The control-plane service could not start: \(detail)"
-        case let .healthCheckFailed(endpoint):
-            "The service started but did not become healthy at \(endpoint)."
+        case let .healthCheckFailed(endpoint, detail):
+            "The service at \(endpoint) is not healthy: \(detail)."
+        case let .serviceExited(service, errorLog, state):
+            errorLog.isEmpty
+                ? "\(service) stopped before it was ready (\(state)) and wrote no error output."
+                : "\(service) stopped before it was ready (\(state)):\n\(errorLog)"
         }
     }
 }

@@ -228,7 +228,7 @@ extension BackendProvisioner {
         let endpoint = "https://\(fqdn)"
         await onUpdate(.init(phase: "Checking health", detail: endpoint, fraction:
             0.9))
-        try await waitUntilHealthy(endpoint: endpoint)
+        try await confirmHealthy(endpoint: endpoint)
         await onUpdate(.init(phase: "Ready", detail: "Microsoft Azure is running this Stado deployment", fraction:
             1))
         return ProvisionedBackend(endpoint: endpoint, region: region)
