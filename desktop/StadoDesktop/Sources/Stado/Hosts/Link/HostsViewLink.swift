@@ -86,6 +86,16 @@ extension HostsView {
                     connectionPathsTarget = HostConnectionPathsTarget(host: link.host)
                 }
             )
+            WisentActionButton(
+                action: WisentAction(
+                    "Edit or remove registry declaration…",
+                    symbol: "square.and.pencil",
+                    kind: .secondary,
+                    isEnabled: !declarationStore.mutation.isWorking
+                ) {
+                    declarationTarget = HostDeclarationTarget(host: link.host)
+                }
+            )
             // What this host DIALS, beside the routes that reach it. The two
             // are different questions and only the first had a surface: a
             // marker naming a port the fleet never declared is how a product

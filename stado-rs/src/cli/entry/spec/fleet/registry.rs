@@ -156,6 +156,35 @@ pub(crate) enum RegistryHostCommands {
         #[arg(long, value_parser = parse_release_platform)]
         release_platform: String,
     },
+    /// Change the SSH destination, kind or release platform `add` declared.
+    ///
+    /// Fields `add` does not write are changed with `stado registry set
+    /// --path targets.<host>.<field>`.
+    Edit {
+        host: String,
+        /// New SSH destination ([user@]host[:port]).
+        #[arg(long)]
+        ssh: Option<String>,
+        /// New registry target kind.
+        #[arg(long, value_parser = parse_target_kind)]
+        kind: Option<String>,
+        /// New release platform.
+        #[arg(long, value_parser = parse_release_platform)]
+        release_platform: Option<String>,
+        /// Emit the receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retire HOST from the canonical registry.
+    ///
+    /// Refused while any other registry entry still names HOST; the refusal
+    /// lists those paths.
+    Remove {
+        host: String,
+        /// Emit the receipt as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage ordered SSH connection paths for an existing host.
     Path {
         #[command(subcommand)]

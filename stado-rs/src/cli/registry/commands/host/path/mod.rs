@@ -11,7 +11,10 @@ use serde_json::Value;
 use crate::cli::CmdError;
 use crate::targets;
 
-fn registry_host_index(document: &Value, host: &str) -> Result<(usize, String), CmdError> {
+pub(in crate::cli::registry::commands::host) fn registry_host_index(
+    document: &Value,
+    host: &str,
+) -> Result<(usize, String), CmdError> {
     let name = targets::normalize_hostname(host);
     if name.is_empty() {
         return Err(CmdError::usage("HOST must not be empty"));

@@ -39,6 +39,13 @@ struct HostConnectionPathsTarget: Identifiable {
     var id: String { host }
 }
 
+/// The registry host whose declaration is being edited or removed.
+struct HostDeclarationTarget: Identifiable {
+    let host: String
+
+    var id: String { host }
+}
+
 /// The selected registry target whose durable storage transaction is shown.
 struct StorageReconciliationTarget: Identifiable {
     let host: String
@@ -67,6 +74,8 @@ struct HostsView: View {
     @StateObject var vaultStore = HostVaultStore()
     @StateObject var workloadStore = WorkloadStore()
     @StateObject var repairStore = RepairStore()
+    /// `registry host edit` and `registry host remove` for the selected host.
+    @StateObject var declarationStore = HostDeclarationStore()
     let scope: String
     /// A host another screen sent the operator here to read. Consumed once and
     /// then cleared: after the jump the selection belongs to the operator, not
@@ -90,6 +99,7 @@ struct HostsView: View {
     @State var vaultBearerTarget: HostVaultBearerTarget?
 
     @State var connectionPathsTarget: HostConnectionPathsTarget?
+    @State var declarationTarget: HostDeclarationTarget?
     @State var reconciliationTarget: StorageReconciliationTarget?
     var body: some View {
         WisentScreen(
@@ -198,6 +208,13 @@ struct HostsView: View {
                 linkStore: linkStore,
                 store: connectionPathStore,
                 refresh: { await linkStore.refresh(hosts: [target.host]) }
+            )
+        }
+        .sheet(item: $declarationTarget) { target in
+            HostDeclarationSheet(
+                host: target.host,
+                store: declarationStore,
+                refresh: refresh
             )
         }
         .sheet(item: $reconciliationTarget) { target in

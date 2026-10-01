@@ -31,6 +31,24 @@ pub(super) async fn dispatch(command: RegistryCommands) -> Result<(), CmdError> 
                 kind,
                 release_platform,
             } => registry::host_add(&host, &ssh, &kind, &release_platform).await,
+            RegistryHostCommands::Edit {
+                host,
+                ssh,
+                kind,
+                release_platform,
+                json,
+            } => registry::host_edit(
+                &host,
+                ssh.as_deref(),
+                kind.as_deref(),
+                release_platform.as_deref(),
+                json,
+            )
+            .await
+            .map_err(|error| error.machine_readable(json)),
+            RegistryHostCommands::Remove { host, json } => registry::host_remove(&host, json)
+                .await
+                .map_err(|error| error.machine_readable(json)),
             // A caller that asked for a typed receipt gets a typed
             // refusal: Stado Desktop reads these documents and cannot
             // handle a prose failure where a receipt was promised.
