@@ -84,7 +84,6 @@ extension HostsView {
                 WisentSectionBox(title: read.operation, detail: read.source) {
                     WisentField(label: "Read result", value: read.state, tone: read.complete ? .neutral : .warning)
                     WisentField(label: "Elapsed", value: "\(read.elapsedMs.formatted(.number)) ms")
-                    WisentField(label: "Read budget", value: "\(read.budgetMs.formatted(.number)) ms")
                     WisentField(label: "Finished", value: read.finishedAt)
                     if let detail = read.detail {
                         Text(detail).textSelection(.enabled).font(WisentTypeScale.body())

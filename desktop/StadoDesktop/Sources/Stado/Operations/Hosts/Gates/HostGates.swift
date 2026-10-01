@@ -129,7 +129,6 @@ struct HostDiagnosticRead: Decodable, Sendable, Identifiable {
     let source: String
     let state: String
     let elapsedMs: Double
-    let budgetMs: Double
     let startedAt: String?
     let finishedAt: String
     let detail: String?
@@ -138,7 +137,7 @@ struct HostDiagnosticRead: Decodable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case operation, source, state, detail
-        case elapsedMs = "elapsed_ms", budgetMs = "budget_ms"
+        case elapsedMs = "elapsed_ms"
         case startedAt = "started_at", finishedAt = "finished_at"
     }
 }

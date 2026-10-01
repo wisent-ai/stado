@@ -53,18 +53,10 @@ pub(super) fn claiming_outcome(
             })
             .collect::<Vec<_>>()
             .join("; ");
-        let failure = CmdError::click(format!(
+        return Err(CmdError::click(format!(
             "{} diagnostic is incomplete: {details}",
             gates.host
-        ));
-        if gates
-            .observations
-            .iter()
-            .any(|read| read.state == crate::deploy::host_gates::ReadState::TimedOut)
-        {
-            return Err(failure.stating(crate::primitives::failure::FailureCode::Timeout));
-        }
-        return Err(failure);
+        )));
     }
     if gates.claiming {
         return Ok(());

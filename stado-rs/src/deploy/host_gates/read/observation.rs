@@ -1,24 +1,21 @@
-//! Bound read-only diagnostic I/O and retain which source did not answer.
+//! Read-only diagnostic I/O, retaining which source did not answer and why.
 use std::future::Future;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::Utc;
 use serde::Serialize;
-
-pub const READ_BUDGET: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadState {
     Complete,
-    /// The source answered inside the budget with a bounded window of what
-    /// it holds, and `detail` says how much was read. A verdict is still
-    /// decided from it; what was not read is named, never guessed.
+    /// The source answered with a bounded window of what it holds, and
+    /// `detail` says how much was read. A verdict is still decided from it;
+    /// what was not read is named, never guessed.
     Partial,
     Absent,
     Cached,
     Error,
-    TimedOut,
     Skipped,
 }
 
@@ -30,7 +27,6 @@ pub struct DiagnosticRead {
     pub started_at: Option<String>,
     pub finished_at: String,
     pub elapsed_ms: u128,
-    pub budget_ms: u128,
     pub detail: Option<String>,
 }
 
@@ -50,7 +46,6 @@ impl DiagnosticRead {
             started_at: None,
             finished_at: Utc::now().to_rfc3339(),
             elapsed_ms: 0,
-            budget_ms: READ_BUDGET.as_millis(),
             detail: Some(reason.to_string()),
         }
     }
@@ -63,13 +58,9 @@ pub(crate) async fn observe<T, E: std::fmt::Display>(
 ) -> (Option<T>, DiagnosticRead) {
     let started_at = Utc::now().to_rfc3339();
     let started = Instant::now();
-    let (value, state, detail) = match tokio::time::timeout(READ_BUDGET, read).await {
-        Ok(Ok(value)) => (Some(value), ReadState::Complete, None),
-        Ok(Err(error)) => (None, ReadState::Error, Some(error.to_string())),
-        Err(_) => (None, ReadState::TimedOut, Some(format!(
-            "{operation} did not finish reading {source} within {} seconds; the source's state is unknown",
-            READ_BUDGET.as_secs()
-        ))),
+    let (value, state, detail) = match read.await {
+        Ok(value) => (Some(value), ReadState::Complete, None),
+        Err(error) => (None, ReadState::Error, Some(error.to_string())),
     };
     (
         value,
@@ -80,7 +71,6 @@ pub(crate) async fn observe<T, E: std::fmt::Display>(
             started_at: Some(started_at),
             finished_at: Utc::now().to_rfc3339(),
             elapsed_ms: started.elapsed().as_millis(),
-            budget_ms: READ_BUDGET.as_millis(),
             detail,
         },
     )
