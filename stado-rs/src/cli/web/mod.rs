@@ -31,9 +31,9 @@
 //! public internet reaches a Stado surface through, whether anything outside
 //! this network can resolve them, and what publishes them. A product hostname
 //! and a public origin are separate declarations because they fail separately
-//! — on 2026-09-07 `brama.wisent.com` answered 502 `DNS_HOSTNAME_NOT_FOUND`
-//! at its edge while the release origin answered 503 `dns_unresolved`, and
-//! neither had a declaration anything could refuse or report.
+//! — a product hostname can answer 502 `DNS_HOSTNAME_NOT_FOUND` at its edge
+//! while the release origin answers 503 `dns_unresolved`, and without a
+//! declaration for each there is nothing to refuse or report.
 
 // `builds`, not `build`: .gitignore excludes `build/`, so that folder would be untracked.
 mod builds;
@@ -55,7 +55,7 @@ pub(crate) use plane::{declare, list, mutate_web, product, remove, DeclareReques
 /// NA REPOZYTORIUM. to znaczy com.wisent.stado. i com.wisent.skarbiec").
 pub(crate) const UNIT_DOMAIN: &str = "com.wisent";
 
-/// The domain web units were labelled under until 2026-09-30. `stado web
+/// The domain web units used to be labelled under. `stado web
 /// deploy` retires `com.wisent.web.<product>` before it starts the product's
 /// one unit, which binds the same port.
 pub(crate) const FORMER_UNIT_DOMAIN: &str = "com.wisent.web";

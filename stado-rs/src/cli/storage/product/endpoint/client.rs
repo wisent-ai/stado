@@ -57,9 +57,9 @@ fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
     for host in configured_origin_hosts() {
         // The tailnet states where its own names live. Asking the system
         // resolver about a MagicDNS name is asking a witness that may not have
-        // been told: on 2026-09-02 it answered the public `ts.net` front end
-        // once and nothing the next time, while the tailnet address served the
-        // same route in 82 ms. SNI and certificate validation still use the
+        // been told: it can answer the public front end once and nothing
+        // the next time, while the tailnet address serves the same route
+        // at once. SNI and certificate validation still use the
         // name, so this decides the route and never the identity.
         if let Some(address) = crate::remote::tailnet::address_of(&host) {
             builder = builder.resolve(&host, std::net::SocketAddr::new(address, 0));

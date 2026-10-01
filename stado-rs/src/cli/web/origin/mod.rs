@@ -5,8 +5,8 @@
 //! on purpose: "public object and release HTTP". A host may answer while its
 //! public name does not exist; a funnel may publish a perfect handler table
 //! for a name no resolver can find. This command group is that boundary's
-//! declaration and its reality check, and it exists because on 2026-09-07 the
-//! boundary had neither.
+//! declaration and its reality check, because a boundary with neither
+//! fails silently.
 //!
 //! What it does NOT do is choose a network provider. The declaration names a
 //! hostname, the target that publishes it and how; a directly reachable

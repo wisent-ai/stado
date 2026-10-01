@@ -42,9 +42,9 @@ pub(crate) async fn release_object_present(uri: &str) -> Result<bool, CmdError> 
 /// script used to derive it from a `Range: 0-0` answer's `Content-Range`, and
 /// the dashboard's own release route does not implement ranges — only the
 /// tailnet proxy in front of it does. So a target fetching from the store it
-/// serves itself, over loopback, got no `Content-Range` and refused with
-/// `fetch no_declared_size` on 2026-09-03, while the same object read from any
-/// other node answered `206 bytes 0-0/75433627`.
+/// serves itself, over loopback, gets no `Content-Range` and refuses with
+/// `fetch no_declared_size`, while the same object read from any other node
+/// answers `206` with the full length in its range.
 pub(crate) async fn release_object_size(uri: &str) -> Result<u64, CmdError> {
     let object = crate::remote::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();

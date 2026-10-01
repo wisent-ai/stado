@@ -156,8 +156,8 @@ pub(crate) fn edge_state(origin: &PublicOrigin, selection: &EdgeSelection) -> &'
     // An origin release clients read directly — `api.url` is that origin —
     // has no second edge in front of it to ask which origin it selected: the
     // read-back through that URL is the proof it serves. That is every
-    // `web-edge` origin, and a funnel origin since the public edge's
-    // forwarding routes were withdrawn on 2026-09-22.
+    // `web-edge` origin, and a funnel origin, since the public edge forwards
+    // no routes.
     if reads_directly(origin) {
         return "agrees";
     }

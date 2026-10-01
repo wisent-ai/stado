@@ -4,10 +4,10 @@
 //! Three things are read back, in the order that decides the verdict. The
 //! node's own handler table, because a zero exit status from the verb that
 //! writes it is a claim and not evidence. A public resolver, because a
-//! publication is not an origin: on 2026-09-07 this exact target had funnel
-//! on and `/api/release/object` proxied while `ts.net`'s own authoritative
-//! nameserver answered NXDOMAIN for the name, and nothing in the product said
-//! so. And the declared origin itself over the public internet, because the
+//! publication is not an origin: a target can have funnel on and the release
+//! route proxied while the tailnet's own authoritative nameserver answers
+//! NXDOMAIN for the name, with nothing in the product saying so. And the
+//! declared origin itself over the public internet, because the
 //! only proof that a public origin serves is a public request that it answers.
 //!
 //! The refusal that remains after a successful convergence is therefore not a
@@ -259,9 +259,9 @@ fn refusal_for(
         // public resolvers answer NXDOMAIN for it. Those two facts together are
         // not a Stado condition at all: a `ts.net` name is published by the
         // tailnet, so the node has the grant locally and the tailnet is not
-        // serving it. On 2026-09-22 this state made every push to the stado
-        // repository red — the release object route answered 503 — while every
-        // Stado read here said "published". Say which side is missing, or an
+        // serving it. This state makes every release object read from outside
+        // answer 503 while every Stado read here says "published". Say which
+        // side is missing, or an
         // operator re-runs converge against a host that is already doing its
         // half.
         ResolutionState::Unresolved if publication.funnel_enabled => Some(format!(

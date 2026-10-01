@@ -64,10 +64,9 @@ pub(crate) fn declare(request: DeclareRequest<'_>) -> Result<(), CmdError> {
     // environment and `--secret NAME=item#field` writes into the env file the
     // launcher sources afterwards, so declaring both leaves the value decided
     // by the order two different writers happen to run in, and the
-    // declaration says two things about one name. On 2026-09-06 the
-    // Preferences declaration carried `--env NEXT_PUBLIC_BASE_URL=https://...`
-    // and `--secret NEXT_PUBLIC_BASE_URL=NEXT_PUBLIC_BASE_URL#value` together
-    // and this command accepted it without a word. The database variable is
+    // declaration says two things about one name; a declaration carrying
+    // `--env NAME=value` and `--secret NAME=item#field` together used to be
+    // accepted without a word. The database variable is
     // the third writer of the same file and is checked against both.
     for name in secrets.keys() {
         if env.contains_key(name) {

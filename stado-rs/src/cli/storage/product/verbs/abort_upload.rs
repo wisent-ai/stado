@@ -35,10 +35,9 @@ pub(in crate::cli::storage) async fn abort_upload(
     // "there are no parts" are not the same fact: the object API's list route
     // is publisher-scoped for release-governed prefixes, so a caller without
     // that publisher's credential is told nothing and would read it as
-    // nothing to do. On 2026-09-05 that is exactly what happened - this
-    // command reported `parts: 0` from one workstation while nineteen parts,
-    // 59,768,832 bytes, were still on the store, and the same command run
-    // with the publisher's credential listed every one of them.
+    // nothing to do: this command reports `parts: 0` from one workstation
+    // while the parts are still on the store, and the same command run with
+    // the publisher's credential lists every one of them.
     let mut listed_via = "local backend";
     let parts = if let Some(remote) =
         RemoteObjectApi::configured_for_list(object.namespace(), &prefix)?

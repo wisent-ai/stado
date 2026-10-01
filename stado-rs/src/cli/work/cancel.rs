@@ -12,8 +12,8 @@
 //! when a running job has no recoverable instance record.
 //!
 //! `--queued` exists because emptying a queue one id at a time is work nobody
-//! finishes: on 2026-09-21 this fleet held 33 queued jobs nobody wanted and
-//! the only route was 33 commands.
+//! finishes: a fleet holding dozens of queued jobs nobody wants otherwise
+//! has only one route, dozens of commands.
 
 use crate::machine::{canonical_json, recorded_instance, utcnow};
 use crate::models::job_state;
