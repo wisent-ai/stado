@@ -105,9 +105,10 @@ fn deploy_in(archive: &Path, work: &Path, token: &str) -> Result<String, CmdErro
                 "--prebuilt",
                 "--prod",
                 "--yes",
-                "--token",
-                token,
             ])
+            // The token travels in the environment the CLI reads, never in
+            // argv, where every process on the host could read it.
+            .env("VERCEL_TOKEN", token)
             .current_dir(&root),
     )?;
     deployed

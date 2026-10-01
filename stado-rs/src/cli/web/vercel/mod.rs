@@ -128,7 +128,8 @@ fn build(
         command
             .args(["--yes", VERCEL_CLI])
             .args(arguments)
-            .args(["--token", &token])
+            // VERCEL_TOKEN, never --token: argv is readable by every process.
+            .env("VERCEL_TOKEN", &token)
             .current_dir(&source)
             .env("VERCEL_ORG_ID", &organisation)
             .env("VERCEL_PROJECT_ID", &project)
