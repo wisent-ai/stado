@@ -47,7 +47,7 @@ pub async fn open_account(
         // and adopting it silently would make this lease's history a guess.
         "exists" => Err(DeployError(format!(
             "account '{name}' already exists on '{}' outside any lease; \
-             remove it with `stado host user delete {name} --target {}` before leasing this name",
+             remove it with `stado host user delete {name} --target {} --confirm {name}` before leasing this name",
             target.name, target.name
         ))),
         other => Err(DeployError(format!(

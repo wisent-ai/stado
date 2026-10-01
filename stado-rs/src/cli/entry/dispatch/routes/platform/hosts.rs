@@ -60,7 +60,9 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             username,
             target,
             keep_home,
-        }) => host::user_delete(&username, &target, keep_home).await,
+            confirm,
+            json,
+        }) => host::user_delete(&username, &target, keep_home, &confirm, json).await,
         HostStateCommands::GpuPowerLimit {
             target,
             watts,

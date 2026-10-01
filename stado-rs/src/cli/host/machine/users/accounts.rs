@@ -5,9 +5,24 @@ use crate::targets::ComputeTarget;
 use crate::cli::host::machine::users::credentials::load_registry_by_source;
 use crate::cli::host::machine::users::registry_target;
 
-/// `stado host user delete USERNAME --target T [--keep-home]` — remove the
-/// account through the channel that created it.
-pub async fn user_delete(username: &str, target: &str, keep_home: bool) -> Result<(), CmdError> {
+/// `stado host user delete USERNAME --target T --confirm USERNAME [--keep-home]
+/// [--json]` — remove the account through the channel that created it. The
+/// deletion cannot be undone, so the username is typed twice and a mismatch
+/// is refused before the host is contacted.
+pub async fn user_delete(
+    username: &str,
+    target: &str,
+    keep_home: bool,
+    confirm: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    if confirm != username {
+        let removed = if keep_home { "account" } else { "account and its home directory" };
+        return Err(CmdError::usage(format!(
+            "host user delete removes {username}'s {removed} on {target} and cannot be undone; \
+             --confirm names {confirm:?}, repeat the username: --confirm {username}"
+        )));
+    }
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
     let result = crate::deploy::host_access::user_delete::delete_user(
@@ -16,6 +31,18 @@ pub async fn user_delete(username: &str, target: &str, keep_home: bool) -> Resul
     .await;
     match result.error {
         Some(detail) => Err(CmdError::click(detail)),
+        None if json => {
+            let report = serde_json::json!({
+                "target": result.target,
+                "ssh_target": result.ssh_target,
+                "username": username,
+                "status": result.status,
+                "os": result.os_name,
+                "home_kept": keep_home,
+            });
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         None => {
             println!("{}\t{}\t{}", result.target, result.status, username);
             Ok(())

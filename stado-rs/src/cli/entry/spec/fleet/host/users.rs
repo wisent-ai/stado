@@ -31,7 +31,9 @@ pub(crate) enum HostUserCommands {
         #[arg(long, default_value = "gcs", value_parser = ["gcs", "local", "auto"])]
         registry_source: String,
     },
-    /// Delete USERNAME from a registry-managed host over SSH.
+    /// Delete USERNAME from a registry-managed host over SSH. The account,
+    /// and its home directory unless --keep-home, cannot be restored, so the
+    /// username is repeated with --confirm.
     Delete {
         username: String,
         /// Registry target name.
@@ -40,5 +42,11 @@ pub(crate) enum HostUserCommands {
         /// Leave the home directory in place.
         #[arg(long)]
         keep_home: bool,
+        /// The username again; anything else is refused before the host is contacted.
+        #[arg(long)]
+        confirm: String,
+        /// Emit the outcome as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
