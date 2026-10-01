@@ -81,20 +81,18 @@ pub(crate) fn select(candidates: &[Candidate], budget_cents: i64) -> Portfolio {
     let conflicts = rows
         .iter()
         .map(|a| {
-            rows.iter()
-                .enumerate()
-                .fold(0, |mask, (index, b)| {
-                    if a.option.benefit_group == b.option.benefit_group
-                        || a.option
-                            .need_keys
-                            .iter()
-                            .any(|k| b.option.need_keys.contains(k))
-                    {
-                        mask | (1 << index)
-                    } else {
-                        mask
-                    }
-                })
+            rows.iter().enumerate().fold(0, |mask, (index, b)| {
+                if a.option.benefit_group == b.option.benefit_group
+                    || a.option
+                        .need_keys
+                        .iter()
+                        .any(|k| b.option.need_keys.contains(k))
+                {
+                    mask | (1 << index)
+                } else {
+                    mask
+                }
+            })
         })
         .collect();
     let mut search = Search {

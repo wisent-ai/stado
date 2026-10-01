@@ -33,8 +33,7 @@ pub(super) fn validate_action_locator(action: &Action) -> Result<(), CmdError> {
         }
         ActionKind::ResizeManagedInstanceGroup => {
             valid_gcp_locator(action, "managed-instance-group", &["zone", "region"])
-                && action.parameters.get("target_size").and_then(Value::as_i64)
-                    == Some(0)
+                && action.parameters.get("target_size").and_then(Value::as_i64) == Some(0)
         }
         ActionKind::ReleaseReservation => {
             valid_gcp_locator(action, "compute-reservation", &["zone"])

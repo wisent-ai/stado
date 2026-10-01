@@ -15,16 +15,15 @@ use super::Journal;
 pub async fn dispatch(command: OperationsCommands) -> Result<(), CmdError> {
     let journal = Journal::open().await?;
     match command {
-        OperationsCommands::List => list(&journal).await,
-        OperationsCommands::Show { operation_id } => show(&journal, &operation_id).await,
+        OperationsCommands::List { json } => list(&journal, json).await,
+        OperationsCommands::Show { operation_id, json } => {
+            show(&journal, &operation_id, json).await
+        }
     }
 }
 
-async fn list(journal: &Journal) -> Result<(), CmdError> {
-    let names = journal
-        .store
-        .list_paths("operations/", 0)
-        .await?;
+async fn list(journal: &Journal, json_output: bool) -> Result<(), CmdError> {
+    let names = journal.store.list_paths("operations/", 0).await?;
     let mut ids = BTreeSet::new();
     for name in names {
         if let Some(rest) = name.strip_prefix("operations/") {
@@ -52,19 +51,35 @@ async fn list(journal: &Journal) -> Result<(), CmdError> {
             })),
         }
     }
-    println!("{}", serde_json::to_string_pretty(&rows)?);
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else if rows.is_empty() {
+        println!("no archived resource operations");
+    } else {
+        for row in &rows {
+            let text = |name: &str| match &row[name] {
+                Value::Null => "-".to_string(),
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            println!(
+                "{}\t{}\t{}\t{}",
+                text("operation_id"),
+                text("phase"),
+                text("updated_at"),
+                text("error")
+            );
+        }
+    }
     Ok(())
 }
 
-async fn show(journal: &Journal, operation_id: &str) -> Result<(), CmdError> {
+async fn show(journal: &Journal, operation_id: &str, json_output: bool) -> Result<(), CmdError> {
     let plan = journal.load_plan(operation_id).await?;
     let state = journal.load_state(operation_id).await?;
     let event_names = journal
         .store
-        .list_paths(
-            &format!("operations/{operation_id}/events/"),
-            0,
-        )
+        .list_paths(&format!("operations/{operation_id}/events/"), 0)
         .await?;
     let mut events = Vec::new();
     for path in event_names {
@@ -77,14 +92,30 @@ async fn show(journal: &Journal, operation_id: &str) -> Result<(), CmdError> {
             .as_str()
             .cmp(&right["recorded_at"].as_str())
     });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "operation_id": operation_id,
-            "plan": plan,
-            "state": state,
-            "events": events,
-        }))?
-    );
+    let document = json!({
+        "operation_id": operation_id,
+        "plan": plan,
+        "state": state,
+        "events": events,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+    let field = |value: &Value| match value {
+        Value::Null => "-".to_string(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let state = &document["state"];
+    println!("operation  {operation_id}");
+    println!("phase      {}", field(&state["phase"]));
+    println!("plan hash  {}", field(&state["plan_hash"]));
+    println!("updated    {}", field(&state["updated_at"]));
+    println!("error      {}", field(&state["error"]));
+    println!("events     {}", events.len());
+    for event in &events {
+        println!("  {}  {}", field(&event["recorded_at"]), event);
+    }
     Ok(())
 }

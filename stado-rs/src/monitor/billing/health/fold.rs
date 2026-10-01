@@ -76,11 +76,7 @@ pub(super) fn health_value(health: &ProviderHealth) -> Value {
 /// than alert-storming on garbage.
 fn elapsed_seconds(since: &str, now: DateTime<Utc>) -> i64 {
     DateTime::parse_from_rfc3339(since)
-        .map(|start| {
-            (now - start.with_timezone(&Utc))
-                .num_seconds()
-                .max(0)
-        })
+        .map(|start| (now - start.with_timezone(&Utc)).num_seconds().max(0))
         .unwrap_or_default()
 }
 

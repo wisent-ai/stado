@@ -42,10 +42,7 @@ async fn available_instances_from_quotas(
         let total = py_int(cfg.get("total"));
         let reserved = py_int(cfg.get("reserved"));
         let used = running_counts.get(accel_type).copied().unwrap_or_default();
-        available.insert(
-            accel_type.clone(),
-            (total - reserved - used).max(0),
-        );
+        available.insert(accel_type.clone(), (total - reserved - used).max(0));
     }
     Ok(available)
 }

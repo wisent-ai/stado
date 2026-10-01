@@ -90,13 +90,5 @@ pub async fn run_cleanup_to_target_once(
 pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
     // A preview persists nothing, so its writer identity never reaches the
     // file; it is recorded anyway so the returned report is self-describing.
-    cleanup_once(
-        0,
-        true,
-        true,
-        false,
-        CleanupWriter::Cli,
-        log_fn,
-    )
-    .await
+    cleanup_once(0, true, true, false, CleanupWriter::Cli, log_fn).await
 }

@@ -202,7 +202,5 @@ fn timestamp_fresh(raw: &str, max_age_seconds: u64, now: chrono::DateTime<Utc>) 
             now.signed_duration_since(stamp.with_timezone(&Utc))
                 .num_seconds()
         })
-        .is_ok_and(|age| {
-            age >= 0 && age <= i64::try_from(max_age_seconds).unwrap_or(i64::MAX)
-        })
+        .is_ok_and(|age| age >= 0 && age <= i64::try_from(max_age_seconds).unwrap_or(i64::MAX))
 }

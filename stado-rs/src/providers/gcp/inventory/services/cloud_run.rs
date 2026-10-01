@@ -148,11 +148,7 @@ pub(in crate::providers::gcp::inventory) fn cloud_run_revisions_detail(
         .count();
     let count = revisions.len();
     (
-        if unhealthy == 0 {
-            "ok"
-        } else {
-            "degraded"
-        },
+        if unhealthy == 0 { "ok" } else { "degraded" },
         Some(count),
         json!({"unhealthy": unhealthy, "revisions": revisions}),
     )

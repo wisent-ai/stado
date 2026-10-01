@@ -17,7 +17,11 @@ pub async fn user_delete(
     json: bool,
 ) -> Result<(), CmdError> {
     if confirm != username {
-        let removed = if keep_home { "account" } else { "account and its home directory" };
+        let removed = if keep_home {
+            "account"
+        } else {
+            "account and its home directory"
+        };
         return Err(CmdError::usage(format!(
             "host user delete removes {username}'s {removed} on {target} and cannot be undone; \
              --confirm names {confirm:?}, repeat the username: --confirm {username}"

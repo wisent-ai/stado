@@ -45,12 +45,26 @@ pub(crate) async fn estimate_lines(
 pub(crate) async fn dispatch(sub: &CostCommands) -> Result<(), CmdError> {
     let store = default_store(crate::config::bucket()).await?;
     match sub {
-        CostCommands::Report => {
+        CostCommands::Report { json: true } => {
+            let report = cost::report(&store).await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        CostCommands::Report { json: false } => {
             for line in report_lines(&store).await? {
                 println!("{line}");
             }
         }
-        CostCommands::Estimate { batch_file } => {
+        CostCommands::Estimate {
+            batch_file,
+            json: true,
+        } => {
+            let projection = cost::project_batch(Path::new(batch_file), &store).await?;
+            println!("{}", serde_json::to_string_pretty(&projection)?);
+        }
+        CostCommands::Estimate {
+            batch_file,
+            json: false,
+        } => {
             for line in estimate_lines(&store, Path::new(batch_file)).await? {
                 println!("{line}");
             }

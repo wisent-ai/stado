@@ -126,7 +126,12 @@ pub async fn ls(json_output: bool) -> Result<bool, String> {
         let context = client
             .read_field(&item.id, "context")
             .await
-            .map_err(|exc| format!("cannot read the context of credential item {}: {exc}", item.id))?;
+            .map_err(|exc| {
+                format!(
+                    "cannot read the context of credential item {}: {exc}",
+                    item.id
+                )
+            })?;
         let described = |name: &str| {
             context
                 .get(name)
@@ -140,13 +145,21 @@ pub async fn ls(json_output: bool) -> Result<bool, String> {
         }));
     }
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&shown).map_err(|exc| exc.to_string())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&shown).map_err(|exc| exc.to_string())?
+        );
     } else if shown.is_empty() {
         println!("no SSH host keys in the credential store");
     } else {
         for row in &shown {
             let text = |name: &str| row[name].as_str().unwrap_or_default().to_string();
-            println!("{}\t{}\t{}", text("item"), text("key_type"), text("fingerprint"));
+            println!(
+                "{}\t{}\t{}",
+                text("item"),
+                text("key_type"),
+                text("fingerprint")
+            );
         }
     }
     Ok(true)

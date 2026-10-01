@@ -18,7 +18,7 @@
 
 mod readiness;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::cli::{CmdError, VastCommands};
 use crate::providers::vast::{self, AutoListParams, ListMachineParams, VastClient, VastError};
@@ -69,29 +69,12 @@ fn cmd_err(exc: VastError) -> CmdError {
     CmdError::click(exc.to_string())
 }
 
-/// One answer, two forms from the same value: pretty JSON with `--json`
-/// (as the Python click commands printed it), otherwise one `key: value` line
-/// per top-level field for a person.
-fn echo(value: &Value, json_output: bool) {
-    if json_output {
-        let pretty = serde_json::to_string_pretty(value).expect("Value serialization is infallible");
-        println!("{}", crate::models::ensure_ascii(&pretty));
-        return;
-    }
-    match value.as_object() {
-        Some(fields) => {
-            for (key, field) in fields {
-                match field {
-                    Value::String(text) => println!("{key}: {text}"),
-                    other => println!("{key}: {other}"),
-                }
-            }
-        }
-        None => println!("{value}"),
-    }
-}
-
-async fn list(price_gpu: f64, price_disk: f64, price_min_bid: Option<f64>, json_output: bool) -> Result<(), CmdError> {
+async fn list(
+    price_gpu: f64,
+    price_disk: f64,
+    price_min_bid: Option<f64>,
+    json_output: bool,
+) -> Result<(), CmdError> {
     let client = VastClient::from_env().await.map_err(cmd_err)?;
     let result = client
         .list_machine(&ListMachineParams {
@@ -102,21 +85,21 @@ async fn list(price_gpu: f64, price_disk: f64, price_min_bid: Option<f64>, json_
         })
         .await
         .map_err(cmd_err)?;
-    echo(&result, json_output);
+    crate::cli::print_answer(&result, json_output)?;
     Ok(())
 }
 
 async fn unlist(json_output: bool) -> Result<(), CmdError> {
     let client = VastClient::from_env().await.map_err(cmd_err)?;
     let result = client.unlist_machine().await.map_err(cmd_err)?;
-    echo(&result, json_output);
+    crate::cli::print_answer(&result, json_output)?;
     Ok(())
 }
 
 async fn status(json_output: bool) -> Result<(), CmdError> {
     let client = VastClient::from_env().await.map_err(cmd_err)?;
     let result = client.machine_status().await.map_err(cmd_err)?;
-    echo(&result, json_output);
+    crate::cli::print_answer(&result, json_output)?;
     Ok(())
 }
 
@@ -152,7 +135,7 @@ async fn monitor(bucket: &str, json_output: bool) -> Result<(), CmdError> {
     // Python list_blobs(prefix=..., max_results=512) counts.
     let queued = store.list_paths("queue/", 512).await?.len();
     let running = store.list_paths("running/", 512).await?.len();
-    echo(
+    crate::cli::print_answer(
         &json!({
             "now": now_utc_iso_z(),
             "hostname": hostname,
@@ -163,7 +146,7 @@ async fn monitor(bucket: &str, json_output: bool) -> Result<(), CmdError> {
             "wisent_running": running,
         }),
         json_output,
-    );
+    )?;
     Ok(())
 }
 

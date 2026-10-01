@@ -10,12 +10,8 @@ pub(super) fn summarize(findings: &[Finding], incomplete_sources: usize) -> Summ
     let mut by_severity = BTreeMap::new();
     let mut by_action = BTreeMap::new();
     for finding in findings {
-        *by_severity
-            .entry(finding.severity.to_string())
-            .or_insert(0) += 1;
-        *by_action
-            .entry(finding.action.to_string())
-            .or_insert(0) += 1;
+        *by_severity.entry(finding.severity.to_string()).or_insert(0) += 1;
+        *by_action.entry(finding.action.to_string()).or_insert(0) += 1;
     }
     let state = match (findings.is_empty(), incomplete_sources == 0) {
         (true, true) => "clean",
