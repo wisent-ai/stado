@@ -11,8 +11,7 @@
 //! no launchd domain and no registry document mentions start them again:
 //!
 //! ```text
-//! @reboot /bin/sh $HOME/.stado/bin/run-com.wisent.compute.coordinator.<host>.sh
-//! @reboot /bin/sh $HOME/.stado/bin/run-com.wisent.compute.agent.<host>.sh
+//! @reboot /bin/sh $HOME/.stado/bin/run-<retired unit label>.sh
 //! ```
 //!
 //! A retirement that survives `launchctl` and not a reboot is not a

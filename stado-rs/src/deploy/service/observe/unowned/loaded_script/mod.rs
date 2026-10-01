@@ -90,10 +90,9 @@ done
 # spawning three thousand processes. Nothing but path, runs and last exit
 # crosses the channel.
 #
-# A one-shot under KeepAlive reads `active` everywhere.
-# `com.wisent.compute.service.com.wisent.claude-reauth-once` -- a job whose own
-# name says `once` -- has run more than fifty thousand times, exiting 1 every
-# time, into a log nobody read.
+# A one-shot under KeepAlive reads `active` everywhere: a job whose own name
+# says `once` can run tens of thousands of times, exiting 1 every time, into
+# a log nobody reads.
 state=$(/bin/launchctl dumpstate 2>/dev/null | /usr/bin/awk '
   /^[^ \t].*= \{$/ { key = $1; next }
   /^\}/ { key = ""; next }

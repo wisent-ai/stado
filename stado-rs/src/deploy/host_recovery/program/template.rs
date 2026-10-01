@@ -49,10 +49,6 @@ else
   printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$gui\" \"$domain_status\" \"$domain_reason\"
   exit 66
 fi
-/bin/launchctl bootout \"$gui/com.wisent.compute.coordinator\" >/dev/null 2>&1 || true
-/bin/launchctl bootout \"$user_domain/com.wisent.compute.coordinator\" >/dev/null 2>&1 || true
-/bin/launchctl disable \"$gui/com.wisent.compute.coordinator\" >/dev/null 2>&1 || true
-/bin/launchctl disable \"$user_domain/com.wisent.compute.coordinator\" >/dev/null 2>&1 || true
 
 recover_agent() {
   label=\"$1\"

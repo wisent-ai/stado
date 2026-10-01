@@ -247,7 +247,7 @@ impl UnreachableProductEnvironment {
 /// True when PRODUCT is named as a whole delimited run of UNIT's identifier.
 ///
 /// Launchd labels are dot- and dash-delimited
-/// (`com.wisent.compute.service.skarbiec-control-plane`), so the product a
+/// (`com.wisent.transcript-lake`), so the product a
 /// unit serves is a delimited segment of its label rather than a substring
 /// of it. Both sides are canonicalised to one delimiter and fenced with it,
 /// which is what lets a product whose own name carries a delimiter match:

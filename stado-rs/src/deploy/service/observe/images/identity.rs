@@ -30,21 +30,17 @@ pub(crate) const SYSTEMD_UNIT_DIRECTORIES: [&str; 2] =
 /// started with. Firing there would report the installer's own working state
 /// as a fault.
 ///
-/// 300 seconds, from the only measurement of that window this fleet has.
-/// `com.wisent.compute.disk-cleanup.disk-cleanup` journalled its last pass on
-/// the superseded image at `2026-09-02T17:50:40Z` and its first pass on the
-/// new one at `2026-09-02T17:51:35Z`: 55 seconds, and that figure already
-/// contains a whole janitor pass rather than just the restart. Five times it
-/// is a grace no legitimate replacement exhausts, and it is four orders of
-/// magnitude short of the thirteen days that unit spent unnoticed, so the
+/// 300 seconds: a measured replacement-and-restart of a janitor unit took
+/// under a minute including a whole janitor pass, so five minutes is a grace
+/// no legitimate replacement exhausts, and it is orders of magnitude short
+/// of the weeks a stale process can otherwise run unnoticed, so the
 /// tolerance costs this check nothing it was built to catch.
 ///
 /// It is keyed on the age of the INSTALLED FILE and never on the age of the
 /// process, which is the part that is easy to get backwards. A stale process
-/// is old by construction — six days old, in the case this check exists for —
-/// so suppressing young processes would suppress nothing and suppressing old
-/// ones would suppress the finding. What is genuinely short-lived is the
-/// replacement, and that is what this measures.
+/// is old by construction, so suppressing young processes would suppress
+/// nothing and suppressing old ones would suppress the finding. What is
+/// genuinely short-lived is the replacement, and that is what this measures.
 pub const IMAGE_SETTLE_SECONDS: i64 = 300;
 
 /// One executable file, as the kernel identifies it rather than as a path

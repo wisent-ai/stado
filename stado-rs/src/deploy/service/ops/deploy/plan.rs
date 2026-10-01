@@ -63,13 +63,11 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 /// [`crate::config_file`]'s search order — `$STADO_CONFIG`,
 /// `./stado.config.json`, `~/.config/stado/config.json`, `~/.stado/config.json`
 /// — and runs on defaults. A coordinator that does that ticks forever against
-/// an empty store: `stado service ensure` installed
-/// `com.wisent.compute.service.stado-local-control-plane` on the always-on mac
-/// with `PATH` as its only variable, and eleven consecutive ticks reaped no
-/// expired lease and dispatched nothing while 55 pinned jobs sat in the store
-/// it could not see. The catalog-backed host Stado unit on the same host
-/// carried `HOME`, `STADO_CONFIG` and the storage keys, so one installer
-/// produced a working unit and the other did not.
+/// an empty store: a coordinator unit installed with `PATH` as its only
+/// variable reaps no expired lease and dispatches nothing while pinned jobs
+/// sit in the store it cannot see, whereas the catalog-backed Stado unit on
+/// the same host carries `HOME`, `STADO_CONFIG` and the storage keys, so one
+/// installer produces a working unit and the other does not.
 ///
 /// Both values ride the [`REMOTE_HOME_PLACEHOLDER`] the remote installer
 /// substitutes, so the account is the host's answer and never this machine's.
@@ -109,12 +107,12 @@ pub fn plan_deploy(
 
 /// [`plan_deploy`] at a label the declaration already carries.
 ///
-/// `plan_deploy` mints `com.wisent.compute.service.<name>`, which is right for
-/// a unit being created and wrong for one that already exists under another
-/// label. Rendering the minted spelling for a declaration that says the unit
-/// is `com.wisent.stado-resolver` installs a SECOND launchd job running the
-/// same program, and two resolvers competing for one stable loopback port is
-/// exactly the shape of outage this module was written after. A declaration
+/// `plan_deploy` mints `com.wisent.<name>`, which is right for a unit being
+/// created and wrong for one that already exists under another label.
+/// Rendering the minted spelling for a declaration that names a different
+/// label installs a SECOND launchd job running the same program, and two
+/// processes competing for one stable loopback port is exactly the shape of
+/// outage this module was written after. A declaration
 /// that names its own label is rendered at that label, so a declared service
 /// is reinstallable from the document without becoming a second service.
 pub fn plan_deploy_labelled(

@@ -83,7 +83,7 @@ pub(in crate::fleet_shape) fn doubled_prefix(
 /// doubled name is written once and then read by everything.
 ///
 /// A deploy can record a doubled name such as
-/// `com.wisent.compute.service.stado-resolver.service.service`. The unit is
+/// `com.wisent.<name>.service.service`. The unit is
 /// real and active — `systemctl --user is-active` answers yes and `service
 /// ensure` restarts it in place — so the cost is not a dead service; it is
 /// that the fleet carries a name nothing else in it agrees with, and the

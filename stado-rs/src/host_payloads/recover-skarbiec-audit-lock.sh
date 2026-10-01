@@ -4,10 +4,9 @@
 # `skarbiec/audit-lock` repair step.
 #
 # A host runs one Skarbiec process, com.wisent.skarbiec on the catalog's
-# port 8895: a login agent on a laptop, a system daemon on the always-on
-# mini. The units it replaced (com.wisent.always-on.skarbiec, the
-# skarbiec-control-plane and replica-sync services) are retired, so this
-# repair restarts the one process and never a retired unit.
+# port 8895, and one Stado process, com.wisent.stado, which serves the
+# object API. This repair restarts those two and nothing else: every unit
+# either of them replaced is retired by the product itself at start.
 set -eu
 
 health_url="${SKARBIEC_HEALTH_URL:-http://127.0.0.1:8895/health}"
@@ -59,7 +58,7 @@ case "$object_health" in
     fi
     ;;
   *'"object":false'*)
-    kick_loaded com.wisent.compute.service.stado-object-api
+    kick_loaded com.wisent.stado
     ;;
   *)
     printf '%s\n' "refusing recovery: $object_health_url returned no object boundary verdict" >&2

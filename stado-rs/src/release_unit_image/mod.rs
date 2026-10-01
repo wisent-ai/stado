@@ -3,14 +3,14 @@
 //! happened.
 //!
 //! `registry doctor` sees a unit whose live process executes a replaced or
-//! unlinked image (#336) and `stado service refresh-image` repairs one named
-//! unit on demand (#344). Neither revisits a unit nobody typed a command for:
+//! unlinked image and `stado service refresh-image` repairs one named unit
+//! on demand. Neither revisits a unit nobody typed a command for:
 //! `self_update::recycle_replaced_units` cycles units only inside the
-//! invocation that replaced their bytes, so one it misses stays missed —
-//! `com.wisent.compute.disk-cleanup.disk-cleanup` journalled `policy:ValueError`
-//! 8,348 times over thirteen days that way, and an unrelated restart ended it.
-//! The installed binary moved from 0.13.50 to 0.14.8 inside one day, so the
-//! condition regenerates faster than a per-unit manual verb clears it.
+//! invocation that replaced their bytes, so one it misses stays missed — a
+//! janitor's watch loop can journal the same failure thousands of times for
+//! weeks that way until an unrelated restart ends it. The installed binary
+//! can move several versions inside one day, so the condition regenerates
+//! faster than a per-unit manual verb clears it.
 //!
 //! Four bounds, each enforced in one named place:
 //!

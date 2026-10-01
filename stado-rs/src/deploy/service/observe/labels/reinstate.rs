@@ -5,10 +5,9 @@
 //! it starts the product's one unit, because both bind the same listener.
 //! Retiring boots the old unit out and withdraws its autostart, so when the
 //! new unit then fails, the host is left running neither, and nothing starts
-//! the old one again: `com.wisent.always-on.skarbiec` was retired that way on
-//! a host whose `com.wisent.skarbiec` never got a unit file, and every vault
-//! read on that host failed until an operator noticed (71f73542). A failed
-//! start puts back exactly what this run took away.
+//! the old one again: a vault whose new unit never got a unit file answers
+//! no read on that host until somebody notices. A failed start puts back
+//! exactly what this run took away.
 
 use crate::deploy::service::*;
 
@@ -170,7 +169,10 @@ pub async fn reinstate_units(
         };
         let mut sentence = format!("{unit} given back: {loaded}");
         if !enabled.is_empty() {
-            sentence.push_str(&format!("; autostart enabled again in {}", enabled.join(", ")));
+            sentence.push_str(&format!(
+                "; autostart enabled again in {}",
+                enabled.join(", ")
+            ));
         }
         if !refused.is_empty() {
             sentence.push_str(&format!("; autostart refused in {}", refused.join("; ")));

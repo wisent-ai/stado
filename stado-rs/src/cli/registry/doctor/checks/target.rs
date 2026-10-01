@@ -137,13 +137,11 @@ pub(in crate::cli::registry::doctor) async fn target_findings(
         // read off the process table and the kernel rather than out of the
         // store — and therefore only on the host this command runs on.
         //
-        // `com.wisent.compute.disk-cleanup.disk-cleanup` spent thirteen days
-        // journalling `policy:ValueError` on 8,348 passes from a `--watch`
-        // process that had been alive since 27 August, executing an image the
-        // file underneath it no longer held. Nothing revisited it, because
+        // A unit whose process outlives the image it was started from keeps
+        // running the old bytes for as long as nothing cycles it: a watch
+        // loop can journal the same failure for weeks that way, because
         // `self_update::recycle_replaced_units` cycles a unit only inside the
-        // invocation that replaced its bytes; an unrelated restart is what
-        // ended it.
+        // invocation that replaced its bytes.
         // The revisit ledger is one host-wide file answering one question, so
         // it is opened once for the whole pass rather than once per finding.
         // `None` unless this is the local host and some product authorised a

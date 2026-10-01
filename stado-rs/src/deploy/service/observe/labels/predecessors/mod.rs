@@ -94,9 +94,9 @@ pub async fn retire_catalog_predecessors(
 /// unit. A retired unit must not run under any condition, so this is safe to
 /// do BEFORE the replacement starts, and it has to be when the replacement
 /// is a renamed unit on the same listener: a product moving to its one unit
-/// `com.wisent.<product>` (263eaf97) cannot bind 8895 while
-/// `com.wisent.always-on.skarbiec` still holds it, and an ensure that waits
-/// for the new unit to stay up would fail before it retired the old one.
+/// `com.wisent.<product>` cannot bind its port while the unit it replaces
+/// still holds it, and an ensure that waits for the new unit to stay up
+/// would fail before it retired the old one.
 pub async fn retire_units(
     target: &ComputeTarget,
     replacement: &crate::deploy::service_catalog::CatalogService,

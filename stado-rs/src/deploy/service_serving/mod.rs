@@ -21,9 +21,9 @@
 //! Three properties are deliberate:
 //!
 //! 1. **Ownership is decided by launchd label, never by argv.** A declared
-//!    `com.wisent.always-on.weles` and an undeclared `com.wisent.weles-worker`
-//!    can execute the same program with the same argument vector — the Weles
-//!    release deployer bootstraps the second one by design.
+//!    unit and an undeclared one can execute the same program with the same
+//!    argument vector — a release deployer that bootstraps a second job does
+//!    exactly that.
 //!    [`super::service::stado_unit_pids`]-style argv matching
 //!    would attribute the surviving process to whichever unit was asked about
 //!    and answer `serving` for a unit that is down. So the question asked here
