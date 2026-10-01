@@ -51,7 +51,6 @@ use crate::queue::JobStorage;
 use show::print_human;
 use watch::watch;
 
-
 pub(crate) async fn dispatch(command: &BillingCommands) -> Result<(), CmdError> {
     let store = JobStorage::with_bucket(crate::config::bucket()).await?;
     match command {

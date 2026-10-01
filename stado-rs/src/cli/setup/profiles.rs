@@ -43,7 +43,13 @@ pub fn run(name: Option<&str>, as_json: bool) -> Result<(), CmdError> {
             continue;
         }
         let description = row["description"].as_str().unwrap_or_default();
-        let first_sentence: String = description.split('.').next().unwrap_or("").chars().take(90).collect();
+        let first_sentence: String = description
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(90)
+            .collect();
         println!("{name:<24} {first_sentence}");
     }
     Ok(())

@@ -36,11 +36,13 @@ pub(super) async fn watch(store: &JobStorage, as_json: bool) -> Result<(), CmdEr
     let mut document = billing::live_snapshot(store).await;
     let evaluation = billing::apply_health(previous.as_ref(), &mut document, Utc::now());
     billing::commit_firing(&mut document, &evaluation);
-    billing::persist_snapshot(store, &document).await.map_err(|err| {
-        CmdError::click(format!(
-            "billing snapshot could not be stored, so its alerts were not sent: {err}"
-        ))
-    })?;
+    billing::persist_snapshot(store, &document)
+        .await
+        .map_err(|err| {
+            CmdError::click(format!(
+                "billing snapshot could not be stored, so its alerts were not sent: {err}"
+            ))
+        })?;
     billing::dispatch_signals(&evaluation).await;
     let mail = mail_probe().await;
     report(&document, &evaluation, &mail, as_json)
