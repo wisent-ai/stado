@@ -1,4 +1,4 @@
-//! `identity relay-apple-challenge`: capture on the holder, store on the worker.
+//! `identity relay-challenge --provider apple`: capture on the holder, store on the worker.
 
 use anyhow::Result;
 use serde_json::{json, Value};

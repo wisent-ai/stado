@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado identity relay-apple-challenge` and `stado identity issue-apple-capabilities` are replaced by `stado identity relay-challenge --provider apple` and `stado identity issue-capabilities --provider apple` (cli.md rule 1). A provider without an adapter is refused by name with the list of those that have one. Weles's Apple account placement calls the new form (weles `src/auth/apple-account-placement.mjs`), so a Weles carrying that change needs a Stado that carries this one.

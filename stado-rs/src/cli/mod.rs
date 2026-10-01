@@ -81,7 +81,7 @@ pub use entry::spec::Cli;
 
 pub(crate) use entry::spec::fleet::host::users::HostUserCommands;
 pub(crate) use entry::spec::fleet::host::HostCommands;
-pub(crate) use entry::spec::fleet::identity::IdentityCommands;
+pub(crate) use entry::spec::fleet::identity::{IdentityCommands, IdentityProvider};
 pub(crate) use entry::spec::fleet::registry::{
     RegistryCommands, RegistryHostCommands, RegistryHostPathCommands,
 };

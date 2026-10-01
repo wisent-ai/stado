@@ -20,9 +20,13 @@ pub(crate) enum IdentityCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Capture on the verified Apple-account holder and store on this worker.
+    /// Capture an identity provider's sign-in challenge on the verified
+    /// account holder and store it on this worker.
     #[command(hide = true)]
-    RelayAppleChallenge {
+    RelayChallenge {
+        /// The identity provider whose challenge is relayed.
+        #[arg(long, value_enum)]
+        provider: IdentityProvider,
         #[arg(long)]
         identity: String,
         #[arg(long)]
@@ -33,9 +37,13 @@ pub(crate) enum IdentityCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Issue Apple login capabilities in the worker's own Weles broker.
+    /// Issue an identity provider's login capabilities in the worker's own
+    /// Weles broker.
     #[command(hide = true)]
-    IssueAppleCapabilities {
+    IssueCapabilities {
+        /// The identity provider whose login the capabilities redeem.
+        #[arg(long, value_enum)]
+        provider: IdentityProvider,
         #[arg(long)]
         target: String,
         #[arg(long)]
@@ -47,4 +55,11 @@ pub(crate) enum IdentityCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Identity providers Stado can relay a challenge for and issue login
+/// capabilities against; any other is refused by clap with this list.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum IdentityProvider {
+    Apple,
 }

@@ -1,4 +1,4 @@
-//! `identity issue-apple-capabilities`: the three grants one Apple login redeems.
+//! `identity issue-capabilities --provider apple`: the three grants one Apple login redeems.
 
 use anyhow::Result;
 use serde_json::json;

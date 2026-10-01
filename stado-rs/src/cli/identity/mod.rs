@@ -5,11 +5,12 @@
 //! host a hardware token is plugged into, the box a licence is bound to. That is not
 //! capacity and not permission, so `weles.actions` cannot express it.
 //!
-//! Three commands, matching the questions an operator and a trajectory ask:
+//! Four commands, matching the questions an operator and a trajectory ask:
 //!
-//!   list                   what does the registry claim
-//!   verify                 what does each host confirm right now
-//!   relay-apple-challenge  capture on the holder and store on the worker
+//!   list                         what does the registry claim
+//!   verify                       what does each host confirm right now
+//!   relay-challenge --provider   capture on the holder and store on the worker
+//!   issue-capabilities --provider  the grants one provider login redeems
 //!
 //! `verify` reads the host rather than trusting the declaration, because these
 //! identities are granted elsewhere and revoked without notice: an Apple account
