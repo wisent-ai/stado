@@ -187,12 +187,12 @@ jobs:
           # Its stderr is deliberately not swallowed: when the channel fails to answer, the
           # reason belongs in the log next to the refusal it caused.
           # A `stado storage stat` that answers `infra_down` is not testimony about the
-          # object: it is the channel saying it cannot answer right now. On 2026-09-22
-          # that read 503 for every push to this repository — the declared public origin
-          # `charless-mac-mini.tail6443b3.ts.net` had no public A or AAAA record, so
-          # `stado web origin status` called it `not serving: release-object:
-          # origin-not-public` — and each run reported "the generated baseline cannot be
-          # trusted", which reads as a defect in the revision under judgement. The
+          # object: it is the channel saying it cannot answer right now. When the
+          # declared public origin has no public A or AAAA record, every read answers
+          # 503 and `stado web origin status` calls it `not serving: release-object:
+          # origin-not-public`; a run that treated that as testimony would report "the
+          # generated baseline cannot be trusted", which reads as a defect in the
+          # revision under judgement. The
           # baseline generator already retries this exact class; this read did not.
           channel_state() {
             "$stado_bin" storage stat "$1" --json | jq -r '.state // ""' || true
