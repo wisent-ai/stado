@@ -33,8 +33,8 @@ pub(crate) struct ReleaseProcess {
 /// the attested Skarbiec release directory on purpose, because a broker from
 /// any other path could belong to a different Skarbiec generation. The state
 /// file never names that process, so `sweep_leaked_processes` sent it SIGTERM
-/// on every pass -- 164 times in the log on 2026-09-05 -- and every Weles
-/// trajectory that redeemed a credential read `ECONNREFUSED` at the socket,
+/// on every pass, and every Weles trajectory that redeemed a credential
+/// read `ECONNREFUSED` at the socket,
 /// including the Developer ID run that publishes desktop signing material.
 /// `agent_spawned` records which processes carry the agent's own launch marker.
 pub(crate) fn release_processes(install_root: &str) -> Vec<ReleaseProcess> {

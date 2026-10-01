@@ -6,11 +6,11 @@
 //! sentinel and never deletes it (`transitions/retire.rs`). The sentinel is
 //! what lets an interrupted transition be finished by anyone and what tells
 //! the workdir cleaner the source is settled — and it is also why `queue/`
-//! held 779 objects for 15 queued jobs on 2026-09-17. Every reader that
-//! wants the queued jobs downloads all of them: the scheduler's window, the
-//! janitor's keep-list, `stado status`, and `stado host gates`, which timed
-//! out at ten seconds on every host over 764 sentinels nobody would ever
-//! read again.
+//! can hold many times more objects than there are queued jobs. Every
+//! reader that wants the queued jobs downloads all of them: the scheduler's
+//! window, the janitor's keep-list, `stado status`, and `stado host gates`,
+//! which then runs out of its budget on every host over sentinels nobody
+//! would ever read again.
 //!
 //! A sentinel is retired here only when nothing can want it: the job's
 //! transition record is retired (or gone), and its destination is a terminal

@@ -274,9 +274,9 @@ pub async fn start_slot(
 
 /// A workstation that goes to sleep takes its running job with it: the
 /// process stops, the heartbeat stops, and the queue records `worker lease
-/// expired` — which is how the darwin build of jeden 0.1.9 (job-b6bb) died
-/// at 02:06 on 2026-09-18, eighteen minutes after this laptop entered sleep
-/// with the build at 183 crates. The host is interactive by declaration, so
+/// expired` — which is how a native build dies minutes after the laptop
+/// running it enters sleep, hundreds of crates in. The host is interactive
+/// by declaration, so
 /// sleep is expected; a claimed job is the reason not to. On Darwin the job's
 /// lifetime holds an idle-sleep assertion through the system's own
 /// `caffeinate`, released the moment the job's pid ends; a closed lid still

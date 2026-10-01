@@ -95,9 +95,8 @@ pub async fn advance_slot(
     // until the bottom of the branch, after upload_output ran — so
     // buffered writes from the subprocess weren't flushed to disk
     // when the upload captured the file, producing empty/truncated
-    // command_output.log uploads. Confirmed live on 2026-05-06: 3
-    // gpt-oss-20b "completions" had zero-byte logs despite the
-    // subprocess running.
+    // command_output.log uploads: completions with zero-byte logs despite
+    // the subprocess running.
     slot.close_log();
     let terminal_failed = ret != 0 || slot.workdir_missing;
     let status = if terminal_failed {
@@ -198,9 +197,8 @@ pub async fn advance_slot(
     // The terminal writes are retried the same way. Returning their storage
     // error ended the agent loop, and the restarted loop no longer held this
     // slot, so a job that had finished and written its receipt stayed
-    // `running` in the queue for good: on 2026-09-27 tama 0.1.14's passed
-    // build (job-6151c580) was left so through one object API 502 and then
-    // cancelled by `release resume`.
+    // `running` in the queue for good through one object API 502, until
+    // something cancelled it.
     if let Err(error) = write_status(store, &job_id, &status).await {
         log_fn(&format!(
             "terminal status write failed for {job_id}; retaining running state for retry: {error}"

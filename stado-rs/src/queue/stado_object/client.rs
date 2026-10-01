@@ -110,11 +110,12 @@ impl StadoObjectBackend {
     /// build a fresh one in every constructor. Nothing here constructs once:
     /// `JobStorage::new()` is called per janitor pass, per gates read, per CLI
     /// invocation, and each of those was a pool with one connection in it that
-    /// was dropped at the end. The store's own socket table showed the result
-    /// on 2026-09-03 — 1,388 `TIME_WAIT` against `127.0.0.1:8765` beside 96
-    /// `ESTABLISHED`, with the object API pinned at 95.9% of a core — and a
-    /// read that has to queue behind a thousand fresh handshakes is a read
-    /// that takes 639 s, which is the latency that starves the agent loop.
+    /// was dropped at the end. The store's own socket table shows the result
+    /// — thousands of `TIME_WAIT` against the loopback port beside a few
+    /// dozen `ESTABLISHED`, with the object API pinned near a full core —
+    /// and a read that has to queue behind a thousand fresh handshakes is a
+    /// read that takes minutes, which is the latency that starves the agent
+    /// loop.
     ///
     /// Cloning a `Client` shares its pool, so every backend built in this
     /// process now reuses connections. The CA and origin host select the

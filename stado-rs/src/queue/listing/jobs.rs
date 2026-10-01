@@ -28,12 +28,12 @@ pub async fn list_jobs(
     let ordered = if oldest_first > 0 { usize::MAX } else { 0 };
     // The prefix is a DIRECTORY, so it is matched at the delimiter and not as
     // a string. The store answers `starts_with`, and `queue/` is a string
-    // prefix of `queue_priority/`: on 2026-09-03 this listing asked for the 13
-    // objects under `queue/` and got 9,032, because every priority marker
-    // matched too. Downloading those took thousands of round trips through the
-    // loopback resolver, one of them failed, and the whole call returned an
-    // error -- which surfaced as `the queue store is unreadable` and blocked
-    // the 0.13.49 release train at `release-capacity` for an hour.
+    // prefix of `queue_priority/`: a listing asking for the handful of
+    // objects under `queue/` gets thousands, because every priority marker
+    // matches too. Downloading those takes thousands of round trips through
+    // the loopback resolver, one of them fails, and the whole call returns
+    // an error -- which surfaces as `the queue store is unreadable` and
+    // blocks a release train at `release-capacity`.
     //
     // Two prefixes in this store are string prefixes of others (`queue` of
     // `queue_priority`, `failed` of `failed_again`), so this is a live

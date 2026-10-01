@@ -7,8 +7,8 @@ pub const BACKFILL_BATCH: usize = 500;
 ///
 /// The same shape of bound as `BACKFILL_BATCH` and for the same reason: the
 /// repair runs on a tick, and replacing an unbounded read cost with an
-/// unbounded delete cost would be no improvement. At this size the 9,021
-/// markers measured on 2026-09-03 clear in a handful of ticks.
+/// unbounded delete cost would be no improvement. At this size thousands of
+/// accumulated markers clear in a handful of ticks.
 pub const MARKER_PRUNE_PER_CALL: usize = 500;
 /// Python `_DOWNLOAD_WORKERS`.
 pub(super) const DOWNLOAD_WORKERS: usize = 10;

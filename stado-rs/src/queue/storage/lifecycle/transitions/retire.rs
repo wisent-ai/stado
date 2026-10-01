@@ -153,12 +153,11 @@ impl JobStorage {
                 // outcome cannot be retained against it. Nothing is dropped
                 // for that: the source stays fenced and the transition
                 // record stays, exactly as refusing did. What changes is the
-                // blast radius. On 2026-09-21 one such run —
-                // `runs/run-release-platform-0a59f2e4e7c00972a78d24c2.json`,
-                // reaped after its build was cancelled — ended every
+                // blast radius. One such run — a platform run manifest reaped
+                // after its build was cancelled — otherwise ends every
                 // coordinator tick with `blob not found`, so no queued job
-                // was dispatched at all and a build queued at 22:14 was
-                // still waiting hours later. One orphan must not stop the
+                // is dispatched at all and a freshly queued build is still
+                // waiting hours later. One orphan must not stop the
                 // fleet; the same shape was already repaired for job records
                 // this build cannot interpret, a few lines below.
                 Err(StorageError::NotFound(missing)) => {

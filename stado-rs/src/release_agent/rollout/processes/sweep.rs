@@ -14,7 +14,7 @@ use crate::release_control::ReleaseTargetPolicy;
 /// save leaves the process running and the record absent, and the agent trusted
 /// only the record. On the always-on Mac that produced a candidate from three
 /// releases ago holding a candidate port for hours, a rollout that could never
-/// bind past it, and an operator asked to stop processes by hand -- which is not a
+/// bind past it, and processes stopped by hand -- which is not a
 /// release system. The one process spared is whichever serves the proxy's current
 /// upstream: it carries traffic, and the normal cutover retires it by routing away
 /// first, after which the next pass sweeps it here.

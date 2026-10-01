@@ -27,11 +27,10 @@ pub async fn write_status(
 /// which silently swallowed any failure. When gsutil hit a transient auth
 /// glitch, network blip, or concurrent-fork ENOMEM, the heartbeat write
 /// vanished into the void; the CF monitor saw an old/missing blob, and
-/// requeued every workstation job at the 15-minute staleness threshold.
-/// Confirmed live on 2026-05-06 (job 01d79e28 had no heartbeat blob despite
-/// the slot being live; jobs 4724ae6d/3f16d8b4/24dee60d were yanked from
-/// running/ for 'stale heartbeat (local consumer)' in a single 4-second
-/// monitor window).
+/// requeued every workstation job at the 15-minute staleness threshold —
+/// live slots with no heartbeat blob, and whole batches of jobs yanked from
+/// running/ for 'stale heartbeat (local consumer)' in a single monitor
+/// window.
 /// Writes go through the storage backend directly (no fork, no swallowed
 /// error).
 ///

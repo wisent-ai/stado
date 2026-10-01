@@ -213,7 +213,7 @@ pub(crate) fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     // This asks for a state, not an action: the legacy unit must not hold the
     // port before the proxy binds it. launchd answers 113 ("Could not find
     // specified service") when the label is not loaded, which IS that state,
-    // and refusing it stopped the proxy step dead on 2026-09-03 -- both
+    // and refusing it stops the proxy step dead -- both
     // candidates healthy on their candidate ports, nothing serving either
     // stable bind, and the control plane 503 behind that. 3 and 5 were
     // already tolerated for exactly this reason; 113 belongs with them.

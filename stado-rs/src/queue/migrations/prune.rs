@@ -16,10 +16,10 @@ use super::sentinel::SENTINEL_PATH;
 /// The repair above only ever ADDED. Nothing pruned, and a marker name is
 /// `<inv_priority>-<created_at>-<job_id>`, so the same job under a new
 /// `created_at` — a requeue, a re-admission, any rewrite of the queue blob —
-/// produces a NEW object while the old one stays forever. Measured on the
-/// fleet store on 2026-09-03: 9,021 markers naming 161 distinct job ids, five
-/// of those ids holding about 1,325 markers each, against twelve jobs
-/// actually queued.
+/// produces a NEW object while the old one stays forever: thousands of
+/// markers naming a few hundred distinct job ids, a handful of those ids
+/// holding over a thousand markers each, against a dozen jobs actually
+/// queued.
 ///
 /// That is not untidiness, it is the second half of an eleven-day queue
 /// stall. [`super::listing::list_claimable`] walks this index and charges one
