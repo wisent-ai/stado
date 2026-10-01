@@ -49,28 +49,64 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Create a hosted database the fleet does not have yet, then declare it.
+    /// Create a database the fleet does not have yet, then declare it.
     ///
-    /// Creates a Supabase project named NAME in the organization and region
-    /// of the ANCHOR database's project, writes the credential item
-    /// `<name>-database` (coordinates, pooler, generated password) and
-    /// declares the database for its consumers. Before creating, it reads
-    /// the organization's plan and running projects and refuses unless
-    /// `--accept-monthly-usd` covers what one more project adds to the
-    /// compute bill; the credit balance is dashboard-only and is named as
-    /// unread. A project already named NAME is reused, never duplicated.
+    /// Any engine Stado declares (`--engine`, postgres or sqlite) on any
+    /// provider (`--provider`). The default provider is `fleet`: Stado runs
+    /// the database itself on one fleet host -- the vault owner unless
+    /// `--host` names another -- with no vendor and no bill, through `stado
+    /// database place` on that host. `supabase` creates a hosted Postgres
+    /// project in the organization and region of the ANCHOR database's
+    /// project and refuses unless `--accept-monthly-usd` covers what one
+    /// more project adds to the compute bill. Either way the credential item
+    /// `<name>-database` is written into the owner vault and the database is
+    /// declared for its consumers; an existing database of that name is
+    /// reused, never duplicated.
     Create {
-        /// Logical database name, also the project name (lowercase letters, digits, dashes).
+        /// Logical database name (lowercase letters, digits, dashes).
         name: String,
         /// Consumer allowed to resolve this database.
         #[arg(long = "consumer", value_delimiter = ',', required = true)]
         consumers: Vec<String>,
-        /// Declared database whose project's organization and region the new project joins.
-        #[arg(long, default_value = "oko")]
-        anchor: String,
-        /// Monthly compute cost in USD the operator accepts for the new project.
+        /// Engine the database speaks: postgres or sqlite.
+        #[arg(long, default_value = "postgres")]
+        engine: String,
+        /// Who runs it: fleet (Stado, on a fleet host) or supabase.
+        #[arg(long, default_value = "fleet")]
+        provider: String,
+        /// Fleet host the database is placed on (fleet; default: the vault owner).
+        #[arg(long)]
+        host: Option<String>,
+        /// Port the fleet database listens on (fleet postgres; default: the first free one from the engine's own).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Declared database whose project's organization and region the new project joins (supabase).
+        #[arg(long)]
+        anchor: Option<String>,
+        /// Monthly compute cost in USD the operator accepts for the new project (supabase).
         #[arg(long)]
         accept_monthly_usd: Option<u64>,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Place a fleet database on this host: the host-side half of `create
+    /// --provider fleet`.
+    ///
+    /// Initialises the engine's data under `~/.stado/databases/<name>/`,
+    /// writes the credential item `<name>-database` into the owner vault and,
+    /// for postgres, installs the managed unit `<name>-database` that serves
+    /// it over TLS with a certificate authority of its own. A database
+    /// already placed here is reported, never initialised twice.
+    Place {
+        /// Logical database name (lowercase letters, digits, dashes).
+        name: String,
+        /// Engine the database speaks: postgres or sqlite.
+        #[arg(long, default_value = "postgres")]
+        engine: String,
+        /// Port to listen on (postgres; default: the first free one from the engine's own).
+        #[arg(long)]
+        port: Option<u16>,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,

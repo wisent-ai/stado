@@ -16,6 +16,7 @@ use super::resolver::read_local_snapshot;
 use super::CmdError;
 
 mod commands;
+mod fleet;
 mod reads;
 mod supabase;
 mod verbs;
@@ -45,10 +46,46 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
         DatabaseCommands::Create {
             name,
             consumers,
+            engine,
+            provider,
+            host,
+            port,
             anchor,
             accept_monthly_usd,
             json,
-        } => supabase::create::create(&name, &anchor, &consumers, accept_monthly_usd, json).await,
+        } => match provider.as_str() {
+            "fleet" => {
+                if anchor.is_some() || accept_monthly_usd.is_some() {
+                    return Err(CmdError::usage(
+                        "--anchor and --accept-monthly-usd price a supabase project; a fleet database has no vendor bill",
+                    ));
+                }
+                fleet::create(&name, &engine, host.as_deref(), port, &consumers, json).await
+            }
+            "supabase" => {
+                if engine != "postgres" {
+                    return Err(CmdError::usage(format!(
+                        "supabase runs postgres only; --engine {engine} is created with --provider fleet"
+                    )));
+                }
+                if host.is_some() || port.is_some() {
+                    return Err(CmdError::usage(
+                        "--host and --port place a fleet database; supabase chooses its own",
+                    ));
+                }
+                let anchor = anchor.as_deref().unwrap_or(supabase::DEFAULT_ANCHOR);
+                supabase::create::create(&name, anchor, &consumers, accept_monthly_usd, json).await
+            }
+            other => Err(CmdError::usage(format!(
+                "--provider must be fleet or supabase, got {other:?}"
+            ))),
+        },
+        DatabaseCommands::Place {
+            name,
+            engine,
+            port,
+            json,
+        } => fleet::place(&name, &engine, port, json).await,
         DatabaseCommands::Adopt {
             name,
             project_ref,

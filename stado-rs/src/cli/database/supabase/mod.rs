@@ -1,10 +1,14 @@
-//! Supabase, the provider every declared hosted database lives in: its
-//! management API, the access token in Skarbiec, and the fields a database's
-//! credential item `<name>-database` carries for one project.
+//! Supabase, one provider a declared database can live in: its management
+//! API, the access token in Skarbiec, and the fields a database's credential
+//! item `<name>-database` carries for one project.
 
 pub(super) mod adopt;
 pub(super) mod create;
-mod owner_vault;
+pub(super) mod owner_vault;
+
+/// The declared database whose project a new Supabase project joins when
+/// `create --provider supabase` names no `--anchor`.
+pub(super) const DEFAULT_ANCHOR: &str = "oko";
 
 use serde_json::{json, Value};
 

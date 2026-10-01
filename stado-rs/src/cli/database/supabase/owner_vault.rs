@@ -14,14 +14,14 @@ use crate::credential_store::owner;
 const ITEM_SCHEMA: &str = "skarbiec.item.v2";
 
 /// Where the owner vault is, relative to this host.
-pub(super) enum Owner {
+pub(in crate::cli::database) enum Owner {
     /// This host owns the vault.
     Here,
     /// The named registry host owns it.
     Host(String),
 }
 
-pub(super) async fn locate() -> Result<Owner, CmdError> {
+pub(in crate::cli::database) async fn locate() -> Result<Owner, CmdError> {
     let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
     Ok(if owner == here {
         Owner::Here
@@ -31,7 +31,7 @@ pub(super) async fn locate() -> Result<Owner, CmdError> {
 }
 
 impl Owner {
-    pub(super) fn name(&self) -> &str {
+    pub(in crate::cli::database) fn name(&self) -> &str {
         match self {
             Self::Here => "this host",
             Self::Host(host) => host,
@@ -40,7 +40,7 @@ impl Owner {
 
     /// Store `item` in the owner vault; refused before any write when the
     /// owner cannot be reached, naming the host and the failed step.
-    pub(super) async fn store(
+    pub(in crate::cli::database) async fn store(
         &self,
         item: &str,
         item_type: &str,
@@ -74,7 +74,7 @@ impl Owner {
 
     /// Whether the owner vault accepts a write now: a created project whose
     /// generated password cannot be stored would be unreachable.
-    pub(super) fn ready(&self) -> Result<(), CmdError> {
+    pub(in crate::cli::database) fn ready(&self) -> Result<(), CmdError> {
         match self {
             Self::Here => owner::vault().map(|_| ()).map_err(|error| {
                 CmdError::click(format!(

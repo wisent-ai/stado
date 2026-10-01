@@ -47,7 +47,7 @@ mod document;
 mod report;
 mod routes;
 
-pub(crate) use crate::cli::directory::routes::service_port;
+pub(crate) use crate::cli::directory::routes::{routable_address, service_port};
 
 use crate::cli::directory::report::publish::publish;
 use crate::cli::directory::report::{profiles, show};

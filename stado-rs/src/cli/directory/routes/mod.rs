@@ -17,7 +17,7 @@ pub(in crate::cli::directory) mod endpoints;
 /// `ssh` carries `user@address` for the channel Stado already trusts, so its
 /// address half is the one this fleet has agreed on. A declared hostname is
 /// accepted after it, for hosts reached by name rather than by number.
-fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
+pub(crate) fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
     let (_, ssh) = target.ssh_connections().next()?;
     let address = ssh.rsplit('@').next().unwrap_or(ssh).trim();
     (!address.is_empty()).then(|| address.to_string())

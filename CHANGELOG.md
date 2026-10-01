@@ -19,5 +19,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- Stado carries no tests the operator has not approved with `tama tests approve`. The integration tests under `stado-rs/tests/`, the source checks package `stado-source-checks`, Stado Desktop's test targets, every inline `#[cfg(test)]` module, the release recipe's `tests` stages and the post-build qualification in `deploy/release/build_stado.sh` are removed. `stado release verify-platform`, whose only work was running those journeys on a host, is removed from the CLI and from Stado Desktop's Releases operations.
