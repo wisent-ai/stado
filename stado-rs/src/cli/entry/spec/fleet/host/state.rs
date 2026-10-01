@@ -114,6 +114,15 @@ pub(crate) enum HostStateCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Withdraw TARGET's declared board power cap and return every GPU to
+    /// the driver's default limit; the agent stops re-asserting a cap.
+    #[command(name = "gpu-power-limit-unset")]
+    GpuPowerLimitUnset {
+        target: String,
+        /// Emit the registry generation and driver report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report TARGET's uptime, load averages and logged-in users.
     Uptime {
         target: String,

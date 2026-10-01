@@ -9,7 +9,18 @@ pub async fn gpu_power_limit(target: &str, watts: u32, json: bool) -> Result<(),
     if watts == 0 {
         return Err(CmdError::usage("WATTS must be a positive integer"));
     }
+    declare_power_cap(target, Some(watts), json).await
+}
 
+/// Withdraw TARGET's declared board power cap and return every GPU to the
+/// driver's own default limit, so the agent stops re-asserting a cap.
+pub async fn gpu_power_limit_unset(target: &str, json: bool) -> Result<(), CmdError> {
+    declare_power_cap(target, None, json).await
+}
+
+/// Write `watts` (or remove the declaration for `None`) in the registry,
+/// then apply it on the host at once and report what the driver holds.
+async fn declare_power_cap(target: &str, watts: Option<u32>, json: bool) -> Result<(), CmdError> {
     let store = crate::targets::RegistryStore::open().await?;
     let current = store
         .read_versioned()
@@ -26,7 +37,14 @@ pub async fn gpu_power_limit(target: &str, watts: u32, json: bool) -> Result<(),
         .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
         .as_object_mut()
         .ok_or_else(|| CmdError::click("registry target must be an object"))?;
-    entry.insert("gpu_power_limit_watts".to_string(), Value::from(watts));
+    match watts {
+        Some(watts) => {
+            entry.insert("gpu_power_limit_watts".to_string(), Value::from(watts));
+        }
+        None => {
+            entry.remove("gpu_power_limit_watts");
+        }
+    }
     crate::targets::validate_registry(&document)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
@@ -38,6 +56,19 @@ pub async fn gpu_power_limit(target: &str, watts: u32, json: bool) -> Result<(),
         .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
     let generation = store.compare_and_swap(&current.version, &payload).await?;
 
+    let apply = match watts {
+        Some(watts) => format!(
+            r#"for gpu in $("$nvidia_smi" --query-gpu=index --format=csv,noheader,nounits); do
+  "$nvidia_smi" --id="$gpu" --power-limit={watts} >/dev/null
+done"#
+        ),
+        None => r#""$nvidia_smi" --query-gpu=index,power.default_limit --format=csv,noheader,nounits |
+while IFS=', ' read -r gpu limit; do
+  "$nvidia_smi" --id="$gpu" --power-limit="$limit" >/dev/null
+done"#
+            .to_string(),
+    };
+
     let script = format!(
         r#"set -eu
 nvidia_smi=$(command -v nvidia-smi)
@@ -45,26 +76,24 @@ if [ -z "$nvidia_smi" ]; then
   printf '%s\n' 'nvidia-smi is unavailable' >&2
   exit 1
 fi
-indices=$("$nvidia_smi" --query-gpu=index --format=csv,noheader,nounits)
-if [ -z "$indices" ]; then
+if [ -z "$("$nvidia_smi" --query-gpu=index --format=csv,noheader,nounits)" ]; then
   printf '%s\n' 'nvidia-smi returned no GPUs' >&2
   exit 1
 fi
-for gpu in $indices; do
-  "$nvidia_smi" --id="$gpu" --power-limit={watts} >/dev/null
-done
+{apply}
 "$nvidia_smi" \
   --query-gpu=index,power.limit,power.min_limit,power.max_limit \
   --format=csv,noheader,nounits
 "#
     );
+    let declared = watts.map_or_else(|| "the driver default".to_string(), |watts| format!("{watts} W"));
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         return Err(CmdError::click(format!(
-            "{target}: registry now requires {watts} W at generation {generation}, but immediate reconciliation failed: {}",
+            "{target}: registry now requires {declared} at generation {generation}, but immediate reconciliation failed: {}",
             crate::deploy::host_channel::last_error_line(
                 &output,
                 "remote nvidia-smi power-limit update failed"
@@ -84,7 +113,7 @@ done
             }))?
         );
     } else {
-        println!("{target}: gpu_power_limit_watts={watts} (generation {generation})");
+        println!("{target}: gpu_power_limit_watts={} (generation {generation})", watts.map_or_else(|| "unset".to_string(), |watts| watts.to_string()));
         print!("{}", output.stdout);
     }
     Ok(())
