@@ -4,9 +4,9 @@ use crate::cli::CmdError;
 use crate::models::{job_state, Job};
 
 /// The exit status carries the job's outcome, so
-/// `stado job watch ID --follow-seconds N && next-step` means what it reads
+/// `stado job watch ID --follow && next-step` means what it reads
 /// like. A job that is still running is not a failure — without
-/// `--follow-seconds` the operator asked for a snapshot, not a verdict. In
+/// `--follow` the operator asked for a snapshot, not a verdict. In
 /// `--json` mode the message goes to stderr and stdout stays a single
 /// parseable object.
 pub(super) fn outcome(job: &Job, terminal: bool) -> Result<(), CmdError> {

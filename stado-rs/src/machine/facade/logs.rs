@@ -51,4 +51,17 @@ impl MachineFacade {
         );
         Ok(Value::Object(out))
     }
+
+    /// A change watch on what a follower of `job_id` reads: the terminal
+    /// prefixes and the job's command log directory, armed before the first
+    /// read so a follower can hold instead of re-reading on a timer.
+    pub fn watch_job(
+        &self,
+        job_id: &str,
+    ) -> Result<Box<dyn crate::queue::ChangeWatch>, MachineError> {
+        let log_directory = format!("status/{job_id}/output");
+        let mut prefixes: Vec<&str> = crate::queue::runs::TERMINAL_PREFIXES.to_vec();
+        prefixes.push(&log_directory);
+        Ok(self.store.watch_prefixes(&prefixes)?)
+    }
 }
