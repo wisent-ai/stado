@@ -19,6 +19,7 @@ use crate::deploy::host_precheck_runner::release::installer::{
     installer_program, Decision, InstallerRequest, PROBIERZ_AGENT_ID, PROBIERZ_AGENT_RESOURCE,
 };
 use crate::deploy::host_precheck_runner::release::publisher::bootstrap_publisher_repository;
+use crate::deploy::host_precheck_runner::role::{declare_runner_role, RUNNER_ROLE};
 use crate::deploy::host_precheck_runner::signing::developer_id::bootstrap_developer_id;
 use crate::deploy::host_precheck_runner::verdict::report::{command_failure, report};
 use crate::deploy::host_precheck_runner::verdict::scope::{scope_for_profile, RunnerScope};
@@ -99,6 +100,25 @@ async fn install_profile(
             reconfigure,
         },
     )?;
+    // A listener must not run while `config.sh` replaces its registration, and
+    // a listener GitHub reports offline is restarted by stopping its role and
+    // switching it back on below: the role is a line of the host's Stado
+    // unit, so taking it off restarts that unit without the listener.
+    let role_taken_off = if reconfigure || restart_registered {
+        declare_runner_role(
+            &target.name,
+            &runner_root,
+            true,
+            &format!(
+                "{} runner at {runner_root} is being re-registered or restarted; its listener \
+                 role is taken off this host's Stado unit until the installer finishes",
+                profile.name
+            ),
+        )
+        .await?
+    } else {
+        "kept".to_string()
+    };
     let output = if platform == Platform::DarwinArm64 {
         crate::deploy::native_signing::run_runner_reconciliation(
             &target,
@@ -131,6 +151,27 @@ async fn install_profile(
             "status": "installed",
         });
     }
+    // The listener runs as a role of the host's one Stado unit; the installer
+    // wrote its launcher and nothing starts it until that unit is asserted
+    // with the role on. Ensure restarts the unit when its arguments or its
+    // running state differ, and reports `already_correct` otherwise.
+    let role = declare_runner_role(
+        &target.name,
+        &runner_root,
+        false,
+        &format!(
+            "{} runner installed at {runner_root}; its listener is the {RUNNER_ROLE} role of \
+             this host's Stado unit",
+            profile.name
+        ),
+    )
+    .await?;
+    value["role"] = json!({
+        "option": format!("{RUNNER_ROLE}={runner_root}"),
+        "unit": crate::deploy::local_install::stado_unit()?,
+        "taken_off": role_taken_off,
+        "ensure": role,
+    });
     // What the host did is not what GitHub holds. The registration is read
     // back from the scope it was made against, and an install that produced
     // no online runner there is a failure however cleanly the program exited.

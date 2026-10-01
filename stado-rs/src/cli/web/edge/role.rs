@@ -1,11 +1,9 @@
 //! The web edge as a role of the host's one Stado process.
 //!
-//! The operator's rule of 2026-09-30 is one service per repository: "JEDNA
-//! USLUGE NA REPOZYTORIUM. to znaczy com.wisent.stado ... jeden proces na
-//! wszystko" (1e14440a). The edge is Stado's function, so it is not a unit of
-//! its own: `stado serve --edge-caddy <program> --edge-caddyfile <path>` runs
-//! the reverse proxy under `com.wisent.stado`, and `stado web edge` delivers
-//! the generated Caddyfile to that path.
+//! One service per repository: the edge is Stado's function, so it is not a
+//! unit of its own. `stado serve --edge-caddy <program> --edge-caddyfile
+//! <path>` runs the reverse proxy under `com.wisent.stado`, and `stado web
+//! edge` delivers the generated Caddyfile to that path.
 //!
 //! Caddy is kept for what it does alone: ordering and renewing a certificate
 //! for every hostname in the file. It runs with `--watch`, so a delivered

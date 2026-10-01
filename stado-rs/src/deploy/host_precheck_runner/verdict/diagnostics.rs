@@ -38,8 +38,10 @@ const LINUX_DIAGNOSTICS: &str = r#"set -eu
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/opt/wisent/stado-precheck-runner
 runner_user=stado-precheck
-root systemctl show -p ActiveState -p SubState -p Result -p NRestarts -p ExecMainStatus -p StandardOutput -p StandardError wisent-stado-precheck-runner.service || true
-printf 'UnitLimits=%s\n' "$(root systemctl show -p MemoryMax -p MemoryHigh -p MemorySwapMax -p LimitAS -p TasksMax wisent-stado-precheck-runner.service 2>/dev/null | tr '\n' ' ')"
+# The listener is a role of the host's one Stado unit, a `systemd --user`
+# service of the account that runs it; its state is that unit's state.
+systemctl --user show -p ActiveState -p SubState -p Result -p NRestarts -p ExecMainStatus -p StandardOutput -p StandardError com.wisent.stado.service || true
+printf 'UnitLimits=%s\n' "$(systemctl --user show -p MemoryMax -p MemoryHigh -p MemorySwapMax -p LimitAS -p TasksMax com.wisent.stado.service 2>/dev/null | tr '\n' ' ')"
 printf 'MemoryAvailableKB=%s\n' "$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
 printf 'MemoryTotalKB=%s\n' "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
 printf 'SwapUsage=%s\n' "$(awk '/^Swap(Total|Free):/ {printf "%s=%s ", $1, $2}' /proc/meminfo)"
@@ -65,12 +67,15 @@ probe_runtime() {
   printf '%sCommand=%s\n%sStatus=%s\n%sOutput=%s\n' \
     "$key" "$*" "$key" "$status" "$key" "$(printf '%s' "$observed" | tr -s ' \n' ' ')"
 }
-state=$(root launchctl print system/com.wisent.stado-precheck-runner 2>/dev/null || true)
+# The listener is a role of the host's one Stado unit; its state is that
+# unit's state, in whichever launchd domain the host declared it.
+uid=$(id -u)
+state=$(launchctl print "gui/$uid/com.wisent.stado" 2>/dev/null || root launchctl print system/com.wisent.stado 2>/dev/null || true)
 printf 'ActiveState=%s\n' "$(printf '%s' "$state" | sed -n 's/.*state = \([a-z]*\).*/\1/p' | head -n 1)"
 printf 'ExecMainStatus=%s\n' "$(printf '%s' "$state" | sed -n 's/.*last exit code = \([0-9-]*\).*/\1/p' | head -n 1)"
 printf 'UnitLimits=%s\n' "$(printf '%s' "$state" | grep -iE 'limit|resource|jetsam|memory' | tr -s ' \n' ' ')"
-printf 'StandardOutput=%s\n' "$runner_root/_diag/launchd.stdout.log"
-printf 'StandardError=%s\n' "$runner_root/_diag/launchd.stderr.log"
+printf 'StandardOutput=%s\n' "$(printf '%s' "$state" | sed -n 's/.*stdout path = \(.*\)$/\1/p' | head -n 1)"
+printf 'StandardError=%s\n' "$(printf '%s' "$state" | sed -n 's/.*stderr path = \(.*\)$/\1/p' | head -n 1)"
 printf 'MemoryAvailableKB=%s\n' "$(( $(sysctl -n hw.memsize) / 100 * $(sysctl -n kern.memorystatus_level) / 1024 ))"
 printf 'MemoryTotalKB=%s\n' "$(( $(sysctl -n hw.memsize) / 1024 ))"
 printf 'SwapUsage=%s\n' "$(sysctl -n vm.swapusage | tr -s ' ')"
@@ -79,7 +84,7 @@ printf 'RunnerRoot=%s\n' "$runner_root"
 newest=$(root sh -c "ls -t \"$runner_root\"/_diag/*.log 2>/dev/null | head -n 1" || true)
 printf 'HostTime=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf 'LogModifiedAt=%s\n' "$(root sh -c "[ -n \"$newest\" ] && date -u -r \"\$(stat -f %m '$newest')\" +%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || printf 'unknown')"
-printf 'WrapperLogModifiedAt=%s\n' "$(date -u -r "$(root stat -f %m "$runner_root/_diag/launchd.stdout.log" 2>/dev/null || printf 0)" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')"
+printf 'WrapperLogModifiedAt=%s\n' "unknown"
 listener=$runner_root/bin/Runner.Listener
 printf 'ListenerBinary=%s\n' "$(if [ -x "$listener" ]; then printf 'present'; else printf 'absent'; fi)"
 printf 'ListenerArchitectures=%s\n' "$(root lipo -archs "$listener" 2>/dev/null || printf 'unreadable')"
@@ -97,7 +102,7 @@ probe_runtime BootArguments /usr/sbin/sysctl kern.bootargs
 probe_runtime RuntimeConfiguration /bin/cat "$runner_root/bin/Runner.Listener.runtimeconfig.json"
 probe_runtime KernelProtection /usr/bin/log show --last 2m --style compact --predicate 'process == "kernel" AND (eventMessage CONTAINS[c] "AMFI" OR eventMessage CONTAINS[c] "mprotect" OR eventMessage CONTAINS[c] "CODE SIGNING")'
 probe_runtime Launcher /bin/cat "$runner_root/start-runner.sh"
-probe_runtime Unit /bin/cat /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
+probe_runtime Unit /bin/sh -c "launchctl print gui/$uid/com.wisent.stado 2>/dev/null || launchctl print system/com.wisent.stado"
 printf 'DiagnosticLog=%s\n' "${newest:-none}"
 printf '%s\n' '--- tail ---'
 if [ -n "$newest" ]; then root tail -n 120 "$newest"; fi

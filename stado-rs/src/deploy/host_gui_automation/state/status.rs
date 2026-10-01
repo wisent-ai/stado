@@ -150,6 +150,9 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
     ));
     items.push(("accessibility-user".to_string(), user.clone()));
 
+    // The driver runs under Probierz's own process; a LaunchAgent of its own
+    // is a retired second owner of the socket, named here so the operator sees
+    // what `stado host gui-automation enable` will retire.
     let uid = gui_user_id(target, &user, runner).await?;
     let qualified = format!("gui/{uid}/{CUA_DRIVER_RUNTIME_LABEL}");
     let runtime = if invoke_as_gui_user(
@@ -162,9 +165,9 @@ pub(in crate::deploy::host_gui_automation) async fn status_inner(
     .await?
     .ok()
     {
-        "running"
+        "DEFECT: a retired CuaDriver LaunchAgent still runs beside Probierz's process"
     } else {
-        "absent"
+        "owned by Probierz's process"
     };
     let socket = format!("/Users/{user}/Library/Caches/cua-driver/probierz.sock");
     let socket_ready = invoke_as_gui_user(

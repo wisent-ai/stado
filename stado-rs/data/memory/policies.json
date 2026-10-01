@@ -3,7 +3,7 @@
   "memory_policies": [
     {
       "name": "macos-always-on-host",
-      "summary": "An always-on Mac that runs fleet work and keeps a logged-in graphical session. Restarts the pre-check runner when its process is gone, reaps stale GnuPG daemons, and ends the graphical-session processes that hold the most memory, largest first and only after ten minutes of life. Refuses new placement while the host is under its low watermark.",
+      "summary": "An always-on Mac that runs fleet work and keeps a logged-in graphical session. Restarts the host's one Stado unit, which runs the pre-check runner as a role, when its process is gone, reaps stale GnuPG daemons, and ends the graphical-session processes that hold the most memory, largest first and only after ten minutes of life. Refuses new placement while the host is under its low watermark.",
       "platforms": ["darwin-arm64"],
       "roles": ["always-on"],
       "policy": {
@@ -17,7 +17,7 @@
         "refuse_placement": true,
         "repairs": {
           "restart_unit": {
-            "units": ["com.wisent.stado-precheck-runner"]
+            "units": ["com.wisent.stado"]
           },
           "reap_recovery": {
             "recovery": "recover-skarbiec-crypto"
@@ -53,7 +53,7 @@
     },
     {
       "name": "linux-queue-host",
-      "summary": "A headless Linux queue host. Restarts the pre-check runner service when its process is gone and reaps stale GnuPG daemons; it declares no graphical session because there is none to end. Refuses new placement while under its low watermark so a job is not admitted onto a host that cannot give it memory.",
+      "summary": "A headless Linux queue host. Restarts the host's one Stado unit, which runs the pre-check runner as a role, when its process is gone and reaps stale GnuPG daemons; it declares no graphical session because there is none to end. Refuses new placement while under its low watermark so a job is not admitted onto a host that cannot give it memory.",
       "platforms": ["linux-amd64"],
       "roles": ["always-on", "burst"],
       "policy": {
@@ -67,7 +67,7 @@
         "refuse_placement": true,
         "repairs": {
           "restart_unit": {
-            "units": ["wisent-stado-precheck-runner.service"]
+            "units": ["com.wisent.stado.service"]
           },
           "reap_recovery": {
             "recovery": "recover-skarbiec-crypto"

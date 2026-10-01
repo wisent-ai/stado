@@ -1,7 +1,13 @@
-//! A finite release command delegates listeners to the persistent host process.
+//! A finite command delegates long-lived work to the persistent host process.
 //! The owner-only Unix socket preserves local OS identity; no proxy daemon is
 //! spawned and no network management endpoint is exposed.
+//!
+//! Two kinds of work are delegated: a release proxy listener, and a storage
+//! root transaction's worker, which the host process runs as its own child
+//! so that no unit of the transaction's own is ever installed.
 
+use std::collections::BTreeMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -10,9 +16,14 @@ use serde::{Deserialize, Serialize};
 mod client;
 mod server;
 mod socket;
+mod transactions;
 
 pub(crate) use server::serve;
 pub(crate) use socket::prepare;
+pub(crate) use transactions::{
+    adopt_transaction, adopt_transaction_blocking, inspect_transaction,
+    inspect_transaction_blocking, OwnedTransaction, TransactionRequest,
+};
 
 const SCHEMA: u32 = 1;
 const FRAME_LIMIT: u64 = 64 * 1024;
@@ -27,9 +38,37 @@ struct Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
-    Ensure { state: PathBuf, bind: SocketAddr },
-    Inspect { state: PathBuf, bind: SocketAddr },
-    Stop { state: PathBuf, bind: SocketAddr },
+    Ensure {
+        state: PathBuf,
+        bind: SocketAddr,
+    },
+    Inspect {
+        state: PathBuf,
+        bind: SocketAddr,
+    },
+    Stop {
+        state: PathBuf,
+        bind: SocketAddr,
+    },
+    /// Run a storage root transaction's worker as a child of this process.
+    AdoptTransaction {
+        transaction: String,
+        argv: Vec<String>,
+        env: BTreeMap<String, String>,
+        working_directory: PathBuf,
+        log: PathBuf,
+    },
+    /// Whether this process runs the transaction's worker, and as which pid.
+    InspectTransaction {
+        transaction: String,
+    },
+}
+
+impl Action {
+    /// A read that is answered `None` when no host process is there to ask.
+    fn is_inspection(&self) -> bool {
+        matches!(self, Self::Inspect { .. } | Self::InspectTransaction { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +84,21 @@ struct Response {
     schema_version: u32,
     pid: i32,
     proxy: Option<OwnedProxy>,
+    #[serde(default)]
+    transaction: Option<OwnedTransaction>,
     error: Option<String>,
+}
+
+/// Run `future` from a synchronous caller inside this program's runtime.
+fn block_on<F: Future>(future: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the host process control client")
+            .block_on(future),
+    }
 }
 
 fn socket_path(home: Option<&str>) -> Result<PathBuf, String> {

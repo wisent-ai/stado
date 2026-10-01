@@ -1,4 +1,6 @@
-//! What macOS reads back, restarts and removes for one installed runner.
+//! What macOS reads back and removes for one installed runner. A restart is
+//! not a program of the host: the listener is a role of the host's Stado
+//! unit, and `restart` cycles that role from the caller's side.
 
 /// Each check states its own refusal, because the caller reports the last
 /// error line and this script tails the runner's launchd logs: for as long as
@@ -10,14 +12,15 @@ pub(crate) const MACOS_STATUS: &str = r#"set -uo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/Users/Shared/stado-precheck-runner
 fail() { printf '__RUNNER_KIND__ runner: %s\n' "$1" >&2; exit 1; }
-if ! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
-  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
-  root tail -n 80 "$runner_root/_diag/launchd.stderr.log" >&2 || true
-  fail 'launchd daemon com.wisent.stado-precheck-runner is not loaded'
+# The listener is the `--precheck-runner` role of the host's one Stado unit,
+# so there is no daemon of its own to read; what this host owns is the
+# launcher that role runs. A daemon left by an earlier install is a second
+# owner of the listener and is reported as such.
+[ -x "$runner_root/start-runner.sh" ] ||
+  fail "the runner launcher $runner_root/start-runner.sh is missing; \`stado runner install\` writes it"
+if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
+  fail 'launchd daemon com.wisent.stado-precheck-runner still runs beside the Stado unit; `stado runner install` retires it'
 fi
-root launchctl print system/com.wisent.stado-precheck-runner |
-  grep -F 'state = running' >/dev/null ||
-  fail 'launchd daemon com.wisent.stado-precheck-runner is loaded but not running'
 dscl . -read /Users/stado-precheck UniqueID PrimaryGroupID NFSHomeDirectory UserShell >/dev/null 2>&1 ||
   fail 'service account stado-precheck does not exist'
 dscl . -read /Users/stado-precheck Password >/dev/null 2>&1 ||
@@ -30,8 +33,8 @@ root pfctl -a com.wisent.stado-precheck -sr >/dev/null 2>&1 ||
 # a host whose runner was executing jobs at that moment the probe answered
 # `Failed to create CoreCLR, HRESULT: 0x8007000C`: a single-file .NET bundle
 # started from an ad-hoc sudo context has no launchd domain of its own, so the
-# check measured its own invocation rather than the product. The runner is a
-# system daemon, so what can be observed about it is the process launchd keeps
+# check measured its own invocation rather than the product. What can be
+# observed about the listener is the process the Stado unit's role keeps
 # and the account that owns it.
 # No `root` here: the process table is world-readable, and the host's
 # passwordless sudo is granted for named commands only — asking for `ps`
@@ -51,12 +54,10 @@ listener_owner=$(/bin/ps -Ao user=,comm= |
   fail 'the process table could not be read'
 listener_problem=
 if [ -z "$listener_owner" ]; then
-  daemon_out=$(root tail -n 3 "$runner_root/_diag/launchd.stdout.log" 2>/dev/null | /usr/bin/tr '\n' ' ')
-  daemon_err=$(root tail -n 3 "$runner_root/_diag/launchd.stderr.log" 2>/dev/null | /usr/bin/tr '\n' ' ')
   runner_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
   runner_tail=$(root tail -n 3 "$runner_log" 2>/dev/null | /usr/bin/tr '\n' ' ')
   owned=$(/bin/ps -Ao user= | /usr/bin/grep -c -x 'stado-precheck')
-  listener_problem="no listener is running from $runner_root, so this host takes no jobs for its labels. stado-precheck holds $owned processes. wrapper stdout: $daemon_out | wrapper stderr: $daemon_err | runner log ($runner_log): $runner_tail"
+  listener_problem="no listener is running from $runner_root, so this host takes no jobs for its labels; \`stado service status stado --host\` says whether the Stado unit runs its --precheck-runner role. stado-precheck holds $owned processes. runner log ($runner_log): $runner_tail"
 elif [ "$listener_owner" != "stado-precheck" ]; then
   listener_problem="the runner listener runs as $listener_owner, not stado-precheck"
 fi
@@ -88,9 +89,7 @@ fi
 if [ -n "$listener_problem" ]; then listener_state=$listener_problem; fi
 # Every runner listener this host runs, with its owner and its path. A host
 # carries several runners, and "a Runner.Listener is running" says nothing
-# about which one: the reclaim phase of `restart` needs the process that
-# belongs to THIS runner root, and an operator reading a queued job needs the
-# same distinction.
+# about which one: an operator reading a queued job needs the distinction.
 listeners=$(/bin/ps -Ao user=,comm= |
   /usr/bin/awk '$2 ~ /Runner\.Listener$/ { printf "%s %s; ", $1, $2 }')
 scope=$(root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true)
@@ -102,102 +101,6 @@ for marker in /Users/Shared/.stado-runner-jobs/*.job; do
   if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
 done
 printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nlistener: %s\nrunner listeners: %s\nhost job slot: %s\n%s\n' "$agent_id" "$brama_route" "$secret_meta" "$listener_state" "${listeners:-none}" "$job_holder" "${scope:-unrecorded}"
-"#;
-
-/// Restart the runner in place and wait until it says it is listening again.
-///
-/// A listener whose long poll to GitHub's broker is cut keeps its process and
-/// its `state = running`, and takes no jobs: `install` sees a running service
-/// and leaves it alone, so nothing else in this product could recover it. A
-/// reinstall cuts that session (`[ERR BrokerServer]
-/// System.Net.Sockets.SocketException (89): Operation canceled`), and a gate
-/// then sits queued against a host that looks healthy in every other reading.
-///
-/// `kickstart -k` replaces the job without a window in which it does not
-/// exist, and the wait is on the runner's own log rather than on the daemon
-/// state that was never the question.
-pub(crate) const MACOS_RESTART: &str = r#"set -uo pipefail
-root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
-runner_root=/Users/Shared/stado-precheck-runner
-fail() { printf '__RUNNER_KIND__ runner: %s\n' "$1" >&2; exit 1; }
-newest_log_path() {
-  root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1"
-}
-# The evidence has to be NEWER than the restart. A whole-file `grep
-# 'Listening for Jobs'` matches the line the runner wrote when it first
-# started, so the first version of this wait reported success on a listener
-# that had not reconnected at all — the same "the check I happened to run"
-# failure this repository keeps paying for.
-await_listening() {
-  before_path=$1
-  before_bytes=$2
-  deadline=$(( $(date +%s) + $3 ))
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    sleep 5
-    current=$(newest_log_path)
-    [ -n "$current" ] || continue
-    if [ "$current" != "$before_path" ]; then
-      # The runner rotated to a log of its own, so anything in it is new.
-      fresh=$(root cat "$current" 2>/dev/null)
-    else
-      fresh=$(root tail -c "+$(( before_bytes + 1 ))" "$current" 2>/dev/null)
-    fi
-    if printf '%s' "$fresh" | /usr/bin/grep -a -q 'Listening for Jobs'; then
-      return 0
-    fi
-  done
-  return 1
-}
-snapshot() {
-  snapshot_path=$(newest_log_path)
-  snapshot_bytes=0
-  if [ -n "$snapshot_path" ]; then
-    snapshot_bytes=$(root stat -f %z "$snapshot_path" 2>/dev/null || printf '0')
-  fi
-}
-
-snapshot
-root launchctl kickstart -k system/com.wisent.stado-precheck-runner ||
-  fail 'launchctl refused to restart com.wisent.stado-precheck-runner'
-if await_listening "$snapshot_path" "$snapshot_bytes" 90; then
-  printf 'runner listener: listening for jobs\n'
-  exit 0
-fi
-
-# A listener launchd no longer owns keeps the registration's session and
-# writes nothing, so the managed job cannot take over and every job for these
-# labels queues forever: a `Runner.Listener` under the runner root, owned by
-# the precheck account, whose last log line is `Shutting down JobDispatcher`
-# from a kickstart long before.
-#
-# Only processes whose executable is UNDER THIS RUNNER'S ROOT are signalled,
-# and only after the ordinary restart has already failed to produce a fresh
-# listening line.
-stale=$(/bin/ps -Ao pid=,comm= |
-  /usr/bin/awk -v root="$runner_root/" '$2 ~ /Runner\.Listener$|runsvc\.sh$/ && index($2, root) == 1 { print $1 }')
-if [ -z "$stale" ]; then
-  last=$(root tail -n 5 "$(newest_log_path)" 2>/dev/null | /usr/bin/tr '\n' ' ')
-  fail "the runner did not report listening within 90s of the restart and holds no stale listener to reclaim: $last"
-fi
-printf 'reclaiming stale listener pids: %s\n' "$(printf '%s' "$stale" | /usr/bin/tr '\n' ' ')"
-for pid in $stale; do
-  root kill -TERM "$pid" 2>/dev/null || true
-done
-sleep 10
-for pid in $stale; do
-  if /bin/ps -p "$pid" >/dev/null 2>&1; then
-    root kill -KILL "$pid" 2>/dev/null || true
-  fi
-done
-snapshot
-root launchctl kickstart -k system/com.wisent.stado-precheck-runner ||
-  fail 'launchctl refused to restart com.wisent.stado-precheck-runner after reclaiming its listener'
-if await_listening "$snapshot_path" "$snapshot_bytes" 150; then
-  printf 'runner listener: listening for jobs after reclaiming a stale listener\n'
-  exit 0
-fi
-last=$(root tail -n 5 "$(newest_log_path)" 2>/dev/null | /usr/bin/tr '\n' ' ')
-fail "the runner did not report listening after its stale listener was reclaimed: $last"
 "#;
 
 pub(crate) const MACOS_REMOVE: &str = r#"set -euo pipefail
@@ -225,5 +128,5 @@ root rm -f /etc/pf.anchors/com.wisent.stado-precheck
 root rm -rf "$runner_root"
 root dscl . -delete /Users/$runner_user >/dev/null 2>&1 || true
 root dscl . -delete /Groups/$runner_user >/dev/null 2>&1 || true
-printf 'runner service: removed\nrunner identity: removed\nnetwork boundary: removed\n'
+printf 'runner launcher: removed\nrunner identity: removed\nnetwork boundary: removed\n'
 "#;

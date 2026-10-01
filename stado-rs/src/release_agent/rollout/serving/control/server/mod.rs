@@ -10,8 +10,18 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use super::socket::Prepared;
-use super::{Action, OwnedProxy, Request, Response, FRAME_LIMIT, SCHEMA};
+use super::{Action, OwnedProxy, OwnedTransaction, Request, Response, FRAME_LIMIT, SCHEMA};
 use crate::release_agent::rollout::serving::proxy::{forward, ProxyState};
+
+mod workers;
+
+use workers::Worker;
+
+/// What one request produced.
+enum Reply {
+    Proxy(Option<OwnedProxy>),
+    Transaction(Option<OwnedTransaction>),
+}
 
 struct Route {
     identity: OwnedProxy,
@@ -21,6 +31,7 @@ struct Route {
 
 struct Owner {
     routes: Mutex<BTreeMap<PathBuf, Route>>,
+    transactions: Mutex<BTreeMap<String, Worker>>,
     failures: mpsc::UnboundedSender<String>,
     uid: u32,
 }
@@ -33,6 +44,7 @@ pub(crate) async fn serve(prepared: Prepared) -> Result<(), String> {
     let (sender, mut failures) = mpsc::unbounded_channel();
     let owner = Arc::new(Owner {
         routes: Mutex::new(BTreeMap::new()),
+        transactions: Mutex::new(BTreeMap::new()),
         failures: sender,
         uid: nix::unistd::geteuid().as_raw(),
     });
@@ -55,14 +67,16 @@ pub(crate) async fn serve(prepared: Prepared) -> Result<(), String> {
 
 async fn respond(mut stream: UnixStream, owner: &Owner) -> Result<(), String> {
     let outcome = read_and_apply(&mut stream, owner).await;
-    let (proxy, error) = match outcome {
-        Ok(proxy) => (proxy, None),
-        Err(error) => (None, Some(error)),
+    let (proxy, transaction, error) = match outcome {
+        Ok(Reply::Proxy(proxy)) => (proxy, None, None),
+        Ok(Reply::Transaction(transaction)) => (None, transaction, None),
+        Err(error) => (None, None, Some(error)),
     };
     let response = Response {
         schema_version: SCHEMA,
         pid: std::process::id() as i32,
         proxy,
+        transaction,
         error,
     };
     let bytes = serde_json::to_vec(&response)
@@ -73,10 +87,7 @@ async fn respond(mut stream: UnixStream, owner: &Owner) -> Result<(), String> {
         .map_err(|error| format!("cannot send proxy control response: {error}"))
 }
 
-async fn read_and_apply(
-    stream: &mut UnixStream,
-    owner: &Owner,
-) -> Result<Option<OwnedProxy>, String> {
+async fn read_and_apply(stream: &mut UnixStream, owner: &Owner) -> Result<Reply, String> {
     let peer = stream
         .peer_cred()
         .map_err(|error| format!("cannot read native proxy caller credentials: {error}"))?;
@@ -104,7 +115,33 @@ async fn read_and_apply(
             request.schema_version
         ));
     }
-    apply(request.action, owner).await
+    match request.action {
+        Action::AdoptTransaction {
+            transaction,
+            argv,
+            env,
+            working_directory,
+            log,
+        } => workers::adopt(
+            &owner.transactions,
+            transaction,
+            argv,
+            env,
+            working_directory,
+            log,
+        )
+        .await
+        .map(|owned| Reply::Transaction(Some(owned))),
+        Action::InspectTransaction { transaction } => {
+            let mut transactions = owner.transactions.lock().await;
+            Ok(Reply::Transaction(
+                transactions
+                    .get_mut(&transaction)
+                    .map(|worker| worker.owned(&transaction)),
+            ))
+        }
+        action => apply(action, owner).await.map(Reply::Proxy),
+    }
 }
 
 async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, String> {
@@ -112,6 +149,9 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
         Action::Ensure { state, bind }
         | Action::Inspect { state, bind }
         | Action::Stop { state, bind } => (state, *bind),
+        Action::AdoptTransaction { .. } | Action::InspectTransaction { .. } => {
+            return Err("a transaction request reached the proxy table".to_string())
+        }
     };
     if !state.is_absolute() || !bind.ip().is_loopback() || bind.port() == 0 {
         return Err(
@@ -215,6 +255,9 @@ async fn apply(action: Action, owner: &Owner) -> Result<Option<OwnedProxy>, Stri
                 state.display()
             );
             Ok(Some(identity))
+        }
+        Action::AdoptTransaction { .. } | Action::InspectTransaction { .. } => {
+            Err("a transaction request reached the proxy table".to_string())
         }
     }
 }

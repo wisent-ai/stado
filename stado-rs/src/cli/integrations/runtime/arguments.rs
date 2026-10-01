@@ -89,6 +89,9 @@ impl ServeArgs {
         if let Some(caddyfile) = &self.edge_caddyfile {
             args.push(format!("--edge-caddyfile={}", caddyfile.display()));
         }
+        if let Some(root) = &self.precheck_runner {
+            args.push(format!("--precheck-runner={}", root.display()));
+        }
         if self.api {
             args.push("--api".to_string());
         }

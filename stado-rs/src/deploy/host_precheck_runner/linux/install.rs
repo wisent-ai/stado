@@ -56,7 +56,12 @@ if [ ! -f "$runner_root/.runner" ] || [ "$reconfigure" = 1 ]; then
       printf '%s\n' 'runner is executing a job; registration was not changed' >&2
       exit 1
     fi
-    root systemctl stop wisent-stado-precheck-runner.service
+    # The listener's role was taken off the host's Stado unit before this
+    # program ran; a listener still alive here is one that unit does not own.
+    if root pgrep -u "$runner_user" -f 'Runner.Listener' >/dev/null; then
+      printf '%s\n' 'runner listener is still running; its role was not taken off the Stado unit' >&2
+      exit 1
+    fi
     root mkdir -m 700 "$staging/previous-registration"
     for owned in .runner .runner_migrated .credentials .credentials_migrated .credentials_rsaparams .service .env .path; do
       if [ -f "$runner_root/$owned" ]; then
@@ -80,7 +85,6 @@ if [ ! -f "$runner_root/.runner" ] || [ "$reconfigure" = 1 ]; then
       root cp -Rp "$staging/previous-registration"/. "$runner_root/"
       root chown root:root "$runner_root"
       root chmod go-w "$runner_root"
-      root systemctl start wisent-stado-precheck-runner.service
     fi
     for log in "$runner_root"/_diag/Runner_*.log; do
       [ -f "$log" ] || continue
@@ -181,87 +185,28 @@ fi
 root systemctl enable nftables.service >/dev/null
 rm -f "$rules"
 
-unit=$(mktemp "$staging/unit.XXXXXX")
-cat > "$unit" <<UNIT
-[Unit]
-Description=Wisent isolated GitHub pre-check runner
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$runner_user
-Group=$runner_user
-WorkingDirectory=$runner_root
-ExecStartPre=$runner_root/clean-work.sh
-ExecStart=$runner_root/bin/runsvc.sh
-Restart=always
-RestartSec=5
-# Where the single-file .NET host unpacks itself, and where the runner puts
-# temporary files: inside this profile's own runner root, exactly as the darwin
-# installer already pins them. Without this the listener answered
-# 'System.IO.IOException: Permission denied' and never reported listening,
-# because ProtectSystem=strict leaves the filesystem read-only apart from
-# ReadWritePaths and the extract directory was neither.
-Environment=HOME=$runner_root
-Environment=TMPDIR=$runner_root/.tmp
-Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet
-Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/job-gate.sh
-Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-RestrictSUIDSGID=true
-LockPersonality=true
-# The runner's own writable set, and nothing else. The install chowns the whole
-# root to root and drops group write so the account cannot rewrite the
-# binaries it executes, then hands back exactly the directories it must write.
-# '.tmp' and '.dotnet' are on that list because the single-file .NET host
-# unpacks itself into DOTNET_BUNDLE_EXTRACT_BASE_DIR before it can run at
-# all: without them the listener answered 'System.IO.IOException: Permission
-# denied' and never reported listening, which is how the first second-profile
-# install on a host failed.
-#
-# '.profile' is a file rather than a directory, and it is here because a
-# toolchain a repository's checks install writes it: rustup-init refused with
-# "could not amend shell profile: '<root>/.profile': Read-only file system"
-# and failed a product's documentation check. HOME is
-# this root, so a job that installs any toolchain needs that one file and
-# nothing else around it.
-#
-# The job gate stays shared on purpose. One job at a time is a host-wide
-# invariant, not a per-runner one, so every profile account writes its marker
-# into the same sticky 1777 directory; giving each profile its own gate path
-# would let two runners on one host build at once, which is the failure the
-# gate exists to prevent.
-ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup $runner_root/.tmp $runner_root/.dotnet $runner_root/.profile /opt/wisent/.stado-runner-jobs
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-service_changed=0
-if [ ! -f "$runner_root/.service-reconciled" ]; then service_changed=1; fi
-if [ ! -f /etc/systemd/system/wisent-stado-precheck-runner.service ] || ! root cmp -s "$unit" /etc/systemd/system/wisent-stado-precheck-runner.service; then
-  service_changed=1
+# The launcher the host's one Stado unit runs as its `--precheck-runner`
+# role: it clears the last job's work tree and drops to the runner's account
+# before GitHub's listener starts. The account and the nftables rules above
+# are the runner's confinement; no unit of its own is written, and the caller
+# asserts the Stado unit with the role once this program exits.
+launcher=$(mktemp "$staging/launcher.XXXXXX")
+cat > "$launcher" <<LAUNCHER
+#!/bin/sh
+set -eu
+/usr/sbin/runuser --user $runner_user -- $runner_root/clean-work.sh
+exec /usr/sbin/runuser --user $runner_user -- /usr/bin/env HOME=$runner_root TMPDIR=$runner_root/.tmp DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet PATH=/usr/local/bin:/usr/bin:/bin ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/job-gate.sh ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
+LAUNCHER
+root install -o root -g root -m 0755 "$launcher" "$runner_root/start-runner.sh"
+rm -f "$launcher"
+# The service earlier installs wrote for this listener is retired here: the
+# launcher is a role of com.wisent.stado now, and two owners of one listener
+# would register it twice.
+if [ -f /etc/systemd/system/wisent-stado-precheck-runner.service ]; then
+  root systemctl disable --now wisent-stado-precheck-runner.service >/dev/null 2>&1 || true
+  root rm -f /etc/systemd/system/wisent-stado-precheck-runner.service
+  root systemctl daemon-reload
 fi
-root install -o root -g root -m 0644 "$unit" /etc/systemd/system/wisent-stado-precheck-runner.service
-rm -f "$unit"
-root systemctl daemon-reload
-if root systemctl is-active --quiet wisent-stado-precheck-runner.service; then
-  if [ "$service_changed" -eq 1 ] || [ "$restart_registered" -eq 1 ] || [ "$reconfigure" = 1 ]; then
-    root systemctl restart wisent-stado-precheck-runner.service
-  fi
-else
-  root systemctl enable --now wisent-stado-precheck-runner.service >/dev/null
-fi
-root systemctl is-active --quiet wisent-stado-precheck-runner.service
 root touch "$runner_root/.service-reconciled"
 # What this host now carries, read back from its own record rather than from
 # the declaration that asked for it: an install that skipped registration used
@@ -275,5 +220,5 @@ for marker in /opt/wisent/.stado-runner-jobs/*.job; do
   if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
 done
 printf 'host job slot: %s\n' "$job_holder"
-printf 'runner service: active\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
+printf 'runner launcher: %s/start-runner.sh, the --precheck-runner role of com.wisent.stado\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_root" "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;

@@ -1,94 +1,38 @@
-//! What the native manager says about the transaction's worker unit, and
-//! whether the worker has recorded itself as the owner bound to it.
+//! What the host process says about the transaction's worker, and whether
+//! the worker has recorded itself as the owner bound to that process.
 
 use std::fs;
-use std::process::{Command, Stdio};
 
-use regex::Regex;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use super::Launch;
+use crate::release_agent::rollout::serving::control;
 
-fn capture<'a>(pattern: &str, text: &'a str) -> Option<&'a str> {
-    Regex::new(pattern)
-        .ok()?
-        .captures(text)?
-        .get(1)
-        .map(|found| found.as_str())
-}
-
-fn quiet_sudo(arguments: &[&str]) -> Option<String> {
-    let output = Command::new("/usr/bin/sudo")
-        .arg("-n")
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn launchd_state(label: &str) -> Value {
-    let Some(printed) = quiet_sudo(&["/bin/launchctl", "print", &format!("system/{label}")]) else {
-        return json!({
-            "manager": "launchd", "service": label, "domain": "system",
-            "loaded": false, "active": false, "starting": false, "pid": null, "state": null,
-        });
-    };
-    let pid: Option<u64> =
-        capture(r"(?m)^\s*pid = ([1-9][0-9]*)\s*$", &printed).and_then(|pid| pid.parse().ok());
-    let state = capture(r"(?m)^\s*state = (.+?)\s*$", &printed).map(str::trim);
-    let completed = Regex::new(r"(?m)^\s*last exit code = -?[0-9]+\s*$")
-        .is_ok_and(|pattern| pattern.is_match(&printed));
-    let runs = capture(r"(?m)^\s*runs = ([1-9][0-9]*)\s*$", &printed).is_some();
-    let lowered = state.unwrap_or_default().to_lowercase();
-    let terminal =
-        lowered == "exited" || lowered == "not running" || (pid.is_none() && completed && runs);
-    json!({
-        "manager": "launchd", "service": label, "domain": "system", "loaded": true,
-        "active": pid.is_some(), "starting": pid.is_none() && !terminal,
-        "pid": pid, "state": state,
-    })
-}
-
-fn systemd_state(label: &str) -> Value {
-    let unit = format!("{label}.service");
-    let mut properties = Map::new();
-    let property_names = "--property=LoadState,ActiveState,SubState,MainPID";
-    if let Some(shown) = quiet_sudo(&["/bin/systemctl", "show", property_names, &unit]) {
-        for line in shown.lines() {
-            if let Some((key, value)) = line.split_once('=') {
-                properties.insert(key.to_string(), json!(value));
-            }
-        }
-    }
-    let property = |key: &str| properties.get(key).and_then(Value::as_str);
-    let pid = property("MainPID")
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|pid| *pid > 0);
-    let active_state = property("ActiveState");
-    let active =
-        pid.is_some() || matches!(active_state, Some("active" | "activating" | "reloading"));
-    json!({
-        "manager": "systemd", "service": unit,
-        "loaded": property("LoadState") == Some("loaded"),
-        "active": active, "starting": active_state == Some("activating"),
-        "pid": pid, "load_state": property("LoadState"),
-        "active_state": active_state, "sub_state": property("SubState"),
-    })
-}
-
+/// The host process's view of the worker, in the shape the worker records
+/// as its manager: `service` is the host's one Stado unit, `pid` the
+/// worker's own pid. No host process answering is `loaded: false`.
 pub(super) fn manager_state(launch: &Launch) -> Result<Value, String> {
-    if cfg!(target_os = "macos") {
-        Ok(launchd_state(&launch.label))
-    } else if cfg!(target_os = "linux") {
-        Ok(systemd_state(&launch.label))
-    } else {
-        Err("native reconciliation worker requires Darwin launchd or Linux systemd".to_string())
-    }
+    let Some((host_pid, worker)) = control::inspect_transaction_blocking(None, launch.transaction)?
+    else {
+        return Ok(json!({
+            "manager": "stado", "service": launch.label,
+            "loaded": false, "active": false, "starting": false, "pid": null, "host_pid": null,
+            "state": "the host process is not running",
+        }));
+    };
+    Ok(match worker {
+        Some(worker) => json!({
+            "manager": "stado", "service": launch.label, "loaded": true,
+            "active": worker.running, "starting": false,
+            "pid": worker.pid, "host_pid": host_pid,
+            "state": worker.exit.unwrap_or_else(|| "running".to_string()),
+        }),
+        None => json!({
+            "manager": "stado", "service": launch.label, "loaded": true,
+            "active": false, "starting": false, "pid": null, "host_pid": host_pid,
+            "state": "no worker of this transaction",
+        }),
+    })
 }
 
 pub(super) fn running(state: &Value) -> bool {

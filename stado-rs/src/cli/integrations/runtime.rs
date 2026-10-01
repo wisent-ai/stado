@@ -13,6 +13,7 @@ use crate::deploy::host_access::native::ReverseForward;
 mod api;
 mod arguments;
 mod identity;
+mod precheck_runner;
 pub(crate) mod roles;
 mod supervisor;
 
@@ -88,6 +89,11 @@ pub(crate) struct ServeArgs {
     /// The Caddyfile `stado web edge` delivers to this host; watched and reloaded.
     #[arg(long, requires = "edge_caddy")]
     pub edge_caddyfile: Option<std::path::PathBuf>,
+    /// Run the GitHub pre-check runner installed at this root inside this
+    /// process: its launcher starts under passwordless sudo and drops to the
+    /// runner's own account.
+    #[arg(long, value_name = "ROOT")]
+    pub precheck_runner: Option<std::path::PathBuf>,
     /// Collect workstation diagnostics inside this host process.
     #[arg(long)]
     pub watchdog: bool,
@@ -188,6 +194,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     }
     if let (Some(caddy), Some(caddyfile)) = (args.edge_caddy, args.edge_caddyfile) {
         supervisor.spawn("edge", move || crate::cli::web::edge_role(caddy, caddyfile))?;
+    }
+    if let Some(root) = args.precheck_runner {
+        supervisor.spawn("precheck-runner", move || precheck_runner::run(root))?;
     }
     if args.watchdog {
         let diagnostics = crate::watchdog::ParsedArgs {

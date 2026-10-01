@@ -41,12 +41,16 @@ pub enum RunnerCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Restart one declared runner in place and wait for a fresh listener event.
+    /// Restart one declared runner by cycling its role on the host's Stado
+    /// unit, and read GitHub's view of it afterwards.
     Restart {
         target: String,
         /// Profile name from stado-rs/data/work/runner-profiles.json.
         #[arg(long)]
         profile: String,
+        /// Repository scope used when this runner was registered.
+        #[arg(long)]
+        repository: Option<String>,
         /// Emit the lifecycle report for native clients.
         #[arg(long, hide = true)]
         json: bool,
@@ -213,11 +217,16 @@ pub async fn run(command: RunnerCommands) -> Result<(), CmdError> {
         RunnerCommands::Restart {
             target,
             profile,
+            repository,
             json,
         } => {
-            let report = crate::deploy::host_precheck_runner::restart_declared(&target, &profile)
-                .await
-                .map_err(|error| click(error, json))?;
+            let report = crate::deploy::host_precheck_runner::restart_declared(
+                &target,
+                &profile,
+                repository.as_deref(),
+            )
+            .await
+            .map_err(|error| click(error, json))?;
             render_lifecycle(&report, json)
         }
         RunnerCommands::Remove {

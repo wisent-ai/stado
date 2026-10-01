@@ -73,11 +73,11 @@ pub(crate) const MACOS_PUBLISHER_STATUS: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 runner_root=/Users/Shared/stado-precheck-runner
 runner_user=stado-precheck
-if ! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null; then
-  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
-  root tail -n 80 "$runner_root/_diag/launchd.stderr.log" >&2 || true
-  exit 1
-fi
+# The listener is the `--precheck-runner` role of the host's one Stado unit;
+# what this host owns is the launcher that role runs. A daemon left by an
+# earlier install is a second owner of the listener.
+[ -x "$runner_root/start-runner.sh" ]
+! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1
 dscl . -read "/Users/$runner_user" UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password >/dev/null
 root pfctl -a com.wisent.stado-precheck -sr >/dev/null
 identity_output=$(root sudo -u "$runner_user" -H -- /usr/bin/security find-identity -v -p codesigning "$runner_root/Library/Keychains/login.keychain-db" 2>&1 || true)

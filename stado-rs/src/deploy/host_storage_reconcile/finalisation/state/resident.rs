@@ -7,11 +7,7 @@ pub(in crate::deploy::host_storage_reconcile) fn resident_owner_retention(
     let identity = RESIDENT_NATIVE_MANAGER.get().ok_or_else(|| {
         DeployError("resident native manager identity was not initialized".to_string())
     })?;
-    let expected_service = if cfg!(target_os = "linux") {
-        format!("com.wisent.stado-storage-root-reconcile.{transaction}.service")
-    } else {
-        format!("com.wisent.stado-storage-root-reconcile.{transaction}")
-    };
+    let expected_service = crate::deploy::local_install::stado_unit()?;
     if identity.get("service").and_then(Value::as_str) != Some(expected_service.as_str())
         || identity.get("pid").and_then(Value::as_u64) != Some(u64::from(std::process::id()))
     {
@@ -71,94 +67,42 @@ pub(in crate::deploy::host_storage_reconcile) fn verify_resident_lock(
     Ok(())
 }
 
+/// The worker's manager is the host's one Stado process, which runs this
+/// worker as its child: the identity it records is that process's unit, the
+/// worker's own pid as that process reports it, and the host process's pid.
 pub(in crate::deploy::host_storage_reconcile) fn resident_native_manager_identity(
     transaction: &str,
 ) -> Result<Value, DeployError> {
-    let label = format!("com.wisent.stado-storage-root-reconcile.{transaction}");
+    let service = crate::deploy::local_install::stado_unit()?;
     let current_pid = std::process::id();
-    if cfg!(target_os = "macos") {
-        let output = std::process::Command::new("/usr/bin/sudo")
-            .args(["-n", "/bin/launchctl", "print", &format!("system/{label}")])
-            .output()
-            .map_err(|error| {
-                DeployError(format!("cannot query resident launchd owner: {error}"))
-            })?;
-        if !output.status.success() {
-            return Err(DeployError(
-                "resident worker is not loaded in its captured launchd service".to_string(),
-            ));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let pid = stdout.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("pid = ")
-                .and_then(|value| value.parse::<u32>().ok())
-        });
-        let state = stdout
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("state = ").map(str::to_string));
-        if pid != Some(current_pid) {
-            return Err(DeployError(format!(
-                "launchd binds the resident service to pid {pid:?}, not worker pid {current_pid}"
-            )));
-        }
-        return Ok(json!({
-            "manager": "launchd",
-            "service": label,
-            "domain": "system",
-            "pid": current_pid,
-            "state": state,
-        }));
+    let Some((host_pid, worker)) =
+        crate::release_agent::rollout::serving::control::inspect_transaction_blocking(
+            None,
+            transaction,
+        )
+        .map_err(|error| DeployError(format!("cannot query the host process: {error}")))?
+    else {
+        return Err(DeployError(
+            "the host process is not running, so nothing manages this worker".to_string(),
+        ));
+    };
+    let worker = worker.ok_or_else(|| {
+        DeployError(format!(
+            "the host process (pid {host_pid}) runs no worker of transaction {transaction}"
+        ))
+    })?;
+    if worker.pid != current_pid {
+        return Err(DeployError(format!(
+            "the host process binds transaction {transaction} to pid {}, not worker pid \
+             {current_pid}",
+            worker.pid
+        )));
     }
-    if cfg!(target_os = "linux") {
-        let unit = format!("{label}.service");
-        let output = std::process::Command::new("/usr/bin/sudo")
-            .args([
-                "-n",
-                "/bin/systemctl",
-                "show",
-                "--property=LoadState,ActiveState,SubState,MainPID",
-                &unit,
-            ])
-            .output()
-            .map_err(|error| {
-                DeployError(format!("cannot query resident systemd owner: {error}"))
-            })?;
-        if !output.status.success() {
-            return Err(DeployError(
-                "resident worker is not loaded in its captured systemd service".to_string(),
-            ));
-        }
-        let properties = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.split_once('='))
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect::<BTreeMap<_, _>>();
-        let pid = properties
-            .get("MainPID")
-            .and_then(|value| value.parse::<u32>().ok());
-        if properties.get("LoadState").map(String::as_str) != Some("loaded")
-            || !matches!(
-                properties.get("ActiveState").map(String::as_str),
-                Some("active" | "activating" | "reloading")
-            )
-            || pid != Some(current_pid)
-        {
-            return Err(DeployError(format!(
-                "systemd does not bind {} to worker pid {}: {:?}",
-                unit, current_pid, properties
-            )));
-        }
-        return Ok(json!({
-            "manager": "systemd",
-            "service": unit,
-            "pid": current_pid,
-            "load_state": properties.get("LoadState"),
-            "active_state": properties.get("ActiveState"),
-            "sub_state": properties.get("SubState"),
-        }));
-    }
-    Err(DeployError(
-        "native reconciliation worker requires Darwin launchd or Linux systemd".to_string(),
-    ))
+    Ok(json!({
+        "manager": "stado",
+        "service": service,
+        "pid": current_pid,
+        "host_pid": host_pid,
+        "state": worker.exit.unwrap_or_else(|| "running".to_string()),
+    }))
 }

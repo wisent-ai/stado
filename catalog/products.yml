@@ -534,6 +534,25 @@ products:
       flag: --product-sync-interval-seconds
     - unit: com.wisent.products.desktop-sync
       flag: --product-sync-interval-seconds
+    # Each GitHub pre-check runner ran as a system daemon or service of its
+    # own; its launcher is the `--precheck-runner <ROOT>` role of this
+    # process, one option per runner root on the host.
+    - unit: com.wisent.stado-precheck-runner
+      flag: --precheck-runner
+    - unit: wisent-stado-precheck-runner.service
+      flag: --precheck-runner
+    - unit: com.wisent.stado-repo-precheck-runner
+      flag: --precheck-runner
+    - unit: wisent-stado-repo-precheck-runner.service
+      flag: --precheck-runner
+    - unit: com.wisent.stado-publisher-runner
+      flag: --precheck-runner
+    - unit: wisent-stado-publisher-runner.service
+      flag: --precheck-runner
+    - unit: com.wisent.stado-product-precheck-runner
+      flag: --precheck-runner
+    - unit: wisent-stado-product-precheck-runner.service
+      flag: --precheck-runner
 - id: lem
   name: Lem
   status: active
@@ -672,6 +691,12 @@ products:
     - com.wisent.probierz-intake
     # A hand-made nightly agent whose script no longer exists in the repository.
     - com.probierz.nightly
+    # The desktop driver (CuaDriver) ran under a LaunchAgent Stado installed
+    # for Probierz; Probierz's own process starts the driver app on demand and
+    # owns its socket, so the agent and the label Stado minted before it are
+    # retired.
+    - com.wisent.probierz-cua-driver
+    - com.wisent.compute.service.com.wisent.probierz-cua-driver
   dependencies:
   - product: brama
     surface: service

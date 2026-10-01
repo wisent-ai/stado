@@ -1,16 +1,15 @@
 //! Launch the resident storage-root worker, exactly once per transaction.
 //!
-//! Under the launch lock: a worker the native manager already runs (or is
-//! starting) is acknowledged, not replaced. Otherwise the operation lock is
-//! taken and the manager asked again, since a unit may start between the
-//! two; only then is the launch intent recorded, the staged tool verified
-//! and moved into place, and the unit installed and started. The launcher
-//! then waits for the worker to record itself as the owner bound to that
-//! manager process.
+//! Under the launch lock: a worker the host process already runs is
+//! acknowledged, not replaced. Otherwise the operation lock is taken and the
+//! host process asked again, since a worker may start between the two; only
+//! then is the launch intent recorded, the staged tool verified and moved
+//! into place, and the worker handed to the host process. The launcher then
+//! waits for the worker to record itself as the owner bound to that process.
 
+mod adopt;
 mod manager;
 mod origin;
-mod unit;
 
 use std::fs;
 use std::os::fd::AsRawFd;
@@ -135,10 +134,7 @@ pub(super) fn launch(request: &Request) -> Result<(), String> {
         .map_err(|error| format!("captured target is invalid: {error}"))?;
     let launch = Launch {
         transaction: request.transaction,
-        label: format!(
-            "com.wisent.stado-storage-root-reconcile.{}",
-            request.transaction
-        ),
+        label: crate::deploy::local_install::stado_unit().map_err(|error| error.0)?,
         owner_path: format!("{work}/operation-owner.json"),
         intent_path: format!("{work}/launch-intent.json"),
         log_path: format!("{work}/transaction-worker.log"),
@@ -196,7 +192,7 @@ pub(super) fn launch(request: &Request) -> Result<(), String> {
     });
     atomic_json(&launch.intent_path, &intent)?;
     place_tool(&staged, &tool, request.sha256, &launch.work)?;
-    unit::install(&launch, &release_api, move || drop(operation_lock))?;
+    adopt::install(&launch, &release_api, move || drop(operation_lock))?;
     loop {
         let state = manager_state(&launch)?;
         if let Some(owner) = manager_bound_owner(&launch, &state)? {

@@ -78,8 +78,11 @@ if [ "$runner_registered" -eq 0 ] || [ "$reconfigure" = 1 ]; then
       printf '%s\n' 'runner is executing a job; registration was not changed' >&2
       exit 1
     fi
-    if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
-      root launchctl bootout system/com.wisent.stado-precheck-runner
+    # The listener's role was taken off the host's Stado unit before this
+    # program ran; a listener still alive here is one that unit does not own.
+    if root pgrep -u "$runner_user" -f 'Runner.Listener' >/dev/null; then
+      printf '%s\n' 'runner listener is still running; its role was not taken off the Stado unit' >&2
+      exit 1
     fi
     root mkdir -m 700 "$staging/previous-registration"
     for owned in .runner .runner_migrated .credentials .credentials_migrated .credentials_rsaparams .service .env .path; do
@@ -104,7 +107,6 @@ if [ "$runner_registered" -eq 0 ] || [ "$reconfigure" = 1 ]; then
       root cp -Rp "$staging/previous-registration"/. "$runner_root/"
       root chown root:wheel "$runner_root"
       root chmod go-w "$runner_root"
-      root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
     fi
     for log in "$runner_root"/_diag/Runner_*.log; do
       [ -f "$log" ] || continue
@@ -173,9 +175,10 @@ root pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-prec
 root pfctl -E >/dev/null 2>&1 || true
 rm -f "$anchor"
 
-service_changed=$runtime_repaired
-if [ ! -f "$runner_root/.service-reconciled" ]; then service_changed=1; fi
-
+# The launcher the host's one Stado unit runs as its `--precheck-runner`
+# role: it applies this runner's egress rules and drops to the runner's
+# account before GitHub's listener starts. No unit of its own is written;
+# the caller asserts the Stado unit with the role once this program exits.
 launcher=$(mktemp "$staging/launcher.XXXXXX")
 cat > "$launcher" <<LAUNCHER
 #!/bin/sh
@@ -184,48 +187,15 @@ set -eu
 /sbin/pfctl -E >/dev/null 2>&1 || true
 exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root TMPDIR=$runner_root/.tmp DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/job-gate.sh ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
 LAUNCHER
-if [ ! -f "$runner_root/start-runner.sh" ] || ! root cmp -s "$launcher" "$runner_root/start-runner.sh"; then
-  service_changed=1
-fi
 root install -o root -g wheel -m 0755 "$launcher" "$runner_root/start-runner.sh"
 rm -f "$launcher"
-
-plist=$(mktemp "$staging/plist.XXXXXX")
-cat > "$plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>com.wisent.stado-precheck-runner</string>
-<key>ProgramArguments</key><array><string>$runner_root/start-runner.sh</string></array>
-<key>WorkingDirectory</key><string>$runner_root</string>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-<key>ThrottleInterval</key><integer>5</integer>
-<key>ProcessType</key><string>Background</string>
-<key>StandardOutPath</key><string>$runner_root/_diag/launchd.stdout.log</string>
-<key>StandardErrorPath</key><string>$runner_root/_diag/launchd.stderr.log</string>
-</dict></plist>
-PLIST
-root plutil -lint "$plist" >/dev/null
-if [ ! -f /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist ] || ! root cmp -s "$plist" /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist; then
-  service_changed=1
-fi
-root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
-rm -f "$plist"
+# The daemon earlier installs wrote for this launcher is retired here: the
+# launcher is a role of com.wisent.stado now, and two owners of one listener
+# would register it twice.
 if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
-  if [ "$service_changed" -eq 1 ] ||
-     [ "$restart_registered" -eq 1 ] ||
-     ! root launchctl print system/com.wisent.stado-precheck-runner |
-       grep -F 'state = running' >/dev/null; then
-    # GitHub, rather than launchd's outer RunnerService process, is the
-    # authoritative listener health signal. Only a registered publisher that
-    # GitHub reported offline reaches this branch.
-    root launchctl kickstart -k system/com.wisent.stado-precheck-runner
-  fi
-else
-  root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
+  root launchctl bootout system/com.wisent.stado-precheck-runner
 fi
-root launchctl enable system/com.wisent.stado-precheck-runner
-root launchctl print system/com.wisent.stado-precheck-runner | grep -F 'state = running' >/dev/null
+root rm -f /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 root touch "$runner_root/.service-reconciled"
 # The same read-back the linux installer prints, for the same reason.
 root sed -n '3p' "$runner_root/.stado/registered-runner" 2>/dev/null || true
@@ -237,5 +207,5 @@ for marker in /Users/Shared/.stado-runner-jobs/*.job; do
   if kill -0 "$pid" 2>/dev/null; then job_holder="$(basename "$marker" .job) pid=$pid"; else job_holder="$(basename "$marker" .job) stale"; fi
 done
 printf 'host job slot: %s\n' "$job_holder"
-printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
+printf 'runner launcher: %s/start-runner.sh, the --precheck-runner role of com.wisent.stado\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_root" "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;

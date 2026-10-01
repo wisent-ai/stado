@@ -13,6 +13,7 @@
 //! |---|---|
 //! | [`declaration`] | the compiled profile declaration and the host it resolves |
 //! | [`platform`] | the two platforms, template substitution, the host job gate |
+//! | [`role`] | the runner role on the host's one Stado unit |
 //! | [`lifecycle`] | restarting, repairing and removing an installed runner |
 //! | [`accounts`] | every identity a runner presents: GitHub, Skarbiec, Brama, model review |
 //! | [`release`] | registering a runner: the rendered installer and what one install declares |
@@ -27,6 +28,7 @@ mod linux;
 mod macos;
 mod platform;
 mod release;
+mod role;
 mod signing;
 mod verdict;
 
@@ -38,5 +40,6 @@ pub use self::declaration::*;
 pub use self::lifecycle::*;
 pub use self::platform::*;
 pub use self::release::*;
+pub use self::role::*;
 pub use self::signing::*;
 pub use self::verdict::*;

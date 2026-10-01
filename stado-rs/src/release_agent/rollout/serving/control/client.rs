@@ -11,7 +11,7 @@ pub(super) async fn exchange(
     action: Action,
 ) -> Result<Option<Response>, String> {
     let path = socket_path(home)?;
-    let inspecting = matches!(&action, Action::Inspect { .. });
+    let inspecting = action.is_inspection();
     let metadata = match tokio::fs::symlink_metadata(&path).await {
         Ok(metadata) => metadata,
         Err(error) if inspecting && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -100,19 +100,22 @@ pub(super) async fn exchange(
             request.action
         ));
     }
-    let (state, bind) = match &request.action {
+    let coordinates = match &request.action {
         Action::Ensure { state, bind }
         | Action::Inspect { state, bind }
-        | Action::Stop { state, bind } => (state, bind),
+        | Action::Stop { state, bind } => Some((state, bind)),
+        Action::AdoptTransaction { .. } | Action::InspectTransaction { .. } => None,
     };
-    if response
-        .proxy
-        .as_ref()
-        .is_some_and(|proxy| &proxy.state != state || &proxy.bind != bind)
-    {
-        return Err(format!(
-            "proxy owner pid {pid} answered for a different state file or bind"
-        ));
+    if let Some((state, bind)) = coordinates {
+        if response
+            .proxy
+            .as_ref()
+            .is_some_and(|proxy| &proxy.state != state || &proxy.bind != bind)
+        {
+            return Err(format!(
+                "proxy owner pid {pid} answered for a different state file or bind"
+            ));
+        }
     }
     Ok(Some(response))
 }
