@@ -187,12 +187,13 @@ fn rewrite_git_input(declared: &str, git_config: &Path) -> Result<(), CmdError> 
         format!("ssh://git@github.com/{repository}"),
         format!("git@github.com:{repository}"),
     ];
-    for (position, origin) in origins.iter().enumerate() {
+    let adding = std::iter::once(false).chain(std::iter::repeat(true));
+    for (add, origin) in adding.zip(origins.iter()) {
         let mut command = Command::new("git");
         command
             .env("GIT_CONFIG_GLOBAL", git_config)
             .args(["config", "--global"]);
-        if position > usize::MIN {
+        if add {
             command.arg("--add");
         }
         run(command.args([target.as_str(), origin.as_str()]))?;

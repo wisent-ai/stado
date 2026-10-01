@@ -136,8 +136,8 @@ impl UnitState {
         self.text.lines().find_map(|line| {
             line.trim()
                 .strip_prefix(prefix)
-                .and_then(|value| value.parse::<u32>().ok())
-                .filter(|pid| *pid != u32::MIN)
+                .and_then(|value| value.parse::<std::num::NonZeroU32>().ok())
+                .map(std::num::NonZeroU32::get)
         })
     }
 

@@ -33,7 +33,6 @@
 //! anything. The manifest keeps the commit; the reader resolves the rest
 //! against a checkout it can see.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -128,14 +127,7 @@ pub fn describe(path: &Path, artifact: &str) -> Provenance {
 pub fn file_sha256(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
-    let mut buffer = [u8::MIN; u16::MAX as usize];
-    loop {
-        let read = file.read(&mut buffer).ok()?;
-        if read == usize::default() {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
+    std::io::copy(&mut file, &mut hasher).ok()?;
     Some(hex::encode(hasher.finalize()))
 }
 

@@ -101,11 +101,9 @@ pub fn marker_port(url: &str) -> Option<u32> {
     if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
         return None;
     }
-    let port: u32 = port.parse().ok()?;
-    if port == u32::MIN || port > u32::from(u16::MAX) {
-        return None;
-    }
-    Some(port)
+    port.parse::<std::num::NonZeroU16>()
+        .ok()
+        .map(|port| u32::from(port.get()))
 }
 
 /// One marker's verdict against the listener table: its port, and whether

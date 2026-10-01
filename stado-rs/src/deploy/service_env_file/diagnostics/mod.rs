@@ -23,11 +23,12 @@ pub use reconcile::{endpoint_rows, endpoint_verdict, EndpointRow};
 /// decides what the value MEANS.
 pub fn effective_text(value: &str) -> &str {
     let trimmed = value.trim();
-    let bytes = trimmed.as_bytes();
-    if bytes.len() >= 2 {
-        let head = bytes[usize::MIN];
-        if (head == b'"' || head == b'\'') && bytes[bytes.len() - 1] == head {
-            return &trimmed[1..trimmed.len() - 1];
+    for quote in ['"', '\''] {
+        if let Some(inner) = trimmed
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
         }
     }
     // `KEY=value # note` is a comment to every shell that sources the file,
@@ -84,26 +85,20 @@ pub fn declared_endpoint(key: &str, value: &str) -> Option<Endpoint> {
             },
         };
         let port = match port {
-            Some(port) => port.parse::<u32>().ok()?,
+            Some(port) => tcp_port(port)?,
             None => match scheme {
                 "http" | "ws" => 80,
                 "https" | "wss" => 443,
                 _ => return None,
             },
         };
-        if port == u32::MIN || port > u32::from(u16::MAX) {
-            return None;
-        }
         return Some(Endpoint {
             port,
             loopback: authority_is_loopback(&host),
         });
     }
     if key == "PORT" || key.ends_with("_PORT") {
-        let port = text.parse::<u32>().ok()?;
-        if port == u32::MIN || port > u32::from(u16::MAX) {
-            return None;
-        }
+        let port = tcp_port(text)?;
         return Some(Endpoint {
             port,
             loopback: true,
@@ -112,10 +107,8 @@ pub fn declared_endpoint(key: &str, value: &str) -> Option<Endpoint> {
     // `127.0.0.1:8895` with no scheme, the spelling a `*_HOST` or `*_ADDR`
     // variable usually carries.
     let (host, port) = text.rsplit_once(':')?;
-    let port = port.parse::<u32>().ok()?;
-    if port == u32::MIN
-        || port > u32::from(u16::MAX)
-        || host.is_empty()
+    let port = tcp_port(port)?;
+    if host.is_empty()
         || !host
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
@@ -126,4 +119,11 @@ pub fn declared_endpoint(key: &str, value: &str) -> Option<Endpoint> {
         port,
         loopback: authority_is_loopback(host),
     })
+}
+
+/// A TCP port: a number a socket can carry, and never zero.
+fn tcp_port(text: &str) -> Option<u32> {
+    text.parse::<std::num::NonZeroU16>()
+        .ok()
+        .map(|port| u32::from(port.get()))
 }

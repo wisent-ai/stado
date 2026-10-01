@@ -103,15 +103,16 @@ pub(crate) async fn env_show(options: EnvShowOptions<'_>) -> Result<(), CmdError
                 service_env_file::SHADOWED
             );
         }
-        let redacted = report
+        let redacted: Vec<_> = report
             .entries
             .iter()
             .filter(|entry| entry.value_state == service_env_file::VALUE_REDACTED)
-            .count();
-        if redacted > usize::MIN {
+            .collect();
+        if !redacted.is_empty() {
             println!(
-                "redacted: {redacted} value(s) never left the host. Show one with \
-                 --reveal KEY."
+                "redacted: {} value(s) never left the host. Show one with \
+                 --reveal KEY.",
+                redacted.len()
             );
         }
     }

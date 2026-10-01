@@ -283,12 +283,15 @@ pub(crate) fn erase_transient_grant(path: &str, byte_count: usize) {
     let path = Path::new(path);
     if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) {
         let _ = std::io::copy(
-            &mut std::io::repeat(u8::MIN).take(u64::try_from(byte_count).unwrap_or(u64::MAX)),
+            &mut std::io::repeat(b'\0').take(u64::try_from(byte_count).unwrap_or(u64::MAX)),
             &mut file,
         );
-        let _ = file.set_len(u64::MIN);
         let _ = file.sync_all();
     }
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path);
     let _ = std::fs::remove_file(path);
 }
 

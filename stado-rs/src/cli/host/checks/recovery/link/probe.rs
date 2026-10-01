@@ -178,7 +178,7 @@ pub(super) async fn collect_silences(
             crate::monitor::host_silence::RefusalSummary::empty(REFUSAL_WINDOW_SECONDS)
         }
     };
-    let refused = refusals.count > usize::MIN;
+    let refused = std::num::NonZeroUsize::new(refusals.count).is_some();
     if refused {
         blockers.push(format!(
             "readers refused {} time(s) in the last {}s: {}",

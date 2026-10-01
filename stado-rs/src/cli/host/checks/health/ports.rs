@@ -18,9 +18,6 @@ use serde_json::json;
 use crate::cli::CmdError;
 use crate::targets::ComputeTarget;
 
-/// The highest port number a TCP socket can carry.
-const HIGHEST_PORT: u32 = 65_535;
-
 #[derive(Serialize)]
 pub struct PortHolder {
     pub pid: String,
@@ -60,9 +57,14 @@ fn parse_lsof(text: &str) -> Vec<PortHolder> {
 /// raw text, because a shape neither `lsof` nor `ss` produces is still
 /// evidence and must not be swallowed by a parser.
 pub async fn port_owner(target: &str, port: u32, json: bool) -> Result<(), CmdError> {
-    if port == u32::MIN || port > HIGHEST_PORT {
+    if u16::try_from(port)
+        .ok()
+        .and_then(std::num::NonZeroU16::new)
+        .is_none()
+    {
         return Err(CmdError::click(format!(
-            "--port is a TCP port between 1 and {HIGHEST_PORT}, not {port}"
+            "--port is a TCP port between 1 and {}, not {port}",
+            u16::MAX
         )));
     }
     let resolved: ComputeTarget = crate::deploy::host_channel::canonical_target(target)

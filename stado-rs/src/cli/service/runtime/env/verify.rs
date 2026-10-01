@@ -50,7 +50,7 @@ pub(super) async fn verify_env_write(
     Ok(ReadBack {
         state,
         effective,
-        chars: entry.map_or(u32::MIN, |entry| entry.chars),
+        chars: entry.map(|entry| entry.chars).unwrap_or_default(),
         marker,
     })
 }

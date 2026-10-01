@@ -56,21 +56,17 @@ pub fn to_report(
     let mut stale_markers: Vec<&str> = Vec::new();
     let mut disagreeing_markers: Vec<&str> = Vec::new();
     let mut undeclared_markers: Vec<&str> = Vec::new();
-    let mut matched = usize::MIN;
-    let mut stale = usize::MIN;
-    let mut unreadable = usize::MIN;
-    let mut unknown = usize::MIN;
-    let mut declared_matched = usize::MIN;
+    let mut matched: Vec<&str> = Vec::new();
+    let mut unreadable: Vec<&str> = Vec::new();
+    let mut unknown: Vec<&str> = Vec::new();
+    let mut declared_matched: Vec<&str> = Vec::new();
     for marker in &inventory.forwards {
         let (port, state) = verdict(marker, &inventory.listeners, &inventory.listeners_state);
         match state {
-            MATCHED => matched += 1,
-            STALE => {
-                stale += 1;
-                stale_markers.push(&marker.name);
-            }
-            UNKNOWN => unknown += 1,
-            _ => unreadable += 1,
+            MATCHED => matched.push(&marker.name),
+            STALE => stale_markers.push(&marker.name),
+            UNKNOWN => unknown.push(&marker.name),
+            _ => unreadable.push(&marker.name),
         }
         // Two declared sources, in the order `service directory publish`
         // writes them: the endpoint this host serves on, then the adapter it
@@ -88,7 +84,7 @@ pub fn to_report(
         match declaration {
             DISAGREES => disagreeing_markers.push(&marker.name),
             UNDECLARED => undeclared_markers.push(&marker.name),
-            _ => declared_matched += 1,
+            _ => declared_matched.push(&marker.name),
         }
         markers.push(json!({
             "name": marker.name,
@@ -188,15 +184,15 @@ pub fn to_report(
         "reconciliation".to_string(),
         json!({
             "markers": inventory.forwards.len(),
-            "matched": matched,
-            "stale": stale,
-            "unreadable": unreadable,
-            "unknown": unknown,
+            "matched": matched.len(),
+            "stale": stale_markers.len(),
+            "unreadable": unreadable.len(),
+            "unknown": unknown.len(),
             "stale_markers": stale_markers,
             // The registry axis, counted separately from the listener axis
             // above it on purpose: they are different questions, and one
             // combined "drift" number would hide which of them was answered.
-            "declaration_matched": declared_matched,
+            "declaration_matched": declared_matched.len(),
             "declaration_disagrees": disagreeing_markers.len(),
             "declaration_undeclared": undeclared_markers.len(),
             "disagreeing_markers": disagreeing_markers,

@@ -190,14 +190,7 @@ pub(in crate::cli::storage) fn archive(args: &StorageArchiveArgs) -> Result<(), 
     }
     let mut file = std::fs::File::open(output)?;
     let mut hasher = Sha256::new();
-    let mut buffer = [u8::MIN; u16::MAX as usize];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == usize::default() {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
+    std::io::copy(&mut file, &mut hasher)?;
     let bytes = file.metadata()?.len();
     let sha256 = hex::encode(hasher.finalize());
     if args.json {

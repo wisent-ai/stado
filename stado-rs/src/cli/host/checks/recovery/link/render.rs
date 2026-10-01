@@ -38,12 +38,8 @@ pub(super) fn render(
         // One per line, unabridged. These are whole sentences from the reader,
         // the channel and the host's own agent; comma-joining them made three
         // accounts read as one.
-        for (index, blocker) in blockers.iter().enumerate() {
-            let label = if index == usize::MIN {
-                "blockers:"
-            } else {
-                "         "
-            };
+        let labels = std::iter::once("blockers:").chain(std::iter::repeat("         "));
+        for (label, blocker) in labels.zip(blockers.iter()) {
             println!("{label} {blocker}");
         }
     }
