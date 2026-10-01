@@ -92,30 +92,12 @@ fn first_contact_argv(destination: &str) -> Vec<String> {
     .collect()
 }
 
-/// What ssh says when first contact fails, declared in
-/// `ssh-contact-markers.json` beside this file: one family for a TCP or DNS
-/// leg that never completed, where no credential was ever offered, and one
-/// for a server that answered and refused the operator.
-fn markers(family: &str) -> Vec<String> {
-    let document: serde_json::Value =
-        serde_json::from_str(include_str!("ssh-contact-markers.json"))
-            .expect("ssh-contact-markers.json beside this file is valid JSON");
-    document[family]
-        .as_array()
-        .unwrap_or_else(|| panic!("ssh-contact-markers.json declares no {family}"))
-        .iter()
-        .filter_map(|marker| marker.as_str().map(str::to_owned))
-        .collect()
-}
-
-fn matches_any(haystack: &str, needles: &[String]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
-}
-
 /// Turn one failed first-contact run into the sentence naming the operator's
-/// next action. The three failures below need three different actions, which is
-/// why they are three different messages and not one "ssh failed":
-/// dial the machine, fix the credential, or fix the machine's home directory.
+/// next action. ssh exits 255 when it could not open the session at all — the
+/// machine was not reached, or it was reached and refused the credential —
+/// and the two are told apart by ssh's own sentence, quoted whole, not by a
+/// list of phrases. Any other status means the session opened and the
+/// install on the machine failed.
 fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutput) -> String {
     // `accept-new` records an unknown host key and says so on stderr. That
     // notice is not a diagnosis of anything, and quoting it ahead of the real
@@ -127,26 +109,14 @@ fn first_contact_failure(destination: &str, output: &crate::deploy::CommandOutpu
         .filter(|line| !line.is_empty() && !line.starts_with("Warning: Permanently added"))
         .collect::<Vec<_>>()
         .join("; ");
-    let lowered = diagnostic.to_ascii_lowercase();
-    if output.code == 255 && matches_any(&lowered, &markers("unreachable")) {
-        return format!(
-            "no SSH connection to {destination} was established, so no credential was even offered: \
-             check the address and port, that the machine is awake and on this network, and that \
-             sshd is listening there. ssh said: {diagnostic}"
-        );
-    }
-    if output.code == 255 && matches_any(&lowered, &markers("rejected")) {
-        return format!(
-            "{destination} answered on SSH and rejected the authentication: --install-key can only \
-             use a session you can already open yourself, so unlock or forward an agent \
-             (ssh-add -l), or let OpenSSH ask for the account password — which needs a terminal, \
-             not a script or the dashboard. ssh said: {diagnostic}"
-        );
-    }
     if output.code == 255 {
         return format!(
-            "ssh could not open a session to {destination}; it reported neither an unreachable \
-             address nor a rejected credential: {diagnostic}"
+            "ssh could not open a session to {destination} (exit 255). ssh said: {diagnostic}. \
+             If it never connected, check the address and port, that the machine is awake and on \
+             this network, and that sshd is listening there. If it connected and refused the \
+             credential, --install-key can only use a session you can already open yourself: \
+             unlock or forward an agent (ssh-add -l), or let OpenSSH ask for the account password \
+             — which needs a terminal, not a script or the dashboard."
         );
     }
     let reason = output

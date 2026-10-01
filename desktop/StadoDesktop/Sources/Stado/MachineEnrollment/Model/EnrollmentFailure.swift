@@ -29,32 +29,15 @@ struct MachineEnrollmentFailure: Equatable, Sendable {
         )
     }
 
+    /// Enrollment probes the machine before it writes anything and rolls its
+    /// own entry back when the agent install fails, so whatever the command
+    /// refused, no half-added machine is left behind. Which refusal it was is
+    /// the command's own sentence, shown verbatim; it is not guessed here from
+    /// its words.
     static func enrollment(_ message: String, machine: String, sshTarget: String) -> Self {
-        let lowered = message.lowercased()
-        if lowered.contains("rolled back") {
-            return Self(
-                title: "The agent install failed, so \(machine) was removed again",
-                detail: "The registry entry was written, the agent install on the machine failed, and Stado rolled the entry back. There is no half-added machine to hunt for: the registry is exactly as it was before this attempt. Fix what the install complained about and enroll again.",
-                backendMessage: message
-            )
-        }
-        if lowered.contains("already registered") || lowered.contains("already has a health beacon") {
-            return Self(
-                title: "\(machine) is already in the registry",
-                detail: "Enrollment refuses to overwrite a machine that already has a channel or a health beacon. Choose a different name, or work with the existing entry from the Hosts table.",
-                backendMessage: message
-            )
-        }
-        if lowered.contains("unsupported release platform") {
-            return Self(
-                title: "Stado reached \(sshTarget) but does not ship a release for it",
-                detail: "The machine answered the identity probe with an operating system and architecture combination Stado has no release for, so no entry was written.",
-                backendMessage: message
-            )
-        }
-        return Self(
-            title: "Stado could not reach \(sshTarget)",
-            detail: "Enrollment asks the machine for its hostname, uname -s and uname -m before it writes anything, so this failure is about the connection and not about the registry. Nothing was written. Check that Remote Login is on over there, that the public key from the key step is in its ~/.ssh/authorized_keys, and that \(sshTarget) resolves from the machine running the Stado dashboard.",
+        Self(
+            title: "\(machine) was not enrolled",
+            detail: "Enrollment asks \(sshTarget) for its hostname, uname -s and uname -m before it writes anything, and rolls its own registry entry back if the agent install fails, so the registry is exactly as it was before this attempt. Stado's own sentence below says what refused.",
             backendMessage: message
         )
     }
@@ -79,17 +62,9 @@ struct MachineEnrollmentFailure: Equatable, Sendable {
     }
 
     static func invite(_ message: String, machine: String) -> Self {
-        let lowered = message.lowercased()
-        if lowered.contains("allow_invite") || lowered.contains("not allowed") || lowered.contains("refuses") {
-            return Self(
-                title: "This fleet's registry does not allow invitations",
-                detail: "The catalog in the canonical registry switches this method off, and the preflight refused before anything was minted. No invitation exists and no key was created.",
-                backendMessage: message
-            )
-        }
-        return Self(
+        Self(
             title: "No invitation was minted for \(machine)",
-            detail: "Minting writes one object to the store and one key pair to the credential store, in that order, and neither is left half-written on failure. Nothing was sent to anyone and nothing is waiting to be answered.",
+            detail: "Minting writes one object to the store and one key pair to the credential store, in that order, and neither is left half-written on failure. Nothing was sent to anyone and nothing is waiting to be answered. Stado's own sentence below says what refused.",
             backendMessage: message
         )
     }
@@ -110,40 +85,15 @@ struct MachineEnrollmentFailure: Equatable, Sendable {
     /// Adoption differs from the hand-installed key in exactly one way, and
     /// that one way is where it fails: Stado opens the first session itself,
     /// with whatever `ssh` on the control plane host can already authenticate
-    /// with. The command distinguishes three refusals — no connection, a
-    /// rejected credential, and a home directory it could not write — and they
-    /// send the operator to three different places.
+    /// with. The command's own sentence says whether the machine was not
+    /// reached, refused the credential, or would not take the key; it is shown
+    /// verbatim and not read back here for words.
     static func adoption(_ message: String, machine: String, sshTarget: String) -> Self {
-        let lowered = message.lowercased()
-        if lowered.contains("rejected the authentication") || lowered.contains("permission denied") {
-            return Self(
-                title: "\(sshTarget) answered, then refused the credentials",
-                detail: "The machine is reachable, so this is about the credential and not the network. The key install runs from the machine hosting the Stado control plane, which has no terminal: OpenSSH there cannot prompt for a password, and no password can be supplied from this window. Either make the credential available to that host's SSH agent, or put an existing key of yours on \(sshTarget) — or use the invitation, which needs no credential from you at all. Nothing was written to the registry.",
-                backendMessage: message
-            )
-        }
-        if lowered.contains("no ssh connection") {
-            return Self(
-                title: "Nothing at \(sshTarget) answered on SSH",
-                detail: "No session was established, so no credential was tried and nothing was written. Check that Remote Login is on over there and that \(sshTarget) resolves from the machine running the Stado control plane, which is where the connection is made from — not from this Mac.",
-                backendMessage: message
-            )
-        }
-        if lowered.contains("writing ~/.ssh/authorized_keys") {
-            return Self(
-                title: "\(sshTarget) let Stado in but would not take the key",
-                detail: "The session opened and the credentials were accepted, and then writing the key into that account's ~/.ssh/authorized_keys failed. This is about the account on the machine: a read-only home directory, a full disk, or an authorized_keys file owned by somebody else. Nothing was written to the registry.",
-                backendMessage: message
-            )
-        }
-        if lowered.contains("allow_adopt") {
-            return Self(
-                title: "This fleet's registry does not allow Stado to install keys",
-                detail: "The catalog switches adoption off, so the preflight refused before any session was opened. The invitation and the key installed by hand need no such permission, and either one is the way through.",
-                backendMessage: message
-            )
-        }
-        return .enrollment(message, machine: machine, sshTarget: sshTarget)
+        Self(
+            title: "\(machine) was not adopted",
+            detail: "Adoption opens a session to \(sshTarget) from the machine hosting the Stado control plane, which has no terminal, installs the public key, and probes the machine before anything is written. Nothing was written to the registry. Stado's own sentence below says which step refused.",
+            backendMessage: message
+        )
     }
 
     /// Approval runs the same probing enrollment as `fleet enroll`, so it has
