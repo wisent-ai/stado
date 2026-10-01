@@ -13,9 +13,8 @@
 //! short-TTL in-process cache and is the fleet-survival authority
 //! (`source="gcs"`), while [`load_registry_auto`] adds the bundled file as
 //! a fallback (`source="auto"`). On the "gcs" backend the fetch still goes
-//! through the crate's GCS JSON-API backend, never gsutil — see the Python
-//! `_load_from_gcs` docstring: a broken gsutil install knocked the agent
-//! offline on 2026-05-08 even though the registry was in GCS.
+//! through the crate's GCS JSON-API backend, never gsutil: a broken gsutil
+//! install knocks the agent offline even though the registry is in GCS.
 //!
 //! The same document carries the fleet's [`ServiceDirectory`] — which host
 //! currently serves each service and which consumers may call it — and the

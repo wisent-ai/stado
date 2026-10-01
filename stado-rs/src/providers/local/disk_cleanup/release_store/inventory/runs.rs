@@ -11,8 +11,8 @@ use crate::providers::local::disk_cleanup::JanitorError;
 /// Publication evidence from every namespace on the local store.
 ///
 /// Missing from the active-run set does not mean a publisher finished. The
-/// tag workflow publishes outside the queue: on 2026-09-06 the janitor removed
-/// Stado 0.16.29 repeatedly while that workflow was uploading it. Reclaim
+/// tag workflow publishes outside the queue, so the janitor would otherwise
+/// remove a version repeatedly while that workflow is uploading it. Reclaim
 /// requires a completed run for the same source, not merely an absent pin.
 /// Unknown and failed publications remain owned by their publisher.
 pub(in crate::providers::local::disk_cleanup::release_store) fn run_retention_evidence(

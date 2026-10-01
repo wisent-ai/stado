@@ -95,7 +95,7 @@ pub(crate) fn may_replace_last_good(
 
 /// Why the last-known-good copy was not refreshed.
 ///
-/// The cache refused documents silently until 2026-09-03: every refusal
+/// The cache used to refuse documents silently: every refusal
 /// printed one stderr line and [`store_last_good`] returned `()`, so neither
 /// caller could know the host had stopped taking new copies. A host can sit a
 /// registry generation behind indefinitely that way, with the only evidence

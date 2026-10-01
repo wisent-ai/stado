@@ -187,8 +187,8 @@ pub const PRIMARY_SSH_CONNECTION: &str = "primary";
 /// Android capture families lived nowhere, and the only trace of it in the
 /// repository was the probe side: `deploy::host_exec` approved
 /// `appium --version`, `appium driver list --installed`, `which adb` and
-/// `adb devices -l` on 2026-09-03 so a placement could be asked whether it
-/// can run, with nothing anywhere stating what the answer ought to be.
+/// `adb devices -l` so a placement could be asked whether it can run, with
+/// nothing anywhere stating what the answer ought to be.
 ///
 /// Declared here rather than hardcoded in the verifier for the reason
 /// [`crate::deploy::weles_browser_runtime`] reads Playwright's revisions out

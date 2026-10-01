@@ -148,9 +148,9 @@ pub struct VerifyDescriptor {
     #[serde(default = "default_verify_expect")]
     pub expect: String,
     /// Keys this build does not model, kept verbatim. [`Registry::extra`]
-    /// exists for the same reason one level up: on 2026-08-04 the canonical
-    /// document lost three top-level blocks to a writer that could not name
-    /// them, and a descriptor is no safer — a newer publisher's
+    /// exists for the same reason one level up: a canonical document can lose
+    /// whole top-level blocks to a writer that cannot name them, and a
+    /// descriptor is no safer — a newer publisher's
     /// `verify.timeout_seconds` must survive a rewrite from this checkout.
     #[serde(flatten)]
     pub extra: Map<String, Value>,

@@ -14,10 +14,10 @@ use crate::providers::local::disk_cleanup::janitor::pass::once::cleanup_once;
 /// solved it for watermarks by preferring the registry declaration.
 ///
 /// An `outcome` cannot be solved that way, because it is an event and not a
-/// declaration. On 2026-08-31 the agent's pass at 14:55:24Z reported
-/// `interval_noop` with no errors and all six cleaners scanned, and 46 seconds
-/// later `stado space report` read `invalid_or_unavailable_policy` from the same
-/// path: two processes, opposite verdicts, and the operator's answer decided by
+/// declaration. The agent's pass can report `interval_noop` with no errors
+/// and every cleaner scanned, and seconds later `stado space report` reads
+/// `invalid_or_unavailable_policy` from the same path: two processes,
+/// opposite verdicts, and the operator's answer decided by
 /// which wrote last. A long-running writer holding a superseded configuration —
 /// or an older binary that rejects a cleaner the registry now declares, which
 /// makes it reject the whole document and resolve no policy at all — loses

@@ -215,11 +215,11 @@ pub fn scan_release_store(
                     Ok(delta) => {
                         // One line per version, at `warn`, because a whole
                         // immutable release leaving a host is not routine
-                        // reclaim: on 2026-09-04 a complete installable
-                        // `stado` 0.15.21 was removed and the only trace was
-                        // a counter reading `deleted_items`, so the loss was
-                        // reconstructed from a 404 half an hour later rather
-                        // than read from the log. It names what was removed
+                        // reclaim: when a complete installable version is
+                        // removed and the only trace is a counter reading
+                        // `deleted_items`, the loss gets reconstructed from
+                        // a 404 later rather than read from the log. It names
+                        // what was removed
                         // and, since nothing pinned it, which pins were
                         // consulted and came back empty.
                         tracing::warn!(

@@ -20,11 +20,11 @@
 //! - a version any host in the registry DECLARES, through
 //!   `targets[].managed_versions`, and any version an operator pins in a
 //!   config file on this host through `release.version`. These two were the
-//!   gap. On 2026-09-04 `stado/0.15.21/darwin-arm64` was published complete,
-//!   read successfully through the public release route at 21:21Z, and
-//!   answered `{"state":"absent"}` for every one of its objects by 21:50Z:
-//!   this cleaner deleted it under disk pressure because the object-API
-//!   host's `~/.stado/release-state` was empty and nothing else named it.
+//!   gap: a version published complete and read successfully through the
+//!   public release route can answer `{"state":"absent"}` for every one of
+//!   its objects half an hour later, because this cleaner deleted it under
+//!   disk pressure when the object-API host's `~/.stado/release-state` was
+//!   empty and nothing else named it.
 //!   `install-stado.sh`, `self_update.rs` and the declared release host-state
 //!   capability all pin a version by `STADO_RELEASE_VERSION` /
 //!   `release.version`, and a declaration in the registry is the durable pin
@@ -43,9 +43,9 @@
 //!   is not a substitute for it. Every publisher claims
 //!   `source-revision.json` create-only BEFORE any artifact
 //!   (`release_control::RELEASE_REVISION_NAME`), so an interrupted publish
-//!   leaves a version directory holding that one small file — and four such
-//!   claims are exactly what filled the newest-three ladder on 2026-09-04
-//!   while the last installable version fell off the bottom of it. A claim is
+//!   leaves a version directory holding that one small file — and a few such
+//!   claims are exactly what fill the newest-three ladder while the last
+//!   installable version falls off the bottom of it. A claim is
 //!   not a release: counting one as the rollback ladder leaves a host with
 //!   nothing to install and nothing to roll back to.
 //!

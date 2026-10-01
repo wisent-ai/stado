@@ -7,8 +7,7 @@ use crate::targets::*;
 /// a `targets` value that is the string `"not-a-list"` leaves it holding zero
 /// targets and no complaint, so gating the copy on the loader alone recorded
 /// that string as the fleet's last known good registry and then served it —
-/// an empty fleet — for as long as the store stayed down. Confirmed by hand
-/// on 2026-08-19 against this exact code before the gate moved here.
+/// an empty fleet — for as long as the store stayed down.
 ///
 /// A document that fails the contract is reported and not recorded: the copy
 /// already on disk is worth more than the newest thing the store happened to
@@ -50,12 +49,11 @@ pub fn store_last_good(text: &str, generation: &str) -> Result<(), LastGoodRefus
             // Valid is not the same as better. A document naming no hosts
             // never replaces one that names some.
             //
-            // Measured on 2026-09-01: a forced push replaced the canonical
-            // registry with a 65-byte skeleton, and seventeen minutes later
-            // this cache - the product's own recovery path - recorded that
-            // skeleton as the last KNOWN GOOD registry, destroying the one
-            // copy it exists to provide. Recovery came from an operator's
-            // private snapshot instead.
+            // A forced push that replaces the canonical registry with a
+            // skeleton has this cache - the product's own recovery path -
+            // record that skeleton as the last KNOWN GOOD registry minutes
+            // later, destroying the one copy it exists to provide, and
+            // recovery then depends on somebody's private snapshot.
             //
             // The rule is relative rather than an absolute "never cache an
             // empty document" floor, and that is deliberate: a fresh install
@@ -133,8 +131,8 @@ static REGISTRY_NOTICE_REPORTED: AtomicBool = AtomicBool::new(false);
 /// Print a fallback notice to stderr, once per process.
 ///
 /// Once, because a fleet sweep resolves twenty hosts through one dead
-/// authority: twenty copies of the same sentence bury the twenty answers the
-/// operator asked for, and the sentence is about the process, not the host.
+/// authority: twenty copies of the same sentence bury the twenty answers
+/// that were asked for, and the sentence is about the process, not the host.
 pub fn report_registry_notice(notice: &str) {
     if !REGISTRY_NOTICE_REPORTED.swap(true, Ordering::Relaxed) {
         eprintln!("{notice}");

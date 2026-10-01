@@ -95,9 +95,9 @@ pub fn scan_object_evidence(
             }
             // A pinned input is addressed by its own digest and is immutable,
             // so its age says nothing about whether anything still needs it.
-            // On 2026-09-21 a pass over `ecosystem/probierz/artifacts` took
-            // the fleet's Apple issuer chain and the pinned signer with it,
-            // and the next darwin release died in `macos-code-signing` with
+            // A pass over the evidence artifacts that takes the fleet's Apple
+            // issuer chain and the pinned signer with it has the next darwin
+            // release die in `macos-code-signing` with
             // `cannot read native signing input ... apple-issuers-<sha>.pem`.
             if path
                 .components()
