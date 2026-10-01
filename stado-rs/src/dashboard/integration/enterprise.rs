@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
 
 use crate::models::Job;
@@ -54,25 +54,17 @@ async fn snapshot(store: &JobStorage) -> HandlerResult {
     let running = all.get("running").cloned().unwrap_or_default();
     let completed = all.get("completed").cloned().unwrap_or_default();
     let failed = all.get("failed").cloned().unwrap_or_default();
-    let cutoff = Utc::now() - Duration::hours("1".parse().expect("static hour"));
-    let recent_completed = completed
-        .iter()
-        .filter(|job| timestamp(job, "completed").is_some_and(|value| value >= cutoff))
-        .cloned()
-        .collect::<Vec<_>>();
-    let recent_failed = failed
-        .iter()
-        .filter(|job| timestamp(job, "failed").is_some_and(|value| value >= cutoff))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut recent_failures = failed.clone();
-    recent_failures.sort_by_key(|job| std::cmp::Reverse(timestamp(job, "failed")));
-    recent_failures.truncate("50".parse().expect("static failure cap"));
+    let mut recent_completed = completed.clone();
+    recent_completed.sort_by_key(|job| std::cmp::Reverse(timestamp(job, "completed")));
+    let mut recent_failed = failed.clone();
+    recent_failed.sort_by_key(|job| std::cmp::Reverse(timestamp(job, "failed")));
     let capacities = read_consumer_capacity(store)
         .await
         .map_err(|_| HandlerError::UpstreamFailure)?
         .into_values()
         .collect::<Vec<_>>();
+    // Every job in each state, newest first: the reader decides how much of
+    // it to show.
     Ok(json!({
         "counts": {
             "queued": queue.len(),
@@ -80,29 +72,23 @@ async fn snapshot(store: &JobStorage) -> HandlerResult {
             "completed": completed.len(),
             "failed": failed.len(),
         },
-        "queueSample": jobs_value(queue.into_iter().take("200".parse().expect("static queue cap"))),
+        "queue": jobs_value(queue),
         "running": jobs_value(running),
-        "recentCompleted": jobs_value(recent_completed),
-        "recentFailed": jobs_value(recent_failed),
-        "recentFailures": jobs_value(recent_failures),
+        "completed": jobs_value(recent_completed),
+        "failed": jobs_value(recent_failed),
         "capacities": capacities,
     }))
 }
 
 async fn timeseries(store: &JobStorage) -> HandlerResult {
-    let cutoff = Utc::now() - Duration::hours("6".parse().expect("static horizon"));
     let completed = store
-        .list_jobs("completed", usize::default())
+        .list_jobs("completed", 0)
         .await
-        .map_err(|_| HandlerError::UpstreamFailure)?
-        .into_iter()
-        .filter(|job| timestamp(job, "completed").is_some_and(|value| value >= cutoff));
+        .map_err(|_| HandlerError::UpstreamFailure)?;
     let failed = store
-        .list_jobs("failed", usize::default())
+        .list_jobs("failed", 0)
         .await
-        .map_err(|_| HandlerError::UpstreamFailure)?
-        .into_iter()
-        .filter(|job| timestamp(job, "failed").is_some_and(|value| value >= cutoff));
+        .map_err(|_| HandlerError::UpstreamFailure)?;
     Ok(json!({
         "completed": jobs_value(completed),
         "failed": jobs_value(failed),
@@ -168,11 +154,11 @@ async fn host_health(store: &JobStorage) -> HandlerResult {
             "wisent-agent".into(),
             json!({"state": "active", "n_restarts": "?", "active_since": reported_at}),
         );
+        // Capacity says the host is alive; it says nothing about its disk,
+        // so no disk figures are made up for it.
         hosts.push(json!({
             "host": host,
             "reported_at": reported_at,
-            "disk_pct": i64::default(),
-            "disk_avail_gb": i64::default(),
             "units": units,
             "last_log": "live Stado capacity broadcast",
         }));
