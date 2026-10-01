@@ -86,11 +86,11 @@ pub struct BuildSubmitArgs {
 pub struct BuildStatusArgs {
     /// Full build ID from `stado build submit` or `stado build list`.
     pub build_id: String,
-    /// Re-read the build every this many seconds until every platform's job
-    /// is queued and then ended, so the answer is `passed` or `failed`,
-    /// never `waiting`.
+    /// Hold until every platform's job is queued and then ended, so the
+    /// answer is `passed` or `failed`, never `waiting`; woken by the local
+    /// store's change watch, not a timer.
     #[arg(long)]
-    pub wait_seconds: Option<u64>,
+    pub wait: bool,
     #[arg(long)]
     pub json: bool,
 }

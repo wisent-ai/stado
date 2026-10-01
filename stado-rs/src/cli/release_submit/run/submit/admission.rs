@@ -49,7 +49,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             (build, m)
         }
         (None, Some(build_id)) => {
-            let build = current_build(build_id, None).await?;
+            let build = current_build(build_id, false).await?;
             if build.state != BuildRunState::Passed {
                 return Err(CmdError::click(format!(
                     "build {build_id} is {}, not passed: a release consumes only a passed build; `stado build status {build_id}` shows what its platforms did",

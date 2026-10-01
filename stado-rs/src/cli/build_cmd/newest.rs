@@ -44,10 +44,10 @@ pub struct BuildNewestArgs {
     /// queueing anything.
     #[arg(long)]
     plan: bool,
-    /// Follow every queued build to its end, re-reading it every this many
-    /// seconds, and exit nonzero naming each product whose build failed.
+    /// Follow every queued build to its end on the local store's change
+    /// watch, and exit nonzero naming each product whose build failed.
     #[arg(long)]
-    wait_seconds: Option<u64>,
+    wait: bool,
     #[arg(long)]
     json: bool,
 }
@@ -215,12 +215,12 @@ pub async fn newest(args: &BuildNewestArgs) -> Result<(), CmdError> {
         }
         outcomes.push(outcome);
     }
-    if let Some(period) = args.wait_seconds.map(std::time::Duration::from_secs) {
+    if args.wait {
         for outcome in &mut outcomes {
             let Some(build_id) = &outcome.build_id else {
                 continue;
             };
-            let build = current_build(build_id, Some(period)).await?;
+            let build = current_build(build_id, true).await?;
             outcome.state = build.state.word().to_owned();
             outcome.failure = build.failure.clone().or_else(|| {
                 build

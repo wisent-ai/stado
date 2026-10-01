@@ -42,19 +42,28 @@ pub(super) fn summary(build: &BuildRun) -> String {
 
 /// The build as it stands now: its record brought up to date from the queue
 /// and its jobs' receipts, and saved when that changed anything. With
-/// `wait`, the build is re-read at that period until its submission has
-/// queued every platform's job and every job has ended.
-pub(crate) async fn current_build(
-    build_id: &str,
-    wait: Option<std::time::Duration>,
-) -> Result<BuildRun, CmdError> {
+/// `wait`, the read holds on the store's change watch until its submission
+/// has queued every platform's job and every job has ended.
+pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun, CmdError> {
     require_build_id(build_id)?;
-    let mut build = load_build(build_id)
-        .await?
-        .ok_or_else(|| CmdError::refused(format!("build {build_id} does not exist")))?;
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
+    // Armed before the build is first read, so nothing written between that
+    // read and the wait is missed.
+    let record = format!("runs/build/{build_id}");
+    let mut watched: Vec<&str> = crate::queue::runs::TERMINAL_PREFIXES.to_vec();
+    watched.push(&record);
+    let mut watch = if wait {
+        Some(store.watch_prefixes(&watched).map_err(|error| {
+            CmdError::click(format!("build status --wait cannot hold: {error}"))
+        })?)
+    } else {
+        None
+    };
+    let mut build = load_build(build_id)
+        .await?
+        .ok_or_else(|| CmdError::refused(format!("build {build_id} does not exist")))?;
     let manifest_path = build_path(&build.product, &build.build_id, "manifest.json");
     let bytes = store
         .read_bytes(&manifest_path)
@@ -69,12 +78,23 @@ pub(crate) async fn current_build(
     else {
         return Err(CmdError::click("build manifest disables releases"));
     };
-    if let Some(period) = wait {
-        build = queued_build(build, manifest.platforms.len(), period).await?;
+    if let Some(mut armed) = watch.take() {
+        // A build is recorded before its jobs are queued, so a wait read in
+        // that gap used to answer `waiting` at once, which is the one answer
+        // it promises never to give.
+        while build.platforms.len() < manifest.platforms.len()
+            && build.state == BuildRunState::Waiting
+            && build.failure.is_none()
+        {
+            armed = changed(armed, build_id).await?;
+            build = load_build(build_id)
+                .await?
+                .ok_or_else(|| CmdError::click(format!("build {build_id} disappeared")))?;
+        }
         for platform in build.platforms.values() {
             if platform.state == PlatformRunState::Submitted {
                 while read_terminal_job(&store, &platform.job_id).await?.is_none() {
-                    tokio::time::sleep(period).await;
+                    armed = changed(armed, build_id).await?;
                 }
             }
         }
@@ -87,26 +107,19 @@ pub(crate) async fn current_build(
     Ok(build)
 }
 
-/// The build once its submission has queued a job for every platform the
-/// manifest declares, or recorded why it could not, re-read every `period`.
-/// A build is recorded before its jobs are queued, so a wait read in that gap
-/// used to answer `waiting` at once, which is the one answer it promises
-/// never to give.
-async fn queued_build(
-    mut build: BuildRun,
-    declared: usize,
-    period: std::time::Duration,
-) -> Result<BuildRun, CmdError> {
-    while build.platforms.len() < declared
-        && build.state == BuildRunState::Waiting
-        && build.failure.is_none()
-    {
-        tokio::time::sleep(period).await;
-        build = load_build(&build.build_id)
-            .await?
-            .ok_or_else(|| CmdError::click(format!("build {} disappeared", build.build_id)))?;
-    }
-    Ok(build)
+/// Block until the store reports a change under the watched prefixes, and
+/// hand the watch back for the next wait.
+async fn changed(
+    armed: Box<dyn crate::queue::ChangeWatch>,
+    build_id: &str,
+) -> Result<Box<dyn crate::queue::ChangeWatch>, CmdError> {
+    tokio::task::spawn_blocking(move || {
+        let mut armed = armed;
+        armed.next().map(|()| armed)
+    })
+    .await
+    .map_err(|error| CmdError::click(format!("the change watch on build {build_id} stopped: {error}")))?
+    .map_err(|error| CmdError::click(format!("the change watch on build {build_id} failed: {error}")))
 }
 
 fn print_build(build: &BuildRun, progress: &BTreeMap<String, Progress>) {
@@ -168,14 +181,39 @@ async fn platform_progress(build: &BuildRun) -> Result<BTreeMap<String, Progress
     Ok(progress)
 }
 
-/// Follow a build on stderr until no platform is still building, re-reading
-/// it every `period`: each platform's queue wait, every step as it starts and
-/// as it ends, and how long it took. `--json` stays one document and does not
-/// follow.
-async fn follow(build_id: &str, period: std::time::Duration) -> Result<(), CmdError> {
+/// Follow a build on stderr until no platform is still building, woken by the
+/// store's change watch on the build record, the terminal prefixes and every
+/// platform job's output: each platform's queue wait, every step as it starts
+/// and as it ends, and how long it took. `--json` stays one document and does
+/// not follow.
+async fn follow(build_id: &str) -> Result<(), CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let mut said = std::collections::HashSet::new();
+    let mut armed: Option<Box<dyn crate::queue::ChangeWatch>> = None;
     loop {
-        let build = current_build(build_id, None).await?;
+        let build = current_build(build_id, false).await?;
+        if armed.is_none() {
+            let mut watched: Vec<String> = crate::queue::runs::TERMINAL_PREFIXES
+                .iter()
+                .map(|prefix| prefix.to_string())
+                .collect();
+            watched.push(format!("runs/build/{build_id}"));
+            watched.extend(
+                build
+                    .platforms
+                    .values()
+                    .map(|platform| format!("status/{}/output", platform.job_id)),
+            );
+            let watched: Vec<&str> = watched.iter().map(String::as_str).collect();
+            armed = Some(store.watch_prefixes(&watched).map_err(|error| {
+                CmdError::click(format!("build status --wait cannot follow: {error}"))
+            })?);
+            // The first read came before the watch: read again under it, so
+            // a change in that gap is not waited for in vain.
+            continue;
+        }
         let progress = platform_progress(&build).await?;
         for (name, progress) in &progress {
             let mut lines = progress.lines(false);
@@ -207,16 +245,17 @@ async fn follow(build_id: &str, period: std::time::Duration) -> Result<(), CmdEr
         if !building {
             return Ok(());
         }
-        tokio::time::sleep(period).await;
+        if let Some(watch) = armed.take() {
+            armed = Some(changed(watch, build_id).await?);
+        }
     }
 }
 
 pub(super) async fn status(args: &BuildStatusArgs) -> Result<(), CmdError> {
-    let wait = args.wait_seconds.map(std::time::Duration::from_secs);
-    if let (Some(period), false) = (wait, args.json) {
-        follow(&args.build_id, period).await?;
+    if args.wait && !args.json {
+        follow(&args.build_id).await?;
     }
-    let build = current_build(&args.build_id, wait).await?;
+    let build = current_build(&args.build_id, args.wait).await?;
     let progress = platform_progress(&build).await?;
     if args.json {
         let mut document = serde_json::to_value(&build)?;
