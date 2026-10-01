@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `com.wisent.stado` takes the API listener over from a predecessor unit that declares no storage variables. The takeover resolves the predecessor's root the way its own process does: `WC_STORAGE_BACKEND`/`WC_LOCAL_STORAGE_PATH` from its environment, else the `storage` section of the config file it starts with (`STADO_CONFIG`, then the candidates under its `HOME`), else `local` and `~/.stado/local-storage`. Before, a first-generation unit such as `com.wisent.always-on.stado-object-api`, written without those variables, was reported as serving backend `None` root `None`, the takeover failed, and `stado serve --api` refused to start under the one unit on every host that still loaded it. A predecessor that resolves to another root is still refused, and the refusal now names the backend, the root and where it came from.

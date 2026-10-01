@@ -17,7 +17,7 @@
 use crate::deploy::service::*;
 
 use super::record::{self, taken_over, TAKEN_OVER, WITHDRAWN};
-use super::{retirement, PredecessorRetirement};
+use super::{retirement, served_root, PredecessorRetirement};
 
 /// The unit the init system started this process under: launchd names the
 /// job in `XPC_SERVICE_NAME`, systemd in the process's own cgroup path.
@@ -120,9 +120,6 @@ pub async fn retire_if_taken_over(
     Some(retirement(target, unit, runner).await)
 }
 
-/// The local backend word a predecessor must name to serve the same root.
-const LOCAL_BACKEND: &str = "local";
-
 /// What the init system reports for one loaded unit: launchd's `print`, or
 /// systemd's `MainPID` and `Environment` properties.
 struct UnitState {
@@ -161,32 +158,26 @@ impl UnitState {
 
     /// Why this unit is not proven to serve `served_root`, the local root this
     /// process is about to serve, comparing canonical paths; `None` when it
-    /// serves exactly that root. A process with no local root, or a unit that
-    /// does not declare its backend and root, is unproven, never the same.
+    /// serves exactly that root. A process with no local root is unproven,
+    /// never the same. The unit's root is resolved the way its own process
+    /// resolves it ([`served_root::resolve`]), so a unit that declares nothing
+    /// and reads the same config as this process is the same root.
     fn other_root(&self, served_root: Option<&str>) -> Option<String> {
-        let canonical = |value: &str| {
-            std::fs::canonicalize(value)
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|_| value.to_string())
-        };
-        let Some(ours) = served_root.map(canonical) else {
+        let Some(ours) = served_root.map(|root| served_root::canonical(Path::new(root))) else {
             return Some(
                 "this process serves no local store, so the route it takes over \
                          cannot be proven the same"
                     .to_string(),
             );
         };
-        let backend = self.variable("WC_STORAGE_BACKEND");
-        let theirs = self
-            .variable("WC_LOCAL_STORAGE_PATH")
-            .map(|path| canonical(&path));
-        (backend.as_deref() != Some(LOCAL_BACKEND) || theirs.as_deref() != Some(ours.as_str()))
-            .then(|| {
-                format!(
-                    "it runs with WC_STORAGE_BACKEND={backend:?} WC_LOCAL_STORAGE_PATH={theirs:?}, \
-                     this process serves {ours}"
-                )
-            })
+        let home = crate::config_file::expand_tilde("~");
+        let theirs = served_root::resolve(&|key| self.variable(key), &home);
+        (theirs.backend != served_root::LOCAL_BACKEND || theirs.root != ours).then(|| {
+            format!(
+                "it serves backend {:?} root {:?} by {}, this process serves {ours}",
+                theirs.backend, theirs.root, theirs.source
+            )
+        })
     }
 }
 
