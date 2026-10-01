@@ -142,7 +142,7 @@ pub(in crate::queue::submit) fn validate_run_manifest(
             .get("planned_job")
             .cloned()
             .ok_or_else(|| SubmitError::Validation("run entry has no planned job".into()))?;
-        let job: Job = serde_json::from_value(planned_value.clone())
+        let job: Job = serde_json::from_value(planned_value)
             .map_err(|error| SubmitError::Validation(format!("invalid planned job: {error}")))?;
         let mut effective = options.clone();
         effective.exclusive = effective.exclusive && !activation_extraction_must_share_gpu(command);
@@ -167,9 +167,17 @@ pub(in crate::queue::submit) fn validate_run_manifest(
         );
         expected.submission_request_digest = identity_digest.to_string();
         expected.submission_command_index = Some(index);
+        // The stored plan is compared as this build's model reads it, not
+        // byte for byte: a job field added since the run was written
+        // serialises on the re-derived job and not on the stored one, which
+        // made every older run "not derivable", and with it every terminal
+        // outcome of its jobs unrecordable. What the model does not carry is
+        // not part of the plan's identity.
+        let stored = serde_json::to_value(&job)
+            .map_err(|error| SubmitError::Validation(error.to_string()))?;
         if serde_json::to_value(&expected)
             .map_err(|error| SubmitError::Validation(error.to_string()))?
-            != planned_value
+            != stored
         {
             return Err(SubmitError::Validation(format!(
                 "run id {run_id} has a planned job not derivable from its request at index {index}"
