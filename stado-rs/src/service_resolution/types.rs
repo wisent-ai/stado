@@ -80,8 +80,8 @@ pub struct ServiceEndpoint {
     /// unmodelled keys in a flattened `extra` and this reader denies them, so
     /// publishing a field only the tolerant side knew would take every
     /// resolver in the fleet down over a key it merely did not recognize.
-    /// `registry validate` refused precisely that on 2026-09-03 -- "unknown
-    /// field `release_id`, expected `url`" -- which is the check doing its job.
+    /// `registry validate` refuses precisely that -- "unknown field
+    /// `release_id`, expected `url`" -- which is the check doing its job.
     ///
     /// On the endpoint and not on the service because it is a fact about one
     /// address: a service with a standby endpoint would otherwise carry one

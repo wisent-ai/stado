@@ -65,9 +65,9 @@ pub enum SkarbiecError {
     /// clients — object, release, service and machine — and a refusal in any
     /// of them used to surface as one indistinguishable sentence: `Skarbiec
     /// returned HTTP 403: {"error":"consumer not authorized to read item
-    /// field"}`, with no consumer, no item and no field in it. On 2026-09-05
-    /// `stado doctor --deployment-preflight` reported exactly that under
-    /// `machine verifier`, for a read the machine verifier does not
+    /// field"}`, with no consumer, no item and no field in it, which
+    /// `stado doctor --deployment-preflight` then reports under whichever
+    /// verifier happened to read, for a read that verifier does not
     /// necessarily own.
     ///
     /// The variant underneath is preserved rather than flattened into a

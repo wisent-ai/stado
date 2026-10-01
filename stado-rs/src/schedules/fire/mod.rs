@@ -152,8 +152,8 @@ pub async fn fire_schedule_now(
     // A pending occurrence that is not this token's is somebody else's work —
     // a crashed coordinator fire, typically. Finish it first, then reserve and
     // enqueue the occurrence this token names: returning that unrelated job as
-    // the manual fire would report work the operator asked for as done while
-    // it was never submitted.
+    // the manual fire would report the requested work as done while it was
+    // never submitted.
     for _ in 0..2 {
         let Some(sched) = read_schedule(store, schedule_id).await? else {
             return Ok(None);

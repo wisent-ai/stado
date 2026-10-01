@@ -86,8 +86,8 @@ impl Default for HttpReleaseFetcher {
 impl HttpReleaseFetcher {
     /// Where release objects are read: the one registry `public_origins`
     /// declaration that publishes [`RELEASE_ROUTE`], because that is the
-    /// origin the fleet says answers it (the configured `api.url` named an
-    /// edge that stopped forwarding the route on 2026-09-22). Self-update is
+    /// origin the fleet says answers it (the configured `api.url` can name
+    /// an edge that no longer forwards the route). Self-update is
     /// the recovery root, so a registry that cannot be read, or that declares
     /// no public origin at all, leaves the configured `api.url`; a declaration
     /// set that publishes the route from none or several origins is refused.
@@ -138,8 +138,8 @@ impl ReleaseFetcher for HttpReleaseFetcher {
         if status == reqwest::StatusCode::NOT_FOUND {
             // Only the release route's own answer means the object is absent:
             // `{"state":"absent",...}`. Anything else at 404 is a host that
-            // does not serve the route at all (stado.wisent.com has answered
-            // its site's HTML 404 page since 2026-09-22), and reading that as
+            // does not serve the route at all (a site edge answers its own
+            // HTML 404 page), and reading that as
             // "no such release" would report a missing version instead of a
             // wrong api.url.
             let body = response

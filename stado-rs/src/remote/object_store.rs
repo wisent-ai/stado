@@ -91,13 +91,13 @@ impl ObjectRef {
     /// then refused the whole answer — "Stado object API returned an
     /// inconsistent object-list item", correctly, because those keys are not
     /// under the prefix it asked for — and `JobStorage::list_jobs("queue")`
-    /// became permanently unreadable against this fleet's 9,026-object store.
+    /// became permanently unreadable against a store of thousands of objects.
     ///
-    /// That is what stopped the release trains on 2026-09-03: `stado host
-    /// reclaim` builds its keep-list from `queue/` and `running/`, and back
-    /// then it refused the whole reclamation when the store could not be
-    /// read, so every `release-capacity` barrier failed on it — 0.13.49 and
-    /// 0.13.50 both died there with publication never attempted. Today an
+    /// That is what stops release trains: `stado host reclaim` builds its
+    /// keep-list from `queue/` and `running/`, and it used to refuse the
+    /// whole reclamation when the store could not be read, so every
+    /// `release-capacity` barrier failed on it and releases died there with
+    /// publication never attempted. Today an
     /// unreadable store costs only the `queue_workdirs` stage, which skips
     /// and names the store's own error.
     ///

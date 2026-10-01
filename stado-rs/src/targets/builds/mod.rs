@@ -2,11 +2,10 @@
 //! the fleet expects.
 //!
 //! The registry's `builds` recipes and the `deliveries`/`passes` batching
-//! written on top of them lived here until 2026-09-21. Nobody had asked for
-//! either: they were added by sessions that a refusal had pointed at a build
-//! recipe, and they spent the fleet's day on single commits. The operator
-//! removed them by name — "to usun ta funkcjonalnosc" — and what a host
-//! carries, below, is all this module was ever asked for.
+//! written on top of them used to live here. Nobody had asked for either:
+//! they spent the fleet's build budget on single commits, and they were
+//! removed. What a host carries, below, is all this module was ever asked
+//! for.
 
 mod build_skew;
 mod routing;

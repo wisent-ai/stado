@@ -109,11 +109,11 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
         // the same sentence, which is the true answer for this binary.
         //
         // The sentence now also says what the refusal costs and what ends it.
-        // On 2026-09-22 a `tests` key entered this repository's own recipe
-        // hours after the newest published release was cut, so every builder
-        // in the fleet refused it, two of the day's three build jobs were
-        // spent discovering that, and no stado release could be built at all
-        // — including the one carrying the reader for the key.
+        // A key entering this repository's own recipe hours after the newest
+        // published release is cut has every builder in the fleet refuse it,
+        // most of the day's build budget spent discovering that, and no
+        // stado release buildable at all — including the one carrying the
+        // reader for the key.
         if !recipe.extra.is_empty() {
             let mut unknown: Vec<&str> = recipe.extra.keys().map(String::as_str).collect();
             unknown.sort_unstable();

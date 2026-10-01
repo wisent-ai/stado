@@ -83,9 +83,9 @@ pub(super) async fn recycle_launchd(
             // Any other declared unit whose image is gone is executing the
             // program this install replaced, the same case as a readable image
             // that differs below, so it is restarted onto the installed inode.
-            // Refusing it failed every fleet-macbook delivery of stado 0.22.11
-            // on 2026-09-28: `stado release agent` ran the replaced binary,
-            // the refusal left it there, and the next delivery met it again.
+            // Refusing it fails every delivery to a host whose
+            // `stado release agent` runs the replaced binary: the refusal
+            // leaves it there, and the next delivery meets it again.
         }
         let selected = if directly_declared && running.is_none() {
             installed_images

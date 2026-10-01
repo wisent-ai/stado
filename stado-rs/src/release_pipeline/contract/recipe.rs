@@ -12,9 +12,9 @@ use crate::release_pipeline::validate::predicates::{default_extract, default_req
 /// Unknown keys are kept rather than refused, and the reason is a production
 /// failure: the workers that build a release run the binary a host already
 /// has, so a manifest field added in the same commit as its reader is read
-/// by the OLD contract first. Declaring `min_free_gb` on 2026-09-10 failed
-/// stado 0.20.4 on both platforms with serde's "unknown field" before a
-/// single crate compiled, because the deployed worker denied it. A field a
+/// by the OLD contract first. Declaring a new field fails the release on
+/// every platform with serde's "unknown field" before a single crate
+/// compiles, because the deployed worker denies it. A field a
 /// worker does not understand must be ignorable; `stado release submit`
 /// refuses typos itself, in the binary the operator is running.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

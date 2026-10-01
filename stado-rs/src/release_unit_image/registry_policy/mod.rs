@@ -16,8 +16,8 @@ use serde_json::Value;
 /// key they do not model is refused OUTRIGHT by every build that predates it
 /// — not ignored. Instance 25 in `stado.wisent.com/docs/checks-that-measure-nothing` is
 /// what that costs: `readiness_path` went from forbidden to required with no
-/// version where both held, so on 2026-09-01 no single document satisfied the
-/// fleet and the mini's queue agent resolved no policy at all. Declaring this
+/// version where both held, so no single document satisfied the
+/// fleet and a queue agent resolved no policy at all. Declaring this
 /// inside `release_control` would repeat it exactly — the first host to
 /// receive the document would be the first host to stop reading the registry.
 ///
