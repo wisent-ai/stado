@@ -43,7 +43,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/ster-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:02Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -120,7 +120,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/jeden-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -166,7 +166,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/brama-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -254,7 +254,7 @@ products:
     - com.wisent.weles-api
     - com.wisent.weles-auto-deploy
     - com.wisent.compute.service.weles-release-cutover
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:03Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -309,7 +309,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/skarbiec-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -379,7 +379,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/most-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -480,7 +480,7 @@ products:
     repository: wisent-ai/stado
     command: desktop/StadoDesktop/release/bundle/build-app.sh
     bundle_path: desktop/StadoDesktop/.build/Stado.app
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:04Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -582,7 +582,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/lem-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:05Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -620,7 +620,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/echo-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:05Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -669,7 +669,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/probierz-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:05Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -728,7 +728,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/tama-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:06Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -772,7 +772,7 @@ products:
     repository: wisent-ai/wisent-trade
     binaries:
     - byk
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:06Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -841,7 +841,7 @@ products:
     binaries:
     - las
     - las-mcp
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:06Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -904,7 +904,7 @@ products:
       remain in the account's Skarbiec vault.
     retired_units:
     - com.wisent.always-on.skrzynka
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:07Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -969,7 +969,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/oko-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:07Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -1033,7 +1033,7 @@ products:
     kind: desktop-release
     repository: wisent-ai/singularity-desktop
     manifest: .wisent-desktop-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -1075,7 +1075,7 @@ products:
     kind: stado-release
     repository: wisent-ai/transcript-lake
     manifest: .wisent-release.json
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -1135,7 +1135,7 @@ products:
     repository: wisent-ai/kronika
     binaries:
     - kronika
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
   approval_note: 'Operator enumerated these by hand on 2026-08-20T21:11:21Z: "moim
     zdaniem to wszystko powinno byc instalowalne. 1. Ster 2. Jeden 3. Brama 4. Weles
@@ -1307,7 +1307,7 @@ products:
     manifest: Cargo.toml
     binaries:
     - handtohuman
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-03T01:51:39Z'
   approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe."
     - placing it in a family is treating it as a product.'
@@ -1378,7 +1378,7 @@ products:
     repository: wisent-ai/preferences
     binaries:
     - preferences
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-03T01:51:39Z'
   approval_note: 'Operator, 2026-09-02: "handtohuman i preferences nie sa wisentowe."
     - placing it in a family is treating it as a product.'
@@ -1421,7 +1421,7 @@ products:
     repository: lbartoszcze/humanmaxx-web
     binaries:
     - humanmaxx
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-03T01:51:40Z'
   approval_note: 'Operator, 2026-09-02, ordering the split: "mamy produkty wisentowe
     i niewisentowe. rozgrupuj je na dwa typy. na przyklad skrzynka to jest wisentowy
@@ -1586,7 +1586,7 @@ products:
     repository: wisent-ai/turbot-web
     binaries:
     - turbot-archive
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-03T01:51:40Z'
   approval_note: 'Operator, 2026-09-02: "needhim to tez nasz produkt. dodaj go normalnie.
     to ze cos nie ma kodu albo repozytorium nie ma znaczenia. tak samo z turbot-web."'
@@ -1620,7 +1620,7 @@ products:
     repository: lbartoszcze/needsomeone-ai-web
     binaries:
     - needsomeone-archive
-  approved_by: Lukasz Bartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T23:49:12Z'
   approval_note: dodaj jeszcze do produktow needsomeone i needhim. to sa niewisnetowe
     produkty (2026-09-02)
@@ -1653,7 +1653,7 @@ products:
     repository: lbartoszcze/needhim-ai-web
     binaries:
     - needhim-archive
-  approved_by: Lukasz Bartoszcze
+  approved_by: operator
   approved_at: '2026-09-02T23:49:12Z'
   approval_note: dodaj jeszcze do produktow needsomeone i needhim. to sa niewisnetowe
     produkty (2026-09-02)
@@ -1755,7 +1755,7 @@ products:
     - transcript-label-trainer
     features:
     - hf
-  approved_by: lukaszbartoszcze
+  approved_by: operator
   approved_at: '2026-09-03T23:30:00Z'
   approval_note: 'Operator, 2026-09-03: "releases: false is not an argument against
     cataloguing" - the catalogue already carries kind: cargo products built from a
