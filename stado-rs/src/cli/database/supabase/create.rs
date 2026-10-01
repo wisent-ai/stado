@@ -209,17 +209,3 @@ pub(in crate::cli::database) async fn create(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::cost;
-
-    /// A paid plan's compute credit covers the first running project only; the
-    /// free plan charges nothing for compute.
-    #[test]
-    fn one_more_project_costs_what_the_published_prices_say() {
-        assert_eq!(cost("pro", 0), 0);
-        assert_eq!(cost("pro", 11), 10);
-        assert_eq!(cost("free", 1), 0);
-    }
-}

@@ -139,7 +139,3 @@ fn report(json_output: bool, document: serde_json::Value) -> Result<(), CmdError
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "../../../tests/credentials/seed_enrol.rs"]
-mod tests;

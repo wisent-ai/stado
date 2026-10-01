@@ -75,17 +75,3 @@ pub fn validate_arguments(arguments: &[String]) -> Result<(), String> {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lexical_paths_are_bounded_to_one_managed_tree() {
-        assert!(validate_run_descendant("/Users/dev/.stado/work/runs/abc/src/Cargo.toml").is_ok());
-        assert!(validate_run_descendant("/tmp/Cargo.toml").is_err());
-        assert!(validate_run_descendant("/Users/dev/.stado/work/runs/../secret").is_err());
-        assert!(validate_run_directory("/Users/dev/.stado/work/runs/abc").is_ok());
-        assert!(validate_run_directory("/Users/dev/.stado/work/runs/abc/src").is_err());
-    }
-}

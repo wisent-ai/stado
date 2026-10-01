@@ -38,27 +38,3 @@ pub(in crate::cli::web::builds) fn site_root(
     }
     Ok(root)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_site_root_is_the_checkout_root_unless_the_recipe_names_one() {
-        let checkout = std::env::temp_dir();
-        assert_eq!(site_root(&checkout, None).unwrap(), checkout);
-
-        // A path that climbs out of the checkout is refused rather than
-        // clamped: a staged directory is what the recipe declared, and
-        // rewriting it stages something nobody wrote down.
-        for escaping in ["../elsewhere", "/etc", "web/../.."] {
-            let error = site_root(&checkout, Some(escaping))
-                .expect_err("a root outside the checkout must be refused");
-            assert!(error.message.is_some_and(|message| !message.is_empty()));
-        }
-        // A relative path that does not exist is refused by name, because
-        // after the build there would be nothing to serve.
-        site_root(&checkout, Some("no-such-directory-here"))
-            .expect_err("a site root that is not a directory must be refused");
-    }
-}

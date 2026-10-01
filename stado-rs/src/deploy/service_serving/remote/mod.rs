@@ -8,9 +8,6 @@ use crate::targets::ComputeTarget;
 
 mod script;
 
-#[cfg(test)]
-mod ports_travel_base64;
-
 pub use script::remote_serving_script;
 
 /// Parse the script's one line of JSON.

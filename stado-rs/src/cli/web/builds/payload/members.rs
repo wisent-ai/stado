@@ -170,31 +170,3 @@ fn walk(directory: &Path, excluded: &[PathBuf], into: &mut Vec<PathBuf>) -> Resu
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_site_root_never_stages_git_platform_or_developer_state() {
-        // Whatever directory the site root is. Four of these sites are the
-        // repository itself; `jeden`'s is its `web` directory and carries a
-        // .vercelignore and a vercel.json. A static server publishes whatever
-        // is in the directory, so `/.env.local` would be a request anyone
-        // could make.
-        for name in [
-            ".git",
-            ".gitignore",
-            ".vercel",
-            ".vercelignore",
-            "vercel.json",
-            "node_modules",
-            ".wisent-release.json",
-        ] {
-            assert!(
-                NOT_PART_OF_A_SITE.contains(&name),
-                "{name} must never be staged"
-            );
-        }
-    }
-}

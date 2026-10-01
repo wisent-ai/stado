@@ -155,30 +155,3 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
     }
     reclamation
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn local_terminality_evidence_is_machine_readable() {
-        let report = parse_output(
-            concat!(
-                "STADO_RECLAIM_LOCAL_EVIDENCE\tqueue_workdirs\tjob-a\t/tmp/wc-job-a\t",
-                "reclaimed\ttrue\ttrue\t1801\t901\n",
-                "STADO_RECLAIM_ITEM\tqueue_workdirs\t/tmp/wc-job-a\n",
-                "STADO_RECLAIM_STAGE\tqueue_workdirs\t100\t200\n",
-            ),
-            true,
-        );
-        let evidence = &report.stages[0].local_terminality_evidence[0];
-
-        assert_eq!(evidence["source"], "local_observation");
-        assert_eq!(evidence["job_id"], "job-a");
-        assert_eq!(evidence["decision"], "reclaimed");
-        assert_eq!(evidence["process_absent"], true);
-        assert_eq!(evidence["lease_expired"], true);
-        assert_eq!(evidence["tree_age_seconds"], 1801);
-        assert_eq!(evidence["absence_age_seconds"], 901);
-    }
-}

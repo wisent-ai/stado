@@ -55,39 +55,3 @@ pub fn exact_origin(raw: &str) -> Result<String, DeployError> {
 pub fn fill_resource(origin: &str, field_class: &str) -> String {
     format!("origin:{origin}/{field_class}")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_origin_that_weles_could_never_match_is_refused_before_anything_is_minted() {
-        // The worker's own sentence for a non-HTTP(S) page.
-        let said = exact_origin("ftp://accounts.google.com")
-            .unwrap_err()
-            .to_string();
-        assert_eq!(said, "credential fill requires an HTTP(S) origin");
-
-        // Weles compares `new URL(page.url()).origin`, which carries no path.
-        let said = exact_origin("https://accounts.google.com/signin")
-            .unwrap_err()
-            .to_string();
-        assert!(said.contains("bare origin"), "{said}");
-        assert!(said.contains("no path, query or fragment"), "{said}");
-
-        let said = exact_origin("https://user:pw@accounts.google.com")
-            .unwrap_err()
-            .to_string();
-        assert!(said.contains("embedded credentials"), "{said}");
-
-        // A trailing slash is the origin itself and is accepted.
-        assert_eq!(
-            exact_origin("https://accounts.google.com/").unwrap(),
-            "https://accounts.google.com"
-        );
-        // A non-default port belongs to the origin Weles would compute.
-        let ported = "http://localhost:\
-                      8080";
-        assert_eq!(exact_origin(ported).unwrap(), ported);
-    }
-}

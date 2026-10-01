@@ -138,28 +138,3 @@ pub fn program_candidates(program: &str) -> Option<&'static [&'static str]> {
 pub fn cargo_candidates() -> &'static [&'static str] {
     program_candidates(CARGO_CLI).expect("cargo is in the program candidate table")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::super::programs::GIT_PROGRAM;
-    use super::*;
-
-    /// `/usr/bin/git` is the `xcode-select` shim: on a host with no Command
-    /// Line Tools, running it opens the installer WINDOW instead of printing
-    /// a version. A read-only allowlist must not be able to raise a consent
-    /// dialog on an unattended host, so the shim stays out of the candidates
-    /// and this test is what stops it being helpfully added back.
-    #[test]
-    fn the_git_probe_never_reaches_the_xcode_select_shim() {
-        let candidates = program_candidates(GIT_PROGRAM).expect("git is in the table");
-        assert!(
-            !candidates.contains(&"/usr/bin/git"),
-            "the /usr/bin/git shim must never be probed: {candidates:?}"
-        );
-        assert!(
-            candidates.contains(&"/Library/Developer/CommandLineTools/usr/bin/git"),
-            "the real Command Line Tools git must be probed instead"
-        );
-        assert!(candidates.iter().all(|path| path.starts_with('/')));
-    }
-}

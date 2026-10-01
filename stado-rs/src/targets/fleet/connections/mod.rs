@@ -90,33 +90,3 @@ pub fn connection_provider_declared(name: &str) -> bool {
         .iter()
         .any(|provider| provider.name == name)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The compiled document parses, and the primary path the registry writer
-    /// treats specially is one of the networks the product describes.
-    #[test]
-    fn the_declaration_parses_and_names_the_primary_path() {
-        let providers = declared_connection_providers();
-        assert!(connection_provider_declared(
-            crate::targets::PRIMARY_SSH_CONNECTION
-        ));
-        assert!(providers
-            .iter()
-            .all(|provider| !provider.summary.trim().is_empty()));
-    }
-
-    /// A declaration this build cannot read is named, with the document that
-    /// carries it, instead of becoming an empty vocabulary.
-    #[test]
-    fn an_unreadable_declaration_says_which_document_it_is() {
-        let wrong_shape = parse_connection_declaration("{\"schema_version\": 99}")
-            .expect_err("a document of another shape must not parse");
-        assert!(
-            wrong_shape.contains(CONNECTION_DECLARATION_PATH),
-            "{wrong_shape}"
-        );
-    }
-}

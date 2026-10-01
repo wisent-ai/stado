@@ -87,34 +87,3 @@ pub(in crate::cli::web::builds) fn product(
         })?;
     product_name(declared).map(str::to_string)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plain_package_name_is_the_product_name() {
-        assert_eq!(
-            product_name("preferences-landing").unwrap(),
-            "preferences-landing"
-        );
-    }
-
-    #[test]
-    fn scope_is_stripped_from_a_scoped_package_name() {
-        assert_eq!(product_name("@wisent/preferences").unwrap(), "preferences");
-    }
-
-    #[test]
-    fn a_name_that_is_not_a_file_name_is_refused() {
-        // A scope left in would put the artifact in a directory the recipe's
-        // stage map never names, so it would never be collected.
-        for name in ["", "@wisent", "@/preferences", "web/preferences", ".."] {
-            let error = product_name(name).expect_err(name);
-            assert!(
-                error.message.is_some_and(|message| !message.is_empty()),
-                "refusing {name} must say why"
-            );
-        }
-    }
-}

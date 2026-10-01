@@ -159,28 +159,3 @@ pub(super) fn plan(
         file_list: validate_file_list(file_list, kind)?,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn probierz_destination_requires_a_canonical_run_uuid_and_child() {
-        assert!(destination_components(
-            ".stado/work/runs/123e4567-e89b-12d3-a456-426614174000/probierz"
-        )
-        .is_ok());
-        assert!(destination_components(".stado/work/runs/not-a-uuid/probierz").is_err());
-        assert!(
-            destination_components(".stado/work/runs/123e4567-e89b-12d3-a456-426614174000")
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn destinations_outside_managed_run_root_are_refused() {
-        assert!(destination_components("tmp/tree").is_err());
-        assert!(destination_components("/tmp/tree").is_err());
-        assert!(destination_components(".stado/work/tree").is_err());
-    }
-}

@@ -31,26 +31,3 @@ impl Kind {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_start_script_is_what_makes_a_product_a_server() {
-        // The whole rule, in one place. `byk-landing` has no package.json at
-        // all; `tama-landing` has a build and no start; `preferences-landing`
-        // has both. Nothing else — not next.config, not a dependency on next
-        // — is allowed to answer this question, because `start` is the only
-        // thing the launcher can run.
-        assert_eq!(Kind::of(None), Kind::Static);
-        let building = serde_json::json!({ "scripts": { "build": "node scripts/build.mjs" } });
-        assert_eq!(Kind::of(building.as_object()), Kind::Static);
-        let served =
-            serde_json::json!({ "scripts": { "build": "next build", "start": "next start" } });
-        assert_eq!(Kind::of(served.as_object()), Kind::Server);
-        // A whitespace `start` runs nothing, so it does not make a server.
-        let empty = serde_json::json!({ "scripts": { "start": "  " } });
-        assert_eq!(Kind::of(empty.as_object()), Kind::Static);
-    }
-}

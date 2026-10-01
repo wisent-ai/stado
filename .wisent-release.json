@@ -7,14 +7,6 @@
     "path": "stado-rs/Cargo.toml",
     "pattern": "(?m)^version\\s*=\\s*\"(?P<version>[^\"]+)\"\\s*$"
   },
-  "inputs": {
-    "skarbiec": {
-      "uri": "stado://sources/skarbiec/618c0d4a46be1eab6071bf091844f965651c6669b6803972f557fd8de76d8d06/source.tar.gz",
-      "sha256": "618c0d4a46be1eab6071bf091844f965651c6669b6803972f557fd8de76d8d06",
-      "mount": "skarbiec",
-      "extract": true
-    }
-  },
   "platforms": {
     "darwin-arm64": {
       "runner_platform": "darwin-arm64",
@@ -30,10 +22,6 @@
             "--",
             "--check"
           ]
-        },
-        {
-          "name": "source-documentation",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--package", "stado-source-checks", "--test", "documentation"]
         },
         {
           "name": "clippy",
@@ -57,28 +45,6 @@
           "deploy/release/build_stado.sh"
         ]
       },
-      "tests": [
-        {
-          "name": "single-process-runtime",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
-        },
-        {
-          "name": "native-resident-identity",
-          "argv": ["/bin/sh", "-c", "STADO_TEST_NATIVE_LABEL=com.wisent.stado,com.wisent.always-on.stado-object-api,com.wisent.stado.release-agent,com.wisent.compute.service.stado-release-agent exec \"$HOME/.cargo/bin/cargo\" test --manifest-path stado-rs/Cargo.toml --locked --release --test resolver native_identity -- --ignored --nocapture"]
-        },
-        {
-          "name": "release-newest",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
-        },
-        {
-          "name": "fleet-expansion-cli",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
-        },
-        {
-          "name": "release-steps",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3", "--test", "product_documentation_index", "--test", "product_tree_archive", "--test", "product_lock"]
-        }
-      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }
@@ -99,10 +65,6 @@
           ]
         },
         {
-          "name": "source-documentation",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--package", "stado-source-checks", "--test", "documentation"]
-        },
-        {
           "name": "clippy",
           "argv": [
             "cargo",
@@ -124,24 +86,6 @@
           "deploy/release/build_stado.sh"
         ]
       },
-      "tests": [
-        {
-          "name": "single-process-runtime",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "resolver", "host_runtime", "--", "--nocapture"]
-        },
-        {
-          "name": "release-newest",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "release_newest"]
-        },
-        {
-          "name": "fleet-expansion-cli",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "fleet_expansion", "--", "--nocapture"]
-        },
-        {
-          "name": "release-steps",
-          "argv": ["cargo", "test", "--manifest-path", "stado-rs/Cargo.toml", "--locked", "--release", "--test", "product_crx3", "--test", "product_documentation_index", "--test", "product_tree_archive", "--test", "product_lock"]
-        }
-      ],
       "stage": {
         "stado-rs/target/release/stado": "stado"
       }

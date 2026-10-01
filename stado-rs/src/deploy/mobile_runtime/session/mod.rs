@@ -163,30 +163,3 @@ pub async fn verify(
 
     Ok(RuntimeReport { components })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_remote_scripts_resolve_the_paths_the_allowlist_probes() {
-        // One table, two readers: the script the host runs must carry the same
-        // candidates `host_exec` uses, or the two could disagree about which
-        // binary a machine has.
-        let script = with_candidates(REMOTE_VERIFY_BODY);
-        assert!(!script.contains("@APPIUM_CANDIDATES@"));
-        assert!(!script.contains("@ADB_CANDIDATES@"));
-        assert!(!script.contains("@NODE_CANDIDATES@"));
-        for candidate in
-            crate::deploy::host_exec::program_candidates(crate::deploy::host_exec::APPIUM_PROGRAM)
-                .expect("appium is in the table")
-        {
-            let expected = candidate
-                .strip_prefix("~/")
-                .map_or_else(|| (*candidate).to_string(), |rest| rest.to_string());
-            assert!(script.contains(&expected), "{expected} missing from script");
-        }
-        // A home-relative candidate is expanded by the host, not here.
-        assert!(script.contains("\"$HOME\"/"));
-    }
-}

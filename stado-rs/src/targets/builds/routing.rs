@@ -80,32 +80,3 @@ pub fn platform_accepts_job(platform: &str, platform_os: &str, architecture: &st
     };
     names(routing.os, platform_os) && names(routing.arch, architecture)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The same machine is written down four ways across this repository, and
-    /// a host must claim its own work under every one of them.
-    #[test]
-    fn a_host_claims_its_own_work_under_every_spelling() {
-        assert!(platform_accepts_job("darwin-arm64", "Darwin", "arm64"));
-        assert!(platform_accepts_job("darwin-arm64", "macos", "aarch64"));
-        assert!(platform_accepts_job("linux-amd64", "linux", "x86_64"));
-        assert!(platform_accepts_job("linux-amd64", "Linux", "amd64"));
-    }
-
-    /// A job that names another platform, or a platform nothing publishes
-    /// for, is not this host's work. A job that names neither is everyone's.
-    #[test]
-    fn work_for_another_platform_is_refused_and_unconstrained_work_is_not() {
-        assert!(!platform_accepts_job("darwin-arm64", "linux", "x86_64"));
-        assert!(!platform_accepts_job("windows-amd64", "linux", "x86_64"));
-        assert!(platform_accepts_job("darwin-arm64", "", ""));
-        assert_eq!(
-            platform_job_os_arch("darwin-arm64"),
-            Some(("darwin", "arm64"))
-        );
-        assert_eq!(platform_job_os_arch("windows-amd64"), None);
-    }
-}

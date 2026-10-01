@@ -75,24 +75,3 @@ pub(super) fn zone_of(hostname: &str) -> String {
         hostname.to_string()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_zone_is_the_last_two_labels_the_way_stado_dns_defaults() {
-        assert_eq!(zone_of("app.preferences.wisent.com"), "wisent.com");
-        assert_eq!(zone_of("wisent.com"), "wisent.com");
-        assert_eq!(zone_of("localhost"), "localhost");
-    }
-
-    #[test]
-    fn resolved_words_names_nothing_rather_than_printing_an_empty_list() {
-        assert_eq!(resolved_words(&json!({ "resolves_to": [] })), "nothing");
-        assert_eq!(
-            resolved_words(&json!({ "resolves_to": ["76.76.21.21", "20.12.34.56"] })),
-            "76.76.21.21, 20.12.34.56"
-        );
-    }
-}

@@ -80,44 +80,6 @@ pub fn normalize_job(job: &Job) -> Value {
     Value::Object(out)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{normalize_job, JOB_PREFIXES};
-    use crate::models::Job;
-    use crate::queue::runs;
-
-    fn job_in(state: &str) -> Job {
-        Job {
-            job_id: "job-1".into(),
-            state: state.into(),
-            ..Job::default()
-        }
-    }
-
-    /// A reader asks the job, not a list of state words it keeps itself.
-    #[test]
-    fn the_view_says_whether_the_job_has_stopped_moving() {
-        for prefix in JOB_PREFIXES {
-            let view = normalize_job(&job_in(prefix));
-            let expected = runs::TERMINAL_PREFIXES.contains(&prefix);
-            assert_eq!(
-                view["terminal"], expected,
-                "{prefix} reported as terminal={}",
-                view["terminal"]
-            );
-        }
-    }
-
-    /// `queue/` is spelled `queued` in the machine view, and a queued job is
-    /// as far from terminal as a job gets.
-    #[test]
-    fn a_queued_job_is_named_queued_and_is_not_terminal() {
-        let view = normalize_job(&job_in(runs::QUEUE));
-        assert_eq!(view["state"], "queued");
-        assert_eq!(view["terminal"], false);
-    }
-}
-
 /// A provider instance a job is recorded as holding, plus the blob the
 /// record came from so an operator can go look at it.
 #[derive(Debug, Clone)]

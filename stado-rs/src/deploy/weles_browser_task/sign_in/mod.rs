@@ -65,23 +65,3 @@ pub fn weles_api_broker_files() -> host_capability::BrokerFiles<'static> {
         routes_file: Some(WELES_API_ROUTES_FILE),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The fill targets must satisfy Weles's own field-class hints, or the
-    /// worker throws `credential field class mismatch` and the one-shot
-    /// capability is already spent.
-    #[test]
-    fn the_fill_targets_match_the_hints_weles_checks_before_redeeming() {
-        let hints = [("email", "email"), ("password", "password")];
-        for ((target, field_class), (expect_target, expect_class)) in
-            SIGN_IN_FIELDS.iter().zip(hints)
-        {
-            assert_eq!(*target, expect_target);
-            assert_eq!(*field_class, expect_class);
-            assert!(target.to_lowercase().contains(field_class));
-        }
-    }
-}

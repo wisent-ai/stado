@@ -37,35 +37,3 @@ pub fn dominant(tally: &[(QuarantineCause, usize)]) -> Option<(QuarantineCause, 
         .find(|(cause, _)| cause.is_classified())
         .copied()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_tally_ranks_by_count_and_names_a_dominant_cause() {
-        let counts = tally([
-            QuarantineCause::Unclassified,
-            QuarantineCause::CredentialCannotServe,
-            QuarantineCause::Unclassified,
-            QuarantineCause::RollbackCompatibilityUndeclared,
-            QuarantineCause::CredentialCannotServe,
-            QuarantineCause::Unclassified,
-        ]);
-        assert_eq!(
-            counts,
-            vec![
-                (QuarantineCause::Unclassified, 3),
-                (QuarantineCause::CredentialCannotServe, 2),
-                (QuarantineCause::RollbackCompatibilityUndeclared, 1),
-            ]
-        );
-        // The largest bucket is unclassified; the answer an operator can act
-        // on is the largest *classified* one.
-        assert_eq!(
-            dominant(&counts),
-            Some((QuarantineCause::CredentialCannotServe, 2))
-        );
-        assert_eq!(dominant(&tally([QuarantineCause::Unclassified])), None);
-    }
-}

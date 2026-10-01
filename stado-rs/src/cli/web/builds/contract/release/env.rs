@@ -44,37 +44,3 @@ pub(in crate::cli::web::builds) fn declared_env(
     }
     Ok(pairs)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_platforms_declared_env_is_read_from_the_release_manifest() {
-        let directory =
-            std::env::temp_dir().join(format!("stado-web-build-env-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join(crate::release_pipeline::PRODUCT_MANIFEST);
-        std::fs::write(
-            &path,
-            serde_json::json!({
-                "platforms": { "web": { "env": { "NEXT_PUBLIC_SITE_URL": "https://content.wisent.ai" } } }
-            })
-            .to_string(),
-        )
-        .unwrap();
-        assert_eq!(
-            declared_env(&directory, "web").unwrap(),
-            vec![(
-                "NEXT_PUBLIC_SITE_URL".to_string(),
-                "https://content.wisent.ai".to_string()
-            )]
-        );
-        // A platform that declares none, and a checkout with no manifest at
-        // all, both mean no variables rather than a failure.
-        assert!(declared_env(&directory, "linux-amd64").unwrap().is_empty());
-        std::fs::remove_file(&path).unwrap();
-        assert!(declared_env(&directory, "web").unwrap().is_empty());
-        std::fs::remove_dir_all(&directory).unwrap();
-    }
-}

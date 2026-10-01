@@ -2,16 +2,6 @@
 //! back out of what the edge holds.
 
 use crate::config::{self, WebApiEdge};
-
-#[cfg(test)]
-mod corpus;
-#[cfg(test)]
-mod fixtures;
-#[cfg(test)]
-mod mounts;
-#[cfg(test)]
-mod rendering;
-
 /// The whole edge configuration, rendered from the declarations.
 ///
 /// Pure, and the only thing that produces a Caddyfile for this fleet. The

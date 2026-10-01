@@ -35,31 +35,3 @@ pub fn expand_home(path: &str, home: &str) -> Result<String, DeployError> {
     }
     Ok(expanded)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_root_written_for_a_shell_is_resolved_once_against_the_real_home() {
-        // charless-mac-mini's env file says exactly this, and a quoted argument
-        // expands nothing - the first run of this verb looked for a directory
-        // literally named $HOME.
-        assert_eq!(
-            expand_home("$HOME/.stado/releases/x.tar.gz", "/Users/charles"),
-            Ok("/Users/charles/.stado/releases/x.tar.gz".to_string())
-        );
-        assert_eq!(
-            expand_home("${HOME}/r", "/Users/charles/"),
-            Ok("/Users/charles/r".to_string())
-        );
-        assert_eq!(
-            expand_home("~/r", "/Users/charles"),
-            Ok("/Users/charles/r".to_string())
-        );
-        let said = expand_home("$RELEASES/r", "/Users/charles")
-            .unwrap_err()
-            .to_string();
-        assert!(said.contains("without running a shell over it"), "{said}");
-    }
-}

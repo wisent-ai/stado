@@ -4762,7 +4762,6 @@ dependencies = [
  "gcp_auth",
  "hex",
  "nix 0.30.1",
- "parking_lot",
  "plist",
  "regex",
  "reqwest",
@@ -4770,7 +4769,6 @@ dependencies = [
  "russh",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "stado-product",
  "tar",
@@ -4824,13 +4822,6 @@ dependencies = [
  "url",
  "uuid",
  "yaml-rust",
-]
-
-[[package]]
-name = "stado-source-checks"
-version = "0.0.0"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]

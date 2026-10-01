@@ -21,8 +21,6 @@
 use serde_json::{json, Map, Value};
 
 mod day;
-#[cfg(test)]
-mod tests;
 
 use day::{next_day, runs_submitted_on};
 

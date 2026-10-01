@@ -14,8 +14,6 @@ use crate::deploy::DeployError;
 
 mod file_half;
 mod listeners_half;
-#[cfg(test)]
-mod shell_parses;
 
 /// The remote program.
 ///

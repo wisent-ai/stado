@@ -11,7 +11,7 @@ mod version_gate;
 pub use commands::dispatch::dispatch;
 pub use commands::{
     ReleaseActivateStagedArgs, ReleaseCommands, ReleaseDeclareVersionArgs, ReleaseHostStateArgs,
-    ReleasePromoteVersionArgs, ReleaseProvenanceArgs, ReleaseProxyArgs, ReleaseVerifyPlatformArgs,
+    ReleasePromoteVersionArgs, ReleaseProvenanceArgs, ReleaseProxyArgs,
 };
 pub use fetch::ReleaseFetchArgs;
 pub use local::{ReleaseConvergeLocalReadersArgs, ReleaseInstallLocalArgs};

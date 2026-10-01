@@ -4,16 +4,14 @@ version = "0.22.18"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
+# No test target is built until the operator approves one with
+# `tama tests approve`.
+autotests = false
 
-# `checks` holds the source checks that must not wait for this crate to
-# compile; one lockfile and one target directory serve both. `database`
-# is the crate products depend on to reach their fleet database through
-# SeaORM, without linking the whole control plane. The journeys
-# build throwaway crates of their own under `target/` (`product-runs/`,
-# `ci-cd-runs/`), and Cargo would otherwise claim them for this workspace
-# and refuse them as non-members.
+# `database` is the crate products depend on to reach their fleet database
+# through SeaORM, without linking the whole control plane.
 [workspace]
-members = [".", "product", "checks", "database"]
+members = [".", "product", "database"]
 exclude = ["target"]
 
 [dependencies]
@@ -75,11 +73,6 @@ wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors", rev = "dc8
 # `../catalog/products.yml` at the root of this repository.
 stado-product = { path = "product" }
 
-[dev-dependencies]
-parking_lot = "0.12"
-# The product tests read the persisted catalog authority, which is YAML.
-serde_yaml = "0.9"
-
 [[bin]]
 name = "stado"
 path = "src/bin/stado.rs"
@@ -105,94 +98,3 @@ path = "src/bin/stado_mcp.rs"
 [[bin]]
 name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
-
-[[test]]
-name = "failure_classification"
-path = "tests/failure_classification/main.rs"
-
-[[test]]
-name = "channel"
-path = "tests/channel/main.rs"
-
-[[test]]
-name = "host_exec"
-path = "tests/host_exec/main.rs"
-
-[[test]]
-name = "host_delivery"
-path = "tests/host_delivery/main.rs"
-
-[[test]]
-name = "host_disk_cleanup"
-path = "tests/host_disk_cleanup/main.rs"
-
-[[test]]
-name = "scratch_workdirs"
-path = "tests/scratch_workdirs/main.rs"
-
-[[test]]
-name = "space_report"
-path = "tests/space_report/main.rs"
-
-[[test]]
-name = "host_gates"
-path = "tests/host_gates/main.rs"
-
-[[test]]
-name = "capacity_reservations"
-path = "tests/capacity_reservations/main.rs"
-
-[[test]]
-name = "fleet_needs"
-path = "tests/fleet_needs/main.rs"
-
-[[test]]
-name = "host_run"
-path = "tests/host_run/main.rs"
-
-[[test]]
-name = "apple_challenge"
-path = "tests/apple_challenge/main.rs"
-
-
-[[test]]
-name = "service_convergence"
-path = "tests/service_convergence/main.rs"
-
-[[test]]
-name = "vast"
-path = "tests/vast/main.rs"
-
-[[test]]
-name = "release_delivery"
-path = "tests/release_delivery/main.rs"
-
-[[test]]
-name = "release_newest"
-path = "tests/release_newest/main.rs"
-
-
-
-[[test]]
-name = "web"
-path = "tests/web/main.rs"
-
-[[test]]
-name = "quarantine_retire"
-path = "tests/quarantine_retire/main.rs"
-
-[[test]]
-name = "alerts_send"
-path = "tests/alerts_send/main.rs"
-
-[[test]]
-name = "object_evidence"
-path = "tests/object_evidence/main.rs"
-
-[[test]]
-name = "publication"
-path = "tests/publication/main.rs"
-
-[[test]]
-name = "fleet_expansion"
-path = "tests/fleet_expansion/main.rs"

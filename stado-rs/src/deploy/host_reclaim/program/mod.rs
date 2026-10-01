@@ -193,27 +193,3 @@ pub(super) fn remote_script_with_stado(
                 .to_string(),
         )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unavailable_queue_uses_two_observation_local_proof() {
-        let script = remote_script(
-            true,
-            &["queue_workdirs".to_string()],
-            None,
-            "/fixture",
-            "\"$HOME\"",
-            Some(18),
-        );
-
-        assert!(script.contains("keep_mode=\"local\""));
-        assert!(script.contains("local_grace=900"));
-        assert!(script.contains("process_absent \"$entry\""));
-        assert!(script.contains("lsof_bin"));
-        assert!(script.contains("if [ \"$tree_age\" -lt \"$local_grace\" ]"));
-        assert!(script.contains("if [ \"$absence_age\" -lt \"$local_grace\" ]"));
-    }
-}

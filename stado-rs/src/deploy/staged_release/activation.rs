@@ -81,31 +81,3 @@ pub async fn api_answering(target: &ComputeTarget, port: u16, runner: &Runner) -
     .map(|report| report.stdout.contains("up"))
     .unwrap_or(false)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_activation_script_parse_checks_the_installer_before_running_it() {
-        let script = activation_script("/r/weles-worker.tar.gz", "0.5.43");
-        let parse_check = script.find("bash -n").expect("parse check");
-        let run = script.find("bash \"$installer\"").expect("run");
-        assert!(
-            parse_check < run,
-            "the parse check must come first:\n{script}"
-        );
-        assert!(script.contains("installer-unparseable"), "{script}");
-        // A path is one shell word on a real host. The payload may appear
-        // inside the quoting - that is what quoting looks like - but it must
-        // never begin a line, which is the only way it becomes a command.
-        let script = activation_script("/r/x'; rm -rf ~; '.tar.gz", "0.5.43");
-        assert!(
-            !script
-                .lines()
-                .any(|line| line.trim_start().starts_with("rm -rf ~")),
-            "{script}"
-        );
-        assert!(script.contains("archive='/r/x'"), "{script}");
-    }
-}

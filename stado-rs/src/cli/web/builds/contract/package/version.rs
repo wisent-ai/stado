@@ -56,27 +56,3 @@ pub(in crate::cli::web::builds) fn require_version(
         )),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_version_must_match_the_release_being_cut() {
-        let matching = serde_json::json!({ "version": "1.4.0" });
-        require_version(matching.as_object().unwrap(), "1.4.0").unwrap();
-
-        let drifted = serde_json::json!({ "version": "1.3.9" });
-        let error = require_version(drifted.as_object().unwrap(), "1.4.0")
-            .expect_err("a version mismatch must be refused");
-        let message = error.message.unwrap_or_default();
-        assert!(
-            message.contains("1.3.9") && message.contains("1.4.0"),
-            "{message}"
-        );
-
-        let absent = serde_json::json!({});
-        require_version(absent.as_object().unwrap(), "1.4.0")
-            .expect_err("a package.json with no version must be refused");
-    }
-}

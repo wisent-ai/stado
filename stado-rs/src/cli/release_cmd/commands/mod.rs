@@ -117,9 +117,6 @@ pub enum ReleaseCommands {
     /// Activate one host's already-staged release with its own installer.
     #[command(name = "activate-staged")]
     ActivateStaged(ReleaseActivateStagedArgs),
-    /// Run the native release journeys on one declared host platform.
-    #[command(name = "verify-platform")]
-    VerifyPlatform(ReleaseVerifyPlatformArgs),
     /// Read or converge the versions a host declares.
     #[command(name = "host-state")]
     HostState(ReleaseHostStateArgs),
@@ -175,19 +172,6 @@ pub struct ReleaseActivateStagedArgs {
     env_file: String,
     #[arg(long, default_value_t = 8788)]
     port: u16,
-    #[arg(long)]
-    json: bool,
-}
-
-/// Verify the declared platform by running the native release journeys.
-#[derive(Args)]
-pub struct ReleaseVerifyPlatformArgs {
-    #[arg(long)]
-    host: String,
-    #[arg(long)]
-    repo: String,
-    #[arg(long = "ref")]
-    revision: String,
     #[arg(long)]
     json: bool,
 }

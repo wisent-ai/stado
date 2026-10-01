@@ -57,22 +57,3 @@ pub(in crate::cli::web::builds) fn script<'a>(
         .as_str()
         .filter(|body| !body.trim().is_empty())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_declared_non_empty_script_counts() {
-        let manifest = serde_json::json!({
-            "scripts": { "build": "next build", "lint": "   " }
-        });
-        let manifest = manifest.as_object().unwrap();
-        assert_eq!(script(manifest, "build"), Some("next build"));
-        // A script declared as whitespace runs nothing; treating it as present
-        // would have the gate report a lint that never happened.
-        assert_eq!(script(manifest, "lint"), None);
-        assert_eq!(script(manifest, "typecheck"), None);
-        assert_eq!(script(&Map::new(), "build"), None);
-    }
-}

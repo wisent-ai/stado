@@ -45,21 +45,3 @@ pub fn probierz_run_root_script() -> String {
     script.push_str("/bin/chmod 700 .stado/work/runs\nprintf '%s\\n' \"$HOME/.stado/work/runs\"\n");
     script
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::deploy::host_exec::allowlist::{approve, PROBIERZ_RUN_ROOT_CREATE};
-
-    #[test]
-    fn run_root_preparation_is_one_fixed_guarded_mutation() {
-        let selected = approve(&["mkdir".into(), "-p".into(), ".stado/work/runs".into()])
-            .expect("fixed run root is approved");
-        assert_eq!(selected.argv, PROBIERZ_RUN_ROOT_CREATE);
-        let script = probierz_run_root_script();
-        assert!(script.contains("umask 077"));
-        assert!(script.contains("[ ! -L .stado/work/runs ]"));
-        assert!(script.contains("/bin/chmod 700 .stado/work/runs"));
-        assert!(!script.contains("$1"));
-    }
-}

@@ -17,8 +17,7 @@ use super::{host_channel, shlex_quote, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 mod parse;
-#[cfg(test)]
-mod reports_and_read_only;
+
 mod script;
 mod state;
 

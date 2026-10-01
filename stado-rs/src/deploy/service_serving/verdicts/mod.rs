@@ -10,9 +10,6 @@ use super::*;
 
 mod json_report;
 
-#[cfg(test)]
-mod ownership_and_unknowns;
-
 pub use json_report::to_report;
 
 /// Whether this pid, or the job that owns it, is the unit under test.

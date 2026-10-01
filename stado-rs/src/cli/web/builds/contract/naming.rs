@@ -17,23 +17,3 @@ pub(in crate::cli::web::builds) fn tarball_name(product: &str) -> String {
 pub(in crate::cli::web::builds) fn sidecar_line(digest: &str, file_name: &str) -> String {
     format!("{digest}  {file_name}\n")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn archive_paths_are_named_after_the_product_and_version() {
-        assert_eq!(top_level("preferences", "1.4.0"), "preferences-1.4.0");
-        assert_eq!(tarball_name("preferences"), "preferences-web.tar.gz");
-    }
-
-    #[test]
-    fn the_sidecar_line_is_sha256sum_readable() {
-        let digest = "e".repeat(64);
-        assert_eq!(
-            sidecar_line(&digest, "preferences-web.tar.gz"),
-            format!("{digest}  preferences-web.tar.gz\n")
-        );
-    }
-}

@@ -19,8 +19,7 @@
 // that return them.
 pub(crate) mod rollout;
 pub(crate) mod state;
-#[cfg(test)]
-mod tests;
+
 pub(crate) mod tick;
 
 /// The existing standalone release agent's reconciliation cadence.

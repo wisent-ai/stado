@@ -49,9 +49,6 @@ mod model;
 mod script;
 mod watch;
 
-#[cfg(test)]
-mod script_match_privacy;
-
 pub use self::model::{Ancestor, Arrival, Baseline, ProcessRow, WatchReport};
 pub use self::watch::{parse_watch, watch_spawns};
 

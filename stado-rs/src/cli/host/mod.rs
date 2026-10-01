@@ -56,7 +56,6 @@ pub use crate::cli::host::machine::disk::disk_cleanup;
 pub use crate::cli::host::machine::releases::activate::activate_staged_release;
 pub use crate::cli::host::machine::releases::platform::build;
 pub use crate::cli::host::machine::releases::platform::run_attached;
-pub use crate::cli::host::machine::releases::platform::verify_release_platform;
 pub use crate::cli::host::machine::releases::provenance::report::provenance;
 pub use crate::cli::host::machine::releases::versions::declare_version;
 pub use crate::cli::host::machine::releases::versions::promote::promote_version;

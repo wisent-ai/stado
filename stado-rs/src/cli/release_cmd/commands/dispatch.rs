@@ -82,15 +82,6 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             )
             .await
         }
-        ReleaseCommands::VerifyPlatform(args) => {
-            crate::cli::host::verify_release_platform(
-                &args.host,
-                &args.repo,
-                &args.revision,
-                args.json,
-            )
-            .await
-        }
         ReleaseCommands::HostState(args) => {
             crate::cli::service_converge::converge(
                 &args.host,

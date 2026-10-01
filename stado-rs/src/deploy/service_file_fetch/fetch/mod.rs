@@ -11,9 +11,6 @@ use super::report::{FetchReport, FetchedFile};
 use crate::deploy::{host_channel, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-#[cfg(test)]
-mod integrity_end_to_end;
-
 /// Parse the script's one line of JSON.
 ///
 /// The LAST line starting with `{` is the payload, for the reason

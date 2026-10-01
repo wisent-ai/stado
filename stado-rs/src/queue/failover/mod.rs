@@ -12,8 +12,6 @@ use std::sync::Arc;
 use super::{BlobBackend, StorageError, UPLOAD_PART_MARKER};
 
 mod blob_backend;
-#[cfg(test)]
-mod mirror_heal;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReadMode {

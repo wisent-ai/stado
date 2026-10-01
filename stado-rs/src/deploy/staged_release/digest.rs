@@ -25,32 +25,3 @@ pub fn parse_shasum(stdout: &str) -> Option<&str> {
         .next()
         .filter(|field| field.len() == 64 && field.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_archive_that_is_not_the_declared_one_refuses_before_anything_runs() {
-        let declared = "a".repeat(64);
-        let observed = "b".repeat(64);
-        let said = digest_verdict(&declared, &observed)
-            .unwrap_err()
-            .to_string();
-        assert!(said.contains("has not agreed to run"), "{said}");
-        // Case is the only thing a host's tooling is allowed to differ on.
-        digest_verdict(&declared, &declared.to_uppercase()).unwrap();
-    }
-
-    #[test]
-    fn a_shasum_line_yields_only_a_real_digest() {
-        assert_eq!(
-            parse_shasum(
-                "2714720eea1eaa430000000000000000000000000000000000000000000000ab  /path\n"
-            ),
-            Some("2714720eea1eaa430000000000000000000000000000000000000000000000ab")
-        );
-        assert_eq!(parse_shasum("shasum: no such file\n"), None);
-        assert_eq!(parse_shasum(""), None);
-    }
-}

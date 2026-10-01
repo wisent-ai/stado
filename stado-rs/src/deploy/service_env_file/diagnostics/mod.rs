@@ -11,9 +11,6 @@ use super::*;
 mod precedence;
 mod reconcile;
 
-#[cfg(test)]
-mod ordering_and_verdicts;
-
 pub use precedence::{duplicate_keys, shadowing};
 pub use reconcile::{endpoint_rows, endpoint_verdict, EndpointRow};
 

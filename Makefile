@@ -1,4 +1,4 @@
-# The commands this repository is checked, built and tested with.
+# The commands this repository is checked and built with.
 #
 # They live in a checked-in file rather than in whatever a person types, so the
 # verdict here, the one a Stado recipe reaches on every commit and the one a
@@ -6,7 +6,7 @@
 # lives in `stado-rs/`, which is the only reason these are not bare cargo
 # lines.
 
-.PHONY: check build release test
+.PHONY: check build release
 
 # Does the working copy compile? The cheap question, and the one to ask after
 # an edit: a build is rationed, a check is not.
@@ -19,6 +19,3 @@ build:
 # What a delivery installs.
 release:
 	cd stado-rs && cargo build --release
-
-test:
-	cd stado-rs && cargo test

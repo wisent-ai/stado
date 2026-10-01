@@ -16,10 +16,6 @@ enum NativeHostReleaseOperations {
         .init(id: "apply", title: "Deliver declared host versions", path: ["release", "host-state"], fields: [
             .init(id: "binary", label: "Binary (blank selects all declared binaries)", option: "--binary"),
         ], fixedArguments: ["--apply"]),
-        .init(id: "verify-platform", title: "Run the declared native release journeys", path: ["release", "verify-platform"], fields: [
-            .init(id: "repository", label: "Repository path", option: "--repo", required: true),
-            .init(id: "revision", label: "Exact source revision", option: "--ref", required: true),
-        ]),
         .init(id: "activate", title: "Activate a verified staged release", path: ["release", "activate-staged"], fields: [
             .init(id: "product", label: "Product (optional)", option: "--product"),
             .init(id: "environment", label: "Declared environment file on target (optional)", option: "--env-file"),

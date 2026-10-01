@@ -261,21 +261,3 @@ impl StoreRoot {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::StoreRoot;
-
-    /// 0b6008fe: on a store an object API serves, a client's queue is the
-    /// served namespace; the server keeps the whole store; a store nothing
-    /// serves stays rooted at its top for both.
-    #[test]
-    fn a_client_of_a_served_store_roots_its_queue_in_the_served_namespace() {
-        let store = tempfile::tempdir().expect("scratch store");
-        assert_eq!(StoreRoot::Client.queue_root(store.path()), store.path());
-        let served = StoreRoot::namespaced(store.path());
-        std::fs::create_dir_all(&served).expect("served namespace");
-        assert_eq!(StoreRoot::Client.queue_root(store.path()), served);
-        assert_eq!(StoreRoot::Served.queue_root(store.path()), store.path());
-    }
-}

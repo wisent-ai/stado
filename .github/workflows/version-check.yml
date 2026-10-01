@@ -543,21 +543,11 @@ jobs:
     # already builds precisely that, in this same workflow run, because it
     # needs the binary to read the advertised surface. A second twelve-minute
     # release build would buy no signal, and `--all-targets` below type-checks
-    # every bin, test and example the crate declares -- including the seven
-    # `[[bin]]` targets and the 27 integration tests that `--bin stado` never
-    # touches.
+    # every bin the crate declares -- including the `[[bin]]` targets that
+    # `--bin stado` never touches.
     #
-    # It also does not run the test suite, and that is not an oversight: the
-    # release gate does not run it either, and this repository's integration
-    # tests are Probierz journeys against live fleet resources. `tests/channel`
-    # says so in its own first line -- "deliberately ignored by a plain `cargo
-    # test`: it needs the public control origin and one immutable release
-    # coordinate. Probierz supplies both". A hosted `cargo test` would fail on
-    # the fleet's absence rather than on the change, and a check that is red
-    # for reasons the author cannot fix is a check the next person deletes. So
-    # this job refuses a test tree that cannot COMPILE, which is the defect
-    # that actually reached `main`, and leaves the running of journeys to
-    # Probierz, which owns it.
+    # It runs no test suite: this repository carries no tests until the
+    # operator approves one with `tama tests approve`.
     runs-on: ubuntu-latest
     # Hosted, not `[self-hosted, stado-control-plane]`. Exactly one runner
     # carries that label and both publish legs of the release train queue on

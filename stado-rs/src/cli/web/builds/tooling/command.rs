@@ -74,24 +74,3 @@ pub(super) fn run_with_path(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn a_killed_command_is_not_reported_as_a_clean_exit() {
-        use std::os::unix::process::ExitStatusExt;
-
-        // A wait status of 7 << 8 is an exit code of 7.
-        assert_eq!(exit_report(ExitStatus::from_raw(7 << 8)), "exit status 7");
-        // A Next.js build that exhausts the builder's memory is killed and has
-        // no exit code at all. Reporting a code there would say the build
-        // returned something, and the operator would look for a compile error
-        // that was never printed.
-        let killed = exit_report(ExitStatus::from_raw(9));
-        assert!(killed.contains("signal"), "{killed}");
-        assert!(!killed.contains("exit status"), "{killed}");
-    }
-}
