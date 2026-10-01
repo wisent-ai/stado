@@ -62,7 +62,7 @@ extension EnrollmentInviteView {
         if let record = store.plan.invite {
             return record.isExpired
                 ? "This invitation has lapsed. A machine answering it now is refused. Revoke it and mint another when you are ready."
-                : "Waiting for \(record.targetName) to answer. This screen reads the request store while it is open, and remembers what it is waiting for when it is not."
+                : "Waiting for \(record.targetName) to answer. The request store was read when this screen opened; Check for the reply now reads it again. What it is waiting for is remembered when the screen is closed."
         }
         if store.plan.approvedName != nil {
             return "The invitation is spent and cannot be used again. Inviting another machine mints a new one for a new name."

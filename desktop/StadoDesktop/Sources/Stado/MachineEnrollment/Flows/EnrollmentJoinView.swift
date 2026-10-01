@@ -58,7 +58,7 @@ struct EnrollmentJoinView: View {
             }
         }
         .task {
-            await store.watchPending()
+            await store.readPendingOnAppear()
         }
     }
 }

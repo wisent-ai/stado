@@ -62,11 +62,11 @@ struct EnrollmentInviteView: View {
             }
         }
         // Only the online invitation is answered by a machine, so only it has a
-        // request store to watch. Polling for a reply that cannot arrive is how
-        // a screen teaches an operator that waiting means something is broken.
+        // request store to read; it is read once here and again on **Check for
+        // the reply now**.
         .task(id: watchKey) {
             guard let record = store.plan.invite, !record.isOffline else { return }
-            await store.watchPending()
+            await store.readPendingOnAppear()
         }
         // What the one-line mode would stand on today, read when the operator
         // is choosing — not after a mint already fell to offline.

@@ -61,11 +61,6 @@ final class MachineEnrollmentStore: ObservableObject {
 
     static let draftKey = "machineEnrollmentDraft"
     static let planKey = "machineEnrollmentPlan"
-    /// How long the invitation screen leaves between reads of the request
-    /// store while it is on screen. Long enough that an afternoon of waiting
-    /// is not an afternoon of requests, short enough that the operator does
-    /// not reach for a refresh button.
-    static let pollInterval = Duration.seconds(20)
 
     let client: FleetControlClient
     let defaults: UserDefaults

@@ -45,21 +45,12 @@ extension MachineEnrollmentStore {
         }
     }
 
-    /// Keep reading the request store for as long as the screen is up.
-    ///
-    /// Driven by the view's own task, so it starts when the operator is
-    /// looking at the wait and stops when they are not. There is no background
-    /// poller: this app reads the fleet when somebody is reading the app.
-    func watchPending() async {
+    /// Read the request store once when the screen appears. A later request
+    /// is read when the operator asks (**Check for requests now**, **Check for
+    /// the reply now**) or after an
+    /// approval or rejection; nothing re-reads the store on a timer.
+    func readPendingOnAppear() async {
         await refreshPending()
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: Self.pollInterval)
-            } catch {
-                return
-            }
-            await refreshPending()
-        }
     }
 
     /// `stado fleet approve HOSTNAME` — the probing enrollment, with the
