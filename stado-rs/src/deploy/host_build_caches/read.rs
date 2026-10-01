@@ -1,9 +1,6 @@
 //! The build-cache reader: resolve one host's cleaner from its declaration or
 //! from the reporting default, and read the verdicts back.
 
-use std::time::Duration;
-
-use crate::deploy::host_users::SSH_TIMEOUT_SECONDS;
 use crate::deploy::{host_channel, CommandSpec, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -90,38 +87,6 @@ pub async fn report_declaration_on_host(
     .await
 }
 
-/// The environment override for the verdict's wall-clock bound, in seconds.
-/// Fractional values are accepted so a case can prove the bound fires.
-const VERDICT_BUDGET_ENV: &str = "STADO_CACHE_VERDICT_BUDGET_SECONDS";
-
-/// How long one verdict walk may take before it is killed and reported.
-///
-/// The remote branch has always carried [`SSH_TIMEOUT_SECONDS`]; the local
-/// branch carried nothing at all, and the local branch is the one an operator
-/// standing on a wedged machine uses. A host whose declared cleaner root is
-/// `$HOME` can leave `stado space report <host>` with neither an answer nor a
-/// refusal for minutes when the walk has no deadline, because the whole read
-/// waits on it. One bound governs both branches, and an operator whose root
-/// really needs longer raises it rather than losing the command.
-fn verdict_budget() -> Result<Duration, DeployError> {
-    match std::env::var(VERDICT_BUDGET_ENV) {
-        Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs(SSH_TIMEOUT_SECONDS)),
-        Ok(value) => value
-            .parse::<f64>()
-            .ok()
-            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
-            .map(Duration::from_secs_f64)
-            .ok_or_else(|| {
-                DeployError(format!(
-                    "{VERDICT_BUDGET_ENV} must be a positive number of seconds"
-                ))
-            }),
-        Err(error) => Err(DeployError(format!(
-            "cannot read {VERDICT_BUDGET_ENV}: {error}"
-        ))),
-    }
-}
-
 /// Report or prune on one registry host.
 pub async fn run_on_host(
     target: &ComputeTarget,
@@ -141,13 +106,6 @@ pub async fn run_on_host(
         report.error = Some(error.0);
         return report;
     }
-    let budget = match verdict_budget() {
-        Ok(budget) => budget,
-        Err(error) => {
-            report.error = Some(error.0);
-            return report;
-        }
-    };
     // The refused roots are the target's, not this machine's: a Linux
     // operator reading a Mac still prunes the Mac's photo library. A local
     // target that declares no platform is this binary's platform.
@@ -159,10 +117,9 @@ pub async fn run_on_host(
     let prune =
         crate::providers::local::disk_cleanup::build_caches::privacy_protected_parts(darwin);
     let command = remote_command(root, days, apply, force, prune);
-    let started = std::time::Instant::now();
+    // The walk runs until it ends; its own exit and output are the answer.
     let result = if target_is_local(target) {
-        let mut spec = CommandSpec::new(vec!["/bin/sh".to_string(), "-c".to_string(), command]);
-        spec.timeout = Some(budget);
+        let spec = CommandSpec::new(vec!["/bin/sh".to_string(), "-c".to_string(), command]);
         runner(spec).await
     } else if !target.has_ssh_connection() {
         report.error = Some(format!(
@@ -171,7 +128,7 @@ pub async fn run_on_host(
         ));
         return report;
     } else {
-        host_channel::run_script_with_timeout(target, &command, budget, runner)
+        host_channel::run_script_to_completion(target, &command, runner)
             .await
             .map_err(|error| error.0)
     };
@@ -180,17 +137,6 @@ pub async fn run_on_host(
         Ok(output) => {
             report.entries = parse_report(&output.stdout);
             report.error = Some(output.detail().trim().to_string());
-        }
-        // A killed walk reports the bound it hit and what to do about it: the
-        // runner's own sentence names a truncated second count and no root.
-        Err(_) if started.elapsed() >= budget => {
-            report.timed_out = true;
-            report.error = Some(format!(
-                "the build-cache verdict for {root} did not finish within {}s; \
-                 raise {VERDICT_BUDGET_ENV} or declare a narrower \
-                 cleaners.build_caches.root",
-                budget.as_secs_f64()
-            ))
         }
         Err(error) => report.error = Some(error),
     }
