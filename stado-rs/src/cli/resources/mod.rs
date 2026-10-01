@@ -163,9 +163,18 @@ pub struct RestoreArgs {
 #[derive(Subcommand, Debug)]
 pub enum OperationsCommands {
     /// List durable operations newest first.
-    List,
+    List {
+        /// Print the operations as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show the archived plan, state, and events for one operation.
-    Show { operation_id: String },
+    Show {
+        operation_id: String,
+        /// Print the plan, state and events as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: ResourcesCommands) -> Result<(), CmdError> {

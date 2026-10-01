@@ -5,9 +5,18 @@ use clap::Subcommand;
 #[derive(Subcommand)]
 pub(crate) enum CostCommands {
     /// Summarize $ spent per target_kind and per model from completed jobs.
-    Report,
+    Report {
+        /// Print the report, with every completed job's row, as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Project total $ for a batch file using observed per-job cost.
-    Estimate { batch_file: String },
+    Estimate {
+        batch_file: String,
+        /// Print the projection as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show the attributed provider/owner/workload cost ledger.
     Allocation {
         #[arg(long)]

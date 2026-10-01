@@ -18,7 +18,12 @@ pub enum OptimizeCommands {
         json: bool,
     },
     /// Explain one immutable placement or resource decision.
-    Explain { decision_id: String },
+    Explain {
+        decision_id: String,
+        /// Print the decision record as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run one inventory, optimizer, reconciler, and FinOps cycle.
     Run,
     /// Emergency-stop new autonomous mutations.
@@ -32,7 +37,12 @@ pub enum OptimizeCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum PolicyCommands {
-    Show,
+    /// Print the versioned autonomy policy.
+    Show {
+        /// Print the version and policy as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     Apply {
         #[arg(long)]
         file: PathBuf,
@@ -68,7 +78,7 @@ struct InventoryStatus {
 pub async fn dispatch_optimize(command: OptimizeCommands) -> Result<(), CmdError> {
     match command {
         OptimizeCommands::Status { json } => status(json).await,
-        OptimizeCommands::Explain { decision_id } => explain(&decision_id).await,
+        OptimizeCommands::Explain { decision_id, json } => explain(&decision_id, json).await,
         OptimizeCommands::Run => run_once().await,
         OptimizeCommands::Pause { reason } => pause(reason).await,
         OptimizeCommands::Resume => resume().await,
@@ -198,13 +208,12 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-async fn explain(decision_id: &str) -> Result<(), CmdError> {
+async fn explain(decision_id: &str, json_output: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let decision = crate::autonomy::storage::load_decision(&store, decision_id)
         .await?
         .ok_or_else(|| CmdError::refused(format!("decision not found: {decision_id}")))?;
-    println!("{}", serde_json::to_string_pretty(&decision)?);
-    Ok(())
+    crate::cli::print_answer(&serde_json::to_value(&decision)?, json_output)
 }
 
 async fn run_once() -> Result<(), CmdError> {
@@ -242,18 +251,12 @@ async fn resume() -> Result<(), CmdError> {
 async fn policy(command: PolicyCommands) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     match command {
-        PolicyCommands::Show => {
+        PolicyCommands::Show { json } => {
             let policy = crate::autonomy::storage::load_policy(&store).await?;
             let version = crate::autonomy::storage::load_policy_versioned(&store)
                 .await?
                 .map(|value| value.version);
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "version": version,
-                    "policy": policy,
-                }))?
-            );
+            crate::cli::print_answer(&json!({ "version": version, "policy": policy }), json)?;
         }
         PolicyCommands::Apply {
             file,
@@ -279,12 +282,7 @@ pub(crate) async fn show_report(name: &str, json_output: bool) -> Result<(), Cmd
             "cost report absent: {name}; run `stado optimize run`"
         ))
     })?;
-    if json_output {
-        println!("{}", serde_json::to_string(&value)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&value)?);
-    }
-    Ok(())
+    crate::cli::print_answer(&value, json_output)
 }
 
 async fn report_value(store: &JobStorage, name: &str) -> Result<Option<Value>, CmdError> {

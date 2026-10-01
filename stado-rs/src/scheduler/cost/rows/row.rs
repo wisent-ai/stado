@@ -1,7 +1,7 @@
 //! The per-job cost row both collectors emit.
 
 /// One finished job with wall-time + cost attribution. Python `rows` dict.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CostRow {
     pub job_id: String,
     pub state: String,

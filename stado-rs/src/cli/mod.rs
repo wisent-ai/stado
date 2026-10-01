@@ -93,3 +93,26 @@ pub(crate) use entry::spec::spend::billing::BillingCommands;
 pub(crate) use entry::spec::spend::cost::CostCommands;
 pub(crate) use entry::spec::spend::quota::QuotaCommands;
 pub(crate) use entry::spec::spend::vast::VastCommands;
+
+/// One answer in the two forms cli.md rule 13 asks for, from the same value:
+/// pretty JSON with `--json`, otherwise one `key: value` line per top-level
+/// field (a nested value printed compactly) for a person.
+pub(crate) fn print_answer(value: &serde_json::Value, json: bool) -> Result<(), CmdError> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(value)?);
+        return Ok(());
+    }
+    match value.as_object() {
+        Some(fields) => {
+            for (key, field) in fields {
+                match field {
+                    serde_json::Value::String(text) => println!("{key}: {text}"),
+                    serde_json::Value::Null => println!("{key}: -"),
+                    other => println!("{key}: {other}"),
+                }
+            }
+        }
+        None => println!("{value}"),
+    }
+    Ok(())
+}

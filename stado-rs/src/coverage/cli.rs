@@ -59,9 +59,23 @@ pub fn kv_to_kwargs(pairs: &[String]) -> Result<Map<String, Value>, String> {
 
 /// Print `value` as Python `json.dumps(value, indent=2)` (insertion
 /// order, ensure_ascii) on stdout.
-fn print_pretty(value: &Value) {
-    let pretty = serde_json::to_string_pretty(value).expect("JSON serialization is infallible");
-    println!("{}", crate::models::ensure_ascii(&pretty));
+fn print_pretty(value: &Value, json: bool) {
+    if json {
+        let pretty = serde_json::to_string_pretty(value).expect("JSON serialization is infallible");
+        println!("{}", crate::models::ensure_ascii(&pretty));
+        return;
+    }
+    match value.as_object() {
+        Some(fields) => {
+            for (key, field) in fields {
+                match field {
+                    Value::String(text) => println!("{key}: {text}"),
+                    other => println!("{key}: {other}"),
+                }
+            }
+        }
+        None => println!("{value}"),
+    }
 }
 
 /// click UsageError rendering for a subcommand: usage + Try line + blank +
@@ -94,13 +108,20 @@ struct Cli {
 #[derive(clap::Subcommand)]
 enum CoverageCommands {
     /// List registered coverage universes.
-    List,
-    /// Dry-run coverage walk; print per-universe report JSON. No submits.
+    List {
+        /// Print the universe names as a JSON array.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Dry-run coverage walk; print the per-universe report. No submits.
     Verify {
         universe_id: String,
         /// Universe constructor kwarg KEY=VALUE; repeat per kwarg.
         #[arg(long = "kv")]
         kv_pairs: Vec<String>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Verify, and with --execute, re-submit MISSING tuples via submit_batch.
     Retry {
@@ -111,6 +132,9 @@ enum CoverageCommands {
         /// Actually submit gap jobs via submit_batch; default is dry-run.
         #[arg(long)]
         execute: bool,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -121,20 +145,25 @@ pub async fn cli_main() -> i32 {
     let cli = <Cli as clap::Parser>::parse();
     let log = |msg: String| eprintln!("{msg}");
     match cli.command {
-        CoverageCommands::List => {
+        CoverageCommands::List { json } => {
             let names = list_universes();
             if names.is_empty() {
                 eprintln!("(no universes registered)");
                 return 1;
             }
-            for name in names {
-                println!("{name}");
+            if json {
+                print_pretty(&serde_json::json!(names), true);
+            } else {
+                for name in names {
+                    println!("{name}");
+                }
             }
             0
         }
         CoverageCommands::Verify {
             universe_id,
             kv_pairs,
+            json,
         } => {
             let universe = match kv_to_kwargs(&kv_pairs)
                 .and_then(|kwargs| build_universe(&universe_id, kwargs))
@@ -156,7 +185,7 @@ pub async fn cli_main() -> i32 {
             .await;
             match result {
                 Ok(report) => {
-                    print_pretty(&report.as_dict());
+                    print_pretty(&report.as_dict(), json);
                     0
                 }
                 Err(err) => runtime_error(&err),
@@ -166,6 +195,7 @@ pub async fn cli_main() -> i32 {
             universe_id,
             kv_pairs,
             execute,
+            json,
         } => {
             let universe = match kv_to_kwargs(&kv_pairs)
                 .and_then(|kwargs| build_universe(&universe_id, kwargs))
@@ -182,7 +212,7 @@ pub async fn cli_main() -> i32 {
             .await
             {
                 Ok(report) => {
-                    print_pretty(&report.as_dict());
+                    print_pretty(&report.as_dict(), json);
                     0
                 }
                 Err(err) => runtime_error(&err),

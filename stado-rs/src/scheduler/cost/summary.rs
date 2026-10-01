@@ -9,7 +9,7 @@ use super::rows::collect::collect_completed;
 use super::rows::row::CostRow;
 
 /// Aggregation bucket. Python `{"jobs","wall_s","cost_usd"}` dicts.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct BucketSummary {
     pub jobs: usize,
     pub wall_s: f64,
@@ -17,7 +17,7 @@ pub struct BucketSummary {
 }
 
 /// Python `report` result.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct Report {
     pub rows: Vec<CostRow>,
     pub by_target: BTreeMap<String, BucketSummary>,

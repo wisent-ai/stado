@@ -10,7 +10,7 @@ use super::summary::{report, BucketSummary};
 
 /// Python `project_batch` result. `projected_cost_usd` is None when there
 /// is no completed-job data to base the projection on.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct Projection {
     pub jobs_in_batch: usize,
     pub samples: usize,
