@@ -38,9 +38,8 @@ fn resolve_step_program(program: &str) -> PathBuf {
     candidates.push(Path::new("/usr/local/bin").join(program));
     // A candidate must be an executable file, as `execvp` requires. uv's
     // installer writes `~/.local/bin/env`, a shell snippet meant to be
-    // sourced; on charless-mac-mini that file shadowed `/usr/bin/env`, and
-    // the release gate stopped with `cannot run /Users/charles/.local/bin/env:
-    // Permission denied`.
+    // sourced; where that file comes first it shadows `/usr/bin/env`, and a
+    // step fails with `cannot run ~/.local/bin/env: Permission denied`.
     candidates
         .into_iter()
         .find(|candidate| is_executable_file(candidate))
@@ -57,11 +56,10 @@ fn is_executable_file(candidate: &Path) -> bool {
 /// A step written `env NAME=VALUE… program args…` sets variables for one
 /// program. Run through `env` itself, the program is looked up on the
 /// LaunchAgent's minimal PATH, which `resolve_step_program` exists to avoid:
-/// on 2026-09-23 `source-native-resident-identity` stopped on
-/// charless-mac-mini with `env: cargo: No such file or directory` (build
-/// aee7ac68) while every step naming `cargo` directly found it. So the
-/// assignments become the step's environment and the program after them is
-/// resolved like any other.
+/// a step written this way stops with `env: cargo: No such file or directory`
+/// while every step naming `cargo` directly finds it. So the assignments
+/// become the step's environment and the program after them is resolved like
+/// any other.
 fn split_env_prefix(argv: &[String]) -> (&[String], BTreeMap<String, String>) {
     let mut assignments = BTreeMap::new();
     if Path::new(&argv[0])
@@ -140,9 +138,9 @@ pub(crate) fn execute(
 /// Refuse a build the host has no room for, before the first crate.
 ///
 /// A release build that runs out of space fails after every minute it was
-/// going to spend: the stado 0.20.3 darwin job compiled 616 crates on
-/// charless-mac-mini and died on `No space left on device (os error 28)`
-/// writing rustc metadata, and the cause was one line inside a 30 KB log. The
+/// going to spend: a build that compiles hundreds of crates and then dies on
+/// `No space left on device (os error 28)` writing rustc metadata leaves the
+/// cause as one line inside a long log. The
 /// requirement is the recipe's own (`min_free_gb`), the observation is the
 /// work volume's, and a recipe that declares nothing is not measured.
 pub(super) fn require_free_space(

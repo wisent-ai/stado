@@ -29,17 +29,14 @@ pub enum BuildVerdict {
 /// Only refusals and unmeasured hosts are built: a build that accepts the
 /// document has nothing to report.
 ///
-/// This is the condition that opened both silent windows and that nothing
-/// reported. On `lukasz-macbook` the disk janitor journalled 8,348
-/// `policy:ValueError` passes across two windows — 2026-08-20T20:18:05Z to
-/// 2026-08-27T18:03:59Z and 2026-08-31T06:30:49Z to 2026-09-02T17:50:40Z —
-/// while the registry was valid the whole way through and the running build
-/// was too old to accept it. Neither window opened on a restart or a binary
+/// This is the condition that opens silent windows nothing else reports: a
+/// disk janitor can journal thousands of `policy:ValueError` passes while the
+/// registry is valid the whole way through and the running build is too old
+/// to accept it. Such a window opens without a restart or a binary
 /// replacement, so [`crate::deploy::service::StaleUnitImage`] fires nothing:
-/// the installed file and the running image agreed and the REGISTRY was what
-/// moved. Measured on 2026-09-03, 0.7.14 through 0.7.22 refuse today's
-/// document over `disk_cleanup.cleaners`, 0.13.24 refuses it over the
-/// `disk_cleanup` key set, and 0.13.46 onward accept it.
+/// the installed file and the running image agree and the REGISTRY is what
+/// moved — older builds refuse today's document over
+/// `disk_cleanup.cleaners` or the `disk_cleanup` key set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildRegistrySkew {
     pub host: String,

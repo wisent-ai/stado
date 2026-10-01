@@ -114,11 +114,10 @@ pub(crate) enum HostRunCommands {
     ///
     /// The periodic table is the one place a fleet host can declare a
     /// process that no launchd domain and no registry document mentions.
-    /// charless-mac-mini carried four `@reboot` entries outside both, two of
-    /// which restart duplicates that had just been retired with verified
-    /// postconditions — so every repair on that host was one reboot from
-    /// coming back, and the only way to change the table was a bare
-    /// `crontab -e` over ssh.
+    /// `@reboot` entries outside both can restart duplicates that were just
+    /// retired with verified postconditions — so every repair on that host
+    /// is one reboot from coming back, and without this command the only way
+    /// to change the table is a bare `crontab -e` over ssh.
     ///
     /// `--prune` previews by default and refuses anything but a single
     /// matching line that references `$HOME/.stado`; `--apply` saves the

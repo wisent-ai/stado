@@ -59,10 +59,9 @@ pub async fn grant_item_read(
 ///
 /// On the vault owner that is its own vault, widened in place. Anywhere else
 /// the host reads the owner's vault through the broker, and its vault files
-/// are retired copies: widening one of them refused on lukasz-macbook for
-/// every command that needed a grant first — `stado fleet key generate`
-/// (7db47e80), then `stado dns list` (85b4d4a6) — so the grant goes to the
-/// owner over the host channel. Progress goes to stderr: callers print one
+/// are retired copies: widening one of them refuses every command that needs
+/// a grant first — `stado fleet key generate`, `stado dns list` — so the
+/// grant goes to the owner over the host channel. Progress goes to stderr: callers print one
 /// JSON document on stdout.
 pub async fn settle_consumer_reads(item: &str, fields: &[&str]) -> Result<(), CmdError> {
     if crate::credential_store::skarbiec_url().is_none() {

@@ -3,11 +3,10 @@
 //! `status` answers whether a runner is healthy and reduces its log to one
 //! line, which is the right shape for a fleet table and the wrong shape for a
 //! diagnosis: a .NET `System.IO.IOException: Permission denied` names the path
-//! it could not open in the frames underneath that line, and those frames were
-//! being dropped. On 2026-09-07 a repository-scoped runner on
-//! `ubuntu-server-rtx-pro-6000` reported `activating` with an empty journal and
-//! that one truncated line for an hour, because a GitHub runner's diagnosis
-//! lives in `_diag/*.log` inside its own root and no product reader returned it.
+//! it could not open in the frames underneath that line, and a reader that
+//! drops them leaves a runner reporting `activating` with an empty journal and
+//! one truncated line, because a GitHub runner's diagnosis lives in
+//! `_diag/*.log` inside its own root.
 //!
 //! Everything here is read-only and takes a declared profile, so the paths, the
 //! service account and the unit name are resolved from the declaration by

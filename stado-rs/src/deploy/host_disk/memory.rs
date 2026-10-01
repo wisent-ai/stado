@@ -2,13 +2,11 @@
 //! what its registry declaration says about it, and what its last
 //! memory-reclaim pass did.
 //!
-//! Until 2026-09-06 this file could read only free pages and the swap line,
-//! and only on macOS. `stado runner install charless-mac-mini --profile
-//! precheck` failed four times with `Failed to create CoreCLR, HRESULT:
-//! 0x8007000C` while the report said 5.7 GiB of disk was free and said
-//! nothing at all about the 638 MiB of memory and the 4.7 GiB of swap that
-//! were the actual cause. Free pages alone cannot answer that: the machine
-//! had already pushed everything it could into the compressor and onto disk.
+//! Free pages and the swap line alone, on macOS only, cannot explain a
+//! runner install failing with `Failed to create CoreCLR, HRESULT:
+//! 0x8007000C` while the report says the disk has room: the cause is memory
+//! and swap, and a machine in that state has already pushed everything it
+//! can into the compressor and onto disk.
 //!
 //! So the reader now answers what a watermark can be measured against — total
 //! memory, obtainable memory, swap used and swap total, the compressor and

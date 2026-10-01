@@ -102,12 +102,11 @@ pub struct DiskCleanupPolicy {
     ///
     /// Optional, and absent means the janitor's own `DEADLINE_SECONDS` — 30 —
     /// so nothing changes for a host that does not declare it. It exists
-    /// because on 2026-09-02 this was the ONLY bound in this policy an
-    /// operator could not declare, and it was the one that bound: the pass on
-    /// `lukasz-macbook` reported `caps: {deadline: true, scan: false, items:
-    /// false, bytes: false}` after crossing 59,588 of 879,559 directories,
-    /// well under its declared `max_scan_items` of 100,000. Every other limit
-    /// here was tunable and none of them was in the way.
+    /// because this can be the one bound that decides: a pass can report
+    /// `caps: {deadline: true, scan: false, items: false, bytes: false}`
+    /// after crossing a small fraction of a large tree, well under its
+    /// declared `max_scan_items`, while every other limit here is tunable and
+    /// none of them is in the way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_pass_seconds: Option<i64>,
     pub cleaners: BTreeMap<String, DiskCleanerPolicy>,
@@ -120,13 +119,12 @@ impl DiskCleanupPolicy {
     /// Before this existed, an undeclared host was not a host with a lenient
     /// policy — it was a host the janitor refused to look at, because
     /// `resolve_canonical_policy` treated a missing declaration as a lookup
-    /// failure. `lukasz-macbook` builds and publishes everything this fleet
-    /// ships and declared nothing, so nothing watched it: it reached 1.8 GiB
-    /// free of 1.8 TiB carrying ~305 GB of cargo target trees, builds started
-    /// dying with `No space left on device`, the CI runner could not write its
-    /// own `_diag` pages, and the first anyone knew was four dead release
-    /// trains later. The registry's silence was read as "nothing to do" rather
-    /// than "nobody has said".
+    /// failure. A builder that declares nothing would be watched by nothing:
+    /// it can fill with hundreds of GB of cargo target trees until builds die
+    /// with `No space left on device` and the CI runner cannot write its own
+    /// `_diag` pages, and the first anyone knows is several dead release
+    /// trains later. The registry's silence must not be read as "nothing to
+    /// do" rather than "nobody has said".
     ///
     /// `report`, deliberately, and this is the whole judgement in this
     /// function. A default that deleted would delete on hosts whose operator

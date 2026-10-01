@@ -4,13 +4,12 @@
 //! `ecosystem/releases/<product>/<version>/` of the canonical store, and the
 //! objects are immutable by contract: nothing ever rewrites or deletes one
 //! through the object API. On the host that carries the store's files that
-//! contract had no counterpart. Measured on `charless-mac-mini` on
-//! 2026-09-04: `local-storage/ecosystem/releases/stado` held 84 versions,
-//! 21.6 GiB, while the disk sat under the janitor's 15 GiB low watermark with
-//! every declared cleaner reporting zero — and the same release loop that
-//! filled it kept publishing 0.6 GiB stado releases into it, each one failing
-//! to land because the host would not claim work under disk pressure. The
-//! loop that needed the disk was the loop that consumed it, and nothing in the
+//! contract had no counterpart: a product's releases can pile up to dozens of
+//! versions and tens of GiB while the disk sits under the janitor's low
+//! watermark with every declared cleaner reporting zero — and the same
+//! release loop that fills it keeps publishing into it, each release failing
+//! to land because the host will not claim work under disk pressure. The
+//! loop that needs the disk is the loop that consumes it, and nothing in the
 //! janitor could name what it was looking at.
 //!
 //! What a release version is still for, and therefore what this cleaner keeps:

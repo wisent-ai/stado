@@ -76,12 +76,11 @@ pub enum CredentialCommands {
     /// that is already on the host, but nothing could create that file. So the
     /// only remaining way to bind a host to the fleet object store was to
     /// hand-copy a secret onto it, which is the one thing the fleet-wide
-    /// "everything through Stado" rule exists to prevent. Lacking the file,
-    /// charless-mac-mini's queue agent bound its `JobStorage` to a
-    /// device-local store instead and published no capacity for seven days
-    /// while 74 fleet jobs waited on a host every surface reported as
-    /// in-sync -- a fleet claim written to a device store does not fail, it
-    /// succeeds where nobody else can see it.
+    /// "everything through Stado" rule exists to prevent. Lacking the file, a
+    /// queue agent binds its `JobStorage` to a device-local store instead and
+    /// publishes no capacity while fleet jobs wait on a host every surface
+    /// reports as in-sync -- a fleet claim written to a device store does not
+    /// fail, it succeeds where nobody else can see it.
     ///
     /// The value is read through the isolated service-verifier grant and
     /// carried in the SSH request body. It is never printed or placed in argv.

@@ -10,21 +10,20 @@ use super::super::programs::{CADDY_PROXY, NODE_RUNTIME, NPM_CLI};
 use super::super::ApprovedCommand;
 
 pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
-    // The four reads a release that is installed but not running needs, added
-    // 2026-09-02. On that evening `com.wisent.weles-admission` on
-    // charless-mac-mini crash-looped on `Cannot find module
+    // The four reads a release that is installed but not running needs. An
+    // admission unit can crash-loop on `Cannot find module
     // .../runtime/dist/worker/dispatch.js` while `stado release status
-    // weles-worker` reported 0.5.57 committed and active. Three different
-    // repairs hid behind that: the build had dropped the file, the install had
-    // put it where the launcher does not look, or the launcher was resolving a
+    // weles-worker` reports the release committed and active. Three different
+    // repairs hide behind that: the build dropped the file, the install
+    // put it where the launcher does not look, or the launcher resolves a
     // tree from an older release. Separating them is four facts about one
     // directory -- which digest `current` resolves to, which digests are
     // installed beside it, what the launcher sees inside the one it reaches,
     // and whether the compiled worker modules the API server imports are
-    // there -- and this table could read none of them: `ls` existed only as
-    // the fixed `ls /Applications`, and there is no `readlink`, `cat`, `find`
-    // or `stat` entry. The whole diagnosis stopped on the symlink evidence
-    // and said so.
+    // there -- and without these entries this table could read none of them:
+    // `ls` existed only as the fixed `ls /Applications`, and there was no
+    // `readlink`, `cat`, `find` or `stat` entry, so a diagnosis stopped on the
+    // symlink evidence.
     //
     // Each entry names the one service, because a path an operator supplies is
     // a path that can be `~/.ssh/id_ed25519`. `.stado/services` holds the

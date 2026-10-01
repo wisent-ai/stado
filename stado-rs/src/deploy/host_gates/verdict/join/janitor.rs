@@ -43,13 +43,12 @@ impl JanitorHealth {
         // janitor that is still running and still being turned away, so the age of
         // its last success says nothing about its health. Only silence does.
         //
-        // This is the whole of the 2026-09-03 false blocker: charless-mac-mini ran
-        // one job for 42 minutes, the in-process janitor polled every ten seconds
-        // throughout, and because a prevented pass recorded nothing the success age
-        // reached 2311s against a 1200s limit and `claiming` went off — on a host
-        // with 17.3 GiB free against a 15 GiB watermark and
-        // `disk_pressure_unresolved: false`. The host was refusing new work because
-        // it was doing work.
+        // Without this, a host that runs one long job while the in-process
+        // janitor polls every ten seconds would let the success age pass its
+        // limit — because a prevented pass records nothing — and switch
+        // `claiming` off on a host with free space above its watermark and
+        // `disk_pressure_unresolved: false`, refusing new work because it is
+        // doing work.
         let cleanup_prevented = match (stall_after_seconds, cleanup_prevented_age_seconds) {
             (Some(limit), Some(age)) => age <= limit,
             _ => false,

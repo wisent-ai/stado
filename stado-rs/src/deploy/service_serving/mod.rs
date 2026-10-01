@@ -21,11 +21,11 @@
 //!
 //! Three properties are deliberate:
 //!
-//! 1. **Ownership is decided by launchd label, never by argv.** On
-//!    charless-mac-mini the declared `com.wisent.always-on.weles` and the
-//!    undeclared `com.wisent.weles-worker` execute the same program with the
-//!    same argument vector — the Weles release deployer bootstraps the second
-//!    one by design. [`super::service::stado_unit_pids`]-style argv matching
+//! 1. **Ownership is decided by launchd label, never by argv.** A declared
+//!    `com.wisent.always-on.weles` and an undeclared `com.wisent.weles-worker`
+//!    can execute the same program with the same argument vector — the Weles
+//!    release deployer bootstraps the second one by design.
+//!    [`super::service::stado_unit_pids`]-style argv matching
 //!    would attribute the surviving process to whichever unit was asked about
 //!    and answer `serving` for a unit that is down. So the question asked here
 //!    is which launchd job holds the pid, resolved by walking the pid's parent

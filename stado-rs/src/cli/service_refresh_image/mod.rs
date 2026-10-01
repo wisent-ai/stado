@@ -10,14 +10,13 @@
 //!
 //! - **It refuses a unit that is not stale**, and the refusal names the
 //!   identity it found. A command that restarts whatever it is pointed at is a
-//!   restart button, and this fleet has already turned a degraded host into a
-//!   down one with one of those.
-//! - **It re-reads the identity afterwards.** On 2026-09-03 pid 49727 —
-//!   `com.wisent.compute.agent.lukasz-macbook` — respawned under `KeepAlive`
-//!   straight back onto the same unlinked inode 182274754 it had just left.
-//!   launchd re-execs the PATH, and the path was never the problem; a
+//!   restart button, and a restart button turns a degraded host into a down
+//!   one.
+//! - **It re-reads the identity afterwards.** A unit under `KeepAlive` can
+//!   respawn straight back onto the same unlinked inode it has just left;
+//!   launchd re-execs the PATH, and the path is not the problem. A
 //!   remediation that reported success on the strength of having issued a
-//!   restart would have been a second silence exactly where the first one was.
+//!   restart would be a second silence exactly where the first one was.
 //!   So a restart that did not change the image is a failure with a non-zero
 //!   exit, not a caveat in a success message.
 //! - **One unit per invocation.** No `--all`, no glob, no sweep. Three stale

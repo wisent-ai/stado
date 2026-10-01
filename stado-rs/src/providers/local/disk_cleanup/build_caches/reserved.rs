@@ -113,10 +113,9 @@ pub(super) fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<Pat
 /// on. This is the one list: the janitor's own walk reads it through
 /// [`privacy_protected_roots`], and the build-cache verdict script that
 /// `stado space report` sends to a host reads it through
-/// `STADO_CACHE_PRUNE`. Two lists drifted on 2026-09-17: the janitor refused
-/// `~/Library/CloudStorage` while the verdict's `find` walked straight into a
-/// Google Drive `.tmp` on lukasz-macbook and reported the whole host as
-/// `scan-failed`.
+/// `STADO_CACHE_PRUNE`. Two lists drift: the janitor refusing
+/// `~/Library/CloudStorage` while the verdict's `find` walks straight into a
+/// synced-drive `.tmp` and reports the whole host as `scan-failed`.
 pub fn privacy_protected_parts(darwin: bool) -> &'static [&'static str] {
     if darwin {
         &[

@@ -29,10 +29,10 @@ pub(in crate::fleet_shape) fn path_binary(
         ));
         return;
     };
-    // Unmeasured is not clean. The first version of this check reported
-    // agreement whenever `command -v stado` answered nothing, which on
-    // charless-mac-mini it always does: the channel's shell is not a login
-    // shell. A check that passes because it could not look is the disease.
+    // Unmeasured is not clean. Reporting agreement whenever `command -v stado`
+    // answers nothing would pass on every host, because the channel's shell is
+    // not a login shell. A check that passes because it could not look is the
+    // disease.
     if !posture.measurable() {
         notes.push(format!(
             "{}: stado copies UNMEASURED — delivered {} resolved to {:?}, {} location(s) answered",

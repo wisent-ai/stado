@@ -1,14 +1,13 @@
 //! `stado service watch-spawn` — sit on one host and name the parent of the
 //! next process that matches a program, while that parent is still alive.
 //!
-//! NO Python original. This exists because of a diagnosis that no shipped
-//! command could finish. On charless-mac-mini an **undeclared**
-//! `stado agent --target charless-mac-mini` kept coming back within one to
-//! four minutes of being reaped. Every replacement was read with `ppid 1` and
-//! no launchd label holding it, which says only one thing: whatever started it
-//! had already exited, so the process reparented to launchd. The question
-//! "what started it" was therefore unanswerable from any snapshot taken after
-//! the fact, and every snapshot this fleet can take is after the fact.
+//! NO Python original. An **undeclared** `stado agent --target <host>` can
+//! keep coming back within minutes of being reaped, every replacement read
+//! with `ppid 1` and no launchd label holding it, which says only one thing:
+//! whatever started it had already exited, so the process reparented to
+//! launchd. The question "what started it" is therefore unanswerable from any
+//! snapshot taken after the fact, and every other snapshot this fleet can take
+//! is after the fact.
 //!
 //! Why the existing readers cannot do it:
 //!

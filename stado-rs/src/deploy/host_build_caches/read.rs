@@ -20,15 +20,13 @@ use crate::deploy::host_channel::target_is_this_host as target_is_local;
 ///
 /// The default is not this function's invention: it is
 /// [`crate::targets::DiskCleanupPolicy::reporting_default`], which the janitor
-/// has resolved undeclared hosts against since the `lukasz-macbook` space
-/// incident, and whose whole point is that silence in the registry means
-/// "nobody has said", not "do not look". This reader refused instead, so one
-/// declaration had two answers: the janitor reported an undeclared host's
-/// reclaimable caches while `stado space report` and `stado host build-caches`
-/// said the host declares no policy at all. A leased scratch target meets it
-/// every time — the registry `stado scratch create` emits declares no
-/// `disk_cleanup` — and a capability test had to write a policy into its own
-/// document before it could read anything back.
+/// resolves undeclared hosts against, and whose whole point is that silence
+/// in the registry means "nobody has said", not "do not look". Refusing
+/// instead would give one declaration two answers: the janitor reports an
+/// undeclared host's reclaimable caches while `stado space report` and
+/// `stado host build-caches` say the host declares no policy at all. A leased
+/// scratch target meets it every time — the registry `stado scratch create`
+/// emits declares no `disk_cleanup`.
 ///
 /// Nothing here arms a cleaner. The default's mode is `report`, deleting stays
 /// an explicit registry declaration, and the two refusals below are unchanged:
@@ -100,12 +98,11 @@ const VERDICT_BUDGET_ENV: &str = "STADO_CACHE_VERDICT_BUDGET_SECONDS";
 ///
 /// The remote branch has always carried [`SSH_TIMEOUT_SECONDS`]; the local
 /// branch carried nothing at all, and the local branch is the one an operator
-/// standing on a wedged machine uses. On `lukasz-macbook`, whose declared
-/// cleaner root is `$HOME`, `stado space report lukasz-macbook` returned
-/// neither an answer nor a refusal after 420 seconds on 2026-09-10: the walk
-/// this function starts had no deadline, so the whole read waited on it. One
-/// bound now governs both branches, and an operator whose root really needs
-/// longer raises it rather than losing the command.
+/// standing on a wedged machine uses. A host whose declared cleaner root is
+/// `$HOME` can leave `stado space report <host>` with neither an answer nor a
+/// refusal for minutes when the walk has no deadline, because the whole read
+/// waits on it. One bound governs both branches, and an operator whose root
+/// really needs longer raises it rather than losing the command.
 fn verdict_budget() -> Result<Duration, DeployError> {
     match std::env::var(VERDICT_BUDGET_ENV) {
         Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs(SSH_TIMEOUT_SECONDS)),

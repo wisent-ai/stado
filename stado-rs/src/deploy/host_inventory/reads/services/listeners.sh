@@ -26,10 +26,10 @@ if [ "$listeners_state" = read ]; then
     # This used to drop anything that was not loopback and then keep only the
     # FIRST row per port, which made two facts unrepresentable: that a port has
     # more than one holder, and that anything is listening on a routable
-    # address at all. charless-mac-mini had THREE servers on 8765 — the
+    # address at all. A host can carry several servers on one port — the
     # declared unit on 127.0.0.1, a stale duplicate on ::1, and an undeclared
-    # node proxy on the tailnet address serving every external caller — and
-    # this table could show exactly one of them. Consumers that only care
+    # proxy on the tailnet address serving every external caller — and a
+    # de-duplicated table shows exactly one of them. Consumers that only care
     # about loopback filter for it themselves; a de-duplicating collector
     # cannot be un-de-duplicated downstream.
     if (seen[address]++) next

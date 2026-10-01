@@ -106,12 +106,10 @@ pub(in crate::cli::release_cmd) async fn active_binary(
 /// than under release control: `targets[].managed_versions` names the
 /// version, and the host's software report names the program at that version.
 ///
-/// `release host-state` already judged such a host `in-sync` while this
-/// command refused it: on charless-mac-mini on 2026-09-26 host-state read
-/// skarbiec 0.3.12 running and in sync, and `active-binary skarbiec` answered
-/// `release product "skarbiec" has no target "charless-mac-mini"`, so Weles,
-/// which asks this command for the Skarbiec it runs, had not started for two
-/// days. Both reads now answer from what the host declares and reports.
+/// `release host-state` can judge such a host `in-sync` while this command
+/// refuses it with `release product "skarbiec" has no target "<host>"`, and
+/// Weles, which asks this command for the Skarbiec it runs, then does not
+/// start. Both reads answer from what the host declares and reports.
 async fn declared_binary(
     product: &str,
     target: &crate::targets::ComputeTarget,
@@ -144,10 +142,10 @@ async fn declared_binary(
     // Attested when it can be: the signed release of that version, and the
     // receipt its delivery left on this host, both name these bytes. A
     // program the host runs under its own declaration with no delivery on
-    // this host (the vault owner on charless-mac-mini) is answered as
-    // `declared` with its reported digest and path, and the caller checks the
-    // bytes itself: refusing it kept weles-admission down (641f08db). A
-    // receipt that names other bytes is still refused.
+    // this host (the vault owner, typically) is answered as `declared` with
+    // its reported digest and path, and the caller checks the bytes itself:
+    // refusing it keeps weles-admission down. A receipt that names other
+    // bytes is still refused.
     let platform = target.release_platform.as_str();
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)

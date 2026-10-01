@@ -48,14 +48,13 @@ pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, Storage
 
 /// Delete every object in the backup that the source does not have.
 ///
-/// A replica that keeps what the source deleted is not a replica. This used to
-/// walk [`CANONICAL_PREFIXES`] only, which left everything outside them
-/// accumulating for the lifetime of the host: on charless-mac-mini that was
-/// 11.4 GiB of `artifacts/models` and 2.7 GiB of `status/`, and it is why the
-/// 47.8 GiB replica had grown larger than the 32.7 GiB primary it mirrors. The
-/// operator's decision, recorded here because the reason outlives the diff: the
-/// backup mirrors the source in full, and objects the source no longer has are
-/// deleted from it on the next replication pass.
+/// A replica that keeps what the source deleted is not a replica. Walking
+/// [`CANONICAL_PREFIXES`] only would leave everything outside them
+/// accumulating for the lifetime of the host, until the replica is larger
+/// than the primary it mirrors. The decision, recorded here because the
+/// reason outlives the diff: the backup mirrors the source in full, and
+/// objects the source no longer has are deleted from it on the next
+/// replication pass.
 ///
 /// The resume sentinel is the one exception, because the copier writes it to
 /// the destination itself ([`SENTINEL_PATH`]) and the source never has it.

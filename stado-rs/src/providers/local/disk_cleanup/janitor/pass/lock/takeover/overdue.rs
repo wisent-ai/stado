@@ -37,14 +37,12 @@ fn unattributed_overdue(lock: &File, pass_seconds: f64) -> Option<f64> {
 
 /// The predecessor this pass may take the lock from, recorded or not.
 ///
-/// A hold with no holder record used to be permanent: `overdue_holder` reads
-/// the record first and answers `None` without it, so the pass reported
-/// `lock_busy_unattributed` and left. On `charless-mac-mini` on 2026-09-06
-/// that state lasted two hours and counting - the agent's own janitor tick
-/// held the kernel lock with no record, every later tick declined to take it,
-/// and the host stopped reclaiming anything at 5.3 GiB free while fifty
-/// queued documentation records waited for space that only this janitor
-/// returns. A missing record is not a live budget: the lock file's own age is
+/// A hold with no holder record would otherwise be permanent: `overdue_holder`
+/// reads the record first and answers `None` without it, so the pass would
+/// report `lock_busy_unattributed` and leave — the agent's own janitor tick
+/// holding the kernel lock with no record, every later tick declining to take
+/// it, and the host reclaiming nothing while queued work waits for space that
+/// only this janitor returns. A missing record is not a live budget: the lock file's own age is
 /// the evidence that exists in every case, and a hold past the declared pass
 /// deadline is overdue whether or not its owner wrote itself down.
 pub(super) fn overdue_predecessor(

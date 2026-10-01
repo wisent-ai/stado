@@ -29,7 +29,7 @@
     {
       "name": "filesystem_refusal",
       "code": "unknown",
-      "why": "A file or directory the host itself would not open. The words overlap with the auth family — `find: /x: Permission denied` and an object gateway's `permission denied` are spelled the same — but the meaning does not: no credential of ours was rejected, and telling the operator 'retrying will not help, check your credentials' sends them to the vault for a chmod. On 2026-09-17 `stado space report lukasz-macbook` did exactly that over one unreadable Google Drive .tmp. Checked before the auth needles and landed in unknown with the detail intact, because the seven-code vocabulary has no code for 'the host refused a file operation' and inventing one here is not this crate's call.",
+      "why": "A file or directory the host itself would not open. The words overlap with the auth family — `find: /x: Permission denied` and an object gateway's `permission denied` are spelled the same — but the meaning does not: no credential of ours was rejected, and telling the operator 'retrying will not help, check your credentials' sends them to the vault for a chmod over one unreadable synced-drive .tmp file. Checked before the auth needles and landed in unknown with the detail intact, because the seven-code vocabulary has no code for 'the host refused a file operation' and inventing one here is not this crate's call.",
       "needles": ["find: ", "operation not permitted", "(os error 13)", "eacces", "eperm"]
     },
     {

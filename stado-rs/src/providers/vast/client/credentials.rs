@@ -5,12 +5,10 @@
 //! The reading is structured rather than a bare string because the string
 //! could only ever say "empty", and "empty" was the answer for three
 //! different states: this host has no Skarbiec channel at all, the channel
-//! answered and refused, or the vault holds no such item. On 2026-09-20
-//! `stado vast status` reported the refusal as `403 consumer not authorized
-//! to read item field` while the fleet vault on charless-mac-mini declared no
-//! `stado-vast` item at all, so the sentence named a grant that could not
-//! exist. `stado vast readiness` turns this reading plus the vault's own
-//! answer into one verdict.
+//! answered and refused, or the vault holds no such item. Reporting a missing
+//! `stado-vast` item as `403 consumer not authorized to read item field`
+//! names a grant that cannot exist. `stado vast readiness` turns this reading
+//! plus the vault's own answer into one verdict.
 
 use serde::Serialize;
 

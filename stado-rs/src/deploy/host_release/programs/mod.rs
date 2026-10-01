@@ -76,11 +76,11 @@ fn bindings(plan: &ReleasePlan) -> String {
     //
     // The caller reads the manifest through a client that pins tailnet names
     // (`cli::storage::fleet_https_client`); the target fetches the archive with
-    // `curl`, which asks its system resolver. On 2026-09-02 that split cost a
-    // delivery: 0.13.46's archive matched its manifest byte for byte here, and
-    // `charless-mac-mini` reported `verify mismatch` for bytes fetched from the
-    // same URL, because a MagicDNS name resolved to the public `ts.net` front
-    // end there. The tailnet address is tailnet-global, so the address this
+    // `curl`, which asks its system resolver. That split can fail a delivery:
+    // the archive matches its manifest byte for byte here while the target
+    // reports `verify mismatch` for bytes fetched from the same URL, because a
+    // MagicDNS name resolves to the public `ts.net` front end there. The
+    // tailnet address is tailnet-global, so the address this
     // machine reads is the address the target must use, and `--resolve` decides
     // the route while leaving SNI, the certificate check and the URL untouched.
     bound.push_str(&format!(

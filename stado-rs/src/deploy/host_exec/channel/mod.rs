@@ -142,11 +142,10 @@ pub fn account_script(account: &AccountProgram, arguments: &[&str]) -> String {
         // actually installed, and the agent records where that is: the
         // `active.release_dir` of `$HOME/.stado/release-state/<product>.json`.
         // The static candidates below name a `current/<platform>/bin` layout
-        // the agent never writes, so on 2026-09-19 every `subscription
-        // sign-in` on charless-mac-mini fell through to the standalone copy in
-        // `~/.stado/bin` - a bundle from 8 September, whose sign-in refuses
-        // every Weles release with "does not advertise the login_item
-        // selector", a gate the served release removed on 9 September.
+        // the agent never writes, so a `subscription sign-in` would fall
+        // through to an older standalone copy in `~/.stado/bin`, whose
+        // sign-in can refuse every current Weles release on a gate the
+        // served release has already removed.
         script.push_str(&format!(
             "released=$({reader} {product} {relative} 2>/dev/null || true)\n\
              [ -z \"$released\" ] || [ ! -x \"$released\" ] || program=\"$released\"\n",

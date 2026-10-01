@@ -35,12 +35,10 @@ pub struct StageDeclaration {
     ///
     /// Declared because a stage that says what it covers is the only way the
     /// disk can be measured against the declarations. `stado space report`
-    /// reads exactly this list to answer the question nothing could answer on
-    /// 2026-09-09, when `charless-mac-mini` sat at 282 MB free of 228 GB with
-    /// the janitor reporting `cap_reached`: which occupants of that disk no
-    /// stage can reach. It was `~/.stado/local-storage` at 52.4 GB and
-    /// `~/.stado/local-backup` at 10.4 GB, and every reading the fleet had
-    /// was true while none of them said so.
+    /// reads exactly this list to answer which occupants of a nearly full
+    /// disk no stage can reach — for example `~/.stado/local-storage` and
+    /// `~/.stado/local-backup` — a question every other reading leaves open
+    /// while each of them is true.
     ///
     /// Empty is legitimate, and then [`StageDeclaration::roots_from`] names
     /// where the paths come from instead: the registry's cleaner set, the

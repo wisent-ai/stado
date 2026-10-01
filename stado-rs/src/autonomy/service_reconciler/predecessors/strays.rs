@@ -1,11 +1,10 @@
 //! Units in the fleet's own label namespace that the registry never declared
 //! and that are failing, retired on every local host.
 //!
-//! `service list --undeclared` names them, and that was all: a stray copy of
-//! Weles bootstrapped by hand as
-//! `com.wisent.compute.service.com.wisent.always-on.weles` ran a program from
-//! a loose `~/weles` folder on lukasz-macbook, exited 1 on every start and was
-//! started again at every login, and no pass ever acted on the row. A unit the
+//! `service list --undeclared` names them, and nothing more: a stray copy of
+//! a product bootstrapped by hand under a doubled label, running a program
+//! from a loose folder in the home directory, can exit 1 on every start and
+//! be started again at every login while no pass ever acts on the row. A unit the
 //! registry does not declare has no owner that will repair it, so a failing
 //! one is retired the way a catalog predecessor is: booted out and its
 //! autostart withdrawn, the unit file left in place.

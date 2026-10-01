@@ -2,15 +2,15 @@
 /// release channel delivered. Appended to [`super::LOADED_UNITS_SCRIPT`] for
 /// the full read only; image reconciliation never asks this question.
 ///
-/// `~/.cargo/bin/stado` at 0.7.34 shadowed a delivered 0.13.40 for a week, and
-/// 0.7.34 has no `--undeclared`, no `bootout` and no `reap`: every answer it
-/// gave was "this host is clean", not because the host was, but because that
-/// binary could not look.
+/// A stale `~/.cargo/bin/stado` can shadow a delivered release, and an old
+/// binary with no `--undeclared`, no `bootout` and no `reap` answers "this
+/// host is clean" every time, not because the host is, but because that
+/// binary cannot look.
 ///
 /// `command -v` alone is not the question. This program runs on the channel's
-/// non-interactive shell, whose PATH is not the login shell's -- on
-/// charless-mac-mini it resolved NOTHING, and the reader called that agreement
-/// with the delivered binary. So the concrete locations are probed by name, a
+/// non-interactive shell, whose PATH is not the login shell's -- it can
+/// resolve NOTHING, and a reader that called that agreement with the
+/// delivered binary would be wrong. So the concrete locations are probed by name, a
 /// stale copy in any of them is a finding, and a location that could not be
 /// read is reported as unread rather than as clean.
 pub(crate) const PATH_POSTURE_SCRIPT: &str = r##"delivered="$HOME/.stado/bin/stado"

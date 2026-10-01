@@ -178,10 +178,10 @@ pub const AGENT_TICK_PROGRESS_TTL_S: u64 = AGENT_CLAIM_STORE_BUDGET_S * 2;
 /// much the read may bring back, and an object body is buffered whole in the
 /// process that asked for it — so an unbounded read is unbounded memory as
 /// well as unbounded time, and a budget that fires afterwards fires too late.
-/// `charless-mac-mini` was measured on 2026-09-03 with 88 MB of free pages,
-/// ~3 GB held by the compressor and 3.1M swap-outs after seven days of
-/// uptime, and the agent's loop is the process performing these reads on that
-/// host every tick.
+/// A host under memory pressure can have tens of MB of free pages, GBs held
+/// by the compressor and millions of swap-outs after a week of uptime, and
+/// the agent's loop is the process performing these reads on that host every
+/// tick.
 ///
 /// Sized against what these documents are, not against what a host can
 /// afford: the canonical registry is ~41 KB, a job is a few KB, a capacity

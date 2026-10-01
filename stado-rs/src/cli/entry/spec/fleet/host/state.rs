@@ -36,9 +36,8 @@ pub(crate) enum HostStateCommands {
     /// What the health beacon must ask about. The collector's list was an
     /// operator-typed `WC_HEALTH_UNITS`, so a service the registry declared
     /// and the beacon never watched read as a unit that does not exist:
-    /// `registry doctor` reported `missing-plist` for
-    /// `com.wisent.compute.service.stado-resolver.service.service` on
-    /// ubuntu-server-rtx-pro-6000 while that unit was active with a live pid.
+    /// `registry doctor` reported `missing-plist` for a declared unit that
+    /// was active with a live pid.
     ///
     /// Prints nothing and succeeds when this machine is not in the registry or
     /// the registry cannot be read: a beacon that fails to collect reports
@@ -88,10 +87,9 @@ pub(crate) enum HostStateCommands {
     ///
     /// `stado disk-cleanup` and `stado install-disk-cleanup` act on the
     /// machine they are typed on, so a fleet host that drifts below its low
-    /// watermark has no way back: on 2026-09-20 charless-mac-mini published
-    /// 6.7 GiB free against an 8 GiB watermark and Stado refused every
-    /// placement on it, including the deployment that would have fixed the
-    /// host. This runs the target's own installed Stado, which reads the
+    /// watermark has no way back: Stado refuses every placement on it,
+    /// including the deployment that would fix the host. This runs the
+    /// target's own installed Stado, which reads the
     /// same declaration it reads locally; nothing about what may be deleted
     /// is decided here.
     #[command(name = "disk-cleanup")]

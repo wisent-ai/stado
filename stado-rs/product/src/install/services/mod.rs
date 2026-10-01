@@ -51,9 +51,9 @@ pub fn ensure(product: &Value, recipe: &Value, host: &str) -> Result<Value> {
 ///
 /// A retired unit Stado does not manage is adopted first and then removed:
 /// the catalog's word that it is retired is the authority, and reporting it
-/// as "not managed" left `com.wisent.transcript-lake-secret-scrub`, installed
-/// by hand on 2026-08-31, loaded on lukasz-macbook for four weeks after the
-/// catalog retired it. A unit the host does not have is reported as absent.
+/// as "not managed" leaves a hand-installed unit loaded for as long as nobody
+/// notices, after the catalog has retired it. A unit the host does not have is
+/// reported as absent.
 /// Any other refusal fails the install, since the host would still run two
 /// processes of the product.
 fn retire_predecessors(product: &Value, host: &str) -> Result<Vec<Value>> {

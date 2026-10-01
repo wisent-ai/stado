@@ -153,12 +153,11 @@ pub(in crate::cli::service_converge) fn apply_gate_diagnostics(
             pass.undeliverable.len()
         ));
     }
-    // Every refusal used to be reported as `host-ahead`, whatever it was. On
-    // 2026-09-02 charless-mac-mini was BEHIND its declaration — 0.13.45 against
-    // 0.13.46 — and the summary told the release train that a host ahead of the
-    // registry had been refused rather than downgraded, which is the opposite
-    // diagnosis and points an operator at `declare-version` when the answer was
-    // a delivery. A refusal is classified by the row it came from.
+    // A refusal is classified by the row it came from. Reporting every refusal
+    // as `host-ahead` would tell the release train that a host BEHIND its
+    // declaration had been refused rather than downgraded, which is the
+    // opposite diagnosis and points an operator at `declare-version` when the
+    // answer is a delivery.
     if !pass.refused.is_empty() {
         let kind = |verdict: &str| {
             pass.refused

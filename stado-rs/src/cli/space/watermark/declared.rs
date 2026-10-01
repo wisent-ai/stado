@@ -1,10 +1,10 @@
 //! Applying a declared policy to a host, and reading back whether that host
 //! is actually managed.
 //!
-//! Both halves exist because of the same defect. charless-mac-mini's
-//! declaration was readable the whole time it was useless: `mode` was
-//! `report`, its one repair could never fire, and the command that printed it
-//! printed the fields and left the judgement to whoever was looking. So the
+//! Both halves exist because of the same defect. A declaration can be
+//! readable and useless: `mode` set to `report`, its one repair never able to
+//! fire, and a command that prints the fields and leaves the judgement to
+//! whoever is looking. So the
 //! read here states the verdict — armed or not, and which declared policy the
 //! document IS — and the write refuses anything but a policy written for this
 //! host.

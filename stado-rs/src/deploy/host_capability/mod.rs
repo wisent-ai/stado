@@ -10,7 +10,7 @@
 //! Capabilities are per-host on both ends. Issuing writes into the state file
 //! beside the vault of the machine that issues, and redemption is a UNIX
 //! socket on the machine that redeems (`SKARBIEC_CAP_SOCKET`, read by Weles's
-//! own `src/utils/capability.ts`). charless-mac-mini holds its own
+//! own `src/utils/capability.ts`). A Weles host holds its own
 //! `~/.stado/capability-routes.json`, its own capability state and its own
 //! vault; a reference minted on an operator's laptop names nothing there. The
 //! local precedent is not wrong, it is only correct when Stado runs ON the

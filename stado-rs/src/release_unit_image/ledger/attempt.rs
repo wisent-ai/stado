@@ -37,10 +37,9 @@ impl RevisitAttempt {
     /// that pair is the whole content of what it established: kickstarting
     /// this unit while it runs `was_running` and declares `declared` did not
     /// move it. Either side changing is a situation nothing has been tried in
-    /// — the declared file replaced again (the common case at 0.13.50 to
-    /// 0.14.8 in a day), or something else cycling the unit onto a third
-    /// image, which is how `com.wisent.compute.agent.lukasz-macbook` healed
-    /// itself. A wall clock is worse in both directions: too short
+    /// — the declared file replaced again (the common case when several
+    /// releases land in a day), or something else cycling the unit onto a
+    /// third image, which can heal a unit by itself. A wall clock is worse in both directions: too short
     /// re-kickstarts a unit launchd will not move, too long holds off a unit
     /// whose file changed an hour ago. The identity pair is not a proxy for
     /// "has anything changed" — it is that question.

@@ -229,10 +229,10 @@ stado_activate_definition() {
     # A disabled service is what `stado service stop` and the release agent's
     # `stop_legacy` leave behind, and `bootstrap` refuses it with `Bootstrap
     # failed: 5: Input/output error` - the create path below already enables
-    # before it bootstraps, and this path did not. On 2026-09-06 that refused
-    # the one command that could give charless-mac-mini its Skarbiec unit back
-    # after the release path abandoned the stable bind, and then failed the
-    # rollback with the same error, thirteen hours into an outage.
+    # before it bootstraps, and this path must too, or it refuses the one
+    # command that can give a host its vault unit back after the release path
+    # abandoned the stable bind, and then fails the rollback with the same
+    # error.
     $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
     activation_detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
     activation_rc=$?

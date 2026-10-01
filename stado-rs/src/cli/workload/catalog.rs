@@ -47,13 +47,11 @@ pub struct WorkloadKind {
     /// True when the kind repairs the host rather than consuming it.
     ///
     /// A capacity hold is right for work that competes for a machine and
-    /// wrong for work that puts one back: on 2026-09-20 charless-mac-mini
-    /// sat below its disk watermark, refused every placement with
-    /// `disk_pressure_active`, and that refusal covered `weles-api-runtime`
-    /// — the deployment that then moved that host's worker to a named revision,
-    /// removed once Weles became the one catalog process `com.wisent.weles` —
-    /// so the fleet's only browser host could not be repaired because it
-    /// needed repairing. A maintenance kind runs on the host it names and
+    /// wrong for work that puts one back: a host below its disk watermark
+    /// refuses every placement with `disk_pressure_active`, and if that
+    /// refusal covers the deployment that would repair it, the host cannot
+    /// be repaired because it needs repairing. A maintenance kind runs on the
+    /// host it names and
     /// takes no hold. Every declaration check still applies, so a host that
     /// does not declare the kind still refuses it.
     #[serde(default)]

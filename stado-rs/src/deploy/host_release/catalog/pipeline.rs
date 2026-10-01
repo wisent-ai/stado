@@ -60,16 +60,15 @@ pub(super) async fn pipeline_catalog_identity(
     // delivery authority and stays it; what was missing is any check that the
     // OTHER publisher of the same coordinate agrees with it.
     //
-    // On 2026-09-01 both wrote `stado/0.13.27`. A `release submit` published
-    // the signed `release.json` and `release.tar.gz` at 06:48 from d53f10c9,
-    // and the tag's own train published the nine platform objects at 16:25
-    // from 99e03396 — three merges later, carrying #250, #255 and #256. Create-
-    // only puts mean neither could overwrite the other, so the coordinate holds
-    // two builds, and this function preferred the signed one without ever
-    // reading the sidecar beside it. Release delivery then reported
-    // `released: charless-mac-mini now runs stado 0.13.27` while installing the
-    // older build, and host-state confirmed `in-sync` — every reading true
-    // about itself and none of them about the version an operator asked for.
+    // Both can write the same coordinate: a `release submit` publishes the
+    // signed `release.json` and `release.tar.gz` from one commit, and the
+    // tag's own train publishes the platform objects from a later one.
+    // Create-only puts mean neither can overwrite the other, so the
+    // coordinate holds two builds, and preferring the signed one without
+    // reading the sidecar beside it makes release delivery report the version
+    // as installed while installing the older build, with host-state
+    // confirming `in-sync` — every reading true about itself and none of them
+    // about the version an operator asked for.
     //
     // A version number that means two different builds is not deliverable, and
     // the doctrine for that is already written in `catalog_identity` below:

@@ -25,13 +25,12 @@ pub const UNKNOWN: &str = "unknown";
 /// downgrade, and no process running the declared binary to interrupt, so the
 /// delivery the declaration asks for is exactly what closes it.
 ///
-/// Folding the two together meant a host with no copy of a managed binary
-/// could never be given one by the product: `--apply` skipped it as
-/// unmeasured for as long as it stayed empty. On 2026-09-08 a leased scratch
-/// account on `charless-mac-mini` proved it - `verdict unknown`, `root none`,
-/// and no delivery on any number of `--apply` passes - so the first install
-/// had to be carried out by hand through the repository's installer script,
-/// which is not a product capability. Report mode exits non-zero on this
+/// Folding the two together would mean a host with no copy of a managed
+/// binary could never be given one by the product: `--apply` would skip it as
+/// unmeasured for as long as it stayed empty - `verdict unknown`, `root none`,
+/// and no delivery on any number of passes - so the first install would have
+/// to be carried out by hand through an installer script, which is not a
+/// product capability. Report mode exits non-zero on this
 /// verdict for the same reason it does on `host-behind`: the declaration is
 /// false about the host.
 pub const HOST_MISSING: &str = "host-missing";
@@ -44,14 +43,11 @@ pub const UNDECLARED: &str = "undeclared";
 ///
 /// A version number is not provenance. `--version` prints whatever
 /// `Cargo.toml` said when the file was compiled, so a local build reports a
-/// release number it never came from, and this command used to read exactly
-/// that as [`HOST_AHEAD`] — "the declaration is stale, not the host" — and
-/// offer to write the unverified version into the registry. On 2026-08-31
-/// charless-mac-mini, the always-on Mac every other host reads its registry
-/// from, was running a `stado` answering 0.13.19 written at 21:25Z while the
-/// 0.13.19 coordinate measured present=0 / absent=9 on both platforms: bytes
-/// nobody delivered, one `--apply` away from promoting themselves into the
-/// fleet's own record of what that host runs.
+/// release number it never came from. Reading that as [`HOST_AHEAD`] — "the
+/// declaration is stale, not the host" — and offering to write the unverified
+/// version into the registry would let bytes nobody delivered, on the very
+/// host every other host reads its registry from, promote themselves into the
+/// fleet's own record of what that host runs with one `--apply`.
 ///
 /// The delivery path stages every release it installs at
 /// `$HOME/.stado/releases/<binary>/<version>/<platform>/<binary>`, digest-
@@ -73,16 +69,15 @@ pub(in crate::cli::service_converge) const ATTEST_ABSENT: &str = "no-staged-copy
 /// at any version: the delivery path has never run here for it.
 ///
 /// Held apart from [`ATTEST_ABSENT`] because the two carry opposite
-/// histories and opposite remedies, and folding them together made the
-/// verdict unreadable. On 2026-09-01 `lukasz-macbook` reported both at once:
-/// `skarbiec` had no `~/.stado/releases/skarbiec` directory at all — the
-/// bootstrap installer stages nothing, so a binary that has never been
-/// delivered reads exactly like one that was tampered with — while `stado`
-/// had nine staged versions, the newest `0.13.24` from the day before, and a
-/// `0.13.28` at the install path that no delivery put there. One is a host
-/// nobody has released to yet; the other is a binary swapped in beside a
-/// working pipeline. Printing the same sentence for both is what made
-/// "unattested" look like the normal state of every host.
+/// histories and opposite remedies, and folding them together makes the
+/// verdict unreadable. One host can show both at once: a binary with no
+/// `~/.stado/releases/<binary>` directory at all — the bootstrap installer
+/// stages nothing, so a binary that has never been delivered reads exactly
+/// like one that was tampered with — and another with several staged versions
+/// and a newer one at the install path that no delivery put there. One is a
+/// host nobody has released to yet; the other is a binary swapped in beside a
+/// working pipeline. Printing the same sentence for both makes "unattested"
+/// look like the normal state of every host.
 pub(in crate::cli::service_converge) const ATTEST_NEVER_DELIVERED: &str = "no-delivery-history";
 /// The version could not be read, so provenance was never asked.
 pub(in crate::cli::service_converge) const ATTEST_UNKNOWN: &str = "unknown";

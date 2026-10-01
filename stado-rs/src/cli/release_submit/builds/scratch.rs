@@ -1,10 +1,9 @@
 //! What the last build of a product and platform wrote to disk, and whether
 //! one candidate builder has room for that much again.
 //!
-//! The 0.20.3 darwin build was pinned to charless-mac-mini because it was the
-//! first darwin-arm64 host in name order that was above its low watermark. It
-//! had fourteen GiB free, compiled for twenty-five minutes, and died writing
-//! rustc metadata with no space left. A watermark says when a host is in
+//! A build pinned to the first host above its low watermark can compile for
+//! half an hour and die writing rustc metadata with no space left. A
+//! watermark says when a host is in
 //! trouble; it says nothing about whether a build fits. The builder measures
 //! its scratch tree before removing it and leaves [`ScratchReceipt`] beside its
 //! receipt, [`super::history`] finds the newest one among the product's own

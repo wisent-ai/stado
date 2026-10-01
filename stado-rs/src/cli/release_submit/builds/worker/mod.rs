@@ -144,12 +144,11 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         // The identity is the fleet's too: the Apple certificate and key
         // Skarbiec holds, handed to the signer's own temporary keychain
         // through its environment, the way runner reconciliation already
-        // hands them over. Until 2026-09-17 the step signed with whatever
-        // identity the builder's login keychain held, so a build placed on
-        // the operator's laptop signed and the same build placed on
-        // charless-mac-mini - the host with the most free disk that day -
-        // died at `no Apple signing identity is available`, spending the
-        // brama 0.4.21 coordinate on a placement decision.
+        // hands them over. Signing with whatever identity the builder's login
+        // keychain holds would let a build placed on the operator's laptop
+        // sign while the same build placed on another host dies at `no Apple
+        // signing identity is available`, spending a release coordinate on a
+        // placement decision.
         let mut argv = crate::deploy::native_signing::local_signer();
         argv.extend([
             "signing".into(),

@@ -108,10 +108,10 @@ pub async fn issue_sign_in_prefill(
         // action drives - Google, Apple, Microsoft - asks for the identifier
         // first and the secret on a page that does not exist yet, and a runtime
         // that fills every entry at load spends the secret's one-shot
-        // capability on a field that cannot be there. Charless-mac-mini did
-        // exactly that twice: both capabilities `spent` within two seconds of
-        // the first page load, and the agent that reached the real password
-        // field was denied for a capability nobody had used.
+        // capability on a field that cannot be there: both capabilities end up
+        // `spent` within seconds of the first page load, and the agent that
+        // reaches the real password field is denied for a capability nobody
+        // used.
         //
         // So the identifier is prefilled and the rest are handed over unspent,
         // for the agent to redeem on the page that has the field. A runtime

@@ -32,9 +32,9 @@ pub const RUNTIME_UNKNOWN: &str = "unknown";
 /// the split [`crate::host_software`] already argues for: failing a host over
 /// a program nothing declares is how an operator learns to write `|| true`
 /// after the command, at which point the drift the check exists to catch
-/// stops being noticed. But leaving it out of the report entirely is how
-/// `charless-mac-mini` kept a `mac2@1.20.5` that the server calls
-/// incompatible, ready to deadlock npm for whichever install came next.
+/// stops being noticed. But leaving it out of the report entirely lets a host
+/// keep a driver the server calls incompatible, ready to deadlock npm for
+/// whichever install comes next.
 pub const COMPONENT_UNDECLARED_INCOMPATIBLE: &str = "incompatible-undeclared";
 
 /// One component of the runtime, as the host reported it.

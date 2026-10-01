@@ -1,14 +1,13 @@
 //! Submit one browser task to Weles on a target host, with the action name
 //! taken from that host's own allowlist.
 //!
-//! NO Python original. This module exists because of a gap found on
-//! 2026-08-30 while trying to drive a sign-in through Weles on
-//! charless-mac-mini. Stado had exactly two ways to put work on a Weles
-//! worker and neither could carry an operator's task:
+//! NO Python original. Without it Stado has exactly two ways to put work on a
+//! Weles worker and neither can carry an operator's task, such as driving a
+//! sign-in:
 //!
 //! - The `weles-capture` workload uses `generic_capture`
 //!   ([`super::weles_capture::CAPTURE_ACTION`]), and that action is not in
-//!   that host's 226-entry `WELES_ACTION_ALLOWLIST`. The worker refuses any
+//!   that host's `WELES_ACTION_ALLOWLIST`. The worker refuses any
 //!   name outside the allowlist, so that workload cannot run there at all.
 //! - The `weles-image-inspect` workload does submit the allowlisted
 //!   `generic_browser_task`, but its objective and constraints are fixed in

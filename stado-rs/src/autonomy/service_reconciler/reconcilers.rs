@@ -3,11 +3,11 @@
 //!
 //! Service reconciliation is what loads a declared unit that is not running,
 //! and it runs inside the coordinator's tick. When the coordinator unit itself
-//! is unloaded nothing restores it: on charless-mac-mini
+//! is unloaded nothing restores it: with
 //! `com.wisent.compute.service.stado-local-control-plane` and
-//! `com.wisent.stado.release-agent` were both not loaded from 2026-09-25T19:30Z,
-//! so no schedule fired, no queued job was dispatched or reaped and no release
-//! was applied there, while the object API and its queue agent ran on.
+//! `com.wisent.stado.release-agent` both unloaded, no schedule fires, no
+//! queued job is dispatched or reaped and no release is applied on that host,
+//! while the object API and its queue agent run on.
 //!
 //! The queue agent is the process launchd keeps alive on every host that
 //! claims work, so it asserts these two units through the same `ensure`

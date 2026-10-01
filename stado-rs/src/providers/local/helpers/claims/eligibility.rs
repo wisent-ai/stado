@@ -16,10 +16,10 @@ use crate::providers::local::helpers::{accel_hourly_rate, MODEL_RE};
 ///
 /// The release worker sets `CARGO_TARGET_DIR` to
 /// `<build cache>/<product>/<platform>/cargo-target` from the same two words,
-/// so two jobs with one key contend for one Cargo build-directory lock. On
-/// 2026-09-30 lukasz-macbook claimed three Stado darwin builds at once; the
-/// newest sat 42 minutes in `Blocking waiting for file lock on build
-/// directory` inside a claimed slot while the queue called it running.
+/// so two jobs with one key contend for one Cargo build-directory lock: a
+/// host claiming several builds of one product at once leaves the newest
+/// `Blocking waiting for file lock on build directory` inside a claimed slot
+/// while the queue calls it running.
 pub fn build_cache_key(job: &Job) -> Option<(&str, &str)> {
     let (_, rest) = job.output_uri.split_once("/runs/build/")?;
     let mut parts = rest.split('/');
@@ -35,21 +35,18 @@ pub fn build_cache_key(job: &Job) -> Option<(&str, &str)> {
 /// Does `identity` name this consumer?
 ///
 /// Three spellings of one host reach the queue and every one of them is
-/// legitimate: the consumer id the agent publishes
-/// (`local-Charless-Mac-mini.local`), the machine's own hostname
-/// (`Charless-Mac-mini.local`), and the registry target name
-/// (`charless-mac-mini`) that `stado submit --pinned-host` and the makespan
-/// mirror write. Case is not load-bearing either: registry hostnames are
-/// stored normalized while `consumer_id` carries the machine's verbatim
-/// `gethostname()` casing.
+/// (`local-<Hostname>.local`), the machine's own hostname
+/// (`<Hostname>.local`), and the registry target name (`<host>`) that
+/// `stado submit --pinned-host` and the makespan mirror write. Case is not
+/// load-bearing either: registry hostnames are stored normalized while
+/// `consumer_id` carries the machine's verbatim `gethostname()` casing.
 ///
 /// One predicate for both `pinned_host` and `assigned_to`, because matching
-/// one spelling and refusing the other is how 55 jobs pinned to the always-on
-/// mac starved for seven days. `pinned_host` was tolerant, the makespan
-/// matcher mirrored that same `pinned_host` into `assigned_to`
-/// (`scheduler::makespan`), and the exact `assigned_to == consumer_id` test
-/// then refused every job the pin had just admitted:
-/// `eligibility_rejected=72, eligible_count=0` on a host reporting
+/// one spelling and refusing the other starves pinned jobs: a tolerant
+/// `pinned_host`, mirrored by the makespan matcher into `assigned_to`
+/// (`scheduler::makespan`), followed by an exact `assigned_to ==
+/// consumer_id` test, refuses every job the pin has just admitted —
+/// `eligibility_rejected=<n>, eligible_count=0` on a host reporting
 /// `claiming: yes, blockers: none`.
 fn names_this_consumer(identity: &str, consumer_id: &str, kind: &str) -> bool {
     if identity.is_empty() || consumer_id.is_empty() {

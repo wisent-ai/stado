@@ -58,12 +58,10 @@ fn missing_key(id: &str, error: SkarbiecError) -> DeployError {
 
 /// The refusal when the store itself could not be reached.
 ///
-/// On 2026-09-21 repairing charless-mac-mini needed
-/// `stado-ssh-charless-mac-mini`, and the read went to
-/// `http://127.0.0.1:17602/v1/items/read` — a Stado forward to the Skarbiec
-/// ON THAT HOST, which was the thing being repaired. The command said only
-/// "error sending request for url …", so the circle was invisible and the
-/// recovery channel that already exists went unmentioned.
+/// Repairing a host needs its `stado-ssh-<host>` key, and the read can go to
+/// a Stado forward to the Skarbiec ON THAT HOST — the thing being repaired.
+/// "error sending request for url …" alone hides that circle and leaves the
+/// recovery channel that already exists unmentioned.
 fn unreachable_store(
     id: &str,
     target: &str,

@@ -57,9 +57,8 @@ pub struct MemoryRepairPolicy {
     /// `recover-skarbiec-crypto` is the one this fleet already has. It
     /// replaces the account's GnuPG daemons when Skarbiec reports them wedged
     /// or when one of them stands over `SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB`
-    /// (1024 MiB unset): `keyboxd` held 15 GiB on charless-mac-mini after
-    /// twelve days while readiness answered ok, and this pass asked the
-    /// program and was refused, because memory was not yet a precondition.
+    /// (1024 MiB unset): `keyboxd` can grow to many GiB over days while
+    /// readiness answers ok, so memory is a precondition the program checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
     /// How long a process must have been running before this repair may
@@ -120,12 +119,11 @@ impl MemoryReclaimPolicy {
     /// The disk twin is [`crate::targets::DiskCleanupPolicy::reporting_default`]
     /// and the judgement is the same one, taken for the same reason: before
     /// it existed an undeclared host was not a host with a lenient policy, it
-    /// was a host nothing looked at. charless-mac-mini declared no memory
-    /// anything, so when its pre-check runner's listener died with `Failed to
-    /// create CoreCLR, HRESULT: 0x8007000C` and exit 137 on 2026-09-06, the
+    /// was a host nothing looked at: when a pre-check runner's listener dies
+    /// with `Failed to create CoreCLR, HRESULT: 0x8007000C` and exit 137, the
     /// fleet's own read path could report the host's disk, its units and its
-    /// uptime, and had no field in which to say that 1.3 GB of memory was
-    /// free with 86% of swap in use.
+    /// uptime, and had no field in which to say how little memory was free
+    /// and how much swap was in use.
     ///
     /// `report`, and an EMPTY repair map. The difference from disk matters:
     /// the disk default names `build_caches` because a tagged cache directory

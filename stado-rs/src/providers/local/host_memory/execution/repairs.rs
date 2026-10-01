@@ -1,11 +1,10 @@
 //! The two repairs that act on software Stado itself declared.
 //!
 //! Both are narrow on purpose. `restart_unit` restarts a unit the registry
-//! names, and only when that unit has no live process — the state the
-//! charless-mac-mini pre-check runner was in on 2026-09-06, where launchd
-//! kept trying and every attempt died with `Failed to create CoreCLR,
-//! HRESULT: 0x8007000C` and exit 137 because the machine could not give the
-//! runtime its heap. `reap_recovery` runs a host-recovery program this fleet
+//! names, and only when that unit has no live process — the state of a
+//! pre-check runner whose every launchd attempt dies with `Failed to create
+//! CoreCLR, HRESULT: 0x8007000C` and exit 137 because the machine cannot give
+//! the runtime its heap. `reap_recovery` runs a host-recovery program this fleet
 //! already ships, by name, and records what that program said.
 //!
 //! Neither infers a subject. A repair with no declared subject is refused by
@@ -218,10 +217,9 @@ pub fn run_recovery(
         // The program's own last word decides. Every recovery program this
         // build ships says `recovered` when it replaced something and says
         // `no recovery needed` when its precondition did not hold, and the
-        // two exit 0 alike. Counting the second as a repair is how the
-        // charless-mac-mini pass reported `repaired: 1` on every tick for
-        // twelve days while keyboxd grew to 15 GiB: nothing had been reaped,
-        // and the report said something had.
+        // two exit 0 alike. Counting the second as a repair would report
+        // `repaired: 1` on every tick while keyboxd keeps growing: nothing
+        // reaped, and the report saying something was.
         Ok(output) if output.status.success() => {
             let said = String::from_utf8_lossy(&output.stdout);
             if said.contains("recovered") {

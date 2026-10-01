@@ -109,21 +109,18 @@ pub struct CleanupState {
     /// a file written by anything older carries no author at all, which is the
     /// state this field exists to end.
     ///
-    /// This said "present from stado 0.13.20", and charless-mac-mini disproved
-    /// it on 2026-09-01: a pass written at 17:02:38Z carried
-    /// `writer: "agent-tick"`, `writer_version: "0.13.20"` and
-    /// `writer_pid: null`. `git merge-base --is-ancestor` puts #232 in
+    /// A pass written by 0.13.20 carries `writer_version: "0.13.20"` and
+    /// `writer_pid: null`: `git merge-base --is-ancestor` puts #232 in
     /// `stado-v0.13.24` and in no tag before it.
     ///
     /// And a version number is not the whole answer to "who wrote this".
-    /// Alternating passes on that same host carried no `writer` field at all,
-    /// and the writer turned out to be
-    /// `python3.12 -m stado.cli agent --target charless-mac-mini` under
-    /// `com.stado.agent.charless-mac-mini` — the Python agent, not this binary.
-    /// No release of this crate will ever make that process stamp a pid,
-    /// because it does not run this code. Delivering a newer `stado` does not
-    /// change what an already-running process executes either: the file on
-    /// disk is replaced, the process keeps its own image until it re-execs.
+    /// Passes carrying no `writer` field at all can come from the retired
+    /// Python agent, `python3.12 -m stado.cli agent --target <host>`, not
+    /// this binary. No release of this crate will ever make that process
+    /// stamp a pid, because it does not run this code. Delivering a newer
+    /// `stado` does not change what an already-running process executes
+    /// either: the file on disk is replaced, the process keeps its own image
+    /// until it re-execs.
     pub writer_pid: Option<i64>,
     pub free_bytes_before: Option<i64>,
     pub free_bytes_after: Option<i64>,

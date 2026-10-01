@@ -1,21 +1,19 @@
 //! Standing checks for the shape of the fleet: is what is declared what is
 //! running, and does anything measure the difference.
 //!
-//! NO Python original. Written on 2026-08-31 after a night in which seven
-//! defects of ONE shape were fixed by hand and nothing in the product would
-//! have caught the eighth. Every check here is a question somebody had to ask
-//! a host by hand that night, and the answer each time was a surprise:
+//! NO Python original. Every check here is a question that otherwise has to
+//! be asked of a host by hand, and each answer can be a surprise:
 //!
-//! - three processes served one declared port on `charless-mac-mini`
-//!   (`127.0.0.1:8765`, `[::1]:8765`, and a `node` on the tailnet address),
-//!   found with `lsof` after hours of treating the symptom as a slow link;
+//! - several processes can serve one declared port (`127.0.0.1:<port>`,
+//!   `[::1]:<port>`, and a `node` on the tailnet address), found only with
+//!   `lsof` after hours of treating the symptom as a slow link;
 //! - a label declared in two launchd domains ran twice and was invisible to
 //!   `service list --undeclared`, precisely BECAUSE the label was declared;
 //! - the live object API answered `healthz` 200 while every object route
 //!   returned 503, so the health check was green on a server refusing its
 //!   entire purpose;
 //! - a primary addressed by bare key with a replica addressed by qualified
-//!   path silently produced 48 GiB of objects nothing could resolve;
+//!   path silently produces tens of GiB of objects nothing can resolve;
 //! - a managed host declared two cleaners, neither of which could reach what
 //!   actually filled its disk, and nothing said so.
 //!

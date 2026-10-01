@@ -45,11 +45,10 @@ pub struct PlatformRecipe {
     /// Free space this platform's build needs on the work volume, in GiB, or
     /// zero where the product declares no requirement.
     ///
-    /// Declared, never inferred. On 2026-09-10 the stado 0.20.3 darwin build
-    /// compiled for twenty minutes on charless-mac-mini and died with
-    /// `No space left on device (os error 28)` while rustc wrote metadata,
-    /// with roughly 11 GiB free against an 8 GiB janitor watermark: the
-    /// operator learnt the requirement from a linker error inside a 30 KB log
+    /// Declared, never inferred. Without it a build compiles for twenty
+    /// minutes and dies with `No space left on device (os error 28)` while
+    /// rustc writes metadata, on a host above its janitor watermark: the
+    /// operator learns the requirement from a linker error inside a long log
     /// instead of from a refusal before the first crate.
     #[serde(default)]
     pub min_free_gb: u64,

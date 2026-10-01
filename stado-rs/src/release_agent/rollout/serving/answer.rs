@@ -111,11 +111,11 @@ pub(crate) async fn ensure_active_proxy(
     state: &mut HostReleaseState,
     readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
-    // The probe's own sentence travels with the verdict. On 2026-09-06 the
-    // quarantine list on charless-mac-mini read `active release lost readiness`
-    // for two digests in a row, and nothing said whether the candidate answered
-    // 503, refused the connection, or took longer than the 3s the probe allows
-    // on a host running 242 jobs. Three different repairs, one word.
+    // The probe's own sentence travels with the verdict. A quarantine list
+    // reading `active release lost readiness` for two digests in a row says
+    // nothing about whether the candidate answered 503, refused the
+    // connection, or took longer than the 3s the probe allows on a busy host.
+    // Three different repairs, one word.
     // One refused probe is not a lost release either; the confirmation window
     // lives in `lost_readiness_because`.
     if let Some(why) = lost_readiness_because(active, &serving.readiness_path).await {

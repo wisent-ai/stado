@@ -3,13 +3,12 @@
 //! A GitHub runner's own diagnosis is not in journald. It is in
 //! `_diag/Runner_*.log` and `_diag/Worker_*.log` inside the runner root, which
 //! is why `stado host unit-log <target> <unit>` answering `-- No entries --` is
-//! perfectly consistent with a listener that is failing loudly. Until this
-//! command existed the only product readers of that log were `runner status`
-//! and `runner restart`, and both reduced it to the last line matching a fixed
+//! perfectly consistent with a listener that is failing loudly. Without this
+//! command the only product readers of that log are `runner status` and
+//! `runner restart`, and both reduce it to the last line matching a fixed
 //! pattern — so a .NET `System.IO.IOException: Permission denied`, whose
-//! frames carry the path it could not open, reached an operator as the word
-//! `Permission denied` and nothing else. That cost an hour on
-//! 2026-09-07 against `ubuntu-server-rtx-pro-6000`.
+//! frames carry the path it could not open, reaches an operator as the word
+//! `Permission denied` and nothing else.
 //!
 //! The tail is returned whole. `--json` carries it as a string so a console or
 //! a report keeps the frames, and the human rendering prints them last, after

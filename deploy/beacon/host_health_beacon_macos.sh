@@ -74,8 +74,9 @@ printf 'host_health_beacon: api=%s skarbiec=%s collector=%s\n' \
 #
 # The list comes from the registry rather than from a name written here. A target
 # that publishes for itself is skipped on freshness, not on the absence of a
-# collector: `ubuntu-server` has both, its own publisher reports every unit the
-# registry declares for it, and the relay's collector carried an older list --
+# collector: a Linux host can have both, its own publisher reporting every
+# unit the registry declares for it while the relay's collector carries an
+# older list --
 # so relaying on every tick overwrote a correct document with a thinner one, and
 # a service that had just been installed and started read as missing for as long
 # as the relay kept winning. Ask what the fleet already knows about each host's

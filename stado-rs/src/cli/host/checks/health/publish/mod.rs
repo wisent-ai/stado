@@ -174,12 +174,10 @@ pub(super) async fn publish_document(mut document: Value, print: bool) -> Result
 /// The list the health beacon must ask systemd or launchd about. Answered from
 /// the registry rather than assembled in the collector, because the registry
 /// is already the one place that says what a host runs and a second list in
-/// shell would be a second answer to that question. That second list existed:
-/// `WC_HEALTH_UNITS`, typed per host, and on ubuntu-server-rtx-pro-6000 it
-/// named `wisent-agent.service` alone while the registry declared
-/// `stado-resolver` there. The declared unit was never asked about, so the
-/// beacon carried no entry for it and `registry doctor` reported it as a unit
-/// the host does not have — while it was active with a live pid.
+/// shell would be a second answer to that question. A per-host
+/// `WC_HEALTH_UNITS` list that omits a declared unit leaves the beacon with no
+/// entry for it, and `registry doctor` then reports it as a unit the host does
+/// not have — while it is active with a live pid.
 ///
 /// Never fails the caller. A machine that is not in the registry, or a
 /// registry that cannot be read, prints nothing and exits zero: the beacon

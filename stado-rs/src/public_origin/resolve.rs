@@ -4,7 +4,7 @@
 //! This machine is the worst possible witness. [`crate::remote::tailnet`] exists
 //! because a Stado origin in this fleet is a MagicDNS name and the local
 //! resolver has to be told where the tailnet's names live; a workstation on
-//! the tailnet therefore resolves `charless-mac-mini.tail6443b3.ts.net`
+//! the tailnet therefore resolves `<host>.<tailnet>.ts.net`
 //! perfectly while a GitHub-hosted runner and a provider-managed edge get
 //! nothing at all. A check run through the system resolver would have passed
 //! on every machine an operator was likely to run it from, and failed on every

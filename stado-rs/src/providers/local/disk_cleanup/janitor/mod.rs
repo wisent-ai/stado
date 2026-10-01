@@ -40,13 +40,12 @@ pub(crate) const MAX_ERRORS: usize = 16;
 /// Who holds the exclusive run lock, and until when they said they would.
 ///
 /// `flock` states that somebody holds the lock and can state nothing else.
-/// That was enough while every holder finished, and on 2026-09-03 it was not:
-/// `charless-mac-mini` reported `disk_cleanup_stalled` for nine and a half
-/// hours because one agent process held this lock, idle at 0% CPU with
-/// eleven ESTABLISHED sockets to an object API whose pid no longer existed,
-/// and a hold that never ends disables cleanup on the host permanently. The
-/// kernel frees a dead holder's lock; it cannot free a live holder that will
-/// never come back, and nothing in the file said the holder was overdue.
+/// That is enough while every holder finishes, and not otherwise: one agent
+/// process can hold this lock idle at 0% CPU with sockets open to an object
+/// API whose pid no longer exists, and a hold that never ends disables
+/// cleanup on the host permanently while it reports `disk_cleanup_stalled`.
+/// The kernel frees a dead holder's lock; it cannot free a live holder that
+/// will never come back, and nothing in the file said the holder was overdue.
 pub(crate) const LOCK_HOLDER_NAME: &str = "disk-cleanup.lock.holder";
 /// How long past a holder's own declared deadline the lock may be taken over.
 ///
@@ -87,9 +86,9 @@ pub fn state_relative_path() -> String {
 ///
 /// `lock_busy` and the agent's `cleanup_in_progress` are two views of one
 /// fact — somebody holds this file — and the product could print both
-/// without ever naming the holder. On 2026-08-31 charless-mac-mini reported
-/// them in alternation for hours while every cleaner scanned zero, and no
-/// command in the fleet could say which process was holding it:
+/// without ever naming the holder: a host can report them in alternation for
+/// hours while every cleaner scans zero, and without this no command in the
+/// fleet could say which process was holding it:
 /// `host exec`'s allowlist has no form that names the owner of a file lock,
 /// correctly, because an operator-supplied path there would be a hole. So
 /// the path travels as a crate constant, and [`crate::deploy::host_disk`]

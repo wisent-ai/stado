@@ -11,18 +11,15 @@
 //! [`crate::primitives::constants::CAPACITY_HEARTBEAT_INTERVAL_S`] — "always fresh before
 //! the stale threshold" — one third of it.
 //!
-//! The agent tick used to `await run_cleanup_once` BEFORE it reached its
-//! capacity publication, on the same task, with no concurrency. Every second
-//! the janitor spent was a second the publication was not written. Measured on
-//! charless-mac-mini on 2026-09-03: `duration_ms: 818021` — 13.6 minutes — for
-//! a pass whose own verdict was `healthy_noop` on a host with 19.8 GB free,
-//! against a policy `check_interval_seconds` of 300, so passes ran effectively
-//! back to back. The builder was therefore selectable for roughly three
-//! minutes in every fourteen, and two weles-worker releases were refused that
-//! day with `no live fleet builder is broadcasting verified release_platform
-//! darwin-arm64 ... listed 0 live consumer(s)` against a builder that was
-//! healthy, running and correctly declared. A release on this fleet succeeded
-//! or failed by luck.
+//! Awaiting `run_cleanup_once` BEFORE the capacity publication, on the same
+//! task, makes every second the janitor spends a second the publication is
+//! not written. A pass can take over ten minutes while its own verdict is
+//! `healthy_noop`, against a `check_interval_seconds` of 300, so passes run
+//! back to back and the builder is selectable for a few minutes in every
+//! quarter hour. Releases are then refused with `no live fleet builder is
+//! broadcasting verified release_platform darwin-arm64 ... listed 0 live
+//! consumer(s)` against a builder that is healthy, running and correctly
+//! declared, and a release succeeds or fails by luck.
 //!
 //! # The mechanism, and why this one
 //!
@@ -202,9 +199,9 @@ impl JanitorReports {
                         reports.record_memory(memory);
                         // The third pass: the reconcilers this host declares
                         // are loaded. The coordinator's own reconciliation
-                        // cannot restore the coordinator, and on
-                        // charless-mac-mini it and the release agent stayed
-                        // unloaded for a day and a half while this agent ran.
+                        // cannot restore the coordinator, so without this
+                        // it and the release agent can stay unloaded while
+                        // this agent runs.
                         crate::autonomy::service_reconciler::restore_reconcilers(
                             &mut |message: &str| {
                                 crate::providers::local::agent::agent_log(message);

@@ -12,9 +12,9 @@ use crate::cli::CmdError;
 /// a `stado host exec node --version` on the same host cannot name different
 /// binaries. The list exists because a release worker is a launchd job, and a
 /// launchd job's `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin` unless something
-/// set it — Homebrew is not on it. `charless-mac-mini` carries node v25.9.0
-/// and npm 11.12.1 under `/opt/homebrew/bin`, and a build that trusted `PATH`
-/// would have reported that host as having no Node toolchain at all.
+/// set it — Homebrew is not on it. A Mac that carries node and npm under
+/// `/opt/homebrew/bin` would, to a build that trusted `PATH`, be a host with
+/// no Node toolchain at all.
 const NODE_TOOLCHAIN_DIRECTORIES: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 
 /// The absolute path of one Node toolchain program, or its bare name.

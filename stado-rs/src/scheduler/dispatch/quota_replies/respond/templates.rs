@@ -23,7 +23,7 @@ pub fn reply_body(subscription: &str, region: &str, contact_email: &str) -> Stri
          on one cloud's regional ceiling. All VMs are released as soon \
          as the job completes; we do not hold capacity.\n\nPlease \
          proceed with the increase. Happy to provide any additional \
-         information.\n\nRegards,\nLukasz Bartoszcze\n{contact_email}"
+         information.\n\nRegards,\n{contact_email}"
     )
 }
 
@@ -46,7 +46,6 @@ pub fn escalation_body(subscription: &str, quota_id: &str, region: &str, email: 
          same use case as the prior message (LLM activation extraction + \
          fine-tuning, on-demand, no Spot, VMs released on job completion).\
          \n\nIf you cannot escalate, please indicate the correct team or \
-         process and we will re-route directly.\n\nRegards,\n\
-         Lukasz Bartoszcze\n{email}"
+         process and we will re-route directly.\n\nRegards,\n{email}"
     )
 }

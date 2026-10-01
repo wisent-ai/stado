@@ -140,10 +140,10 @@ struct HostConnectionPathProbe: Decodable, Identifiable, Sendable {
 /// answers there, and whether it is the address the fleet declares for them.
 ///
 /// The console had no surface for these at all, and they are what a product
-/// on that host actually resolves a service through. On 2026-09-05
-/// `lukasz-macbook` carried `weles-admission` at `18794` while its own
-/// resolver adapter for that service binds `17614`; the file was the only
-/// statement of the address and nothing displayed it.
+/// on that host actually resolves a service through. A marker can name one
+/// port while the host's own resolver adapter for that service binds
+/// another; the file is the only statement of the address and nothing else
+/// displays it.
 struct HostForwardMarker: Decodable, Identifiable, Sendable {
     let name: String
     let url: String

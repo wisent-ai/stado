@@ -8,12 +8,11 @@ use crate::targets::{ComputeTarget, IdentityBinding};
 ///
 /// `drivable` is `None` when the host could not be asked, never conflated
 /// with `false`. `reason` is what was actually observed: the item that
-/// disagreed, or the error that stopped the probe. Until 2026-09-19 the
-/// probe folded every failure into `None` with `.ok()`, so the Developer ID
-/// relay on charless-mac-mini could only say "none of those Apple challenge
-/// sessions is drivable" about a laptop that, asked directly, answered
-/// `drivable` - and nothing on either side said which of the two probes was
-/// wrong or why.
+/// disagreed, or the error that stopped the probe. Folding every failure into
+/// `None` with `.ok()` would leave a relay able to say only "none of those
+/// Apple challenge sessions is drivable" about a laptop that, asked directly,
+/// answers `drivable` - with nothing on either side saying which of the two
+/// probes was wrong or why.
 #[derive(Debug, Clone)]
 pub(in crate::cli::identity) struct Drivability {
     pub drivable: Option<bool>,

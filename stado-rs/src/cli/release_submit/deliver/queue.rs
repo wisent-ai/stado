@@ -126,11 +126,11 @@ pub(super) async fn queue_delivery(
         .await?
         .1
     } else {
-        // One target that publishes no capacity used to fail the
-        // whole run here, before any delivery was queued: Stado 0.22.5
-        // was published on 2026-09-26 and reached no host because
-        // charless-mac-mini was out of disk. That target's delivery
-        // is recorded failed with the refusal and the rest are queued.
+        // One target that publishes no capacity would fail the whole run
+        // here, before any delivery was queued, so a release published while
+        // one host is out of disk would reach no host at all. That target's
+        // delivery is recorded failed with the refusal and the rest are
+        // queued.
         match target_consumer(&d.target).await {
             Ok(consumer) => consumer,
             Err(refusal) => {

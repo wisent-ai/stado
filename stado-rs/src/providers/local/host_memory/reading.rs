@@ -13,9 +13,9 @@
 //! `kern.memorystatus_level` — the figure `memory_pressure` prints as "memory
 //! free percentage" — and this reader takes that share of `hw.memsize`. It
 //! used to sum only free, speculative and purgeable pages, which leaves out
-//! the inactive and file-backed cache the kernel reclaims: on 2026-09-30
-//! lukasz-macbook published 0.7 GiB available against a 4 GiB watermark
-//! while the kernel's level read 71% of 64 GiB. The compressor and swapout
+//! the inactive and file-backed cache the kernel reclaims, so a host could
+//! publish well under a GiB available while the kernel's own level read most
+//! of its memory reclaimable. The compressor and swapout
 //! counters are still recorded beside it as evidence.
 
 use std::process::Command;
@@ -85,12 +85,10 @@ impl MemoryReading {
     /// not be read at all. Used swap is history rather than pressure - Linux
     /// never pages anonymous memory back in on its own - so a host that
     /// swapped during one spike reads over its swap watermark for as long as
-    /// it stays up. On 2026-09-10 `ubuntu-server-rtx-pro-6000` held 67.2 GB
-    /// available of 132.1 GB against an 8 GiB watermark with 85% of an 8.59 GB
-    /// swap file in use, refused every job, and `skarbiec` could not build
-    /// `linux-amd64` in three consecutive releases. Withholding a host with
-    /// 64 GiB of headroom frees no memory; it removes the fleet's one Linux
-    /// builder. `over_watermark` still reports either crossing as pressure,
+    /// it stays up. A large Linux builder with half its memory available and
+    /// most of a small swap file in use would refuse every job, and withholding
+    /// a host with that much headroom frees no memory; it removes the fleet's
+    /// Linux builder. `over_watermark` still reports either crossing as pressure,
     /// and the declared repairs still run.
     ///
     /// One predicate, both writers: the pass records its answer in the report

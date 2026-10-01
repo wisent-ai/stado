@@ -60,13 +60,12 @@ async fn status_profile(target_name: &str, profile: &RunnerProfile) -> Result<Va
 ///
 /// The installer derives that address once and writes it into
 /// `routes/brama.url`; nothing re-derived it afterwards and nothing compared
-/// the two. When Brama's endpoint on `charless-mac-mini` moved from `8080` to
-/// `18080`, the file kept the old port, and the only symptom was `kronika:
-/// fetch failed` in the CI of a DIFFERENT repository — the Skarbiec
-/// documentation gate, which is also what `build`, `deploy` and `tag` there
-/// depend on, so no Skarbiec release could be published at all. A published
-/// address that nothing compares to its declaration is the same defect this
-/// fleet has already paid for in `~/.stado/forwards/<service>.local`.
+/// the two. When Brama's endpoint on its host moves to another port, the file
+/// keeps the old one, and the only symptom is a fetch failure in the CI of a
+/// DIFFERENT repository whose gates depend on that runner — enough to stop a
+/// product's releases altogether. A published address that nothing compares
+/// to its declaration is the same defect as an unchecked
+/// `~/.stado/forwards/<service>.local`.
 /// A verdict rather than an error, so the rest of the status — the account,
 /// the boundary, the signing secret, the listener's own last event — still
 /// reaches the operator. The command exits non-zero on a drifted route; it

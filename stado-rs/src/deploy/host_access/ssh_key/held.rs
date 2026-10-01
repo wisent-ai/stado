@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 /// Where the last key the vault handed out for each host is kept, owner-only,
 /// under `$HOME`: the vault that holds a host's repair key can be the broken
-/// service on that very host (charless-mac-mini on 2026-09-21), and the key
-/// that repairs it must not depend on it.
+/// service on that very host, and the key that repairs it must not depend on
+/// it.
 const HELD_KEYS_DIR: &str = ".stado/host-keys";
 
 fn held_key_path(target: &str) -> Option<PathBuf> {

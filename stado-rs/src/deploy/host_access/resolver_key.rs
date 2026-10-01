@@ -1,8 +1,8 @@
 //! Authorize one registry host's SERVICE RESOLVER to read the registry from
 //! the service-directory authority.
 //!
-//! NO Python original. This module exists because of a real, six-day outage on
-//! `ubuntu-server-rtx-pro-6000`.
+//! NO Python original. Without it a resolver on any host other than the
+//! authority can go days without a snapshot while nothing reports why.
 //!
 //! A resolver on the authority host itself reads the canonical store directly.
 //! Every other host cannot: [`crate::cli::resolver::snapshot_source`] returns

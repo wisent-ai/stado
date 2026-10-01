@@ -48,12 +48,11 @@ pub(super) fn route_alias(value: &str) -> bool {
 /// means resolving no `disk_cleanup` policy at all.
 ///
 /// So on any host below 0.13.10 this value is a janitor kill switch, not a
-/// routing preference. On 2026-08-31 at 07:13:43Z it switched off every
-/// cleaner on `charless-mac-mini` — the janitor answered
+/// routing preference: it switches off every cleaner — the janitor answers
 /// `invalid_or_unavailable_policy`, `errors: ["policy:ValueError"]`,
 /// `target_name: null` — from a single field in a section the janitor never
-/// reads. Restoring the route to a concrete destination at 07:19:11Z brought
-/// it back to `errors: []`, `mode: enforce` by 07:25:20Z.
+/// reads, and restoring the route to a concrete destination brings it back to
+/// `errors: []`, `mode: enforce` within minutes.
 ///
 /// The precondition for restoring it, all three parts:
 ///

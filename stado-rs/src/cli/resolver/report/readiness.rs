@@ -49,10 +49,10 @@ pub(crate) async fn status(target: Option<&str>, json_output: bool) -> Result<()
     // A declared bind is a loopback address *on the target*. Connecting to it
     // from here answers a different question: what this machine holds on that
     // number. The two answers were reported as one, and on a control-plane
-    // host that runs its own resolver the numbers collide -- asking about
-    // charless-mac-mini returned `listening: false` for three adapters that
-    // one pid was holding there, and would have returned `listening: true`
-    // for the four whose numbers this laptop happens to serve itself. So the
+    // host that runs its own resolver the numbers collide -- asking about a
+    // remote host from here can return `listening: false` for adapters one
+    // pid holds there, and `listening: true` for those whose numbers this
+    // machine happens to serve itself. So the
     // probe runs only where the binds live, and elsewhere reports that it did
     // not run rather than a measurement of the wrong socket.
     let local_target = current_target(&document).ok();

@@ -133,8 +133,8 @@ async fn preview_vault_sync(target: &str, json_output: bool) -> Result<(), CmdEr
 ///
 /// Only the vault owner, the registry's `skarbiec` active host, publishes.
 /// A whole-file vault cannot be merged, so a second writer makes the mirror
-/// alternate between copies: on 2026-09-25 lukasz-macbook's copy had pushed
-/// and the owner's push was rejected `fetch first`.
+/// alternate between copies: once another host's copy has pushed, the
+/// owner's push is rejected `fetch first`.
 pub async fn push_vault(target: &str, json_output: bool) -> Result<(), CmdError> {
     if let Some(owner) = crate::cli::directory::active_host("skarbiec").await? {
         if owner != target {

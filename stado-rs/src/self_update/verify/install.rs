@@ -130,9 +130,8 @@ async fn install_release_with(
     // and discarded it, then reported the result as if the bytes were
     // untrustworthy.
     //
-    // On 2026-09-01 `lukasz-macbook` reported exactly that for `stado`: nine
-    // versions staged by `host release`, the newest 0.13.24, and an installed
-    // binary with no staged copy at all.
+    // A host can carry several versions staged by `host release` and an
+    // installed binary with no staged copy at all.
     //
     // Never fatal. The bytes are verified and the install is the point; a
     // receipt that cannot be written is logged and the update continues.

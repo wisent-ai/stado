@@ -4,10 +4,10 @@ import WisentDesignSystem
 /// The declared memory policies written for this host, and the backend's
 /// verdict on the declaration it currently carries.
 ///
-/// It exists because a readable declaration is not a managed host. On
-/// 2026-09-06 charless-mac-mini carried a `report`-mode policy whose one
-/// repair could never fire, and every surface showed its fields without
-/// saying that nothing would ever be repaired. The verdict here is the
+/// It exists because a readable declaration is not a managed host. A host
+/// can carry a `report`-mode policy whose one repair can never fire while
+/// every surface shows its fields without saying that nothing will ever be
+/// repaired. The verdict here is the
 /// backend's own sentence, and the policies offered are the fleet's declared
 /// ones, so arming a host from this window writes the document `stado space
 /// watermark --policy` writes.

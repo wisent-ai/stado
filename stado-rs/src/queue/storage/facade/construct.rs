@@ -152,15 +152,13 @@ impl JobStorage {
     /// Attach the configured disaster-recovery mirror using the selected read
     /// authority, when the backup can hold a replica of this primary at all.
     ///
-    /// This is the OTHER writer to the backup, and until now the unchecked
-    /// one: `ReadFailoverBackend` copies every `upload_*` to the backup as it
-    /// happens, so it does not need replication to be switched on and it is not
-    /// stopped by switching replication off. On charless-mac-mini it refilled
-    /// `~/.stado/local-backup` at 2 GiB per minute — 48.29 GiB of proven
-    /// duplicates deleted, back over 15 GiB seven minutes later — hours after
-    /// the coordinator's replication had been stopped, because a `stado`
-    /// primary names objects by bare key and a directory stores the name it is
-    /// handed, so every artifact a job published landed at
+    /// This is the OTHER writer to the backup: `ReadFailoverBackend` copies
+    /// every `upload_*` to the backup as it happens, so it does not need
+    /// replication to be switched on and it is not stopped by switching
+    /// replication off. Unchecked, it refills `~/.stado/local-backup` at GiB
+    /// per minute after the coordinator's replication has been stopped,
+    /// because a `stado` primary names objects by bare key and a directory
+    /// stores the name it is handed, so every artifact a job publishes lands at
     /// `local-backup/artifacts/...` where nothing looks for it.
     ///
     /// A pairing that cannot hold a replica gets NO mirror, and the reason is

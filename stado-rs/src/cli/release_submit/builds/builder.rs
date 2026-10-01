@@ -41,8 +41,8 @@ impl Fleet {
 /// `None`; they write an archive, not a build tree.
 ///
 /// Among the hosts that may take the job, the one publishing the most free
-/// disk goes first. Name order used to decide, and it sent every darwin build
-/// to charless-mac-mini for as long as that host stayed one byte above its
+/// disk goes first. Name order would send every build of a platform to the
+/// first host in the list for as long as that host stays one byte above its
 /// low watermark.
 ///
 /// `secret_env` is what the job projects into its environment, as
@@ -96,11 +96,10 @@ pub(crate) async fn builder(
             let (consumer, publication) = live_consumers.get(&target.name)?;
             // An operator's workstation - role `interactive` in the registry -
             // may build, but only after every always-on or burst builder of
-            // the platform that can take the job. On 2026-09-17 two Stado
-            // builds landed on lukasz-macbook because it published the most
-            // free disk, while the operator was playing a game on it; the
-            // claim gate's cpu_busy and ram_headroom_low still hold it back
-            // while it is loaded.
+            // the platform that can take the job, because a workstation can
+            // publish the most free disk while somebody is using it; the claim
+            // gate's cpu_busy and ram_headroom_low still hold it back while
+            // it is loaded.
             let interactive = target.role.as_deref() == Some("interactive");
             let mut verdict = claimability(publication);
             if let Some(short) = scratch.and_then(|need| scratch_verdict(publication, need)) {

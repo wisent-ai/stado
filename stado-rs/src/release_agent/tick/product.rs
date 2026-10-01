@@ -118,9 +118,9 @@ pub(crate) async fn reconcile_product(
         // A refusal that named the host, not the release, is retired by the
         // agent itself. `holds_the_candidate` has always said which refusals
         // those are; until this branch asked, it governed only the next
-        // candidate, and the desired digest stayed refused on every pass
-        // until a person cleared it. On lukasz-macbook that left Skarbiec's
-        // release plane dead for three days over one three-second probe.
+        // candidate, and the desired digest would stay refused on every pass
+        // until a person cleared it — a release plane dead for days over one
+        // three-second probe.
         let verdict = retire_host_caused_quarantine(
             &target.state_dir,
             target_name,
@@ -249,9 +249,9 @@ pub(crate) async fn reconcile_product(
 /// True when the registry wants a release this host has not quarantined and
 /// the last pass never got to spawn one: either the bind was held — the agent
 /// says so in `detail`, in its own words — or the desired generation changed
-/// since the record was written. Everything else keeps the net that exists
-/// because charless-mac-mini once served no Skarbiec for thirteen hours: with
-/// nothing to roll out, the bind belongs to the declared unit.
+/// since the record was written. Everything else keeps the safety net: with
+/// nothing to roll out, the bind belongs to the declared unit, so a host is
+/// never left serving nothing.
 ///
 /// A candidate that is given the bind and fails quarantines its digest, so the
 /// following tick reads `false` here and the net catches the bind again.

@@ -43,15 +43,12 @@ pub(crate) const CLEANER_ORDER: [&str; 8] = [
 /// Every cleaner used to receive `max_scan_items` minus what the ones
 /// before it had spent, which reads as fair and is not: the cleaners run in
 /// a fixed order, and one whose root is large enough to exhaust the cap
-/// takes the whole pass, every pass, forever. Measured on
-/// charless-mac-mini on 2026-08-31 with `max_scan_items: 10000` and six
-/// declared cleaners: `weles_recordings` scanned 15, `build_caches` scanned
-/// 9,985 and found NOTHING eligible, and `chromium_clones`,
-/// `queue_workdirs` and `backup_twins` each received a budget of zero and
-/// scanned nothing — pass after pass, under real disk pressure, with 18 GiB
-/// of proven duplicates sitting in the replica that `backup_twins` exists
-/// to reclaim. The outcome was `cap_reached`, which is true and reads like
-/// work being done.
+/// takes the whole pass, every pass, forever: with six declared cleaners, one
+/// can scan almost the whole cap and find NOTHING eligible while the ones
+/// after it each receive a budget of zero and scan nothing — pass after pass,
+/// under real disk pressure, with proven duplicates sitting in the replica
+/// `backup_twins` exists to reclaim. The outcome is `cap_reached`, which is
+/// true and reads like work being done.
 ///
 /// An equal share of what is left, with everything unspent rolling forward
 /// to the cleaners behind: a cleaner that scans less than its share leaves
@@ -110,8 +107,8 @@ pub(crate) async fn run_cleaners(
 ) -> Result<(), JanitorError> {
     // The host's declared pass budget, or this module's own 30 seconds when it
     // declares none. This is the limit that actually decides how much of a
-    // large tree one pass sees: on `lukasz-macbook` `max_scan_items` never
-    // bound and the deadline did, every pass.
+    // large tree one pass sees: on a large home `max_scan_items` never binds
+    // and the deadline does, every pass.
     let pass_seconds = policy
         .max_pass_seconds
         .filter(|seconds| *seconds > 0)

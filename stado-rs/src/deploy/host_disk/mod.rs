@@ -89,15 +89,14 @@ const MEMORY_STATE_PATH_MARK: &str = "@MEMORY_STATE_PATH@";
 /// This exists because the cost is not evenly spread. [`INVENTORY_SECTION`]
 /// walks the managed home and selected system roots deeply enough to attribute
 /// disk pressure; the depth caps the OUTPUT, never the traversal, so it walks the whole selected
-/// tree. Measured on `lukasz-macbook` on 2026-09-02: the three fields
-/// `host gates` reads take 0.8s together, while the full script had not
-/// finished after 180s and burned `user 7m27s` of CPU, so
-/// `stado host gates lukasz-macbook` died on the two-minute
+/// tree. The three fields `host gates` reads take under a second together,
+/// while the full script can run for minutes and burn several CPU-minutes,
+/// so `stado host gates <host>` would die on the two-minute
 /// [`host_channel::remote_timeout`] having computed nothing an operator
 /// could read — `disk_cleanup_stalled` and `cleanup_success_age_seconds`
-/// were unobtainable on the machine the command was running on. The work
-/// was performed for a consumer that does not exist: `host gates` never
-/// reads `inventory`, `clone_summaries` or `lock_holders`.
+/// unobtainable on the machine the command runs on. That work would be
+/// performed for a consumer that does not exist: `host gates` never reads
+/// `inventory`, `clone_summaries` or `lock_holders`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiskScope {
     /// Every field. `space report`'s [`to_report`] reads all eight, so its

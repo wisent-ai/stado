@@ -143,10 +143,9 @@ const SUPERSEDED_SCAN: usize = 20;
 /// a platform this build also queued, when this build's commit contains
 /// theirs, and say each one on stderr.
 ///
-/// On 2026-09-30 stado build 652b6c96 (c6a63931) compiled on lukasz-macbook
-/// for over 77 minutes after build 03baf850 (063d095f, a descendant) was
-/// queued, holding the Cargo build-directory lock the new build waited on:
-/// every minute of it was spent on a result nobody would use. A build of a
+/// Without this an older build keeps compiling after a build of a descendant
+/// commit is queued, holding the Cargo build-directory lock the new build
+/// waits on: every minute of it is spent on a result nobody will use. A build of a
 /// commit that is not an ancestor of this one, or of the same commit, is
 /// left alone. A cancellation or a read that fails is named and the new
 /// build stands: it is queued either way, and only the wait is lost.

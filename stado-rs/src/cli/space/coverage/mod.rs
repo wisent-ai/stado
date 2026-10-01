@@ -1,11 +1,10 @@
 //! The disk measured against the declarations: what the host needs, what the
 //! declared mechanisms reach, and what nothing reaches.
 //!
-//! This exists because of a reading that was true and useless. On 2026-09-09
-//! `charless-mac-mini` held 282 MB free of 228 GB, `stado space report` printed
-//! `99%` and `janitor: cap_reached`, and a delivery to a leased account died
-//! with `No space left on device`. Every figure in that report was correct.
-//! None of them answered the question an operator and an automat both have:
+//! This exists because a reading can be true and useless. A host with a few
+//! hundred MB free, a report printing `99%` and `janitor: cap_reached`, and a
+//! delivery dying with `No space left on device` — every figure correct, and
+//! none of them answering the question an operator and an automat both have:
 //! how far is this host from the free space it declares, can the declared
 //! mechanisms get it there, and if not, what is holding the bytes.
 //!

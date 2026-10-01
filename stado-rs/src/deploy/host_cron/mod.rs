@@ -4,26 +4,22 @@
 //!
 //! ## Why this exists
 //!
-//! On 2026-08-31 `charless-mac-mini` was cleaned of duplicate janitors and
-//! duplicate queue agents: a launchd label retired with a verified
-//! postcondition, its plist deleted, a stale user-domain job booted out of
-//! `gui/501`. All of it correct, and all of it one reboot from coming back,
-//! because the machine also carried four `@reboot` crontab entries that no
-//! launchd domain and no registry document mentions:
+//! A host can be cleaned of duplicate janitors and duplicate queue agents —
+//! a launchd label retired with a verified postcondition, its plist deleted,
+//! a stale user-domain job booted out of `gui/<uid>` — and still be one
+//! reboot from all of it coming back, because `@reboot` crontab entries that
+//! no launchd domain and no registry document mentions start them again:
 //!
 //! ```text
-//! @reboot /bin/sh $HOME/.stado/bin/run-com.wisent.compute.coordinator.charless-control-plane.sh
-//! @reboot /bin/sh $HOME/.stado/bin/start-stado-tailnet-object-proxy
-//! @reboot /bin/sh $HOME/.stado/bin/run-com.wisent.compute.disk-cleanup.disk-cleanup.sh
-//! @reboot /bin/sh $HOME/.stado/bin/run-com.wisent.compute.agent.charless-mac-mini.sh
+//! @reboot /bin/sh $HOME/.stado/bin/run-com.wisent.compute.coordinator.<host>.sh
+//! @reboot /bin/sh $HOME/.stado/bin/run-com.wisent.compute.agent.<host>.sh
 //! ```
 //!
-//! Two of those resurrect the exact defects that session removed. A
-//! retirement that survives `launchctl` and not a reboot is not a
-//! retirement, and until this module existed the fleet could read that table
-//! ([`crate::deploy::host_exec`]'s `crontab -l`) and had no sanctioned way to
-//! change it — the only remaining answer was a bare `crontab -e` over ssh,
-//! which nothing bounds and nobody audits.
+//! A retirement that survives `launchctl` and not a reboot is not a
+//! retirement. The fleet could read that table ([`crate::deploy::host_exec`]'s
+//! `crontab -l`) and, without this module, had no sanctioned way to change it
+//! — the only remaining answer was a bare `crontab -e` over ssh, which nothing
+//! bounds and nobody audits.
 //!
 //! ## What it refuses
 //!

@@ -35,7 +35,7 @@ const DIRECTORY_GENERATION: &str = "generation";
 
 /// The value to write: JSON when the argument parses as JSON, the argument
 /// itself when it does not, so `--value 8789` is a number, `--value '"8789"'`
-/// a string, and `--value /Users/charles/.stado` the path it looks like.
+/// a string, and `--value /Users/<user>/.stado` the path it looks like.
 fn parsed(value: &str) -> Value {
     serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
 }
@@ -45,10 +45,9 @@ fn parsed(value: &str) -> Value {
 /// A host's resolver parses the service directory strictly: a consumer
 /// carrying a field its build has never heard of makes the whole document
 /// invalid for that host, and it resolves nothing at all. `grants` arrived in
-/// 0.21.35, and on 2026-09-20 `charless-mac-mini` — the host every service
-/// resolves through — still ran 0.21.32. Declaring one grant that morning
-/// would have taken the fleet's resolution down, so this refuses the write
-/// until the hosts can read it.
+/// 0.21.35; declaring one while the host every service resolves through
+/// still runs an older Stado would take the fleet's resolution down, so this
+/// refuses the write until the hosts can read it.
 const GRANTS_FIELD: &str = "grants";
 const GRANTS_SINCE: &str = "0.21.35";
 const MANAGED_VERSIONS: &str = "managed_versions";

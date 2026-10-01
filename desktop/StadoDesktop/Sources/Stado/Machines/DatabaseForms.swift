@@ -171,7 +171,7 @@ struct DatabasePushForm: View {
                 .font(WisentTypeScale.caption())
                 .foregroundStyle(WisentDesign.muted)
             LabeledContent("Host") {
-                TextField("charless-mac-mini", text: $host)
+                TextField("registry host", text: $host)
                     .textFieldStyle(.roundedBorder)
             }
             LabeledContent("Unit serving the database plane") {

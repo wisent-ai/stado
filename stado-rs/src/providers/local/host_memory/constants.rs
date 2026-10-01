@@ -2,9 +2,9 @@
 //!
 //! The disk janitor keeps its bounds beside the code that uses them; this
 //! module keeps them together instead, because each one below is a judgement
-//! about the 2026-09-06 charless-mac-mini incident rather than a unit
-//! conversion, and a reader checking whether the watermark would have caught
-//! that host should not have to open six files to find out.
+//! about a host running out of memory rather than a unit conversion, and a
+//! reader checking whether a watermark would catch that state should not have
+//! to open six files to find out.
 
 /// One mebibyte. The declaration states memory in MiB because a host's free
 /// memory is a three-to-four-digit number there, and in GiB the same
@@ -54,11 +54,10 @@ pub const DEFAULT_CHECK_INTERVAL_SECONDS: i64 = 300;
 
 /// Reporting-default low watermark, in MiB.
 ///
-/// charless-mac-mini was holding roughly 1.3 GB free — about 1240 MiB — when
-/// its pre-check runner died with `Failed to create CoreCLR, HRESULT:
-/// 0x8007000C` and exit 137. 2048 MiB is above that reading and below the
-/// idle free memory of every other host in this fleet, so an undeclared host
-/// reports the incident state and reports nothing on a healthy one.
+/// A pre-check runner dies with `Failed to create CoreCLR, HRESULT:
+/// 0x8007000C` and exit 137 at around 1.2 GiB free. 2048 MiB is above that
+/// and below the idle free memory of a healthy host, so an undeclared host
+/// reports that state and reports nothing on a healthy one.
 pub const DEFAULT_LOW_FREE_MB: i64 = 2048;
 
 /// Reporting-default target watermark, in MiB.

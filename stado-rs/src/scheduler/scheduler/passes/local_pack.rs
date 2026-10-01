@@ -15,10 +15,9 @@ use crate::scheduler::scheduler::support::reporting::{log, py_pairs_i64};
 /// yield a job the agent then REFUSES at admission (it rejects when
 /// projected_used > total - buffer). Over-committing on raw broadcast
 /// free_vram stranded jobs: yielded to the local agent but rejected by it,
-/// AND skipped by cloud dispatch because they were yielded. Confirmed live
-/// 2026-06-01: a 16GB job yielded to local-ubuntu-server (75/98 GB used,
-/// ~22 free) sat unclaimed forever (22 - 8 = 14 < 16). Reserving the
-/// buffer routes such jobs to cloud.
+/// AND skipped by cloud dispatch because they were yielded: a 16GB job
+/// yielded to a local agent with ~22 GB free sits unclaimed forever
+/// (22 - 8 = 14 < 16). Reserving the buffer routes such jobs to cloud.
 pub const LOCAL_ADMISSION_BUFFER_GB: i64 = 8;
 
 /// The cost-optimal local-pack knapsack half of Python

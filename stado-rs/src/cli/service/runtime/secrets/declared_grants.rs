@@ -162,9 +162,9 @@ pub(crate) async fn declared_grant_reconcile(
     }
     // Minted on the host the directory names, not on a host that happens to
     // declare a managed unit for this service: `brama` is placed by a release
-    // profile and declares no unit anywhere, so `grant-sync` answered "brama
-    // is not a registry-managed service on charless-mac-mini" and its
-    // consumers could not be minted at all. The directory is this command's
+    // profile and declares no unit anywhere, so `grant-sync` would answer
+    // "brama is not a registry-managed service on <host>" and its consumers
+    // could not be minted at all. The directory is this command's
     // input; the host it names is where the vault is.
     let target = host_channel::canonical_target(&host).await.map_err(click)?;
     let runner = production_runner();

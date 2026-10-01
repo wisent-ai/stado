@@ -7,13 +7,12 @@
 //! so a fleet host that drifts below its low watermark cannot be brought back
 //! from anywhere.
 //!
-//! On 2026-09-20 that closed the fleet's only browser host: charless-mac-mini
-//! published 6.7 GiB free against an 8 GiB low watermark, Stado refused every
-//! placement on it with `disk_pressure_active`, and every Weles workload —
-//! including the deployment that would move its worker to a fixed revision —
-//! was refused with the same sentence. Nothing in the product could clear it,
-//! and no operator gesture should have to: the host runs its own Stado, and
-//! this command is the fleet-side way to make it run its own policy.
+//! A browser host below its watermark refuses every placement with
+//! `disk_pressure_active`, and every Weles workload — including the
+//! deployment that would move its worker to a fixed revision — is refused
+//! with the same sentence. No operator gesture should be needed to clear it:
+//! the host runs its own Stado, and this command is the fleet-side way to
+//! make it run its own policy.
 //!
 //! Nothing about what may be deleted is decided here. The remote binary reads
 //! the same declaration it reads when a person runs it on that machine; this

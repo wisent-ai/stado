@@ -152,8 +152,8 @@ pub(super) fn write_scratch(scratch: &ScratchReceipt) -> Result<(), CmdError> {
 }
 
 /// The sentence a failed build's receipt and exit carry about the disk it
-/// was writing: the two numbers that were one line inside a 30 KB log when
-/// the 0.20.3 darwin build died on charless-mac-mini.
+/// was writing: the two numbers that are otherwise one line inside a long
+/// build log.
 pub(super) fn disk_sentence(scratch: &ScratchReceipt) -> String {
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
     let state = if scratch.exhausted_disk() {

@@ -51,9 +51,8 @@ const UNIT_DIRECTORIES_MARK: &str = "@UNIT_DIRECTORIES@";
 /// How deep below a declared root a build tool's own `CACHEDIR.TAG` is looked
 /// for. Six levels reaches `<checkouts>/<repo>/<crate>/target` and the nested
 /// workspaces beside it, and stops one sweep from walking a whole home
-/// directory: the janitor pass that had no such bound crossed 59,588 of
-/// 879,559 directories on lukasz-macbook before its deadline and reclaimed
-/// nothing.
+/// directory: without such a bound a janitor pass can cross a small fraction
+/// of a home's directories before its deadline and reclaim nothing.
 const BUILD_CACHE_DEPTH: &str = "6";
 
 /// The fixed remote program.

@@ -21,13 +21,13 @@ fn managed_binary_version(managed: &std::path::Path) -> Option<String> {
 /// hands control to a genuinely different file and the supervisor's restart
 /// changes something.
 ///
-/// The marker alone cannot decide that, and reading it as authoritative cost a
-/// host its entire share of the queue. On 2026-09-02 `lukasz-macbook` held a
-/// 0.13.42 binary at the managed path beside a marker still reading 0.13.39.
-/// The agent announced `installed 0.13.39 supersedes running 0.13.42`, exited,
-/// was recreated by launchd from that same file, and repeated it every ten
-/// seconds -- claiming nothing, while a signed Stado release delivery pinned to
-/// that host sat queued behind it. A handoff whose restart cannot change the
+/// The marker alone cannot decide that, and reading it as authoritative can
+/// cost a host its entire share of the queue: with a newer binary at the
+/// managed path beside a marker still naming an older version, the agent
+/// announces `installed <old> supersedes running <new>`, exits, is recreated
+/// by launchd from that same file, and repeats it every ten seconds --
+/// claiming nothing, while a release delivery pinned to that host sits
+/// queued behind it. A handoff whose restart cannot change the
 /// running image is not a handoff, it is a stall with an explanation.
 ///
 /// So the file is asked what it is. When it answers this process's own version
@@ -86,10 +86,10 @@ pub(crate) fn installed_stado_release_mismatch(log_fn: &mut dyn FnMut(&str)) -> 
 }
 
 /// The same version installed again under this process: the marker cannot
-/// tell it apart, and the process kept executing the replaced inode for good.
-/// On lukasz-macbook on 2026-09-27 `stado product install stado` reinstalled
-/// 0.22.10 over a 0.22.10 agent inside the object API; the marker read
-/// 0.22.10, nothing handed off, and the unit kept an image no longer on disk.
+/// tell it apart, and the process keeps executing the replaced inode for good:
+/// `stado product install stado` reinstalling the same version over a running
+/// agent leaves the marker unchanged, nothing hands off, and the unit keeps an
+/// image no longer on disk.
 /// When this process's image is not the managed file, a restart does change
 /// what runs, so the handoff is taken.
 fn replaced_image(

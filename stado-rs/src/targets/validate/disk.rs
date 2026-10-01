@@ -107,12 +107,11 @@ pub(crate) fn validate_disk_cleanup(
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
     // A cleaner this binary does not know is a cleaner a newer binary does:
     // the registry is one document read by every release in the fleet at
-    // once. Refusing the whole policy for one unfamiliar name switched off
-    // every cleaner on charless-mac-mini on 2026-09-04 the moment
-    // `release_store` was declared for the binary that was still queued to
-    // reach it — the janitor read `cleaners: null`, reported
-    // `invalid_or_unavailable_policy`, and the disk it had been holding above
-    // the watermark was left to fill. So an unknown name is skipped here and
+    // once. Refusing the whole policy for one unfamiliar name would switch off
+    // every cleaner on a host the moment a new cleaner is declared for a
+    // binary still queued to reach it — the janitor reading `cleaners: null`,
+    // reporting `invalid_or_unavailable_policy`, and leaving the disk it had
+    // been holding above the watermark to fill. So an unknown name is skipped here and
     // reported by the janitor as `unknown_cleaner`; the known ones keep
     // running, and the new one starts the moment the binary that knows it
     // lands. A name is still held to the cleaner key schema below.
@@ -125,9 +124,8 @@ pub(crate) fn validate_disk_cleanup(
     // passes every other check here: the mode is legal, the thresholds are
     // legal, the cleaner map is a legal empty object — and the janitor then
     // reports a healthy no-op on any disk, because there is nothing enabled
-    // to find anything. `lukasz-macbook` carried `cleaners: {}` while it
-    // filled to 1.8 GiB free of 1.8 TiB, and arming that policy would have
-    // changed nothing at all.
+    // to find anything: a host carrying `cleaners: {}` can fill its disk, and
+    // arming that policy changes nothing at all.
     //
     // `off` and `report` may legitimately name no cleaner: neither deletes,
     // and both still measure free space and pressure. `enforce` claims it

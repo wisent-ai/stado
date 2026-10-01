@@ -1,12 +1,11 @@
 //! Read the owner-controlled env FILE a managed unit sources, and reconcile
 //! the endpoints it declares against what is actually listening on the host.
 //!
-//! NO Python original. This module exists because of a real outage on
-//! 2026-08-30. `com.wisent.always-on.weles` on charless-mac-mini crash-looped
-//! with `Skarbiec at http://127.0.0.1:8785 is unreachable`; the host's
-//! Skarbiec was listening on 8895; `stado service env-set` had been used twice
-//! to write the right port into `$HOME/.config/weles/worker.env`, and the unit
-//! kept naming the wrong one. Nothing in Stado could read that file back.
+//! NO Python original. A unit can crash-loop with `Skarbiec at
+//! http://127.0.0.1:<port> is unreachable` while the host's Skarbiec listens
+//! on another port, and `stado service env-set` can write the right port into
+//! the sourced env file while the unit keeps naming the wrong one. Without
+//! this module nothing in Stado could read that file back.
 //!
 //! `stado service env` already answers "what environment does the UNIT FILE
 //! declare" — it parses the plist / systemd unit. That is a different file

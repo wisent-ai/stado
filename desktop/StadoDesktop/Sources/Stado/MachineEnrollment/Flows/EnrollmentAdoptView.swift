@@ -62,7 +62,7 @@ struct EnrollmentAdoptView: View {
                 ) {
                     VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                         TextField(
-                            "lukasz@studio.local",
+                            "user@studio.local",
                             text: Binding(
                                 get: { store.draft.sshTarget },
                                 set: { store.setSSHTarget($0) }
@@ -70,7 +70,7 @@ struct EnrollmentAdoptView: View {
                         )
                         .textFieldStyle(.roundedBorder)
                         .font(WisentTypeScale.body())
-                        Text(verbatim: "Examples: lukasz@studio.local, lukasz@100.92.4.11, lukasz@studio.tailnet-name.ts.net")
+                        Text(verbatim: "Examples: user@studio.local, user@100.92.4.11, user@studio.tailnet-name.ts.net")
                             .font(WisentTypeScale.identifierSmall())
                             .foregroundStyle(WisentDesign.muted)
                     }

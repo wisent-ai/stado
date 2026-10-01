@@ -2,12 +2,10 @@
 //!
 //! A product that writes run evidence into this host's object store owns how
 //! long it is kept and can expire it with its own command. On a host under
-//! disk pressure it cannot: `charless-mac-mini` published `not accepting
-//! jobs: disk_pressure_active` at 3.7 GiB free, so the job carrying
-//! `probierz retention --fleet --apply` — the very work that would have
-//! freed the 34.9 GiB under `ecosystem/probierz` — sat in the queue and
-//! could never be claimed. Reclamation that depends on job admission cannot
-//! reach the host that needs it most.
+//! disk pressure it cannot: a host publishing `not accepting jobs:
+//! disk_pressure_active` never claims the job carrying the product's own
+//! retention command — the very work that would free the space. Reclamation
+//! that depends on job admission cannot reach the host that needs it most.
 //!
 //! So the host's own janitor takes it, under the rule every other cleaner
 //! follows: only inside a root the operator declared, only files older than

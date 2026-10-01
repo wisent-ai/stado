@@ -150,10 +150,10 @@ pub fn consumer_id_for_target(
 /// because a capacity document has two writers on every host — the agent tick
 /// and the heartbeat republisher — and a host that published itself as
 /// claimable from one of them while its own `targets[].memory_reclaim`
-/// refuses work would be selected for exactly the work it cannot run. That is
-/// what happened to charless-mac-mini on 2026-09-06: a machine that could no
-/// longer give a runtime its heap kept being selected, and every selection
-/// died with `Failed to create CoreCLR, HRESULT: 0x8007000C`. The refusal is
+/// refuses work would be selected for exactly the work it cannot run: a
+/// machine that can no longer give a runtime its heap keeps being selected,
+/// and every selection dies with `Failed to create CoreCLR, HRESULT:
+/// 0x8007000C`. The refusal is
 /// declared, never inferred: `refuse_placement` is a registry field, and a
 /// host that does not declare it publishes exactly what its caller measured.
 ///

@@ -102,23 +102,21 @@ pub async fn reap_undeclared_processes(
 /// correctly answered that nothing is unowned, because every duplicate IS
 /// owned, by a label the registry never heard of.
 ///
-/// charless-mac-mini was running three queue agents at once under that blind
-/// spot: `com.wisent.compute.service.stado-agent-mini`, the only one the
-/// registry declares, plus `com.wisent.compute.agent.charless-mac-mini` from
-/// `stado bootstrap --local`'s label convention and
-/// `com.wisent.compute.service.stado-queue-agent` from a third. All three
-/// published capacity for the same consumer id, so the oldest binary on the
-/// box decided what the host answered, and 55 pinned jobs were refused for
-/// seven days by a process no report could name.
+/// A host can run several queue agents at once under that blind spot: the one
+/// the registry declares, one from `stado bootstrap --local`'s label
+/// convention, and one from an older installer. All of them publish capacity
+/// for the same consumer id, so the oldest binary on the box decides what the
+/// host answers, and pinned jobs are refused for days by a process no report
+/// can name.
 ///
-/// Scope is the registry's declaration and nothing else. This used to be
-/// "every job under [`FLEET_LABEL_PREFIX`] that the registry does not declare",
-/// and the prefix was the entire hiding place: `com.stado.agent.charless-mac-mini`
-/// was loaded on that same host on 2026-09-01, was the only label on it outside
-/// the prefix, held the pid overwriting the janitor's state file — and this
-/// function answered that the host had no undeclared unit. Callers that want to
-/// treat an out-of-prefix row differently read
-/// [`UndeclaredUnit::classification`]; nothing decides that by filtering.
+/// Scope is the registry's declaration and nothing else. Scoping it to
+/// "every job under [`FLEET_LABEL_PREFIX`] that the registry does not
+/// declare" would make the prefix the entire hiding place: a stray agent
+/// loaded under another prefix, holding the pid that overwrites the janitor's
+/// state file, would leave this function answering that the host has no
+/// undeclared unit. Callers that want to treat an out-of-prefix row
+/// differently read [`UndeclaredUnit::classification`]; nothing decides that
+/// by filtering.
 pub async fn undeclared_units(
     target: &ComputeTarget,
     runner: &Runner,
@@ -135,19 +133,18 @@ pub async fn undeclared_units(
 /// or not, with every domain that declares it and the registry's verdict on each.
 ///
 /// [`undeclared_units`] is this list minus the rows the registry declares, and
-/// that subtraction is why one class of duplicate hid for a whole evening: a
-/// label declared once as a system LaunchDaemon and once as a user LaunchAgent
-/// is DECLARED, so it never appears in the undeclared view, while launchd runs
-/// both copies. Three processes served one declared port on the always-on mac
-/// behind exactly that. Callers that need to reason about duplication read this
-/// one; callers that need to reason about ownership read the other.
+/// that subtraction is why one class of duplicate can hide: a label declared
+/// once as a system LaunchDaemon and once as a user LaunchAgent is DECLARED,
+/// so it never appears in the undeclared view, while launchd runs both
+/// copies and several processes serve one declared port. Callers that need
+/// to reason about duplication read this one; callers that need to reason
+/// about ownership read the other.
 ///
-/// Neither list is filtered by label any more. This function used to drop every
-/// row outside [`FLEET_LABEL_PREFIX`] before returning, so the sweep and the
-/// undeclared view were both blind to the same set, and the one job on
-/// charless-mac-mini that mattered on 2026-09-01 was in it. A check that wants
-/// a narrower population states that narrowing itself, from evidence it holds,
-/// and says so where an operator can read it.
+/// Neither list is filtered by label. Dropping every row outside
+/// [`FLEET_LABEL_PREFIX`] before returning would blind the sweep and the
+/// undeclared view to the same set, which is where the job that matters can
+/// sit. A check that wants a narrower population states that narrowing
+/// itself, from evidence it holds, and says so where an operator can read it.
 pub async fn loaded_units(
     target: &ComputeTarget,
     runner: &Runner,

@@ -8,11 +8,10 @@
 //! broken, and then it cannot be repaired by shipping a better one, because
 //! the thing that would install the repair is the broken copy.
 //!
-//! charless-mac-mini spent a day in exactly that state: weles 0.5.40 shipped
-//! `auto-deploy.sh` with a blank line inside a backslash continuation, so its
-//! activator logged `syntax error near unexpected token '&&'` once per cycle
-//! and installed nothing - including 0.5.43, which fixes that line and was
-//! sitting in its local release root the whole time.
+//! A release that ships `auto-deploy.sh` with a blank line inside a backslash
+//! continuation leaves its activator logging `syntax error near unexpected
+//! token '&&'` once per cycle and installing nothing — including the release
+//! that fixes that line, sitting in its local release root the whole time.
 //!
 //! This runs the STAGED archive's installer instead of the installed one, once.
 //! Same env file, same digest contract, same script the host would have run

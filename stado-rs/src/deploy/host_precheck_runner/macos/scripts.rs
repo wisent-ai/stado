@@ -41,12 +41,10 @@ root pfctl -a com.wisent.stado-precheck -sr >/dev/null 2>&1 ||
 # the pipe while `ps` is still writing, `ps` dies of SIGPIPE, and `pipefail`
 # then reports "the process table could not be read" on a host where reading
 # it worked perfectly.
-# Scoped to THIS runner's root. Matching any `Runner.Listener` passed on the
-# wrong process: `charless-mac-mini` runs four of them, one of which
-# (`/Users/Shared/jeden-desktop-release-runner`) happens to run as the same
-# account, so the check reported a healthy listener while the pre-check
-# runner's own listener had been dead since 18:51:45 and every job for these
-# labels queued.
+# Scoped to THIS runner's root. Matching any `Runner.Listener` would pass on
+# the wrong process: a host can run several, one of which may run as the same
+# account, so the check would report a healthy listener while the pre-check
+# runner's own listener is dead and every job for these labels queues.
 listener_owner=$(/bin/ps -Ao user=,comm= |
   /usr/bin/awk -v root="$runner_root/" \
     '$2 ~ /Runner\.Listener$/ && index($2, root) == 1 && !seen++ { owner = $1 } END { print owner }') ||

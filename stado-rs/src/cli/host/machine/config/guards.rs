@@ -13,20 +13,18 @@ use crate::cli::host::secrets::vault::item::read_vault_phase;
 /// `/api/object` read of a `system/release-catalog/*` key then answers 401 or
 /// 503, for every product, including the ones publishing perfectly.
 ///
-/// That happened on `charless-mac-mini`: `weles-client` and
-/// `wisent-cost-tracker` were declared with no
-/// `weles-client-release-publisher` or `wisent-cost-tracker-release-publisher`
-/// in the vault, and the boundary reported
+/// A product declared as a publisher with no `<product>-release-publisher`
+/// item in the vault makes the boundary report
 /// `release verifier grant item set mismatch (missing=[...], unexpected=[...])`
-/// on the host and nowhere an operator was looking. A publisher declaration
+/// on the host and nowhere an operator is looking. A publisher declaration
 /// whose item does not exist is the defect, never the missing item: mint the
 /// item first, then declare it.
 ///
 /// The item is looked for in the vault the host's verifier reads: the fleet
 /// vault on its owner, the registry's `skarbiec` active host. Reading the
-/// declaring host's own file refused `tama` on lukasz-macbook on 2026-09-25
-/// right after `enroll` had minted it on the owner, because that host's
-/// local copy no longer receives the owner's items.
+/// declaring host's own file would refuse an item `enroll` has just minted
+/// on the owner, because a non-owner's local copy no longer receives the
+/// owner's items.
 pub(super) async fn refuse_unminted_publisher(
     target: &str,
     key: &str,
@@ -99,15 +97,15 @@ pub(super) async fn refuse_unminted_publisher(
 ///
 /// `object_api.namespaces.<ns>` names a Skarbiec item, and the host's object
 /// verifier must hold a read on it or the whole object authorization boundary
-/// closes — not just that namespace. On 2026-09-03 `spis-crawls` was declared
-/// on `charless-mac-mini` with its item `spis-crawls-object-api` outside the
-/// verifier's grant. Nothing complained. The boundary closed, every non-release
-/// object read answered `503 object authorization unavailable`, and the fault
-/// stayed invisible until the next restart of the release agent — which then
-/// could not read `release_control`, published no stable bind, and left
-/// `brama.wisent.com/health` answering 502 for hours. The log line that named
-/// it, `object verifier grant item set mismatch (missing=[spis-crawls-object-api])`,
-/// existed the whole time on the host and nowhere an operator was looking.
+/// closes — not just that namespace. A namespace declared with an item
+/// outside the verifier's grant draws no complaint at declaration time. The
+/// boundary closes, every non-release
+/// object read answers `503 object authorization unavailable`, and the fault
+/// stays invisible until the next restart of the release agent — which then
+/// cannot read `release_control`, publishes no stable bind, and leaves public
+/// routes answering 502. The log line that named
+/// it, `object verifier grant item set mismatch (missing=[<item>])`, exists
+/// the whole time on the host and nowhere an operator is looking.
 ///
 /// So the warning is emitted here, where the declaration is made, and it names
 /// the second half of the trap too: the declared `object-verifier` repair computes the

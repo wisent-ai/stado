@@ -12,11 +12,10 @@
 set -euo pipefail
 # The units this host is asked about. `WC_HEALTH_UNITS` is the operator's own
 # addition; the registry's declarations for this host are unioned onto it below,
-# once the binary that can read them is resolved. A hand-typed list was the only
-# source until 2026-09-03, and the registry had declared `stado-resolver` on
-# ubuntu-server-rtx-pro-6000 while the beacon watched `wisent-agent.service`
-# alone -- so `registry doctor` reported `missing-plist` for a unit that was
-# active with a live pid. Two lists and nothing reconciling them.
+# once the binary that can read them is resolved. With a hand-typed list as
+# the only source, a unit the registry declares but the list omits makes
+# `registry doctor` report `missing-plist` for a unit that is active with a
+# live pid. Two lists and nothing reconciling them.
 UNITS_TO_WATCH="${WC_HEALTH_UNITS:-wisent-agent.service}"
 HOST_SLUG=$(/bin/hostname -s 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]')
 
@@ -151,10 +150,9 @@ unit_manager() {
 #
 # `launchctl print` is read-only, needs no privilege on Darwin, and is the ONLY
 # reader that can answer for the system domain -- `launchctl list` cannot print
-# it at all. That gap is not theoretical: `com.wisent.always-on.brama` and
-# `com.wisent.always-on.skarbiec` are declared as system LaunchDaemons on
-# charless-mac-mini, and the beacon there reported both `inactive` while
-# `brama serve` and `skarbiec serve` were listening. The system domain is asked
+# it at all. That gap is not theoretical: a unit declared as a system
+# LaunchDaemon reads `inactive` to a `launchctl list` reader while its server
+# is listening. The system domain is asked
 # first, in the order `service bootout` acts in.
 launchd_domain() {
     for domain in "system" "gui/$(/usr/bin/id -u)"; do

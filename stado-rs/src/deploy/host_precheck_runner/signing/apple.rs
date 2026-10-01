@@ -59,16 +59,14 @@ pub(crate) fn developer_id_bundle() -> Result<Option<(String, String, String, St
 }
 /// Issue one Apple sign-in capability on the host that will redeem it.
 ///
-/// This used to shell out to a local `skarbiec capability-issue`, and
-/// [`crate::deploy::host_capability`] was written on 2026-08-31 for exactly
-/// that gap while naming this function as the surviving instance of it.
-/// Capabilities are per-host at both ends: issuing writes state beside the
-/// issuing machine's vault, and redemption is a UNIX socket on the worker. So a
-/// reference minted on an operator's laptop named nothing on
-/// charless-mac-mini, the broker answered `redemption denied: no such
-/// capability`, and the trajectory reported `capability denied` after
-/// spending its browser session - which is how a Developer ID run could look
-/// authorized and be unredeemable at the same time.
+/// A local `skarbiec capability-issue` is the gap
+/// [`crate::deploy::host_capability`] exists for. Capabilities are per-host at
+/// both ends: issuing writes state beside the issuing machine's vault, and
+/// redemption is a UNIX socket on the worker. So a reference minted on an
+/// operator's laptop names nothing on the worker, the broker answers
+/// `redemption denied: no such capability`, and the trajectory reports
+/// `capability denied` after spending its browser session - a Developer ID
+/// run that looks authorized and is unredeemable at the same time.
 ///
 /// The broker addressed is Weles's own instance, not the vault's default
 /// pair: its launcher serves `weles-api-capability.sock` out of

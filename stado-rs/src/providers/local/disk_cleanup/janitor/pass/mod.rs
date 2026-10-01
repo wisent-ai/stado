@@ -169,13 +169,12 @@ pub(crate) async fn run_with_lock(
     report.pressure_active = Some(below_low || continuing_reclaim);
     // THIS writer's last attempt, not the file's.
     //
-    // This read used to be `previous["last_attempt_at"]` - the last attempt by
-    // anyone - so any writer's stamp gated every writer. On 2026-08-31
-    // charless-mac-mini had two janitors: the queue agent's in-process pass and
-    // a standalone `disk-cleanup` unit on its own timer. With the thresholds
-    // raised to 40/42 GiB against 31.2 GiB free, the agent reported
-    // `disk_pressure_active: true`, `errors: []`, policy resolved, and all six
-    // cleaners `scanned 0` - because the other process had stamped the file
+    // Reading `previous["last_attempt_at"]` - the last attempt by anyone -
+    // would let any writer's stamp gate every writer. A host with two
+    // janitors — the queue agent's in-process pass and a standalone
+    // `disk-cleanup` unit on its own timer — would report
+    // `disk_pressure_active: true`, `errors: []`, policy resolved, and every
+    // cleaner `scanned 0`, because the other process had stamped the file
     // within the interval. Pressure active, policy resolved, nothing scanned.
     //
     // The gate returns before the first scanner AND before `run_with_lock`

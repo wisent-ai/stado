@@ -2,11 +2,10 @@
 //!
 //! The init system sees only the wrapper a runner unit starts (`runsvc.sh`,
 //! `start-runner.sh`, a reconcile script); the process that polls GitHub for
-//! jobs is its child `bin/Runner.Listener`. On 2026-09-27 both wisent-backend
-//! runners on charless-mac-mini were published `active` while one listener
-//! never started (`Failed to create CoreCLR`) and the other had exited because
-//! GitHub refused its runner version, so every deploy they serve queued and
-//! `stado service list` called them healthy.
+//! jobs is its child `bin/Runner.Listener`. A runner unit can be `active`
+//! while its listener never started (`Failed to create CoreCLR`) or has exited
+//! because GitHub refused its runner version; every deploy it serves then
+//! queues while `stado service list` calls it healthy.
 //!
 //! The runner install is taken from the unit's own launch chain, never from
 //! what happens to sit near its program:

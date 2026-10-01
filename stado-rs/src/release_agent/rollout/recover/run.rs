@@ -9,25 +9,23 @@ use crate::release_cause::QuarantineCause;
 /// How many consecutive quarantines sharing one named cause count as a wall
 /// rather than a bad attempt.
 ///
-/// Chosen by measuring the live data, not by taste. Classifying all twenty
-/// `brama` records on `charless-mac-mini` gives a longest run of one classified
-/// cause of **two** -- `brama-0.2.42` and `brama-0.2.43`, four days apart, both
-/// refused at capability redemption. Two is ordinary: a candidate fails,
-/// someone changes something, the next candidate fails the same way because the
-/// change was wrong. Refusing at two would block that loop on its first honest
-/// iteration.
+/// Chosen by measuring the live data, not by taste. Classifying a product's
+/// quarantine history gives a longest run of one classified cause of **two**
+/// -- consecutive versions days apart, both refused at the same step. Two is
+/// ordinary: a candidate fails, someone changes something, the next candidate
+/// fails the same way because the change was wrong. Refusing at two would
+/// block that loop on its first honest iteration.
 ///
 /// Three is therefore the smallest threshold that fires on nothing in a month
-/// of real history -- it raises no refusal anywhere in those twenty records --
-/// while catching the first step past the worst run the fleet has actually
-/// produced. Calibrating it against the data rather than the anecdote matters:
-/// the 2026-09-01 sequence looks like a run of three and is not one, because
-/// 0.2.49, 0.2.50 and 0.2.51 wrote no failure line and cannot be named.
+/// of real history while catching the first step past the worst run the
+/// fleet has actually produced. Calibrating it against the data rather than
+/// the anecdote matters: a sequence that looks like a run of three is not one
+/// when its versions wrote no failure line and cannot be named.
 ///
-/// The reason no historical window trips this is that twelve of the twenty rows
-/// are unclassified. The threshold is worth having anyway, because from here on
-/// a cause is recorded at the moment of quarantine from the whole log, so runs
-/// become visible instead of being invisible in a column that did not exist.
+/// The reason no historical window trips this is that most of those rows are
+/// unclassified. The threshold is worth having anyway, because a cause is
+/// recorded at the moment of quarantine from the whole log, so runs become
+/// visible instead of being invisible in a column that did not exist.
 pub(crate) const REPEAT_CAUSE_LIMIT: usize = 3;
 
 /// Is this product about to walk into a wall it has already walked into?

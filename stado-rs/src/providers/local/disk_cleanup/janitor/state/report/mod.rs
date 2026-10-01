@@ -25,10 +25,9 @@ pub struct CleanerReport {
     ///
     /// A count answers "how many files did you leave"; an operator looking
     /// at a host still over its watermark is asking "where are the bytes".
-    /// On charless-mac-mini on 2026-09-20 `job_outputs` reported 1986
-    /// `record_kept` and nothing eligible beside 12 GiB, and the counts
-    /// could not say whether the bytes were in the records or somewhere the
-    /// pass never reached.
+    /// A cleaner can report thousands of `record_kept` and nothing eligible
+    /// beside many GiB, and the counts cannot say whether the bytes are in
+    /// the records or somewhere the pass never reached.
     pub skipped_bytes: BTreeMap<String, i64>,
 }
 
@@ -111,12 +110,11 @@ pub struct CleanupReport {
     /// Set once, immediately before the first cleaner runs. It exists because
     /// the report used to carry a complete cleaner table of zeros no matter
     /// how early the pass gave up, and a table of zeros is byte-for-byte what
-    /// a successful pass that found nothing to delete emits. On
-    /// `lukasz-macbook` that made 12,197 records over fifteen days — 8,539 of
-    /// them `invalid_or_unavailable_policy` and 2,030 `lock_busy`, neither of
-    /// which resolved a policy or opened a single directory — indistinguishable
-    /// from fifteen days of "nothing needed doing", which is why nobody
-    /// noticed the janitor had never once deleted anything.
+    /// a successful pass that found nothing to delete emits. Thousands of
+    /// records of `invalid_or_unavailable_policy` and `lock_busy`, neither of
+    /// which resolved a policy or opened a single directory, would be
+    /// indistinguishable from weeks of "nothing needed doing", and nobody
+    /// would notice the janitor had never once deleted anything.
     ///
     /// A pass that did not reach its cleaners now emits `cleaners: null`
     /// rather than a measurement it never made. Both readers of the table
@@ -134,17 +132,15 @@ pub struct CleanupReport {
     /// all; this says which of them it never reached, and it exists for the
     /// same reason: the table publishes `scanned 0, eligible 0, deleted 0`
     /// for a cleaner that was never given a turn, which is byte-for-byte what
-    /// a cleaner that looked and found nothing emits. On `charless-mac-mini`
-    /// the cleaners run in a fixed order with `backup_twins` last, the policy
-    /// declared no `max_pass_seconds` so every pass took the janitor's own 30
-    /// seconds against a `$HOME` holding 103.9 GiB under `~/.stado` alone,
-    /// and `build_caches` — which walks all of `$HOME` by design — ended the
-    /// pass inside itself. `backup_twins` reported zeros with
-    /// `skipped {scan_cap: 1, scan_deadline: 1}` for as long as anyone had
-    /// looked, under real pressure, while the host refused every ordinary job
-    /// for eleven days. The outcome was `cap_reached`, which is true, names
-    /// the budget and not the cleaner, and reads like a finished look at the
-    /// disk.
+    /// a cleaner that looked and found nothing emits. With the cleaners
+    /// running in a fixed order and `backup_twins` last, a policy declaring no
+    /// `max_pass_seconds` gives every pass the janitor's own 30 seconds, and
+    /// `build_caches` — which walks all of `$HOME` by design — can end the
+    /// pass inside itself. `backup_twins` then reports zeros with
+    /// `skipped {scan_cap: 1, scan_deadline: 1}` indefinitely, under real
+    /// pressure, while the host refuses every ordinary job. The outcome is
+    /// `cap_reached`, which is true, names the budget and not the cleaner,
+    /// and reads like a finished look at the disk.
     ///
     /// Empty when every declared cleaner had its turn, so a reader can tell
     /// "nothing was eligible" from "nobody looked".

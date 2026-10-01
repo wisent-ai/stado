@@ -15,9 +15,8 @@
 //! One name is exempt from the first refusal: a `tailscale-funnel` node's own
 //! tailnet name. Tailscale publishes that record only while the node's Funnel
 //! is on, and Funnel is switched on by `converge` for a declared origin, so
-//! demanding the record first made the funnel origin impossible to declare
-//! at all — which is how charless-mac-mini had no release origin from
-//! 2026-09-22. It is declared as `pending-publication`, and `converge` and
+//! demanding the record first would make the funnel origin impossible to
+//! declare at all. It is declared as `pending-publication`, and `converge` and
 //! `status` judge the public name afterwards.
 
 use serde_json::{json, Value};

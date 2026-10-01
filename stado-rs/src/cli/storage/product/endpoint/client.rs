@@ -59,16 +59,13 @@ pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
 }
 
 fn build_fleet_https_client() -> Result<reqwest::Client, CmdError> {
-    // One bound, on the whole request. Two earlier bounds each covered a
-    // phase — establishment, and a body that had gone quiet — and together
-    // they still bounded nothing. On 2026-09-03 three processes on
-    // charless-mac-mini were alive 9h34m, 9h58m and 9h58m against this API,
-    // holding 11, 10 and 19 sockets, and one of them held the disk janitor's
-    // exclusive run lock for its whole life -- so cleanup completed no pass,
-    // `disk_cleanup_stalled` latched, and the host claimed nothing for the
-    // rest of the day. A peer that stops answering without ever sending FIN
-    // or RST was outside both phase bounds, and nothing here would ever have
-    // given up. The ceiling below is outside no phase: it covers the call.
+    // One bound, on the whole request. Two bounds that each cover a phase —
+    // establishment, and a body that has gone quiet — together bound
+    // nothing: a peer that stops answering without ever sending FIN or RST is
+    // outside both, and a process can then live for hours holding sockets.
+    // When that process holds the disk janitor's exclusive run lock, cleanup
+    // completes no pass, `disk_cleanup_stalled` latches, and the host claims
+    // nothing. The ceiling below is outside no phase: it covers the call.
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         // A ceiling on the WHOLE request, so no single call can outlive the

@@ -4,8 +4,8 @@ import Foundation
 ///
 /// They are here rather than at the call sites because each one is a claim
 /// about a real measurement: readiness reads a fleet host's vault over its
-/// own channel, which took eleven seconds against charless-mac-mini on
-/// 2026-09-20 and is bounded well above that; the marketplace calls reach
+/// own channel, which takes several seconds and is bounded well above that;
+/// the marketplace calls reach
 /// console.vast.ai over the internet. The price and the idle window are the
 /// CLI's own defaults, repeated here so the form opens on what the daemon
 /// would do unattended.

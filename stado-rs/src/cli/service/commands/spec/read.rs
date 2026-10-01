@@ -47,8 +47,8 @@ pub enum ReadCommands {
     /// Neither of the other two can see one — `list` walks the document and
     /// asks the host about each entry, `--unowned` walks the processes and asks
     /// launchd who owns them, and a loaded job the document never heard of is
-    /// in neither set. charless-mac-mini ran three queue agents at once in that
-    /// blind spot for seven days.
+    /// in neither set, and a host can run several queue agents at once in
+    /// that blind spot without any report noticing.
     List {
         /// Report the product processes no unit owns instead of the declared
         /// managed set. This is the one question in this group the beacons
@@ -98,7 +98,7 @@ pub enum ReadCommands {
         #[arg(long)]
         host: String,
         /// The exact program being de-duplicated, as a substring of its command
-        /// line -- for example `stado agent --target charless-mac-mini`.
+        /// line -- for example `stado agent --target <host>`.
         /// Required, and deliberately not defaulted: a fleet-wide reap on that
         /// host proposed ending `skarbiec serve`, `stado dashboard`,
         /// `stado resolver serve` and the Weles API server, because launchd
@@ -122,8 +122,8 @@ pub enum ReadCommands {
     /// `reap` and `list --unowned` each take one snapshot, and a snapshot
     /// taken after a respawn can only ever report `ppid 1` — the parent
     /// backgrounded the child and exited, which is precisely why nothing
-    /// could say what kept restarting an undeclared `stado agent` on
-    /// charless-mac-mini. Driving a snapshot from here in a loop cannot
+    /// could say what kept restarting an undeclared `stado agent`. Driving a
+    /// snapshot from here in a loop cannot
     /// sample faster than an SSH round trip; the loop has to run on the host.
     ///
     /// Reads `ps` on an interval and prints. It signals nothing, starts
@@ -135,7 +135,7 @@ pub enum ReadCommands {
         #[arg(long)]
         host: String,
         /// The program to watch for, as a substring of its command line --
-        /// for example `stado agent --target charless-mac-mini`. Processes
+        /// for example `stado agent --target <host>`. Processes
         /// matching it that are ALREADY running when the watch opens are
         /// reported as baseline and never as arrivals.
         #[arg(long)]

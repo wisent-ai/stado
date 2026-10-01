@@ -162,11 +162,10 @@ pub(crate) const LOST_READINESS_CONFIRMATION_SECONDS: u64 = 30;
 /// Why a release that was serving is no longer ready, confirmed over a window,
 /// or `None` when it answers.
 ///
-/// One refused probe is not a lost release. On 2026-09-19 brama 0.4.41 was
-/// rolled back and quarantined on charless-mac-mini for `did not answer within
-/// 3s` while its process was alive and its own log, seconds either side, shows
-/// it working through a model-discovery sweep on a host running hundreds of
-/// jobs. A release that is really gone stays gone, so the verdict is confirmed
+/// One refused probe is not a lost release. A release can be rolled back and
+/// quarantined for `did not answer within 3s` while its process is alive and
+/// its own log, seconds either side, shows it working through a long sweep on
+/// a busy host. A release that is really gone stays gone, so the verdict is confirmed
 /// before it costs a rollback. A process that has exited is reported at once:
 /// there is nothing to wait for, and holding a rollback for half a minute over
 /// a pid that is already gone is time the fleet spends serving nothing.

@@ -5,16 +5,13 @@ use crate::deploy::service::*;
 /// `com.wisent.compute.<kind>.<name>` and the always-on set is
 /// `com.wisent.always-on.<name>`, so one prefix covers both.
 ///
-/// It NAMES a finding and never decides what gets looked at. It used to do
-/// both, in three places at once — the `launchctl list` filter in
-/// [`LOADED_UNITS_SCRIPT`], that script's `com.wisent.*.plist` glob, and a
-/// `starts_with` in [`loaded_units`] — and a process outside the prefix could
-/// therefore not be reported as undeclared, because it was never enumerated.
-/// On 2026-09-01 charless-mac-mini had `com.stado.agent.charless-mac-mini`
-/// loaded, the only label on the host outside `com.wisent.`, holding the pid
-/// that was overwriting the janitor's state file — and
-/// `service list --undeclared` answered that the host had no undeclared unit.
-/// That answer was true about a window and false about the host.
+/// It NAMES a finding and never decides what gets looked at. Doing both — in
+/// a `launchctl list` filter, a `com.wisent.*.plist` glob, and a
+/// `starts_with` — means a process outside the prefix can never be reported
+/// as undeclared, because it is never enumerated: a stray agent loaded under
+/// another prefix, holding the pid that overwrites the janitor's state file,
+/// would leave `service list --undeclared` answering that the host has no
+/// undeclared unit — true about a window and false about the host.
 ///
 /// This is the same shape as every other defect this module records: a
 /// declaration checked against something narrower than the world. The fix is
@@ -47,9 +44,9 @@ pub struct UndeclaredUnit {
     /// directories this fleet installs into, `launchd` when only launchd knew
     /// and the host had to ask it, empty when no unit file was found at all.
     ///
-    /// `com.stado.agent.charless-mac-mini` is loaded on charless-mac-mini from
-    /// none of those three directories, so every reader that looked only there
-    /// saw a label with no file and no program behind it.
+    /// A label can be loaded from none of those three directories, and every
+    /// reader that looked only there would see a label with no file and no
+    /// program behind it.
     pub path_source: String,
     /// The argument vector that unit file declares, flattened to one line. A
     /// label alone is not actionable: three naming conventions produce three
@@ -138,16 +135,15 @@ impl UndeclaredUnit {
     /// three launchd directories this fleet installs into, or the program it is
     /// running executes out of a declared product root.
     ///
-    /// This exists because the widened enumeration has to stay readable.
-    /// charless-mac-mini loads 537 labels and 494 of them are `com.apple.*`;
-    /// a report that prints all of them equally has buried its finding as
-    /// effectively as the prefix filter did, and burying a finding in noise is
+    /// This exists because the widened enumeration has to stay readable. A
+    /// Mac loads hundreds of labels and most of them are `com.apple.*`; a
+    /// report that prints all of them equally buries its finding as
+    /// effectively as a prefix filter would, and burying a finding in noise is
     /// the failure this whole change is about. So the noise is separated by
-    /// EVIDENCE rather than by spelling: every one of the six rows that
-    /// mattered on that host — `com.stado.agent.charless-mac-mini`, three
-    /// `ai.wisent.oko.*` agents and two `actions.runner.*` runners — has its
-    /// plist in `~/Library/LaunchAgents` or `/Library/LaunchDaemons`, and not
-    /// one `application.com.apple.*` row does.
+    /// EVIDENCE rather than by spelling: the rows that matter — stray agents,
+    /// product LaunchAgents and `actions.runner.*` runners — have their plist
+    /// in `~/Library/LaunchAgents` or `/Library/LaunchDaemons`, and no
+    /// `application.com.apple.*` row does.
     pub fn fleet_affiliated(&self) -> bool {
         !self.declaring_paths.is_empty()
             || (!self.running_program.is_empty()

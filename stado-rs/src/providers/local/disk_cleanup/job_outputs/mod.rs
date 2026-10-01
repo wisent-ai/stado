@@ -3,12 +3,11 @@
 //! Every job the queue runs writes what it produced under
 //! `status/<job_id>/output/` of the store: build logs, receipts, and the
 //! release archive a publish step copies into `releases/` before the run
-//! ends. Nothing ever removed those files. Measured on `charless-mac-mini`
-//! on 2026-09-19: `local-storage/ecosystem/probierz/status` held 12.1 GiB
-//! across 6,243 objects, the oldest from a crawl job of 2026-08-16, while
-//! the disk sat at 1.8 GiB free against an 8 GiB watermark, every declared
-//! cleaner reported nothing eligible, and the host refused to roll out the
-//! Brama release the fleet needed — the janitor could not name the bytes.
+//! ends. Without this cleaner nothing ever removes those files: a product's
+//! `status` tree can grow to many GiB across thousands of objects, weeks old,
+//! while the disk sits below its watermark, every declared cleaner reports
+//! nothing eligible, the host refuses a release rollout the fleet needs, and
+//! the janitor cannot name the bytes.
 //!
 //! What a job's outputs are still for, and therefore what this cleaner keeps:
 //!
@@ -66,9 +65,8 @@ pub(super) const OUTPUT_DIR: &str = "output";
 /// The store root is the account's own, `~/.stado/local-storage`, the same
 /// path `backup_twins` compares its replica against — not the configured
 /// `WC_LOCAL_STORAGE_PATH`, which the janitor's service process does not
-/// carry: on charless-mac-mini on 2026-09-19 that reading answered
-/// `root_absent` for 12 GiB the replica cleaner was walking in the same
-/// pass. A policy `root` override replaces it.
+/// carry, so reading it would answer `root_absent` for bytes the replica
+/// cleaner walks in the same pass. A policy `root` override replaces it.
 ///
 /// Inside that root, the host serving the fleet's object API keeps each
 /// namespace's keys under `ecosystem/<namespace>/` while a device-local
@@ -101,10 +99,10 @@ pub fn status_roots(home: &Path, configured_root: Option<&str>) -> Vec<PathBuf> 
 /// reads, kept regardless of age, rather than a payload.
 ///
 /// Only at that level. A job that wrote a tree under `output/` wrote
-/// artifacts, whatever their extension: on charless-mac-mini a crawl job's
-/// `output/<run>/store-31/store-31_….inst.json` was 131 MB, and an
-/// extension rule that reached into the tree kept the very bytes this
-/// cleaner exists to reclaim.
+/// artifacts, whatever their extension: a crawl job's `.inst.json` under
+/// `output/<run>/` can be over a hundred MB, and an extension rule that
+/// reached into the tree would keep the very bytes this cleaner exists to
+/// reclaim.
 fn is_record(name: &str) -> bool {
     name.ends_with(".json") || name.ends_with(".log")
 }

@@ -1,14 +1,13 @@
 //! Where this host keeps the fleet's work: the one directory the job trees,
 //! the build caches and the published free-space reading all hang from.
 //!
-//! Until 2026-09-18 that directory was the agent's home and nothing else,
-//! spelled three times: the queue-workdir root walked `~/.stado/work/jobs`,
-//! the release worker wrote its Cargo target under `~/.stado/build-cache`,
-//! and the capacity gate measured free space at `~`. On a host whose home
-//! sits on a small system volume all three were wrong together —
-//! ubuntu-server-rtx-pro-6000 refused a 22 GiB build for want of room on
-//! 98 GiB while 13 TiB sat free on `/mnt/wd16tb` — and there was no way to
-//! tell the agent otherwise short of moving its home.
+//! Without a declaration that directory is the agent's home, spelled three
+//! times: the queue-workdir root walks `~/.stado/work/jobs`, the release
+//! worker writes its Cargo target under `~/.stado/build-cache`, and the
+//! capacity gate measures free space at `~`. On a host whose home sits on a
+//! small system volume all three are wrong together — a build is refused for
+//! want of room while terabytes sit free on another mount — and there was no
+//! way to tell the agent otherwise short of moving its home.
 //!
 //! The registry now declares `targets[].work_root`, and this module is the
 //! one reader. The agent declares it into this process when it reads its

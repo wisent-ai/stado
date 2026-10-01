@@ -30,10 +30,10 @@
 //! # Why it reads the host's own files rather than the Weles API
 //!
 //! `weles-activity` already reads the run store off the host filesystem and
-//! only PROBES the worker API. That matters here: on 2026-09-02 the admission
-//! unit on charless-mac-mini was crash-looping on
-//! `ERR_MODULE_NOT_FOUND: Cannot find module …/dist/worker/dispatch.js`, so
-//! every `weles-run-diagnostics` call failed — which is exactly the state in
+//! only PROBES the worker API. That matters here: an admission unit that is
+//! crash-looping on `ERR_MODULE_NOT_FOUND: Cannot find module
+//! …/dist/worker/dispatch.js` fails every `weles-run-diagnostics` call —
+//! which is exactly the state in
 //! which somebody asks this question. A diagnostic that depends on the thing
 //! that is broken answers nothing.
 //!

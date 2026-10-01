@@ -108,12 +108,12 @@ async fn beacon_store() -> Result<JobStorage, CmdError> {
 
 /// The last-known-good copy when `host` names this machine, else `None`.
 ///
-/// On 2026-09-30 `stado service restart --host lukasz-macbook
-/// stado-object-api` ran 300 s with no answer: this machine's object API
-/// hung, and both the host check and the registry read went through it, so
-/// the one managed way to cycle it never started (cb8780c9). A unit on this
-/// machine needs no authority to be found: its declaration is in the copy
-/// every registry refresh keeps here, and restarting it involves no network.
+/// When this machine's object API hangs, `stado service restart --host <this
+/// host> stado-object-api` would wait with no answer, because both the host
+/// check and the registry read go through the hung API, and the one managed
+/// way to cycle it would never start. A unit on this machine needs no
+/// authority to be found: its declaration is in the copy every registry
+/// refresh keeps here, and restarting it involves no network.
 fn this_host_copy(host: Option<&str>) -> Option<targets::Registry> {
     let host = host?;
     let (registry, notice) = targets::last_good_for_this_host()?;

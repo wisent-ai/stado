@@ -83,17 +83,17 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               interface operand and no address, and every configuring form of ifconfig requires \
               one, so this entry cannot change an address, a route, or an interface's state",
     },
-    // The Linux half of the interface read, added 2026-09-02.
-    // `stado host exec ubuntu-server-rtx-pro-6000 -- ifconfig -a` fails with
-    // `/sbin/ifconfig: No such file or directory`, because Ubuntu ships
-    // iproute2 and not net-tools, so the entry above answers for the macOS
-    // hosts and for no other kind of machine in the fleet.
+    // The Linux half of the interface read. `stado host exec <linux host> --
+    // ifconfig -a` fails with `/sbin/ifconfig: No such file or directory`,
+    // because Ubuntu ships iproute2 and not net-tools, so the entry above
+    // answers for the macOS hosts and for no other kind of machine in the
+    // fleet.
     ApprovedCommand {
         argv: &["/usr/bin/ip", "addr"],
         why: "lists every network interface on a Linux host with the addresses it carries — the \
               same fact the `ifconfig -a` entry above reads, on the hosts where that entry \
               cannot run. Ubuntu ships iproute2 and not net-tools, so \
-              `host exec ubuntu-server-rtx-pro-6000 -- ifconfig -a` answers \
+              `host exec <linux host> -- ifconfig -a` answers \
               `/sbin/ifconfig: No such file or directory` and the fleet's one approved way to \
               read a host's interfaces was a macOS-only read; the address of the fleet's only \
               Linux host had to be inferred from `tailscale netcheck` instead, which reports \
@@ -207,13 +207,12 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               Weles's only kimi account and its declared primary, mapped to \
               `brama-sub-wisent-app-kimi-primary`. Same guarantees as the codex entry",
     },
-    // What the installed Kimi CLI actually accepts, added 2026-09-02. Weles's
-    // kimi login trajectory spawns `kimi login --json` and the CLI on
-    // charless-mac-mini answers `error: unknown option '--json'`, so the run
-    // never reaches an authorize URL and kimi has renewed nothing. Fixing a
-    // trajectory against a flag list guessed from a pinned version is how that
-    // mismatch happened; these three reads are how it gets fixed against the
-    // binary that is really there.
+    // What the installed Kimi CLI actually accepts. Weles's kimi login
+    // trajectory spawns `kimi login --json`, and a CLI that answers `error:
+    // unknown option '--json'` never reaches an authorize URL, so kimi renews
+    // nothing. Fixing a trajectory against a flag list guessed from a pinned
+    // version is how that mismatch happens; these three reads fix it against
+    // the binary that is really there.
     ApprovedCommand {
         argv: &[KIMI_CLI, "--version"],
         why: "prints the installed Kimi CLI version. It takes no argument, reads no session \

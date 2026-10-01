@@ -102,12 +102,10 @@ pub const MACOS_JOBS_DIR: &str = "/Users/Shared/.stado-runner-jobs";
 ///
 /// GitHub gives each runner its own concurrency of one and coordinates nothing
 /// between runners, so a machine carrying five of them builds five
-/// repositories at once. On 2026-09-06 `charless-mac-mini` did exactly that:
-/// free disk fell from 10.6 to 4.9 GiB in twenty minutes, one `git` alone held
-/// 1021 MiB resident, free memory reached 597 MiB with 4.7 of 6 GiB of swap in
-/// use, and every .NET runner on the box then failed to start with
-/// `Failed to create CoreCLR, HRESULT: 0x8007000C`. Nothing GitHub offers
-/// bounds that from the host's side.
+/// repositories at once: free disk halves in minutes, one `git` alone can hold
+/// a GiB resident, swap fills, and every .NET runner on the box then fails to
+/// start with `Failed to create CoreCLR, HRESULT: 0x8007000C`. Nothing GitHub
+/// offers bounds that from the host's side.
 ///
 /// The runner runs this before a job's first step
 /// (`ACTIONS_RUNNER_HOOK_JOB_STARTED`) and `clean-work.sh` after its last, so

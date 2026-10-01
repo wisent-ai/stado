@@ -72,12 +72,11 @@ pub(crate) fn declared_target_count(document: &Value) -> usize {
 ///
 /// A registry with no targets is schema-valid: a fresh install legitimately
 /// has none, so the contract cannot refuse it outright. It is still never an
-/// improvement on a copy that names hosts. On 2026-08-31 the authority served
-/// `{"schema_version":2,"coordinators":[],"targets":[]}` for about nine
-/// minutes; it passed the contract, replaced a copy naming three hosts, and
-/// every host-addressed command answered `target 'charless-mac-mini' is not in
-/// the canonical registry` - from the fallback that exists to survive exactly
-/// that outage.
+/// improvement on a copy that names hosts. An authority that briefly serves
+/// `{"schema_version":2,"coordinators":[],"targets":[]}` passes the contract,
+/// and replacing a copy that names hosts with it makes every host-addressed
+/// command answer `target '<host>' is not in the canonical registry` — from
+/// the fallback that exists to survive exactly that outage.
 pub(crate) fn may_replace_last_good(
     incoming: &Value,
     recorded: Option<&Value>,

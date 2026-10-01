@@ -3,11 +3,9 @@
 //! them: its work runs inside that product's one unit, and restarting it would
 //! start the predecessor again beside it.
 //!
-//! On 2026-09-23 lukasz-macbook authorised com.wisent.transcript-lake-stream,
-//! the streamer Transcript Lake retires, and not the declared
-//! com.wisent.compute.service.transcript-lake. A new build would have been put
-//! back into the retired unit, which retires nothing, and never into the one
-//! that retires it, so two streamers of 680 MB each kept running.
+//! A revisit authorising a retired streamer instead of the declared unit
+//! would put a new build back into the retired unit, which retires nothing,
+//! and never into the one that retires it, so two streamers keep running.
 //!
 //! Every case drives the built `stado` against a local storage backend under a
 //! tempdir, with HOME and STADO_CONFIG isolated, so the operator's registry is

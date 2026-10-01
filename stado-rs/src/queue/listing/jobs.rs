@@ -75,14 +75,12 @@ pub async fn list_jobs(
 /// in the name and downloading the document to read it back out is a round
 /// trip per job for a field the listing handed over for free.
 ///
-/// That is not a micro-optimisation. The janitor's workdir keep-list used
-/// [`list_jobs`] for this, and on 2026-09-03 charless-mac-mini spent
-/// `duration_ms:
-/// 818021` — 13.6 minutes — on a cleanup pass whose own verdict
-/// was `healthy_noop` on a host with 19.8 GB free, because the pass downloaded
-/// every object the `queue` listing returned before it had decided whether any
-/// cleaner would run. The keep-list needs a set of ids, and this returns one
-/// for one listing per 1000 names instead of one GET per name.
+/// That is not a micro-optimisation. A janitor keep-list built on
+/// [`list_jobs`] can spend over ten minutes on a cleanup pass whose own
+/// verdict is `healthy_noop`, because the pass downloads every object the
+/// `queue` listing returns before it has decided whether any cleaner will
+/// run. The keep-list needs a set of ids, and this returns one for one
+/// listing per 1000 names instead of one GET per name.
 ///
 /// DELIBERATELY a superset of [`list_jobs`]: a job whose blob currently holds
 /// a transition sentinel keeps its id here, where `list_jobs` drops it. For a

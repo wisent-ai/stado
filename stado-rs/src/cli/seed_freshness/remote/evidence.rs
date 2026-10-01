@@ -35,12 +35,11 @@ const MARKERS = [
   ['weles_unreachable', /refused the sign-in request|no reachable Weles|no_trajectory/i],
   // A Weles runtime that cannot load its own modules fails every reauth
   // forever, which looks exactly like a stale seed from the outside and has a
-  // completely different repair: fix the release. Observed on
-  // charless-mac-mini on 2026-09-02, release sha256-4316e3aa4cbf, as
+  // completely different repair: fix the release. Its signature is
   // `ERR_MODULE_NOT_FOUND: Cannot find module .../dist/worker/dispatch.js`.
   ['weles_runtime_broken', /ERR_MODULE_NOT_FOUND|Cannot find module/i],
-  // Brama refusing a run before Weles drove anything: the 131 records this
-  // fleet's journal actually holds are almost all of this shape. No code was
+  // Brama refusing a run before Weles drove anything: most records in a
+  // fleet's journal are of this shape. No code was
   // submitted, so these are silent about the seed and must classify as a
   // failure elsewhere.
   ['weles_not_attributed', /answered HTTP 401|not attributed to the account/i],

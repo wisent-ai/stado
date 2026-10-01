@@ -3,7 +3,7 @@
   "memory_policies": [
     {
       "name": "macos-always-on-host",
-      "summary": "An always-on Mac that runs fleet work and keeps a logged-in graphical session. Restarts the pre-check runner when its process is gone, reaps stale GnuPG daemons, and ends the session processes that held the memory on charless-mac-mini on 2026-09-06, largest first and only after ten minutes of life. Refuses new placement while the host is under its low watermark.",
+      "summary": "An always-on Mac that runs fleet work and keeps a logged-in graphical session. Restarts the pre-check runner when its process is gone, reaps stale GnuPG daemons, and ends the graphical-session processes that hold the most memory, largest first and only after ten minutes of life. Refuses new placement while the host is under its low watermark.",
       "platforms": ["darwin-arm64"],
       "roles": ["always-on"],
       "policy": {

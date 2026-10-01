@@ -40,12 +40,11 @@ export STADO_RELEASE_PLATFORM
 # platform manifest declares, installs by rename, and leaves the attestation
 # copy under `$HOME/.stado/releases/<binary>/<version>/<platform>/` that
 # `cli::service_converge::attest_installed` byte-compares against the installed
-# file. A plain `cp` leaves no such copy, so on 2026-09-02 the 0.13.46 train
-# deployed this host correctly and then `deploy-fleet` refused it: `stado
-# service converge lukasz-macbook stado` reported the binary `unattested` —
-# "the host runs 0.13.46 and no delivered copy of 0.13.46 is staged" — and
-# refused rather than downgrade a host that was already right. The bytes were
-# fine; nothing had recorded where they came from.
+# file. A plain `cp` leaves no such copy, so a host deployed correctly is then
+# refused by `deploy-fleet`: `stado service converge <host> stado` reports the
+# binary `unattested` — "the host runs <version> and no delivered copy of
+# <version> is staged" — and refuses rather than downgrade a host that is
+# already right. The bytes are fine; nothing recorded where they came from.
 if [ -n "$RELEASE_DIR" ]; then
     if [ ! -x "$RELEASE_DIR/stado" ]; then
         echo "FATAL: STADO_RELEASE_DIR=$RELEASE_DIR has no executable Rust stado binary"

@@ -116,9 +116,9 @@ pub async fn gather(
     // one observation, while same-named files at different paths remain two.
     //
     // The bin directory is classified in one command and everything else per
-    // path: the directory is where the population is large — 1408 retired
-    // helper scripts on charless-mac-mini — and the unit programs and bound
-    // product paths are a handful that live anywhere.
+    // path: the directory is where the population is large — a long-lived
+    // host can hold over a thousand retired helper scripts — and the unit
+    // programs and bound product paths are a handful that live anywhere.
     let mut paths: Vec<(String, Option<Classification>)> = Vec::new();
     let mut seen = BTreeSet::new();
     if host_channel::remote_test(target, &format!("-d {}", shlex_quote(&bin)), runner).await? {

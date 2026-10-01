@@ -75,13 +75,10 @@ impl<'a> Walk<'a> {
             }
             let absolute = root.join(&relative);
             // A macOS bundle is one opaque item to the person who installed
-            // it, and no build tool writes a tagged cache inside one. The
-            // walk used to descend anyway: on lukasz-macbook on 2026-09-21
-            // the pass reported 27493 directories still pending with its
-            // cursor inside `Applications/IBKR Desktop/IBKR Desktop
-            // Uninstaller.app`, so every pass spent its whole deadline on
-            // application payloads and never reached the fleet's own build
-            // output.
+            // it, and no build tool writes a tagged cache inside one. A walk
+            // that descends anyway can spend every pass's whole deadline on
+            // an application's payload, its cursor inside some `.app`, and
+            // never reach the fleet's own build output.
             if is_bundle(name) {
                 report.skip_builds("application_bundle", 1);
                 continue;

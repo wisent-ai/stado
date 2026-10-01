@@ -125,15 +125,13 @@ impl ActiveSlot {
 /// permanent one, on a process that was otherwise perfectly healthy and kept
 /// publishing capacity throughout.
 ///
-/// Measured on `charless-mac-mini` on 2026-09-03: the agent (pid 79473, alive
-/// 11.5 hours) held the lock, `space report` named it as the holder, every pass
-/// reported `outcome: lock_busy, duration_ms: 372`, and the janitor's last
-/// success stayed at 16:40:29Z. `host gates` then read that success age
-/// against `STALL_INTERVALS * 300s` and reported `disk_cleanup_stalled`, which
-/// closed the host to all work — on 18.4 GiB free against a 15 GiB watermark,
-/// with eight jobs pinned to it. `lukasz-macbook` was closed the same way on
-/// the same day at 118.7 GiB free against 100. Those two are the whole of
-/// `darwin-arm64` in the registry, so the platform had no builder at all.
+/// An agent can hold the lock for hours while `space report` names it as the
+/// holder, every pass reports `outcome: lock_busy`, and the janitor's last
+/// success stays where it was. `host gates` then reads that success age
+/// against `STALL_INTERVALS * 300s` and reports `disk_cleanup_stalled`, which
+/// closes the host to all work with free space above its watermark and jobs
+/// pinned to it. When that happens on every builder of a platform at once,
+/// the platform has no builder at all.
 ///
 /// And it could not clear itself. The agent replaces itself only once
 /// `slots.is_empty()` (`agent::run_agent`'s release-handoff branch), which the

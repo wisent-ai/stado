@@ -113,10 +113,9 @@ pub fn perform(
             // verified archive this installation came from, so a step can hand
             // the exact bytes to the product's own reconciler: Stado's
             // `release converge-local-readers` restarts every unit still
-            // executing the binary this install replaced. Without it the 0.22.5
-            // install on 2026-09-26 left the object API on lukasz-macbook on
-            // the replaced image, and the next build's resident-identity test
-            // failed on exactly that.
+            // executing the binary this install replaced. Without it an
+            // install leaves the object API running the replaced image, and
+            // anything that checks the resident identity fails on exactly that.
             let archive = installed
                 .release
                 .as_ref()

@@ -3,9 +3,9 @@
 //!
 //! A build job is hard-pinned to the builder it was placed on, and the
 //! queue's reaper never releases a hard pin, so a job queued on a host that
-//! stopped publishing capacity waited for it forever: on 2026-09-26 every
-//! release waited on charless-mac-mini while its disk was full and two other
-//! hosts of the fleet sat idle. A job that is still queued (no host has
+//! stopped publishing capacity would wait for it forever — every release
+//! behind a host with a full disk while other hosts of the fleet sit idle. A
+//! job that is still queued (no host has
 //! started it, so nothing is lost) and whose pinned host has fallen out of
 //! the live capacity set is cancelled here; the build then records the
 //! platform failed and places a replacement among the hosts that do publish,

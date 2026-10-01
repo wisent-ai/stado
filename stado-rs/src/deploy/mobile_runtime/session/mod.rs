@@ -142,8 +142,8 @@ pub async fn verify(
 
     // Visible, not judged. The server named these itself; a declaration that
     // says nothing about them cannot fail on them, and a report that omitted
-    // them is how `charless-mac-mini` kept a driver the server refuses to
-    // host, waiting to deadlock npm for the next install into that tree.
+    // them would let a host keep a driver the server refuses to host, waiting
+    // to deadlock npm for the next install into that tree.
     for (driver, server_said) in incompatible_drivers(&field("warnings")) {
         if declared.drivers.contains(&driver) {
             continue;

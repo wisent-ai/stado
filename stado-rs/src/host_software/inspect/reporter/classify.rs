@@ -85,10 +85,10 @@ impl Reporter<'_> {
 
     /// [`Self::classify`] for every entry directly under DIR, in one command.
     ///
-    /// One round trip instead of one per file: `$HOME/.stado/bin` on
-    /// charless-mac-mini holds 1408 retired helper scripts beside 41 programs,
-    /// and reading each one's two bytes over its own channel round trip cost
-    /// the first refresh through `release host-state` fourteen minutes. The
+    /// One round trip instead of one per file: `$HOME/.stado/bin` can hold
+    /// over a thousand retired helper scripts beside a few dozen programs, and
+    /// reading each one's two bytes over its own channel round trip makes a
+    /// refresh through `release host-state` take many minutes. The
     /// readings are the same three — regular file, executable bit, first two
     /// bytes — taken by `find` on the host and printed one line per file as
     /// `<name>\t<x|->\t<hex>`, hex because two raw bytes of a Mach-O header

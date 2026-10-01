@@ -20,11 +20,11 @@ pub(crate) async fn this_host() -> Result<String, CmdError> {
 }
 
 /// The host that owns the fleet vault: the registry's `skarbiec` active host,
-/// the same answer `stado credentials vault` gives. It used to be read from
-/// this machine's local vault file's replication bonds, which named this host
-/// the owner once its local copy was retired and replicated nothing; grants
-/// were then minted against a vault nobody reads ("lukasz-macbook declares no
-/// vault authority").
+/// the same answer `stado credentials vault` gives. Reading it from this
+/// machine's local vault file's replication bonds would name this host the
+/// owner once its local copy is retired and replicates nothing; grants would
+/// then be minted against a vault nobody reads ("<host> declares no vault
+/// authority").
 async fn vault_owner() -> Result<String, CmdError> {
     crate::cli::directory::active_host("skarbiec")
         .await?

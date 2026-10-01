@@ -6,14 +6,13 @@
 //! because this script is what the fleet sweep spends its budget on. The
 //! version before this one asked launchd again for every label -- five `awk`
 //! passes over two in-memory tables and up to three `launchctl print
-//! <domain>/<label>` calls each -- so a mac carrying 1,034 labels spawned
-//! something near fifteen thousand processes to answer questions that one
-//! pass answers for every label at once. It took longer than
-//! [`crate::deploy::host_recovery::TIMEOUT_SECONDS`], the channel killed it,
-//! and `stado doctor` reported `lukasz-macbook: not measured` -- the host
-//! running the sweep was the one host the sweep could never finish. Measured
-//! on that host: 28 seconds for 1,159 labels, against a 120-second cap it
-//! used to exceed.
+//! <domain>/<label>` calls each -- so a mac carrying a thousand labels would
+//! spawn something near fifteen thousand processes to answer questions that
+//! one pass answers for every label at once. That takes longer than
+//! [`crate::deploy::host_recovery::TIMEOUT_SECONDS`], the channel kills it,
+//! and `stado doctor` reports the host as `not measured` -- the host running
+//! the sweep is the one host the sweep can never finish. One pass finishes
+//! well inside the cap.
 
 mod posture;
 
@@ -55,12 +54,10 @@ listing=$(/bin/launchctl list)
 # `launchctl list` prints one domain, and this script used to enumerate from it
 # plus the three unit directories. A job loaded in the SYSTEM domain whose
 # plist has been deleted is in neither half, so it was never a candidate. That
-# is not a corner: on 2026-09-01 the label
-# `com.wisent.compute.service.com.wisent.compute.service.stado-agent-mini` was
-# loaded in the system domain with KeepAlive and no file on disk, and it
-# recreated an undeclared `stado agent` on charless-mac-mini for days while
-# `list --undeclared`, `list --unowned` and the reap keep-set each answered,
-# for three different reasons, that no label held it.
+# is not a corner: a doubly-prefixed label can stay loaded in the system
+# domain with KeepAlive and no file on disk, recreating an undeclared `stado
+# agent` for days while `list --undeclared`, `list --unowned` and the reap
+# keep-set each answer, for three different reasons, that no label holds it.
 holds=''
 for domain in system "user/$uid" "gui/$uid"; do
   block=$(/bin/launchctl print "$domain" 2>/dev/null) || continue
@@ -158,9 +155,9 @@ joined=$(
         # one of the two that can speak for the system domain. Its 0 is not a
         # pid: `launchctl print` writes 0 where `launchctl list` writes `-`,
         # for a job launchd holds and is not running. Read as a pid, that zero
-        # sent the 0.20.1 delivery on charless-mac-mini looking for the kernel
-        # image of pid 0 behind an idle stado-resolver unit, and the required
-        # delivery failed on a job that was running nothing at all.
+        # would send a delivery looking for the kernel image of pid 0 behind
+        # an idle unit, failing a required delivery on a job that runs
+        # nothing at all.
         if (hpid[l] ~ /^[1-9][0-9]*$/) pid = hpid[l]
         if (status == "" && hstatus[l] ~ /^-?[0-9]+$/) status = hstatus[l]
         # A domain the job is loaded in answers first; any domain that knows
@@ -226,9 +223,8 @@ printf '%s\n' "$joined" | while IFS="$(printf '\t')" read -r tag label pid statu
     # The variables the unit file hands its program. A launchd job inherits
     # almost nothing, so a plist that names none of what its program requires
     # is a unit that cannot work -- and it fails on its interval, quietly,
-    # forever. The beacon relay on lukasz-macbook carried HOME and PATH while
-    # its program required STADO_HOST_HEALTH_API_URL, and it failed every five
-    # minutes for three weeks.
+    # forever: a relay carrying only HOME and PATH whose program requires
+    # STADO_HOST_HEALTH_API_URL fails every run without anyone noticing.
     if [ "$details" != images ]; then
     env_keys=$(/usr/bin/plutil -extract EnvironmentVariables json -o - "$plist" 2>/dev/null \
       | /usr/bin/tr -d '{}"' | /usr/bin/tr ',' '\n' \

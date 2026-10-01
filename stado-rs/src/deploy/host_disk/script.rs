@@ -22,10 +22,9 @@ done
 /// Every device-backed filesystem and, on Linux, every block device the
 /// kernel sees — the `volumes` and `block_devices` fields. Read by both
 /// scopes. `df -Pk /` above measures the volume the fleet writes to; this
-/// section answers where the rest of the host's storage is. On 2026-09-18 a
-/// multi-terabyte disk was attached to ubuntu-server-rtx-pro-6000, `df`
-/// showed nothing of it because nothing had mounted it, and the only
-/// reading the product offered said the host had 29 GiB free. A disk with
+/// section answers where the rest of the host's storage is. A disk that
+/// nothing has mounted is invisible to `df`, and a reading built only from
+/// `df` would report the host's free space without it. A disk with
 /// no mountpoint is reported as attached and unmounted, never left out.
 const VOLUMES_SECTION: &str = r#"/bin/df -Pk 2>/dev/null | while IFS= read -r row; do
   set -- $row
@@ -60,8 +59,8 @@ const CLEANUP_LOCK_SECTION: &str = r#"lock="$HOME/@LOCK_PATH@"
 # `cleanup_in_progress` in an agent's capacity broadcast are the same fact
 # seen from two sides, and neither one names the holder -- so a host can
 # report both for hours, scan nothing, and refuse to admit work, with no
-# command able to say which process to look at. On charless-mac-mini that
-# cost most of a day. `lsof` is the only reader that answers it; the path is
+# command able to say which process to look at. `lsof` is the only reader
+# that answers it; the path is
 # fixed by the product, never supplied by an operator.
 if [ -e "$lock" ] && [ -x /usr/sbin/lsof ]; then
   /usr/sbin/lsof -Fpc -- "$lock" 2>/dev/null | {
@@ -147,12 +146,12 @@ fi
 /// its size — the `build_caches` census.
 ///
 /// The inventory above walks `$HOME` at depth two, which is the whole reason
-/// 843 GB of build output went unwatched on `lukasz-macbook` on 2026-09-19:
-/// `~/Documents/CodingProjects/Wisent` is one depth-two row, the per-repository
-/// `target/` trees under it are four and five deep, and the coverage report
-/// can only reason about paths the inventory named. The host declared the
-/// `build_caches` cleaner all along; the cleaner's root reached none of it and
-/// nothing said so, because nothing had measured it.
+/// build output can go unwatched: a workspace directory is one depth-two
+/// row, the per-repository `target/` trees under it are four and five deep,
+/// and the coverage report can only reason about paths the inventory named.
+/// A host can declare the `build_caches` cleaner all along while the
+/// cleaner's root reaches none of it, and nothing says so until something
+/// measures it.
 ///
 /// The marker is the same one the cleaner itself judges by: a `CACHEDIR.TAG`
 /// written by the tool that produced the bytes. No directory-name matching and

@@ -45,8 +45,8 @@ pub fn routed_item(routes: &Value, resource: &str) -> Result<RoutedField, Deploy
         field,
         // Advisory, NOT a gate. `routes list` answers these as the process
         // that asked, and over a host channel that process has no gpg: every
-        // route on charless-mac-mini reports `does not open: spawn gpg` while
-        // the broker service on that same host reads those items fine.
+        // route reports `does not open: spawn gpg` while the broker service
+        // on that same host reads those items fine.
         // Refusing on them would refuse every real sign-in for the wrong
         // reason, and redemption is where the item is actually read.
         readable: row

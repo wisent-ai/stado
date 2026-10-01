@@ -86,10 +86,9 @@ pub async fn vault_token_sync(
     // A shared-vault destination reads the owner through its resolver route
     // and holds no vault of its own; the payload verifies its bearer against
     // the owner's grant and never opens a destination vault. Requiring one
-    // refused `--shared-vault` onto lukasz-macbook on 2026-09-27 with
-    // `declares no vault authority`, after its local copy had been retired as
-    // `stado credentials vault` directs, so a re-minted owner bearer could not
-    // reach it.
+    // would refuse `--shared-vault` onto a host whose local copy was retired
+    // as `stado credentials vault` directs, with `declares no vault
+    // authority`, so a re-minted owner bearer could never reach it.
     let destination = if mode.shared_vault() {
         let target = crate::deploy::host_channel::canonical_target(target)
             .await

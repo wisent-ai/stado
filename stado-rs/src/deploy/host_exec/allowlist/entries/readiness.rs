@@ -25,15 +25,13 @@ pub const READINESS_READS: &[ApprovedCommand] = &[
         why: "prints the calling account's own crontab. `-l` is the read-only verb and takes \
               no argument: `-e` opens an editor, `-r` deletes the table, and neither is in \
               this table nor reachable through it; `-u <user>` would read another account's \
-              and is deliberately absent. Added 2026-08-31: a process nobody could name had \
-              been overwriting charless-mac-mini's janitor state file every four minutes \
-              since at least that morning, with the default outcome and no writer \
-              attribution, while the queue agent's own broadcast reported a healthy pass in \
-              the same second. It is not a launchd job - 47 undeclared fleet labels on that \
-              host, none of them a janitor - and it holds the run lock too briefly to be \
-              caught by sampling, which leaves a periodic table as the only remaining place \
-              it can be declared. Every reader in this group could see the file change and \
-              none could name the writer",
+              and is deliberately absent. A process nobody can name can overwrite a \
+              host's janitor state file every few minutes, with the default outcome and \
+              no writer attribution, while the queue agent's own broadcast reports a \
+              healthy pass in the same second. When it is not a launchd job and holds the \
+              run lock too briefly to be caught by sampling, a periodic table is the only \
+              remaining place it can be declared. Every other reader in this group can see \
+              the file change and none can name the writer",
     },
     ApprovedCommand {
         argv: &["/usr/bin/uname", "-a"],
@@ -43,13 +41,12 @@ pub const READINESS_READS: &[ApprovedCommand] = &[
     ApprovedCommand {
         argv: &["/usr/bin/cat", "/sys/kernel/security/lsm"],
         why: "prints which Linux security modules this kernel actually activated. A detached \
-              Jeden session on ubuntu-server-rtx-pro-6000 refused on 2026-09-20 with \
-              `enforced sandbox unavailable: linux-landlock-seccomp-cgroup: sandbox launcher \
-              not active (landlock=false, cgroup_v2=true)`, and the fleet could not read that \
-              fact for itself: `cat /sys/kernel/security/lsm` came back `not an approved \
-              host-exec command`, so whether the kernel carries Landlock was answerable only \
-              by running a session and watching it fail. The path is fixed, the file is a \
-              read-only kernel list of module names, and no argument reaches the command",
+              Jeden session can refuse with `enforced sandbox unavailable: \
+              linux-landlock-seccomp-cgroup: sandbox launcher not active (landlock=false, \
+              cgroup_v2=true)`, and without this entry the fleet could not read that fact \
+              for itself: whether the kernel carries Landlock was answerable only by running \
+              a session and watching it fail. The path is fixed, the file is a read-only \
+              kernel list of module names, and no argument reaches the command",
     },
     ApprovedCommand {
         argv: &["/usr/bin/sw_vers"],
@@ -199,9 +196,8 @@ pub const READINESS_READS: &[ApprovedCommand] = &[
         why: "prints the uv package installer's version, probing the two absolute paths Weles's \
               kimi login trajectory itself probes rather than the login shell's PATH -- which \
               is a different question and answers `not found` on a host that has the binary. \
-              Added 2026-09-02: that trajectory now resolves a pinned Kimi CLI version and \
-              installs it through uv when the host carries a different one, and \
-              charless-mac-mini carries a different one, so whether that repair can complete \
+              That trajectory resolves a pinned Kimi CLI version and installs it through uv \
+              when the host carries a different one, so whether that repair can complete \
               there is entirely this one fact. `--version` takes no argument and installs \
               nothing",
     },

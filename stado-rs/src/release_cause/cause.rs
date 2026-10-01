@@ -47,23 +47,19 @@ pub enum QuarantineCause {
     /// Its own class because the repair is never in the release: Brama's
     /// `/readyz` returns a report computed on a timer, so a probe it cannot
     /// answer within three seconds is a host that could not run the process,
-    /// not a candidate that is broken. On charless-mac-mini on 2026-09-19 the
-    /// desired Brama digest was quarantined for it while the host carried
-    /// 3.6 GiB of swap in use at load 3.9, and the record read
-    /// `unclassified`, so the register blamed the candidate and the host's
-    /// own numbers were never looked at.
+    /// not a candidate that is broken. Recorded as `unclassified`, such a
+    /// quarantine — taken while the host carries heavy swap and load — blames
+    /// the candidate, and the host's own numbers are never looked at.
     ReadinessProbeUnanswered,
     /// The release process the agent started is simply gone: it bound its
     /// port, printed that it was listening, and then vanished.
     ///
     /// Its own class, and host-caused like the unanswered probe, because the
-    /// bytes demonstrably ran. On charless-mac-mini on 2026-09-21 the
-    /// desired Skarbiec digest was quarantined with `active release lost
-    /// readiness: pid 97314 is gone; stderr … skarbiec API listening on
-    /// http://127.0.0.1:18895` while the host published
-    /// `memory_pressure_active` with 93% of its swap in use — the operating
-    /// system had reaped the process. The record read `unclassified`, so the
-    /// agent never retired it, the vault stayed dead, and with it every
+    /// bytes demonstrably ran: `active release lost readiness: pid <pid> is
+    /// gone; stderr … API listening on http://127.0.0.1:<port>` while the
+    /// host publishes `memory_pressure_active` with most of its swap in use —
+    /// the operating system reaped the process. Recorded as `unclassified`,
+    /// the agent never retires it, the vault stays dead, and with it every
     /// credential read, the object authorization the release pipeline needs
     /// and the retagging that would repair a subscription's identity.
     ReleaseProcessVanished,
@@ -72,13 +68,10 @@ pub enum QuarantineCause {
     /// and exited.
     ///
     /// Its own class because the repair is in neither the release nor the
-    /// host's resources: two declarations claim one loopback port. On
-    /// `lukasz-macbook` on 2026-09-20 the Skarbiec release's stable bind
-    /// `127.0.0.1:18787` was held by the resolver's own
-    /// `weles-admission` adapter for consumer
-    /// `skarbiec-weles-credential-client`, and the only trace was
-    /// `Address already in use (os error 48)` inside a stderr tail the
-    /// register filed as `unclassified`.
+    /// host's resources: two declarations claim one loopback port — for
+    /// example a release's stable bind held by a resolver adapter for some
+    /// consumer — and the only trace is `Address already in use (os error
+    /// 48)` inside a stderr tail the register would file as `unclassified`.
     StableBindOccupied,
     /// Nothing in the retained evidence names a cause.
     ///

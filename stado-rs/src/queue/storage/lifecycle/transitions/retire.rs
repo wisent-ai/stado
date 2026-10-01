@@ -189,9 +189,9 @@ impl JobStorage {
     /// retired state. A different value was written outside this state machine.
     /// Raising it into the caller stops far more than the job it describes:
     /// [`Self::claim_queued_job`] recovers before every claim, so one
-    /// uninterpretable record ends the agent's whole tick, and on
-    /// charless-mac-mini it did — the loop died and restarted every few seconds
-    /// for hours while seven pinned jobs waited and every gate read healthy.
+    /// uninterpretable record would end the agent's whole tick — the loop
+    /// dying and restarting every few seconds for hours while pinned jobs wait
+    /// and every gate reads healthy.
     ///
     /// So the world decides instead of the label. A destination that already
     /// carries the promised job in the promised state proves the move

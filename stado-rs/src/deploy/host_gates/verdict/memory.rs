@@ -5,11 +5,9 @@
 //! keeping up, and a blocker when the pressure is unresolved. Memory had two
 //! totals and a raw flag inside `published_diagnostics`.
 //!
-//! On 2026-09-10 `skarbiec` could not publish `linux-amd64`: the only Linux
-//! builder was refusing placement, and `stado host gates
-//! ubuntu-server-rtx-pro-6000` said `accepting_jobs: false` with 62.8 GiB of
-//! 123.0 GiB free RAM, `blockers: [host_diagnostic_incomplete]`, and nothing
-//! about memory at all. The reason was published; no surface read it.
+//! A Linux builder can refuse placement — `accepting_jobs: false` with half
+//! its RAM free, `blockers: [host_diagnostic_incomplete]`, and nothing about
+//! memory at all — while the reason is published and no surface reads it.
 
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};

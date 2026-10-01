@@ -14,12 +14,11 @@ use crate::cli::CmdError;
 /// The marker is the address consumers on THIS host use, and for a service
 /// served elsewhere that address is never the serving host's own loopback
 /// port. Publishing skipped those services entirely, so the file either did
-/// not exist or still held whatever wrote it last: on `lukasz-macbook`
-/// `brama.local` named `127.0.0.1:8080`, which on that machine belongs to an
-/// unrelated service, and `weles-admission.local` named `8788` while the
-/// documented answer for a non-serving host is its adapter at `17614`. Every
-/// consumer reading those files dialled the wrong thing for as long as they
-/// existed.
+/// not exist or still held whatever wrote it last: a marker could name a
+/// loopback port that on that machine belongs to an unrelated service, or the
+/// serving host's port where a non-serving host must name its adapter. Every
+/// consumer reading such a file dials the wrong thing for as long as it
+/// exists.
 ///
 /// One adapter is an address; several are a question this function may not
 /// answer, because adapters are per consumer and the marker's name carries no

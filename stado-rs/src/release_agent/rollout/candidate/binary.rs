@@ -24,14 +24,13 @@ pub(crate) async fn active_binary(
     target: &ReleaseTargetPolicy,
 ) -> Result<ActiveBinary, String> {
     let state = load_state(target, product, target_name)?;
-    // The refusal has to say where to look. On 2026-09-21 this sentence
-    // stopped every credential write on charless-mac-mini while
-    // `stado release host-state` reported the declared skarbiec 0.3.12
-    // running, attested and in sync: the host runs a delivered binary under
-    // its own launchd unit, and release control was waiting for a candidate
-    // it could never spawn because that unit held the port. Two mechanisms
-    // for one product on one host read as a contradiction until both reads
-    // are named.
+    // The refusal has to say where to look. This sentence can stop every
+    // credential write on a host while `stado release host-state` reports the
+    // declared binary running, attested and in sync: the host runs a
+    // delivered binary under its own launchd unit, and release control waits
+    // for a candidate it can never spawn because that unit holds the port.
+    // Two mechanisms for one product on one host read as a contradiction
+    // until both reads are named.
     let active = state.active.as_ref().ok_or_else(|| {
         format!(
             "{product} is release-controlled on {target_name} but has no observed active release \

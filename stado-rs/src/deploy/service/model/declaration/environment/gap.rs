@@ -72,20 +72,15 @@ pub enum EnvironmentGap {
 /// One product whose declared environment cannot reach the unit that serves
 /// it on one host.
 ///
-/// Measured on `lukasz-macbook` on 2026-09-02, and the measurement is what
-/// fixed this check's shape. `release_control.products.skarbiec.environment`
-/// declares `SKARBIEC_AUDIT_FILE` and `SKARBIEC_VAULT_FILE`; that product's
-/// `targets` map names `charless-mac-mini` only, and in fact no product
-/// names `lukasz-macbook` at all. The host nevertheless declares
-/// `managed_versions.skarbiec` and runs
-/// `com.wisent.compute.service.skarbiec-control-plane`, which the registry
-/// adopted as inventory on 2026-09-01 with no program, no args and no
-/// environment recorded — three weeks after the plist was hand-created. Its
-/// `EnvironmentVariables` is an empty dict and its only `ProgramArguments`
-/// entry is a hand-authored launcher that exports `SKARBIEC_VAULT_FILE` and
-/// never mentions `SKARBIEC_AUDIT_FILE`, so the journal went to the
-/// unpinned default and reached 573,321,978 bytes while the sibling unit
-/// that pins it held 34,486,246.
+/// A product's `release_control.products.<product>.environment` can declare
+/// `SKARBIEC_AUDIT_FILE` and `SKARBIEC_VAULT_FILE` while its `targets` map
+/// names other hosts only, and a host that nevertheless declares
+/// `managed_versions.skarbiec` runs a hand-created unit the registry adopted
+/// as inventory with no program, no args and no environment recorded. Its
+/// `EnvironmentVariables` is empty and its only `ProgramArguments` entry is a
+/// hand-authored launcher that exports `SKARBIEC_VAULT_FILE` and never
+/// mentions `SKARBIEC_AUDIT_FILE`, so the journal goes to the unpinned
+/// default and grows far beyond the sibling unit that pins it.
 ///
 /// Nothing reported any of it. Every existing check either validated the
 /// declaration's own syntax or compared it against another declaration:

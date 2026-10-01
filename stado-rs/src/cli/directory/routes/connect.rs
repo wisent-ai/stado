@@ -100,9 +100,8 @@ pub(in crate::cli::directory) async fn connect(
     // adapter, because that is the only address on this machine that leads to
     // it. These services bind loopback on their own host by design, so
     // `scheme://<that host's address>:<its port>` names a socket nobody outside
-    // that host can open -- and this verb answered exactly that until
-    // 2026-09-04, when `connect brama` from lukasz-macbook returned
-    // `http://100.120.25.24:8080` and failed. `ARCHITECTURE.md` states the rule
+    // that host can open, so answering with it hands the caller an address
+    // that fails. `ARCHITECTURE.md` states the rule
     // this broke: a client "must look up its own target rather than reconstruct
     // an address from a host name".
     //
@@ -110,8 +109,8 @@ pub(in crate::cli::directory) async fn connect(
     // which already declares one loopback bind per (service, consumer) pair on
     // every machine that consumes a service. Nothing new is declared here; the
     // declaration was simply never read, so every client that needed a working
-    // address grew a hand-written pointer file beside it. Lem carried one for
-    // months with `127.0.0.1:17621` typed into it.
+    // address grew a hand-written pointer file beside it, with a loopback
+    // port typed into it.
     //
     // `--consumer` selects among a machine's adapters for the same service. One
     // adapter needs no choosing; several without a named consumer is ambiguous

@@ -24,10 +24,9 @@ use super::home_anchored;
 /// Every candidate's directory goes on `PATH` before the exec, and that is not
 /// convenience. `/opt/homebrew/bin/npm` is a JavaScript shim whose first line
 /// is `#!/usr/bin/env node`, so executing it on a channel whose `PATH` does
-/// not carry Homebrew answers `env: node: No such file or directory` — which
-/// is what `stado host exec charless-mac-mini -- npm --version` answered on
-/// 2026-09-03 while `node --version` on the same host answered `v25.9.0` from
-/// the directory beside it. The interpreter a shim needs is always a sibling
+/// not carry Homebrew answers `env: node: No such file or directory` while
+/// `node --version` on the same host answers from the directory beside it.
+/// The interpreter a shim needs is always a sibling
 /// of the shim, so the directories this table already names are exactly the
 /// ones that make it runnable. They are prepended, not appended: a host with
 /// two Node installations must resolve the shim against the one whose path

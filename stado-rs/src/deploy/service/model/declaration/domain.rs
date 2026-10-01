@@ -49,15 +49,14 @@ const ACCOUNTS_PREFIX: &str = "/Users/";
 /// A unit declared in a launchd domain the host it is declared on cannot
 /// have.
 ///
-/// `com.wisent.compute.service.stado-agent-mini` was declared as a user
-/// LaunchAgent at `/Users/charles/Library/LaunchAgents/...` on
-/// `control-host`, a host declared always-on in both `role` and
-/// `host_heuristic` and with no graphical session at all: `/dev/console` is
-/// root's, `who` prints nothing, and the login's own `launchctl list` holds
-/// no `com.wisent.*` label. `launchctl bootstrap user/501 <plist>` answers
-/// `Bootstrap failed: 5: Input/output error` there and `gui/501` does not
-/// exist, so the declaration named a domain that could never load it. Every
-/// other always-on unit on that host is a system LaunchDaemon under
+/// A unit declared as a user LaunchAgent at
+/// `/Users/<user>/Library/LaunchAgents/...` on a host declared always-on in
+/// both `role` and `host_heuristic`, with no graphical session at all —
+/// `/dev/console` is root's, `who` prints nothing, and the login's own
+/// `launchctl list` holds no `com.wisent.*` label — names a domain that can
+/// never load it: `launchctl bootstrap user/<uid> <plist>` answers
+/// `Bootstrap failed: 5: Input/output error` and `gui/<uid>` does not exist.
+/// Every other always-on unit on such a host is a system LaunchDaemon under
 /// [`DAEMON_DIR`].
 ///
 /// The declaration is checkable without going anywhere: the path says the

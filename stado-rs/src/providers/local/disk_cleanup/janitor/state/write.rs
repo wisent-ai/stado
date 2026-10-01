@@ -76,13 +76,12 @@ pub(crate) fn write_state(
     // A janitor that cannot take the run lock because a workload holds it in
     // shared mode has been PREVENTED. That is a modelled, healthy answer —
     // `acquire_workload_lock` takes the lock for the job's whole duration on
-    // purpose — but until this stamp existed nothing recorded it, so
+    // purpose — but without this stamp nothing recorded it, so
     // `cleanup_success_age_seconds` downstream could not tell a prevented
-    // janitor from a silent one and inferred a stall from the absence. On
-    // 2026-09-03 charless-mac-mini ran one job for 42 minutes, roughly 40
-    // in-process passes hit `lock_busy` at the ten-second agent tick, none of
-    // them left a trace, and `host gates` turned `claiming` off on a host with
-    // 17.3 GiB free, a 15 GiB watermark and `disk_pressure_unresolved: false`.
+    // janitor from a silent one and inferred a stall from the absence: one
+    // long job, dozens of in-process passes hitting `lock_busy` without a
+    // trace, and `host gates` turning `claiming` off on a host with free
+    // space above its watermark and `disk_pressure_unresolved: false`.
     //
     // A live workload takes only the kernel's shared hold; it does not write
     // the exclusive janitor holder record. Its expected answer is therefore

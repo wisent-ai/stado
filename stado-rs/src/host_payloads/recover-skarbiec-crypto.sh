@@ -8,10 +8,9 @@
 # a keybox lock, is the wedge. A keyboxd or gpg-agent of this account holding
 # more than SKARBIEC_GPG_DAEMON_MEMORY_LIMIT_MB (Skarbiec's own ceiling; 1024
 # unset) is the bloat: `gpg` never stops its daemons and keyboxd grows with
-# every lookup, and on charless-mac-mini it held 15 GiB after twelve days
-# while readiness answered ok, so the memory policy asked this program and it
-# refused. The footprint read here is the physical one — resident, compressed
-# and swapped pages together — because `ps` reported that daemon at 327 MiB.
+# every lookup, to many GiB over days while readiness answers ok. The
+# footprint read here is the physical one — resident, compressed and swapped
+# pages together — because `ps` reports such a daemon at a fraction of it.
 set -eu
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH

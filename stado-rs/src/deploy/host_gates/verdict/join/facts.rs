@@ -53,10 +53,10 @@ impl Facts {
         // an always-on host several processes make them: the queue agent every ten
         // seconds, a `disk-cleanup --watch` unit on its own timer, and any of them
         // may be a long-running process still holding a configuration that resolves
-        // a superseded policy. On charless-mac-mini that produced `low watermark
-        // 20 GiB, target 18 GiB` — a floor above its own ceiling, from a stale
-        // 20/25 policy — alternating with the canonical 15/18 between one reading
-        // and the next, while the registry said 15 throughout.
+        // a superseded policy. That can produce a low watermark above the
+        // target — a floor above its own ceiling, from a stale policy —
+        // alternating with the canonical values between one reading and the
+        // next, while the registry says the same thing throughout.
         //
         // So the declaration wins. It is what the fleet decided, this command has
         // just read it, and a watermark the operator cannot reconcile with the

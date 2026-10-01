@@ -32,10 +32,10 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
     ApprovedCommand {
         argv: &["/usr/sbin/sysctl", "vm.swapusage"],
         why: "reads the macOS swap file's total, used and free bytes; one fixed read-only \
-              key, no path and no write. Added 2026-09-06: `vm_stat` further down this list \
-              already answered the page counters, and page counters alone cannot say whether \
-              a host is out of memory or merely paging. charless-mac-mini held 597 MiB free \
-              with 4.7 GiB of its 6 GiB swap in use while every .NET runner on it failed to \
+              key, no path and no write. `vm_stat` further down this list \
+              answers the page counters, and page counters alone cannot say whether \
+              a host is out of memory or merely paging: a host can hold a few hundred MiB \
+              free with most of its swap in use while every .NET runner on it fails to \
               start with E_OUTOFMEMORY",
     },
     ApprovedCommand {
@@ -52,11 +52,9 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
             "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID,MODEL",
         ],
         why: "lists every block device the Linux kernel sees, mounted or not, with a fixed \
-              column set and no path argument; lsblk writes nothing. Added 2026-09-18: a \
-              multi-terabyte disk was attached to ubuntu-server-rtx-pro-6000 and `df -h` \
-              could not show it, because an unmounted disk has no filesystem row, so the \
-              only approved read of the host's storage said the host had 29 GiB while the \
-              operator knew it had terabytes",
+              column set and no path argument; lsblk writes nothing. An unmounted disk has \
+              no filesystem row, so `df -h` cannot show it, and the only approved read of \
+              the host's storage would report a fraction of what the host really holds",
     },
     ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "2", "/"],
@@ -103,12 +101,12 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
         argv: &["/usr/bin/du", "-xk", "-d", "1", "/private/tmp"],
         why: "attributes the OS scratch directory one level deep; -x stays on one filesystem, \
               -k is a fixed unit, the depth and the path are fixed words, and du writes \
-              nothing. Added 2026-09-04: charless-mac-mini reached 1.1 GB free of 239 GB, \
-              which took the object API, the registry authority and every Skarbiec \
-              decryption on that host down at once, and the root-level attribution named \
-              /private/tmp as the second largest consumer at 14.2 GB while every declared \
-              cleaner and reclaim stage measured zero. Nothing in this table could say what \
-              those bytes were, so they could neither be defended nor reclaimed",
+              nothing. A host near a full disk takes the object API, the registry authority \
+              and every Skarbiec decryption on it down at once, and the root-level \
+              attribution can name /private/tmp as a large consumer while every declared \
+              cleaner and reclaim stage measures zero. Without this read nothing in this \
+              table could say what those bytes are, so they could neither be defended nor \
+              reclaimed",
     },
     ApprovedCommand {
         argv: &["/bin/ls", "-lt", "/private/tmp"],
@@ -151,11 +149,10 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
         why: "reports resident memory per process, by executable name only. The two `ps` \
               entries around it show identity, parentage and elapsed time but never a byte \
               count, so the one question a thrashing host forces - which process ate the \
-              memory - had no answer in this table at all. Added 2026-09-03: \
-              charless-mac-mini was holding ~2.9 GB in the compressor with ~88 MB free and \
-              3,277,146 swapouts, which stalled every fresh ssh session on it for 12-25 s \
-              and tripped an unrelated preflight's hard timeout; `vm_stat` proved the \
-              pressure was real but could not name a single owner of it. `-o rss` is a \
+              memory - had no answer in this table at all. A host holding gigabytes in \
+              the compressor with a few MB free stalls every fresh ssh session on it for \
+              many seconds and trips unrelated preflights; `vm_stat` proves the \
+              pressure is real but cannot name a single owner of it. `-o rss` is a \
               kernel counter and `-o comm` is the executable's name; `-o command` - the \
               full argv, where tokens and passwords are passed - is deliberately NOT in \
               this table and cannot be reached through it. The selector is fixed to `ax` \

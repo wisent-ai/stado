@@ -140,8 +140,8 @@ pub async fn converge_result(
     // One session for the whole visit. Outside a session every remote command
     // fetches the target's private key from Skarbiec and, on a multi-route
     // host, probes a route before it runs; the software report alone is a
-    // few hundred commands, and paying that per command is how one refresh of
-    // charless-mac-mini came to take thirteen minutes.
+    // few hundred commands, and paying that per command turns one refresh of
+    // a host into many minutes.
     host_channel::with_session(&resolved, &runner, async {
         Ok(visit(resolved.clone(), &declared, apply, &runner).await)
     })

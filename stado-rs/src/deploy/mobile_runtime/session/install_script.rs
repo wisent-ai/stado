@@ -80,12 +80,11 @@ update_installed_drivers() {
   drivers_updated=yes
   out=$(NPM_CONFIG_LEGACY_PEER_DEPS=true "$appium_bin" driver update installed --unsafe 2>&1) \
     || printf 'STADO_RUNTIME\tfailed\tdriver update: %s\n' "$(diagnose "$out")"
-  # The claim is checked against the world before it is made. The first
-  # version of this printed "updated" on a zero exit, and on
-  # charless-mac-mini that zero exit sat beside a `mac2` still at 1.20.5 with
+  # The claim is checked against the world before it is made. Printing
+  # "updated" on a zero exit can report a driver still at its old version with
   # the server still calling it incompatible -- a report of a state nobody
-  # had verified, which is the whole defect class this module exists to
-  # avoid. So: re-read the server's own verdict and say what it says.
+  # verified, which is the whole defect class this module exists to avoid.
+  # So: re-read the server's own verdict and say what it says.
   after=$("$appium_bin" driver list --installed 2>&1 || printf '')
   case "$after" in
     *"potential problem"*)
@@ -134,11 +133,10 @@ done
 # The server's own verdict on its driver tree, acted on rather than printed.
 #
 # Appium validates every driver in its manifest at startup and says so:
-# `Driver "mac2" has 1 potential problem`. On charless-mac-mini that is a
-# stale `mac2@1.20.5` beside a declared 3.7.0 server -- it never blocked THIS
-# repair, because `uiautomator2` happened to install before it was reached,
-# so nothing here would have noticed and the deadlock would have been waiting
-# for whichever install came next. Reading the server's own complaint is not
+# `Driver "mac2" has 1 potential problem`. A stale driver beside a newer
+# server need not block THIS repair, because another driver may install
+# before it is reached, so nothing here would notice and the deadlock would
+# wait for whichever install comes next. Reading the server's own complaint is not
 # inference about npm's resolver; it is the declared authority on this tree
 # stating that a driver disagrees with it, and the same conservative update
 # answers it. Undeclared drivers are still only updated, never removed.

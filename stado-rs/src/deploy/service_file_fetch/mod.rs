@@ -9,16 +9,15 @@
 //! channel. The consequence is that it can diagnose a file and can never
 //! reproduce one byte of it.
 //!
-//! That gap has a name on this fleet. `$HOME/.stado/bin/weles-release-cutover`
-//! on charless-mac-mini is 4357 bytes of live operator tooling that is checked
-//! into no repository: it rewrote `$HOME/.config/weles/worker.env` on every
-//! launchd restart for days, and the only copy of the code doing it was on the
-//! host. `stado host exec` is an allowlist of argument-free read-only programs
-//! with no file read in it. `service file-sync` moves a file the other way.
-//! `service env-show` would have returned a redacted paraphrase. So the only
-//! way to put that script under version control was to copy it off the box by
-//! hand, outside the approved channel — which is the one thing the fleet-wide
-//! "everything through Stado" rule exists to prevent.
+//! That gap matters: live operator tooling checked into no repository — a
+//! script under `$HOME/.stado/bin` that rewrites a product's env file on
+//! every launchd restart — exists only on the host. `stado host exec` is an
+//! allowlist of argument-free read-only programs with no file read in it.
+//! `service file-sync` moves a file the other way. `service env-show` returns
+//! a redacted paraphrase. So the only way to put such a script under version
+//! control would be to copy it off the box by hand, outside the approved
+//! channel — which is the one thing the fleet-wide "everything through
+//! Stado" rule exists to prevent.
 //!
 //! Three properties are deliberate:
 //!

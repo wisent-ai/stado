@@ -9,9 +9,9 @@
 //!
 //! The verdict is not computed here. It is the same function the CLI prints
 //! from, for the reason the whole capability exists: a surface that showed
-//! the fields and left the judgement to whoever was reading is what let a
-//! `report`-mode declaration look like management on charless-mac-mini while
-//! its pre-check runner was being killed for memory.
+//! the fields and left the judgement to whoever was reading would let a
+//! `report`-mode declaration look like management while a host's pre-check
+//! runner was being killed for memory.
 
 use serde_json::{json, Value};
 

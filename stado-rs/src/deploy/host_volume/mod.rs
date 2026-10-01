@@ -1,13 +1,11 @@
 //! `stado space volume mount TARGET --device NAME --mount-point PATH`: give a
 //! disk the host already has a place in its filesystem tree, durably.
 //!
-//! On 2026-09-18 ubuntu-server-rtx-pro-6000 carried `/dev/sdb1`, 16.4 TiB of
-//! xfs, attached and mounted nowhere, while the fleet refused a 22 GiB build
-//! for want of room on the 98 GiB root volume. The disk had been mounted at
-//! `/mnt/wd16tb` two weeks earlier and had come back after a reattach with
-//! no fstab line to bring it up. `stado space report` and `stado host gates`
-//! now name such a disk ([`crate::deploy::host_gates::DISK_ATTACHED_UNMOUNTED`]);
-//! this module is the command that mounts it.
+//! A large disk can sit attached and mounted nowhere — after a reattach with
+//! no fstab line to bring it up — while the fleet refuses a build for want of
+//! room on the root volume. `stado space report` and `stado host gates` name
+//! such a disk ([`crate::deploy::host_gates::DISK_ATTACHED_UNMOUNTED`]); this
+//! module is the command that mounts it.
 //!
 //! The program mounts, it never formats: a device with no filesystem is
 //! refused by name, because the one command that can write a filesystem

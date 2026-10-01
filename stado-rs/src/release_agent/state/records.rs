@@ -117,9 +117,8 @@ impl QuarantineRecord {
     /// unclassified stays unclassified.
     ///
     /// Stored first, and that order is load-bearing: the agent classifies the
-    /// whole log, while the reason kept here is a bounded tail of it. On
-    /// charless-mac-mini the two routing records prove it — their reason stops
-    /// before the line their stored evidence quotes.
+    /// whole log, while the reason kept here is a bounded tail of it, and the
+    /// tail can stop before the line the stored evidence quotes.
     ///
     /// It lives on the record because three readers need one answer: the
     /// agent deciding whether it may retire this record by itself,

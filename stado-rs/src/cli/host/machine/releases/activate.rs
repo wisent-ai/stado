@@ -6,8 +6,8 @@ use crate::cli::CmdError;
 /// The host installs its own releases by running the installer that ships
 /// inside the active release. When that copy is broken the host cannot install
 /// the release that repairs it, and no amount of correct delivery reaches it:
-/// charless-mac-mini sat with 0.5.43 staged in its local release root and an
-/// activator logging a syntax error once a minute. This runs the staged copy
+/// the fix sits staged in its local release root while the activator logs a
+/// syntax error once a minute. This runs the staged copy
 /// instead of the installed one. Nothing else changes - same env file, same
 /// digest contract, same script.
 pub async fn activate_staged_release(

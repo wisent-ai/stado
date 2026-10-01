@@ -68,10 +68,9 @@ pub(in crate::providers::local::disk_cleanup::release_store) fn host_pinned_vers
 ///
 /// Not just this host's target. A release version a host declares must
 /// survive on whichever host carries the store, and the host that carries
-/// the store is usually not the host that runs the binary: on 2026-09-04 the
-/// store lived on `charless-mac-mini` while the declarations that needed
-/// those bytes belonged to every other target in the fleet. Reading only the
-/// local target's declaration would leave that gap exactly as it was.
+/// the store is usually not the host that runs the binary: the declarations
+/// that need those bytes belong to every other target in the fleet. Reading
+/// only the local target's declaration would leave that gap open.
 ///
 /// The registry document is taken as `Value` rather than as parsed targets
 /// because this cleaner must not fail closed on a target shape a newer

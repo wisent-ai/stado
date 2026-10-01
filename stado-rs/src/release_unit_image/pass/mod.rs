@@ -75,7 +75,7 @@ pub(crate) async fn revisit_once(
     // — the whole reason `observe_unit_images` takes `local_units`. `--target`
     // is an operator-supplied string, so this machine's own target is resolved
     // from its hostname the way `service refresh-image` does. Without it a
-    // `--target charless-mac-mini` run on a laptop would read the laptop's
+    // `--target <other host>` run on a laptop would read the laptop's
     // process table and kickstart the laptop's units under another host's name.
     let hostname = crate::providers::vast::system_hostname();
     let this_machine = registry

@@ -142,9 +142,8 @@ fn named(point: &str, code: Code, detail: &str) -> Option<Named> {
 ///
 /// For an envelope a log tail cut in half: the keys are written before the
 /// long `detail`, so they survive a truncation that stops the document from
-/// parsing. Every quarantine record on charless-mac-mini carrying the
-/// 2026-09-18 routing failure is in exactly that shape — the register's own
-/// bound landed inside `detail`.
+/// parsing. A quarantine record whose register bound lands inside `detail` is
+/// in exactly that shape.
 fn field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let opening = format!("\"{key}\":");
     let start = text.find(&opening)? + opening.len();

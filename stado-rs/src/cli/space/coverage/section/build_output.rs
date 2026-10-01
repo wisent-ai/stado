@@ -1,13 +1,13 @@
 //! What the host holds in build output, and whether the declared cleaner
 //! reaches it.
 //!
-//! A declaration is not a measurement. `lukasz-macbook` declared the
-//! `build_caches` cleaner for months; its root resolved to the fleet's own
-//! build cache, the operator's 843 GB of tagged `target/` trees sat four and
-//! five levels down in a checkout, and every surface said the host was fine
-//! while the volume stood at 97% and a release build failed for want of
-//! scratch. Nothing was broken and nothing was missing: the cleaner covered
-//! what it was pointed at, and nobody was told what it was not pointed at.
+//! A declaration is not a measurement. A host can declare the `build_caches`
+//! cleaner while its root resolves to the fleet's own build cache and
+//! hundreds of GB of tagged `target/` trees sit several levels down in a
+//! checkout; every surface then says the host is fine while the volume fills
+//! and a release build fails for want of scratch. Nothing is broken and
+//! nothing is missing: the cleaner covers what it is pointed at, and nobody
+//! is told what it is not pointed at.
 //!
 //! This block is that sentence. It is computed from the census the disk
 //! report already collects and the cleaner roots the registry already

@@ -20,7 +20,7 @@ impl JobStorage {
         // document is rewritten, so the rewrite never lands under a fence
         // another writer is about to retire — and an operator's own
         // `job set-priority` becomes a way to finish a transition the agent
-        // cannot, which is what cleared `charless-mac-mini` on 2026-09-03.
+        // cannot.
         self.recover_job_transition(job_id).await?;
         for _ in 0..3 {
             let Some(versioned) = self.read_text_versioned(&path).await? else {
@@ -116,8 +116,7 @@ impl JobStorage {
     /// is pinned to and the capacity it is assigned to. Goes through the same
     /// rewrite as priority and assignment so a transition still pending on
     /// the job is recovered before the document is touched; a placement
-    /// written under a pending transition is what left `charless-mac-mini`
-    /// refusing to claim on 2026-09-03.
+    /// written under a pending transition leaves a host refusing to claim.
     pub async fn update_queued_placement(
         &self,
         job_id: &str,

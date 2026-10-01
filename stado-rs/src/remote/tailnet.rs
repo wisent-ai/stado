@@ -1,15 +1,14 @@
 //! The tailnet's own name-to-address map, read from the local Tailscale node.
 //!
-//! Every Stado origin in this fleet is a MagicDNS name — the release channel is
-//! `https://charless-mac-mini.tail6443b3.ts.net` — and reaching it depends on
-//! the machine's resolver knowing that name. On 2026-09-02 the control-plane
-//! runner's resolver for `tail6443b3.ts.net` listed `1.1.1.1` and `8.8.8.8`,
-//! which cannot answer a MagicDNS name at all: the release origin resolved to
-//! the public `ts.net` front end on one attempt and to nothing on the next,
-//! while `100.100.100.100` answered `100.120.25.24` throughout and that address
-//! served the release route in 82 ms. A release train read 20 MB of one
-//! immutable object per 55 seconds and was cancelled at 55 minutes with the
-//! object API healthy the whole time.
+//! Every Stado origin in this fleet is a MagicDNS name —
+//! `https://<host>.<tailnet>.ts.net` — and reaching it depends on the
+//! machine's resolver knowing that name. A runner whose resolver for the
+//! tailnet domain lists `1.1.1.1` and `8.8.8.8` cannot answer a MagicDNS name
+//! at all: the origin resolves to the public `ts.net` front end on one attempt
+//! and to nothing on the next, while `100.100.100.100` answers the tailnet
+//! address throughout and that address serves the route in milliseconds. A
+//! release train then crawls through one immutable object and is cancelled
+//! with the object API healthy the whole time.
 //!
 //! Stado's own fleet channel never had that problem, because it reaches hosts
 //! at the addresses the registry declares. This module gives the HTTP clients

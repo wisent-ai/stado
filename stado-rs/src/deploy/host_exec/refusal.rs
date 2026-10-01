@@ -8,7 +8,7 @@ use super::allowlist::allowlist;
 /// A host-exec failure that states its own [`crate::primitives::failure::FailureCode`]
 /// where it is created, instead of leaving one to be guessed from its prose.
 ///
-/// On 2026-09-03 `host exec charless-mac-mini -- ls -la …` was refused by the
+/// An unapproved `host exec <host> -- ls -la …` was refused by the
 /// allowlist and reported `error_code=timeout`, `retryable=true`. Nothing had
 /// timed out. The refusal was built as a bare [`DeployError`], flattened to a
 /// string by the CLI, and the code was then reconstructed by

@@ -10,17 +10,17 @@
 //! mutations belong to.
 //!
 //! **It converges the declared paths and nothing else.** One hostname carries
-//! handlers for several products at once — on `charless-mac-mini` the same
-//! funnel serves `/` to Brama on 8080, `/api/integration` on 8791 and the five
-//! object and release paths on 8765 — so a whole-table reconcile rendered from
+//! handlers for several products at once — the same funnel can serve `/` to
+//! Brama, `/api/integration` to another service and the object and release
+//! paths to a third — so a whole-table reconcile rendered from
 //! one declaration would retract another product's entrance. A public-origin
 //! declaration owns exactly the paths it names: those are made to match, and a
 //! path nobody declared is left alone and reported, never removed.
 //!
 //! The publication is not the origin. A node can publish a perfect handler
-//! table for a name that no public resolver can answer, which is precisely the
-//! 2026-09-07 state: funnel on, `/api/release/object` proxied, and NXDOMAIN at
-//! `ts.net`'s own authoritative nameserver. So [`read`] answers what this node
+//! table for a name that no public resolver can answer: funnel on,
+//! `/api/release/object` proxied, and NXDOMAIN at `ts.net`'s own
+//! authoritative nameserver. So [`read`] answers what this node
 //! serves, [`super::resolve`] answers whether anyone can reach it, and the two
 //! are reported separately because they fail separately and are repaired by
 //! different people.

@@ -95,12 +95,10 @@ pub(super) fn print_memory(memory: &Value) {
         number(reading, "available_mb"),
         number(reading, "swap_used_pct"),
     );
-    // The compressor and the lifetime swapouts are read on every pass and
-    // were printed nowhere. They are what explains a host that has memory
-    // left and still cannot answer a three-second probe: on
-    // charless-mac-mini on 2026-09-19 the line above read 4487 MiB
-    // available and swap 71%, both inside their watermarks, while the
-    // released Brama was quarantined for readiness twice in one hour.
+    // The compressor and the lifetime swapouts are read on every pass. They
+    // are what explains a host that has memory left and still cannot answer
+    // a three-second probe: available memory and swap can both sit inside
+    // their watermarks while a released service is quarantined for readiness.
     let compressor = reading.get("compressor_pages").and_then(Value::as_i64);
     let swapouts = reading.get("swapouts").and_then(Value::as_i64);
     if compressor.is_some() || swapouts.is_some() {

@@ -65,11 +65,10 @@ pub(super) fn path_names_file(path: &Path, file: &File) -> bool {
 ///
 /// A contended retired inode is a live process: the kernel releases an
 /// `flock` the moment its holder dies, so a lock that refuses this pass is
-/// held by something that is running now. Until 2026-09-21 the janitor said
-/// only "a retired cleanup lock inode is still held" and stopped, which on
-/// `lukasz-macbook` meant every pass persisted diagnostics and deleted
-/// nothing while the host sat 15.3 GiB below its disk target — with no way
-/// to learn which process to look at.
+/// held by something that is running now. Saying only "a retired cleanup lock
+/// inode is still held" and stopping would leave every pass persisting
+/// diagnostics and deleting nothing while the host sits below its disk target
+/// — with no way to learn which process to look at.
 pub(super) fn holder_sentence(state_dir: &Path, file: &File) -> String {
     let Some(holder) = read_lock_holder(state_dir, file) else {
         return "a lock with no holder record".to_string();

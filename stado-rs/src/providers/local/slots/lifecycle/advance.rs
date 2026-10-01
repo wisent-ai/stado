@@ -116,16 +116,12 @@ pub async fn advance_slot(
     // The workload's own last words, read before the failure record is
     // written rather than after it, because they ARE the failure record. This
     // used to be computed below for OOM classification only, while `job.error`
-    // said "inspect the redacted command output" and the agent's own log line
-    // printed that sentence under the name `error_tail=`.
-    //
-    // On 2026-08-31 fifteen jobs on charless-mac-mini failed with that
-    // sentence. Their output said what happened: CuaDriver panicked on
-    // `+[NSPasteboard generalPasteboard]` returning NULL and never created
-    // `probierz.sock`. The queue record said nothing, so the failures were
-    // read as a missing Accessibility grant — which `stado host gui-automation
-    // status` reports as `granted` on that host — and an hour went into a
-    // permission that was never the problem.
+    // said "inspect the redacted command output". When the output says what
+    // happened — a driver panicking on `+[NSPasteboard generalPasteboard]`
+    // returning NULL and never creating its socket — and the queue record
+    // says nothing, the failure gets read as a missing Accessibility grant,
+    // which `stado host gui-automation status` reports as `granted`, and the
+    // time goes into a permission that was never the problem.
     let classification_error = if job.state == job_state::FAILED && !slot.workdir_missing {
         redacted_tail(
             &job,

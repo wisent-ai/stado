@@ -24,9 +24,9 @@ adb=$(resolve @ADB_CANDIDATES@)
 # `appium` is a JavaScript shim whose first line is `#!/usr/bin/env node`, so
 # on a channel whose PATH does not carry Node it answers `env: node: No such
 # file or directory` -- present, runnable, and reported as broken. That is
-# exactly what charless-mac-mini answered on the first repair: the binary was
-# installed at ~/.npm-global/bin/appium and `--version` came back empty, so
-# the runtime read `unknown`. The interpreter a shim needs is a sibling of the
+# a binary installed at ~/.npm-global/bin/appium whose `--version` comes back
+# empty, so the runtime reads `unknown`. The interpreter a shim needs is a
+# sibling of the
 # Node the fleet installs, which is the argument `host_exec::candidate_script`
 # already makes for the same programs.
 node_dir=''

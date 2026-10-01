@@ -99,11 +99,10 @@ pub(super) fn reclaim_legacy_bridges(
             // An agent that predates the persistent root left the tree
             // itself here, not a link to it, and no cleaner could see it:
             // this pass only ever unlinked symlinks, and every other
-            // cleaner is rooted in the account's home. On 2026-09-04 ten
-            // such trees held 14.2 GB on charless-mac-mini while the host
-            // sat at 1.1 GB free, which took its object API, the registry
-            // authority and every Skarbiec decryption down together while
-            // `space reclaim` measured zero in all eight stages. The gate is
+            // cleaner is rooted in the account's home. Such trees can hold
+            // many GB on a nearly full host, taking its object API, the
+            // registry authority and every Skarbiec decryption down together
+            // while `space reclaim` measures zero in every stage. The gate is
             // the canonical pass's own: this account owns it, it is a
             // directory on the legacy root's device, and its job is
             // terminal by the same keep-list.

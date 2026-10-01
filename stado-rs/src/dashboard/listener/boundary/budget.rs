@@ -72,14 +72,14 @@ pub(crate) fn boundary_timeout(boundary: Boundary) -> Duration {
     // the number of declarations, and a fixed 90 seconds is a budget that
     // stops being true as the fleet grows.
     //
-    // On 2026-08-31 charless-mac-mini declared 17 object namespaces, 14
-    // release publishers and 4 service deployers. Every boundary failed with
+    // A host declaring a few dozen object namespaces, release publishers and
+    // service deployers outgrows a fixed budget: every boundary fails with
     // "validation did not settle within 90 seconds", every object route
-    // answered 503, two `queue resume` attempts died on it, and no release
-    // could publish — while the vault was up, listening, and answering. The
-    // same lesson is already recorded one module over in
-    // `doctor::object_auth_deadline`, which budgets this exact sweep per item;
-    // this is that fix applied to the boundary the whole fleet reads through.
+    // answers 503, `queue resume` dies on it, and no release can publish —
+    // while the vault is up, listening, and answering. The same lesson is
+    // recorded one module over in `doctor::object_auth_deadline`, which
+    // budgets this exact sweep per item; this is that fix applied to the
+    // boundary the whole fleet reads through.
     let mapped = match boundary {
         Boundary::Object => {
             crate::config::object_api_namespaces().map_or(usize::MIN, |items| items.len())

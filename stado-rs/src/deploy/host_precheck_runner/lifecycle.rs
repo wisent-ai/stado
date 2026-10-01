@@ -45,10 +45,10 @@ pub async fn repair_runtime(
                         .join("start-runner.sh")
         });
     // An adopted runner whose unit starts `start-runner.sh` beside its
-    // install, as `com.wisent.actions-runner.wisent-backend-publisher` on
-    // charless-mac-mini does, was refused here although its apphosts were the
-    // ones failing (`Failed to create CoreCLR, HRESULT: 0x8007000C`). The
-    // repair script itself checks that the directory is a runner install.
+    // install (`com.wisent.actions-runner.<name>`) must be accepted here,
+    // because its apphosts can be the ones failing (`Failed to create
+    // CoreCLR, HRESULT: 0x8007000C`). The repair script itself checks that
+    // the directory is a runner install.
     let adopted_launcher = managed.unit_id().starts_with("com.wisent.actions-runner.")
         && path
             .file_name()

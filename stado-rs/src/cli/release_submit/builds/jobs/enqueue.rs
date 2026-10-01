@@ -72,10 +72,8 @@ pub(crate) async fn enqueue(
     // platform keeps `requests/<platform>.json`, and a rebuild after a
     // terminal failure writes its own under the attempt's id: the saved
     // request names the builder, and a rebuild that reread the first one
-    // was welded to the host that had just failed - brama 0.4.26's darwin
-    // build died in code signing on charless-mac-mini on 2026-09-18, and
-    // the rebuild was refused on that same host while lukasz-macbook sat
-    // idle.
+    // would be welded to the host that had just failed, refused there while
+    // other builders of the platform sit idle.
     let request_leaf = match prior_terminal_job_id {
         Some(_) => format!("requests/{platform}/attempts/{submission_run_id}.json"),
         None => format!("requests/{platform}.json"),

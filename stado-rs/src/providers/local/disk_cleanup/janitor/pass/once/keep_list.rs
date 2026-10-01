@@ -1,14 +1,12 @@
 //! The listing-only keep set the workdir cleaner refuses to delete.
 //!
-//! Every read here used to collapse into `None`: a store that could not be
-//! opened, a listing the primary refused, a document read that failed and a
-//! budget that ran out all produced the same wordless answer, and the
-//! cleaners turned it into `queue_store_unreadable` with nothing after it.
-//! On charless-mac-mini on 2026-09-21 that one word stood in front of 34.9
-//! GiB of finished jobs' outputs while the host sat 15.4 GiB below its disk
-//! target and was refused as a release builder — and nothing in the report
-//! said which of the four it was. Each failure now carries the sentence the
-//! store gave, so the janitor's own report names the read that failed.
+//! Collapsing every read into `None` — a store that could not be opened, a
+//! listing the primary refused, a document read that failed and a budget that
+//! ran out — gives the same wordless answer, which the cleaners turn into
+//! `queue_store_unreadable` with nothing after it, while tens of GiB of
+//! finished jobs' outputs stay on a host below its disk target that is refused
+//! as a release builder. Each failure carries the sentence the store gave, so
+//! the janitor's own report names the read that failed.
 
 use std::collections::BTreeSet;
 

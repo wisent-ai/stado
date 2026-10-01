@@ -63,9 +63,8 @@ fn validate_ssh_fallbacks(
             return Err(verr(&destination_location, "must include a host"));
         }
         // A private-network address is leased by the network's router and
-        // moves: charless-mac-mini's `lan` path named 10.0.0.253 long after
-        // the router gave it 10.0.0.207, so the fallback answered "Host is
-        // down" for a host that was up. The host's own name follows the lease.
+        // moves: a `lan` path naming an old lease answers "Host is down" for
+        // a host that is up. The host's own name follows the lease.
         if identity
             .parse::<std::net::Ipv4Addr>()
             .is_ok_and(|address| address.is_private() || address.is_link_local())

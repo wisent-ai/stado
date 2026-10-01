@@ -67,8 +67,8 @@ pub(super) async fn recycle_launchd(
             // one executing the file this install just replaced. When it is a
             // queue agent it recycles itself through the installed-release
             // handshake, exactly as the readable case below; refusing it here
-            // failed every Stado CLI install on lukasz-macbook on 2026-09-26
-            // while that agent was already on its way out.
+            // would fail every Stado CLI install while that agent is already
+            // on its way out.
             let deferring = crate::deploy::service::process_arguments(pid)
                 .is_ok_and(|argv| defers_to_release_handshake(&argv));
             if deferring {

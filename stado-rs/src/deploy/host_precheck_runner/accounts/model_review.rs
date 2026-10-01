@@ -225,13 +225,11 @@ pub async fn reconcile_model_review_secret(
     // Beside Brama, not beside the runner. The Brama-owned Skarbiec vault, its
     // capability-routes table and its GnuPG home exist only on the host Brama
     // runs on, so every command built from that context has to run there. This
-    // read was pointed at the runner's own host, which is exactly the failure
-    // `brama_identity_host` was added to prevent and which its own doc comment
-    // quotes: registering a repository-scoped runner on
-    // ubuntu-server-rtx-pro-6000 answered `cannot read Brama's Skarbiec path
-    // declarations: /usr/bin/grep: /root/.config/brama/service.env: No such
-    // file or directory`, because Brama does not run there. `install_profile`
-    // resolved the same identity correctly; only this path did not.
+    // read must not point at the runner's own host, which is exactly the
+    // failure `brama_identity_host` was added to prevent: registering a
+    // repository-scoped runner on a host Brama does not run on answers
+    // `cannot read Brama's Skarbiec path declarations: /usr/bin/grep:
+    // /root/.config/brama/service.env: No such file or directory`.
     let identity = brama_identity_host(&target).await?;
     let context = brama_skarbiec_context(&identity).await?;
     reconcile_brama_introspection_grant(&identity, &context).await?;

@@ -159,11 +159,10 @@ pub(crate) async fn start_candidate(
         Err(StartSlotError::Claim(exc)) => {
             // One job's claim is that job's problem. Returning here
             // ends the tick, and `cli::hosts::agent` restarts the whole loop:
-            // on charless-mac-mini a single queued job whose durable
-            // transition record could not be verified killed the loop
-            // every few seconds for hours, so the nine other queued
-            // jobs were never reached, the census keys never survived
-            // a publish, and every gate read the host as healthy. The
+            // a single queued job whose durable transition record cannot be
+            // verified would kill the loop every few seconds for hours, so
+            // the other queued jobs are never reached, the census keys never
+            // survive a publish, and every gate reads the host as healthy. The
             // same doctrine `cli::doctor` states for probes holds here:
             // one failure names itself and the scan continues.
             disk_cleanup::release_workload_lock(workload_lock, log_fn);

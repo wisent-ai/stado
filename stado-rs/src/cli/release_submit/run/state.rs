@@ -125,14 +125,13 @@ pub(crate) async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
 ///
 /// A run that has published nothing fences nothing: there is no artifact of
 /// it a host could receive, so no older delivery is stale relative to it.
-/// The newest run of any state used to be the fence, and on 2026-09-11 two
-/// 0.20.10 runs that failed before a builder was found - created thirty
-/// seconds after the 0.20.11 run - made every 0.20.11 delivery refuse itself
-/// as superseded, on every host, by runs that would never deliver a byte.
-/// The day before, an abandoned 0.20.9 run whose builds had both failed did
-/// the same to the 0.20.8 delivery to lukasz-macbook. A run starts fencing
-/// the moment it publishes a platform, which is when its deliveries can
-/// begin.
+/// With the newest run of any state as the fence, runs of an older version
+/// that failed before a builder was found, created moments after a newer run,
+/// make every delivery of the newer version refuse itself as superseded, on
+/// every host, by runs that will never deliver a byte; an abandoned run whose
+/// builds both failed does the same to the delivery before it. A run starts
+/// fencing the moment it publishes a platform, which is when its deliveries
+/// can begin.
 pub(crate) async fn latest_submitted_run(product: &str) -> Result<Option<ReleaseRun>, CmdError> {
     let store = JobStorage::new()
         .await

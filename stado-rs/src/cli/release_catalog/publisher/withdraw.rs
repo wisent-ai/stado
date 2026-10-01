@@ -74,7 +74,7 @@ pub(crate) async fn withdraw_publisher(
     // when it declares no vault of its own, reads the owner's vault through
     // its route: the owner's own reconciliation covers it, and repairing it
     // would reconcile its retired local copy, whose grant no longer matches
-    // the bearer this host holds (lukasz-macbook, 2026-09-28).
+    // the bearer this host holds.
     let here_reads_owner = crate::config::skarbiec_vault_file().trim().is_empty();
     for host in &hosts {
         if here_reads_owner && host == &here && host != &owner {

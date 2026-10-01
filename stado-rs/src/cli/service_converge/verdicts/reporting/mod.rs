@@ -130,15 +130,13 @@ pub(in crate::cli::service_converge) fn emit(
     // it is named here — and only for the rows where it contradicts the
     // declaration, which are the rows that would otherwise read as fine.
     //
-    // This used to end "restart it to pick up what is installed", which is the
-    // wrong instruction to hand someone at seven in the morning. A stale
-    // process is a fact, not a fault. On 2026-08-31 `com.wisent.stado-resolver`
-    // on charless-mac-mini reported this line after a clean 0.13.9 delivery,
-    // and cycling it would have been tidiness: the running binary had no
-    // functional symptom, and restarting a load-bearing resolver to silence a
-    // diff is how a degraded host becomes a down host. So the line now states
-    // the condition under which the restart is actually required, and leaves
-    // the judgement where it belongs.
+    // "Restart it to pick up what is installed" is the wrong instruction to
+    // hand someone. A stale process is a fact, not a fault: a resolver still
+    // running the previous image after a clean delivery can have no functional
+    // symptom, and restarting a load-bearing resolver to silence a diff is how
+    // a degraded host becomes a down host. So the line states the condition
+    // under which the restart is actually required, and leaves the judgement
+    // where it belongs.
     for row in rows
         .iter()
         .filter(|row| row.process_cell() == PROCESS_DIFFERS)

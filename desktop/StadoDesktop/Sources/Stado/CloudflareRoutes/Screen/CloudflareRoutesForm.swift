@@ -35,7 +35,7 @@ extension CloudflareRoutesView {
             VStack(spacing: WisentDesign.Space.x3) {
                 selectionInput(
                     "Registry host",
-                    placeholder: "charless-mac-mini",
+                    placeholder: "registry host",
                     values: hosts,
                     selection: $draft.host
                 )

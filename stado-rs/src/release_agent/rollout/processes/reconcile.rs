@@ -21,11 +21,11 @@ use crate::release_control::ReleaseTargetPolicy;
 ///
 /// `leave_bind_for_candidate` is the caller's answer to "is a candidate about
 /// to be spent on this bind, having never had it". It exists because this pass
-/// runs before every rollout branch: on charless-mac-mini the legacy unit held
-/// 8895, the agent refused to spawn a candidate for it, and when the unit was
-/// stopped this pass put the same unit straight back — `restored legacy
-/// skarbiec on 127.0.0.1:8895`, seconds later. Two correct rules, one loop
-/// nothing could leave, and behind it every credential write on that host.
+/// runs before every rollout branch: with the legacy unit holding the stable
+/// port, the agent refuses to spawn a candidate for it, and when the unit is
+/// stopped this pass would put the same unit straight back seconds later. Two
+/// correct rules, one loop nothing can leave, and behind it every credential
+/// write on that host.
 pub(crate) async fn reconcile_stable_proxy(
     target: &ReleaseTargetPolicy,
     product: &str,
@@ -41,10 +41,10 @@ pub(crate) async fn reconcile_stable_proxy(
         // No proxy, no owned release, and nothing answering on the stable bind:
         // the release path has let go of the bind and the legacy unit was never
         // given it back. This is the state a rollback whose `restore_legacy`
-        // was refused leaves behind, and until 2026-09-06 the agent returned
-        // here every fifteen seconds while charless-mac-mini served no
-        // Skarbiec for thirteen hours. The bind belongs to someone on every
-        // tick; when the release path does not want it, the declared unit does.
+        // was refused leaves behind, and returning here every fifteen seconds
+        // would leave the host serving no Skarbiec indefinitely. The bind
+        // belongs to someone on every tick; when the release path does not
+        // want it, the declared unit does.
         if ownership_empty
             && target.legacy_launchd_plist.is_some()
             && !stable_bind_ready(&serving).await

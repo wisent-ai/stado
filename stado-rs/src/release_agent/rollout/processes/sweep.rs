@@ -73,8 +73,8 @@ pub(crate) fn sweep_leaked_processes(
         }
         // A process that ignored the previous pass's SIGTERM is still here on
         // this one. Sending it the same signal again is not a sweep, it is a log
-        // line: skarbiec 0.2.39 pid 38640 on charless-mac-mini was "swept" every
-        // fifteen seconds for thirteen hours on 2026-09-06 and never exited.
+        // line repeated every fifteen seconds for as long as the process
+        // refuses to exit.
         let signal = if swept_before(target, product, process.pid) {
             Signal::SIGKILL
         } else {

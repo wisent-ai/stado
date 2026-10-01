@@ -15,16 +15,14 @@ use super::systemd::recycle_systemd;
 /// as it lives, because neither launchd nor systemd has any reason to notice
 /// that the file underneath it changed.
 ///
-/// That is not theoretical. On 2026-09-01 the disk-cleanup janitor on
-/// `lukasz-macbook` was executing a 68,977,488-byte image of
-/// `~/.stado/bin/stado` while the file at that exact path was 70,892,848
-/// bytes: the process had been up since 2026-08-27 and the binary was
-/// replaced under it. Its reports named four cleaners and carried no
-/// `writer_version`, while the installed build declares six and sets that
-/// field, so the registry policy it was handed no longer validated. It
-/// answered `invalid_or_unavailable_policy` 8,460 times out of 12,009 passes,
-/// freed zero bytes across all of them, and the volume reached 100% with a
-/// janitor running every minute the whole way down.
+/// That is not theoretical. A long-running disk-cleanup janitor keeps
+/// executing the previous image of `~/.stado/bin/stado` after the file at
+/// that exact path is replaced. Its reports then name fewer cleaners and
+/// carry no `writer_version`, while the installed build declares more and
+/// sets that field, so the registry policy it is handed no longer validates:
+/// it answers `invalid_or_unavailable_policy` on most passes, frees zero
+/// bytes, and the volume fills with a janitor running every minute the whole
+/// way down.
 ///
 /// Prefer an in-place restart. A launchd definition whose program changed must
 /// be reloaded in its observed owner domain; a kick would reuse the stale argv.

@@ -17,16 +17,12 @@ const MINTED_PREFIX: &str = "com.wisent.compute.service.";
 
 /// A label carries this fleet's minted prefix exactly once.
 ///
-/// `label()` used to prefix a name that already carried the prefix, and the
-/// function was fixed early. Nobody went looking for the jobs it had already
-/// minted, and on 2026-09-01 eight of them were loaded on charless-mac-mini —
-/// one of them a system LaunchDaemon with `KeepAlive` running
-/// `stado agent --target charless-mac-mini`, which recreated an undeclared
-/// queue agent for days. Three separate sessions hunted it as a rogue script.
+/// A `label()` that prefixes a name already carrying the prefix leaves jobs
+/// behind even after it is fixed — among them a system LaunchDaemon with
+/// `KeepAlive` running `stado agent --target <host>`, recreating an
+/// undeclared queue agent for days while people hunt it as a rogue script.
 ///
-/// It is a string comparison. It would have ended that hunt on the first
-/// sweep, and it is here because the absence of this one line cost more than
-/// every check above it put together.
+/// It is a string comparison, and it ends that hunt on the first sweep.
 pub(in crate::fleet_shape) fn doubled_prefix(
     target: &ComputeTarget,
     loaded: &[service::UndeclaredUnit],
@@ -62,14 +58,14 @@ pub(in crate::fleet_shape) fn doubled_prefix(
 /// DECLARES, because the population that matters here is the declaration: a
 /// doubled name is written once and then read by everything.
 ///
-/// On 2026-09-03 a resolver deploy recorded
-/// `com.wisent.compute.service.stado-resolver.service.service` on
-/// ubuntu-server-rtx-pro-6000. The unit is real and active — `systemctl --user
-/// is-active` answers yes and `service ensure` restarts it in place — so the
-/// cost is not a dead service; it is that the fleet now carries a name nothing
-/// else in it agrees with, and the registry's `services` array validated only
-/// that a service's `host_heuristic` matched its target's, so the name itself
-/// was never checked by anything.
+/// A deploy can record a doubled name such as
+/// `com.wisent.compute.service.stado-resolver.service.service`. The unit is
+/// real and active — `systemctl --user is-active` answers yes and `service
+/// ensure` restarts it in place — so the cost is not a dead service; it is
+/// that the fleet carries a name nothing else in it agrees with, and the
+/// registry's `services` array validates only that a service's
+/// `host_heuristic` matches its target's, so the name itself is never
+/// checked by anything else.
 ///
 /// The remediation is deliberately not `retire`: that command refuses a unit
 /// that is still running, correctly, and this unit is running. What closes it
@@ -113,11 +109,10 @@ pub(in crate::fleet_shape) fn doubled_suffix(
 /// The prefix rule, on what the registry DECLARES.
 ///
 /// [`doubled_prefix`] reads the labels launchd has LOADED and that the registry
-/// does not declare, which is the population the #286 respawner lived in. A
-/// label the registry DOES declare is in neither that population nor any
-/// other, so `com.wisent.compute.service.com.wisent.stado-host-health-api` and
-/// its `-forward` sibling sat declared, loaded and unmeasured on lukasz-macbook
-/// while the rule that forbids them was already written down. Same comparison,
+/// does not declare. A label the registry DOES declare is in neither that
+/// population nor any other, so a declared doubled label and its `-forward`
+/// sibling can sit declared, loaded and unmeasured while the rule that
+/// forbids them is already written down. Same comparison,
 /// same check id: it is one rule, and which list a name came from does not
 /// change whether it carries the prefix twice.
 pub(in crate::fleet_shape) fn declared_doubled_prefix(

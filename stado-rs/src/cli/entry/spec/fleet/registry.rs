@@ -66,7 +66,7 @@ pub(crate) enum RegistryCommands {
         /// Print one part of the document: a dotted path of object keys,
         /// array indexes or array element names, such as
         /// `release_control.products.transcript-lake` or
-        /// `targets.lukasz-macbook.skarbiec`. A string prints bare.
+        /// `targets.<host>.skarbiec`. A string prints bare.
         #[arg(long, conflicts_with_all = ["with_generation", "generation_only"])]
         path: Option<String>,
     },
@@ -74,7 +74,7 @@ pub(crate) enum RegistryCommands {
     /// was read at.
     ///
     /// The path is the one `pull --path` reads, so a field a caller can read
-    /// it can write: `registry set --path targets.lukasz-macbook.release_platform
+    /// it can write: `registry set --path targets.<host>.release_platform
     /// --value darwin-arm64`. The value is JSON when it parses as JSON and the
     /// literal text when it does not. A path that does not already exist is
     /// refused, naming the keys or element names that do; a registry that

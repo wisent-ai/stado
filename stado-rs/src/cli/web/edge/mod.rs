@@ -1,15 +1,14 @@
 //! `stado web edge` — the one host on the public internet, and the reverse
 //! proxy on it.
 //!
-//! No fleet host has a public address. `tailscale netcheck` on
-//! `ubuntu-server-rtx-pro-6000` and `curl -4 https://api.ipify.org` from the
-//! operator's laptop report the same residential address, inbound 80 and 443
-//! on it time out, and `PortMapping:` is empty. The fleet's only public
-//! entrance is a Tailscale Funnel, and Funnel can serve no name outside
-//! `*.ts.net` — it routes by SNI and holds no certificate for a custom name.
-//! That is the whole reason `preferences.wisent.com` still answers with
-//! `server: Vercel`: a third party was holding the one thing the fleet could
-//! not, a certificate for a `wisent.com` name.
+//! No fleet host has a public address. `tailscale netcheck` on a fleet host
+//! and `curl -4 https://api.ipify.org` from the operator's laptop report the
+//! same residential address, inbound 80 and 443 on it time out, and
+//! `PortMapping:` is empty. The fleet's only public entrance is a Tailscale
+//! Funnel, and Funnel can serve no name outside `*.ts.net` — it routes by SNI
+//! and holds no certificate for a custom name. Without an edge, a third party
+//! has to hold the one thing the fleet cannot: a certificate for a
+//! `wisent.com` name.
 //!
 //! So the fleet gets one host that does hold a public address: a small Linux
 //! VM provisioned through the Azure provider Stado already implements
@@ -25,7 +24,7 @@
 //! fleet owns, which means obtaining and renewing a Let's Encrypt certificate
 //! per hostname. Caddy does that by itself from the site address alone: no
 //! ACME client to schedule, no renewal cron to forget, no certificate path to
-//! get wrong. It is also already installed on `charless-mac-mini`, so the
+//! get wrong. It is also already installed on the always-on Mac, so the
 //! fleet carries it whether or not this capability exists. The alternative was
 //! nginx plus certbot plus a renewal timer — three moving parts, each of which
 //! has its own way of leaving an expired certificate in front of a working

@@ -102,8 +102,8 @@ fn python_os_name(os: &str) -> &str {
 /// If `name` is a bare product name like `"stado-agent-mini"` or `"disk-cleanup"`,
 /// returns `{LABEL_PREFIX}.{kind}.{name}` — e.g. `com.wisent.compute.service.stado-agent-mini`.
 /// If `name` is already a fleet label (starts with `com.wisent.`), returns it unchanged,
-/// preventing the double-prefix defect that occurred on charless-mac-mini and led to
-/// stale duplicate queue agents and a seven-day fleet stall.
+/// preventing a double prefix, which leaves stale duplicate queue agents that
+/// can stall the fleet for days.
 pub fn label(kind: &str, name: &str) -> String {
     if name.starts_with(FLEET_LABEL_PREFIX) {
         name.to_string()

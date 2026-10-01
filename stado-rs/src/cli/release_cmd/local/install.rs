@@ -176,13 +176,12 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // read `unattested` forever after — even though the archive was verified
     // against the contract digest a hundred lines above.
     //
-    // lukasz-macbook is the proof. Its `~/.stado/bin` carries this command's
-    // own dated backups through 2026-09-02 and its `stado.release-version`
-    // handshake, so deliveries plainly ran; `~/.stado/releases/stado` holds
-    // 0.13.24 and older, nothing since. `stado service converge` therefore
-    // reported the host's binary as bytes the fleet cannot attest, and the
-    // remediation it printed — deliver a published version — was the thing
-    // that had just happened.
+    // A host whose deliveries plainly ran — its `~/.stado/bin` carries this
+    // command's dated backups and its `stado.release-version` handshake —
+    // would otherwise hold nothing recent under `~/.stado/releases/stado`.
+    // `stado service converge` then reports the host's binary as bytes the
+    // fleet cannot attest, and the remediation it prints — deliver a
+    // published version — is the thing that has just happened.
     //
     // Never fatal: the archive is verified and the install is the point, so a
     // receipt that cannot be written is named and the delivery continues.
@@ -242,13 +241,11 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // executing the inode it started with, for as long as it lives, because
     // nothing tells launchd or systemd that the file underneath changed.
     //
-    // That is how a delivery could succeed and change nothing. On 2026-09-01
-    // the janitor on lukasz-macbook was still executing a 68,977,488-byte
-    // image of this exact path while the file was 70,265,008 bytes, had
-    // answered `invalid_or_unavailable_policy` 8,460 times out of 12,009
-    // passes because the policy no longer validated against the code it was
-    // compiled from, and the volume had reached 100% full with a janitor
-    // running every minute the whole way down.
+    // That is how a delivery can succeed and change nothing: a janitor keeps
+    // executing the previous image of this exact path, answers
+    // `invalid_or_unavailable_policy` on most passes because the policy no
+    // longer validates against the code it was compiled from, and the volume
+    // fills with a janitor running every minute the whole way down.
     //
     // In place, and never the agent: see `self_update::recycle_replaced_units`.
     // Run this image check even when the pathname already matches the delivered

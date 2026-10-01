@@ -3,12 +3,12 @@
 //!
 //! `~/Desktop`, `~/Documents` and `~/Downloads` are consent-gated: the first
 //! `open` under one of them by a process without the grant makes macOS ask
-//! the person at the keyboard, and the syscall blocks until they answer. On
-//! 2026-09-10 the agent on lukasz-macbook asked that question from its
-//! janitor thread at 19:19Z and was still inside `openat` two hours later:
-//! the pass held its exclusive lock the whole time, every admission on the
-//! host reported `cleanup_in_progress`, and a required release delivery sat
-//! queued while `host gates` said the host was claiming. A cleaner walking
+//! the person at the keyboard, and the syscall blocks until they answer. An
+//! agent asking that question from its janitor thread can sit inside `openat`
+//! for hours: the pass holds its exclusive lock the whole time, every
+//! admission on the host reports `cleanup_in_progress`, and a required
+//! release delivery sits queued while `host gates` says the host is claiming.
+//! A cleaner walking
 //! the fleet's own checkouts under `~/Documents` is the declared policy, and
 //! the grant is one decision for a stably signed binary; what must not happen
 //! is the wait for that decision costing the host.

@@ -197,11 +197,10 @@ type ReplicationOutcome = Result<Option<crate::queue::copy::CopyReport>, String>
 
 /// Disaster-recovery replication, one pass at a time, on its own thread.
 ///
-/// It used to be awaited inside the loop, between one tick and the next. On
-/// charless-mac-mini on 2026-09-28 a pass that failed 32004 objects took
-/// most of half an hour, so the lease reaper at the head of the tick ran
-/// that rarely: a build whose agent restarted stayed `running` and its
-/// release never published (2bab068e). The pass now runs beside the tick;
+/// Awaited inside the loop, between one tick and the next, a pass that fails
+/// many objects can take most of half an hour, so the lease reaper at the
+/// head of the tick runs that rarely: a build whose agent restarted stays
+/// `running` and its release never publishes. The pass runs beside the tick;
 /// the loop reports a finished pass and starts the next, and never waits,
 /// except a single `Once` tick, which waits for its own pass.
 #[derive(Default)]

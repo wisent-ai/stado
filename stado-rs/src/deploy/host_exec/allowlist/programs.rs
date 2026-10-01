@@ -40,12 +40,10 @@ pub const GIT_PROGRAM: &str = GIT_CLI;
 ///
 /// Spis's terminal families drive the product under test inside a tmux
 /// session, so this is their precondition in the same way cargo is every
-/// worker's. It went unapproved, which meant `stado host exec TARGET --
-/// tmux -V` answered "not an approved host-exec command" and every CLI and
-/// TUI preflight refused every host — a refusal that reads as "this machine
-/// has no tmux" and is really a question the channel was never allowed to
-/// ask. Found on 2026-09-03 by running the terminal preflight against
-/// lukasz-macbook, which does carry tmux.
+/// worker's. Unapproved, `stado host exec TARGET -- tmux -V` answers "not an
+/// approved host-exec command" and every CLI and TUI preflight refuses every
+/// host — a refusal that reads as "this machine has no tmux" and is really a
+/// question the channel was never allowed to ask.
 pub const TMUX_CLI: &str = "/opt/homebrew/bin/tmux";
 
 /// tmux's canonical name in [`super::PROGRAM_CANDIDATES`].

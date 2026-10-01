@@ -35,10 +35,9 @@ pub struct InstallPlan {
     /// An always-on mac is the whole reason. `launchctl bootstrap gui/<uid>`
     /// cannot work where nobody logs in graphically, and the ladder this
     /// module walks instead — `user/<uid>`, `asuser gui/<uid>`, then a crontab
-    /// entry — ends in a process with no unit behind it. Four units on the
-    /// always-on mini sat in `/Users/charles/Library/LaunchAgents` and never
-    /// loaded once, the active coordinator among them, which is why nothing
-    /// reaped an expired worker lease for two days.
+    /// entry — ends in a process with no unit behind it. Units placed in a
+    /// user's `~/Library/LaunchAgents` on such a host never load, the active
+    /// coordinator among them, and then nothing reaps an expired worker lease.
     /// [`crate::deploy::service::requires_daemon_domain`] answers it from the
     /// registry declaration.
     pub daemon: Option<String>,

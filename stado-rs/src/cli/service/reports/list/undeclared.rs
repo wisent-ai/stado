@@ -11,26 +11,21 @@ use super::*;
 /// document has never heard of is in neither set, so nothing in this binary
 /// could name one.
 ///
-/// charless-mac-mini was running three queue agents at once in that blind spot:
-/// `com.wisent.compute.service.stado-agent-mini`, the only one the registry
-/// declares, plus `com.wisent.compute.agent.charless-mac-mini` from
-/// `stado bootstrap --local`'s label convention and
-/// `com.wisent.compute.service.stado-queue-agent` from a third. All three
-/// published capacity for the same consumer id, so whichever wrote last decided
-/// what the host answered — and the oldest of them, three days into a stale
-/// binary, refused 55 pinned jobs for a week while every report in this group
-/// said the declared agent was fine.
+/// A host can run several queue agents at once in that blind spot: the one
+/// the registry declares, one from `stado bootstrap --local`'s label
+/// convention, and one from an older installer. All of them publish capacity
+/// for the same consumer id, so whichever writes last decides what the host
+/// answers — and an agent running a stale binary can refuse pinned jobs for
+/// days while every report in this group says the declared agent is fine.
 ///
 /// An empty answer means the hosts were asked and had nothing, because a host
 /// that will not answer is named on stderr and makes the command fail.
 ///
-/// It also means the whole host was asked. Until 2026-09-01 this command
-/// enumerated only labels under `com.wisent.`, so its empty answer was a fact
-/// about that prefix and was read as a fact about the machine:
-/// `com.stado.agent.charless-mac-mini` was loaded on the always-on mac, was the
-/// only label on it outside the prefix, held the pid rewriting the janitor's
-/// state file every interval — and this command said the host had nothing
-/// undeclared. Every row is now enumerated and classified; the prefix chooses
+/// It also means the whole host was asked. Enumerating only labels under
+/// `com.wisent.` would make an empty answer a fact about that prefix, read as
+/// a fact about the machine: a stray agent under another prefix, holding the
+/// pid that rewrites the janitor's state file every interval, would go
+/// unreported. Every row is enumerated and classified; the prefix chooses
 /// the sentence, never the population.
 pub(crate) async fn list_undeclared(json: bool) -> Result<(), CmdError> {
     let registry = registry::read_registry().await?;
@@ -64,10 +59,10 @@ pub(crate) async fn list_undeclared(json: bool) -> Result<(), CmdError> {
         print_json(&json!({"undeclared": payload}))?;
     } else {
         // The table prints the jobs this fleet put on the host and cannot
-        // account for. `unaffiliated` rows are counted below instead: on
-        // charless-mac-mini they are 494 of 537 loaded labels, all of them the
-        // platform's own, and printing them beside six real findings is the
-        // same disservice the prefix filter did by another route. They are read,
+        // account for. `unaffiliated` rows are counted below instead: on a
+        // Mac they are most of the loaded labels, all of them the platform's
+        // own, and printing them beside the real findings is the same
+        // disservice a prefix filter would do by another route. They are read,
         // classified and counted, and `--json` carries every one of them.
         let actionable: Vec<&service::UndeclaredUnit> =
             found.iter().filter(|unit| !unit.accounted_for()).collect();
@@ -82,11 +77,9 @@ pub(crate) async fn list_undeclared(json: bool) -> Result<(), CmdError> {
                     unit.status.clone(),
                     // What the process IS running, and only then what its file
                     // declares. Reading only the declaration is how a job could
-                    // be seen and not identified: the pid rewriting the
-                    // janitor's state file on charless-mac-mini is named
-                    // `com.stado.agent.charless-mac-mini`, and only its argv
-                    // says it is `python3.12 -m stado.cli agent`, a program no
-                    // release of this binary can ever change.
+                    // be seen and not identified: a label named like a Stado
+                    // agent can be running `python3.12 -m stado.cli agent`, a
+                    // program no release of this binary can ever change.
                     dash(if unit.running_program.is_empty() {
                         &unit.program
                     } else {

@@ -102,9 +102,8 @@ pub async fn discard(
 /// canonical registry agree by construction — but only for a write that went
 /// through this module. Any other writer of `registry.json` moves the
 /// declaration and leaves the gateway serving the previous table, with nothing
-/// on either side saying so. On 2026-09-06 the canonical registry lost the
-/// `wisent-backend` route while `charless-mac-mini` kept serving it, and the
-/// divergence was invisible to every command. `absent` is an answer: a host
+/// on either side saying so: the canonical registry can lose a route while a
+/// host keeps serving it, invisible to every command. `absent` is an answer: a host
 /// that has never been staged has no file, and that is not a failure to read.
 pub async fn live(target: &ComputeTarget, runner: &Runner) -> Result<Option<Value>, DeployError> {
     let script = r#"set -euo pipefail

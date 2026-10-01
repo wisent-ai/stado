@@ -168,11 +168,11 @@ impl CleanupReport {
             "writer": self.writer,
             "writer_version": self.writer_version,
             // The pid that wrote this pass. `writer` names WHICH entry point
-            // ran and `writer_version` names what it was built from, and on
-            // 2026-08-31 neither was enough: charless-mac-mini's state file
-            // was overwritten every forty-five seconds by a build older than
-            // the one that stamps those fields, so the file said nothing at
-            // all about its author and no sampling caught the process alive.
+            // ran and `writer_version` names what it was built from, and
+            // neither is enough when a build older than the one that stamps
+            // those fields overwrites the file every few seconds: the file
+            // then says nothing about its author and no sampling catches the
+            // process alive.
             // A pid outlives the process in the file it wrote, which is the
             // whole difference between "somebody is writing this" and a name.
             "writer_pid": std::process::id(),

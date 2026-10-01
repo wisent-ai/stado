@@ -17,8 +17,8 @@ use crate::cli::secrets::store::resolve::skarbiec_binary;
 /// It also names the host that owns the fleet vault, the registry's
 /// `skarbiec` active host. A different host declaring a local copy in
 /// `secrets.skarbiec.vault_file` is refused: that copy diverges from the
-/// owner (grants minted there never reach it) and was how lukasz-macbook came
-/// to hold its own Skarbiec on 2026-09-25.
+/// owner (grants minted there never reach it), and it leaves that host
+/// holding a Skarbiec of its own.
 pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
     let candidates = crate::credential_store::owner::candidates_present()
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -46,8 +46,8 @@ pub(crate) async fn vault_authority(json_output: bool) -> Result<(), CmdError> {
         } else if owner != here {
             // A non-owner that declares no local copy is the configuration
             // the refusal above asks for. Judging its leftover local files
-            // afterwards answered `ambiguous` and told it to declare one of
-            // them again — on lukasz-macbook on 2026-09-27, one command after
+            // afterwards would answer `ambiguous` and tell it to declare one
+            // of them again, one command after
             // `stado config unset secrets.skarbiec.vault_file`.
             state = "reads_owner".to_string();
             resolved = Err(format!(

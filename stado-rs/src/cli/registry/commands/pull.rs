@@ -24,7 +24,7 @@ struct RegistryPullReceipt {
 
 const PULL_RECEIPT_SCHEMA: &str = "stado.registry-pull-receipt.v1";
 const PATH_SEPARATOR: char = '.';
-/// The field an array element is named by, so `targets.lukasz-macbook`
+/// The field an array element is named by, so `targets.<host>`
 /// reads the target instead of an index nobody remembers.
 const NAME_FIELD: &str = "name";
 
@@ -85,7 +85,7 @@ pub(in crate::cli::registry) fn kind(value: &Value) -> &'static str {
 }
 
 /// The subtree a dotted path names: `release_control.products.transcript-lake`,
-/// `targets.lukasz-macbook.skarbiec`, `coordinators.0`.
+/// `targets.<host>.skarbiec`, `coordinators.0`.
 pub fn select<'a>(document: &'a Value, path: &str) -> Result<&'a Value, CmdError> {
     let mut value = document;
     let mut walked = String::new();

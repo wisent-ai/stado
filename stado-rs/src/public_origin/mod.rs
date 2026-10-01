@@ -5,16 +5,14 @@
 //! release origin — `https://stado.wisent.com/api/release/object` promises
 //! bearer-free reads under `stado://releases/` — is served by an edge that
 //! fetches its bytes from somewhere else, and that somewhere else lived in one
-//! untyped deployment environment variable. On 2026-09-07 its value was
-//! `https://charless-mac-mini.tail6443b3.ts.net`, a MagicDNS name that answers
-//! only inside this tailnet: `ts.net`'s own authoritative nameserver returns
-//! NXDOMAIN for it, so every public read answered HTTP 503 with
-//! `originDiagnosis.state = dns_unresolved`, and `version-check` refused every
-//! pull request with `error_code=infra_down`. Nothing in the product had
-//! declared that origin, nothing had refused it, and nothing could report it.
-//! The same shape was measured the same day for `https://brama.wisent.com`,
-//! which answers 502 `DNS_HOSTNAME_NOT_FOUND` at its edge. Two instances of one
-//! defect: a published product hostname that no public resolver can answer.
+//! untyped deployment environment variable. A MagicDNS name there answers
+//! only inside the tailnet: `ts.net`'s own authoritative nameserver returns
+//! NXDOMAIN for it, so every public read answers HTTP 503 with
+//! `originDiagnosis.state = dns_unresolved`, and `version-check` refuses
+//! every pull request with `error_code=infra_down` — while nothing in the
+//! product has declared that origin, refused it, or can report it. A
+//! published product hostname that no public resolver can answer is one
+//! defect wherever it appears.
 //!
 //! So the origin becomes a row in the canonical registry, and three things
 //! confront it with the world:

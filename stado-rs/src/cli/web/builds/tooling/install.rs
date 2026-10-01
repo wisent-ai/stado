@@ -13,10 +13,8 @@ use crate::cli::CmdError;
 /// being a fleet host: `npm ci` shells out to `git ls-remote ssh://git@…`,
 /// which needs a GitHub SSH key in that account. On Vercel the same products
 /// installed over HTTPS, because their `installCommand` rewrote the URL with
-/// `GITHUB_TOKEN` first. On 2026-09-06 `preferences` 0.1.2 built on
-/// charless-mac-mini for thirty-eight minutes and then failed with
-/// `git@github.com: Permission denied (publickey)` on
-/// `wisent-ai/deep-analytics`, because nothing did that rewrite here.
+/// `GITHUB_TOKEN` first; without that rewrite here a build runs for half an
+/// hour and then fails with `git@github.com: Permission denied (publickey)`.
 fn ssh_github_dependencies(lockfile: &Path) -> bool {
     std::fs::read_to_string(lockfile)
         .map(|body| body.contains("ssh://git@github.com/"))

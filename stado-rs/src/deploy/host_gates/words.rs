@@ -123,11 +123,10 @@ pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
 /// A NOTE and never a blocker: the fleet writes to the volume under the
 /// agent's home, and that volume's free space is the verdict above. It is
 /// reported because an operator reading "29 GiB free" on a box they know to
-/// hold terabytes has been told a true number about the wrong disk: on
-/// 2026-09-18 ubuntu-server-rtx-pro-6000 refused a 22 GiB build for want of
-/// room while a multi-terabyte disk sat attached and unmounted, and no
-/// command in the product could say so. `stado space report <host>` names
-/// the device, its size and its filesystem, if it has one.
+/// hold terabytes has been told a true number about the wrong disk: a build
+/// can be refused for want of room while a multi-terabyte disk sits attached
+/// and unmounted. `stado space report <host>` names the device, its size and
+/// its filesystem, if it has one.
 pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 
 /// This host's janitor has not completed a pass within
@@ -137,12 +136,11 @@ pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 /// its own condition rather than a shade of [`DISK_PRESSURE_UNRESOLVED`]:
 /// those two are the disk being full and the mechanism that empties it being
 /// dead, they fail at different times, and the second one is the one nothing
-/// in this product could see. On `lukasz-macbook` the janitor logged 12,197
-/// passes between 2026-08-18 and 2026-09-02 and deleted nothing in any of
-/// them — 8,539 never resolved a policy and 2,030 never got the run lock — so
-/// `last_success_at` stayed null for fifteen days while every gate in the
-/// fleet read green. The host then crossed its low watermark, releases stopped
-/// fleet-wide, and the space came back by hand at one in the morning.
+/// in this product could see. A janitor can log thousands of passes and
+/// delete nothing in any of them — most never resolving a policy, the rest
+/// never getting the run lock — so `last_success_at` stays null for weeks
+/// while every gate in the fleet reads green, until the host crosses its low
+/// watermark and releases stop fleet-wide.
 ///
 /// Two things this deliberately is not. It is not a pass that was PREVENTED:
 /// a workload holds the run lock in shared mode for its whole duration and
@@ -151,7 +149,7 @@ pub const DISK_ATTACHED_UNMOUNTED: &str = "disk_attached_unmounted";
 /// `last_prevented_at` and never accumulates here. And it does not refuse work
 /// on a host that still has its headroom: below the watermark a stalled
 /// janitor must block, because nothing is bringing the space back and
-/// admitting a job is how the incident above ended; above it, refusing work
+/// admitting a job is how a full disk follows; above it, refusing work
 /// creates no space and only removes capacity.
 ///
 /// Hosts that declare `mode: "off"` are exempt — a janitor nobody armed is not
@@ -170,10 +168,9 @@ pub const DISK_CLEANUP_STALLED: &str = "disk_cleanup_stalled";
 /// process on the other end of `~/.cache/wisent-compute/disk-cleanup.lock`,
 /// which `stado space report` names in `cleanup_lock.holders`.
 ///
-/// On 2026-09-03 charless-mac-mini reported the stalled word with 18.4 GiB
-/// free against a 15 GiB watermark while its own agent (pid 79473) held the
-/// lock, and lukasz-macbook reported it with 118.7 GiB free against 100. Both
-/// pointed at a disk that was fine. The mechanism —
+/// A host can report the stalled word with free space above its watermark
+/// while its own agent holds the lock, pointing an operator at a disk that is
+/// fine. The mechanism —
 /// [`crate::providers::local::slots::release_hold_for_exited_workload`] — is
 /// fixed, and this word exists so the next hold that outlives its workload is
 /// read as a lock and not as a full disk.
@@ -191,14 +188,12 @@ pub const DISK_CLEANUP_LOCK_HELD: &str = "disk_cleanup_lock_held";
 ///
 /// A BLOCKER whatever the disk says, unlike [`DISK_CLEANUP_STALLED`] and
 /// [`DISK_CLEANUP_LOCK_HELD`], because it is not a prediction about space:
-/// it is the claim path's own answer, read back. On 2026-09-10
-/// lukasz-macbook's janitor pass held the lock for two hours inside a
-/// directory open macOS had parked behind a consent dialog; every claim
-/// answered this word and took nothing, the publication kept saying
-/// `accepting_jobs: true`, this command read `claiming: yes` with
-/// `disk_cleanup_stalled` as a note, and the queued release delivery sat
-/// pinned to a host that could not start it. The remedy is the same as for
-/// the held lock: `stado space report` names the holder in
+/// it is the claim path's own answer, read back. A janitor pass can hold the
+/// lock for hours inside a directory macOS has parked behind a consent
+/// dialog; every claim answers this word and takes nothing while the
+/// publication still says `accepting_jobs: true`, and a queued release
+/// delivery sits pinned to a host that cannot start it. The remedy is the
+/// same as for the held lock: `stado space report` names the holder in
 /// `cleanup_lock.holders`.
 ///
 /// [`disk_cleanup::CLEANUP_IN_PROGRESS`]: crate::providers::local::disk_cleanup::CLEANUP_IN_PROGRESS
@@ -230,7 +225,7 @@ pub const AGENT_DECLARED_NOT_LOADED: &str = "agent_declared_not_loaded";
 ///
 /// Not the agent's word: a host does not know what a build it has not run
 /// will write. The coordinator reads the previous build's measured scratch
-/// from the run store and judges the publication against it, because the
-/// 0.20.3 darwin build was pinned to charless-mac-mini with fourteen GiB free
-/// and died of a full disk after twenty-five minutes of compiling.
+/// from the run store and judges the publication against it, because a build
+/// pinned to a host with too little room dies of a full disk after half an
+/// hour of compiling.
 pub const RELEASE_SCRATCH_SHORT: &str = "release_scratch_short";

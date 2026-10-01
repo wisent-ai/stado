@@ -50,10 +50,10 @@ pub struct SystemDaemon {
     pub foreign_pids: Vec<String>,
     /// The whole argument vector the unit declares, single-spaced.
     ///
-    /// The argv and not the program: every Stado service on control-host
-    /// runs `/Users/charles/.stado/bin/stado`, so the program is the fleet and
-    /// the argv is the unit. A restart that resolved its pids by program TERMed
-    /// eight processes there on 2026-08-19 and reported one unit restarted.
+    /// The argv and not the program: every Stado service on a host runs
+    /// `~/.stado/bin/stado`, so the program is the fleet and the argv is the
+    /// unit. A restart that resolved its pids by program would TERM every
+    /// Stado process there and report one unit restarted.
     pub argv: String,
 }
 

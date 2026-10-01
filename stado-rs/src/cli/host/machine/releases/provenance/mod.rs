@@ -24,10 +24,9 @@ mod trailers;
 /// written by the release path when it installs them, and carries the same
 /// four facts - commit, digest, when, by whom. Reading only the first reported
 /// every pipeline-delivered binary as `unprovenanced`, which is the confident
-/// wrong answer this command exists to prevent: on 2026-09-08 a leased target
-/// on `charless-mac-mini` was delivered 0.16.38 through the product, kept the
-/// receipt beside the staged copy, and was still reported as accounted for by
-/// nothing.
+/// wrong answer this command exists to prevent: a leased target delivered a
+/// release through the product keeps the receipt beside the staged copy and
+/// would still be reported as accounted for by nothing.
 ///
 /// Manifests and receipts are flattened to one line each so the three kinds of
 /// output can be told apart by tag rather than by parsing position, and a host

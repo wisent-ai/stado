@@ -20,10 +20,9 @@ const AMBIENT_VARIABLES: [&str; 12] = [
 ///
 /// A launchd job inherits almost nothing, so a plist that names none of what
 /// its program requires is a unit that cannot work — and it fails on its
-/// interval, quietly, forever. `com.wisent.host-health-beacon-collect` on
-/// lukasz-macbook carried `HOME` and `PATH` while its program required
-/// `STADO_HOST_HEALTH_API_URL`; it failed every five minutes from 12 August
-/// into a log nobody read, and the fleet's own beacon age never noticed
+/// interval, quietly, forever: a beacon collector carrying only `HOME` and
+/// `PATH` whose program requires `STADO_HOST_HEALTH_API_URL` fails every run
+/// into a log nobody reads, and the fleet's own beacon age never notices
 /// because the other hosts self-publish.
 ///
 /// The population is scripts under the account's own home — a fleet script,

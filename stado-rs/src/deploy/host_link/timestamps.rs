@@ -20,7 +20,7 @@ pub(super) fn parse_stamp(raw: &str) -> Option<DateTime<FixedOffset>> {
         "%Y-%m-%d %H:%M:%S %z",
         // log show --style ndjson: `2026-08-19 11:59:32.869840-0700`
         "%Y-%m-%d %H:%M:%S%.f%z",
-        // journalctl -o short-iso, as ubuntu-server spells it:
+        // journalctl -o short-iso, as Ubuntu spells it:
         // `2026-08-17T19:46:46+00:00`
         "%Y-%m-%dT%H:%M:%S%:z",
         // journalctl -o short-iso where the offset carries no colon

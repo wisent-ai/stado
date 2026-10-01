@@ -5,12 +5,10 @@ use crate::deploy::service::*;
 /// One managed unit whose live process is not executing the file the unit's
 /// own `ProgramArguments` name — or one the question could not be asked about.
 ///
-/// Measured on `lukasz-macbook` on 2026-09-02, and the measurement is why this
-/// exists. `com.wisent.transcript-lake-stream` had been running pid 99986
-/// since the previous afternoon on inode 125374164, 3,058,288 bytes, zero
-/// links; the `/Users/lukaszbartoszcze/.local/bin/transcript-lake` its plist
-/// names resolved to inode 181713431 at 2,958,720 bytes, written that morning.
-/// Nothing in the fleet reported it and nothing could have:
+/// A long-running unit can keep executing an unlinked inode of its program —
+/// zero links, the old size — while the path its plist names resolves to a
+/// newer file written since. Without this check nothing in the fleet reports
+/// it, and nothing could:
 /// `self_update::recycle_replaced_units` cycles a unit only as a side effect
 /// of the invocation that replaced its bytes, matches by string equality on
 /// `argv[0]`, compares no identity at all, and never revisits a unit it missed

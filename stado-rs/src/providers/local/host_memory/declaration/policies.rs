@@ -6,18 +6,16 @@
 //! exists because of what arming a host looked like without it: a shell line
 //! carrying eleven flags, in which the watermarks, the per-pass budget, the
 //! unit label, the recovery program, the process names and the authorization
-//! for ending a graphical session were all typed at the moment of the
-//! incident, reviewed by nobody, and recorded only in one machine's registry.
+//! for ending a graphical session would otherwise be typed at the moment of
+//! an incident, reviewed by nobody, and recorded only in one machine's
+//! registry.
 //!
-//! charless-mac-mini is what that costs. It carried a `report`-mode
-//! declaration whose single repair was `restart_unit`, and the unit it named
-//! kept a live process the whole time its listener was dying, so on
-//! 2026-09-10 at 08:05:43Z the pass read 799 MiB available against a 2048 MiB
-//! low watermark, recorded `pressure_active`, examined its one repair,
-//! skipped it as `unit_running`, and reclaimed nothing. A policy that cannot
-//! act on the pressure it reports is the shape
-//! `stado.wisent.com/docs/checks-that-measure-nothing` collects, and the fix
-//! is not a better shell line: it is a declaration whose repairs are chosen
+//! A `report`-mode declaration whose single repair is `restart_unit`, naming
+//! a unit that keeps a live process while its listener is dying, reads
+//! available memory below its low watermark, records `pressure_active`,
+//! examines its one repair, skips it as `unit_running`, and reclaims nothing.
+//! A policy that cannot act on the pressure it reports measures nothing, and
+//! the fix is not a better shell line: it is a declaration whose repairs are chosen
 //! for the host CLASS, kept beside the code that executes them, and read back
 //! the same way on every host.
 //!
@@ -251,10 +249,9 @@ pub fn matching_name(declared: &Value) -> Option<&'static str> {
 /// Whether a host's declaration repairs anything, and the sentence that says
 /// why not.
 ///
-/// This is the verdict charless-mac-mini did not have on 2026-09-06: a
-/// readable declaration is not a managed host, and a surface that prints the
-/// fields and leaves the judgement to the reader is how a `report`-mode
-/// policy sat through an out-of-memory incident looking like configuration.
+/// A readable declaration is not a managed host, and a surface that prints
+/// the fields and leaves the judgement to the reader lets a `report`-mode
+/// policy sit through an out-of-memory incident looking like configuration.
 pub fn automatic_verdict(declared: Option<&Value>) -> Value {
     let Some(document) = declared else {
         return json!({

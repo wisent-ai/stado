@@ -118,10 +118,9 @@ root chmod 600 "$runner_root/.profile"
 # `System.UnauthorizedAccessException: Access to the path
 # '<root>/.credentials_rsaparams' is denied` at
 # `RSAFileKeyManager.GetKey` -> `OAuthCredential.GetVssCredentials` ->
-# `BrokerMessageListener.CreateSessionAsync`. Measured on
-# ubuntu-server-rtx-pro-6000 on 2026-09-07; the unit reported `active
-# (running)` with `Result=success` and seven restarts throughout, and GitHub
-# reported the runner offline, because a crash loop this early writes nothing
+# `BrokerMessageListener.CreateSessionAsync`. The unit meanwhile reports
+# `active (running)` with `Result=success` and repeated restarts, and GitHub
+# reports the runner offline, because a crash loop this early writes nothing
 # journald keeps.
 for owned in .runner .runner_migrated .credentials .credentials_migrated .credentials_rsaparams .service; do
   [ -e "$runner_root/$owned" ] || continue

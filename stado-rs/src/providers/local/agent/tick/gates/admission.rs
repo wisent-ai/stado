@@ -98,11 +98,11 @@ pub(crate) async fn publish_and_admit(
     );
     // Whether a claim could take the workload lock right now. The claim path
     // asks the same question and answers `cleanup_in_progress` without a
-    // claim, so a publication that said `accepting_jobs: true` meanwhile was a
-    // host promising work it could not start: on 2026-09-10 lukasz-macbook
-    // published that for two hours while its janitor thread held the lock
-    // inside a consent-gated `openat`, `host gates` read `claiming: yes`, and
-    // a required release delivery sat queued against it. The probe takes the
+    // claim, so a publication saying `accepting_jobs: true` meanwhile is a
+    // host promising work it cannot start: while a janitor thread holds the
+    // lock inside a consent-gated `openat`, `host gates` reads `claiming:
+    // yes` and a required release delivery sits queued against it. The
+    // probe takes the
     // shared lock and releases it at once, which is what the claim would do,
     // and what it saw is published under the same key the claim path writes.
     let probe = crate::providers::local::disk_cleanup::acquire_workload_lock("admission-probe");

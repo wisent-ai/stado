@@ -1,16 +1,15 @@
 //! Verify and repair the browser runtime a Weles host declares it needs.
 //!
-//! NO Python original. This module exists because of what stopped the first
-//! real `generic_browser_task` on charless-mac-mini on 2026-08-30:
+//! NO Python original. A Weles host missing part of its browser runtime fails
+//! every `generic_browser_task` like this:
 //!
 //! ```text
 //! browserContext.newPage: Executable doesn't exist at
-//!   /Users/charles/Library/Caches/ms-playwright/ffmpeg-1011/ffmpeg-mac
+//!   ~/Library/Caches/ms-playwright/ffmpeg-<build>/ffmpeg-mac
 //! ...Video rendering requires ffmpeg binary...
 //! ```
 //!
-//! Three browser runs had already failed that way earlier the same day. The
-//! worker records its sessions, and the recordings are the evidence Weles
+//! The worker records its sessions, and the recordings are the evidence Weles
 //! exists to keep, so `newPage` dies before any navigation and every browser
 //! task on the host fails. Turning recording off would trade the product's
 //! own evidence for a green run; completing the runtime is the repair.

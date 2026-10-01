@@ -67,8 +67,8 @@ pub(super) fn assign_one(
         // Keep optimizer-side assignment aligned with agent-side eligibility.
         // A provider-pinned job assigned to a different consumer kind becomes
         // unclaimable: the pinned agent refuses it, and the assigned agent
-        // also refuses it. Confirmed live with a gcp-pinned smoke assigned to
-        // local-ubuntu-server.
+        // also refuses it: a gcp-pinned job assigned to a local consumer is
+        // never claimed by either.
         if job.pin_to_provider && job.provider != info.kind {
             continue;
         }

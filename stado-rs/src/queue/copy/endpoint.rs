@@ -97,13 +97,11 @@ impl Endpoint {
     /// So a `local` -> `stado` copy offers `ecosystem/<ns>/<key>` as a key and
     /// the API stores it at `ecosystem/<ns>/ecosystem/<ns>/<key>`, and a
     /// `stado` -> `local` copy writes `<key>` at the root with the namespace
-    /// dropped. Both happened on charless-mac-mini:
-    /// 9.6 GiB of
-    /// `ecosystem/probierz/ecosystem/probierz/` in the store the object API
-    /// serves, and bare `artifacts/`, `status/` and `runs/` trees in the backup
-    /// beside their correctly-qualified twins. Neither copy failed. Both
-    /// succeeded and silently produced objects at addresses nothing else in the
-    /// fleet will ever look at.
+    /// dropped: keys end up doubled under `ecosystem/<ns>/ecosystem/<ns>/` in
+    /// the store the object API serves, and bare `artifacts/`, `status/` and
+    /// `runs/` trees land in the backup beside their correctly-qualified
+    /// twins. Neither copy fails. Both succeed and silently produce objects at
+    /// addresses nothing else in the fleet will ever look at.
     pub fn keys_are_namespace_qualified(&self) -> bool {
         self.adapter() != Some(StorageAdapter::StadoObject)
     }
@@ -118,13 +116,11 @@ impl Endpoint {
     /// [`crate::queue::storage::JobStorage`] builds out of
     /// [`crate::queue::failover::ReadFailoverBackend`], which copies every
     /// single `upload_*` to the backup as it happens and asked nothing at all.
-    /// So on charless-mac-mini, where replication had been switched off hours
-    /// earlier, `~/.stado/local-backup` still refilled at 2 GiB per minute
-    /// while the queue drained: primary `stado` names objects by bare key, the
-    /// backup directory stores whatever name it is handed, and every artifact
-    /// a job published landed at `local-backup/artifacts/...` where no reader
-    /// looks. 48.29 GiB of it was deleted, and it was back over 15 GiB seven
-    /// minutes later.
+    /// So with replication switched off, `~/.stado/local-backup` still refills
+    /// at GiB per minute while the queue drains: primary `stado` names objects
+    /// by bare key, the backup directory stores whatever name it is handed,
+    /// and every artifact a job publishes lands at `local-backup/artifacts/...`
+    /// where no reader looks.
     ///
     /// [`replicate_configured_backup`]: super::replicate_configured_backup
     pub fn cannot_replicate(&self, other: &Self) -> Option<String> {
@@ -194,19 +190,19 @@ impl Endpoint {
     /// copy to it or inspect it.
     ///
     /// OUTSTANDING, and recorded here because it is a live gap rather than a
-    /// preference: `charless-mac-mini` has no disaster-recovery replica, and
-    /// there is currently no way to configure a correct one for it.
+    /// preference: a host whose primary is the object API has no correct
+    /// disaster-recovery replica, and there is currently no way to configure
+    /// one for it.
     ///
-    /// Its primary is the object API, addressed by bare ecosystem keys. Its
-    /// backup was a directory, addressed by namespace-qualified store paths, so
-    /// every replication pass re-addressed what it copied and the replica grew
-    /// to 48.5 GiB against a 32.7 GiB primary without ever becoming a replica.
-    /// [`replicate_configured_backup`] now refuses that pairing outright, which
-    /// is correct and also leaves the host with nothing. On 2026-08-30 the
-    /// operator's decision was to stop the corruption first: the host's
-    /// `storage.backup.backend` was set from `local` to `stado`, which makes the
-    /// primary and the backup the same store, so the pre-existing same-store
-    /// guard refuses every tick and nothing is written.
+    /// Its primary is addressed by bare ecosystem keys. A directory backup is
+    /// addressed by namespace-qualified store paths, so every replication pass
+    /// re-addresses what it copies and the replica grows larger than the
+    /// primary without ever becoming a replica. [`replicate_configured_backup`]
+    /// refuses that pairing outright, which is correct and also leaves the host
+    /// with nothing. Setting the host's `storage.backup.backend` to `stado`
+    /// stops the corruption: the primary and the backup are then the same
+    /// store, so the same-store guard refuses every tick and nothing is
+    /// written.
     ///
     /// Two things have to happen and neither is done. A host whose primary is
     /// the object API needs a backup that speaks the same addressing — a second

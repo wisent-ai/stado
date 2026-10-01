@@ -81,10 +81,9 @@ pub struct ComputeTarget {
     ///
     /// Declared with `stado space work-root TARGET --path PATH`, which also
     /// creates the directory on the host owned by the agent's account. It
-    /// exists because on 2026-09-18 ubuntu-server-rtx-pro-6000 refused a
-    /// 22 GiB build for want of room on its 98 GiB root volume while 13 TiB
-    /// sat free on `/mnt/wd16tb`, and nothing in the product could tell the
-    /// agent to work there.
+    /// exists because a host whose home sits on a small root volume refuses
+    /// builds for want of room while terabytes sit free on another mount,
+    /// and nothing else in the product can tell the agent to work there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_root: Option<String>,
     /// The memory twin of [`ComputeTarget::disk_cleanup`]: what this host is

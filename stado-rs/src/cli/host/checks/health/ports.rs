@@ -1,14 +1,13 @@
 //! Who holds one TCP port on a managed host.
 //!
 //! A unit that cannot start because its port is taken is one of the few
-//! faults this fleet could not diagnose through the product. On 2026-09-21
-//! `com.wisent.always-on.skarbiec` on charless-mac-mini exited 1 with
-//! `bind 127.0.0.1:8895: Address already in use` on every spawn, while
-//! `stado service verify` called the same port `unreachable (Connection reset
-//! by peer)` and `stado service reap` kept every candidate row because a
-//! declared label held it. Nothing in Stado could say which process owned the
-//! socket, so the diagnosis went by guesswork and the owner vault stayed down
-//! — and every credential read on the fleet goes through it.
+//! faults the fleet could not diagnose through the product. A unit can exit 1
+//! with `bind 127.0.0.1:<port>: Address already in use` on every spawn while
+//! `stado service verify` calls the same port `unreachable (Connection reset
+//! by peer)` and `stado service reap` keeps every candidate row because a
+//! declared label holds it. Without a read of who owns the socket the
+//! diagnosis goes by guesswork, and when the unit is the owner vault every
+//! credential read on the fleet waits on that guess.
 //!
 //! This is that missing answer: the listener's pid, user and command, read
 //! over the host channel with a fixed read, on macOS and Linux both.

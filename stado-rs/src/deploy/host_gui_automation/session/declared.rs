@@ -37,11 +37,11 @@ pub(in crate::deploy::host_gui_automation) fn automates_declared_session(
 ///
 /// Without this the resolution is silent and plausible: `login_user` answers with
 /// whoever is at `/dev/console`, every step succeeds against that user, and `status`
-/// ends with `gui-ready yes`. On charless-mac-mini on 2026-09-04 that sentence was
-/// true about the `charles` session and useless about the fleet: the Apple account the
-/// registry places there is signed into `controlyourai-relay`, whose prompts the
-/// `charles` session cannot see. Enabling the wrong session is not partial progress
-/// towards reading a code; it is a certainty of never reading one.
+/// ends with `gui-ready yes` — true about the console session and useless about
+/// the fleet when the Apple account the registry places there is signed into
+/// another macOS user, whose prompts the console session cannot see. Enabling
+/// the wrong session is not partial progress towards reading a code; it is a
+/// certainty of never reading one.
 pub(in crate::deploy::host_gui_automation) fn require_declared_session(
     target: &ComputeTarget,
     user: &str,

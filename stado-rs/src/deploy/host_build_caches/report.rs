@@ -25,8 +25,7 @@ pub struct BuildCacheReport {
     /// seconds over a large declared root has already produced every other
     /// figure in the report, and failing the whole command then throws away
     /// the free space, the watermarks, the janitor's last pass and the
-    /// coverage — which is exactly what `space report` did on lukasz-macbook
-    /// on 2026-09-20, exit 1, after printing all of them.
+    /// coverage after printing all of them.
     pub timed_out: bool,
 }
 

@@ -15,12 +15,9 @@ const RESTART_LOOP_RUNS: u64 = 500;
 /// A job's run count is work it did, not a loop it is in.
 ///
 /// A one-shot with `KeepAlive` is invisible to every other check here: it
-/// reads `active`, it exits, launchd restarts it, forever. Nothing reported
-/// the count, so on charless-mac-mini
-/// `com.wisent.compute.service.com.wisent.claude-reauth-once` — a job whose
-/// own name says `once` — had run 45,418 times and exited 1 every single time,
-/// into a log nobody read; `stado-resolver` was at 50,863 and `brama-funnel`
-/// at 50,436.
+/// reads `active`, it exits, launchd restarts it, forever. A job whose own
+/// name says `once` can run tens of thousands of times and exit 1 every
+/// single time, into a log nobody reads.
 ///
 /// Two findings, deliberately separate. A job looping is one defect; a job
 /// whose last exit is non-zero is another, and a host can have either without

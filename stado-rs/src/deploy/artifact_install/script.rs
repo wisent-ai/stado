@@ -70,12 +70,11 @@ echo "STADO_DETAIL=$program"
 /// Retire the version trees this install just made unreachable.
 ///
 /// Every install stages one tree per version beside the one before it, and
-/// nothing ever removed the ones a rollback can no longer reach. Measured on
-/// `charless-mac-mini` on 2026-09-05: superseded trees under
-/// `~/.stado/services` for `stado-object-api` and `weles-admission` held about
-/// 6 GiB while the disk sat at 6.1 GiB against the janitor's 15 GiB low
-/// watermark, so the host claimed nothing and the space came back only because
-/// an operator ran `stado space reclaim` by hand - four times in one day. The
+/// nothing would ever remove the ones a rollback can no longer reach.
+/// Superseded service trees under `~/.stado/services` can hold several GiB
+/// while the disk sits below the janitor's low watermark, so the host claims
+/// nothing and the space comes back only when an operator runs `stado space
+/// reclaim` by hand. The
 /// janitor cannot reach these: its declared cleaners cover the release store,
 /// build caches, queue workdirs and browser clones, and a delivered service
 /// tree is none of those.

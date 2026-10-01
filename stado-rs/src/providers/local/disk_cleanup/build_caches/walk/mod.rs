@@ -107,15 +107,12 @@ impl<'a> Walk<'a> {
     /// anything. A build tool writes its cache at the TOP of the tree it
     /// generates — that is where the standard puts `CACHEDIR.TAG` — so every
     /// candidate is shallow and everything deep is some tree's contents. A
-    /// depth-first walk spends its budget the other way round: on
-    /// `lukasz-macbook` on 2026-09-02, crossing the declared root took
-    /// 803,825 directories against a `max_scan_items` of 100,000, and the
-    /// walk was still inside the first repository's `node_modules` — 7,297
-    /// directories deep into one alphabetically-first branch — having
-    /// examined none of the 174 tagged caches the tree holds, including a
-    /// 62 GiB `target/`. Visiting by level reaches 41 of them in 5,808
-    /// charges and 107 in 38,578, all of them inside one pass's budget, on
-    /// the same tree with the same cap.
+    /// depth-first walk spends its budget the other way round: crossing a
+    /// workspace root can take hundreds of thousands of directories against a
+    /// `max_scan_items` of 100,000, with the walk still inside the first
+    /// repository's `node_modules`, having examined none of the tagged caches
+    /// the tree holds. Visiting by level reaches most of them inside one
+    /// pass's budget, on the same tree with the same cap.
     ///
     /// The order changes only WHICH directories a bounded pass gets to look
     /// at. Every deletion criterion — the tag, the age, the reserved roots,

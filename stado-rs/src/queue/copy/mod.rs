@@ -89,12 +89,12 @@ pub use run::{copy, plan, replicate_configured_backup};
 ///
 /// `job-transitions/` holds the durable transition documents
 /// (`queue::storage::TRANSITION_PREFIX`) that make a claim, a completion and
-/// a cancellation survive a crash between two writes. It arrived on
-/// 2026-09-01 without a line here or in any host's object policy, and the
-/// object API on `charless-mac-mini` answered every agent claim with 401
-/// until 2026-09-03 while the agent restarted after each one. This list is
-/// what `config::queue_prefixes_missing` holds every `probierz` object policy
-/// to, so a prefix the binary uses is granted before the binary is delivered.
+/// a cancellation survive a crash between two writes. A prefix the binary
+/// uses without a line here or in a host's object policy makes the object API
+/// answer every agent claim with 401 while the agent restarts after each one.
+/// This list is what `config::queue_prefixes_missing` holds every `probierz`
+/// object policy to, so a prefix the binary uses is granted before the binary
+/// is delivered.
 ///
 /// [`BlobBackend`]: super::BlobBackend
 pub const CANONICAL_PREFIXES: &[&str] = &[

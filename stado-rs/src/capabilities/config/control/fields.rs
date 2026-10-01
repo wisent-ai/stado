@@ -74,14 +74,12 @@ pub const ALERT_RESEND_FIELD_CONFIG: ConfigField = ConfigField::scalar(
 /// Which vault on this machine holds the operator's own items.
 ///
 /// Discovery answers this when a machine holds exactly one candidate vault,
-/// and refuses when two of them claim the same owner — `stado host vaults`
-/// on `lukasz-macbook` names eight, two of which are owned by the same
-/// identity with 660 and 626 items. Until this key existed the only way past
-/// that refusal was `SKARBIEC_VAULT_FILE` in one process's environment, which
-/// answers for that invocation and for nothing else: the next command, the
-/// next agent and every launchd unit each got their own answer, and six real
-/// `skarbiec set-json` writes went to a vault the release verifier does not
-/// read.
+/// and refuses when two of them claim the same owner. Without this key the
+/// only way past that refusal is `SKARBIEC_VAULT_FILE` in one process's
+/// environment, which answers for that invocation and for nothing else: the
+/// next command, the next agent and every launchd unit each get their own
+/// answer, and real `skarbiec set-json` writes go to a vault the release
+/// verifier does not read.
 ///
 /// The environment variable still wins, because it is how a build is
 /// exercised before it is installed, but it is no longer the only durable

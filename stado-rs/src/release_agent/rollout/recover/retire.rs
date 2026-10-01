@@ -13,15 +13,14 @@
 //!
 //! # What went wrong
 //!
-//! On `lukasz-macbook` the Skarbiec release digest `55f2cf47…` was quarantined
-//! at 2026-09-17T21:50:31Z for `readiness_probe_unanswered` — the stable bind
-//! did not answer `/readyz` within three seconds on a host that was out of
-//! disk. Nothing retried it. Three days later the agent still reported
+//! A release digest quarantined for `readiness_probe_unanswered` — the stable
+//! bind not answering `/readyz` within three seconds on a host that was out of
+//! disk — would never be retried. Days later the agent would still report
 //! `phase: quarantined`, `observed: -`, and every command that resolves the
-//! release-controlled Skarbiec binary refused with `no observed active release
-//! (phase Quarantined)`: `credentials item show`, `credentials grant show`,
-//! `release catalog declare-publisher`, and with them the Most provider
-//! credential read and the whole fleet's release publication.
+//! release-controlled Skarbiec binary would refuse with `no observed active
+//! release (phase Quarantined)`: `credentials item show`, `credentials grant
+//! show`, `release catalog declare-publisher`, and with them provider
+//! credential reads and the whole fleet's release publication.
 //!
 //! # What is defended here
 //!

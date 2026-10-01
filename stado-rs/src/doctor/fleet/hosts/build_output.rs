@@ -1,13 +1,13 @@
 //! Whether the cleaner a host declares reaches the build output it holds.
 //!
-//! The defect this row exists for produced no error anywhere. `lukasz-macbook`
-//! declared the `build_caches` cleaner, the cleaner covered the root it was
-//! pointed at, and 843 GB of tagged `target/` trees sat in a checkout four and
-//! five levels below the home directory. Every reading was true — free space,
-//! the janitor's outcome, the cleaner list — and the volume reached 97% with
-//! 2.1 GiB free, which is where a release build begins to fail for want of
-//! scratch. A declaration that reaches nothing is not visible from the
-//! declaration; it is only visible from the measurement beside it.
+//! The defect this row exists for produces no error anywhere. A host can
+//! declare the `build_caches` cleaner, the cleaner can cover the root it is
+//! pointed at, and hundreds of GB of tagged `target/` trees can sit in a
+//! checkout several levels below the home directory. Every reading is true —
+//! free space, the janitor's outcome, the cleaner list — while the volume
+//! fills to where a release build begins to fail for want of scratch. A
+//! declaration that reaches nothing is not visible from the declaration; it
+//! is only visible from the measurement beside it.
 //!
 //! The measurement is the census `host_disk` collects: every directory
 //! carrying its build tool's own `CACHEDIR.TAG`. This row compares it with the

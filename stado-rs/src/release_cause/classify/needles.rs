@@ -64,10 +64,9 @@ pub(super) const READINESS_UNANSWERED_NEEDLES: &[&str] = &["did not answer withi
 /// probe, because a probe that timed out is the outer symptom and this is
 /// the reading underneath it: the agent watched a pid it had started, the
 /// stderr it retained shows the release bound its port and announced
-/// itself, and then the pid was not there. On charless-mac-mini on
-/// 2026-09-21 that sentence — `active release lost readiness: pid 97314 is
-/// gone` — read `unclassified`, so the desired Skarbiec digest was never
-/// retired and the host's vault stayed dead for hours.
+/// itself, and then the pid was not there. Read as `unclassified`, `active
+/// release lost readiness: pid <pid> is gone` would leave the desired digest
+/// never retired and the host's vault dead for hours.
 pub(super) const PROCESS_VANISHED_NEEDLES: &[&str] = &["is gone"];
 
 /// Another process already holds the port the release must serve on. Both

@@ -4,9 +4,9 @@ use crate::deploy::service::*;
 /// keyed by label and valued by the unit file to read.
 ///
 /// Two sources, because either alone has a blind spot this check cannot
-/// afford. The registry's own `services` array is the declared set — and
-/// `com.wisent.compute.disk-cleanup.disk-cleanup`, the unit the whole incident
-/// happened to, is not in it on `lukasz-macbook`. The three unit directories
+/// afford. The registry's own `services` array is the declared set — and a
+/// unit such as `com.wisent.compute.disk-cleanup.disk-cleanup` can be missing
+/// from it on a given host. The three unit directories
 /// carry every label this fleet installed whether the document adopted it or
 /// not, which is the class [`UndeclaredUnit::fleet_affiliated`] was widened to
 /// see, and they miss a declared unit whose file has been deleted. The union

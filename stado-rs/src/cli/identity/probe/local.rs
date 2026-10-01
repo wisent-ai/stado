@@ -38,7 +38,7 @@ pub(in crate::cli::identity) fn is_local_target(target: &ComputeTarget) -> bool 
     if host.is_empty() {
         return false;
     }
-    // Compare the leading label only. `hostname -s` gives "Lukaszs-MacBook-Pro-5485"
+    // Compare the leading label only. `hostname -s` gives "Operator-MacBook-Pro"
     // while the registry records the mDNS form "operator-host.local", and
     // an exact match fails on that suffix unannounced -- reporting the local machine as
     // unverifiable while standing on it.

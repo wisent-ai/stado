@@ -6,11 +6,11 @@ use serde_json::{json, Value};
 /// Which of a host's vaults its own credential operations resolve to, given
 /// what that host declares in `secrets.skarbiec.vault_file`.
 ///
-/// The counts were never the question an operator arrives with. `stado host
-/// vaults lukasz-macbook` answered "8 vault(s)" for months while two of them
-/// claimed one owner, and nothing in the report said that every owner write
-/// and every authoritative read on that machine was refused because of it —
-/// that surfaced only when `stado repair stado --step release-verifier` failed,
+/// The counts are not the question an operator arrives with. `stado host
+/// vaults <host>` can answer "8 vault(s)" while two of them claim one owner,
+/// and a count says nothing of every owner write and every authoritative
+/// read on that machine being refused because of it — which otherwise
+/// surfaces only when `stado repair stado --step release-verifier` fails,
 /// with the fleet's release publication boundary already closed.
 ///
 /// The three states are the resolution rule itself, and no item name is

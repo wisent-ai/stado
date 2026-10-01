@@ -1,10 +1,10 @@
 //! The one repair that reaches outside software Stado declared: terminating
 //! a named process of the logged-in graphical session.
 //!
-//! It exists because that is what actually held the memory on
-//! charless-mac-mini on 2026-09-06 — WindowManager at 718 MB, Safari with
-//! eight WebKit content processes, Messages spinning at 90% CPU — and no
-//! amount of restarting Stado's own units would have returned it. It is also
+//! It exists because a logged-in graphical session can be what actually
+//! holds the memory — a window manager, a browser's content processes, a
+//! spinning chat client — and no amount of restarting Stado's own units
+//! returns it. It is also
 //! the one repair that can lose a person's unsaved work, so it is the one
 //! repair that needs two declarations: the registry must name the repair AND
 //! the repair must carry `allow_graphical_session: true`. Declared without

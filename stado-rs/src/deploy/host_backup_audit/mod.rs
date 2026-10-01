@@ -1,11 +1,9 @@
 //! Classify a host's local disaster-recovery replica against the store it is
 //! supposed to mirror, object by object, before anything is deleted.
 //!
-//! Written for charless-mac-mini on 2026-08-30, where the replica had become
-//! the largest single consumer on the one machine whose disk was blocking a
-//! stalled queue:
-//! 48.5 GiB of `~/.stado/local-backup` against a 32.7 GiB
-//! primary. It got there because replication crossed two addressings — the
+//! A local replica can become the largest single consumer on a host whose
+//! disk is blocking a stalled queue, larger than the primary it mirrors. It
+//! gets there when replication crosses two addressings — the
 //! object API answers in bare ecosystem keys, a directory in
 //! namespace-qualified store paths — so every pass wrote its objects at names
 //! nothing resolves, and [`crate::queue::copy::prune_backup_extras`] only ever

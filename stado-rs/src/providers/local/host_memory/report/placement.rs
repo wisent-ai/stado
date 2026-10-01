@@ -7,13 +7,12 @@
 //! twin publishes all of them - free bytes, the low watermark, the target, the
 //! policy mode and the janitor's whole last report.
 //!
-//! On 2026-09-10 that asymmetry cost a release. `skarbiec` could not build
-//! `linux-amd64` because the only Linux builder was refusing placement, and
-//! `stado host gates ubuntu-server-rtx-pro-6000` answered `accepting_jobs:
-//! false` with 62.8 GiB of 123.0 GiB free RAM and not one word about which
-//! watermark had been crossed: the reason sat in `diag.admission_reason` with
-//! no measurement beside it, so nobody could tell whether memory or swap had
-//! refused the host, or by how much.
+//! That asymmetry can cost a release: a product cannot build for Linux
+//! because the only Linux builder refuses placement, and `stado host gates
+//! <host>` answers `accepting_jobs: false` with half its RAM free and not one
+//! word about which watermark was crossed. The reason sits in
+//! `diag.admission_reason` with no measurement beside it, so nobody can tell
+//! whether memory or swap refused the host, or by how much.
 
 use serde_json::{Map, Value};
 

@@ -2,13 +2,11 @@
 # looked at. `service converge` compares the DECLARED products under
 # `$HOME/<root>/<name>` against the registry and says `in-sync`; a unit whose
 # program is `$HOME/.stado/services/<label>/current/<platform>/<program>` is
-# versioned by content hash and was swept by nothing. On 2026-08-31
-# charless-mac-mini's object API - the store behind `stado://probierz` and
-# the release ingress - was serving an artefact from before 19 August under a
-# current declaration, on a host whose `.stado/bin/stado` had been 0.13.13
-# since that morning. Both mtimes travel here so the comparison is a fact
-# rather than an inference: an artefact older than the installed program of
-# the same name is running code the fleet has already replaced.
+# versioned by content hash and was swept by nothing. An object API can serve
+# an artefact weeks old under a current declaration, on a host whose
+# `.stado/bin/stado` is current. Both mtimes travel here so the comparison is
+# a fact rather than an inference: an artefact older than the installed
+# program of the same name is running code the fleet has already replaced.
 printf '],"service_artifacts":['
 separator=""
 services_root="$HOME/.stado/services"
