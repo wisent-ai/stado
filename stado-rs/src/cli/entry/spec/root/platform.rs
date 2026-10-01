@@ -116,7 +116,7 @@ pub(crate) enum PlatformCommands {
     #[command(subcommand)]
     Storage(storage::StorageCommands),
     /// Read, migrate, and manage application credentials in the selected store.
-    #[command(name = "credentials", visible_alias = "secrets", subcommand)]
+    #[command(name = "credentials", subcommand)]
     Secrets(secrets::SecretsCommands),
     /// Maintenance mode: pause/resume dispatching, and drain the fleet.
     #[command(subcommand)]
