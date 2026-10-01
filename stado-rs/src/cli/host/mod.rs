@@ -89,7 +89,7 @@ pub use crate::cli::host::secrets::vault::token::{vault_token_sync, TokenSyncMod
 pub(crate) use crate::cli::host::secrets::vault::vault_word;
 pub use crate::cli::host::secrets::vault::vaults;
 pub use crate::cli::host::secrets::weles::sync_acquisition_scopes;
-pub use crate::cli::host::secrets::weles::trust::render::render_spis_admission_trust;
+pub use crate::cli::host::secrets::weles::trust::render::render_public_document;
 
 pub(crate) use crate::cli::host::checks::health::beacon_store;
 pub(crate) use crate::cli::host::checks::recovery::apply_host_repair;

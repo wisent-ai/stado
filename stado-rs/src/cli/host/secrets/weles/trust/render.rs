@@ -1,13 +1,13 @@
 use crate::cli::CmdError;
 
 use crate::cli::host::files::forwarding::{deliver_file, DELIVERED_FILES_DIR};
-use crate::cli::host::secrets::weles::trust::judge::judge_spis_trust;
+use serde_json::Value;
 use crate::cli::host::secrets::weles::trust::live_skarbiec_environment;
 use crate::cli::host::secrets::weles::{catalog_file_name, remove_remote};
 
-/// `stado host render-spis-admission-trust TARGET SOURCE` — deliver the
-/// checked-in Weles renderer to TARGET and print the public Spis receipt-trust
-/// document it builds there.
+/// `stado host render-public-document TARGET SOURCE` — deliver a checked-in
+/// renderer to TARGET and print the public JSON document it builds there from
+/// TARGET's own live vault.
 ///
 /// The point of doing it this way is what does NOT travel. The admission
 /// authority's private half stays in the vault it was minted into; the
@@ -24,7 +24,7 @@ use crate::cli::host::secrets::weles::{catalog_file_name, remove_remote};
 /// Unlike that command this one reaps what it delivered — the retired helper
 /// channel had a writer and no reaper, and `host provenance` still counts the
 /// scripts it left behind.
-pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(), CmdError> {
+pub async fn render_public_document(target: &str, source: &str) -> Result<(), CmdError> {
     use crate::deploy::host_channel;
 
     let metadata = std::fs::symlink_metadata(source)?;
@@ -153,7 +153,7 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
             "the renderer refused",
         )));
     }
-    judge_spis_trust(&rendered.stdout).map_err(refused)?;
+    public_document(&rendered.stdout).map_err(refused)?;
 
     // The host's own bytes, verbatim: this document is committed to a public
     // repository and compared byte-for-byte at activation, so re-serializing
@@ -161,6 +161,18 @@ pub async fn render_spis_admission_trust(target: &str, source: &str) -> Result<(
     print!("{}", rendered.stdout);
     if !rendered.stdout.ends_with('\n') {
         println!();
+    }
+    Ok(())
+}
+
+/// What any document leaving the host must be: one JSON document with no
+/// private key material. Its shape is the consumer's to check; a document
+/// carrying a private half is the one mistake this command exists to make
+/// impossible, whoever consumes it.
+fn public_document(text: &str) -> Result<(), String> {
+    serde_json::from_str::<Value>(text).map_err(|_| "the renderer did not emit one JSON document")?;
+    if text.contains("PRIVATE KEY") {
+        return Err("the rendered document carries private key material".to_string());
     }
     Ok(())
 }

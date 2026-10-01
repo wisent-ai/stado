@@ -1,26 +1,8 @@
-//! The SPIS Weles receipt-trust document.
+//! A public document rendered on a host from its own live vault.
 
-pub(in crate::cli::host) mod judge;
 pub(in crate::cli::host) mod render;
 
 use crate::targets::ComputeTarget;
-
-/// The schema both halves of the Spis/Weles bridge require of the public
-/// receipt-trust document.
-const SPIS_TRUST_SCHEMA: &str = "wisent.spis-weles-receipt-trust.v1";
-
-/// The one browser action the Spis admission binding grants.
-const SPIS_TRUST_ACTION: &str = "generic_browser_task";
-
-/// Exactly the fields the document carries. A sixth would be refused by the
-/// consumer's `deny_unknown_fields` deserializer, so it is refused here first.
-const SPIS_TRUST_FIELDS: &[&str] = &[
-    "schema",
-    "organizationId",
-    "allowedAction",
-    "receiptKeys",
-    "keySetVersion",
-];
 
 /// The managed Skarbiec units whose own environment names the vault the
 /// daemon actually serves, at the system paths the fleet installs them.

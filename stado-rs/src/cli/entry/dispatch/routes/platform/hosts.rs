@@ -165,8 +165,8 @@ async fn runs(command: HostRunCommands) -> Result<(), CmdError> {
             apply,
             json,
         } => host::cron(&target, prune.as_deref(), restore.as_deref(), apply, json).await,
-        HostRunCommands::RenderSpisAdmissionTrust { target, source } => {
-            host::render_spis_admission_trust(&target, &source).await
+        HostRunCommands::RenderPublicDocument { target, source } => {
+            host::render_public_document(&target, &source).await
         }
         HostRunCommands::Exec {
             target,

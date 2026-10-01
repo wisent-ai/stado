@@ -140,12 +140,10 @@ pub(crate) enum HostRunCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Deliver the checked-in Weles receipt-trust renderer to TARGET and print
-    /// the public five-field Spis receipt-trust document it builds from
-    /// TARGET's own live Skarbiec. The admission authority's private half
-    /// never leaves the host.
-    #[command(name = "render-spis-admission-trust")]
-    RenderSpisAdmissionTrust {
+    /// Deliver a checked-in renderer to TARGET and print the public JSON
+    /// document it builds from TARGET's own live vault. Private material never
+    /// leaves the host: a rendered document carrying a private key is refused.
+    RenderPublicDocument {
         target: String,
         /// Local renderer to deliver and run.
         source: String,
