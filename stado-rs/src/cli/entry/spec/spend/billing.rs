@@ -23,7 +23,7 @@ pub(crate) enum BillingCommands {
     /// outside the cloud it monitors (see `cli/billing.rs` module docs).
     Watch {
         /// Poll interval as a duration string: 45s, 5m, 2h, 1d.
-        #[arg(long, default_value = "5m", value_parser = billing::parse_interval)]
+        #[arg(long, value_parser = billing::parse_interval)]
         interval: std::time::Duration,
         /// Evaluate once and exit instead of looping.
         #[arg(long)]

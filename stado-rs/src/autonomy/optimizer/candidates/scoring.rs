@@ -19,10 +19,9 @@ use crate::models::Job;
 use super::feedback::{observed_failure_probability, observed_startup_seconds};
 use super::shapes::{crosses_provider_boundary, machine_capacity};
 
-const CLOUD_STARTUP_SECONDS: f64 =
-    (crate::monitor::billing::SECONDS_PER_MINUTE * (u16::BITS / u8::BITS) as u64) as f64;
-const DEFAULT_FAILURE_PROBABILITY: f64 = f64::EPSILON;
-
+/// A target with no recorded startup is not charged one, and a target with
+/// no recorded failures carries no retry cost: the pass prices only what
+/// feedback has observed.
 pub(super) fn candidate(
     job: &Job,
     offer: &CapacityOffer,
@@ -39,10 +38,10 @@ pub(super) fn candidate(
     let startup = if offer.existing {
         f64::default()
     } else {
-        observed_startup_seconds(feedback, &offer.target_id).unwrap_or(CLOUD_STARTUP_SECONDS)
+        observed_startup_seconds(feedback, &offer.target_id).unwrap_or_default()
     };
-    let failure_probability = observed_failure_probability(feedback, &offer.target_id)
-        .unwrap_or(DEFAULT_FAILURE_PROBABILITY);
+    let failure_probability =
+        observed_failure_probability(feedback, &offer.target_id).unwrap_or_default();
     let hourly = if offer.provider == ProviderId::Local && quote.is_none() {
         policy.local_hourly_cost_usd.or(Some(f64::default()))
     } else {
@@ -55,9 +54,7 @@ pub(super) fn candidate(
         .as_deref()
         .map(|raw| match chrono::DateTime::parse_from_rfc3339(raw) {
             Ok(deadline) => {
-                let remaining = (deadline.with_timezone(&Utc) - context.now).num_milliseconds()
-                    as f64
-                    / chrono::Duration::seconds(true as i64).num_milliseconds() as f64;
+                let remaining = (deadline.with_timezone(&Utc) - context.now).as_seconds_f64();
                 let lateness = (expected_finish - remaining).max(f64::default());
                 if lateness > f64::default() {
                     deadline_rejection = Some(format!(

@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
-use super::{PriceQuote, PriceSource, PriceState, PRICING_HTTP_TIMEOUT};
+use super::{PriceQuote, PriceSource, PriceState};
 use taxonomy::{gcp_sku_taxonomy, SkuTaxonomy};
 
 const COMPUTE_ENGINE_SERVICE: &str = "6F81-5844-456A";
@@ -42,10 +42,7 @@ pub(super) async fn gcp_prices(observed_at: DateTime<Utc>) -> PriceSource {
             return source;
         }
     };
-    let client = reqwest::Client::builder()
-        .timeout(PRICING_HTTP_TIMEOUT)
-        .build()
-        .expect("pricing HTTP client builds");
+    let client = reqwest::Client::new();
     let taxonomy = match gcp_sku_taxonomy(&client, token.as_str()).await {
         Ok(taxonomy) => taxonomy,
         Err(error) => {

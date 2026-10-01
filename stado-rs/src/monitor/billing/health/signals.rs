@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::{humanize, ProviderHealth, Signal, HEALTH_GRACE_SECONDS};
+use super::{humanize, ProviderHealth, Signal};
 use crate::config;
 use crate::monitor::billing::format::{py_f64, py_value};
 
@@ -28,14 +28,13 @@ pub(super) fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Sig
             subject: format!("stado billing: {} account unhealthy", health.provider),
             message: format!(
                 "BILLING ACCOUNT HEALTH: the {} billing section has reported '{}' since {} \
-                 ({} and counting), past the {} grace period. Last good report: {}. \
+                 ({} and counting). Last good report: {}. \
                  Cause: {}. While this persists {} publishes no balance at all, so the \
                  credit-threshold alert CANNOT fire — treat this as the outage warning.",
                 health.provider,
                 health.status,
                 health.failing_since.as_deref().unwrap_or("an unknown time"),
                 humanize(health.failing_seconds),
-                humanize(HEALTH_GRACE_SECONDS),
                 health.last_ok.as_deref().unwrap_or("never"),
                 cause,
                 health.provider,

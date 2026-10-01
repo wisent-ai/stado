@@ -37,7 +37,7 @@ pub struct ReconcileSummary {
     pub operation_id: Option<String>,
     pub findings: usize,
     pub automatic_actions: usize,
-    pub scheduled_actions: usize,
+    pub scheduled_operations: Vec<String>,
     pub executed: bool,
     pub blocked_reason: Option<String>,
 }
@@ -59,10 +59,10 @@ pub async fn reconcile(
         return Ok(summary);
     }
     if policy.mode != AutonomyMode::Report {
-        summary.scheduled_actions =
+        summary.scheduled_operations =
             reconcile_schedules(store, snapshot, policy, configuration_fingerprint).await?;
-        if summary.scheduled_actions > usize::default() {
-            summary.automatic_actions = summary.scheduled_actions;
+        if !summary.scheduled_operations.is_empty() {
+            summary.automatic_actions = summary.scheduled_operations.len();
             summary.executed = true;
             return Ok(summary);
         }

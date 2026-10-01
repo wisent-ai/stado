@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use super::{
-    ProviderHealth, HEALTH_GRACE_SECONDS, MISSING_STATUS, OK_STATUS, SECONDS_PER_DAY,
-    SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
+    ProviderHealth, MISSING_STATUS, OK_STATUS, SECONDS_PER_DAY, SECONDS_PER_HOUR,
+    SECONDS_PER_MINUTE,
 };
 
 /// Carry one provider's history forward against this tick's section.
@@ -55,7 +55,7 @@ pub(super) fn fold_provider(
         detail,
         last_ok: prior_str("last_ok"),
         failing_since: Some(failing_since),
-        degraded: failing_seconds >= HEALTH_GRACE_SECONDS,
+        degraded: true,
         failing_seconds,
     }
 }

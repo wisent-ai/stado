@@ -49,7 +49,7 @@
 //! across ticks inside the same blob ([`HEALTH_KEY`]): the last `ok`
 //! timestamp, the start of the current failing run, and its length, so
 //! "how long has this been broken" is answerable from the snapshot alone.
-//! A section non-`ok` for longer than [`HEALTH_GRACE_SECONDS`] raises its
+//! A section that is not `ok` raises its
 //! own alert naming the provider and the exact upstream cause, entirely
 //! independent of any balance threshold. Every condition is keyed
 //! ([`Signal::key`]) and the firing set is persisted, so a failure that
@@ -81,7 +81,7 @@ use health::emit_alerts;
 
 pub use health::{
     apply_health, commit_firing, dispatch_signals, humanize, providers, HealthEvaluation,
-    ProviderHealth, Signal, HEALTH_GRACE_SECONDS, HEALTH_KEY, SECONDS_PER_DAY, SECONDS_PER_HOUR,
+    ProviderHealth, Signal, HEALTH_KEY, SECONDS_PER_DAY, SECONDS_PER_HOUR,
     SECONDS_PER_MINUTE, SECONDS_PER_SECOND,
 };
 

@@ -23,10 +23,6 @@ use aws::aws_spot_prices;
 use azure::azure_prices;
 use gcp::gcp_prices;
 
-const PRICING_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
-    crate::monitor::billing::SECONDS_PER_MINUTE / (u16::BITS / u8::BITS) as u64,
-);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PriceState {

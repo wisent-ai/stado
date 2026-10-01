@@ -7,12 +7,8 @@ use crate::monitor::billing::{
 };
 
 /// Parse `--interval` as a duration string: `45s`, `5m`, `2h`, `1d`, or a
-/// bare count of seconds.
-///
-/// A duration string rather than a number of seconds so the clap default
-/// can be spelled as text — this crate's edit policy rejects bare numeric
-/// literals, and every scale below is derived from the standard-library
-/// integer constants re-exported by `monitor/billing.rs`.
+/// bare count of seconds. The operator names the interval; there is no
+/// default.
 pub fn parse_interval(raw: &str) -> Result<Duration, String> {
     let trimmed = raw.trim();
     let split = trimmed

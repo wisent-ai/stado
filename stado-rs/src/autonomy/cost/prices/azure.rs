@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::autonomy::model::SCHEMA_VERSION;
 use crate::capabilities::ProviderId;
 
-use super::{infer_accelerator, PriceQuote, PriceSource, PriceState, PRICING_HTTP_TIMEOUT};
+use super::{infer_accelerator, PriceQuote, PriceSource, PriceState};
 
 pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
     let mut source = PriceSource {
@@ -18,10 +18,7 @@ pub(super) async fn azure_prices(observed_at: DateTime<Utc>) -> PriceSource {
         error: None,
         quotes: Vec::new(),
     };
-    let client = reqwest::Client::builder()
-        .timeout(PRICING_HTTP_TIMEOUT)
-        .build()
-        .expect("pricing HTTP client builds");
+    let client = reqwest::Client::new();
     let regions = crate::config::azure_locations();
     let region_filter = regions
         .iter()

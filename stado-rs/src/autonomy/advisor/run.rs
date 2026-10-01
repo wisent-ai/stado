@@ -49,7 +49,7 @@ pub async fn publish_recommendations(
             )
             .await?
             {
-                summary.rightsizing += true as usize;
+                summary.rightsizing.push(resource.resource_id.clone());
             }
         if let Some(rule) = policy.matching_rule(resource) {
             if (rule.stop_schedule.is_some() || rule.start_schedule.is_some() || rule.scale_to_zero)
@@ -71,7 +71,7 @@ pub async fn publish_recommendations(
                 )
                 .await?
             {
-                summary.schedules += true as usize;
+                summary.schedules.push(resource.resource_id.clone());
             }
         }
         if storage_candidate(resource, policy, now)
@@ -91,7 +91,7 @@ pub async fn publish_recommendations(
             )
             .await?
         {
-            summary.storage_lifecycle += true as usize;
+            summary.storage_lifecycle.push(resource.resource_id.clone());
         }
         if policy.placement.account_for_egress {
             let dependencies = cross_boundary_dependencies(resource, snapshot);
@@ -112,7 +112,7 @@ pub async fn publish_recommendations(
                 )
                 .await?
             {
-                summary.network += true as usize;
+                summary.network.push(resource.resource_id.clone());
             }
         }
     }
@@ -123,7 +123,7 @@ pub async fn publish_recommendations(
             .filter(|resource| resource.resource_type == "instance")
             .filter_map(|resource| resource.current_hourly_cost_usd)
             .sum();
-        if stable_hourly > f64::default() {
+        if stable_hourly.is_normal() && stable_hourly.is_sign_positive() {
             let synthetic = ResourceRecord::new(
                 crate::capabilities::ProviderId::Stado,
                 "global",
@@ -148,7 +148,7 @@ pub async fn publish_recommendations(
             )
             .await?
             {
-                summary.commitments += true as usize;
+                summary.commitments.push(synthetic.resource_id.clone());
             }
         }
     }

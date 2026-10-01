@@ -31,20 +31,19 @@ pub(super) async fn reconcile_schedules(
     snapshot: &InventorySnapshot,
     policy: &AutonomyPolicy,
     configuration_fingerprint: &str,
-) -> Result<usize, StorageError> {
+) -> Result<Vec<String>, StorageError> {
     let now = Utc::now();
     let lookback = chrono::Duration::seconds(policy.limits.decision_ttl_seconds as i64);
-    let mut executed = usize::default();
-    let mut provider_actions: BTreeMap<crate::capabilities::ProviderId, usize> = BTreeMap::new();
+    let mut executed: Vec<String> = Vec::new();
+    let mut provider_actions: BTreeMap<crate::capabilities::ProviderId, Vec<String>> =
+        BTreeMap::new();
     for resource in &snapshot.resources {
-        if executed >= policy.limits.max_actions_per_tick {
+        if executed.len() >= policy.limits.max_actions_per_tick {
             break;
         }
         if provider_actions
             .get(&resource.provider)
-            .copied()
-            .unwrap_or_default()
-            >= policy.limits.max_actions_per_provider
+            .is_some_and(|done| done.len() >= policy.limits.max_actions_per_provider)
         {
             continue;
         }
@@ -137,8 +136,11 @@ pub(super) async fn reconcile_schedules(
                 }))?,
             )
             .await?;
-        *provider_actions.entry(resource.provider).or_default() += true as usize;
-        executed += true as usize;
+        provider_actions
+            .entry(resource.provider)
+            .or_default()
+            .push(plan.operation_id.clone());
+        executed.push(plan.operation_id.clone());
     }
     Ok(executed)
 }

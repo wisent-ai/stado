@@ -30,21 +30,11 @@ pub use fold::humanize;
 // Account health
 // ---------------------------------------------------------------------------
 
-/// Time-unit ladder. The base unit is explicit; larger units are derived
-/// from standard-library integer constants and prior entries in the ladder.
-pub const SECONDS_PER_SECOND: u64 = true as u64;
-/// `64 - 32/8 == 60`.
-pub const SECONDS_PER_MINUTE: u64 = (u64::BITS - u32::BITS / u8::BITS) as u64;
-/// `60 * 60 == 3600`.
-pub const SECONDS_PER_HOUR: u64 = SECONDS_PER_MINUTE * SECONDS_PER_MINUTE;
-/// `3600 * (32 - 8) == 86400`.
-pub const SECONDS_PER_DAY: u64 = SECONDS_PER_HOUR * (u32::BITS - u8::BITS) as u64;
-
-/// How long a provider section may report a non-`ok` status before it is
-/// alerted on. One hour: long enough to ride out one failed collector tick
-/// or a transient ARM/BigQuery 5xx, short enough that a closed account or a
-/// disabled service principal is reported within the hour it breaks.
-pub const HEALTH_GRACE_SECONDS: i64 = SECONDS_PER_HOUR as i64;
+/// Time units as the `time` crate defines them.
+pub const SECONDS_PER_SECOND: u64 = time::Duration::SECOND.whole_seconds().unsigned_abs();
+pub const SECONDS_PER_MINUTE: u64 = time::Duration::MINUTE.whole_seconds().unsigned_abs();
+pub const SECONDS_PER_HOUR: u64 = time::Duration::HOUR.whole_seconds().unsigned_abs();
+pub const SECONDS_PER_DAY: u64 = time::Duration::DAY.whole_seconds().unsigned_abs();
 
 /// Key of the health record inside the billing document. It lives in the
 /// same blob as the sections it describes, so the last-good timestamps
@@ -86,7 +76,7 @@ pub struct ProviderHealth {
     pub failing_since: Option<String>,
     /// Length of the current non-`ok` run, in seconds.
     pub failing_seconds: i64,
-    /// Non-`ok` for longer than [`HEALTH_GRACE_SECONDS`].
+    /// Non-`ok` this tick: there is no grace period before it alerts.
     pub degraded: bool,
 }
 
@@ -154,7 +144,6 @@ pub fn apply_health(
         providers.push(health);
     }
     document[HEALTH_KEY] = json!({
-        "grace_seconds": HEALTH_GRACE_SECONDS,
         "providers": Value::Object(record),
         "firing": previously_firing.iter().collect::<Vec<_>>(),
     });

@@ -139,7 +139,7 @@ pub(crate) async fn run_autonomy_once(
     let reconciliation =
         crate::autonomy::reconciler::reconcile(store, &inventory, &policy, &fingerprint, log)
             .await?;
-    if reconciliation.findings > usize::default() {
+    if reconciliation.operation_id.is_some() || reconciliation.executed {
         log(&format!(
             "autonomy reconciliation: findings={} actions={} executed={}",
             reconciliation.findings, reconciliation.automatic_actions, reconciliation.executed
@@ -149,14 +149,9 @@ pub(crate) async fn run_autonomy_once(
     crate::autonomy::placement_relief::reconcile(store, &policy, log).await?;
     let advice =
         crate::autonomy::advisor::publish_recommendations(store, &inventory, &policy, now).await?;
-    if advice.rightsizing > usize::default()
-        || advice.schedules > usize::default()
-        || advice.storage_lifecycle > usize::default()
-        || advice.network > usize::default()
-        || advice.commitments > usize::default()
-    {
+    if !advice.is_empty() {
         log(&format!(
-            "autonomy advice: rightsizing={} schedules={} storage={} network={} commitments={}",
+            "autonomy advice: rightsizing={:?} schedules={:?} storage={:?} network={:?} commitments={:?}",
             advice.rightsizing,
             advice.schedules,
             advice.storage_lifecycle,
@@ -172,10 +167,9 @@ pub(crate) async fn run_autonomy_once(
     crate::autonomy::cost::persist_reports(store, &prices, &allocation, &forecast, &anomalies)
         .await?;
     let outcomes = crate::autonomy::cost::measure_outcomes(store, &policy, now).await?;
-    if outcomes.feedback_written > usize::default() || outcomes.savings_measured > usize::default()
-    {
+    if !outcomes.is_empty() {
         log(&format!(
-            "autonomy outcomes: feedback={} savings-measured={}",
+            "autonomy outcomes: feedback={:?} savings-measured={:?}",
             outcomes.feedback_written, outcomes.savings_measured
         ));
     }
@@ -191,10 +185,12 @@ pub(crate) async fn run_autonomy_once(
     )
     .await?;
     let lifecycle = crate::autonomy::lifecycle::enforce(store, &policy, now).await?;
-    if lifecycle.deleted > usize::default() {
+    if !lifecycle.deleted.is_empty() {
         log(&format!(
             "autonomy lifecycle: deleted={} bytes={} capped={}",
-            lifecycle.deleted, lifecycle.deleted_bytes, lifecycle.capped
+            lifecycle.deleted.len(),
+            lifecycle.deleted_bytes,
+            lifecycle.capped
         ));
     }
     Ok(())
