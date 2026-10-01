@@ -117,13 +117,18 @@ for root in \"$@\"; do
       printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'would_end' \"$started\" \"$command\"
       continue
     fi
-    /bin/kill \"$pid\" 2>/dev/null || true
-    /bin/sleep 2
-    state=$(/bin/ps -p \"$pid\" -o stat= 2>/dev/null | /usr/bin/tr -d ' ')
-    if [ -n \"$state\" ] && [ \"${state#Z}\" = \"$state\" ]; then
-      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'still_running' \"$started\" \"$command\"
-    else
+    # A duplicate is ended with a signal it cannot ignore, and the report is
+    # written when the kernel says the process exited: kqueue through
+    # caffeinate on macOS, the pid watch of GNU tail on Linux.
+    if /bin/kill -KILL \"$pid\" 2>/dev/null; then
+      if [ -x /usr/bin/caffeinate ]; then
+        /usr/bin/caffeinate -w \"$pid\"
+      else
+        tail --pid=\"$pid\" -f /dev/null
+      fi
       printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'ended' \"$started\" \"$command\"
+    else
+      printf 'STADO_REAP\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" 'still_running' \"$started\" \"$command\"
     fi
   done
 done

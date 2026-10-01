@@ -62,7 +62,7 @@ pub(crate) async fn reap(
         .count();
     if stubborn > 0 {
         return Err(CmdError::click(format!(
-            "{}: {stubborn} process(es) did not end on SIGTERM; their rows name each pid",
+            "{}: {stubborn} process(es) refused SIGKILL from this user; their rows name each pid",
             target.name
         )));
     }

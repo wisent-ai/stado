@@ -150,8 +150,9 @@ fi
 /// first. Both bodies now splice in this one sweep, so they cannot disagree about
 /// what stopping means.
 ///
-/// Sets `left` (what was found) and `still` (what survived a TERM); reporting is
-/// the caller's, because stop and restart have different things to say about it.
+/// Sets `left` (what was found) and `still` (what refused SIGKILL); reporting
+/// is the caller's, because stop and restart have different things to say
+/// about it.
 ///
 /// Scoped to the unit's whole declared argv, through `stado_unit_pids`. It used
 /// to sweep every process whose executable was the unit's program, and on a host
@@ -165,20 +166,21 @@ pub(crate) const DISOWNED_SWEEP: &str = "  sweep_argv=$(stado_unit_argv \"$unit_
   if [ -n \"$sweep_argv\" ]; then
     left=$(stado_unit_pids \"$sweep_argv\")
     if [ -n \"$left\" ]; then
-      for pid in $left; do /bin/kill -TERM \"$pid\" >/dev/null 2>&1 || true; done
-      /bin/sleep 2
+      # These processes are outside launchd's hands, and a service that serves
+      # each adapter from its own process does not go away on TERM: the
+      # siblings keep their ports and launchd is refused them. Each one gets the
+      # signal it cannot ignore, and the sweep goes on when the kernel reports
+      # its exit (kqueue through caffeinate, GNU tail's pid watch on Linux).
+      for pid in $left; do
+        if /bin/kill -KILL \"$pid\" >/dev/null 2>&1; then
+          if [ -x /usr/bin/caffeinate ]; then
+            /usr/bin/caffeinate -w \"$pid\"
+          else
+            tail --pid=\"$pid\" -f /dev/null
+          fi
+        fi
+      done
       still=$(stado_unit_pids \"$sweep_argv\")
-      # A service that serves each adapter from its own process does not go
-      # away on one round of TERM: the process holding the port exits, the
-      # siblings holding theirs do not, and launchd is then refused the ports
-      # it is being asked to bind. Reporting that as \"survived\" left the unit
-      # booted out -- a restart that ends with nothing running. Escalate, and
-      # keep 'survived' for a process that refuses SIGKILL.
-      if [ -n \"$still\" ]; then
-        for pid in $still; do /bin/kill -KILL \"$pid\" >/dev/null 2>&1 || true; done
-        /bin/sleep 2
-        still=$(stado_unit_pids \"$sweep_argv\")
-      fi
     fi
   fi
 ";
