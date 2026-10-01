@@ -125,10 +125,72 @@ pub(crate) fn owns_stable_bind(target: &ReleaseTargetPolicy, port: u16) -> Resul
     }))
 }
 
+/// The TCP ports the legacy job's own process listens on, read from launchd's
+/// pid for the label (system domain, then this login's) and `lsof` for that
+/// pid. Empty when the job is not running: a stopped unit serves nothing that
+/// its bootout could take away.
+fn legacy_listening_ports(label: &str) -> Result<Vec<u16>, String> {
+    let uid = nix::unistd::getuid();
+    let mut pid = None;
+    for domain in [format!("system/{label}"), format!("gui/{uid}/{label}")] {
+        let printed = Command::new("/bin/launchctl")
+            .args(["print", &domain])
+            .output()
+            .map_err(|error| format!("cannot read legacy launchd service {domain}: {error}"))?;
+        pid = String::from_utf8_lossy(&printed.stdout)
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("pid = "))
+            .and_then(|pid| pid.trim().parse::<u32>().ok());
+        if pid.is_some() {
+            break;
+        }
+    }
+    let Some(pid) = pid else {
+        return Ok(Vec::new());
+    };
+    let listening = Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-a", "-p", &pid.to_string(), "-iTCP", "-sTCP:LISTEN", "-Fn"])
+        .output()
+        .map_err(|error| format!("cannot read the listeners of legacy {label} (pid {pid}): {error}"))?;
+    let mut ports: Vec<u16> = String::from_utf8_lossy(&listening.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .filter_map(|address| address.rsplit_once(':'))
+        .filter_map(|(_, port)| port.parse::<u16>().ok())
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    Ok(ports)
+}
+
 pub(crate) fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let Some(label) = target.legacy_launchd_label.as_deref() else {
         return Ok(());
     };
+    // The release takes over the stable bind and nothing else. A legacy unit
+    // that also answers another port is the only thing serving it, and
+    // consumers declared on that port lose the service the moment the unit
+    // goes, while the release reports itself healthy. Refuse, naming the
+    // ports, so the endpoint is moved to the stable bind first.
+    if let Ok(serving) = target.blue_green_serving() {
+        let stable = serving
+            .stable_bind
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse::<u16>().ok());
+        let other: Vec<String> = legacy_listening_ports(label)?
+            .into_iter()
+            .filter(|port| Some(*port) != stable)
+            .map(|port| port.to_string())
+            .collect();
+        if !other.is_empty() {
+            return Err(format!(
+                "legacy launchd service {label} also listens on port(s) {} that the release does not take over (it serves {}); \
+                 point the consumers' service endpoint at the stable bind before the legacy unit is stopped",
+                other.join(", "),
+                serving.stable_bind
+            ));
+        }
+    }
     let status = Command::new("/usr/bin/sudo")
         .args([
             "-n",
