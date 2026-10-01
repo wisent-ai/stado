@@ -53,7 +53,7 @@ mod platform {
     use std::os::fd::AsRawFd;
     use std::path::{Path, PathBuf};
 
-    use nix::sys::event::{EventFilter, EventFlag, FilterFlag, KEvent, Kqueue};
+    use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent, Kqueue};
 
     use super::kernel_error;
     use crate::queue::{ChangeWatch, StorageError};
@@ -80,7 +80,7 @@ mod platform {
             changes.push(KEvent::new(
                 file.as_raw_fd() as usize,
                 EventFilter::EVFILT_VNODE,
-                EventFlag::EV_ADD | EventFlag::EV_CLEAR,
+                EvFlags::EV_ADD | EvFlags::EV_CLEAR,
                 FilterFlag::NOTE_WRITE | FilterFlag::NOTE_DELETE | FilterFlag::NOTE_RENAME,
                 0,
                 0,
@@ -102,7 +102,7 @@ mod platform {
             let mut events = [KEvent::new(
                 0,
                 EventFilter::EVFILT_VNODE,
-                EventFlag::empty(),
+                EvFlags::empty(),
                 FilterFlag::empty(),
                 0,
                 0,

@@ -133,7 +133,7 @@ fn api(slug_path: &str) -> Result<(StatusCode, Value)> {
 
 /// Non-draft release tags, after proving the API names this repository back
 /// and lists the tags the remote serves.
-pub fn published_release_tags(root: &Path, slug: &str, over_git: &[String]) -> Result<Vec<String>> {
+pub fn published_release_tags(slug: &str, over_git: &[String]) -> Result<Vec<String>> {
     let (status, repository) = api(slug)?;
     if status != StatusCode::OK {
         bail!("the GitHub API answered {status} for {slug}, so this read cannot see the repository it asks about and every absence it reports is unproven");
@@ -178,7 +178,7 @@ pub fn newest(tags: &[String]) -> Option<(String, Version)> {
 /// The released artifact: a published release, else a remote tag, else none.
 pub fn artifact(root: &Path) -> Result<(Artifact, Option<Version>)> {
     let tags = remote_tags(root)?;
-    let releases = published_release_tags(root, &slug(root)?, &tags)?;
+    let releases = published_release_tags(&slug(root)?, &tags)?;
     if let Some((tag, version)) = newest(&releases) {
         return Ok((Artifact::Release { tag }, Some(version)));
     }

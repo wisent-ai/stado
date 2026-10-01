@@ -131,9 +131,13 @@ pub fn topological_order(plan: &Plan) -> Result<Vec<&Action>, CmdError> {
     Ok(ordered)
 }
 
+/// One age unit's constructor: whole units of it as a `Duration`, or none
+/// when the figure overflows.
+type AgeUnit = fn(i64) -> Option<Duration>;
+
 pub fn parse_age(raw: &str) -> Result<Duration, CmdError> {
     let raw = raw.trim();
-    let units: [(char, fn(i64) -> Option<Duration>); 4] = [
+    let units: [(char, AgeUnit); 4] = [
         ('s', Duration::try_seconds),
         ('m', Duration::try_minutes),
         ('h', Duration::try_hours),

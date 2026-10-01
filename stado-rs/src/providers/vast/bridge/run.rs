@@ -8,7 +8,6 @@
 //! rendering inside a branch body. The rendered text is unchanged.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use serde_json::Value;
 

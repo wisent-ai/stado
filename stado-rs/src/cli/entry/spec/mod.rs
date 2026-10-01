@@ -33,6 +33,10 @@ pub struct Cli {
 /// The four declaration blocks of `stado --help`, in the order they are
 /// printed. Flattening keeps one flat command tree: `stado submit` stays
 /// `stado submit`, and no group name appears on a command line.
+// One value of this enum exists per process, parsed once; boxing the widest
+// block would add nothing but a deref to every dispatch arm, which is why
+// the release subtree carries the same allowance.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     #[command(flatten)]

@@ -56,7 +56,7 @@ pub(super) async fn proxy_connection(
     }
     // Remote traffic opens channels on the resolver's native SSH session.
     // There is no child process or intermediary TCP listener.
-    let (mut client_read, mut client_write) = client.into_split();
+    let (client_read, mut client_write) = client.into_split();
     let upstream = if resolved.active_host == state.local_target {
         TcpStream::connect((host, port))
             .await

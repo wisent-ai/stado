@@ -1,7 +1,5 @@
 //! Building a client: which grant it consumes, and the HTTP handle it carries.
 
-use std::time::Duration;
-
 use super::super::{checked_url, GrantMode, SkarbiecError};
 use super::Client;
 

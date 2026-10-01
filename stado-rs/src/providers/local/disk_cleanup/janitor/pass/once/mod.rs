@@ -5,11 +5,10 @@ pub(crate) mod entry;
 pub(crate) mod finish;
 pub(crate) mod keep_list;
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::Value;
 
-use crate::primitives::constants;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::LockState;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::holds;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::takeover::{

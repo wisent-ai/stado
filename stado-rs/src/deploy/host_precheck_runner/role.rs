@@ -43,7 +43,7 @@ pub async fn declare_runner_role(
         )));
     }
     let option = format!("{RUNNER_ROLE}={runner_root}");
-    let declared_on = existing.args.iter().any(|argument| *argument == option);
+    let declared_on = existing.args.contains(&option);
     if off && !declared_on {
         return Ok("absent".to_string());
     }

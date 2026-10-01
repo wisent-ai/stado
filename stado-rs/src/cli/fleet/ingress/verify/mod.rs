@@ -18,8 +18,7 @@ fn log_tail(log: &Path) -> String {
         Ok(text) => text
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .next_back()
+            .rfind(|line| !line.is_empty())
             .unwrap_or("(the log is empty)")
             .to_string(),
         Err(exc) => format!("({} could not be read: {exc})", log.display()),

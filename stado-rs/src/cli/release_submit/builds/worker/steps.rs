@@ -171,11 +171,11 @@ pub(super) fn require_free_space(
 
 /// Free space of the volume holding `path`, in GiB, from the file system's
 /// own `statvfs` answer: blocks available to an unprivileged writer times the
-/// block size.
+/// block size. The two figures are widened to `u128` because their width
+/// differs between platforms, and the product is read back as `f64`.
 fn free_gibibytes(path: &Path) -> Option<f64> {
     let stats = nix::sys::statvfs::statvfs(path).ok()?;
-    let bytes =
-        u64::from(stats.blocks_available()).checked_mul(u64::from(stats.fragment_size()))?;
+    let bytes = u128::from(stats.blocks_available()) * u128::from(stats.fragment_size());
     Some(bytes as f64 / crate::providers::local::disk_cleanup::GIB as f64)
 }
 

@@ -1,8 +1,6 @@
 //! The model-review bearer a repository's CI presents to Brama, and the route
 //! and grant that make it answerable.
 
-use std::time::Duration;
-
 use serde_json::{json, Value};
 
 use crate::deploy::host_precheck_runner::accounts::brama::{

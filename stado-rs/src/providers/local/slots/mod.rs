@@ -25,7 +25,7 @@ use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::Utc;
 use nix::sys::signal::Signal;
@@ -36,7 +36,6 @@ use crate::models::{
     activation_extraction_must_share_gpu, deprecated_activation_command_reason, isoformat_utc,
     job_state, Job,
 };
-use crate::primitives::constants;
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 
