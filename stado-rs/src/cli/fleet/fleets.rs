@@ -141,8 +141,10 @@ pub async fn list(as_json: bool) -> Result<bool, String> {
 }
 
 /// `stado fleet status NAME` — live state of one fleet's members: health
-/// beacons and capacity broadcasts from the store, nothing else.
-pub async fn status(name: &str) -> Result<bool, String> {
+/// beacons and capacity broadcasts from the store, nothing else. Lines, or
+/// with `--json` `{fleet, notes, members: [{name, reported_at | error}],
+/// broadcasting}`.
+pub async fn status(name: &str, as_json: bool) -> Result<bool, String> {
     let document = crate::cli::registry::fetch_document()
         .await
         .map_err(|exc| exc.to_string())?;
@@ -156,21 +158,40 @@ pub async fn status(name: &str) -> Result<bool, String> {
         .await
         .map_err(|exc| exc.to_string())?;
     let broadcasting: Vec<String> = consumers.keys().cloned().collect();
+    let mut members = Vec::with_capacity(fleet.members.len());
+    for member in &fleet.members {
+        members.push(
+            match crate::monitor::host_health::load_host_health(&store, member).await {
+                Ok(report) => serde_json::json!({
+                    "name": member,
+                    "reported_at": report.beacon.get("reported_at").and_then(Value::as_str),
+                }),
+                Err(exc) => serde_json::json!({ "name": member, "error": exc.to_string() }),
+            },
+        );
+    }
+    if as_json {
+        let answer = serde_json::json!({
+            "fleet": fleet.name,
+            "notes": fleet.notes,
+            "members": members,
+            "broadcasting": broadcasting,
+        });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        return Ok(true);
+    }
     println!("fleet '{}' — {}", fleet.name, fleet.notes);
-    if fleet.members.is_empty() {
+    if members.is_empty() {
         println!("  (no members)");
     }
-    for member in &fleet.members {
-        match crate::monitor::host_health::load_host_health(&store, member).await {
-            Ok(report) => {
-                let reported_at = report
-                    .beacon
-                    .get("reported_at")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                println!("  {member}: last beacon at {reported_at}");
-            }
-            Err(exc) => println!("  {member}: no readable health beacon ({exc})"),
+    for member in &members {
+        let name = member["name"].as_str().unwrap_or_default();
+        match member.get("error").and_then(Value::as_str) {
+            Some(error) => println!("  {name}: no readable health beacon ({error})"),
+            None => println!(
+                "  {name}: last beacon at {}",
+                member["reported_at"].as_str().unwrap_or("unknown")
+            ),
         }
     }
     if broadcasting.is_empty() {

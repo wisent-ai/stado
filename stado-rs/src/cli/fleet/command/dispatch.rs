@@ -33,7 +33,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         FleetCommands::Needs { json, days } => needs::run(json, days).await,
         FleetCommands::Expansion(command) => crate::cli::fleet::expansion::run(command).await,
         FleetCommands::List { json } => fleets::list(json).await,
-        FleetCommands::Status { name } => fleets::status(&name).await,
+        FleetCommands::Status { name, json } => fleets::status(&name, json).await,
         FleetCommands::Create { name, notes, json } => ops::create(&name, &notes, json).await,
         FleetCommands::Assign {
             target,
@@ -68,7 +68,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
             json,
         } => invite::invite(name.as_deref(), &expires, uses, offline, json).await,
         FleetCommands::Invites { json } => invite::invites(json).await,
-        FleetCommands::RevokeInvite { id } => invite::revoke_invite(&id).await,
+        FleetCommands::RevokeInvite { id, json } => invite::revoke_invite(&id, json).await,
         FleetCommands::Ingress(sub) => match sub {
             IngressCommands::Up { port, named } => ingress::up(port, named).await,
             IngressCommands::Status { json } => ingress::status(json).await,
@@ -87,7 +87,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
             match sub {
                 KeyCommands::Add { target, from } => key::add(&runner, &target, &from).await,
                 KeyCommands::Ls { json } => key::ls(json).await,
-                KeyCommands::Rm { target } => key::rm(&target).await,
+                KeyCommands::Rm { target, json } => key::rm(&target, json).await,
                 KeyCommands::Install { target } => key::install(&runner, &target).await,
                 KeyCommands::Check { target } => key::check(&runner, &target).await,
                 KeyCommands::Generate { target } => key::rotate::generate(&runner, &target).await,

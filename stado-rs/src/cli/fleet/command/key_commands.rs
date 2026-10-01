@@ -22,6 +22,9 @@ pub enum KeyCommands {
     Rm {
         /// Registry target.
         target: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Install the stored public key into the target's authorized_keys.
     Install {

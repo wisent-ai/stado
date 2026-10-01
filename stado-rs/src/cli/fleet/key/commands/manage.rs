@@ -166,13 +166,18 @@ pub async fn ls(json_output: bool) -> Result<bool, String> {
 }
 
 /// `key rm TARGET` — delete the target's SSH host key.
-pub async fn rm(target: &str) -> Result<bool, String> {
+pub async fn rm(target: &str, as_json: bool) -> Result<bool, String> {
     let client = configured_client()?;
     client
         .delete_item(&item_id(target))
         .await
         .map_err(|exc| exc.to_string())?;
-    println!("removed credential item {}", item_id(target));
+    if as_json {
+        let answer = serde_json::json!({ "target": target, "removed": item_id(target) });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+    } else {
+        println!("removed credential item {}", item_id(target));
+    }
     Ok(true)
 }
 

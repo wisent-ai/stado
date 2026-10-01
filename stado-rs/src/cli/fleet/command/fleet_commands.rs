@@ -40,6 +40,9 @@ pub enum FleetCommands {
     Status {
         /// Fleet name as declared in the registry `fleets` section.
         name: String,
+        /// Emit the machine-readable document instead of the lines.
+        #[arg(long)]
+        json: bool,
     },
     /// Declare a new fleet in the canonical registry.
     Create {
@@ -141,6 +144,9 @@ pub enum FleetCommands {
     RevokeInvite {
         /// Invite id as printed by `invite` and `invites`.
         id: String,
+        /// Emit the machine-readable document instead of the sentences.
+        #[arg(long)]
+        json: bool,
     },
     /// Stand up, inspect or tear down the public entrance the one-line invite
     /// mode needs — a narrow enrollment listener behind a Cloudflare quick

@@ -8,18 +8,34 @@ use crate::cli::fleet::invite::record::{effective_status, STATUS_REVOKED};
 use crate::queue::JobStorage;
 
 /// `stado fleet revoke-invite ID` — retire an invite before anybody uses it.
-pub async fn revoke_invite(id: &str) -> Result<bool, String> {
+/// Sentences, or with `--json` `{invite, target, previous, revoked,
+/// channel_key_item_remains}`.
+pub async fn revoke_invite(id: &str, as_json: bool) -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let mut invite = load_invite(&store, id)
         .await?
         .ok_or_else(|| format!("no invite '{id}'"))?;
-    if invite.status == STATUS_REVOKED {
+    let already = invite.status == STATUS_REVOKED;
+    let previous = effective_status(&invite, Utc::now());
+    if !already {
+        invite.status = STATUS_REVOKED.to_string();
+        store_invite(&store, &invite).await?;
+    }
+    if as_json {
+        let answer = serde_json::json!({
+            "invite": id,
+            "target": invite.target_name,
+            "previous": previous,
+            "revoked": !already,
+            "channel_key_item_remains": true,
+        });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        return Ok(true);
+    }
+    if already {
         println!("invite {id} is already revoked");
         return Ok(true);
     }
-    let previous = effective_status(&invite, Utc::now());
-    invite.status = STATUS_REVOKED.to_string();
-    store_invite(&store, &invite).await?;
     println!(
         "invite {id} for target '{}' is revoked (was {previous})",
         invite.target_name
