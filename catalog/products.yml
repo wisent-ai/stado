@@ -1801,3 +1801,48 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
+- id: obraz
+  name: Obraz
+  status: active
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/obraz
+  description: 'Obraz renders a Wisent image: the recipe that turns a creator, a pose
+    and a description into a prompt, the adapter that makes the image that creator''s,
+    the ComfyUI render, and the picture that comes back.'
+  roadmap: []
+  integrations:
+  - product: brama
+    description: Vendor-hosted image models are Brama's (image-model); Obraz renders
+      a creator's adapter on Wisent hardware.
+    source: obraz/README.md
+  evidence:
+  - wisent-ai/obraz/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/obraz
+  - kind: service
+    repository: wisent-ai/obraz
+  installations:
+  - surface: cli
+    kind: cargo
+    repository: wisent-ai/obraz
+    manifest: Cargo.toml
+    binaries:
+    - obraz
+  - surface: service
+    kind: stado-release
+    repository: wisent-ai/obraz
+    manifest: .wisent-release.json
+  service:
+    installable: true
+    unit: com.wisent.obraz
+    program: $HOME/.stado/services/obraz/current/$STADO_PLATFORM/bin/start
+    args: []
+    summary: The one Obraz process per host, rendering through the ComfyUI the
+      deployment's environment file names.
+    retired_units: []
+  dependencies:
+  - product: skarbiec
+    surface: service
+    for_surface: service
