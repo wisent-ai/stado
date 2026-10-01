@@ -60,7 +60,7 @@ const REGISTRY: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "stado_profiles",
-        cli: &["profiles"],
+        cli: &["profiles", "--json"],
         desc: "List submit profiles, or print one profile's resolved JSON (read-only).",
         arg: Some(ArgSpec {
             name: "name",

@@ -21,3 +21,4 @@ The version-bump commit moves them with `stado product changelog --version V`;
 ## Unreleased
 
 - The `stado database` commands that change a declaration or the database service, and `stado database place`, print `key: value` lines without `--json`; before, those changes ignored `--json` and `place` printed JSON either way. `place --json` stays one line, which `database create` reads from a remote placement.
+- `stado profiles [NAME]` takes `--json`: the list as `[{name, description}]` and one profile as its JSON; without it the list prints one line per profile and one profile prints `key: value` lines. The MCP tool `stado_profiles` passes `--json`.

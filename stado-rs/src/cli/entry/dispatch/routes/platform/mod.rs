@@ -17,7 +17,7 @@ mod registries;
 
 pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> {
     match command {
-        PlatformCommands::Profiles { name } => profiles::run(name.as_deref()),
+        PlatformCommands::Profiles { name, json } => profiles::run(name.as_deref(), json),
         PlatformCommands::Config {
             sub,
             key,

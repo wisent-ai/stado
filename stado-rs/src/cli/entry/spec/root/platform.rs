@@ -26,8 +26,13 @@ pub(crate) enum PlatformCommands {
         sub: Option<QuotaCommands>,
     },
 
-    /// List available submit profiles, or show one profile's JSON.
-    Profiles { name: Option<String> },
+    /// List available submit profiles, or show one profile.
+    Profiles {
+        name: Option<String>,
+        /// Print the list, or the one profile, as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Inspect or change stado configuration: show | get | validate | init | migrate | set | unset.
     Config {
