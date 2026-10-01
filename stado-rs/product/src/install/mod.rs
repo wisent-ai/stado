@@ -20,6 +20,9 @@ pub fn recipe<'a>(product: &'a Value, surface: &str) -> Result<&'a Value> {
         .with_context(|| format!("{} has no installation recipe for {surface}", product["id"]))
 }
 
+/// `without` names products this machine does without. A dependency on one of
+/// them is skipped only when the catalogue gives it an `alternative`; any
+/// other is refused, so nothing is installed half-wired.
 pub fn perform(
     runtime: &Runtime,
     document: &Value,
@@ -27,6 +30,7 @@ pub fn perform(
     surface: &str,
     host: Option<&str>,
     pin: Option<(&str, &str)>,
+    without: &[String],
     stack: &mut Vec<String>,
 ) -> Result<ProductState> {
     let id = catalog::text(product, "id")?;
@@ -59,6 +63,25 @@ pub fn perform(
             },
             existing.as_ref(),
         )?;
+        // An explicit --without replaces the choice; otherwise the choice the
+        // installation being replaced recorded holds, so `update` and `sync`
+        // do not install what the user chose to do without.
+        let without: Vec<String> = if without.is_empty() {
+            existing
+                .as_ref()
+                .and_then(|state| state.extra.get("without"))
+                .and_then(Value::as_array)
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            without.to_vec()
+        };
         let mut dependencies = Vec::new();
         if let Some(declared) = product.get("dependencies") {
             for dependency in declared
@@ -74,6 +97,19 @@ pub fn perform(
                 let dependency_id = catalog::text(dependency, "product")?;
                 let dependency_surface = catalog::text(dependency, "surface")?;
                 let dependency_product = catalog::product(document, dependency_id)?;
+                if without.iter().any(|name| name == dependency_id) {
+                    let Some(alternative) = dependency["alternative"].as_str() else {
+                        bail!(
+                            "{id}/{surface} cannot be installed without {dependency_id}: \
+                             the catalogue declares no alternative for it"
+                        );
+                    };
+                    eprintln!(
+                        "{id}: installed without {dependency_id}/{dependency_surface}: {alternative}"
+                    );
+                    dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": false, "without": true, "alternative": alternative}));
+                    continue;
+                }
                 let blocked = if dependency_surface == "service" && host.is_none() {
                     Some("no --host was given".to_owned())
                 } else {
@@ -90,8 +126,8 @@ pub fn perform(
                         document,
                         dependency_product,
                         dependency_surface,
-                        host,
                         None,
+                        &without,
                         stack,
                     )?;
                     dependencies.push(json!({"product": dependency_id, "surface": dependency_surface, "checked": true}));
@@ -99,6 +135,9 @@ pub fn perform(
             }
         }
         let mut installed = transaction::commit(runtime, id, surface, host, selected, plan)?;
+        if !without.is_empty() {
+            installed.extra.insert("without".to_owned(), json!(without));
+        }
         installed
             .extra
             .insert("dependencies".to_owned(), json!(dependencies));
@@ -247,6 +286,19 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
     };
     let document = catalog::current(runtime)?;
     let product = catalog::product(&document, &args.positional[0])?;
+    let without: Vec<String> = args
+        .optional("--without")?
+        .map(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    for name in &without {
+        catalog::product(&document, name)?;
+    }
     if args.has("--check-arguments") {
         emit(&serde_json::json!({
             "action": action,
@@ -265,6 +317,7 @@ pub fn run(action: &str, arguments: clap::ArgMatches, runtime: &Runtime) -> Resu
             surface,
             host,
             pin,
+            &without,
             &mut Vec::new(),
         )?)?,
         "remove" => serde_json::to_value(transaction::lifecycle::remove(

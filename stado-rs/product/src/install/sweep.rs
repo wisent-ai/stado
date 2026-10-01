@@ -152,6 +152,7 @@ pub fn run(arguments: clap::ArgMatches, runtime: &Runtime) -> Result<i32> {
                 surface,
                 host,
                 None,
+                &[],
                 &mut Vec::new(),
             )?;
             let observed = status::inspect(runtime, product, surface, host)?;

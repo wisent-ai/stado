@@ -38,6 +38,12 @@ pub fn installation(action: &'static str, about: &'static str) -> Command {
                 )
                 .requires("release-version"),
             )
+            .arg(value(
+                "without",
+                "Comma-separated products this machine does without; a dependency on one \
+                 is skipped only when the catalogue declares its alternative, and the \
+                 choice is kept for later updates",
+            ))
             .arg(flag(
                 "check-arguments",
                 "Check this command line (required pairs such as --release-version with \

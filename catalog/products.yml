@@ -246,9 +246,13 @@ products:
   - product: brama
     surface: service
     for_surface: service
+    alternative: WELES_MODEL_ENDPOINT and WELES_MODEL name an OpenAI-compatible provider
+      for Weles' model calls
   - product: skarbiec
     surface: service
     for_surface: service
+    alternative: WELES_CREDENTIALS_FILE names an owner-only credentials file Weles reads
+      and writes instead of Skarbiec
 - id: skarbiec
   name: Skarbiec
   status: active
@@ -700,6 +704,8 @@ products:
   - product: brama
     surface: service
     for_surface: service
+    alternative: the failure intake needs no model; only repair drafting (probierz repair)
+      asks Brama and fails without it
 - id: tama
   name: Tama
   status: active
@@ -979,6 +985,8 @@ products:
   - product: brama
     surface: service
     for_surface: service
+    alternative: tasks are recorded with oko transcripts tasks add and closed with oko
+      transcripts tasks close or Close on Oko Desktop, without a model
 - id: singularity
   name: Singularity
   status: active
