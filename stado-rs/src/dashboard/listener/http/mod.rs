@@ -202,11 +202,40 @@ impl Dashboard {
         // into the next read rather than be dropped with the buffer.
         let mut carry: Vec<u8> = Vec::new();
         loop {
-            let Some(mut request) =
-                read_request(&mut stream, &mut carry, Self::KEEP_ALIVE_IDLE).await?
-            else {
-                return Ok(());
-            };
+            // A request this listener refuses to read is answered with the
+            // reason before the connection closes: dropping it left the client
+            // with "connection closed before message completed" and no word
+            // about the size or framing that was refused.
+            let mut request =
+                match read_request(&mut stream, &mut carry, Self::KEEP_ALIVE_IDLE).await {
+                    Ok(Some(request)) => request,
+                    Ok(None) => return Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                        let status = if error.to_string().contains("accepts at most") {
+                            "413"
+                        } else {
+                            "400"
+                        };
+                        let mut response = Response::new(
+                            http_status(status),
+                            if status == "413" {
+                                "Payload Too Large"
+                            } else {
+                                "Bad Request"
+                            },
+                            "text/plain; charset=utf-8",
+                            error.to_string().as_bytes(),
+                        );
+                        eprintln!("[dashboard] refused request: {error}");
+                        response.close_connection();
+                        stream.write_all(&response.bytes).await?;
+                        return stream.shutdown().await;
+                    }
+                    Err(error) => {
+                        eprintln!("[dashboard] request read failed: {error}");
+                        return Err(error);
+                    }
+                };
             request.peer = peer;
             // The mode gate is the FIRST thing that looks at the request, ahead
             // of the object PUT preflight, ahead of every Host check and

@@ -176,7 +176,10 @@ pub(crate) async fn read_request(
     if content_length > max_body_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "HTTP request body too large",
+            format!(
+                "{method} {route} declares a {content_length}-byte body; this route accepts at most {max_body_bytes} bytes",
+                route = path.split_once('?').map_or(path.as_str(), |(route, _)| route)
+            ),
         ));
     }
     let available = buf.len().saturating_sub(body_start).min(content_length);
