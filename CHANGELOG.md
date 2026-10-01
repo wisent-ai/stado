@@ -21,3 +21,4 @@ The version-bump commit moves them with `stado product changelog --version V`;
 ## Unreleased
 
 - `stado fleet join` and `stado fleet reject` take `--json`. `join` prints the request as `key: value` lines between its sentence and the `approve` command, where it printed a JSON document in the middle of text; with `--json` it prints `{recorded, request, approve_with}` alone, and the note that the registry is not readable goes to standard error. `reject --json` prints `{rejected}`.
+- `stado fleet create|assign|unassign|delete` take `--json`: `{created, generation}`, `{target, fleet, generation}`, `{target, left, generation}` (`left` is the fleet the machine left, or null) and `{deleted, generation}`. Without it each prints the same sentence as before.

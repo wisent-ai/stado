@@ -32,7 +32,7 @@ pub fn delete_fleet(document: &Value, name: &str) -> Result<Value, String> {
 }
 
 /// `stado fleet delete NAME` — retire a declared fleet.
-pub async fn delete(name: &str) -> Result<bool, String> {
+pub async fn delete(name: &str, as_json: bool) -> Result<bool, String> {
     // Pure, and the member check has to be re-run against the newer document
     // anyway: a fleet that gained a member since this command started is one
     // whose declaration must not be dropped.
@@ -41,6 +41,11 @@ pub async fn delete(name: &str) -> Result<bool, String> {
     })
     .await
     .map_err(|exc| exc.to_string())?;
-    println!("fleet '{name}' deleted (generation {generation})");
+    if as_json {
+        let answer = serde_json::json!({ "deleted": name, "generation": generation });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+    } else {
+        println!("fleet '{name}' deleted (generation {generation})");
+    }
     Ok(true)
 }

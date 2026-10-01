@@ -34,10 +34,14 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         FleetCommands::Expansion(command) => crate::cli::fleet::expansion::run(command).await,
         FleetCommands::List { json } => fleets::list(json).await,
         FleetCommands::Status { name } => fleets::status(&name).await,
-        FleetCommands::Create { name, notes } => ops::create(&name, &notes).await,
-        FleetCommands::Assign { target, fleet } => ops::assign(&target, &fleet).await,
-        FleetCommands::Unassign { target } => ops::unassign(&target).await,
-        FleetCommands::Delete { name } => ops::delete(&name).await,
+        FleetCommands::Create { name, notes, json } => ops::create(&name, &notes, json).await,
+        FleetCommands::Assign {
+            target,
+            fleet,
+            json,
+        } => ops::assign(&target, &fleet, json).await,
+        FleetCommands::Unassign { target, json } => ops::unassign(&target, json).await,
+        FleetCommands::Delete { name, json } => ops::delete(&name, json).await,
         FleetCommands::Enroll {
             name,
             ssh,

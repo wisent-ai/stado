@@ -223,7 +223,7 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
             .map_err(|exc| exc.to_string())?;
             println!("approved '{request_hostname}' as target '{name}' (generation {generation})");
             if let Some(fleet) = fleet_name {
-                crate::cli::fleet::ops::assign(&name, fleet).await?;
+                crate::cli::fleet::ops::assign(&name, fleet, false).await?;
             }
         }
     }

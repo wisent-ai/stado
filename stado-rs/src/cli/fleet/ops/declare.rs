@@ -30,7 +30,7 @@ pub fn create_fleet(document: &Value, name: &str, notes: &str) -> Result<Value, 
 }
 
 /// `stado fleet create NAME` — declare a fleet in the canonical registry.
-pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
+pub async fn create(name: &str, notes: &str, as_json: bool) -> Result<bool, String> {
     // Pure: the fleet entry is a function of the document it is appended to,
     // so a lost race is answered by appending it to the newer document.
     let generation = commit_document(|document| {
@@ -38,6 +38,11 @@ pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
     })
     .await
     .map_err(|exc| exc.to_string())?;
-    println!("fleet '{name}' created (generation {generation})");
+    if as_json {
+        crate::cli::print_answer(&json!({ "created": name, "generation": generation }), true)
+            .map_err(|exc| exc.to_string())?;
+    } else {
+        println!("fleet '{name}' created (generation {generation})");
+    }
     Ok(true)
 }

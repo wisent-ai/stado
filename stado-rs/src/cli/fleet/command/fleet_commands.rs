@@ -48,6 +48,9 @@ pub enum FleetCommands {
         /// Free-form description of what this fleet is for.
         #[arg(long, default_value = "")]
         notes: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Add a registered machine to a declared fleet.
     Assign {
@@ -55,12 +58,18 @@ pub enum FleetCommands {
         target: String,
         /// Declared fleet name.
         fleet: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Take a registered machine out of its fleet; the machine stays in the
     /// registry. A machine in no fleet is reported and left unchanged.
     Unassign {
         /// Registry target name (the machine).
         target: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Retire a declared fleet. Refused while any target still points at it:
     /// deleting the declaration under a member would leave the document
@@ -69,6 +78,9 @@ pub enum FleetCommands {
     Delete {
         /// Declared fleet name.
         name: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// One-command onboarding: register a machine, optionally fleet it,
     /// optionally install the agent.

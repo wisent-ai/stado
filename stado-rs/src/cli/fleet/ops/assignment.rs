@@ -2,7 +2,7 @@
 //! and the command that commits it.
 
 use crate::cli::registry::commit_document;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
 
@@ -37,7 +37,7 @@ pub fn assign_target(
 }
 
 /// `stado fleet assign TARGET FLEET` — add a registered machine to a fleet.
-pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
+pub async fn assign(target: &str, fleet_name: &str, as_json: bool) -> Result<bool, String> {
     // Pure: the assignment is one field on one target, and re-applying it to
     // a newer document is exactly the intent.
     let generation = commit_document(|document| {
@@ -45,7 +45,12 @@ pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
     })
     .await
     .map_err(|exc| exc.to_string())?;
-    println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
+    if as_json {
+        let answer = json!({ "target": target, "fleet": fleet_name, "generation": generation });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+    } else {
+        println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
+    }
     Ok(true)
 }
 
@@ -74,7 +79,7 @@ pub fn unassign_target(
 }
 
 /// `stado fleet unassign TARGET` — take a registered machine out of its fleet.
-pub async fn unassign(target: &str) -> Result<bool, String> {
+pub async fn unassign(target: &str, as_json: bool) -> Result<bool, String> {
     let left = std::sync::Mutex::new(None);
     let generation = commit_document(|document| {
         let (next, fleet) =
@@ -84,7 +89,13 @@ pub async fn unassign(target: &str) -> Result<bool, String> {
     })
     .await
     .map_err(|exc| exc.to_string())?;
-    match left.into_inner().expect("unassign result lock") {
+    let left = left.into_inner().expect("unassign result lock");
+    if as_json {
+        let answer = json!({ "target": target, "left": left, "generation": generation });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        return Ok(true);
+    }
+    match left {
         Some(fleet) => {
             println!("target '{target}' removed from fleet '{fleet}' (generation {generation})")
         }
