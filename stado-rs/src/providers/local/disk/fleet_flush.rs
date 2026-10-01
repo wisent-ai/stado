@@ -92,7 +92,7 @@ pub async fn spawn_fleet_flush(
     fleet_staging: &Path,
     log_fn: &mut dyn FnMut(&str),
 ) -> std::io::Result<bool> {
-    let token = crate::skarbiec::read_string("stado-huggingface", "write_token")
+    let token = crate::skarbiec::read_string("huggingface", "write_token")
         .await
         .map_err(std::io::Error::other)?
         .filter(|value| !value.is_empty())

@@ -82,10 +82,10 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         SecretsCommands::Item { command } => match command {
             CredentialItemCommands::Put {
                 host,
-                item,
+                role,
                 item_type,
                 json,
-            } => super::host::vault_item_put(&host, &item, &item_type, json).await,
+            } => super::host::vault_item_put(&host, &role, &item_type, json).await,
             CredentialItemCommands::Show {
                 host,
                 item,
@@ -185,15 +185,15 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             }
         },
         SecretsCommands::Grant { command } => match command {
-            CredentialGrantCommands::ItemRead {
+            CredentialGrantCommands::RoleRead {
                 host,
                 consumer,
-                item,
+                role,
                 field,
                 token_file,
                 json,
             } => {
-                super::host::grant_item_read(&host, &consumer, &item, &field, &token_file, json)
+                super::host::grant_item_read(&host, &consumer, &role, &field, &token_file, json)
                     .await
             }
             CredentialGrantCommands::Consolidate {

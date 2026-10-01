@@ -62,8 +62,8 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
             crate::config::agent_skarbiec_token_file().to_string(),
         ));
         env.push((
-            "WC_AGENT_SKARBIEC_ITEMS".to_string(),
-            crate::config::agent_skarbiec_items().join(","),
+            "WC_AGENT_SKARBIEC_ROLES".to_string(),
+            crate::config::agent_skarbiec_roles().join(","),
         ));
         env.push((
             "WC_AGENT_SKARBIEC_SECRET_FIELDS".to_string(),

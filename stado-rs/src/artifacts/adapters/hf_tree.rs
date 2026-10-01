@@ -74,7 +74,7 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
             kind: "RequestError",
             message: exc.to_string(),
         })?;
-    let token = crate::skarbiec::read_string("stado-huggingface", "token")
+    let token = crate::skarbiec::read_string("huggingface", "token")
         .await
         .map_err(|exc| TreeFetchError {
             kind: "AuthenticationError",

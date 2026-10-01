@@ -58,7 +58,7 @@ impl BoxHttpTransport {
         max_bytes: usize,
     ) -> Result<Vec<u8>, BoxError> {
         let api_key = if self.api_key.is_empty() {
-            crate::skarbiec::read_string("stado-box", "api_key")
+            crate::skarbiec::read_string("box", "api_key")
                 .await
                 .map_err(|err| BoxError::configuration(err.to_string()))?
                 .filter(|value| !value.is_empty())

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use crate::cli::blast_radius::CredentialStoreReport;
 
 pub(in crate::cli::blast_radius) async fn inspect_credential_store() -> CredentialStoreReport {
-    const REQUIRED_ITEMS: &[&str] = &["stado-huggingface"];
+    const REQUIRED_ITEMS: &[&str] = &["huggingface"];
     let locator = crate::credential_store::requested_selector()
         .unwrap_or_else(|error| format!("invalid selector: {error}"));
     let credentials = match crate::credential_store::admin_credentials() {

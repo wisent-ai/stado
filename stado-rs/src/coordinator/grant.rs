@@ -91,43 +91,37 @@ pub(crate) async fn agent_workload_grant() -> Result<Option<String>, crate::skar
         token_file,
         crate::skarbiec::GrantMode::for_grant_file(token_file),
     )?;
-    let mut visible: Vec<String> = agent_vault
-        .list_items()
-        .await?
-        .into_iter()
-        .map(|item| item.id)
-        .collect();
-    visible.sort();
-    let mut expected = config::agent_skarbiec_items().to_vec();
+    let visible = crate::skarbiec::roles::roles_played(&agent_vault.list_items().await?);
+    let mut expected = config::agent_skarbiec_roles().to_vec();
     expected.sort();
     expected.dedup();
     if expected
         .iter()
-        .any(|item| matches!(item.as_str(), "stado-aws" | "stado-azure" | "stado-gcp"))
+        .any(|role| matches!(role.as_str(), "cloud-aws" | "cloud-azure" | "cloud-gcp"))
     {
         return Err(SkarbiecError::Deployment(
-            "agent.skarbiec.items must not contain cloud-provider credential items".to_string(),
+            "agent.skarbiec.roles must not contain cloud-provider credential roles".to_string(),
         ));
     }
     for reference in config::agent_skarbiec_secret_fields() {
-        let Some((item, field)) = reference.split_once('#') else {
+        let Some((role, field)) = reference.split_once('#') else {
             return Err(SkarbiecError::Deployment(format!(
-                "agent.skarbiec.secret_fields entry {reference:?} must be item#field"
+                "agent.skarbiec.secret_fields entry {reference:?} must be role#field"
             )));
         };
-        if item.is_empty()
+        if role.is_empty()
             || field.is_empty()
-            || !expected.iter().any(|configured| configured == item)
+            || !expected.iter().any(|configured| configured == role)
         {
             return Err(SkarbiecError::Deployment(format!(
-                "agent.skarbiec.secret_fields entry {reference:?} is not covered by agent.skarbiec.items"
+                "agent.skarbiec.secret_fields entry {reference:?} is not covered by agent.skarbiec.roles"
             )));
         }
     }
     if visible != expected {
         return Err(SkarbiecError::Deployment(format!(
-            "consumer {consumer:?} can list {visible:?}; the remote workload grant must expose \
-             exactly the configured workload-secret items"
+            "consumer {consumer:?} can list items playing {visible:?}; the remote workload grant \
+             must expose exactly one item per configured workload role"
         )));
     }
     Ok(Some(agent_token))

@@ -6,24 +6,86 @@ use crate::cli::CmdError;
 
 use crate::cli::host::machine::users::credentials::credential_host;
 use crate::cli::host::secrets::vault::item::read_vault_phase;
-use crate::cli::host::secrets::vault::mirror::skarbiec_tool_path;
+use crate::cli::host::secrets::vault::mirror::{remote_skarbiec_json, skarbiec_tool_path};
 use crate::cli::host::secrets::vault::vault_word;
+use crate::skarbiec::{roles, ItemInfo};
 
-/// Store one canonical credential item in TARGET's owner vault.
+/// Store the secret that plays ROLE in TARGET's owner vault, from stdin.
 ///
-/// The payload is accepted only on stdin and remains stdin across the host
-/// channel. The command reports encrypted-record metadata before and after the
-/// write; it never decrypts the value for reporting and never rewrites the
-/// surrounding vault.
+/// The caller names what the secret is for, never an item (see
+/// [`write_role_item`]). The payload is accepted only on stdin and remains
+/// stdin across the host channel; the report carries encrypted-record
+/// metadata only.
 pub async fn vault_item_put(
     target: &str,
-    item: &str,
+    role: &str,
     item_type: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
     let mut payload = String::new();
     std::io::stdin().lock().read_to_string(&mut payload)?;
-    store_vault_item(target, item, item_type, &payload, json_output).await
+    let report = write_role_item(target, role, item_type, &payload, false).await?;
+    print_report(&report, json_output)
+}
+
+/// Write the item that plays ROLE in TARGET's vault: the one live item
+/// carrying `stado:role:<role>` is rotated in place — or, with
+/// `keep_existing`, left as it is and reported `created: false` — and when
+/// none does a new item is created under a random id with that tag. Two
+/// items in one role are refused, because choosing between them would be a
+/// guess.
+pub(crate) async fn write_role_item(
+    target: &str,
+    role: &str,
+    item_type: &str,
+    payload: &str,
+    keep_existing: bool,
+) -> Result<Value, CmdError> {
+    vault_word("role", role)?;
+    let (_, listing) = remote_skarbiec_json(target, &["list".into()]).await?;
+    let items: Vec<ItemInfo> = serde_json::from_value(listing).map_err(|error| {
+        CmdError::click(format!(
+            "{target}: Skarbiec list did not answer items: {error}"
+        ))
+    })?;
+    let tag = roles::role_tag(role);
+    let mut report = match roles::holders(&items, role).as_slice() {
+        [] => {
+            let item = roles::fresh_item_id();
+            write_vault_item(target, &item, item_type, payload, false, Some(&tag)).await?
+        }
+        [_] if keep_existing => json!({ "created": false, "target": target, "kind": item_type }),
+        [one] => write_vault_item(target, &one.id, item_type, payload, false, None).await?,
+        several => {
+            return Err(CmdError::refused(format!(
+                "{target}: {} items carry {tag}; exactly one item may play role {role}",
+                several.len()
+            )))
+        }
+    };
+    report["role"] = Value::from(role);
+    Ok(report)
+}
+
+fn print_report(report: &Value, json_output: bool) -> Result<(), CmdError> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
+    let subject = report["role"]
+        .as_str()
+        .map(|role| format!("role {role}"))
+        .unwrap_or_else(|| report["item"].as_str().unwrap_or_default().to_string());
+    println!(
+        "{}: stored {subject} as {}; state {} -> {}, revision {} -> {}",
+        report["target"].as_str().unwrap_or_default(),
+        report["kind"].as_str().unwrap_or_default(),
+        report["before"]["state"].as_str().unwrap_or_default(),
+        report["after"]["state"].as_str().unwrap_or_default(),
+        report["before"]["revision"].as_str().unwrap_or_default(),
+        report["after"]["revision"].as_str().unwrap_or_default(),
+    );
+    Ok(())
 }
 
 /// The write itself, for a caller that composed the payload in memory: the
@@ -36,20 +98,8 @@ pub(crate) async fn store_vault_item(
     payload: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let report = write_vault_item(target, item, item_type, payload, false).await?;
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        println!(
-            "{}: stored {item} as {item_type}; state {} -> {}, revision {} -> {}",
-            report["target"].as_str().unwrap_or_default(),
-            report["before"]["state"].as_str().unwrap_or_default(),
-            report["after"]["state"].as_str().unwrap_or_default(),
-            report["before"]["revision"].as_str().unwrap_or_default(),
-            report["after"]["revision"].as_str().unwrap_or_default(),
-        );
-    }
-    Ok(())
+    let report = write_vault_item(target, item, item_type, payload, false, None).await?;
+    print_report(&report, json_output)
 }
 
 /// Write one item and return its encrypted-record report (target, item, kind,
@@ -60,12 +110,16 @@ pub(crate) async fn store_vault_item(
 /// item has that id (`set-json --if-absent`, decided and written under one
 /// vault generation, so of two concurrent creators only one writes); an
 /// existing item is left as it is and reported with `created: false`.
+///
+/// `tags` sets the item's tag list (`set-json --tags`); `None` leaves an
+/// existing item's tags as they are.
 pub(crate) async fn write_vault_item(
     target: &str,
     item: &str,
     item_type: &str,
     payload: &str,
     if_absent: bool,
+    tags: Option<&str>,
 ) -> Result<Value, CmdError> {
     vault_word("vault item", item)?;
     vault_word("credential type", item_type)?;
@@ -110,6 +164,10 @@ pub(crate) async fn write_vault_item(
     ];
     if if_absent {
         invocation.push("--if-absent");
+    }
+    if let Some(tags) = tags {
+        invocation.push("--tags");
+        invocation.push(tags);
     }
 
     let before = read_vault_phase(&resolved, &vault, item, &runner)

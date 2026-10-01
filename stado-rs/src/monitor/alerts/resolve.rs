@@ -59,7 +59,7 @@ impl AlertChannels {
                 Ok(vault) => {
                     let mut found = std::collections::BTreeMap::new();
                     for field in wanted {
-                        match vault.read_string("stado-alerts", field).await {
+                        match vault.read_string("alerts", field).await {
                             Ok(Some(value)) if !value.is_empty() => {
                                 found.insert(field.to_string(), value);
                             }
@@ -218,7 +218,7 @@ async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
         "messaging_service_sid",
         "from_number",
     ] {
-        match provider.read_string("most-twilio", name).await {
+        match provider.read_string("twilio", name).await {
             Ok(Some(value)) if !value.is_empty() => {
                 values.insert(name, value);
             }

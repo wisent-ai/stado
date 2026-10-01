@@ -137,12 +137,12 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
             }
         }
         for (name, reference) in &recipe.secret_env {
-            let Some((item, field)) = reference.split_once('#') else {
+            let Some((role, field)) = reference.split_once('#') else {
                 return Err(format!(
-                    "{platform}: secret_env must use item#field references"
+                    "{platform}: secret_env must use role#field references"
                 ));
             };
-            if !env_name(name) || !identifier(item) || !identifier(field) {
+            if !env_name(name) || !identifier(role) || !identifier(field) {
                 return Err(format!("{platform}: secret_env is invalid"));
             }
         }
@@ -280,15 +280,15 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
         }
         let mut secret_names = BTreeSet::new();
         for (name, reference) in &delivery.secret_env {
-            let Some((item, field)) = reference.split_once('#') else {
+            let Some((role, field)) = reference.split_once('#') else {
                 return Err(format!(
-                    "delivery {} secret_env must use item#field references",
+                    "delivery {} secret_env must use role#field references",
                     delivery.name
                 ));
             };
             if !env_name(name)
                 || !secret_names.insert(name)
-                || !identifier(item)
+                || !identifier(role)
                 || !identifier(field)
             {
                 return Err(format!("delivery {} secret_env is invalid", delivery.name));

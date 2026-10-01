@@ -53,7 +53,7 @@
 mod fleet_join;
 mod integration;
 mod listener;
-mod operator_auth;
+pub(crate) mod operator_auth;
 mod operator_console;
 mod registry_policy;
 

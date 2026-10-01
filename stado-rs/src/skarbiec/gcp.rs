@@ -10,7 +10,7 @@ pub async fn gcp_provider() -> Result<std::sync::Arc<dyn gcp_auth::TokenProvider
         Ok(identity) => Ok(std::sync::Arc::new(identity)),
         Err(metadata_error) => {
             let credential_json = Client::configured()?
-                .read_string("stado-gcp", "service_account_json")
+                .read_string("cloud-gcp", "service_account_json")
                 .await
                 .map_err(|error| {
                     SkarbiecError::GcpAuth(format!(

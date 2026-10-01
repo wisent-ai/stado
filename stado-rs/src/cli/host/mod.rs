@@ -74,7 +74,9 @@ pub use crate::cli::host::secrets::vault::item::change::delete::delete_vault_ite
 pub use crate::cli::host::secrets::vault::item::change::rename::rename_vault_item;
 pub use crate::cli::host::secrets::vault::item::change::retag::retag_vault_item;
 pub use crate::cli::host::secrets::vault::item::put::vault_item_put;
-pub(crate) use crate::cli::host::secrets::vault::item::put::{store_vault_item, write_vault_item};
+pub(crate) use crate::cli::host::secrets::vault::item::put::{
+    store_vault_item, write_role_item, write_vault_item,
+};
 pub use crate::cli::host::secrets::vault::item::show::vault_item_show;
 pub use crate::cli::host::secrets::vault::item::stamp::stamp_vault_fingerprints;
 pub use crate::cli::host::secrets::vault::item::summarize_local as summarize_item_local;

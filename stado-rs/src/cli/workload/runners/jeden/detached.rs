@@ -28,25 +28,28 @@ pub(super) const RECORD_SCHEMA_VERSION: u64 = 1;
 /// The fleet service a session reaches its models through.
 const MODEL_ROUTER_SERVICE: &str = "brama";
 
-/// The two credentials a Jeden session needs, as vault coordinates rather
-/// than values: the agent's own signing secret and the gateway bearer. The
-/// worker's agent resolves them through its own grant and hands them to the
-/// session's environment; nothing puts a value on a command line, and a
-/// host whose grant does not expose them leaves the session queued for one
-/// that does.
+/// The two credentials a Jeden session needs, as roles rather than values:
+/// the agent's own signing secret and the gateway bearer. The worker's agent
+/// selects the items playing them through its own grant and hands their
+/// values to the session's environment; nothing puts a value on a command
+/// line, and a host whose grant exposes no item in a role leaves the session
+/// queued for one that does.
+const SESSION_SIGNING_ROLE: &str = "jeden-session-signing";
+const SESSION_GATEWAY_ROLE: &str = "jeden-session-gateway";
+
 fn session_secrets() -> std::collections::BTreeMap<String, crate::models::JobSecretRef> {
     let mut secrets = std::collections::BTreeMap::new();
     secrets.insert(
         "WISENT_APP_AGENT_AUTH_SECRET".to_string(),
         crate::models::JobSecretRef {
-            item: "agent:wisent-app".to_string(),
+            role: SESSION_SIGNING_ROLE.to_string(),
             field: "value".to_string(),
         },
     );
     secrets.insert(
         "BRAMA_TOKEN".to_string(),
         crate::models::JobSecretRef {
-            item: "jeden-model-router".to_string(),
+            role: SESSION_GATEWAY_ROLE.to_string(),
             field: "token".to_string(),
         },
     );

@@ -29,7 +29,7 @@ pub(crate) struct AgentGrant {
     /// The bearer's path on the remote host, spelled for the consumer: the
     /// Darwin installer expands `$HOME`, a systemd unit does not.
     pub(crate) token_file: String,
-    pub(crate) items: String,
+    pub(crate) roles: String,
     pub(crate) secret_fields: String,
 }
 
@@ -40,7 +40,7 @@ impl AgentGrant {
             ("WC_AGENT_SKARBIEC_URL", self.url.clone()),
             ("WC_AGENT_SKARBIEC_CONSUMER", self.consumer.clone()),
             ("WC_AGENT_SKARBIEC_TOKEN_FILE", self.token_file.clone()),
-            ("WC_AGENT_SKARBIEC_ITEMS", self.items.clone()),
+            ("WC_AGENT_SKARBIEC_ROLES", self.roles.clone()),
             (
                 "WC_AGENT_SKARBIEC_SECRET_FIELDS",
                 self.secret_fields.clone(),
@@ -66,7 +66,7 @@ impl AgentGrant {
             url: crate::config::agent_skarbiec_url().to_string(),
             consumer: crate::config::agent_skarbiec_consumer().to_string(),
             token_file: format!("{remote_home}/{REMOTE_AGENT_TOKEN_LEAF}"),
-            items: crate::config::agent_skarbiec_items().join(","),
+            roles: crate::config::agent_skarbiec_roles().join(","),
             secret_fields: crate::config::agent_skarbiec_secret_fields().join(","),
         }
     }
@@ -119,20 +119,17 @@ pub(super) async fn provision_agent_grant(
             "cannot configure dedicated remote agent grant: {error}"
         ))
     })?;
-    let mut visible = agent_vault
-        .list_items()
-        .await
-        .map_err(|error| DeployError(format!("cannot authorize remote agent grant: {error}")))?
-        .into_iter()
-        .map(|item| item.id)
-        .collect::<Vec<_>>();
-    visible.sort();
-    let mut expected = crate::config::agent_skarbiec_items().to_vec();
+    let visible =
+        crate::skarbiec::roles::roles_played(&agent_vault.list_items().await.map_err(|error| {
+            DeployError(format!("cannot authorize remote agent grant: {error}"))
+        })?);
+    let mut expected = crate::config::agent_skarbiec_roles().to_vec();
     expected.sort();
     expected.dedup();
     if visible != expected {
         return Err(DeployError(format!(
-            "stado-local-agent grant exposes {visible:?}; expected exactly {expected:?}"
+            "stado-local-agent grant exposes items playing {visible:?}; expected exactly one item \
+             for each of {expected:?}"
         )));
     }
     let prepare = runner(CommandSpec::new(ssh_argv(
@@ -177,7 +174,7 @@ pub(super) async fn provision_agent_grant(
         url: agent_url.to_string(),
         consumer: agent_consumer.to_string(),
         token_file: format!("{remote_home}/{REMOTE_AGENT_TOKEN_LEAF}"),
-        items: crate::config::agent_skarbiec_items().join(","),
+        roles: crate::config::agent_skarbiec_roles().join(","),
         secret_fields: crate::config::agent_skarbiec_secret_fields().join(","),
     })
 }

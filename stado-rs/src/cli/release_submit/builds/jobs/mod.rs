@@ -60,12 +60,12 @@ async fn persist_worker_request(
 pub(crate) fn secret_refs(v: &BTreeMap<String, String>) -> BTreeMap<String, JobSecretRef> {
     v.iter()
         .filter_map(|(n, r)| {
-            r.split_once('#').map(|(i, f)| {
+            r.split_once('#').map(|(role, field)| {
                 (
                     n.clone(),
                     JobSecretRef {
-                        item: i.into(),
-                        field: f.into(),
+                        role: role.into(),
+                        field: field.into(),
                     },
                 )
             })

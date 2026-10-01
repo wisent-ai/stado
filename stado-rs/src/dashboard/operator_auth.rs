@@ -9,11 +9,13 @@ use url::Url;
 
 use super::{trusted_request_host, Request};
 
-const EMAIL_ITEM: &str = "wisent-backend-email-provider";
-const APNS_ITEM: &str = "wisent-backend-apns";
-const FCM_ITEM: &str = "wisent-backend-fcm";
-const DEVICE_REGISTRY_ITEM: &str = "stado-supabase";
-const REQUIRED_ITEMS: &[&str] = &[APNS_ITEM, FCM_ITEM, DEVICE_REGISTRY_ITEM];
+/// The roles the backend messaging boundary reads, which configuration
+/// validation holds `backend.messaging.skarbiec.items` to as well.
+pub(crate) const EMAIL_ROLE: &str = "email-provider";
+const APNS_ROLE: &str = "apns";
+const FCM_ROLE: &str = "fcm";
+const DEVICE_REGISTRY_ROLE: &str = "device-registry";
+pub(crate) const REQUIRED_ROLES: &[&str] = &[APNS_ROLE, FCM_ROLE, DEVICE_REGISTRY_ROLE];
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 #[derive(Debug, thiserror::Error)]
@@ -31,7 +33,7 @@ pub(super) enum OperatorAuthError {
 /// Backend messaging items are read through Stado's Skarbiec identity.
 fn messaging_vault() -> Result<crate::skarbiec::Client, OperatorAuthError> {
     let configured = crate::config::backend_messaging_skarbiec_items();
-    let required = REQUIRED_ITEMS.iter().copied().collect::<BTreeSet<_>>();
+    let required = REQUIRED_ROLES.iter().copied().collect::<BTreeSet<_>>();
     let actual = configured
         .iter()
         .map(String::as_str)
@@ -40,7 +42,7 @@ fn messaging_vault() -> Result<crate::skarbiec::Client, OperatorAuthError> {
         && required.is_subset(&actual)
         && actual
             .iter()
-            .all(|item| required.contains(item) || *item == EMAIL_ITEM);
+            .all(|role| required.contains(role) || *role == EMAIL_ROLE);
     if !items_valid {
         return Err(OperatorAuthError::Configuration);
     }
@@ -57,11 +59,11 @@ fn required(value: &Value) -> Result<&str, OperatorAuthError> {
 async fn metadata() -> Result<(Url, String), OperatorAuthError> {
     let vault = messaging_vault()?;
     let raw_url = vault
-        .read_field(DEVICE_REGISTRY_ITEM, "url")
+        .read_field(DEVICE_REGISTRY_ROLE, "url")
         .await
         .map_err(|_| OperatorAuthError::Credential)?;
     let raw_key = vault
-        .read_field(DEVICE_REGISTRY_ITEM, "anon_key")
+        .read_field(DEVICE_REGISTRY_ROLE, "anon_key")
         .await
         .map_err(|_| OperatorAuthError::Credential)?;
     let base = Url::parse(required(&raw_url)?).map_err(|_| OperatorAuthError::Credential)?;

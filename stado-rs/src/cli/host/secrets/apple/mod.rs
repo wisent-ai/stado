@@ -104,6 +104,7 @@ pub async fn apple_profile(args: AppleProfileArgs) -> Result<(), CmdError> {
         "bundle",
         &payload.to_string(),
         false,
+        None,
     )
     .await?;
     let outcome =

@@ -33,7 +33,7 @@ static AZURE_BILLING_SECRET: LazyLock<String> = LazyLock::new(|| {
         .unwrap_or_else(|_| "wisent-azure-billing-sp".to_string())
 });
 static AZURE_PROVIDER_SECRET: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("WC_AZURE_SECRET").unwrap_or_else(|_| "stado-azure".to_string())
+    std::env::var("WC_AZURE_SECRET").unwrap_or_else(|_| "cloud-azure".to_string())
 });
 
 /// Billing sources queried by the collector. This is independent from compute

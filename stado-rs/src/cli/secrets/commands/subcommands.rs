@@ -4,11 +4,14 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum CredentialItemCommands {
-    /// Store one typed item directly in a host's declared owner vault.
+    /// Store the secret that plays one role in a host's declared owner vault:
+    /// the item carrying stado:role:<ROLE> is rotated, or created under a
+    /// random id with that tag.
     Put {
         #[arg(long)]
         host: String,
-        item: String,
+        #[arg(long)]
+        role: String,
         #[arg(long = "type")]
         item_type: String,
         #[arg(long)]
@@ -180,13 +183,14 @@ pub enum CredentialAcquisitionScopeCommands {
 
 #[derive(Subcommand)]
 pub enum CredentialGrantCommands {
-    /// Authorize a consumer to read one field of one item.
-    #[command(name = "item-read")]
-    ItemRead {
+    /// Authorize a consumer to read one field of the item that plays a role.
+    #[command(name = "role-read")]
+    RoleRead {
         #[arg(long)]
         host: String,
         consumer: String,
-        item: String,
+        #[arg(long)]
+        role: String,
         #[arg(long)]
         field: String,
         #[arg(long)]

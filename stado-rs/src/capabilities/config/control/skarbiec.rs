@@ -43,10 +43,10 @@ pub const SECRETS_SKARBIEC: SkarbiecBinding =
     skarbiec_binding!("secrets-skarbiec", "WC_SKARBIEC", "secrets.skarbiec");
 pub const AGENT_SKARBIEC: SkarbiecBinding =
     skarbiec_binding!("agent-skarbiec", "WC_AGENT_SKARBIEC", "agent.skarbiec");
-pub const AGENT_SKARBIEC_ITEMS_CONFIG: ConfigField = ConfigField::list(
-    "agent-skarbiec-items",
-    "WC_AGENT_SKARBIEC_ITEMS",
-    "agent.skarbiec.items",
+pub const AGENT_SKARBIEC_ROLES_CONFIG: ConfigField = ConfigField::list(
+    "agent-skarbiec-roles",
+    "WC_AGENT_SKARBIEC_ROLES",
+    "agent.skarbiec.roles",
 );
 pub const AGENT_SKARBIEC_SECRET_FIELDS_CONFIG: ConfigField = ConfigField::list(
     "agent-skarbiec-secret-fields",

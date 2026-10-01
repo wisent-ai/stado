@@ -173,22 +173,22 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
         let Some(spec) = value.as_object() else {
             return Err(invalid(format!("secret_env.{env_name} must be an object")));
         };
-        if spec.keys().any(|key| key != "item" && key != "field") {
+        if spec.keys().any(|key| key != "role" && key != "field") {
             return Err(invalid(format!(
-                "secret_env.{env_name} accepts only item and field"
+                "secret_env.{env_name} accepts only role and field"
             )));
         }
-        let item = spec.get("item").and_then(Value::as_str).unwrap_or_default();
+        let role = spec.get("role").and_then(Value::as_str).unwrap_or_default();
         let field = spec
             .get("field")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !SECRET_PART_RE.is_match(item) || !SECRET_PART_RE.is_match(field) {
+        if !SECRET_PART_RE.is_match(role) || !SECRET_PART_RE.is_match(field) {
             return Err(invalid(format!(
-                "secret_env.{env_name} requires path-safe item and field strings"
+                "secret_env.{env_name} requires path-safe role and field strings"
             )));
         }
-        if !config::agent_secret_reference_allowed(item, field) {
+        if !config::agent_secret_reference_allowed(role, field) {
             return Err(invalid(format!(
                 "secret_env.{env_name} reference is not in agent.skarbiec.secret_fields"
             )));

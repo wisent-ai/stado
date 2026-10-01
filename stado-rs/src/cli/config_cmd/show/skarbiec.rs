@@ -166,9 +166,9 @@ pub(super) fn insert(resolved: &mut Map<String, Value>) {
     };
     resolved.insert("service_api_deployers".into(), service_deployers);
     resolved.insert(
-        "agent_skarbiec_items".into(),
+        "agent_skarbiec_roles".into(),
         Value::Array(
-            config::agent_skarbiec_items()
+            config::agent_skarbiec_roles()
                 .iter()
                 .map(|item| Value::from(item.as_str()))
                 .collect(),

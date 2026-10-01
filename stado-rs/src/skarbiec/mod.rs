@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 mod client;
 mod gcp;
+pub mod roles;
 mod tokens;
 pub mod validate;
 mod verifiers;

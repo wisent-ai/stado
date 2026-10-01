@@ -106,7 +106,7 @@ pub async fn dispatch_fix(
                       running the failure-fixer.",
         }));
     };
-    let anthropic_key = crate::skarbiec::read_string("stado-anthropic", "api_key")
+    let anthropic_key = crate::skarbiec::read_string("anthropic", "api_key")
         .await?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {

@@ -1,5 +1,5 @@
-//! Reconcile item reads on Stado's grant without replacing unrelated
-//! capabilities.
+//! Reconcile the reads of declared roles on Stado's grant without replacing
+//! unrelated capabilities.
 
 pub(in crate::cli::host) mod shadow;
 
@@ -10,7 +10,9 @@ use crate::cli::CmdError;
 use crate::cli::host::checks::recovery::verifier::release::remote_skarbiec_metadata;
 use crate::cli::host::secrets::vault::vault_word;
 
-/// Ensure the declared item reads on Stado's grant, preserving other scopes.
+/// Ensure the declared roles read on Stado's grant, preserving other scopes.
+/// `items` holds roles; each is translated to the item playing it in the
+/// vault that holds the authoritative copy, and only that id is granted.
 pub(super) async fn reconcile_verifier(
     target: &str,
     kind: &str,
@@ -25,8 +27,8 @@ pub(super) async fn reconcile_verifier(
             "{config_name} is empty; refusing to mint an unusable verifier grant"
         )));
     }
-    for item in &items {
-        vault_word(&format!("{kind} verifier item"), item)?;
+    for role in &items {
+        vault_word(&format!("{kind} verifier role"), role)?;
     }
 
     let resolved = crate::deploy::host_channel::canonical_target(target)
@@ -116,11 +118,45 @@ pub(super) async fn reconcile_verifier(
             "{kind} verifier grant is already expired"
         )));
     }
-    // Release publisher items and the route-scoped host-health bearer remain
-    // authoritative in the control-plane vault. Their consumers read
-    // target-local shadows with the same ids. Atomically replace only those
-    // shadows; this copies the current value without rotating or reclassifying
-    // the authoritative source.
+    // Each role is played by an item in the vault that holds the
+    // authoritative copy: the control-plane vault for release publishers and
+    // the route-scoped host-health bearer, the target's own vault otherwise.
+    let listed = |value: Value| -> Result<Vec<crate::skarbiec::ItemInfo>, CmdError> {
+        serde_json::from_value(value).map_err(|error| {
+            CmdError::click(format!(
+                "{}: Skarbiec list did not answer items: {error}",
+                resolved.name
+            ))
+        })
+    };
+    let authority = if matches!(kind, "release" | "object") {
+        let launcher = crate::cli::secrets::skarbiec_launcher()
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let owner_vault = crate::credential_store::owner::vault()
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        listed(
+            crate::cli::secrets::launcher_json(&launcher, &owner_vault, &["list"])
+                .map_err(|error| CmdError::click(error.to_string()))?,
+        )?
+    } else {
+        listed(
+            remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
+                .await?,
+        )?
+    };
+    let mut played = Vec::new();
+    for role in &items {
+        let id = crate::skarbiec::roles::item_for_role(&authority, role)
+            .map_err(|refusal| {
+                CmdError::refused(format!("{}: {kind} verifier: {refusal}", resolved.name))
+            })?
+            .id
+            .clone();
+        played.push((role.clone(), id));
+    }
+    // Their consumers read target-local shadows with the same ids. Atomically
+    // replace only those shadows; this copies the current value without
+    // rotating or reclassifying the authoritative source.
     let mut source_lifecycles = Vec::new();
     if matches!(kind, "release" | "object") {
         let authoritative_vault = crate::credential_store::owner::vault()
@@ -144,8 +180,8 @@ pub(super) async fn reconcile_verifier(
         let target_items =
             remote_skarbiec_metadata(&resolved, &runner, &skarbiec, &vault, &gnupg_home, "list")
                 .await?;
-        for item in &items {
-            if kind == "object" && item.as_str() != crate::config::HOST_HEALTH_API_ITEM {
+        for (role, item) in &played {
+            if kind == "object" && role.as_str() != crate::config::HOST_HEALTH_API_ITEM {
                 continue;
             }
 
@@ -179,7 +215,7 @@ pub(super) async fn reconcile_verifier(
         crate::deploy::shlex_quote(&token_file),
     );
     let mut command = common;
-    for item in &items {
+    for (_, item) in &played {
         command.push_str(&format!(
             "; {} grant ensure {} {} --field token --token-file \"$token_file\" > /dev/null",
             crate::deploy::shlex_quote(&skarbiec),

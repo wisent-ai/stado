@@ -2,14 +2,15 @@
 //! before `release submit` can publish it, in the order the guards require,
 //! from the typed operations this fleet already has.
 //!
-//! The command mints the product's publisher item, grants Stado read access,
-//! declares it on the participating hosts and checks their release policies.
+//! The command stores the product's publisher bearer in the role
+//! `<product>-release-publisher`, grants Stado read access, declares it on the
+//! participating hosts and checks their release policies.
 
 use serde_json::{json, Value};
 
 use crate::cli::host::{
-    grant_item_read, store_vault_item, vault_item_state, vault_token_sync, vault_word,
-    write_host_config, TokenSyncMode,
+    grant_item_read, vault_token_sync, vault_word, write_host_config, write_role_item,
+    TokenSyncMode,
 };
 use crate::cli::CmdError;
 
@@ -26,11 +27,23 @@ pub(super) use withdraw::withdraw_publisher;
 /// verifier reconciliation mints (`openssl rand -hex 32`).
 const BEARER_BYTES: usize = 32;
 
-/// The publisher item and prefix a product's declaration names.
+/// The suffix that makes a role a product's release publisher role.
+const PUBLISHER_ROLE_SUFFIX: &str = "-release-publisher";
+
+/// The publisher role and prefix a product's declaration names. The
+/// declaration's `item` key holds the role: the vault, not the declaration,
+/// decides which item plays it.
 pub(super) fn publisher_declaration(product: &str) -> (String, Value) {
-    let item = product.to_string();
-    let declared = json!({ "item": item, "prefix": format!("{product}/") });
-    (item, declared)
+    let role = format!("{product}{PUBLISHER_ROLE_SUFFIX}");
+    let declared = json!({ "item": role, "prefix": format!("{product}/") });
+    (role, declared)
+}
+
+/// The product whose publisher plays `role`, or `None` for a role that is no
+/// release publisher's.
+pub(super) fn publisher_product(role: &str) -> Option<&str> {
+    role.strip_suffix(PUBLISHER_ROLE_SUFFIX)
+        .filter(|product| !product.is_empty())
 }
 
 /// A fresh bearer: two random UUIDs' bytes, hex encoded, so no shell and no
@@ -70,35 +83,31 @@ pub(super) async fn declare_publisher(
 ) -> Result<(), CmdError> {
     let reloads = reload::reload_targets(reloads)?;
     vault_word("product", product)?;
-    let (item, declared) = publisher_declaration(product);
+    let (role, declared) = publisher_declaration(product);
     let consumer = crate::config::skarbiec_consumer().to_string();
     let token_file = home_relative(crate::config::skarbiec_token_file());
     let mut report = Vec::new();
 
-    // 1. The item, on the owner, once.
-    let state = vault_item_state(owner, &item).await?;
-    let minted = state == "absent";
-    if minted {
-        // The canonical item envelope Skarbiec's `set-json` accepts: schema,
-        // kind, the one required field, and the context that names the
-        // product the bearer publishes.
-        let payload = json!({
-            "schema": "skarbiec.item.v2",
-            "kind": "token",
-            "fields": { "token": mint_bearer() },
-            "context": { "product": product, "role": "release-publisher" },
-        })
-        .to_string();
-        store_vault_item(owner, &item, "token", &payload, false).await?;
-    }
-    report.push(json!({ "step": "item", "host": owner, "item": item, "minted": minted, "state_before": state }));
+    // 1. The bearer, on the owner, once: an item already playing the role is
+    //    kept. The canonical item envelope Skarbiec's `set-json` accepts:
+    //    schema, kind, the one required field, and the context that names the
+    //    product the bearer publishes.
+    let payload = json!({
+        "schema": "skarbiec.item.v2",
+        "kind": "token",
+        "fields": { "token": mint_bearer() },
+        "context": { "product": product, "role": "release-publisher" },
+    })
+    .to_string();
+    let stored = write_role_item(owner, &role, "token", &payload, true).await?;
+    let minted = stored["created"].as_bool() != Some(false);
+    report.push(json!({ "step": "item", "host": owner, "role": role, "minted": minted }));
 
     // 2. The release client's bearer beside the owner's vault, so its grant
     //    can be widened there and not on a replica the owner overwrites. A
     //    client that holds no vault of its own reads the owner's through
-    //    secrets.skarbiec.url, so its bearer already lives there; copying it
-    //    asked for a local vault authority and refused skryba's first
-    //    publisher on lukasz-macbook on 2026-09-27.
+    //    secrets.skarbiec.url, so its bearer already lives there and copying
+    //    it would ask for a local vault authority it does not have.
     let client_reads_owner = this_host().await.is_ok_and(|here| here == client)
         && crate::config::skarbiec_vault_file().trim().is_empty();
     if client != owner && !client_reads_owner {
@@ -115,11 +124,11 @@ pub(super) async fn declare_publisher(
         report
             .push(json!({ "step": "bearer", "from": client, "host": owner, "consumer": consumer }));
     }
-    grant_item_read(owner, &consumer, &item, "token", &token_file, false).await?;
-    report.push(json!({ "step": "grant", "host": owner, "consumer": consumer, "capability": format!("read:{item}#token") }));
+    grant_item_read(owner, &consumer, &role, "token", &token_file, false).await?;
+    report.push(json!({ "step": "grant", "host": owner, "consumer": consumer, "role": role, "field": "token" }));
 
     // 3. The declaration, on every host that serves or submits releases. The
-    //    write is guarded: a host that does not hold the item refuses it.
+    //    write is guarded: a host whose vault plays no such role refuses it.
     let key = format!("release_api.publishers.{product}");
     let value = declared.to_string();
     let mut declared_on = vec![owner.to_string(), client.to_string()];
@@ -137,17 +146,15 @@ pub(super) async fn declare_publisher(
     //    process because this one read configuration before the writes above.
     //    The reconciliation reads the authoritative publisher items from the
     //    vault on the machine it runs on, so a client that reads the owner's
-    //    vault through secrets.skarbiec.url runs it on the owner: run here it
-    //    refused on lukasz-macbook's retired vault copies on 2026-09-27.
+    //    vault through secrets.skarbiec.url runs it on the owner.
     //    A declaration no verifier accepts closes that host's release
     //    publication boundary, so any failure retracts every declaration
     //    written above before the error is returned.
     for host in &declared_on {
         // A client that reads the owner's vault holds no vault a verifier
-        // could be reconciled against: the repair would judge its retired
-        // local copy (it refused with "token file does not match the
-        // consumer's recorded bearer" on 2026-09-27). Its declaration only
-        // lets its own build and release submit find the publisher.
+        // could be reconciled against: the repair would judge a retired local
+        // copy. Its declaration only lets its own build and release submit
+        // find the publisher.
         if client_reads_owner && host == client {
             report.push(json!({ "step": "verifier", "host": host, "repair": "not needed: reads the vault on the owner", "owner": owner }));
             continue;
@@ -219,12 +226,12 @@ pub(super) async fn declare_publisher(
         println!(
             "{}",
             serde_json::to_string_pretty(
-                &json!({ "product": product, "item": item, "steps": report })
+                &json!({ "product": product, "role": role, "steps": report })
             )?
         );
     } else {
         println!(
-            "{product}: publisher {item} {} on {owner}; {consumer} may read it; declared on {}; release verifier reconciled",
+            "{product}: publisher role {role} {} on {owner}; {consumer} may read it; declared on {}; release verifier reconciled",
             if minted { "minted" } else { "already held" },
             declared_on.join(", ")
         );

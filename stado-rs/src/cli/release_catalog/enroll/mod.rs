@@ -44,7 +44,7 @@ mod rollout;
 mod runtime;
 
 // `host_grant::declare_on_host` writes, per host, the config keys the workload
-// secret gate reads (`config::agent_skarbiec_items`, `agent_skarbiec_secret_fields`).
+// secret gate reads (`config::agent_skarbiec_roles`, `agent_skarbiec_secret_fields`).
 
 /// What enrolling one product found and did, step by step.
 pub(crate) struct Enrollment {
@@ -218,15 +218,15 @@ async fn ensure_workload_secrets(
         .iter()
         .map(String::as_str)
         .collect();
-    let declared_items: BTreeSet<&str> = crate::config::agent_skarbiec_items()
+    let declared_roles: BTreeSet<&str> = crate::config::agent_skarbiec_roles()
         .iter()
         .map(String::as_str)
         .collect();
     let missing: Vec<&(String, String)> = references
         .iter()
-        .filter(|(item, field)| {
-            !declared_fields.contains(format!("{item}#{field}").as_str())
-                || !declared_items.contains(item.as_str())
+        .filter(|(role, field)| {
+            !declared_fields.contains(format!("{role}#{field}").as_str())
+                || !declared_roles.contains(role.as_str())
         })
         .collect();
     if missing.is_empty() {
@@ -234,7 +234,7 @@ async fn ensure_workload_secrets(
     }
     let added: Vec<String> = missing
         .iter()
-        .map(|(item, field)| format!("{item}#{field}"))
+        .map(|(role, field)| format!("{role}#{field}"))
         .collect();
 
     let consumer = crate::config::agent_skarbiec_consumer();
@@ -255,10 +255,8 @@ async fn ensure_workload_secrets(
     }
     // A client that holds no vault of its own reads the owner's through
     // secrets.skarbiec.url, so its agent bearer already lives there; copying
-    // it asks the client for a vault authority it does not have, and
-    // `catalog enroll most-desktop` on lukasz-macbook refused with
-    // `lukasz-macbook declares no vault authority` after declaring the
-    // publisher. `declare_publisher` skips the same copy for the same client.
+    // it would ask the client for a vault authority it does not have.
+    // `declare_publisher` skips the same copy for the same client.
     let client_reads_owner = crate::config::skarbiec_vault_file().trim().is_empty();
     if client != owner && !client_reads_owner {
         vault_token_sync(
@@ -272,8 +270,8 @@ async fn ensure_workload_secrets(
         )
         .await?;
     }
-    for (item, field) in &missing {
-        grant_item_read(&owner, consumer, item, field, &token_file, false).await?;
+    for (role, field) in &missing {
+        grant_item_read(&owner, consumer, role, field, &token_file, false).await?;
     }
     eprintln!(
         "{product}: workload agent {consumer} may now read {} (declared on {}, granted on {owner})",

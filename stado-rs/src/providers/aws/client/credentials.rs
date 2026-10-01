@@ -17,7 +17,7 @@
 async fn stado_aws_field(names: &[&str]) -> Result<Option<String>, crate::skarbiec::SkarbiecError> {
     let mut refusal = None;
     for name in names {
-        match crate::skarbiec::read_string("stado-aws", name).await {
+        match crate::skarbiec::read_string("cloud-aws", name).await {
             Ok(Some(value)) if !value.trim().is_empty() => return Ok(Some(value)),
             Ok(_) => {}
             Err(error) => refusal = Some(error),

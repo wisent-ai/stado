@@ -34,7 +34,7 @@ pub const ACTIVE_OBJECT_NAMESPACES: &[&str] = &[
 
 /// Route-scoped bearer the dashboard verifies for host-health publication,
 /// read, like every object bearer, as Stado's one identity `stado`.
-pub const HOST_HEALTH_API_ITEM: &str = "stado-host-health-api";
+pub const HOST_HEALTH_API_ITEM: &str = "host-health-api";
 
 /// What the object API lets a grant do, from the boundaries' declaration.
 pub fn object_api_actions() -> Vec<String> {

@@ -22,7 +22,7 @@ use crate::providers::vast::{
 };
 
 /// The item the bridge reads, and the field on it.
-const ITEM: &str = "stado-vast";
+const ITEM: &str = "vast";
 const FIELD: &str = "api_key";
 /// The fleet service whose active host holds the vault this item lives in.
 /// Asking the directory keeps "which vault" a fleet answer rather than a

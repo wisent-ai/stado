@@ -106,7 +106,7 @@ pub async fn vault_token_mint(
         })
         .to_string();
         let report =
-            crate::cli::host::write_vault_item(target, item, "token", &payload, true).await?;
+            crate::cli::host::write_vault_item(target, item, "token", &payload, true, None).await?;
         if report["created"].as_bool() == Some(true) {
             stored = Some(report);
         }

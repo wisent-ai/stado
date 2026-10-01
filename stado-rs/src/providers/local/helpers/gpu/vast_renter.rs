@@ -16,7 +16,7 @@ pub const VAST_API: &str = "https://console.vast.ai/api/v0";
 /// `Err` propagation (and `error_for_status`, matching urllib's raise on
 /// HTTP errors).
 pub async fn vast_has_renter() -> anyhow::Result<bool> {
-    let api_key = crate::skarbiec::read_string("stado-vast", "api_key")
+    let api_key = crate::skarbiec::read_string("vast", "api_key")
         .await?
         .unwrap_or_default();
     if api_key.is_empty() {

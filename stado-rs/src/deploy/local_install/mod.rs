@@ -139,7 +139,7 @@ pub const SYSTEMD_SUFFIX: &str = ".service";
 /// authorization and transport failures are explicit; there is no alternate
 /// credential source.
 pub async fn fetch_hf_write_token() -> Result<String, DeployError> {
-    crate::skarbiec::read_string("stado-huggingface", "write_token")
+    crate::skarbiec::read_string("huggingface", "write_token")
         .await
         .map_err(|exc| DeployError(exc.to_string()))?
         .filter(|value| !value.is_empty())

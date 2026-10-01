@@ -1,45 +1,47 @@
 //! Every release publisher a product's build reads through: its own, and the
 //! publisher of each pinned build input (`inputs.<name>.uri`).
 //!
-//! On 2026-09-30 oko-desktop and tama-desktop were refused at queue time with
-//! 'cannot read release publisher item oko-desktop-swiftpm-cache … Skarbiec
-//! returned HTTP 403' (34891aeb). The input publishers were declared in this
-//! host's configuration, so `ensure_publisher` passed them, but their items
-//! had been minted into this machine's retired local vault copy (c39eb66d) and
-//! the owner vault held neither the item nor Stado's grant on it. An input's
-//! publisher is ensured by what Stado can read: an item the vault refuses to
-//! Stado (403) or does not hold (404, or no token) is declared again, which
-//! mints it on the owner and grants the read. Any other failure of the read
-//! refuses the enrolment, so an unreachable vault never rotates a bearer.
+//! An input's publisher is ensured by what Stado can read: a role whose item
+//! the vault refuses to Stado (403) or does not hold (404, or no token) is
+//! declared again, which stores the bearer on the owner and grants the read.
+//! Any other failure of the read refuses the enrolment, so an unreachable
+//! vault never rotates a bearer.
 
 use reqwest::StatusCode;
 
 use crate::cli::CmdError;
 use crate::release_pipeline::ReleasePipelineManifest;
 
-use super::super::publisher::{declare_publisher_on_fleet, ensure_publisher};
+use super::super::publisher::{declare_publisher_on_fleet, ensure_publisher, publisher_product};
 
 /// Ensure `manifest`'s own publisher and the publisher of every input it reads.
 pub(super) async fn ensure_publishers(manifest: &ReleasePipelineManifest) -> Result<(), CmdError> {
     ensure_publisher(&manifest.product).await?;
     for (name, input) in &manifest.inputs {
-        let Some(item) = input_publisher(&input.uri)? else {
+        let Some(role) = input_publisher(&input.uri)? else {
             continue;
         };
-        if readable(&item).await? {
+        if readable(&role).await? {
             continue;
         }
+        let product = publisher_product(&role).ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: input {name} is published under role {role}, which is not a release \
+                 publisher role",
+                manifest.product
+            ))
+        })?;
         eprintln!(
-            "{}: input {name} is published by {item}, which Stado cannot read; declaring it on \
-             the vault owner",
+            "{}: input {name} is published under role {role}, which Stado cannot read; \
+             declaring {product}'s publisher on the vault owner",
             manifest.product
         );
-        declare_publisher_on_fleet(&item).await?;
+        declare_publisher_on_fleet(product).await?;
     }
     Ok(())
 }
 
-/// The publisher item a `stado://<namespace>/<key>` input is read with, or
+/// The publisher role a `stado://<namespace>/<key>` input is read with, or
 /// `None` for an input no release publisher covers.
 fn input_publisher(uri: &str) -> Result<Option<String>, CmdError> {
     let Some((namespace, key)) = uri
@@ -61,13 +63,14 @@ fn input_publisher(uri: &str) -> Result<Option<String>, CmdError> {
     Ok(publisher.map(|publisher| publisher.item().to_owned()))
 }
 
-/// Whether Stado's own grant reads a non-empty token from `item`, the read
-/// `release_bearer_for` makes when the build stages the input. `false` only
-/// for the vault's own answer that Stado may not read it or it is not there.
-async fn readable(item: &str) -> Result<bool, CmdError> {
+/// Whether Stado's own grant reads a non-empty token from the item playing
+/// `role`, the read `release_bearer_for` makes when the build stages the
+/// input. `false` only for the vault's own answer that Stado may not read it
+/// or no item plays it.
+async fn readable(role: &str) -> Result<bool, CmdError> {
     let client = crate::skarbiec::Client::stado()
         .map_err(|error| CmdError::click(format!("cannot acquire Stado's grant: {error}")))?;
-    match client.read_string(item, "token").await {
+    match client.read_string(role, "token").await {
         Ok(token) => Ok(token.is_some_and(|token| !token.is_empty())),
         Err(error)
             if error.status() == Some(StatusCode::FORBIDDEN.as_u16())
@@ -76,7 +79,7 @@ async fn readable(item: &str) -> Result<bool, CmdError> {
             Ok(false)
         }
         Err(error) => Err(CmdError::click(format!(
-            "cannot check whether Stado reads publisher item {item}: {error}"
+            "cannot check whether Stado reads publisher role {role}: {error}"
         ))),
     }
 }

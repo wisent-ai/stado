@@ -1,6 +1,6 @@
 //! Which live fleet host a release build or delivery job is pinned to.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::cli::release_submit::builds::claimability::{claimability, Claimability};
 use crate::cli::release_submit::builds::scratch::{published_free_bytes, scratch_verdict};
@@ -201,16 +201,10 @@ pub(crate) async fn builder(
         })
 }
 
-/// The first `item#field` the job declares that this host's published
-/// `secret_fields` does not allow.
-///
-/// On 2026-09-23 jeden 0.1.23's darwin build was pinned to
-/// charless-mac-mini, whose agent does not allow the Apple signing fields,
-/// and failed with `secret WISENT_CODESIGN_CERTIFICATE_PEM is outside
-/// agent.skarbiec.secret_fields`; lukasz-macbook allows them. A publication
-/// without the list comes from an agent older than it and is not judged
-/// here; that agent's own claim-time probe still declines what it cannot
-/// resolve.
+/// The first `role#field` the job declares that this host's published
+/// `secret_fields` does not allow. A publication without the list comes from
+/// an agent older than it and is not judged here; that agent's own
+/// claim-time probe still declines what it cannot resolve.
 fn missing_secret_field(
     publication: &serde_json::Value,
     secret_env: &BTreeMap<String, String>,
@@ -226,18 +220,15 @@ fn missing_secret_field(
         .map(|reference| format!("{reference} is not in its agent.skarbiec.secret_fields"))
 }
 
-/// Refuse a platform job that names a vault item the `stado` consumer cannot
-/// see, before anything is queued.
+/// Refuse a platform job that asks for a role no item the `stado` consumer
+/// can see plays, before anything is queued.
 ///
 /// [`missing_secret_field`] judges a builder by the `secret_fields` it
-/// declares, and a declaration is not a vault. On 2026-09-30 oko's
-/// darwin-arm64 build named `wisent-apple-developer-id#certificate_p12_base64`
-/// and `github-release-mirror#token`; lukasz-macbook declared both, no vault
-/// held either, and the job sat queued an hour with its builder answering
-/// `claiming: yes` while its claim-time probe declined it every scan. The
-/// builder resolves a job's secrets as consumer `stado`, so the same
-/// consumer's metadata listing — ids only, no values — is the question that
-/// decides whether any host could ever claim the job.
+/// declares, and a declaration is not a vault: a job whose role no item
+/// plays would sit queued while every builder's claim-time probe declines
+/// it. The builder resolves a job's secrets as consumer `stado`, so that
+/// consumer's metadata listing — ids and tags, no values — decides whether
+/// any host could ever claim the job.
 pub(crate) async fn refuse_unheld_secret_items(
     product: &str,
     platform: &str,
@@ -248,36 +239,34 @@ pub(crate) async fn refuse_unheld_secret_items(
     }
     let listing_failed = |error: crate::skarbiec::SkarbiecError| {
         CmdError::click(format!(
-            "{product}'s {platform} build names vault secrets and the stado consumer's item \
+            "{product}'s {platform} build asks for vault roles and the stado consumer's item \
              listing could not be read, so whether any builder can claim it is unknown: {error}"
         ))
     };
-    let held: BTreeSet<String> = crate::skarbiec::Client::configured()
+    let visible = crate::skarbiec::Client::configured()
         .map_err(listing_failed)?
         .list_items()
         .await
-        .map_err(listing_failed)?
-        .into_iter()
-        .map(|item| item.id)
-        .collect();
+        .map_err(listing_failed)?;
     let unheld: Vec<String> = secret_env
         .iter()
-        .filter(|(_, reference)| {
-            let item = reference
+        .filter_map(|(env, reference)| {
+            let role = reference
                 .split_once('#')
-                .map_or(reference.as_str(), |(item, _)| item);
-            !held.contains(item)
+                .map_or(reference.as_str(), |(role, _)| role);
+            crate::skarbiec::roles::item_for_role(&visible, role)
+                .err()
+                .map(|refusal| format!("{env}: {refusal}"))
         })
-        .map(|(env, reference)| format!("{env} from {reference}"))
         .collect();
     if unheld.is_empty() {
         return Ok(());
     }
     Err(CmdError::refused(format!(
-        "{product}'s {platform} build names vault items the stado consumer cannot see, so no \
-         builder could ever claim it: {}. Store each item in the owner vault (`stado credentials \
-         item put --host <vault owner> <ITEM>`) and grant it to stado before building.",
-        unheld.join(", ")
+        "{product}'s {platform} build asks for roles the stado consumer cannot select, so no \
+         builder could ever claim it: {}. Store the secret with `stado credentials item put \
+         --host <vault owner> --role <ROLE>` and grant it to stado before building.",
+        unheld.join("; ")
     )))
 }
 

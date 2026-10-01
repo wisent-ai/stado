@@ -111,7 +111,7 @@ pub async fn read_vast_api_key() -> VastCredentialReading {
             consumer: crate::config::skarbiec_consumer().to_string(),
             token_file: control_plane_bearer.to_string(),
         };
-        return match crate::skarbiec::read_string("stado-vast", "api_key").await {
+        return match crate::skarbiec::read_string("vast", "api_key").await {
             Ok(value) => reading(channel, value, None),
             Err(err) => reading(channel, None, Some(err.to_string())),
         };
@@ -141,7 +141,7 @@ pub async fn read_vast_api_key() -> VastCredentialReading {
         consumer,
         token_file,
         crate::skarbiec::GrantMode::for_grant_file(token_file),
-        "stado-vast",
+        "vast",
         "api_key",
     )
     .await

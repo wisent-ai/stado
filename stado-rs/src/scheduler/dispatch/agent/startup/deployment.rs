@@ -136,8 +136,8 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
             config::agent_skarbiec_consumer().to_string(),
         ),
         (
-            "WC_AGENT_SKARBIEC_ITEMS".to_string(),
-            config::agent_skarbiec_items().join(","),
+            "WC_AGENT_SKARBIEC_ROLES".to_string(),
+            config::agent_skarbiec_roles().join(","),
         ),
         (
             "WC_AGENT_SKARBIEC_SECRET_FIELDS".to_string(),

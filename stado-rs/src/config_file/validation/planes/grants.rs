@@ -1,19 +1,19 @@
-//! The item lists a document grants: the workload items and item#field
-//! references jobs read, and the backend-messaging items Stado reads as
+//! The role lists a document grants: the workload roles and role#field
+//! references jobs read, and the backend-messaging roles Stado reads as
 //! itself.
 
 use serde_json::{Map, Value};
 
 use crate::config_file::readers::{field_in, get_in};
 
-/// The workload items the document declares, having judged every `item#field`
+/// The workload roles the document declares, having judged every `role#field`
 /// reference against them. Returned because the sections below ask whether an
-/// infrastructure or verifier item leaked into that same list.
+/// infrastructure or verifier role leaked into that same list.
 pub(in crate::config_file::validation) fn workload_secret_fields(
     root: &Map<String, Value>,
     problems: &mut Vec<String>,
 ) -> Vec<Value> {
-    let configured_items = field_in(root, &crate::capabilities::AGENT_SKARBIEC_ITEMS_CONFIG)
+    let configured_roles = field_in(root, &crate::capabilities::AGENT_SKARBIEC_ROLES_CONFIG)
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -26,58 +26,58 @@ pub(in crate::config_file::validation) fn workload_secret_fields(
             for entry in fields {
                 let Some(reference) = entry.as_str() else {
                     problems.push(
-                        "agent.skarbiec.secret_fields entries must be item#field strings"
+                        "agent.skarbiec.secret_fields entries must be role#field strings"
                             .to_string(),
                     );
                     continue;
                 };
-                let Some((item, field)) = reference.split_once('#') else {
+                let Some((role, field)) = reference.split_once('#') else {
                     problems.push(format!(
-                        "agent.skarbiec.secret_fields entry {reference:?} must be item#field"
+                        "agent.skarbiec.secret_fields entry {reference:?} must be role#field"
                     ));
                     continue;
                 };
-                if item.is_empty()
+                if role.is_empty()
                     || field.is_empty()
                     || reference.matches('#').count() != std::iter::once(()).count()
                 {
                     problems.push(format!(
-                        "agent.skarbiec.secret_fields entry {reference:?} must contain one non-empty item#field"
+                        "agent.skarbiec.secret_fields entry {reference:?} must contain one non-empty role#field"
                     ));
                 }
-                if !configured_items
+                if !configured_roles
                     .iter()
-                    .any(|configured| configured.as_str() == Some(item))
+                    .any(|configured| configured.as_str() == Some(role))
                 {
                     problems.push(format!(
-                        "agent.skarbiec.secret_fields entry {reference:?} names an item absent from agent.skarbiec.items"
+                        "agent.skarbiec.secret_fields entry {reference:?} names a role absent from agent.skarbiec.roles"
                     ));
                 }
                 if matches!(
-                    item,
-                    "stado-aws"
-                        | "stado-azure"
-                        | "stado-gcp"
-                        | "stado-machine-api"
-                        | "stado-service-api"
-                        | "stado-host-health-api"
-                ) || item.ends_with("-object-api")
-                    || item.ends_with("-release-publisher")
+                    role,
+                    "cloud-aws"
+                        | "cloud-azure"
+                        | "cloud-gcp"
+                        | "machine-api"
+                        | "service-api"
+                        | "host-health-api"
+                ) || role.ends_with("-object-api")
+                    || role.ends_with("-release-publisher")
                 {
                     problems.push(format!(
-                        "agent.skarbiec.secret_fields must not expose infrastructure item {item:?} to jobs"
+                        "agent.skarbiec.secret_fields must not expose infrastructure role {role:?} to jobs"
                     ));
                 }
             }
         }
         Some(_) => problems.push(
-            "agent.skarbiec.secret_fields must be an array of item#field strings".to_string(),
+            "agent.skarbiec.secret_fields must be an array of role#field strings".to_string(),
         ),
     }
-    configured_items
+    configured_roles
 }
 
-/// Backend-messaging items must match the set the notifier reads.
+/// Backend-messaging roles must match the set the notifier reads.
 /// Stado reads them through its own Skarbiec identity.
 pub(in crate::config_file::validation) fn messaging(
     root: &Map<String, Value>,
@@ -87,12 +87,8 @@ pub(in crate::config_file::validation) fn messaging(
     // to a messaging section an operator chose to declare at all.
     let messaging = get_in(root, "backend.messaging.skarbiec").and_then(Value::as_object);
     if messaging.is_some() {
-        let required_messaging_items = [
-            "wisent-backend-apns",
-            "wisent-backend-fcm",
-            "stado-supabase",
-        ];
-        let optional_email_item = "wisent-backend-email-provider";
+        let required_messaging_items = crate::dashboard::operator_auth::REQUIRED_ROLES;
+        let optional_email_item = crate::dashboard::operator_auth::EMAIL_ROLE;
         let messaging_items = field_in(
             root,
             &crate::capabilities::BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG,
@@ -114,10 +110,10 @@ pub(in crate::config_file::validation) fn messaging(
                         .all(|later| later != item)
                 })
         }) {
-            problems.push(
-            "backend.messaging.skarbiec.items must contain exactly wisent-backend-apns, wisent-backend-fcm, and stado-supabase; wisent-backend-email-provider is optional"
-                .to_string(),
-        );
+            problems.push(format!(
+                "backend.messaging.skarbiec.items must contain exactly the roles {}; {optional_email_item} is optional",
+                required_messaging_items.join(", ")
+            ));
         }
     }
 }

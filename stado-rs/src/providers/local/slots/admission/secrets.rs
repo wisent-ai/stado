@@ -61,36 +61,25 @@ fn agent_secret_client() -> Result<crate::skarbiec::Client, StorageError> {
 /// the claim and without reading a single value.
 ///
 /// A job whose secrets this agent cannot reach must be left in the queue for
-/// a host that can, not failed. Until 2026-09-05 the resolution happened
-/// after the claim, so `preferences` 0.1.1's `web` build was claimed by this
-/// laptop — whose `agent.skarbiec.url` is `http://127.0.0.1:19096` with
-/// nothing listening — and the job was FAILED with `cannot resolve job …
-/// secret GITHUB_TOKEN: error sending request for url
-/// (http://127.0.0.1:19096/v1/items/read)`, while charless-mac-mini, which
-/// holds the grant, sat idle. Retrying could not help: placement had already
-/// been decided by who was free rather than by who could read.
+/// a host that can, not failed: placement decided by who is free rather than
+/// by who can read would fail a job another host could run.
 ///
-/// `list_items` is metadata only — ids, never values — so this costs one
-/// round trip and reveals nothing. It proves both halves that failed: that
-/// the broker answers at all, and that this consumer's grant exposes each
-/// declared item.
+/// `list_items` is metadata only — ids and tags, never values — so this costs
+/// one round trip and reveals nothing. It proves that the broker answers, and
+/// that this consumer's grant exposes exactly one item playing each declared
+/// role.
 pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
     if job.secret_env.is_empty() {
         return Ok(());
     }
     // The local field allowlist refuses at resolution just as surely as a
-    // missing grant does, so it is asked here too. On 2026-09-23
-    // charless-mac-mini, whose agent.skarbiec.secret_fields omits the Apple
-    // signing fields, claimed jeden 0.1.23's darwin build and failed it with
-    // `secret WISENT_CODESIGN_CERTIFICATE_PEM is outside
-    // agent.skarbiec.secret_fields`, while lukasz-macbook, whose agent
-    // declares them, could have run it.
+    // missing grant does, so it is asked here too.
     for (env_name, reference) in &job.secret_env {
-        if !crate::config::agent_secret_reference_allowed(&reference.item, &reference.field) {
+        if !crate::config::agent_secret_reference_allowed(&reference.role, &reference.field) {
             return Err(format!(
-                "secret {env_name} needs {}#{} and this host's agent.skarbiec.secret_fields \
+                "secret {env_name} needs role {}#{} and this host's agent.skarbiec.secret_fields \
                  does not allow it",
-                reference.item, reference.field
+                reference.role, reference.field
             ));
         }
     }
@@ -99,10 +88,8 @@ pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
         let text = error.to_string();
         // The broker did answer: it refused the consumer. Skarbiec says
         // "consumer grant required" for a grant it does not hold, and a grant
-        // whose expires_at has passed is one it no longer holds. On 2026-09-17
-        // the laptop's stado-local-agent grant expired at 13:11:57 and every
-        // darwin release build declined for seven hours as "did not answer",
-        // which sent the diagnosis at the broker's URL instead of at the grant.
+        // whose expires_at has passed is one it no longer holds; naming the
+        // grant sends the diagnosis there instead of at the broker's URL.
         if text.contains("consumer grant required") {
             format!(
                 "this host's agent grant for consumer {} is missing or has expired at the broker ({text}); \
@@ -117,12 +104,8 @@ pub(crate) async fn secrets_resolvable_here(job: &Job) -> Result<(), String> {
         }
     })?;
     for (env_name, reference) in &job.secret_env {
-        if !visible.iter().any(|item| item.id == reference.item) {
-            return Err(format!(
-                "secret {env_name} needs item {} and this host's agent grant does not expose it",
-                reference.item
-            ));
-        }
+        crate::skarbiec::roles::item_for_role(&visible, &reference.role)
+            .map_err(|refusal| format!("secret {env_name}: {refusal}"))?;
     }
     Ok(())
 }
@@ -140,7 +123,7 @@ pub(crate) async fn resolve_job_secret_environment(
     let client = agent_secret_client()?;
     for (env_name, reference) in &job.secret_env {
         if !valid_env_name(env_name)
-            || reference.item.trim().is_empty()
+            || reference.role.trim().is_empty()
             || reference.field.trim().is_empty()
         {
             return Err(StorageError::Other(format!(
@@ -148,14 +131,14 @@ pub(crate) async fn resolve_job_secret_environment(
                 job.job_id
             )));
         }
-        if !crate::config::agent_secret_reference_allowed(&reference.item, &reference.field) {
+        if !crate::config::agent_secret_reference_allowed(&reference.role, &reference.field) {
             return Err(StorageError::Other(format!(
                 "job {} secret {env_name} is outside agent.skarbiec.secret_fields",
                 job.job_id
             )));
         }
         let value = client
-            .read_string(&reference.item, &reference.field)
+            .read_string(&reference.role, &reference.field)
             .await
             .map_err(|error| {
                 StorageError::Other(format!(

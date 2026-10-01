@@ -41,7 +41,7 @@ fn fail(id: &str, detail: String) -> Check {
     }
 }
 
-/// Items the grant must expose per config vs what it actually exposes:
+/// Roles the grant must expose per config vs the roles its items play:
 /// `(missing, extra)`, both sorted. Pure — covered by unit tests.
 pub fn grant_drift(expected: &[String], visible: &[String]) -> (Vec<String>, Vec<String>) {
     let mut missing: Vec<String> = expected
@@ -59,19 +59,19 @@ pub fn grant_drift(expected: &[String], visible: &[String]) -> (Vec<String>, Vec
     (missing, extra)
 }
 
-/// Split an `item#field` allowlist entry; anything without both halves is
+/// Split a `role#field` allowlist entry; anything without both halves is
 /// refused. Pure — covered by unit tests.
 pub fn parse_secret_field(entry: &str) -> Option<(&str, &str)> {
-    let (item, field) = entry.split_once('#')?;
-    if item.is_empty() || field.is_empty() {
+    let (role, field) = entry.split_once('#')?;
+    if role.is_empty() || field.is_empty() {
         return None;
     }
-    Some((item, field))
+    Some((role, field))
 }
 
-/// The check that would have named today's crash loop: can the local agent
-/// consumer list its grant, does the grant match `agent.skarbiec.items`,
-/// and does every declared `item#field` actually read back.
+/// Can the local agent consumer list its grant, do the items it exposes play
+/// exactly the roles `agent.skarbiec.roles` declares, and does every declared
+/// `role#field` actually read back.
 async fn agent_grant_checks() -> Vec<Check> {
     // Same URL resolution the runtime uses (providers/local/slots.rs):
     // an unset agent.skarbiec.url means the shared Stado skarbiec URL.
@@ -109,12 +109,12 @@ async fn agent_grant_checks() -> Vec<Check> {
             format!("grant listing failed for consumer {consumer}: {exc}"),
         )),
         Ok(items) => {
-            let visible: Vec<String> = items.into_iter().map(|item| item.id).collect();
-            let (missing, extra) = grant_drift(config::agent_skarbiec_items(), &visible);
+            let visible = crate::skarbiec::roles::roles_played(&items);
+            let (missing, extra) = grant_drift(config::agent_skarbiec_roles(), &visible);
             if missing.is_empty() && extra.is_empty() {
                 checks.push(pass(
                     "agent-grant-drift",
-                    format!("grant matches agent.skarbiec.items ({consumer})"),
+                    format!("grant matches agent.skarbiec.roles ({consumer})"),
                 ));
             } else {
                 checks.push(fail(
@@ -127,15 +127,15 @@ async fn agent_grant_checks() -> Vec<Check> {
     let mut unreadable: Vec<String> = Vec::new();
     let mut probed: Vec<String> = Vec::new();
     for entry in config::agent_skarbiec_secret_fields() {
-        let Some((item, field)) = parse_secret_field(entry) else {
+        let Some((role, field)) = parse_secret_field(entry) else {
             unreadable.push(format!("{entry} (malformed allowlist entry)"));
             continue;
         };
-        probed.push(format!("{item}#{field}"));
-        match client.read_string(item, field).await {
+        probed.push(format!("{role}#{field}"));
+        match client.read_string(role, field).await {
             Ok(Some(_)) => {}
-            Ok(None) => unreadable.push(format!("{item}#{field} (absent or empty)")),
-            Err(exc) => unreadable.push(format!("{item}#{field} ({exc})")),
+            Ok(None) => unreadable.push(format!("{role}#{field} (no item plays it, or empty)")),
+            Err(exc) => unreadable.push(format!("{role}#{field} ({exc})")),
         }
     }
     if unreadable.is_empty() {

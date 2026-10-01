@@ -45,7 +45,7 @@ export WC_BACKUP_LOCAL_STORAGE_PATH="${WC_BACKUP_LOCAL_STORAGE_PATH}"
 # grant, into root-only tmpfs for secret_env resolution.
 export WC_AGENT_SKARBIEC_URL="${WC_AGENT_SKARBIEC_URL}"
 export WC_AGENT_SKARBIEC_CONSUMER="${WC_AGENT_SKARBIEC_CONSUMER}"
-export WC_AGENT_SKARBIEC_ITEMS="${WC_AGENT_SKARBIEC_ITEMS}"
+export WC_AGENT_SKARBIEC_ROLES="${WC_AGENT_SKARBIEC_ROLES}"
 export WC_AGENT_SKARBIEC_SECRET_FIELDS="${WC_AGENT_SKARBIEC_SECRET_FIELDS}"
 _wc_agent_grant_dir=/run/stado-agent-credentials
 _wc_agent_grant_file="$_wc_agent_grant_dir/skarbiec-token"

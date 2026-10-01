@@ -114,9 +114,9 @@ impl MachineFacade {
                             (
                                 env_name.clone(),
                                 JobSecretRef {
-                                    item: spec["item"]
+                                    role: spec["role"]
                                         .as_str()
-                                        .expect("validated secret item")
+                                        .expect("validated secret role")
                                         .to_string(),
                                     field: spec["field"]
                                         .as_str()

@@ -1,22 +1,18 @@
 //! The agent's own Skarbiec grant, renewed by the agent before it runs out.
 //!
 //! A workload that declares `secret_env` is claimed only by a host whose agent
-//! consumer can list those items, and the consumer can list them only while
-//! its grant lives. The grant is issued with a lifetime and nothing renewed
-//! it: on 2026-09-17 the laptop's `stado-local-agent` grant expired at
-//! 13:11:57 and every darwin release build of Jeden sat in the queue for the
-//! rest of the day while the agent declined it every twenty seconds. The
-//! operator's rule is that no such renewal is a person's chore, so the agent
-//! that needs the grant keeps it alive.
+//! consumer can list the items playing those roles, and the consumer can list
+//! them only while its grant lives. A grant is issued with a lifetime, so the
+//! agent that needs it keeps it alive instead of leaving renewal to a person.
 //!
 //! Only a host that holds the owner vault can issue a grant, so this runs on
 //! the control plane's own agent and is a no-op elsewhere; a remote agent's
-//! grant is provisioned by the control plane at bootstrap. The capabilities
-//! are the ones `agent.skarbiec.secret_fields` declares — the same
-//! declaration `fleet doctor` checks the live grant against — and the
-//! lifetime is the thirty days `service grant-sync` gives every other
-//! consumer. Renewal happens while a third of that lifetime is still left,
-//! so one missed tick never becomes an expired grant.
+//! grant is provisioned by the control plane at bootstrap. A first grant reads
+//! the roles `agent.skarbiec.secret_fields` declares — the same declaration
+//! `fleet doctor` checks the live grant against — and the lifetime is the
+//! thirty days `service grant-sync` gives every other consumer. Renewal
+//! happens while a third of that lifetime is still left, so one missed tick
+//! never becomes an expired grant.
 
 use std::path::Path;
 use std::process::Command;
@@ -186,16 +182,33 @@ pub(crate) async fn renew(force: bool, log_fn: &mut dyn FnMut(&str)) {
     // The grant keeps the capabilities it was issued with: the issuer chose
     // them, and a renewal that narrowed them to the field-level declaration
     // would silently drop what a release recipe reads. Only a grant the vault
-    // has never held starts from the declaration.
+    // has never held starts from the declaration, whose `role#field` entries
+    // are translated to the items playing those roles right now.
     let issued = record
         .as_ref()
         .map(|(_, capabilities)| capabilities.clone())
         .unwrap_or_default();
     let capabilities = if issued.is_empty() {
-        crate::config::agent_skarbiec_secret_fields()
-            .iter()
-            .map(|entry| format!("read:{entry}"))
-            .collect::<Vec<_>>()
+        match launcher_json(&launcher, &vault, &["list"])
+            .map_err(|error| error.to_string())
+            .and_then(|listing| {
+                serde_json::from_value::<Vec<crate::skarbiec::ItemInfo>>(listing)
+                    .map_err(|error| error.to_string())
+            })
+            .and_then(|items| {
+                crate::skarbiec::roles::read_capabilities(
+                    &items,
+                    crate::config::agent_skarbiec_secret_fields(),
+                )
+            }) {
+            Ok(declared) => declared,
+            Err(error) => {
+                log_fn(&format!(
+                    "agent grant: {consumer} is absent and its declared roles cannot be granted: {error}"
+                ));
+                return;
+            }
+        }
     } else {
         issued
     }

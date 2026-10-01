@@ -35,8 +35,8 @@ static AGENT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     .to_string_lossy()
     .into_owned()
 });
-static AGENT_SKARBIEC_ITEMS: LazyLock<Vec<String>> =
-    LazyLock::new(|| env_and_file_list("WC_AGENT_SKARBIEC_ITEMS", "agent.skarbiec.items"));
+static AGENT_SKARBIEC_ROLES: LazyLock<Vec<String>> =
+    LazyLock::new(|| env_and_file_list("WC_AGENT_SKARBIEC_ROLES", "agent.skarbiec.roles"));
 static AGENT_SKARBIEC_SECRET_FIELDS: LazyLock<Vec<String>> = LazyLock::new(|| {
     env_and_file_list(
         "WC_AGENT_SKARBIEC_SECRET_FIELDS",
@@ -106,15 +106,16 @@ pub fn agent_skarbiec_consumer() -> &'static str {
 pub fn agent_skarbiec_token_file() -> &'static str {
     AGENT_SKARBIEC_TOKEN_FILE.as_str()
 }
-/// Exact Skarbiec items visible to workload agents. The coordinator verifies
-/// that the scoped grant can list neither fewer nor more items before dispatch.
-pub fn agent_skarbiec_items() -> &'static [String] {
-    &AGENT_SKARBIEC_ITEMS
+/// The roles whose items workload agents may see (`skarbiec::roles`). The
+/// coordinator verifies that the scoped grant can list exactly one item per
+/// role and nothing else before dispatch.
+pub fn agent_skarbiec_roles() -> &'static [String] {
+    &AGENT_SKARBIEC_ROLES
 }
 
-/// Exact workload-visible `item#field` references. Infrastructure items may
-/// still be present in [`agent_skarbiec_items`] for trusted agent internals,
-/// but a queued job can resolve only entries in this second, field-level list.
+/// Exact workload-visible `role#field` references. A role may be present in
+/// [`agent_skarbiec_roles`] for trusted agent internals, but a queued job can
+/// resolve only entries in this second, field-level list.
 pub fn agent_skarbiec_secret_fields() -> &'static [String] {
     &AGENT_SKARBIEC_SECRET_FIELDS
 }
@@ -125,17 +126,17 @@ pub fn backend_messaging_skarbiec_items() -> &'static [String] {
     &BACKEND_MESSAGING_SKARBIEC_ITEMS
 }
 
-/// Whether a job may project one exact Skarbiec field into its environment.
+/// Whether a job may project one field of one role into its environment.
 /// Matching without allocating keeps this check cheap on every admission path;
 /// only a reference the loaded list lacks is looked up again in the config
 /// file as it is now, so a product enrolled after this agent started is
 /// served without restarting it.
-pub fn agent_secret_reference_allowed(item: &str, field: &str) -> bool {
+pub fn agent_secret_reference_allowed(role: &str, field: &str) -> bool {
     let matches = |entry: &str| {
         entry
             .split_once('#')
-            .is_some_and(|(allowed_item, allowed_field)| {
-                allowed_item == item && allowed_field == field
+            .is_some_and(|(allowed_role, allowed_field)| {
+                allowed_role == role && allowed_field == field
             })
     };
     AGENT_SKARBIEC_SECRET_FIELDS

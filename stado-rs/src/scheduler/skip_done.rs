@@ -136,7 +136,7 @@ impl HfApiLister {
 impl RepoFileLister for HfApiLister {
     async fn list_repo_files(&self) -> Result<Vec<String>, SkipDoneError> {
         let token = if self.token.is_empty() {
-            crate::skarbiec::read_string("stado-huggingface", "token")
+            crate::skarbiec::read_string("huggingface", "token")
                 .await
                 .map_err(|err| SkipDoneError::Other(err.to_string()))?
                 .unwrap_or_default()

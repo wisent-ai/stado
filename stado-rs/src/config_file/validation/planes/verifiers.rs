@@ -15,19 +15,22 @@ pub(in crate::config_file::validation) fn rate_limit(
 ) {
     let rate_limit = root.get("rate_limit").and_then(Value::as_object);
     if rate_limit.is_some() {
-        if let Err(problem) = crate::rate_limit::parse_clients(
+        match crate::rate_limit::parse_clients(
             field_in(root, &crate::capabilities::RATE_LIMIT_CLIENTS_CONFIG).cloned(),
         ) {
-            problems.push(problem);
-        }
-        if configured_items
-            .iter()
-            .any(|configured| configured.as_str() == Some("trading-autonomy-rate-limit-api"))
-        {
-            problems.push(
-                "agent.skarbiec.items must not expose rate-limit verifier items to jobs"
-                    .to_string(),
-            );
+            Err(problem) => problems.push(problem),
+            Ok(clients) => {
+                for role in clients.values().map(|client| client.item()) {
+                    if configured_items
+                        .iter()
+                        .any(|configured| configured.as_str() == Some(role))
+                    {
+                        problems.push(format!(
+                            "agent.skarbiec.roles must not expose rate-limit verifier role {role:?} to jobs"
+                        ));
+                    }
+                }
+            }
         }
     }
 }
@@ -47,13 +50,13 @@ pub(in crate::config_file::validation) fn integration(
         ));
         match &integration_clients {
             Ok(clients) => {
-                for item in clients.values().map(|client| client.item()) {
+                for role in clients.values().map(|client| client.item()) {
                     if configured_items
                         .iter()
-                        .any(|configured| configured.as_str() == Some(item))
+                        .any(|configured| configured.as_str() == Some(role))
                     {
                         problems.push(format!(
-                        "agent.skarbiec.items must not expose integration verifier item {item:?} to jobs"
+                        "agent.skarbiec.roles must not expose integration verifier role {role:?} to jobs"
                     ));
                     }
                 }

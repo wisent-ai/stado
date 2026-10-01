@@ -45,9 +45,13 @@ fn default_executor() -> String {
 
 /// A named workload secret resolved by the agent immediately before spawn.
 /// Queue records contain only this reference; plaintext never enters storage.
+/// `role` is what the secret is for (`skarbiec::roles`), never an item id; a
+/// record stored before roles reads its old item id here and is refused at
+/// resolution as a role no item plays.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobSecretRef {
-    pub item: String,
+    #[serde(alias = "item")]
+    pub role: String,
     pub field: String,
 }
 

@@ -6,35 +6,50 @@ use crate::cli::host::machine::users::credentials::credential_host;
 use crate::cli::host::secrets::vault::mirror::{remote_skarbiec_json, skarbiec_tool_path};
 use crate::cli::host::secrets::vault::vault_word;
 
-/// Authorize one consumer to read one field of one item in TARGET's vault.
+/// Authorize one consumer to read one field of the item that plays ROLE in
+/// TARGET's vault.
 ///
-/// A Skarbiec grant is per item and per field, so widening what a unit or a
-/// release job may read is a write into the *host's* vault, not into this
-/// laptop's. The bearer never enters an argument vector: the consumer's
-/// existing token file on the target is named, and Skarbiec reads it there.
+/// A Skarbiec grant is per item and per field, so the role is translated to
+/// the one item carrying `stado:role:<role>` in that vault at the moment of
+/// granting; no caller names the item. Widening what a unit or a release job
+/// may read is a write into the *host's* vault, not into this laptop's. The
+/// bearer never enters an argument vector: the consumer's existing token file
+/// on the target is named, and Skarbiec reads it there.
 pub async fn grant_item_read(
     target: &str,
     consumer: &str,
-    item: &str,
+    role: &str,
     field: &str,
     token_file: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let (host, bearer_path) = ensure_item_read(target, consumer, item, field, token_file).await?;
+    vault_word("role", role)?;
+    let (_, listing) = remote_skarbiec_json(target, &["list".into()]).await?;
+    let items: Vec<crate::skarbiec::ItemInfo> =
+        serde_json::from_value(listing).map_err(|error| {
+            CmdError::click(format!(
+                "{target}: Skarbiec list did not answer items: {error}"
+            ))
+        })?;
+    let item = crate::skarbiec::roles::item_for_role(&items, role)
+        .map_err(|refusal| CmdError::refused(format!("{target}: {refusal}")))?
+        .id
+        .clone();
+    let (host, bearer_path) = ensure_item_read(target, consumer, &item, field, token_file).await?;
     if json_output {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "target": host,
                 "consumer": consumer,
-                "item": item,
+                "role": role,
                 "field": field,
                 "token_file": bearer_path,
                 "granted": true,
             }))?
         );
     } else {
-        println!("{host}: {consumer} may read {item}#{field}");
+        println!("{host}: {consumer} may read role {role}#{field}");
     }
     Ok(())
 }

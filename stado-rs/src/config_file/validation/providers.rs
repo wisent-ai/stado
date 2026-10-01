@@ -243,19 +243,19 @@ pub(super) fn azure_control_plane(
                     .to_string(),
             );
         }
-        let agent_items = field_in(root, &crate::capabilities::AGENT_SKARBIEC_ITEMS_CONFIG)
+        let agent_roles = field_in(root, &crate::capabilities::AGENT_SKARBIEC_ROLES_CONFIG)
             .and_then(Value::as_array)
-            .filter(|items| !items.is_empty());
-        if !agent_items.is_some_and(|items| {
-            items.iter().all(|item| {
-                item.as_str().is_some_and(|name| {
-                    !name.is_empty() && !matches!(name, "stado-aws" | "stado-azure" | "stado-gcp")
+            .filter(|roles| !roles.is_empty());
+        if !agent_roles.is_some_and(|roles| {
+            roles.iter().all(|role| {
+                role.as_str().is_some_and(|role| {
+                    !role.is_empty() && !matches!(role, "cloud-aws" | "cloud-azure" | "cloud-gcp")
                 })
             })
         }) {
             problems.push(
-                "agent.skarbiec.items must be a non-empty workload-only string array and must \
-                 not contain cloud-provider credential items"
+                "agent.skarbiec.roles must be a non-empty workload-only string array and must \
+                 not contain cloud-provider credential roles"
                     .to_string(),
             );
         }

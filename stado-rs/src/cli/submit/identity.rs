@@ -92,7 +92,7 @@ pub(crate) fn parse_secret_env(
     values: &[String],
 ) -> Result<BTreeMap<String, crate::models::JobSecretRef>, CmdError> {
     let env_re = regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("static regex compiles");
-    let item_re =
+    let role_re =
         regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$").expect("static regex compiles");
     let field_re =
         regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*$").expect("static regex compiles");
@@ -100,29 +100,29 @@ pub(crate) fn parse_secret_env(
     for value in values {
         let Some((env_name, reference)) = value.split_once('=') else {
             return Err(CmdError::click(format!(
-                "--secret-env must be ENV_NAME=SKARBIEC_ITEM#FIELD: {value:?}"
+                "--secret-env must be ENV_NAME=ROLE#FIELD: {value:?}"
             )));
         };
-        let Some((item, field)) = reference.split_once('#') else {
+        let Some((role, field)) = reference.split_once('#') else {
             return Err(CmdError::click(format!(
-                "--secret-env must be ENV_NAME=SKARBIEC_ITEM#FIELD: {value:?}"
+                "--secret-env must be ENV_NAME=ROLE#FIELD: {value:?}"
             )));
         };
-        if !env_re.is_match(env_name) || !item_re.is_match(item) || !field_re.is_match(field) {
+        if !env_re.is_match(env_name) || !role_re.is_match(role) || !field_re.is_match(field) {
             return Err(CmdError::click(format!(
-                "--secret-env contains an unsafe environment, item, or field name: {value:?}"
+                "--secret-env contains an unsafe environment, role, or field name: {value:?}"
             )));
         }
-        if !crate::config::agent_secret_reference_allowed(item, field) {
+        if !crate::config::agent_secret_reference_allowed(role, field) {
             return Err(CmdError::click(format!(
-                "--secret-env reference {item}#{field} is not in agent.skarbiec.secret_fields"
+                "--secret-env reference {role}#{field} is not in agent.skarbiec.secret_fields"
             )));
         }
         if parsed
             .insert(
                 env_name.to_string(),
                 crate::models::JobSecretRef {
-                    item: item.to_string(),
+                    role: role.to_string(),
                     field: field.to_string(),
                 },
             )
