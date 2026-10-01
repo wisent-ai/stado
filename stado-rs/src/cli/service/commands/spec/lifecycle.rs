@@ -234,6 +234,11 @@ pub enum LifecycleCommands {
         /// Use secret-sync for credentials, never put them on the command line.
         #[arg(long = "env", value_name = "NAME=VALUE")]
         env: Vec<String>,
+        /// A variable withdrawn from the unit's declared environment; repeat
+        /// for each. The declaration keeps every variable it was given until
+        /// one is withdrawn here, whatever `--from` re-declares.
+        #[arg(long = "unset-env", value_name = "NAME")]
+        unset_env: Vec<String>,
         /// Why this host must run this unit. Required: `ensure` installs units
         /// and restarts running ones, and every such change is recorded beside
         /// the registry document it declared the unit in.

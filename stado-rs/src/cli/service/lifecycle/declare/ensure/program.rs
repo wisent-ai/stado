@@ -234,5 +234,6 @@ pub(super) fn resolved_unit(
             None => unit_env.push((name, value)),
         }
     }
+    unit_env.retain(|(name, _)| !options.unset_env.iter().any(|withdrawn| withdrawn == name));
     Ok((unit, unit_env))
 }

@@ -199,6 +199,7 @@ pub(crate) async fn prepare(
             from: None,
             args: &[],
             env: &[],
+            unset_env: &[],
             reason,
             as_daemon: service.as_daemon,
             as_launch_agent: false,

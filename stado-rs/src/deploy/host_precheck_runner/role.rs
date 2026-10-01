@@ -67,6 +67,7 @@ pub async fn declare_runner_role(
         from: Some(&existing.program),
         args: &args,
         env: &env,
+        unset_env: &[],
         reason,
         as_daemon: existing.path.starts_with(DAEMON_DIRECTORY),
         as_launch_agent: false,

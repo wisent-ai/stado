@@ -65,6 +65,7 @@ pub(crate) async fn ensure_local_dependency(
         from: None,
         args: &[],
         env: &[],
+        unset_env: &[],
         reason,
         as_daemon,
         as_launch_agent: false,

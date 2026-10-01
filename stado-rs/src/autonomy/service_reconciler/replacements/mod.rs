@@ -151,6 +151,7 @@ pub(super) async fn ensure_replacements(
             from: None,
             args: &[],
             env: &[],
+            unset_env: &[],
             reason: &reason,
             as_daemon: false,
             as_launch_agent: false,

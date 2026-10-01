@@ -22,6 +22,7 @@ pub(crate) struct EnsureOptions<'a> {
     pub(crate) from: Option<&'a str>,
     pub(crate) args: &'a [String],
     pub(crate) env: &'a [String],
+    pub(crate) unset_env: &'a [String],
     pub(crate) reason: &'a str,
     pub(crate) as_daemon: bool,
     pub(crate) as_launch_agent: bool,

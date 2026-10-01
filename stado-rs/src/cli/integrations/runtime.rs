@@ -13,6 +13,7 @@ use crate::deploy::host_access::native::ReverseForward;
 mod api;
 mod arguments;
 mod identity;
+mod own_route;
 mod precheck_runner;
 pub(crate) mod roles;
 mod supervisor;
@@ -185,6 +186,11 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
             crate::cli::resolver::serve(&resolver_target).await
         })?;
     }
+    // The roles below read the store; when it is behind this process's own
+    // resolver they start once it serves.
+    supervisor
+        .during_startup(own_route::await_own_resolver(args.resolver))
+        .await?;
     if let Some(interval) = args.release_interval_seconds {
         let release_target = identity::required_name(&target)?;
         supervisor.spawn("release", move || async move {

@@ -43,6 +43,7 @@ async fn release_convergence(
             from: None,
             args: &[],
             env: &[],
+            unset_env: &[],
             reason: &reason,
             as_daemon: true,
             as_launch_agent: false,
