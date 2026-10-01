@@ -108,25 +108,6 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Recreate Weles internal authorities in the canonical owner vault from
-    /// surviving owner credentials.
-    #[command(name = "bootstrap-weles")]
-    BootstrapWeles {
-        /// Emit only the recreated item names as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Merge the retired Weles-dedicated vault into the canonical owner vault.
-    ///
-    /// Copies only the ids the canonical vault does not already hold, reports
-    /// one outcome per item, reads the side vault and never writes to it, and
-    /// prints item names, field-level reasons and counts — never a value.
-    #[command(name = "adopt-weles-vault")]
-    AdoptWelesVault {
-        /// Emit the per-item outcomes as JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-    },
     /// Inventory credentials recoverable from agent transcripts. Reports names
     /// and counts, never values.
     Harvest {

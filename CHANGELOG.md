@@ -21,3 +21,4 @@ The version-bump commit moves them with `stado product changelog --version V`;
 ## Unreleased
 
 - `stado dns undelegate <zone>` hands a zone `stado dns delegate` moved into Cloudflare back to the registrar's own nameservers (cli.md rule 2). It is refused, naming the records and changing nothing, while Cloudflare serves a record the registrar's host list lacks; after the switch it reads the registrar back and fails if the registrar still does not serve the zone. `--json` prints the zone, record count and nameservers before and after.
+- `stado credentials bootstrap-weles` and `stado credentials adopt-weles-vault` are removed (cli.md rules 1 and 20). Both served one product: one rebuilt Weles's items from transcript history, the other merged a retired Weles-only vault. Recovering a single item is `stado credentials harvest --restore NAME`, and writing one is `stado credentials put`.

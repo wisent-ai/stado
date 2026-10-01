@@ -7,7 +7,6 @@
 pub(in crate::cli::secrets) mod commands;
 pub(in crate::cli::secrets) mod diagnostics;
 pub(in crate::cli::secrets) mod store;
-pub(in crate::cli::secrets) mod weles;
 
 pub use crate::cli::secrets::commands::dispatch::dispatch;
 pub use crate::cli::secrets::commands::subcommands::{

@@ -22,19 +22,6 @@ pub(crate) fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
     crate::credential_store::owner::binary().map_err(|error| CmdError::click(error.to_string()))
 }
 
-/// The one vault an owner write lands in, resolved exactly where
-/// [`crate::credential_store::owner`] resolves it.
-///
-/// This host runs one credential store. A verb that resolved its own path is
-/// free to disagree with every other write in the process, and that is how a
-/// vault dedicated to a single writer came to sit beside the canonical one
-/// holding the only copy of Weles's credentials. Resolution that finds no
-/// existing vault file is an error here rather than an invitation to create
-/// one: a second vault created quietly is the defect, not the recovery.
-pub(crate) fn owner_vault() -> Result<std::path::PathBuf, CmdError> {
-    crate::credential_store::owner::vault().map_err(|error| CmdError::click(error.to_string()))
-}
-
 const SKARBIEC_LAUNCHER_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec-keychain-launcher"];
 
 pub(crate) fn skarbiec_launcher() -> Result<std::path::PathBuf, CmdError> {

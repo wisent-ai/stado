@@ -14,8 +14,6 @@ use crate::cli::secrets::store::grants::{migrate, mint_acquisition_token};
 use crate::cli::secrets::store::inventory::{inspect_host_vault, inspect_vault};
 use crate::cli::secrets::store::items::{get, ls, put, rm};
 use crate::cli::secrets::store::resolve::client;
-use crate::cli::secrets::weles::adopt::adopt_weles_vault;
-use crate::cli::secrets::weles::bootstrap::bootstrap_weles;
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
     match command {
@@ -53,8 +51,6 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 "inspect-vault needs a local VAULT file or --host",
             )),
         },
-        SecretsCommands::BootstrapWeles { json } => bootstrap_weles(json),
-        SecretsCommands::AdoptWelesVault { json } => adopt_weles_vault(json),
         // Same reasoning as `doctor`: the transcripts are readable when the
         // vault is not, which is the only reason this verb is worth having.
         SecretsCommands::Harvest { json, restore, all } => {
