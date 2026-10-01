@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::transcripts::detect::{name_suggests_secret, one, pairs_in_line, value_looks_secret};
+use crate::transcripts::detect::{name_suggests_secret, pairs_in_line, value_looks_secret};
 use crate::transcripts::sources::events::payloads;
 use crate::transcripts::sources::files::{modified_iso, transcript_files};
 use crate::transcripts::{Finding, Origin};
@@ -42,7 +42,7 @@ pub fn scan(include_file_quotes: bool) -> Vec<Finding> {
                         sources: Vec::new(),
                         origin,
                     });
-                    entry.occurrences = entry.occurrences.saturating_add(one());
+                    entry.occurrences += 1;
                     if !entry.values.contains(&value) {
                         entry.values.push(value);
                     }

@@ -27,5 +27,5 @@ pub use prices::{refresh_prices, PriceBook, PriceQuote};
 
 const HOURS_PER_DAY: f64 =
     (crate::monitor::billing::SECONDS_PER_DAY / crate::monitor::billing::SECONDS_PER_HOUR) as f64;
-/// The billing month is the calendar month: `forecast` and the monthly
-/// figure in `allocation` take its length from chrono.
+// The billing month is the calendar month: `forecast` and the monthly
+// figure in `allocation` take its length from chrono.

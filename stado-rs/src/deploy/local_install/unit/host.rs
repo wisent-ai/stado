@@ -212,12 +212,13 @@ pub(crate) fn merge(
             Commands::Platform(PlatformCommands::Release(ReleaseCommands::Agent(release))) => {
                 check_target(&host.name, &release.target, &component.label)?;
                 let resident = !release.once && release.product.is_none();
-                merge::merge_release_agent(
-                    &mut runtime,
-                    component,
-                    resident,
-                    release.interval_seconds,
-                )?;
+                let interval_seconds = release.interval_seconds.ok_or_else(|| {
+                    DeployError(format!(
+                        "{} declares a resident release agent without --interval-seconds",
+                        component.label
+                    ))
+                })?;
+                merge::merge_release_agent(&mut runtime, component, resident, interval_seconds)?;
                 false
             }
             Commands::Planes(PlaneCommands::Coordinator { target, once }) => {

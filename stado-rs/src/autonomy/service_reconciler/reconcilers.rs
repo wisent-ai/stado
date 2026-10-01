@@ -78,7 +78,9 @@ pub async fn restore_reconcilers(log: &mut dyn FnMut(&str)) {
             }
             Ok(_) => {}
             Err(error) => log(&format!(
-                "reconcilers: {unit} on {here} is not running and ensure did not start it: {error}"
+                "reconcilers: {unit} on {here} is not running and ensure did not start it ({}): {}",
+                error.kind.classification(),
+                error.detail
             )),
         }
     }
