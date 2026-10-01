@@ -51,6 +51,12 @@ pub async fn reconcile(
     let mut gate = MutationGate::new(store, policy, &decision_id);
     let replacements = super::predecessors::replacements(&statuses);
     let declared = super::predecessors::declared_units(&statuses);
+    // A host that declares a product's old units but not the product's one
+    // process gets that process now; the next pass retires the old units.
+    outcomes.extend(
+        super::replacements::ensure_replacements(&statuses, policy, &mut gate, &mut summary)
+            .await?,
+    );
 
     for status in statuses {
         let is_beacon = status.service.unit_id().contains("host-health-beacon")
