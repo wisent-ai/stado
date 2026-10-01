@@ -152,9 +152,9 @@ pub(crate) enum HostStateCommands {
     /// its last sleep and wake, its interface changes, the silences recorded
     /// against it, and what readers refused because of them.
     ///
-    /// Read-only and safe against a live host. control-host was
-    /// unreachable from 18:29 to 18:35 UTC on 2026-08-19 and came back on a
-    /// direct path; nothing in this product carried a trace of it.
+    /// Read-only and safe against a live host. A control host can be
+    /// unreachable for minutes and come back on a direct path with nothing in
+    /// this product carrying a trace of it; this is that trace.
     Link {
         target: String,
         /// Emit the link report as JSON.

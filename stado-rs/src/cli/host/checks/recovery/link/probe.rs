@@ -131,8 +131,8 @@ pub(super) async fn collect_silences(
     // entry point for the transition: whichever component notices the
     // threshold crossing writes it, and three observers of one gap produce one
     // record carrying three names. An operator running this command during an
-    // outage is exactly that — the observer who noticed — and on 2026-08-19
-    // nothing recorded what they saw. The instant is the beacon's own, recovered
+    // outage is exactly that — the observer who noticed — and what they saw
+    // is recorded here. The instant is the beacon's own, recovered
     // with the same parser that aged it: a silence's `started_at` is when the
     // host was last heard from, and deriving it from the rounded age would
     // misdate every record by up to a second.

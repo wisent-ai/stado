@@ -25,9 +25,9 @@ pub(crate) enum RegistryCommands {
     /// again; a storage or validation failure stays exit 1.
     Push {
         /// The document to upload, or `-` to read it from stdin. With neither,
-        /// the repository's bundled registry is uploaded - which is what
-        /// erased the canonical document on 2026-09-01 when a caller piped a
-        /// body this command never reads.
+        /// the repository's bundled registry is uploaded - which erases the
+        /// canonical document when a caller pipes a body this command never
+        /// reads.
         path: Option<String>,
         /// Refuse the write unless the canonical registry is still at this
         /// generation. Take the token from `registry pull --generation-only`

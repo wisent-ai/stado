@@ -17,13 +17,12 @@ pub struct CmdError {
     pub code: i32,
     /// The failure code this error stated about itself where it was built.
     ///
-    /// `None` means it arrived as prose and [`main_entry`](crate::cli::main_entry) resorts to
-    /// [`crate::primitives::failure::classify_message`], which reads the wording. That
-    /// inference is the last resort and never an equal alternative: a
-    /// keyword read of a sentence is a guess, and on 2026-09-03 the guess
-    /// reported a hard allowlist refusal as a retryable timeout because the
-    /// refusal printed an allowlist containing `--login-timeout-ms`. A
-    /// caller that knows what its failure is says so here.
+    /// `None` means the code that failed stated none, and the failure is
+    /// reported as `unknown`: nothing reads the wording, because a keyword
+    /// read of a sentence is a guess — a hard allowlist refusal whose text
+    /// happens to print an option named `--login-timeout-ms` would be read as
+    /// a retryable timeout. A caller that knows what its failure is says so
+    /// here.
     pub failure: Option<crate::primitives::failure::FailureCode>,
     /// Operator help that belongs beside the failure but not inside it —
     /// the approved spellings of a refused command, for instance. Printed
@@ -171,11 +170,11 @@ impl From<std::io::Error> for CmdError {
 ///
 /// `reqwest::Error`'s own `Display` is frequently one unattributable word, and
 /// `builder error` is the worst of them: it names no URL, no header and no
-/// field. On 2026-09-03 it was the only thing `stado storage stat
-/// stado://system/release-catalog/preferences-landing.json` said, while the
-/// same command for two other products answered an honest HTTP 401 — so the
-/// operator's only signal that the fault was in a credential rather than in
-/// the network was that one product differed from the others. The answer was
+/// field. It can be the only thing `stado storage stat` says for one
+/// product's catalog object while the same command for other products
+/// answers an honest HTTP 401 — so the operator's only signal that the
+/// fault is in a credential rather than in the network is that one product
+/// differs from the others. The answer is
 /// one layer down, in a source chain nothing printed: a header value that
 /// could not be built. Every reqwest failure that reaches an operator now
 /// carries that chain, because the layer that knows the cause is never the one

@@ -58,13 +58,13 @@ pub(super) fn service<'a>(
 /// authority first, then this host's last-known-good copy, announced on
 /// stderr with its age and the authority's own refusal.
 ///
-/// On 2026-09-27 the object API answered `503 object authorization
-/// unavailable` for over twelve hours. `stado doctor` kept reading the copy
-/// through `read_registry`, but `service directory connect` read the authority
-/// alone and exited 69, so Oko could not reach Brama and its task judge was
-/// down for the whole outage although every route it needed sat in the copy
-/// on this disk. Writers keep `registry::fetch_document`: a mutation committed
-/// against a stale generation is exactly what the authority exists to refuse.
+/// When the object API answers `503 object authorization unavailable` for
+/// hours, `stado doctor` keeps reading the copy through `read_registry`, but
+/// a `service directory connect` that reads the authority alone exits 69,
+/// so Oko cannot reach Brama and its task judge is down for the whole outage
+/// although every route it needs sits in the copy on this disk. Writers keep
+/// `registry::fetch_document`: a mutation committed against a stale
+/// generation is exactly what the authority exists to refuse.
 pub(super) async fn read_document() -> Result<Value, CmdError> {
     let authority = match registry::fetch_document().await {
         Ok(document) => return Ok(document),
@@ -103,11 +103,11 @@ pub(super) async fn this_target() -> Result<String, CmdError> {
 /// This machine's fleet name, read from a document the caller already holds.
 ///
 /// `service directory connect` read the registry once for the directory and
-/// then twice more through `this_target`, and on 2026-09-29, with the object
-/// API refusing, each read spent its retries before falling back to the copy.
-/// Three sequential reads outlasted the 30-second limit of every agent hook
-/// that asks for Brama's address, so every hooked tool call was refused. One
-/// document answers all three questions, from one generation.
+/// then twice more through `this_target`, and with the object API refusing,
+/// each read spends its retries before falling back to the copy. Three
+/// sequential reads outlast the limit of every agent hook that asks for
+/// Brama's address, so every hooked tool call is refused. One document
+/// answers all three questions, from one generation.
 pub(super) fn this_target_in(document: &Value) -> Result<String, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
     let registry = targets::load_registry_from_value(document)

@@ -16,9 +16,9 @@ const NEWEST_SILENCES: usize = 5;
 /// How far back `stado host link` counts what readers refused.
 ///
 /// One hour rather than the silence threshold. The refusals a gap produces land
-/// AROUND it, not inside it: on 2026-08-19 the resolver refused twice while the
-/// beacon was still inside its tolerance, so a window as narrow as the
-/// threshold would report the gap with none of the refusals it caused. An hour
+/// AROUND it, not inside it: the resolver refuses while the beacon is still
+/// inside its tolerance, so a window as narrow as the threshold would report
+/// the gap with none of the refusals it caused. An hour
 /// is the span an operator asking "why did this host go quiet" has in mind, and
 /// every refusal record keeps its own timestamp for any question longer than
 /// that.
