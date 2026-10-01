@@ -38,11 +38,12 @@ pub(crate) enum QuotaCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Respond to Open Azure quota support tickets awaiting customer info.
-    #[command(name = "azure-replies")]
-    AzureReplies {
-        /// Print what would be sent without invoking az
-        /// support communication create.
+    /// Respond to open quota support tickets the provider is waiting on us for.
+    Replies {
+        /// The provider whose support tickets are answered.
+        #[arg(long, value_enum)]
+        provider: TicketProvider,
+        /// Print what would be sent without posting it.
         #[arg(long)]
         dry_run: bool,
         /// Contact email shown in the response signature.
@@ -50,13 +51,13 @@ pub(crate) enum QuotaCommands {
         #[arg(long, default_value = "")]
         email: String,
     },
-    /// Post a credit-funded-subscription escalation reply on every
-    /// Open Azure quota ticket whose latest Microsoft message was a
-    /// billing-side denial.
-    #[command(name = "azure-escalate")]
-    AzureEscalate {
-        /// Print what would be sent without invoking az
-        /// support communication create.
+    /// Post a credit-funded-subscription escalation reply on every open
+    /// quota ticket whose latest provider message was a billing-side denial.
+    Escalate {
+        /// The provider whose support tickets are escalated.
+        #[arg(long, value_enum)]
+        provider: TicketProvider,
+        /// Print what would be sent without posting it.
         #[arg(long)]
         dry_run: bool,
         /// Contact email shown in the response signature.
@@ -117,4 +118,11 @@ pub(crate) enum QuotaCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Providers whose quota requests become support tickets Stado can answer.
+/// A provider without that adapter is refused by clap with this list.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum TicketProvider {
+    Azure,
 }

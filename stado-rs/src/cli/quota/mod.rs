@@ -1,6 +1,5 @@
 //! `stado quota` command group — READ side (`show`, `catalog`) and WRITE
-//! side (`request`, `request-all`, `requests`, `azure-replies`,
-//! `azure-escalate`).
+//! side (`request`, `request-all`, `requests`, `replies`, `escalate`).
 //!
 //! Port of the `quota` group in `stado/cli.py`.
 //!
@@ -78,11 +77,15 @@ pub(super) async fn dispatch(json: bool, sub: &Option<QuotaCommands>) -> Result<
             awaiting_customer,
             json: sub_json,
         }) => requests(provider, state, *awaiting_customer, *sub_json).await,
-        Some(QuotaCommands::AzureReplies { dry_run, email }) => {
-            azure_replies(*dry_run, email).await
-        }
-        Some(QuotaCommands::AzureEscalate { dry_run, email }) => {
-            azure_escalate(*dry_run, email).await
-        }
+        Some(QuotaCommands::Replies {
+            provider: crate::cli::entry::spec::spend::quota::TicketProvider::Azure,
+            dry_run,
+            email,
+        }) => azure_replies(*dry_run, email).await,
+        Some(QuotaCommands::Escalate {
+            provider: crate::cli::entry::spec::spend::quota::TicketProvider::Azure,
+            dry_run,
+            email,
+        }) => azure_escalate(*dry_run, email).await,
     }
 }

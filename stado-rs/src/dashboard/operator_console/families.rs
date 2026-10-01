@@ -186,7 +186,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             | ("optimize", "status" | "explain")
             | ("placement", "relief")
             | ("queue", "status")
-            | ("quota", "show" | "catalog" | "requests" | "azure-replies")
+            | ("quota", "show" | "catalog" | "requests" | "replies")
             | (
                 "registry",
                 "validate" | "pull" | "self" | "doctor" | "beacon-age"

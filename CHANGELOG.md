@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado quota azure-replies` and `stado quota azure-escalate` are replaced by `stado quota replies --provider azure` and `stado quota escalate --provider azure` (cli.md rule 1: a provider is an argument, not part of the command's name). A provider without a support-ticket adapter is refused by name with the list of those that have one; the operator console's read-only quota family names `replies`.
