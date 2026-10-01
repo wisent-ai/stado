@@ -110,30 +110,17 @@ stop_owned() {
   /usr/bin/sudo -n /usr/bin/pkill "-$signal" -U "$uid" -x "$name" >/dev/null 2>&1 || true
 }
 
-keybox_pids=
+# The daemons are being recovered because they stopped answering, so a polite
+# stop has nobody to hear it: each owned process is killed outright.
 keybox_db="${GNUPGHOME:-$HOME/.gnupg}/public-keys.d/pubring.db"
 if [ -f "$keybox_db" ] && [ -x /usr/sbin/lsof ]; then
   for pid in $(/usr/bin/sudo -n /usr/sbin/lsof -t "$keybox_db" 2>/dev/null || true); do
     comm=$(/bin/ps -p "$pid" -o comm= 2>/dev/null || true)
     case "$comm" in
-      *keyboxd)
-        keybox_pids="$keybox_pids $pid"
-        /usr/bin/sudo -n /bin/kill -TERM "$pid"
-        ;;
+      *keyboxd) /usr/bin/sudo -n /bin/kill -KILL "$pid" ;;
     esac
   done
 fi
-
-for name in gpg keyboxd gpg-agent; do
-  stop_owned TERM "$name"
-done
-/bin/sleep 2
-for pid in $keybox_pids; do
-  comm=$(/bin/ps -p "$pid" -o comm= 2>/dev/null || true)
-  case "$comm" in
-    *keyboxd) /usr/bin/sudo -n /bin/kill -KILL "$pid" ;;
-  esac
-done
 for name in gpg keyboxd gpg-agent; do
   stop_owned KILL "$name"
 done
@@ -141,18 +128,15 @@ done
 "$gpgconf" --launch keyboxd
 "$gpgconf" --launch gpg-agent
 
-attempt=0
-while [ "$attempt" -lt 2 ]; do
-  health=$(/usr/bin/curl --silent --show-error --max-time 70 "$health_url" || true)
-  case "$health" in
-    *'"ok":true'*)
-      printf '%s\n' 'skarbiec cryptographic daemons recovered'
-      exit 0
-      ;;
-  esac
-  attempt=$((attempt + 1))
-  /bin/sleep 2
-done
-
-printf '%s\n' 'Skarbiec stayed unhealthy after GPG daemon recovery' >&2
+if ! health=$(/usr/bin/curl --silent --show-error "$health_url" 2>&1); then
+  printf '%s\n' "Skarbiec health could not be read after GPG daemon recovery: $health" >&2
+  exit 1
+fi
+case "$health" in
+  *'"ok":true'*)
+    printf '%s\n' 'skarbiec cryptographic daemons recovered'
+    exit 0
+    ;;
+esac
+printf '%s\n' "Skarbiec stayed unhealthy after GPG daemon recovery: $health" >&2
 exit 1
