@@ -59,20 +59,18 @@ pub fn decide_action(
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutoListParams {
     /// Wisent-compute must be idle this many consecutive seconds before
-    /// listing (default 300).
+    /// listing.
     pub idle_window_s: i64,
-    /// Polling interval against the wisent-compute bucket (default 10s —
-    /// short enough to catch transient queue states).
-    pub poll_interval_s: u64,
-    /// Per-GPU-hour rental price USD when we list (default 0.50).
+    /// The operator's period between queue polls; required unless `once`.
+    pub poll: Option<std::time::Duration>,
+    /// Per-GPU-hour rental price USD when we list.
     pub price_gpu: f64,
     /// Caps the maximum length of any rental Vast can hand out from this
     /// offer (PUT /machines/create_asks/ duration field, vast-cli
     /// vast.py:
     /// 8092). With duration_s=3600 the worst-case wait for a
     /// wisent-compute job behind an active Vast rental is one hour; None
-    /// leaves the offer open-ended. Default 15768000 (half a year);
-    /// WC_VAST_MAX_DURATION_S env wins (cli.py uneditable).
+    /// leaves the offer open-ended.
     pub duration_s: Option<i64>,
     /// Print the toggle decisions without calling the Vast API.
     pub dry_run: bool,
@@ -80,17 +78,4 @@ pub struct AutoListParams {
     /// graphical surface previews the bridge this way: a daemon cannot be
     /// run through a request that has to answer.
     pub once: bool,
-}
-
-impl Default for AutoListParams {
-    fn default() -> Self {
-        AutoListParams {
-            idle_window_s: 300,
-            poll_interval_s: 10,
-            price_gpu: 0.50,
-            duration_s: Some(15768000),
-            dry_run: false,
-            once: false,
-        }
-    }
 }

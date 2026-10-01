@@ -14,27 +14,20 @@
 //! is the wait for that decision costing the host.
 //!
 //! The first open under each gated folder is therefore made on a helper
-//! thread with a deadline. Answered in time, the folder is confirmed for this
-//! process and every later open is direct. Not answered, the folder is
-//! `pending`: the cleaner reports `consent_pending` and stops, the helper
-//! thread stays with the dialog and records the answer when it comes, and no
-//! later pass asks again while it is pending — one blocked thread per
-//! process, never one per pass.
+//! thread, and the pass does not wait for it: the folder is `pending`, the
+//! cleaner reports `consent_pending` and stops, the helper thread stays with
+//! the open and records the answer when it comes, and no later pass asks
+//! again while it is pending — one blocked thread per process, never one per
+//! pass. A folder the helper confirmed is opened directly by every later pass.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
 
 use super::safefs;
-
-/// How long the first open under a gated folder may wait for the answer
-/// before the pass gives the folder up for this run.
-const CONSENT_WAIT: Duration = Duration::from_secs(5);
 
 /// What one open under a gated folder came back with.
 pub enum Gated {
@@ -94,7 +87,7 @@ fn set_state(folder: &Path, consent: Option<Consent>) {
     }
 }
 
-/// `safefs::open_dir_at`, bounded when `absolute` is the first open under a
+/// `safefs::open_dir_at`, handed to the helper when `absolute` is the first
 /// gated folder this process has not been answered for.
 pub fn open_dir_at(
     gated: &[PathBuf],
@@ -120,7 +113,8 @@ pub fn open_dir_at(
     }
 }
 
-/// `safefs::open_dir_path`, bounded the same way, for a cleaner's root.
+/// `safefs::open_dir_path`, handed to the helper the same way, for a
+/// cleaner's root.
 pub fn open_dir_path(gated: &[PathBuf], path: &Path) -> io::Result<Gated> {
     let Some(folder) = gated_folder(gated, path) else {
         return safefs::open_dir_path(path).map(Gated::Opened);
@@ -135,12 +129,12 @@ pub fn open_dir_path(gated: &[PathBuf], path: &Path) -> io::Result<Gated> {
     }
 }
 
-/// Run one open on a helper thread and wait [`CONSENT_WAIT`] for it. The
-/// thread outlives a missed deadline: when the dialog is finally answered it
-/// records the answer, and the descriptor it opened is closed unread.
+/// Start one open on a helper thread and report the folder pending. When the
+/// open returns — at once, or after the person at the keyboard answers — the
+/// helper records the answer, and the descriptor it opened is closed unread.
 ///
 /// Public because the dialog itself cannot be raised on purpose — raising
-/// one is the defect — so the only honest test of this bound drives it with
+/// one is the defect — so the only honest test of this path drives it with
 /// an open that answers late.
 pub fn bounded(
     folder: &Path,
@@ -157,7 +151,6 @@ pub fn bounded(
         }
         states.insert(folder.to_path_buf(), Consent::Pending);
     }
-    let (sender, receiver) = mpsc::channel();
     let recorded = folder.to_path_buf();
     let spawned = std::thread::Builder::new()
         .name("stado-consent-probe".to_string())
@@ -172,17 +165,10 @@ pub fn bounded(
                     Err(_) => None,
                 },
             );
-            let _ = sender.send(opened);
         });
     if let Err(error) = spawned {
         set_state(folder, None);
         return Err(error);
     }
-    match receiver.recv_timeout(CONSENT_WAIT) {
-        Ok(opened) => opened.map(Gated::Opened),
-        Err(mpsc::RecvTimeoutError::Timeout) => Ok(Gated::Pending),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::other(
-            "the consent probe ended without an answer",
-        )),
-    }
+    Ok(Gated::Pending)
 }

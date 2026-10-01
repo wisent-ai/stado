@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::upload::once;
-use super::{DEFAULT_BUCKET, DEFAULT_INTERVAL_S};
+use super::DEFAULT_BUCKET;
 use crate::models::py_str_repr;
 
 // ---------------------------------------------------------------------------
@@ -17,7 +17,9 @@ use crate::models::py_str_repr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedArgs {
     pub bucket: String,
-    pub interval_s: i64,
+    /// Seconds between collections when the watchdog loops; required
+    /// without `--once`.
+    pub interval_s: Option<i64>,
     pub once: bool,
 }
 
@@ -106,7 +108,7 @@ pub(crate) fn parse_args_with_bucket(
 ) -> Result<ParsedArgs, ParseOutcome> {
     let mut parsed = ParsedArgs {
         bucket: default_bucket,
-        interval_s: DEFAULT_INTERVAL_S,
+        interval_s: None,
         once: false,
     };
     let mut extras: Vec<String> = Vec::new();
@@ -160,7 +162,7 @@ pub(crate) fn parse_args_with_bucket(
                         parsed.bucket = value;
                     } else {
                         match parse_python_int(&value) {
-                            Some(interval) => parsed.interval_s = interval,
+                            Some(interval) => parsed.interval_s = Some(interval),
                             None => {
                                 return Err(ParseOutcome::Error(format!(
                                     "argument --interval-s: invalid int value: {}",
@@ -213,9 +215,19 @@ pub(crate) async fn run(parsed: &ParsedArgs) -> i32 {
     if parsed.once {
         return once(&parsed.bucket).await;
     }
+    let interval = match parsed.interval_s.map(u64::try_from) {
+        Some(Ok(interval)) => interval,
+        Some(Err(_)) => {
+            eprintln!("stado-watchdog: error: --interval-s must not be negative");
+            return USAGE_ERROR_EXIT;
+        }
+        None => {
+            eprintln!("stado-watchdog: error: the collection loop needs --interval-s; use --once for one collection");
+            return USAGE_ERROR_EXIT;
+        }
+    };
     loop {
         once(&parsed.bucket).await;
-        let interval = parsed.interval_s.max(super::MIN_INTERVAL_S) as u64;
         tokio::time::sleep(Duration::from_secs(interval)).await;
     }
 }

@@ -14,8 +14,8 @@ use super::super::MonitorError;
 /// lifecycle move must pin.
 ///
 /// Every requeue below is a liveness verdict reached from a tick-start
-/// listing, and the worker's own lease renewal rewrites this document every
-/// [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`]. Deciding from
+/// listing, and the worker's own lease renewal rewrites this document on
+/// every agent tick. Deciding from
 /// the stale copy and moving unconditionally is what let a live execution be
 /// requeued and started a second time; pinning the fresh version makes the
 /// renewal win the race.

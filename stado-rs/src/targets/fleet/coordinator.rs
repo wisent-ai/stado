@@ -19,7 +19,7 @@ pub struct Coordinator {
     /// same declarative placement selector.
     #[serde(default)]
     pub host_heuristic: Option<String>,
-    #[serde(default = "default_interval_seconds")]
+    /// Seconds between coordinator ticks, as the registry declares them.
     pub interval_seconds: i64,
     #[serde(default = "default_state_uri")]
     pub state_uri: String,

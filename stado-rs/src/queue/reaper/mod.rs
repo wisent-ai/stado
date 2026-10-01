@@ -13,8 +13,8 @@
 //!
 //! This reaper keys on the job's worker lease, and the lease lives IN the
 //! running job document (`Job::lease_expires_at`), renewed by
-//! [`crate::queue::storage::JobStorage::renew_running_lease`] every
-//! [`crate::providers::local::slots::HEARTBEAT_INTERVAL_S`] from
+//! [`crate::queue::storage::JobStorage::renew_running_lease`] on every agent
+//! tick from
 //! `write_heartbeat`. The TTL is the codebase's own
 //! [`crate::config::HEARTBEAT_STALE_MINUTES`] — the window after which the
 //! monitor declares a running job's heartbeat dead.

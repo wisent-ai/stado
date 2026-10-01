@@ -22,7 +22,6 @@ struct SubmitRequestContext {
     record_path: String,
     run_id: String,
     owner: String,
-    lease_expires_at: String,
 }
 
 /// What the reservation record says about the source archive, once this call
@@ -59,7 +58,6 @@ impl MachineFacade {
         let record_path = format!("machine_requests/{request_id}.json");
         let run_id = stable_run_id("machine", &request_id);
         let owner = uuid::Uuid::new_v4().simple().to_string();
-        let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
         let ctx = SubmitRequestContext {
             request,
             request_id,
@@ -67,7 +65,6 @@ impl MachineFacade {
             record_path,
             run_id,
             owner,
-            lease_expires_at,
         };
 
         let mut reserved = match self.claim_request_reservation(&ctx).await? {

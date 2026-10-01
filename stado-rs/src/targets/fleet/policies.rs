@@ -8,10 +8,6 @@ pub(crate) fn default_runtime() -> String {
     "daemon".to_string()
 }
 
-pub(crate) fn default_interval_seconds() -> i64 {
-    180
-}
-
 pub(crate) fn default_state_uri() -> String {
     "stado://system/registry".to_string()
 }

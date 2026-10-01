@@ -79,7 +79,6 @@ impl MachineFacade {
             completed.insert("result".into(), Value::Object(result.clone()));
             completed.insert("completed_at".into(), Value::from(utcnow()));
             completed.remove("owner");
-            completed.remove("lease_expires_at");
             match self
                 .store
                 .compare_and_swap_text(

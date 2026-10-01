@@ -44,6 +44,7 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
                 options.vast_auto_list,
                 options.vast_price_gpu,
                 options.vast_max_duration_s,
+                options.vast_idle_window_s,
                 options.poll_seconds,
             )
             .await

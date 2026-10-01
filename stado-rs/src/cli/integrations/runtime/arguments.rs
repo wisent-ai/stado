@@ -47,6 +47,9 @@ impl ServeArgs {
         if let Some(seconds) = self.worker.poll_seconds {
             args.push(format!("--poll-seconds={seconds}"));
         }
+        if let Some(seconds) = self.worker.vast_idle_window_s {
+            args.push(format!("--vast-idle-window-s={seconds}"));
+        }
         if self.resolver {
             args.push("--resolver".to_string());
         }
@@ -93,13 +96,10 @@ impl ServeArgs {
             args.push(format!("--api-storage={storage}"));
         }
         if self.watchdog {
-            args.extend([
-                "--watchdog".to_string(),
-                format!(
-                    "--watchdog-interval-seconds={}",
-                    self.watchdog_interval_seconds
-                ),
-            ]);
+            args.push("--watchdog".to_string());
+            if let Some(interval) = self.watchdog_interval_seconds {
+                args.push(format!("--watchdog-interval-seconds={interval}"));
+            }
             if let Some(bucket) = &self.watchdog_bucket {
                 args.push(format!("--watchdog-bucket={bucket}"));
             }

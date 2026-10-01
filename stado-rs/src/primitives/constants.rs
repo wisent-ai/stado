@@ -100,9 +100,6 @@ pub const NEEDS_DEFAULT_WINDOW_DAYS: i64 = 7;
 /// straight to a file.
 pub const STORE_DOCUMENT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
-/// Per-job heartbeat interval (derived from the 15-min staleness threshold).
-pub const SLOT_HEARTBEAT_INTERVAL_S: u64 = 60;
-
 /// Fleet staging flush interval (~20 commits/hour, under the HF rate cap).
 pub const FLEET_FLUSH_INTERVAL_S: u64 = 180;
 

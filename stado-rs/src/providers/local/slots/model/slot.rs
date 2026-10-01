@@ -1,13 +1,8 @@
-//! The live slot: the intervals and defaults it is measured against,
-//! [`ActiveSlot`] (the workload's process group, log handle, capacity
-//! accounting and shared janitor hold), and the [`SlotOutcome`] a tick
-//! returns.
+//! The live slot: the defaults it is measured against, [`ActiveSlot`] (the
+//! workload's process group, log handle, capacity accounting and shared
+//! janitor hold), and the [`SlotOutcome`] a tick returns.
 
 use super::*;
-
-/// Write a fresh heartbeat every 60s; HEARTBEAT_STALE_MINUTES=15 leaves 15
-/// missed-write tolerance. Python `HEARTBEAT_INTERVAL`.
-pub const HEARTBEAT_INTERVAL_S: u64 = constants::SLOT_HEARTBEAT_INTERVAL_S;
 
 /// Python `Job.max_yields_before_protected` fallback (`getattr(...) or 5`).
 pub const DEFAULT_MAX_YIELDS: i64 = 5;
@@ -23,8 +18,6 @@ pub struct ActiveSlot {
     /// Our copy of the log-file handle (stdout/stderr were dup'd from it).
     /// `None` after close — Python's flush+close-once discipline.
     pub(crate) log_file: Option<std::fs::File>,
-    /// Last heartbeat stamp (monotonic). Python `last_hb` (time.time()).
-    pub last_hb: Instant,
     /// Whether a heartbeat or finalization observed the canonical tree absent
     /// or replaced by a non-directory. Retained so a later recreation cannot
     /// erase the terminal evidence.

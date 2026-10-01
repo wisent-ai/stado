@@ -131,6 +131,7 @@ pub async fn run(
     vast_auto_list: bool,
     vast_price_gpu: f64,
     vast_max_duration_s: i64,
+    vast_idle_window_s: Option<i64>,
     poll_seconds: Option<u64>,
 ) -> Result<(), CmdError> {
     let poll = std::time::Duration::from_secs(poll_seconds.ok_or_else(|| {
@@ -214,10 +215,19 @@ pub async fn run(
             .map_err(|e| CmdError::click(format!("vast bridge requested but {e}")))?;
         let store = JobStorage::new().await?;
         let hostname = vast::system_hostname();
+        let idle_window_s = vast_idle_window_s.ok_or_else(|| {
+            CmdError::usage(
+                "the Vast bridge needs --vast-idle-window-s: the seconds Stado must be idle \
+                 before this host is listed",
+            )
+        })?;
         let params = vast::AutoListParams {
+            idle_window_s,
+            poll: Some(poll),
             price_gpu: vast_price_gpu,
             duration_s: (vast_max_duration_s > 0).then_some(vast_max_duration_s),
-            ..Default::default()
+            dry_run: false,
+            once: false,
         };
         tokio::spawn(async move {
             if let Err(exc) = vast::auto_list_loop(Some(&client), &store, &hostname, params, |m| {

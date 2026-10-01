@@ -85,7 +85,7 @@ pub(super) fn merge_watchdog(
             component.label
         )));
     }
-    let interval = diagnostics.interval_s.max(crate::watchdog::MIN_INTERVAL_S);
+    let interval = diagnostics.interval_s;
     if runtime.watchdog
         && (runtime.watchdog_bucket.as_ref() != Some(&diagnostics.bucket)
             || runtime.watchdog_interval_seconds != interval)

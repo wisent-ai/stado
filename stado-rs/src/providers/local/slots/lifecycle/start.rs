@@ -263,7 +263,6 @@ pub async fn start_slot(
         slot,
         child,
         log_file: Some(log_file),
-        last_hb: Instant::now(),
         workdir_missing: false,
         paused: false,
         started_mono: Instant::now(),

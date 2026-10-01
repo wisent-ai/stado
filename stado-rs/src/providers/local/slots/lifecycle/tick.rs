@@ -6,8 +6,8 @@ use std::path::Path;
 
 use super::*;
 
-/// A running slot's periodic work: the peak-VRAM attribution on every tick
-/// and, on the heartbeat interval, the status blob and the streamed log.
+/// A running slot's periodic work, once per agent tick: the peak-VRAM
+/// attribution, the status blob and the streamed log.
 pub(super) async fn running_tick(
     slot: &mut ActiveSlot,
     store: &JobStorage,
@@ -19,7 +19,7 @@ pub(super) async fn running_tick(
     if used > slot.slot.peak_vram_gb {
         slot.slot.peak_vram_gb = used;
     }
-    if slot.paused || slot.last_hb.elapsed() <= Duration::from_secs(HEARTBEAT_INTERVAL_S) {
+    if slot.paused {
         return Ok(());
     }
     write_heartbeat(store, job_id).await?;
@@ -58,7 +58,6 @@ pub(super) async fn running_tick(
             }
         }
     }
-    slot.last_hb = Instant::now();
     Ok(())
 }
 

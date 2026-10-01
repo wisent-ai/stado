@@ -149,7 +149,7 @@ async fn monitor(bucket: &str) -> Result<(), CmdError> {
 
 async fn auto_list(
     idle_window_s: i64,
-    poll_interval_s: i64,
+    poll_interval_s: Option<u64>,
     price_gpu: f64,
     max_duration_s: i64,
     dry_run: bool,
@@ -170,7 +170,7 @@ async fn auto_list(
     let hostname = vast::system_hostname();
     let params = AutoListParams {
         idle_window_s,
-        poll_interval_s: poll_interval_s.max(0) as u64,
+        poll: poll_interval_s.map(std::time::Duration::from_secs),
         price_gpu,
         dry_run,
         once,

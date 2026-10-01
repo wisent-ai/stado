@@ -170,22 +170,7 @@ impl MachineFacade {
             options.repo_extras = String::new();
         }
         let command = request["command"].as_str().unwrap_or_default().to_string();
-        let submission = submit_batch(std::slice::from_ref(&command), &options);
-        tokio::pin!(submission);
-        let submitted = loop {
-            tokio::select! {
-                result = &mut submission => break result,
-                _ = tokio::time::sleep(std::time::Duration::from_secs(5 * 60)) => {
-                    renew_machine_request_enqueue(
-                        &self.store,
-                        record_path,
-                        owner,
-                        "enqueue",
-                    )
-                    .await?;
-                }
-            }
-        };
+        let submitted = submit_batch(std::slice::from_ref(&command), &options).await;
         renew_machine_request_enqueue(&self.store, record_path, owner, "enqueue-complete").await?;
         let job = match submitted {
             Ok(mut jobs) => jobs.pop().ok_or_else(|| {
@@ -197,11 +182,8 @@ impl MachineFacade {
                         serde_json::from_str::<Value>(&versioned.content)
                     {
                         if released.get("owner").and_then(Value::as_str) == Some(owner.as_str()) {
-                            released.insert("state".into(), Value::from("claimed"));
-                            released.insert(
-                                "lease_expires_at".into(),
-                                Value::from(chrono::Utc::now().to_rfc3339()),
-                            );
+                            released.insert("state".into(), Value::from("released"));
+                            released.remove("owner");
                             released.insert("last_error".into(), Value::from(exc.to_string()));
                             let _ = self
                                 .store

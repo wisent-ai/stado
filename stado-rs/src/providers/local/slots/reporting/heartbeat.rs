@@ -58,7 +58,7 @@ pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), Sto
         .await
 }
 
-/// Stamp status/<job>/heartbeat every HEARTBEAT_INTERVAL_S for as long as
+/// Stamp status/<job>/heartbeat on the agent's poll period for as long as
 /// the training subprocess is alive — independent of the agent main loop.
 /// Python `_start_heartbeat_thread`.
 ///
@@ -76,8 +76,15 @@ pub fn start_heartbeat_task(
     pid: i32,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let Some(poll) = crate::providers::local::agent::POLL.get().copied() else {
+            eprintln!(
+                "[heartbeat] {job_id}: no agent poll period is set in this process, so no \
+                 heartbeat is written for it"
+            );
+            return;
+        };
         while helpers::pid_alive(pid) {
-            tokio::time::sleep(Duration::from_secs(HEARTBEAT_INTERVAL_S)).await;
+            tokio::time::sleep(poll).await;
             if let Err(err) = write_heartbeat(&store, &job_id).await {
                 // The coordinator requeues local jobs when their heartbeat
                 // goes stale. Silent heartbeat failures leave live jobs looking

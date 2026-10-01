@@ -1,5 +1,5 @@
-//! Renewing the reservation lease so a long submission is never mistaken for
-//! an abandoned one.
+//! Recording a held reservation's phase, after proving this submission still
+//! owns it.
 
 use serde_json::{Map, Value};
 
@@ -36,10 +36,6 @@ async fn renew_machine_request_lease(
                 "matching request ownership changed during submission",
             ));
         }
-        reservation.insert(
-            "lease_expires_at".into(),
-            Value::from((chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339()),
-        );
         reservation.insert("phase".into(), Value::from(phase));
         match store
             .compare_and_swap_text(

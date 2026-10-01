@@ -86,14 +86,10 @@ pub(crate) struct ServeArgs {
     /// Diagnostics destination; the standalone watchdog's default applies when omitted.
     #[arg(long, requires = "watchdog")]
     pub watchdog_bucket: Option<String>,
-    /// Preserve the standalone watchdog's declared collection cadence.
-    #[arg(
-        long,
-        requires = "watchdog",
-        default_value_t = crate::watchdog::DEFAULT_INTERVAL_S,
-        value_parser = clap::value_parser!(i64).range(crate::watchdog::MIN_INTERVAL_S..)
-    )]
-    pub watchdog_interval_seconds: i64,
+    /// Seconds between workstation diagnostics collections; required with
+    /// --watchdog.
+    #[arg(long, requires = "watchdog")]
+    pub watchdog_interval_seconds: Option<i64>,
 }
 
 pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
@@ -238,6 +234,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
                 args.worker.vast_auto_list,
                 args.worker.vast_price_gpu,
                 args.worker.vast_max_duration_s,
+                args.worker.vast_idle_window_s,
                 args.worker.poll_seconds,
             )
         })?;

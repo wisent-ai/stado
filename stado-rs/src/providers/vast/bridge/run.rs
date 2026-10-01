@@ -42,6 +42,12 @@ pub async fn auto_list_loop(
     params: AutoListParams,
     mut log: impl FnMut(&str),
 ) -> Result<(), VastError> {
+    if params.poll.is_none() && !params.once {
+        return Err(VastError::config(
+            "auto-list needs --poll-interval-s, the seconds between queue polls, unless it \
+             runs --once",
+        ));
+    }
     if client.is_none() && !params.dry_run {
         return Err(VastError::config(
             "auto-list without --dry-run needs a Vast.ai API key; run it with \
@@ -135,7 +141,9 @@ pub async fn auto_list_loop(
             if params.once {
                 return Ok(());
             }
-            tokio::time::sleep(Duration::from_secs(params.poll_interval_s)).await;
+            if let Some(poll) = params.poll {
+                tokio::time::sleep(poll).await;
+            }
             continue;
         }
         let state = match is_stado_busy(store, hostname).await {
@@ -146,7 +154,9 @@ pub async fn auto_list_loop(
                 if params.once {
                     return Err(wrapped);
                 }
-                tokio::time::sleep(Duration::from_secs(params.poll_interval_s)).await;
+                if let Some(poll) = params.poll {
+                    tokio::time::sleep(poll).await;
+                }
                 continue;
             }
         };
@@ -248,6 +258,8 @@ pub async fn auto_list_loop(
         if params.once {
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_secs(params.poll_interval_s)).await;
+        if let Some(poll) = params.poll {
+            tokio::time::sleep(poll).await;
+        }
     }
 }

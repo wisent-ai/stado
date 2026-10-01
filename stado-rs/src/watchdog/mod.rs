@@ -31,10 +31,6 @@ pub(crate) use collect::hostname;
 
 /// Python `DEFAULT_BUCKET` (the watchdog's own default, NOT config BUCKET).
 pub const DEFAULT_BUCKET: &str = "wisent-compute";
-/// Python `DEFAULT_INTERVAL_S`.
-pub const DEFAULT_INTERVAL_S: i64 = 60;
-/// Existing lower bound of the diagnostics collection schedule.
-pub const MIN_INTERVAL_S: i64 = 10;
 /// Python `OUT_PREFIX`.
 pub const OUT_PREFIX: &str = "box_diagnostics";
 /// Local standby path when the upload fails (Python `_write_local`).

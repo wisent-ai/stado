@@ -25,7 +25,6 @@ impl MachineFacade {
             record_path,
             run_id,
             owner,
-            lease_expires_at,
             ..
         } = ctx;
         let source_requested = ctx.source_requested;
@@ -140,15 +139,15 @@ impl MachineFacade {
                         return Ok(ReservationClaim::Replayed(stored_result.clone()));
                     }
                 }
-                let live_lease = existing
-                    .get("lease_expires_at")
-                    .and_then(Value::as_str)
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .is_some_and(|expires| expires > chrono::Utc::now());
-                if live_lease {
+                // A reservation another submission holds stays held until
+                // that submission records its result or releases it.
+                if matches!(
+                    existing.get("state").and_then(Value::as_str),
+                    Some("claimed" | "enqueuing")
+                ) {
                     return Err(MachineError::retryable(
                         "REQUEST_IN_PROGRESS",
-                        "matching request is still being submitted",
+                        "matching request is held by a submission that has not released it",
                     ));
                 }
                 source_sha = retained_sha.to_string();
@@ -156,10 +155,6 @@ impl MachineFacade {
                 source_bytes = retained_bytes;
                 existing.insert("state".into(), Value::from("claimed"));
                 existing.insert("owner".into(), Value::from(owner.as_str()));
-                existing.insert(
-                    "lease_expires_at".into(),
-                    Value::from(lease_expires_at.as_str()),
-                );
                 match self
                     .store
                     .compare_and_swap_text(
@@ -209,10 +204,6 @@ impl MachineFacade {
             reservation.insert("run_id".into(), Value::from(run_id.as_str()));
             reservation.insert("state".into(), Value::from("claimed"));
             reservation.insert("owner".into(), Value::from(owner.as_str()));
-            reservation.insert(
-                "lease_expires_at".into(),
-                Value::from(lease_expires_at.as_str()),
-            );
             reservation.insert("created_at".into(), Value::from(utcnow()));
             if source_requested {
                 reservation.insert(

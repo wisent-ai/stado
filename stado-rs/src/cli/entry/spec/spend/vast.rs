@@ -51,9 +51,10 @@ pub(crate) enum VastCommands {
         /// Wisent-compute must be idle this many seconds before listing.
         #[arg(long, default_value_t = 300)]
         idle_window_s: i64,
-        /// Polling interval against configured Stado queue storage.
-        #[arg(long, default_value_t = 10)]
-        poll_interval_s: i64,
+        /// Seconds between polls of the configured Stado queue storage.
+        /// Required unless --once.
+        #[arg(long)]
+        poll_interval_s: Option<u64>,
         /// Per-GPU-hour rental price USD when we list.
         #[arg(long, default_value_t = 0.50)]
         price_gpu: f64,
