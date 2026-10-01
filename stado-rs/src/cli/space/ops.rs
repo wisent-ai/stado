@@ -41,7 +41,7 @@ pub(super) async fn reclaim(
         crate::primitives::failure::log_failure(
             "cli.space.reclaim",
             "fleet",
-            crate::primitives::failure::classify_message(detail),
+            crate::primitives::failure::FailureCode::Unknown,
             &format!("{stage}: {detail}"),
         );
     }

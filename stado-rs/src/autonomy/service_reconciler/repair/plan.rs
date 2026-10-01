@@ -10,11 +10,21 @@ use crate::deploy::service::{self, ManagedService, ServiceStatus};
 pub(super) fn resolved_plan(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
-) -> Result<(service::DeployPlan, String, Vec<String>, String), String> {
+) -> Result<(service::DeployPlan, String, Vec<String>, String), super::RepairRefused> {
     let declared = &status.service;
+    // `unit_program` refuses (a stated `refused`) when nothing declares what
+    // the unit runs: the declaration is incomplete, and no host command ran.
     let mut unit =
         crate::cli::service::unit_program(&target.name, &declared.name, None, &[], Some(declared))
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                let kind = match error.failure {
+                    Some(crate::primitives::failure::FailureCode::Refused) => {
+                        super::FailureKind::DeclarationIncomplete
+                    }
+                    _ => super::FailureKind::RepairFailed,
+                };
+                super::RepairRefused::new(kind, error.to_string())
+            })?;
     let home = crate::deploy::service_catalog::home_for(target);
     let mut unit_env = crate::deploy::service_catalog::lookup(&declared.name)?
         .map(|entry| {
@@ -88,7 +98,8 @@ pub(super) fn resolved_plan(
             return Err(format!(
                 "{} declares a systemd unit definition on non-Linux platform {}",
                 declared.name, target.release_platform
-            ));
+            )
+            .into());
         }
         let definition = std::mem::take(&mut unit.systemd_unit);
         unit.systemd_unit = service::retain_systemd_unit(&mut plan, &definition, &unit_env, false)

@@ -37,6 +37,11 @@ pub const RECOVERY_PROGRAMS: [(&str, &str); 3] = [
     ),
 ];
 
+/// The exit status every recovery program ends with when the host was
+/// healthy and nothing was changed; 0 means it recovered, anything else is a
+/// refusal or a failure.
+pub const NOTHING_TO_RECOVER: i32 = 3;
+
 /// The program bytes a declared recovery name resolves to.
 pub fn recovery_program(name: &str) -> Option<&'static str> {
     RECOVERY_PROGRAMS
@@ -214,20 +219,18 @@ pub fn run_recovery(
     log_fn(&format!("memory: running declared recovery {name}"));
     let output = run_program(program);
     match output {
-        // The program's own last word decides. Every recovery program this
-        // build ships says `recovered` when it replaced something and says
-        // `no recovery needed` when its precondition did not hold, and the
-        // two exit 0 alike. Counting the second as a repair would report
-        // `repaired: 1` on every tick while keyboxd keeps growing: nothing
-        // reaped, and the report saying something was.
-        Ok(output) if output.status.success() => {
-            let said = String::from_utf8_lossy(&output.stdout);
-            if said.contains("recovered") {
-                report.repaired += 1;
-            } else {
-                note(&mut report, "recovery_not_needed");
-                log_fn(&format!("memory: {name}: {}", said.trim()));
-            }
+        // The program's exit status decides: 0 when it replaced something,
+        // [`NOTHING_TO_RECOVER`] when its precondition did not hold. Counting
+        // the second as a repair would report `repaired: 1` on every tick
+        // while keyboxd keeps growing: nothing reaped, and the report saying
+        // something was.
+        Ok(output) if output.status.success() => report.repaired += 1,
+        Ok(output) if output.status.code() == Some(NOTHING_TO_RECOVER) => {
+            note(&mut report, "recovery_not_needed");
+            log_fn(&format!(
+                "memory: {name}: {}",
+                String::from_utf8_lossy(&output.stdout).trim()
+            ));
         }
         Ok(output) => {
             note(&mut report, "recovery_refused");

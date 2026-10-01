@@ -83,7 +83,7 @@ case "$health_status:$health" in
   0:*'"ok":true'*)
     if [ -z "$bloated" ]; then
       printf '%s\n' 'skarbiec cryptographic path is healthy and its GnuPG daemons are under their memory ceiling; no recovery needed'
-      exit 0
+      exit 3
     fi
     printf 'recovering: %s\n' "$bloated"
     ;;

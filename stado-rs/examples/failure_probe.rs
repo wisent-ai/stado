@@ -83,35 +83,9 @@ fn main() {
         println!("{}", failure::operator_line(code));
     }
 
-    println!("== classify_message ==");
-    let messages = [
-        "GCS API error HTTP 503: backend not found",
-        "list queue/ -> HTTP 500 Internal Server Error: no such object",
-        "Stado object API returned HTTP 404 Not Found",
-        "HTTP 429: slow down",
-        "HTTP/1.1 401 Unauthorized",
-        "HTTP 504: upstream",
-        "HTTP 418: connection refused",
-        "WC_BUCKET is required",
-        "gcloud: command not found",
-        "blob not found: queue/1a2b3c4d.json",
-        "authentication failed for service account",
-        "quota exceeded, retry after 30s",
-        "operation timed out after deadline exceeded",
-        "error sending request: tcp connect error",
-        "unknown job 1a2b3c4d",
-        "the disk fell over in a way nobody wrote a needle for",
-    ];
-    for message in messages {
-        println!(
-            "{} <- {message}",
-            failure::classify_message(message).as_str()
-        );
-    }
-
     println!("== full rendered failure ==");
     let message = "GCS API error HTTP 503: could not read queue/1a2b3c4d.json";
-    let code = failure::classify_message(message);
+    let code = FailureCode::InfraDown;
     println!("Error: {message}");
     println!("{}", failure::operator_line(code));
     failure::log_failure("cli.storage.ls", "queue", code, message);

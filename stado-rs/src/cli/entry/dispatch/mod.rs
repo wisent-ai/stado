@@ -55,13 +55,11 @@ pub async fn main_entry() -> i32 {
             let Some(message) = err.message.as_deref() else {
                 return err.code;
             };
-            // What the failure said about itself beats what its wording
-            // looks like. `classify_message` reads prose, and prose is
-            // evidence only when there is nothing better: it once read a
-            // refusal's own allowlist and reported `timeout, retryable`.
+            // What the failure said about itself is its code; a failure that
+            // stated nothing is `unknown`. Its wording is never read for one.
             let code = err
                 .failure
-                .unwrap_or_else(|| crate::primitives::failure::classify_message(message));
+                .unwrap_or(crate::primitives::failure::FailureCode::Unknown);
             if err.json {
                 // The same sorted-keys rendering every `--json` command on
                 // this CLI already prints, so a caller parses one shape.

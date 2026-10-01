@@ -14,7 +14,8 @@ use super::receipts::{
     ServiceReconcileSummary,
 };
 use super::repair::{
-    reconcile_beacon, reconcile_observed, reconcile_undeclared, reconcile_unreachable,
+    reconcile_beacon, reconcile_observed, reconcile_undeclared, reconcile_unreachable, FailureKind,
+    RepairRefused,
 };
 use super::{LATEST_REPORT, SCHEMA_VERSION};
 
@@ -223,8 +224,13 @@ pub async fn reconcile(
             (Ok((_, _, detail)), Some(Ok(undone))) => {
                 Ok(("retired".to_string(), true, format!("{detail}; {undone}")))
             }
-            (Ok((_, _, detail)), Some(Err(failed))) => Err(format!("{detail}; {failed}")),
-            (Err(error), Some(Ok(undone) | Err(undone))) => Err(format!("{error}; {undone}")),
+            (Ok((_, _, detail)), Some(Err(failed))) => {
+                Err(RepairRefused::from(format!("{detail}; {failed}")))
+            }
+            (Err(error), Some(Ok(undone) | Err(undone))) => Err(RepairRefused::new(
+                error.kind,
+                format!("{}; {undone}", error.detail),
+            )),
         };
         let result = gate.release(&subject, &lease, result).await;
         match result {
@@ -239,16 +245,8 @@ pub async fn reconcile(
                 gate.record(None).await?;
             }
             Err(error) => {
-                outcome.classification = if error.starts_with("endpoint responds")
-                    || error.contains("ownership is not proven")
-                {
-                    "identity_unresolved".to_string()
-                } else if error.contains("nothing declares") {
-                    "declaration_incomplete".to_string()
-                } else {
-                    "repair_failed".to_string()
-                };
-                outcome.detail = error.clone();
+                outcome.classification = error.kind.classification().to_string();
+                outcome.detail = error.detail.clone();
                 summary.failures += 1;
                 // Only a mutation that actually failed on a host feeds the
                 // circuit breaker. `identity_unresolved` and
@@ -256,8 +254,8 @@ pub async fn reconcile(
                 // host command ran; counting them opened the breaker on four
                 // incomplete declarations and starved every healthy repair
                 // behind them, fifteen minutes per tick, forever.
-                if outcome.classification == "repair_failed" {
-                    gate.record(Some(&error)).await?;
+                if error.kind == FailureKind::RepairFailed {
+                    gate.record(Some(&error.detail)).await?;
                 }
             }
         }

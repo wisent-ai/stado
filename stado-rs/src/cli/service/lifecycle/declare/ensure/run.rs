@@ -260,7 +260,7 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
         error.failure = Some(
             error
                 .failure
-                .unwrap_or_else(|| crate::primitives::failure::classify_message(cause)),
+                .unwrap_or(crate::primitives::failure::FailureCode::Unknown),
         );
         error.message = Some(format!(
             "{host}: {} is running (action {}, pid {}), but recording the completed ensure \

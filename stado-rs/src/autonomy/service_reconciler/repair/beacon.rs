@@ -3,6 +3,7 @@
 use crate::deploy::service::{self, ServiceStatus};
 
 use super::plan::{replace_declaration, resolved_plan};
+use super::RepairRefused;
 
 /// Repair the one unit whose death blinds every other repair.
 ///
@@ -21,7 +22,7 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_beacon(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
-) -> Result<(String, bool, String), String> {
+) -> Result<(String, bool, String), RepairRefused> {
     let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let outcome = service::ensure_service(target, &plan, runner)
         .await
@@ -30,7 +31,8 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_beacon(
         return Err(format!(
             "beacon ensure did not establish a running unit: {}",
             outcome.report.failure()
-        ));
+        )
+        .into());
     }
     let mut declaration_changed = false;
     if status.service.source == service::SOURCE_REGISTRY {

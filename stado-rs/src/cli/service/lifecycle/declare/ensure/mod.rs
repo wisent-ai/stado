@@ -102,11 +102,9 @@ async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
         match registry::fetch_versioned_document().await {
             Ok(snapshot) => return Ok(snapshot),
             Err(error) => {
-                let code = error.failure.unwrap_or_else(|| {
-                    crate::primitives::failure::classify_message(
-                        error.message.as_deref().unwrap_or_default(),
-                    )
-                });
+                let code = error
+                    .failure
+                    .unwrap_or(crate::primitives::failure::FailureCode::Unknown);
                 if !code.retryable() {
                     return Err(error);
                 }

@@ -46,7 +46,8 @@ fn log(msg: &str) {
 /// the `[alert]` line is what a human tailing the monitor reads, and the
 /// structured line is what a log query finds a week later.
 fn channel_failed(channel: &str, error: &str) {
-    let code = crate::primitives::failure::classify_message(error);
+    // A delivery error states no code of its own, and its wording is not read.
+    let code = crate::primitives::failure::FailureCode::Unknown;
     tracing::error!(
         failure_point = "monitor.alerts.deliver",
         error_code = code.as_str(),

@@ -35,9 +35,9 @@ impl Dashboard {
                     Ok(()) => (0, None),
                     Err(error) => {
                         let message = error.message.unwrap_or_default();
-                        let failure = error.failure.unwrap_or_else(|| {
-                            crate::primitives::failure::classify_message(&message)
-                        });
+                        let failure = error
+                            .failure
+                            .unwrap_or(crate::primitives::failure::FailureCode::Unknown);
                         let code = if error.code == crate::cli::CLICK_ERROR_CODE {
                             failure.exit_code(error.code)
                         } else {
@@ -63,7 +63,12 @@ impl Dashboard {
     pub(crate) async fn put_host_health(&self, request: &Request, query: &str) -> Response {
         match authorize_host_health(self, request).await {
             Ok(true) => {}
-            Ok(false) => return send_json(http_status(reqwest::StatusCode::UNAUTHORIZED), &json!({"error": "unauthorized"})),
+            Ok(false) => {
+                return send_json(
+                    http_status(reqwest::StatusCode::UNAUTHORIZED),
+                    &json!({"error": "unauthorized"}),
+                )
+            }
             // An unreadable authorization item is this service's failure, not
             // the caller's credential. Answering 401 for it told every host in
             // the fleet its beacon grant had been rejected while the real

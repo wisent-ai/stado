@@ -96,4 +96,5 @@ if [ -n "$changed" ]; then
   printf '%s\n' "recovered Skarbiec acquisition state: $changed"
 else
   printf '%s\n' 'Skarbiec acquisition state ownership is healthy; no recovery needed'
+  exit 3
 fi

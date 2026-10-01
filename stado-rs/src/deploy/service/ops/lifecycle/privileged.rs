@@ -43,17 +43,13 @@ pub(super) async fn privileged_restart_system_daemon(
         runner,
     )
     .await?;
-    if !recovery_stop.ok() {
+    if !recovery_stop.ok() && !super::launchd_job_absent(recovery_stop.code) {
         let detail =
             host_channel::last_error_line(&recovery_stop, "sudo or launchctl returned no detail");
-        if !detail.contains("Could not find specified service")
-            && !detail.contains("No such process")
-        {
-            return Err(DeployError(format!(
-                "privileged recovery stop failed on {} with exit {}: {}",
-                target.name, recovery_stop.code, detail
-            )));
-        }
+        return Err(DeployError(format!(
+            "privileged recovery stop failed on {} with exit {}: {}",
+            target.name, recovery_stop.code, detail
+        )));
     }
     let mut output = if reload_unit {
         let bootout = host_channel::run_program_with_stdin(
@@ -71,17 +67,13 @@ pub(super) async fn privileged_restart_system_daemon(
             runner,
         )
         .await?;
-        if !bootout.ok() {
+        if !bootout.ok() && !super::launchd_job_absent(bootout.code) {
             let detail =
                 host_channel::last_error_line(&bootout, "sudo or launchctl returned no detail");
-            if !detail.contains("Could not find specified service")
-                && !detail.contains("No such process")
-            {
-                return Err(DeployError(format!(
-                    "privileged launchd bootout failed on {} with exit {}: {}",
-                    target.name, bootout.code, detail
-                )));
-            }
+            return Err(DeployError(format!(
+                "privileged launchd bootout failed on {} with exit {}: {}",
+                target.name, bootout.code, detail
+            )));
         }
         let mut unloaded = false;
         for _ in 0..15 {

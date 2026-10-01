@@ -27,10 +27,13 @@
 //!
 //! What the contract still buys us here is rule one — an infrastructure
 //! failure is never dressed up as a missing resource, and never as success.
-
-use std::sync::LazyLock;
-
-use regex::Regex;
+//!
+//! A failure's code is what the code that failed stated about it
+//! (`CmdError::failure`, a typed error). An error that states none is
+//! [`FailureCode::Unknown`]: until 2026-10-01 its code was guessed from the
+//! sentence's words against a list of phrases, and the operator ordered every
+//! decision by keyword removed. A guess is no evidence; a caller that knows
+//! its failure says so where it builds the error.
 
 /// The vocabulary and everything derivable from a code come from the fleet
 /// package. `wisent-errors` was extracted from this module verbatim: the code
@@ -51,93 +54,6 @@ pub use wisent_errors::{Code as FailureCode, Severity};
 /// it forever fixes nothing.
 pub fn retry_exit_code() -> i32 {
     FailureCode::RETRY_EXIT
-}
-
-/// How this fleet's failures are actually worded, declared in
-/// `needles.json` beside this file: one family per failure code,
-/// each with the reason it exists and the reason it sits where it sits in
-/// the order, plus the HTTP status that beats all of them.
-///
-/// The lists were eight arrays in this file. They are a record of what ssh,
-/// rsync, gcloud, curl and a dozen HTTP clients have actually said, and a
-/// record belongs where it can be read and added to.
-static FAILURE_NEEDLES: LazyLock<serde_json::Value> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("needles.json"))
-        .expect("needles.json beside this file is valid JSON")
-});
-
-/// The declared families, in the order they must be tested.
-fn families() -> Vec<(FailureCode, Vec<String>)> {
-    FAILURE_NEEDLES["families"]
-        .as_array()
-        .expect("needles.json declares a families array")
-        .iter()
-        .map(|family| {
-            let code = FailureCode::or_fallback(
-                family["code"]
-                    .as_str()
-                    .expect("every family declares the code it yields"),
-            );
-            let needles = family["needles"]
-                .as_array()
-                .expect("every family declares its needles")
-                .iter()
-                .filter_map(|needle| needle.as_str().map(str::to_owned))
-                .collect();
-            (code, needles)
-        })
-        .collect()
-}
-
-static UPSTREAM_STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        FAILURE_NEEDLES["upstream_status"]
-            .as_str()
-            .expect("needles.json declares upstream_status"),
-    )
-    .expect("declared upstream status regex compiles")
-});
-
-fn matches_any(haystack: &str, needles: &[String]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
-}
-
-/// The status an upstream answered with, if the message names one.
-fn upstream_status(message: &str) -> Option<FailureCode> {
-    let status = UPSTREAM_STATUS_RE
-        .captures(message)?
-        .name("status")?
-        .as_str()
-        .parse::<u16>()
-        .ok()?;
-    match FailureCode::from_upstream_status(status) {
-        // A status we cannot place is no evidence at all; fall through to the
-        // wording rather than pinning the failure on a number we misread.
-        FailureCode::Unknown => None,
-        code => Some(code),
-    }
-}
-
-/// Classify a command failure from the only thing a flat `CmdError` carries:
-/// its message.
-///
-/// Order matters, and it encodes the contract's priorities. Structured
-/// evidence (an upstream status) wins outright. Then our own broken
-/// configuration, because that is an outage the operator must be told about
-/// even when the sentence also mentions something missing. `not_found` is
-/// evaluated last so that a dependency being down can never be reported as a
-/// resource being absent.
-pub fn classify_message(message: &str) -> FailureCode {
-    if let Some(code) = upstream_status(message) {
-        return code;
-    }
-    let haystack = message.to_lowercase();
-    for (code, needles) in families() {
-        if matches_any(&haystack, &needles) {
-            return code;
-        }
-    }
-    FailureCode::Unknown
 }
 
 /// The sentence printed under `Error: ...` — what happened, its code, and

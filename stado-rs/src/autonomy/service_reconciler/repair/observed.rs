@@ -4,27 +4,32 @@
 use crate::deploy::service::{self, ServiceStatus};
 
 use super::plan::{replace_declaration, resolved_plan};
+use super::{FailureKind, RepairRefused};
 
 pub(in crate::autonomy::service_reconciler) async fn reconcile_observed(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
-) -> Result<(String, bool, String), String> {
+) -> Result<(String, bool, String), RepairRefused> {
     let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let report = service::probe_service(target, status.service.unit_id(), runner)
         .await
         .map_err(|error| error.to_string())?;
     if !report.succeeded("probed") {
-        return Err(format!(
-            "endpoint responds, but the declared unit could not be inspected: {}",
-            report.failure()
+        return Err(RepairRefused::new(
+            FailureKind::IdentityUnresolved,
+            format!(
+                "endpoint responds, but the declared unit could not be inspected: {}",
+                report.failure()
+            ),
         ));
     }
     if report.unit_state != "loaded" {
-        return Err(
+        return Err(RepairRefused::new(
+            FailureKind::IdentityUnresolved,
             "endpoint responds, but the declared unit is not loaded; refusing to create a duplicate until its owning unit or process is identified"
                 .to_string(),
-        );
+        ));
     }
     let mut corrected = service::record_from_report(
         &status.service.host,
@@ -39,9 +44,12 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_observed(
         .await
         .map_err(|error| error.to_string())?;
     if running.matches_process() != Some(true) {
-        return Err(format!(
-            "endpoint responds and unit {} is loaded, but ownership is not proven by its running program",
-            plan.label
+        return Err(RepairRefused::new(
+            FailureKind::IdentityUnresolved,
+            format!(
+                "endpoint responds and unit {} is loaded, but ownership is not proven by its running program",
+                plan.label
+            ),
         ));
     }
     let changed =
@@ -61,7 +69,7 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_unreachable(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
-) -> Result<(String, bool, String), String> {
+) -> Result<(String, bool, String), RepairRefused> {
     let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let outcome = service::ensure_service(target, &plan, runner)
         .await
@@ -70,7 +78,8 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_unreachable(
         return Err(format!(
             "ensure did not establish a running unit: {}",
             outcome.report.failure()
-        ));
+        )
+        .into());
     }
     let corrected = service::record_from_ensure(
         &status.service.host,

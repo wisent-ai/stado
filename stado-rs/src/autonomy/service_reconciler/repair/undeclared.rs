@@ -3,6 +3,7 @@
 use crate::deploy::service::{self, ServiceStatus};
 
 use super::plan::{replace_declaration, resolved_plan};
+use super::{FailureKind, RepairRefused};
 
 /// A declared unit the service directory says nothing about has no endpoint
 /// to disprove, so "endpoint absence was not proven" would block its repair
@@ -13,7 +14,7 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
-) -> Result<(String, bool, String), String> {
+) -> Result<(String, bool, String), RepairRefused> {
     let (plan, program, args, systemd_unit) = resolved_plan(status, target)?;
     let report = service::probe_service(target, status.service.unit_id(), runner)
         .await
@@ -22,7 +23,8 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
         return Err(format!(
             "the unit could not be inspected over the host channel: {}",
             report.failure()
-        ));
+        )
+        .into());
     }
     if report.unit_state == "loaded" {
         let mut corrected = service::record_from_report(
@@ -63,9 +65,12 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
                     .running_binary()
                     .is_some_and(|binary| binary == running.declared || binary == running.resolved);
                 if !same_binary {
-                    return Err(format!(
-                        "unit {} is loaded on the host but ownership is not proven by its running program",
-                        plan.label
+                    return Err(RepairRefused::new(
+                        FailureKind::IdentityUnresolved,
+                        format!(
+                            "unit {} is loaded on the host but ownership is not proven by its running program",
+                            plan.label
+                        ),
                     ));
                 }
             }
@@ -80,7 +85,8 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
         return Err(format!(
             "ensure did not establish a running unit: {}",
             outcome.report.failure()
-        ));
+        )
+        .into());
     }
     let corrected = service::record_from_ensure(
         &status.service.host,

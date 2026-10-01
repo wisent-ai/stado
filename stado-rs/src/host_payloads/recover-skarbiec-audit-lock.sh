@@ -55,7 +55,7 @@ case "$object_health" in
   *'"object":true'*)
     if [ "$audit_recovered" = false ]; then
       printf '%s\n' 'skarbiec and Stado object authorization are healthy; no recovery needed'
-      exit 0
+      exit 3
     fi
     ;;
   *'"object":false'*)

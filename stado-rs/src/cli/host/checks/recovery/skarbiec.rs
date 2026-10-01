@@ -2,33 +2,58 @@ use serde_json::{json, Value};
 
 use crate::cli::CmdError;
 
-/// Apply the declared Skarbiec audit-lock repair.
-pub(crate) async fn apply_skarbiec_audit_repair(target: &str) -> Result<Value, CmdError> {
+// 0 means the payload recovered; NOTHING_TO_RECOVER means the host was
+// healthy and nothing was changed; anything else is a refusal or a failure.
+// The verdict is read from the status, never from the sentence.
+use crate::providers::local::host_memory::repairs::NOTHING_TO_RECOVER;
+
+/// Run one recovery payload on `target` and answer what it did. `probes`
+/// prepends the health endpoints the target serves on, for a payload that
+/// reads them.
+async fn run_recovery(
+    target: &str,
+    payload: &str,
+    probes: bool,
+    what: &str,
+) -> Result<Value, CmdError> {
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let probes = target_health_probes(&resolved.name).await;
-    let script = format!(
-        "{probes}{}",
-        include_str!("../../../../host_payloads/recover-skarbiec-audit-lock.sh")
-    );
-    let recovered = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+    let script = match probes {
+        true => format!("{}{payload}", target_health_probes(&resolved.name).await),
+        false => payload.to_string(),
+    };
+    let ran = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    if !recovered.ok() {
-        return Err(CmdError::click(format!(
-            "{}: Skarbiec audit recovery failed: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
-        )));
-    }
-    let detail = recovered.stdout.trim();
+    let recovered = match ran.code {
+        0 => true,
+        NOTHING_TO_RECOVER => false,
+        _ => {
+            return Err(CmdError::click(format!(
+                "{}: Skarbiec {what} recovery failed: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(&ran, "remote command failed")
+            )))
+        }
+    };
     Ok(json!({
         "target": resolved.name,
-        "recovered": detail.contains("recovered"),
-        "detail": detail,
+        "recovered": recovered,
+        "detail": ran.stdout.trim(),
     }))
+}
+
+/// Apply the declared Skarbiec audit-lock repair.
+pub(crate) async fn apply_skarbiec_audit_repair(target: &str) -> Result<Value, CmdError> {
+    run_recovery(
+        target,
+        include_str!("../../../../host_payloads/recover-skarbiec-audit-lock.sh"),
+        true,
+        "audit",
+    )
+    .await
 }
 
 /// Shell prologue exporting the health endpoints TARGET itself serves on, read
@@ -73,56 +98,22 @@ async fn target_health_probes(target: &str) -> String {
 
 /// Apply the declared Skarbiec cryptographic-daemon repair.
 pub(crate) async fn apply_skarbiec_crypto_repair(target: &str) -> Result<Value, CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let recovered = crate::deploy::host_channel::run_script(
-        &resolved,
+    run_recovery(
+        target,
         include_str!("../../../../host_payloads/recover-skarbiec-crypto.sh"),
-        &runner,
+        false,
+        "cryptographic",
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !recovered.ok() {
-        return Err(CmdError::click(format!(
-            "{}: Skarbiec cryptographic recovery failed: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
-        )));
-    }
-    let detail = recovered.stdout.trim();
-    Ok(json!({
-        "target": resolved.name,
-        "recovered": detail.contains("recovered"),
-        "detail": detail,
-    }))
 }
 
 /// Apply the declared Skarbiec acquisition-state repair.
 pub(crate) async fn apply_skarbiec_acquisition_repair(target: &str) -> Result<Value, CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let recovered = crate::deploy::host_channel::run_script(
-        &resolved,
+    run_recovery(
+        target,
         include_str!("../../../../host_payloads/recover-skarbiec-acquisition-state.sh"),
-        &runner,
+        false,
+        "acquisition-state",
     )
     .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !recovered.ok() {
-        return Err(CmdError::click(format!(
-            "{}: Skarbiec acquisition-state recovery failed: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
-        )));
-    }
-    let detail = recovered.stdout.trim();
-    Ok(json!({
-        "target": resolved.name,
-        "recovered": detail.contains("recovered"),
-        "detail": detail,
-    }))
 }

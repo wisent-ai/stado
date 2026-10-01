@@ -29,16 +29,12 @@ pub async fn stop_recovery_unit(
         let output =
             host_channel::run_program(target, &["/bin/launchctl", "bootout", &qualified], runner)
                 .await?;
-        if !output.ok() {
+        if !output.ok() && !super::launchd_job_absent(output.code) {
             let detail = host_channel::last_error_line(&output, "launchctl returned no detail");
-            if !detail.contains("Could not find specified service")
-                && !detail.contains("No such process")
-            {
-                return Err(DeployError(format!(
-                    "{}: cannot stop recovery label {qualified}: {detail}",
-                    target.name
-                )));
-            }
+            return Err(DeployError(format!(
+                "{}: cannot stop recovery label {qualified}: {detail}",
+                target.name
+            )));
         }
     }
     Ok(RemoteReport {
@@ -115,17 +111,13 @@ pub async fn stop_service_with_password(
                 runner,
             )
             .await?;
-            if !output.ok() {
+            if !output.ok() && !super::launchd_job_absent(output.code) {
                 let detail =
                     host_channel::last_error_line(&output, "sudo or launchctl returned no detail");
-                if !detail.contains("Could not find specified service")
-                    && !detail.contains("No such process")
-                {
-                    return Err(DeployError(format!(
-                        "privileged launchd stop failed on {} for {} with exit {}: {}",
-                        target.name, job, output.code, detail
-                    )));
-                }
+                return Err(DeployError(format!(
+                    "privileged launchd stop failed on {} for {} with exit {}: {}",
+                    target.name, job, output.code, detail
+                )));
             }
         }
         let body = STOP_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);

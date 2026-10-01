@@ -87,23 +87,23 @@ impl<'a> MutationGate<'a> {
 
     /// Release the lease `admit` took. A lease that changed hands, or a
     /// release that failed, turns the repair's result into an error.
-    pub(super) async fn release<T>(
+    pub(super) async fn release<T, E: From<String>>(
         &self,
         subject: &str,
         lease: &PlacementLease,
-        result: Result<T, String>,
-    ) -> Result<T, String> {
+        result: Result<T, E>,
+    ) -> Result<T, E> {
         match crate::autonomy::storage::release_placement_lease(self.store, subject, &lease.token)
             .await
         {
             Ok(true) => result,
-            Ok(false) => Err(
+            Ok(false) => Err(E::from(
                 "service action finished, but mutation lease ownership changed before release"
                     .to_string(),
-            ),
-            Err(error) => Err(format!(
-                "service action finished, but mutation lease release failed: {error}"
             )),
+            Err(error) => Err(E::from(format!(
+                "service action finished, but mutation lease release failed: {error}"
+            ))),
         }
     }
 
