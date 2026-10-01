@@ -172,7 +172,7 @@ impl UnitState {
         };
         let home = crate::config_file::expand_tilde("~");
         let theirs = served_root::resolve(&|key| self.variable(key), &home);
-        (theirs.backend != served_root::LOCAL_BACKEND || theirs.root != ours).then(|| {
+        (!served_root::serves_local_root(&theirs.backend) || theirs.root != ours).then(|| {
             format!(
                 "it serves backend {:?} root {:?} by {}, this process serves {ours}",
                 theirs.backend, theirs.root, theirs.source

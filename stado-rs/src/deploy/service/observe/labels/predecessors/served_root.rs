@@ -10,9 +10,18 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-/// The local backend word a predecessor must resolve to for its root to be
-/// the one this process serves.
+/// The local backend word.
 pub(super) const LOCAL_BACKEND: &str = "local";
+
+/// Whether a process whose primary backend is `backend` serves the local
+/// root its config names through its API. `local` serves it directly; the
+/// client routes `stado` and `stado-object` address an object API, and the
+/// API that very process runs serves `storage.local.path`, which is how an
+/// operator's machine shares the fleet's one registry. Every other backend
+/// serves no local root.
+pub(super) fn serves_local_root(backend: &str) -> bool {
+    matches!(backend, LOCAL_BACKEND | "stado" | "stado-object")
+}
 
 /// What one unit resolves its primary store to.
 pub(super) struct ServedRoot {
