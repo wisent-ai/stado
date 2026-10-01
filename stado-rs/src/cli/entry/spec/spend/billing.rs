@@ -18,16 +18,11 @@ pub(crate) enum BillingCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Foreground billing watchdog: poll, evaluate credit balance AND
+    /// One billing watchdog pass: refresh, evaluate credit balance AND
     /// account health, and alert on transitions. Deliberately runnable
-    /// outside the cloud it monitors (see `cli/billing.rs` module docs).
+    /// outside the cloud it monitors; whatever schedule runs it (`stado
+    /// schedule create`, cron on another machine) is its cadence.
     Watch {
-        /// Poll interval as a duration string: 45s, 5m, 2h, 1d.
-        #[arg(long, value_parser = billing::parse_interval)]
-        interval: std::time::Duration,
-        /// Evaluate once and exit instead of looping.
-        #[arg(long)]
-        once: bool,
         #[arg(long)]
         json: bool,
     },

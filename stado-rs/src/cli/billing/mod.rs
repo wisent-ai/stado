@@ -6,23 +6,23 @@
 //! the very GCP project it is measuring.
 //!
 //! That co-location is the defect this command exists to fix, and it is
-//! deliberate that `billing watch` is a FOREGROUND process runnable from
-//! anywhere — a laptop, a host in `registry.json`, another cloud. A
-//! collector that dies with its provider cannot warn you about that
-//! provider. When the GCP billing account was shut off, the Cloud Function
-//! publishing `billing_health/credits.json` was shut off with it, so the
-//! blob simply stopped changing and nothing anywhere raised a sound. Run
-//! this OUTSIDE the cloud it monitors and the watchdog survives the outage
+//! deliberate that `billing watch` is one pass runnable from anywhere — a
+//! laptop, a host in `registry.json`, another cloud — on whatever schedule
+//! that machine keeps (`stado schedule create … 'stado billing watch'`, or
+//! its own cron). A collector that dies with its provider cannot warn you
+//! about that provider: when the GCP billing account was shut off, the Cloud
+//! Function publishing `billing_health/credits.json` was shut off with it.
+//! Scheduled OUTSIDE the cloud it monitors, the watchdog survives the outage
 //! it is watching for.
 //!
-//! Two independent conditions are evaluated every poll (see
+//! Two independent conditions are evaluated every pass (see
 //! `monitor/billing.rs::signals`): the credit/balance thresholds, which
 //! only exist while a provider section is `ok`, and account health, which
 //! is what speaks when a section is `no_credentials` or `error` and no
 //! balance figure exists at all. Alerts fire on the TRANSITION into a
 //! condition — the firing set lives in the blob, so a failure that stays
-//! broken does not re-alert every poll, and the de-duplication survives
-//! both a restart of this process and a concurrent coordinator tick.
+//! broken does not re-alert every pass, and the de-duplication holds across
+//! passes and a concurrent coordinator tick.
 //!
 //! Mail is wired in as advisory evidence: providers announce closure,
 //! failed payment and credit expiry by email days before the API starts
@@ -32,15 +32,12 @@
 //! missing.
 //!
 //! The components follow the verbs and the reads: `show` renders a
-//! published snapshot for a human, `watch` holds the foreground watchdog
-//! with its mail sweep and per-poll report, `interval` is the clap parser
-//! for `--interval`, and `format` is the scalar renderer the two output
+//! published snapshot for a human, `watch` holds the watchdog pass with its
+//! mail sweep and report, and `format` is the scalar renderer the two output
 //! paths share. Command dispatch, the `--json` emitter and `refresh` stay
-//! here, and `parse_interval` is re-exported so the clap spec resolves
-//! `billing::parse_interval` exactly as before.
+//! here.
 
 mod format;
-mod interval;
 mod show;
 mod watch;
 
@@ -54,7 +51,6 @@ use crate::queue::JobStorage;
 use show::print_human;
 use watch::watch;
 
-pub use interval::parse_interval;
 
 pub(crate) async fn dispatch(command: &BillingCommands) -> Result<(), CmdError> {
     let store = JobStorage::with_bucket(crate::config::bucket()).await?;
@@ -73,11 +69,7 @@ pub(crate) async fn dispatch(command: &BillingCommands) -> Result<(), CmdError> 
             let document = refresh(&store).await;
             emit(&document, *json)
         }
-        BillingCommands::Watch {
-            interval,
-            once,
-            json,
-        } => watch(&store, *interval, *once, *json).await,
+        BillingCommands::Watch { json } => watch(&store, *json).await,
     }
 }
 
