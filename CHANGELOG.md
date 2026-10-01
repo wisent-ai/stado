@@ -19,5 +19,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- `stado registry host` gains `edit` and `remove` beside `show` and `add`. `edit HOST [--ssh] [--kind] [--release-platform] [--json]` rewrites the fields `add` declares and writes nothing when they already hold those values. `remove HOST [--json]` retires a target and is refused, with every registry path listed, while another entry still names the host. Both write under the generation they read. Stado Desktop's Hosts inspector runs both from **Edit or remove registry declaration…**.
