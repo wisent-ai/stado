@@ -24,7 +24,9 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Schedule(sub) => match sub {
             ScheduleCommands::Create(args) => schedule::create(&args).await,
             ScheduleCommands::List { json } => schedule::list(json).await,
-            ScheduleCommands::Show { schedule_id, json } => schedule::show(&schedule_id, json).await,
+            ScheduleCommands::Show { schedule_id, json } => {
+                schedule::show(&schedule_id, json).await
+            }
             ScheduleCommands::Edit {
                 schedule_id,
                 command,

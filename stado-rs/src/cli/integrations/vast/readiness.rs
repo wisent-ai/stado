@@ -251,7 +251,7 @@ pub(super) async fn report(
     let report = assess(vault_host, !no_vault_check).await;
     let summary = report.verdict.summary(&report);
     if json {
-        super::echo(&serde_json::to_value(&report)?, true);
+        crate::cli::print_answer(&serde_json::to_value(&report)?, true)?;
     } else {
         print_text(&report, &summary);
     }
