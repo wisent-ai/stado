@@ -150,7 +150,9 @@ pub enum EnvironmentCommands {
         json: bool,
     },
     /// Host primitive used by `env set`/`env unset` on a systemd unit: set
-    /// (with --value-b64) or remove one `Environment=` key in the file.
+    /// (with --value-stdin, the base64 value on standard input) or remove one
+    /// `Environment=` key in the file. The value never appears in argv, where
+    /// every other process on the host could read it.
     #[command(name = "unit-env-local", hide = true)]
     UnitEnvLocal {
         #[arg(long)]
@@ -158,7 +160,7 @@ pub enum EnvironmentCommands {
         #[arg(long)]
         key_b64: String,
         #[arg(long)]
-        value_b64: Option<String>,
+        value_stdin: bool,
         #[arg(long)]
         uid: u32,
     },

@@ -54,7 +54,9 @@ if ! stado_unit_env_writer /bin/sh -c '[ -x "$1" ]' sh "$stado" 2>/dev/null; the
   stado="$staged/stado"
 fi
 written=0
-changed=$(stado_unit_env_writer "$stado" service unit-env-local --path-b64 '@ENV_PATH_B64@' --key-b64 '@KEY_B64@' @VALUE_ARG@ --uid "$service_uid" 2>&1) || written=$?
+# The value is piped by the shell's own printf builtin, so it is never an
+# argument of any process on the host.
+changed=$(printf '%s' '@VALUE_B64@' | stado_unit_env_writer "$stado" service unit-env-local --path-b64 '@ENV_PATH_B64@' --key-b64 '@KEY_B64@' @VALUE_ARG@ --uid "$service_uid" 2>&1) || written=$?
 [ -z "$staged" ] || /bin/rm -rf "$staged"
 if [ "$written" != 0 ]; then
   say '@ACTION@_failed' "$(printf '%s' "$changed" | tr '\t\r\n' '   ')"
@@ -73,8 +75,12 @@ say '@ACTION@' "$changed; systemd definition refreshed without restarting the un
         .replace("@KEY_B64@", &STANDARD.encode(key.as_bytes()))
         .replace(
             "@VALUE_ARG@",
+            if value.is_some() { "--value-stdin" } else { "" },
+        )
+        .replace(
+            "@VALUE_B64@",
             &value
-                .map(|value| format!("--value-b64 '{}'", STANDARD.encode(value.as_bytes())))
+                .map(|value| STANDARD.encode(value.as_bytes()))
                 .unwrap_or_default(),
         )
         .replace(

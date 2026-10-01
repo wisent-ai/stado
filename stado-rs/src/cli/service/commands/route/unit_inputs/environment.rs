@@ -94,9 +94,18 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
         EnvironmentCommands::UnitEnvLocal {
             path_b64,
             key_b64,
-            value_b64,
+            value_stdin,
             uid,
         } => {
+            // The value arrives base64-encoded on standard input, never in argv.
+            let value_b64 = if value_stdin {
+                let text = std::io::read_to_string(std::io::stdin()).map_err(|error| {
+                    CmdError::click(format!("cannot read the value from standard input: {error}"))
+                })?;
+                Some(text.trim().to_string())
+            } else {
+                None
+            };
             crate::deploy::service::unit_env_local(&path_b64, &key_b64, value_b64.as_deref(), uid);
             Ok(())
         }
