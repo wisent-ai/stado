@@ -182,12 +182,19 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         crate::skarbiec::GrantMode::RereadPerRequest,
     )
     .map_err(|error| DeployError(error.to_string()))?;
-    // Ask for the one field this needs. A broker that requires a named field
-    // refuses a whole-item read outright, and the refusal arrives as a bare
-    // 400 that reads like a malformed request rather than a version skew --
-    // which is how this call silently took every host command down with it.
-    let private_key = match client.read_field(&id, PRIVATE_KEY_FIELD).await {
-        Ok(value) => value,
+    // The fleet key is an item Stado minted under this name (`stado fleet key
+    // add|generate`), so it is read as named, never selected by role: no key
+    // item plays a role, and asking for one answered "no item carries
+    // stado:role:stado-ssh-<host>" for every host channel. Ask for the one
+    // field this needs: a broker that requires a named field refuses a
+    // whole-item read as a bare 400.
+    let private_key = match client.read_declared_string(&id, PRIVATE_KEY_FIELD).await {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Err(DeployError(format!(
+                "credential store has no SSH key item {id:?}; run `stado fleet key add` or `key generate`"
+            )))
+        }
         Err(error) if error.is_missing() => return Err(missing_key(&id, error)),
         // The vault did not answer. The key it last handed out for this host
         // still opens it; that is the channel that repairs a host whose vault
@@ -205,9 +212,7 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
             }
         },
     };
-    let private_key = private_key
-        .as_str()
-        .ok_or_else(|| DeployError(format!("credential item {id} has no private_key field")))?;
+    let private_key = private_key.as_str();
     hold_key(target, private_key);
     write_key(private_key)
 }

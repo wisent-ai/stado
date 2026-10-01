@@ -4,8 +4,6 @@
 
 use clap::Subcommand;
 
-use crate::cli::billing;
-
 #[derive(Subcommand)]
 pub(crate) enum BillingCommands {
     /// Read the last billing snapshot published by the coordinator.
