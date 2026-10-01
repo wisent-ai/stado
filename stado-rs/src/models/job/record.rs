@@ -45,12 +45,15 @@ fn default_executor() -> String {
 
 /// A named workload secret resolved by the agent immediately before spawn.
 /// Queue records contain only this reference; plaintext never enters storage.
-/// `role` is what the secret is for (`skarbiec::roles`), never an item id; a
-/// record stored before roles reads its old item id here and is refused at
-/// resolution as a role no item plays.
+/// `role` is what the secret is for (`skarbiec::roles`), never an item id.
+///
+/// The queue is read by every Stado in the fleet at once, and a reader from
+/// before roles requires the key `item`: a record written under `role` made
+/// every older reader refuse the whole queue (`missing field item`). So the
+/// value is written under the key every reader parses and read from either.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobSecretRef {
-    #[serde(alias = "item")]
+    #[serde(rename = "item", alias = "role")]
     pub role: String,
     pub field: String,
 }
