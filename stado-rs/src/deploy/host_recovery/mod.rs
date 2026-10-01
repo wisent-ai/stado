@@ -29,22 +29,18 @@ pub use run::{recover_host, recover_host_with_registry};
 /// Rust Stado cleanup binary. Recovery has no Python-package substitute.
 pub const WC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/stado"];
 
-/// The units every recovery pass reloads, with the plist path to use for a
-/// host that declares nothing of its own. Weles lifecycle is owned
+/// The unit every recovery pass reloads, with the plist path to use for a
+/// host that declares nothing of its own: the host's one Stado process, which
+/// carries host-health publication as a role. Weles lifecycle is owned
 /// exclusively by the authenticated Stado service API.
 ///
 /// The path here is the LAST RESORT, not the answer: [`plan_agents`] prefers
 /// what the target's `services` array declares. When the two spellings
-/// disagree — the registry adopting the beacon under
-/// `/Library/LaunchDaemons/` while this constant looks in
-/// `~/Library/LaunchAgents` — every pass reports `missing_plist` about a file
-/// the host has, prints `status: ok` underneath it, and the operator reading
-/// that report concludes the beacon is uninstalled. A declaration nothing
-/// checks against the world is exactly the defect this module's own report is
-/// supposed to catch.
+/// disagree, every pass would report `missing_plist` about a file the host
+/// has, so the declaration wins.
 pub const MANAGED_AGENTS: &[(&str, &str)] = &[(
-    "com.wisent.host-health-beacon",
-    "$HOME/Library/LaunchAgents/com.wisent.host-health-beacon.plist",
+    "com.wisent.stado",
+    "$HOME/Library/LaunchAgents/com.wisent.stado.plist",
 )];
 
 /// The pass reloaded the unit and launchd has a job under the label.

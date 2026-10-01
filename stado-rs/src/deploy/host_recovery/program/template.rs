@@ -61,21 +61,6 @@ recover_agent() {
     printf 'STADO_AGENT\\t%s\\tmissing_plist\\n' \"$label\"
     return
   fi
-  if [ \"$label\" = \"com.wisent.host-health-beacon\" ]; then
-    api_url=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_API_URL raw -o - \"$plist\" || true)
-    vault_url=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_SKARBIEC_URL raw -o - \"$plist\" || true)
-    consumer=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_SKARBIEC_CONSUMER raw -o - \"$plist\" || true)
-    grant_file=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE raw -o - \"$plist\" || true)
-    stado_bin=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_BIN raw -o - \"$plist\" || true)
-    if [ -z \"$api_url\" ] || [ -z \"$vault_url\" ] || [ -z \"$grant_file\" ] || [ -z \"$stado_bin\" ] || [ \"$consumer\" != \"stado-host-health-beacon\" ]; then
-      printf 'STADO_AGENT\\t%s\\tinvalid_scoped_health_config\\n' \"$label\"
-      return
-    fi
-    if /usr/bin/plutil -extract EnvironmentVariables.GOOGLE_APPLICATION_CREDENTIALS raw -o - \"$plist\" >/dev/null || /usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_API_TOKEN raw -o - \"$plist\" >/dev/null; then
-      printf 'STADO_AGENT\\t%s\\tforbidden_ambient_health_credential\\n' \"$label\"
-      return
-    fi
-  fi
   # One resolver, per unit, and every verb below addresses what it chose: this
   # pass used to pick a domain once, bootstrap into it, and report `restarted`
   # on the bootstrap's exit status without ever asking launchd whether a job

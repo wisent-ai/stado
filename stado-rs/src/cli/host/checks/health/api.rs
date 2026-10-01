@@ -135,12 +135,8 @@ pub(super) async fn host_health_api_token() -> Result<String, CmdError> {
     Ok(token)
 }
 
-/// The publisher unit this target actually runs.
-///
-/// Linux and macOS do not share a service namespace. Treating the launchd
-/// label as universal made a reachable Linux host's stale beacon diagnose as
-/// "no unit file" while systemd was recording the publisher's exit on every
-/// timer tick.
+/// The unit whose log carries this target's host-health publications: the
+/// host's one Stado process, under its launchd or systemd name.
 pub(in crate::cli::host) fn host_health_beacon_unit(target: &ComputeTarget) -> &'static str {
     if target.release_platform.starts_with("linux-") {
         HOST_HEALTH_BEACON_UNIT_LINUX

@@ -65,16 +65,13 @@ impl Verdict {
 
 /// How old a beacon may be before it counts as stale.
 ///
-/// Both beacon writers — `deploy/beacon/host_health_beacon.sh` under a systemd
-/// timer on Linux, the `com.wisent.host-health-beacon` LaunchAgent on
-/// macOS — publish on a one-minute tick, the same cadence as the per-slot
-/// heartbeat in [`crate::providers::local::slots`]. That heartbeat's
-/// tolerance for a one-minute writer is already a settled number in this
-/// crate ([`crate::config::HEARTBEAT_STALE_MINUTES`]), so it is reused
-/// here rather than inventing a second answer to the same question. The
-/// incident that motivated this command was five DAYS past this line, so
-/// the exact tolerance was never the difficult part — having any at all
-/// was.
+/// The beacon writer is the host's one Stado process
+/// (`stado serve --health-interval-seconds`), which publishes on the cadence
+/// its declaration gives, one minute in the fleet's declarations, the same
+/// cadence as the per-slot heartbeat in [`crate::providers::local::slots`].
+/// That heartbeat's tolerance for a one-minute writer is already a settled
+/// number in this crate ([`crate::config::HEARTBEAT_STALE_MINUTES`]), so it is
+/// reused here rather than inventing a second answer to the same question.
 pub fn beacon_stale_after() -> TimeDelta {
     TimeDelta::minutes(crate::config::HEARTBEAT_STALE_MINUTES)
 }

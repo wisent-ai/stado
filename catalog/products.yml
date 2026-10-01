@@ -505,6 +505,13 @@ products:
     # the process's --forward-destination role keeps; it holds no local listener.
     - unit: com.wisent.stado-host-health-forward
       flag: --forward-destination
+    # Host-health publication runs inside the one process
+    # (`stado serve --health-interval-seconds`); the launchd agent and the
+    # systemd timer that published it separately are its predecessors.
+    - unit: com.wisent.host-health-beacon
+      flag: --health-interval-seconds
+    - unit: host-health-beacon.service
+      flag: --health-interval-seconds
 - id: lem
   name: Lem
   status: active

@@ -11,8 +11,7 @@ pub(in crate::cli::registry) mod load;
 
 use crate::queue::capacity;
 
-/// The state a live launchd/systemd unit reports
-/// (`deploy/beacon/host_health_beacon_macos.sh`, `deploy/beacon/host_health_beacon.sh`).
+/// The state a live launchd/systemd unit reports.
 pub(in crate::cli::registry) const ACTIVE_STATE: &str = "active";
 /// A successful timer-triggered oneshot with an active native trigger.
 ///
@@ -21,12 +20,10 @@ pub(in crate::cli::registry) const ACTIVE_STATE: &str = "active";
 const SCHEDULED_STATE: &str = "scheduled";
 
 /// A beacon older than the fleet's liveness window is a divergence, not
-/// jitter: the beacon republishes on the cadence of the LaunchAgent
-/// `StartInterval` rendered by `deploy/install/install_macos_coordinator.sh`
-/// and the systemd unit in `deploy/units/host-health-beacon.service`, so
-/// [`capacity::CAPACITY_STALE_SECONDS`] is the same missed-publications
-/// window `queue::capacity` already applies to the other liveness signal.
-/// One window, both signals.
+/// jitter: the host's one Stado process republishes at its declared
+/// `--health-interval-seconds`, so [`capacity::CAPACITY_STALE_SECONDS`] is
+/// the same missed-publications window `queue::capacity` already applies to
+/// the other liveness signal. One window, both signals.
 pub(in crate::cli::registry) fn stale_after_seconds() -> i64 {
     capacity::CAPACITY_STALE_SECONDS as i64
 }
