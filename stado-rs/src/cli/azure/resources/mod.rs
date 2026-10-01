@@ -158,9 +158,8 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
         .iter()
         .filter(|role| role.get("ok").and_then(Value::as_bool) != Some(true))
         .count();
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
+    crate::cli::print_answer(
+        &json!({
             "operator": {
                 "account": operator.account,
                 "tenant_id": operator.tenant_id,
@@ -174,8 +173,9 @@ pub(in crate::cli::azure) async fn repair_rbac(args: RepairRbacArgs) -> Result<(
             "roles": roles,
             "failed_role_assignments": failed,
             "deny_assignments": deny_assignments
-        }))?
-    );
+        }),
+        args.json,
+    )?;
     if failed == 0 {
         Ok(())
     } else {

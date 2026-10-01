@@ -64,6 +64,9 @@ pub struct LoginArgs {
     /// Print the authorization URL without launching the system browser.
     #[arg(long)]
     no_open: bool,
+    /// Print the signed-in session as JSON instead of lines.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -89,6 +92,9 @@ pub struct RepairRbacArgs {
     /// Exact substring of a deny-assignment display name to remove when Azure permits it.
     #[arg(long)]
     remove_deny_name: Option<String>,
+    /// Print the repair report as JSON instead of lines.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]

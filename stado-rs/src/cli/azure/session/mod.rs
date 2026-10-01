@@ -29,7 +29,13 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
         &state,
         &challenge,
     )?;
-    println!("Azure login URL:\n{url}");
+    // With --json stdout carries only the answer, so the URL a person opens
+    // goes to stderr there.
+    if args.json {
+        eprintln!("Azure login URL:\n{url}");
+    } else {
+        println!("Azure login URL:\n{url}");
+    }
     if !args.no_open {
         open_system_browser(url.as_str())?;
     }
@@ -53,18 +59,17 @@ pub(in crate::cli::azure) async fn login(args: LoginArgs) -> Result<(), CmdError
             .and_then(Value::as_str)
             .unwrap_or(""),
     );
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
+    crate::cli::print_answer(
+        &json!({
             "authenticated": true,
             "account": claims.get("preferred_username").and_then(Value::as_str).unwrap_or(&args.account),
             "tenant_id": claims.get("tid").and_then(Value::as_str).unwrap_or(&args.tenant),
             "object_id": claims.get("oid").and_then(Value::as_str),
             "credential": args.item,
             "stored": "Skarbiec"
-        }))?
-    );
-    Ok(())
+        }),
+        args.json,
+    )
 }
 
 pub(in crate::cli::azure) fn jwt_claims(token: &str) -> Value {
