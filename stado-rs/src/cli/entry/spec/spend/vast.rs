@@ -17,13 +17,24 @@ pub(crate) enum VastCommands {
         /// Optional minimum interruptible-bid price floor.
         #[arg(long)]
         price_min_bid: Option<f64>,
+        /// Print Vast.ai's answer as JSON instead of text.
+        #[arg(long)]
+        json: bool,
     },
     /// Remove every offer for our Vast.ai machine, blocking new renters.
     /// Existing rentals are not terminated. Requires stado-vast/api_key in
     /// Skarbiec and a resolvable machine id.
-    Unlist,
+    Unlist {
+        /// Print Vast.ai's answer as JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show Vast.ai's current view of our machine (rentals, listed).
-    Status,
+    Status {
+        /// Print Vast.ai's answer as JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Whether this machine can earn on Vast.ai, and which provisioning step
     /// is missing when it cannot: the Skarbiec channel this host holds, the
     /// vault that would declare stado-vast, and Vast.ai's own answer to our
@@ -44,6 +55,9 @@ pub(crate) enum VastCommands {
         /// Logical Stado queue namespace (default wisent-compute).
         #[arg(long, default_value = "wisent-compute")]
         bucket: String,
+        /// Print the snapshot as JSON instead of text.
+        #[arg(long)]
+        json: bool,
     },
     /// Daemon: list on Vast.ai when wisent-compute is idle, unlist when work appears.
     #[command(name = "auto-list")]

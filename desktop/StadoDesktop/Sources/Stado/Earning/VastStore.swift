@@ -148,7 +148,7 @@ final class VastStore: ObservableObject {
     }
 
     nonisolated static func monitorArguments() -> [String] {
-        ["vast", "monitor"]
+        ["vast", "monitor", "--json"]
     }
 
     nonisolated static func previewArguments(idleWindowSeconds: Int, priceGPU: Double) -> [String] {
@@ -160,11 +160,11 @@ final class VastStore: ObservableObject {
     }
 
     nonisolated static func listArguments(priceGPU: Double) -> [String] {
-        ["vast", "list", "--price-gpu", String(priceGPU)]
+        ["vast", "list", "--price-gpu", String(priceGPU), "--json"]
     }
 
     nonisolated static func unlistArguments() -> [String] {
-        ["vast", "unlist"]
+        ["vast", "unlist", "--json"]
     }
 
     func refresh(vaultHost: String? = nil) async {
