@@ -3,11 +3,11 @@
 //! bundle is resolved against that file's own `LC_RPATH` entries, expanding
 //! `@executable_path` and `@loader_path` the way dyld does.
 //!
-//! Brama Desktop shipped on 2026-08-09 with `Sparkle.framework` inside the
-//! bundle and a main executable whose run paths reached nowhere near it, so
-//! dyld killed it before `main` on every machine while the signature, the
-//! framework and the version all checked out. brama-desktop carried this check
-//! as `release/bundle/verify-bundle-linkage.py`.
+//! A desktop app can ship with a framework inside the bundle and a main
+//! executable whose run paths reach nowhere near it, so dyld kills it
+//! before `main` on every machine while the signature, the framework and
+//! the version all check out. This check is that proof, run before the
+//! bundle is published.
 
 use std::fs;
 use std::io::Read;

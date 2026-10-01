@@ -159,7 +159,7 @@
     },
     {
       "name": "brama",
-      "why": "the gateway's own CLI; delivered to every machine an operator signs a provider into, because `brama subscription sync` is how a live grant on a workstation repairs a gateway whose credentials all died, and on 2026-09-20 that grant sat here for a day while the fleet served nothing",
+      "why": "the gateway's own CLI; delivered to every machine an operator signs a provider into, because `brama subscription sync` is how a live grant on a workstation repairs a gateway whose credentials all died, and without it such a grant sits on the workstation while the fleet serves nothing",
       "source": {
         "product": "brama",
         "member": "bin/brama"

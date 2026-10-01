@@ -203,9 +203,9 @@ pub fn verify(state: &state::ProductState) -> Result<()> {
 ///
 /// A rollback restores the bytes the install replaced, and those are
 /// whatever the host ran before, often a local build with no Developer ID.
-/// Requiring a stable identity of them refused the rollback AFTER it had
-/// placed the backup, on 2026-09-27, leaving Tama's receipt `rolling_back`
-/// with install and remove both refusing; `code_identities` records them.
+/// Requiring a stable identity of them refuses the rollback AFTER it has
+/// placed the backup, leaving a receipt `rolling_back` with install and
+/// remove both refusing; `code_identities` records them.
 pub fn verify_content(state: &state::ProductState) -> Result<()> {
     if let Some(receipt) = &state.release {
         super::super::plan::release::verify_files(receipt)?;

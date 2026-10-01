@@ -13,14 +13,14 @@
 //!
 //! Nothing in a built Stado used to say which tree produced it, so the only
 //! answer to "which build is this" was the semantic version -- and that does
-//! not identify content. On 2026-09-03 `0.14.6` named four materially
-//! different trees: the binary deployed on the fleet (missing the janitor
-//! workload-hold fix and the builder-claimability fix), two separate commits
-//! that each declare `version = "0.14.6"` in `Cargo.toml`, and a local build
-//! carrying a fourth combination. No release object existed for `0.14.6` to
-//! disambiguate them, only a coordinate claim. Establishing what the running
-//! control plane actually carried took reading string literals and mangled
-//! symbols out of the binary with `strings` and `nm`. This makes it a read.
+//! not identify content. One version string can name several materially
+//! different trees: the binary deployed on the fleet, separate commits that
+//! each declare that version in `Cargo.toml`, and a local build carrying
+//! yet another combination. With no release object for the version to
+//! disambiguate them, only a coordinate claim, establishing what the
+//! running control plane actually carries takes reading string literals and
+//! mangled symbols out of the binary with `strings` and `nm`. This makes it
+//! a read.
 //!
 //! A verified release pipeline commit is authoritative. The worker exports
 //! `WISENT_SOURCE_COMMIT` from the immutable request and also sets
