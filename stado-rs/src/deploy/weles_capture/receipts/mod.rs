@@ -7,7 +7,7 @@ mod record;
 use serde_json::{json, Value};
 
 use super::channel::Channel;
-use super::{Plan, CAPTURE_ACTION, REQUEST_DEADLINE};
+use super::{Plan, CAPTURE_ACTION};
 use crate::deploy::DeployError;
 
 pub use batch::{status, totals};
@@ -44,7 +44,6 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
                 "action": CAPTURE_ACTION,
                 "params": Value::Object(capture.params.clone()),
                 "creds": "redact",
-                "timeout_ms": REQUEST_DEADLINE.as_millis(),
             }))
             .await
             .and_then(|(payload, failure)| {

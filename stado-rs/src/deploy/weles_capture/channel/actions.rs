@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use super::super::{RUN_ROUTE, RUN_TIMEOUT};
+use super::super::RUN_ROUTE;
 use super::Channel;
 use crate::deploy::DeployError;
 
@@ -21,7 +21,6 @@ pub async fn run_action_payload(
                 "action": action,
                 "params": params,
                 "creds": "redact",
-                "timeout_ms": RUN_TIMEOUT.as_millis(),
             }),
         )
         .await
@@ -60,7 +59,6 @@ pub fn run_request(
         "action": action,
         "params": params,
         "creds": "redact",
-        "timeout_ms": RUN_TIMEOUT.as_millis(),
     });
     if let Some(account_id) = account_id {
         request["account_id"] = json!(account_id);

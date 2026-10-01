@@ -30,8 +30,6 @@
 //!   so the state report is that record plus one storage listing. It answers
 //!   the same on any control-plane host and never asks the Weles host.
 
-use std::time::Duration;
-
 use serde_json::{Map, Value};
 
 use super::DeployError;
@@ -78,22 +76,6 @@ const ADMISSION_TOKEN_FIELD: &str = "token";
 
 const RUN_ROUTE: &str = "/run";
 const MAX_STEPS: usize = 100;
-
-/// Weles executes browser trajectories synchronously. Planning and running one
-/// complete browser flow may legitimately take tens of minutes, so the worker
-/// gets the same 45-minute window as other host-side product executions. The
-/// HTTP client stays alive one minute longer so the worker can return its
-/// timeout envelope instead of racing the transport deadline.
-const RUN_TIMEOUT: Duration = Duration::from_secs(45 * 60);
-const REQUEST_DEADLINE: Duration = Duration::from_secs(46 * 60);
-
-/// How long the forward gets to start accepting connections. The ssh connect
-/// half is already bounded by the inherited `ConnectTimeout`, so this bounds
-/// only the local bind and the remote channel setup.
-const FORWARD_DEADLINE: Duration = Duration::from_secs(20);
-
-/// Gap between probes of the forwarded port.
-const FORWARD_POLL: Duration = Duration::from_millis(100);
 
 /// The five axes a landing-page capture belongs to. A sixth would be a change
 /// to the capture contract, so an unknown one is refused instead of forwarded

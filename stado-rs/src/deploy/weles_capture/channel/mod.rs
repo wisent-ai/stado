@@ -6,7 +6,7 @@ mod forward;
 mod requests;
 mod token;
 
-use super::{ADMISSION_SERVICE, REQUEST_DEADLINE};
+use super::ADMISSION_SERVICE;
 use crate::deploy::{host_channel, DeployError};
 use crate::targets::ComputeTarget;
 use forward::{await_forward, free_loopback_port};
@@ -89,14 +89,11 @@ pub struct Channel {
 /// Open the channel to a resolved admission endpoint.
 pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError> {
     let token = read_token().await;
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_DEADLINE)
-        .build()
-        .map_err(|error| {
-            DeployError(format!(
-                "cannot build the Weles admission API client: {error}"
-            ))
-        })?;
+    let client = reqwest::Client::builder().build().map_err(|error| {
+        DeployError(format!(
+            "cannot build the Weles admission API client: {error}"
+        ))
+    })?;
     if host_channel::target_is_this_host(&admission.target) {
         return Ok(Channel {
             forward: None,
@@ -113,6 +110,7 @@ pub async fn open_channel(admission: &Admission) -> Result<Channel, DeployError>
         .pop()
         .ok_or_else(|| DeployError("SSH channel has no destination".to_string()))?;
     argv.extend([
+        "-v".to_string(),
         "-N".to_string(),
         "-o".to_string(),
         "ExitOnForwardFailure=yes".to_string(),

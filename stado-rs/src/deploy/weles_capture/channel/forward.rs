@@ -1,10 +1,10 @@
-//! The loopback port the forward binds, the wait for it to accept, and ssh's
-//! own last word when it does not.
+//! The loopback port the forward binds, the line ssh prints once it listens
+//! there, and ssh's own last word when it never does.
 
 use std::net::TcpListener;
-use std::time::Instant;
 
-use super::super::{FORWARD_DEADLINE, FORWARD_POLL};
+use tokio::io::{AsyncBufReadExt, BufReader};
+
 use crate::deploy::DeployError;
 
 /// A loopback port the kernel says is free right now.
@@ -27,55 +27,46 @@ pub(super) fn free_loopback_port() -> Result<u16, DeployError> {
     Ok(port)
 }
 
-/// Wait until the forwarded port accepts a connection, or until ssh gives up
-/// and says why. A forward that is reported open before anything is listening
-/// is how a connection refused ends up looking like a dead API.
+/// Wait for ssh (run with `-v`) to say it listens on the forwarded port, or
+/// for its stderr to end, which means ssh exited without binding it. The rest
+/// of ssh's diagnostics keep being drained so a long-lived forward never
+/// blocks on a full pipe.
 pub(super) async fn await_forward(
     child: &mut tokio::process::Child,
     port: u16,
 ) -> Result<(), DeployError> {
-    let deadline = Instant::now() + FORWARD_DEADLINE;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| DeployError("the SSH forward's stderr was not captured".to_string()))?;
+    let mut lines = BufReader::new(stderr).lines();
+    let listening = format!("Local forwarding listening on 127.0.0.1 port {port}");
+    let mut last = String::new();
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| DeployError(format!("cannot read the SSH forward's state: {error}")))?
-        {
-            return Err(DeployError(format!(
-                "SSH forwarding to the Weles admission API exited ({status}): {}",
-                forward_error(child).await
-            )));
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                if line.contains(&listening) {
+                    tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
+                    return Ok(());
+                }
+                if !line.trim().is_empty() && !line.starts_with("debug") {
+                    last = line;
+                }
+            }
+            Ok(None) => {
+                let status = child.wait().await.map_err(|error| {
+                    DeployError(format!("cannot read the SSH forward's exit: {error}"))
+                })?;
+                return Err(DeployError(format!(
+                    "SSH forwarding to the Weles admission API exited ({status}) without listening on 127.0.0.1:{port}: {}",
+                    if last.is_empty() { "ssh said nothing" } else { &last }
+                )));
+            }
+            Err(error) => {
+                return Err(DeployError(format!(
+                    "cannot read the SSH forward's output: {error}"
+                )))
+            }
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(DeployError(format!(
-                "SSH forwarding to the Weles admission API did not accept a connection on 127.0.0.1:{port} within {} seconds",
-                FORWARD_DEADLINE.as_secs()
-            )));
-        }
-        tokio::time::sleep(FORWARD_POLL).await;
     }
-}
-
-/// ssh's own last word, verbatim — a refused key, a rejected bind, a host that
-/// is not answering. A paraphrase here would cost the operator the one line
-/// that names the cause.
-async fn forward_error(child: &mut tokio::process::Child) -> String {
-    let Some(mut stderr) = child.stderr.take() else {
-        return "ssh forwarding failed".to_string();
-    };
-    let mut detail = String::new();
-    use tokio::io::AsyncReadExt as _;
-    if stderr.read_to_string(&mut detail).await.is_err() {
-        return "ssh forwarding failed".to_string();
-    }
-    detail
-        .lines()
-        .rfind(|line| !line.trim().is_empty())
-        .unwrap_or("ssh forwarding failed")
-        .to_string()
 }
