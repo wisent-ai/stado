@@ -125,6 +125,13 @@ pub struct SubmitOptions {
     pub re_submission_of: String,
     pub yieldable: bool,
     pub yield_command: String,
+    /// Declared by submissions written before 2026-10-01, when a yielding
+    /// job was given a grace period of the submitter's choosing; nothing
+    /// reads it now. Accepted so a job already in the queue with it stays
+    /// readable: a record that cannot be read cannot be run, retired or even
+    /// marked failed, and stays `running` on its host for ever.
+    #[serde(default, rename = "yield_grace_seconds", skip_serializing)]
+    pub retired_yield_grace_seconds: Option<u64>,
     pub pinned_host: String,
     pub secret_env: BTreeMap<String, JobSecretRef>,
     pub input_artifacts: Map<String, Value>,
@@ -167,6 +174,7 @@ impl Default for SubmitOptions {
             re_submission_of: String::new(),
             yieldable: false,
             yield_command: String::new(),
+            retired_yield_grace_seconds: None,
             pinned_host: String::new(),
             secret_env: BTreeMap::new(),
             input_artifacts: Map::new(),
