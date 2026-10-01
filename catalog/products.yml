@@ -312,6 +312,7 @@ products:
     - com.wisent.compute.service.skarbiec-control-plane
     - com.wisent.always-on.skarbiec
     - com.wisent.compute.service.com.wisent.skarbiec-weles
+    - com.wisent.skarbiec-capability-broker
 - id: most
   name: Most
   status: active
@@ -1044,6 +1045,9 @@ products:
     # an incident by policy, so its work is retired, not moved into this
     # process.
     - com.wisent.transcript-lake-secret-scrub
+    # The daily Claude transcript sweep an earlier mirror installed; the
+    # stream owns every transcript now.
+    - ai.wisent.claude-transcripts-push
 - id: kronika
   name: Kronika
   status: active
