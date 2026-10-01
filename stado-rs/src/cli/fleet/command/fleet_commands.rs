@@ -56,10 +56,16 @@ pub enum FleetCommands {
         /// Declared fleet name.
         fleet: String,
     },
+    /// Take a registered machine out of its fleet; the machine stays in the
+    /// registry. A machine in no fleet is reported and left unchanged.
+    Unassign {
+        /// Registry target name (the machine).
+        target: String,
+    },
     /// Retire a declared fleet. Refused while any target still points at it:
     /// deleting the declaration under a member would leave the document
     /// naming a fleet that does not exist, and `fleet list` refuses exactly
-    /// that shape. Reassign the members first.
+    /// that shape. Reassign or unassign the members first.
     Delete {
         /// Declared fleet name.
         name: String,

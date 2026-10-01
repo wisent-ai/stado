@@ -48,3 +48,47 @@ pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
     println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
     Ok(true)
 }
+
+/// Clear one target's `fleet` field, so the machine belongs to no fleet.
+/// An unknown target is refused; a target in no fleet is left as it is.
+/// Returns the fleet it left, or `None` when it was in none. Pure.
+pub fn unassign_target(
+    document: &Value,
+    target_name: &str,
+) -> Result<(Value, Option<String>), String> {
+    let mut next = document.clone();
+    let targets = next
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+    let target = targets
+        .iter_mut()
+        .find(|target| target.get("name").and_then(Value::as_str) == Some(target_name))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| format!("target '{target_name}' not found in registry"))?;
+    let left = target
+        .remove("fleet")
+        .and_then(|fleet| fleet.as_str().map(str::to_string));
+    parse_fleets(&next)?;
+    Ok((next, left))
+}
+
+/// `stado fleet unassign TARGET` — take a registered machine out of its fleet.
+pub async fn unassign(target: &str) -> Result<bool, String> {
+    let left = std::sync::Mutex::new(None);
+    let generation = commit_document(|document| {
+        let (next, fleet) =
+            unassign_target(document, target).map_err(crate::cli::CmdError::click)?;
+        *left.lock().expect("unassign result lock") = fleet;
+        Ok(next)
+    })
+    .await
+    .map_err(|exc| exc.to_string())?;
+    match left.into_inner().expect("unassign result lock") {
+        Some(fleet) => println!(
+            "target '{target}' removed from fleet '{fleet}' (generation {generation})"
+        ),
+        None => println!("target '{target}' was in no fleet; nothing changed"),
+    }
+    Ok(true)
+}

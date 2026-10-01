@@ -16,7 +16,7 @@ pub fn delete_fleet(document: &Value, name: &str) -> Result<Value, String> {
         find_fleet(&fleets, name).ok_or_else(|| format!("fleet '{name}' is not declared"))?;
     if !fleet.members.is_empty() {
         return Err(format!(
-            "fleet '{name}' still has {} member(s): {}; reassign them first",
+            "fleet '{name}' still has {} member(s): {}; move each with `stado fleet assign TARGET OTHER_FLEET` or take it out with `stado fleet unassign TARGET` first",
             fleet.members.len(),
             fleet.members.join(", ")
         ));

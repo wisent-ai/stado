@@ -36,6 +36,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         FleetCommands::Status { name } => fleets::status(&name).await,
         FleetCommands::Create { name, notes } => ops::create(&name, &notes).await,
         FleetCommands::Assign { target, fleet } => ops::assign(&target, &fleet).await,
+        FleetCommands::Unassign { target } => ops::unassign(&target).await,
         FleetCommands::Delete { name } => ops::delete(&name).await,
         FleetCommands::Enroll {
             name,
