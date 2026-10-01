@@ -49,9 +49,9 @@ pub(crate) async fn publish_and_admit(
     // was the new binary or one of the older ones the same host was running
     // — and the question had to be answered by reading process ages out of
     // `ps`, on a machine whose pid counter had wrapped.
-    // The version alone did not finish the job. `0.14.6` named four
-    // different trees of this crate on 2026-09-03, and a host publishing
-    // `agent_version: "0.14.6"` still left "which build is this" to be
+    // The version alone did not finish the job. One version string can name
+    // several different trees of this crate, and a host publishing only
+    // `agent_version` still leaves "which build is this" to be
     // answered by reading symbols out of the binary. The identity carries
     // the revision, and the revision is published beside it so a reader
     // does not have to parse the sentence to get at it.

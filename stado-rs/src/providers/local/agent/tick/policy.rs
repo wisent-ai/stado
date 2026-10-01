@@ -64,11 +64,11 @@ pub(super) async fn disk_policy(
     // on each side of the move. With no job running there is nothing to
     // split, and the agent replaces its own process image with the same
     // binary and argv, the way a completed self-update does, so the new
-    // root takes on the next start. On 2026-09-18 the RTX host declared
-    // `/mnt/wd16tb/stado` on a 16 TiB volume and its agent kept measuring
-    // and writing the 33 GiB root volume for a day, logging every tick that
-    // the declaration would take "when its unit restarts it" — and nothing
-    // in the fleet restarts an agent's unit for a registry change.
+    // root takes on the next start. Otherwise a host that declares a work
+    // root on a large volume keeps measuring and writing the small root
+    // volume indefinitely, logging every tick that the declaration will
+    // take "when its unit restarts it" — and nothing in the fleet restarts
+    // an agent's unit for a registry change.
     if let Some(root) = registry_target
         .as_ref()
         .and_then(|target| target.work_root.as_deref())

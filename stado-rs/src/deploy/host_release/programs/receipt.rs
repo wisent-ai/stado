@@ -5,11 +5,11 @@
 ///
 /// `converge` can already prove WHETHER these bytes were delivered, by
 /// comparing the installed file against this staged copy. It could not say
-/// WHO, and on 2026-08-31 that is exactly where an investigation stopped: a
-/// `stado` answering 0.13.19 appeared in `$HOME/.stado/bin` on the always-on
-/// Mac at 21:25Z, the release channel was ruled out, both operator sessions
-/// were ruled out, the repository's automation was ruled out, and nothing on
-/// the host recorded who had installed it.
+/// WHO, and that is exactly where an investigation stops: a binary at an
+/// unexpected version appears in `$HOME/.stado/bin` on a host, the release
+/// channel is ruled out, every operator session is ruled out, the
+/// repository's automation is ruled out, and nothing on the host records
+/// who installed it.
 ///
 /// It lives in the version/platform directory rather than beside the active
 /// binary, so a receipt cannot outlive the artefact it describes or be read

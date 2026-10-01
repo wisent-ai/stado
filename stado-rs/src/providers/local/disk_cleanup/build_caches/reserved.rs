@@ -32,15 +32,14 @@ use crate::targets::DiskCleanupPolicy;
 ///
 /// The failure that matters is not the lost bytes, it is the timing. Deleting
 /// it under a running build removes source files that build scripts hold
-/// absolute paths to. On 2026-08-31 at 19:15Z the `stado-v0.13.14` train's
-/// `Build native Rust control plane` step died exactly that way -
-/// `aws-lc-sys` reporting `no such file or directory` for two vendored C files
-/// inside this directory, then `ranlib` unable to open the archive it had just
-/// written - on the one runner that publishes every release. That extraction
-/// verified complete afterwards (2010 of 2010 files), so that particular
-/// failure was transient rather than this cleaner's work; the point is that
-/// this cleaner was entitled to do it, on that host, in `enforce` mode, with
-/// its root defaulting to `$HOME`.
+/// absolute paths to: a release train's native build step dies exactly that
+/// way - the crypto crate's build script reporting `no such file or
+/// directory` for vendored C files inside this directory, then `ranlib`
+/// unable to open the archive it had just written - on the one runner that
+/// publishes every release. Whether or not a particular such failure is
+/// this cleaner's work, the point is that this cleaner is entitled to do
+/// it, on that host, in `enforce` mode, with its root defaulting to
+/// `$HOME`.
 ///
 /// `CARGO_HOME` is honoured because a build host may move it off the boot
 /// volume, which is exactly the kind of host that arms a disk janitor.
@@ -90,8 +89,8 @@ pub(super) fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<Pat
 /// which cost a privacy prompt or a network download to look inside.
 ///
 /// `$HOME` is this cleaner's default root, so the walk reaches `~/Pictures`
-/// like any other directory — and on 2026-09-09 it did, from the always-on
-/// agent: `tccd` recorded `kTCCServicePhotos` requests attributed to
+/// like any other directory — and from an always-on agent it does: `tccd`
+/// records `kTCCServicePhotos` requests attributed to
 /// `~/.stado/bin/stado` while the pass was walking. macOS answers such a
 /// request by asking the person at the keyboard, so an unattended cleaner
 /// scanning a photo library produces a dialog nobody asked for, and produces

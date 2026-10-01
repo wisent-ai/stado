@@ -205,9 +205,9 @@ pub(super) fn scan_build_caches(
 
 /// The declared root could not be opened, said so that an operator can act.
 ///
-/// A bare `PermissionError (Operation not permitted (os error 1))` is what
-/// this host recorded on 2026-09-20 with `scanned_items: 0` beside it, and it
-/// names neither the root nor the reason. On macOS that errno is the one the
+/// A bare `PermissionError (Operation not permitted (os error 1))` with
+/// `scanned_items: 0` beside it names neither the root nor the reason. On
+/// macOS that errno is the one the
 /// operating system returns for a folder behind its own privacy consent —
 /// `~/Documents` among them — which is a different repair from a mode bit:
 /// the process needs Full Disk Access, or the declaration needs a root the

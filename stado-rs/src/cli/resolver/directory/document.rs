@@ -20,15 +20,15 @@ pub async fn canonical_document(local_target: &str) -> Result<Value, CmdError> {
 ///
 /// The release agent publishes every product's stable bind, and it learns
 /// which ports those are from `release_control` in the canonical registry,
-/// which it reads through the object API. On 2026-09-03 the object API's
-/// object boundary closed — a namespace was declared on the host without the
-/// object verifier's grant covering its item — and every registry read
-/// answered `503 object authorization unavailable`. The agent had no fallback,
-/// so it exited on that 503 every fifteen seconds, published nothing, and the
-/// stable binds of Skarbiec and Brama stayed unbound: `brama.wisent.com/health`
-/// answered 502 for hours, and the object API needs Skarbiec's stable bind to
-/// open the very boundary that was closed. A restart of the agent was all it
-/// took to enter that loop and nothing in the product could leave it.
+/// which it reads through the object API. When the object API's object
+/// boundary closes — a namespace declared on the host without the object
+/// verifier's grant covering its item — every registry read answers `503
+/// object authorization unavailable`. An agent with no fallback exits on
+/// that 503 every tick, publishes nothing, and the stable binds of the
+/// vault and the gateway stay unbound: the gateway's public health answers
+/// 502 for hours, and the object API needs the vault's stable bind to open
+/// the very boundary that was closed. A restart of the agent is all it
+/// takes to enter that loop and nothing in the product can leave it.
 ///
 /// The resolver already had exactly this fallback and exactly this outage
 /// could not touch it — see [`load_startup`], which bootstraps routing from

@@ -15,12 +15,11 @@ pub(in crate::doctor) const AGENT_SKARBIEC_REMEDY: &str =
 /// Whether this host's queue agent can reach the broker it is configured to
 /// read workload secrets through.
 ///
-/// Nothing reported this. On 2026-09-05 this laptop's `agent.skarbiec.url`
-/// was `http://127.0.0.1:19096` with nothing listening — three brokers were
-/// running, on 9877, 8799 and 8787, none of them that one — and the only
-/// symptom was a `preferences` release job dying after it had been claimed:
-/// `cannot resolve job … secret GITHUB_TOKEN: error sending request for url
-/// (http://127.0.0.1:19096/v1/items/read)`. A misconfiguration that only
+/// Nothing reported this: a host's `agent.skarbiec.url` can name a loopback
+/// port with nothing listening — several brokers running, none of them on
+/// that one — and the only symptom is another product's release job dying
+/// after it has been claimed: `cannot resolve job … secret GITHUB_TOKEN:
+/// error sending request for url (…/v1/items/read)`. A misconfiguration that only
 /// surfaces as another product's failed build is one an operator cannot find.
 ///
 /// Metadata only: `list_items` returns ids, never values.

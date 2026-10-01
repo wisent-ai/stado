@@ -138,8 +138,8 @@ pub async fn run_attached(
         // bare made the account's login shell the interpreter, and this is the
         // only channel that did: every other one sends `/bin/bash -s` or
         // `/bin/sh -c` and keeps the script off the login shell's grammar.
-        // On 2026-09-08 a real run against a zsh account reported
-        // `exit_code: 1, status: failed` for an install that succeeded --
+        // A run against a zsh account reports `exit_code: 1, status:
+        // failed` for an install that succeeded --
         // `status` is read-only in zsh, so the wrapper's own bookkeeping
         // assignment failed on a line the program never reached. Any shell
         // whose reserved names differ from bash's had the same power over

@@ -1,10 +1,10 @@
 //! Chromium code-sign clone cleanup: eviction of the per-launch bundle clones
 //! macOS leaves in this account's temporary container.
 //!
-//! NO Python original. Measured on `control-host` on 2026-08-18: free
-//! space had fallen to about 2 GiB against the registry's 55 GiB policy, its
-//! queue agent published `disk_pressure_unresolved`, admission failed closed,
-//! and every release build queued behind that host for hours. Three consumers
+//! NO Python original. The shape it exists for, measured on a control host:
+//! free space falls to a couple of GiB against the registry's policy, its
+//! queue agent publishes `disk_pressure_unresolved`, admission fails closed,
+//! and every release build queues behind that host for hours. Three consumers
 //! held the space. Two of them are now stages of
 //! [`crate::deploy::host_reclaim`] — `$HOME/.stado/build-work` at about 21 GiB
 //! and the legacy delivered worker trees at about 9 GiB. The third had no

@@ -3,11 +3,11 @@ use crate::monitor::host_silence;
 /// Publish one `authority_unreachable` refusal about the authority host.
 ///
 /// The evidence belongs to the AUTHORITY, not to the machine that noticed.
-/// When the Mac mini dropped off the tailnet on 2026-08-19 this read failed
-/// on the laptop with "registry authority exited with ...: ssh: connect to
-/// host ... Operation timed out", and that sentence was the clearest
-/// statement anything in the fleet made about the Mac mini being gone. It
-/// went to `~/.stado/logs/stado-resolver.err` and nowhere else. It now also
+/// When the authority host drops off the tailnet this read fails on the
+/// reader with "registry authority exited with ...: ssh: connect to host
+/// ... Operation timed out", and that sentence is the clearest statement
+/// anything in the fleet makes about the authority being gone. It used to
+/// go to the resolver's error log and nowhere else. It now also
 /// lands in `reader_refusals/<authority>/`, where `stado host link
 /// <authority>` will find it — verbatim, because a rephrased sentence is a
 /// second vocabulary for one condition and sends an operator grepping for a
