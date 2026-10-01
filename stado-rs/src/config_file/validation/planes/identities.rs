@@ -25,6 +25,8 @@ const RETIRED_KEYS: &[&str] = &[
     "backend.messaging.skarbiec.token_file",
     "backend.messaging.skarbiec.token",
     "agent.skarbiec.token",
+    // Replaced by agent.skarbiec.roles: secrets are asked for by role.
+    "agent.skarbiec.items",
 ];
 
 const RETIRED_AGENT_CONSUMERS: &[&str] = &[
@@ -40,7 +42,9 @@ pub(in crate::config_file::validation) fn retired_identities(
     for path in RETIRED_SECTIONS.iter().chain(RETIRED_KEYS) {
         if get_in(root, path).is_some() {
             problems.push(format!(
-                "{path} is retired; remove it and configure Stado's secrets.skarbiec identity"
+                "{path} is retired; `stado config migrate-identities` removes it (declare \
+                 workload roles with `stado release catalog enroll`, which writes \
+                 agent.skarbiec.roles)"
             ));
         }
     }

@@ -23,6 +23,8 @@ const RETIRED: &[&str] = &[
     "backend.messaging.skarbiec.token_file",
     "backend.messaging.skarbiec.token",
     "agent.skarbiec.token",
+    // Replaced by agent.skarbiec.roles: secrets are asked for by role.
+    "agent.skarbiec.items",
 ];
 
 fn remove(root: &mut Map<String, Value>, path: &str) -> Option<Value> {
@@ -50,10 +52,10 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             removed.push(*key);
         }
     }
-    // A product is its own identity: its publisher and deployer entries name
-    // the item called after the product, and a deployer no longer carries a
-    // consumer of its own. `stado credentials item rename` moves the vault
-    // items to the same names.
+    // A product is its own identity: its publisher entry names the role
+    // `<product>-release-publisher` and its deployer entry the product's role,
+    // and a deployer no longer carries a consumer of its own. The vault
+    // decides which item plays each role.
     for (section, entries) in [("release_api", "publishers"), ("service_api", "deployers")] {
         let Some(table) = root
             .get_mut(section)
@@ -66,9 +68,13 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             let Some(entry) = entry.as_object_mut() else {
                 continue;
             };
-            if entry.get("item").and_then(Value::as_str) != Some(product.as_str()) {
-                entry.insert("item".into(), Value::from(product.as_str()));
-                removed.push("a role-named product item");
+            let role = match section {
+                "release_api" => format!("{product}-release-publisher"),
+                _ => product.clone(),
+            };
+            if entry.get("item").and_then(Value::as_str) != Some(role.as_str()) {
+                entry.insert("item".into(), Value::from(role));
+                removed.push("a product entry not naming its role");
             }
             if entry.remove("consumer").is_some() {
                 removed.push("a product deployer consumer");
