@@ -29,7 +29,7 @@ extension MachineEnrollmentStore {
             ingress = status
             entranceReadProblem = nil
             guard enrollmentURLConfigured == nil else { return }
-            let config = try await run(["config", "show"])
+            let config = try await run(["config", "show", "--json"])
             guard config.ok else {
                 entranceReadProblem = "stado config show refused: \(config.message)"
                 return

@@ -38,6 +38,10 @@ pub(crate) enum PlatformCommands {
         key: Option<String>,
         /// `set`: JSON value; a bare word is stored as a string.
         value: Option<String>,
+        /// `show`: print the file and every resolved key as JSON instead of
+        /// `key: value` lines.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Publish and consume immutable, versioned artifacts.

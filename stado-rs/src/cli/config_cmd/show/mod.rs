@@ -40,19 +40,25 @@ fn resolved() -> Map<String, Value> {
     resolved
 }
 
-/// `config show`: the resolved values for the operator-facing keys.
-pub(super) fn show() -> Result<(), CmdError> {
+/// `config show [--json]`: the config file and the resolved value of every
+/// operator-facing key, as `key: value` lines or as one JSON document.
+pub(super) fn show(json: bool) -> Result<(), CmdError> {
     let where_ = config_file::config_path().map_err(|exc| CmdError::click(exc.to_string()))?;
-    let mut out = Map::new();
-    out.insert(
-        "file".into(),
-        where_
-            .map(|p| Value::from(p.display().to_string()))
-            .unwrap_or(Value::Null),
-    );
-    out.insert("resolved".into(), Value::Object(resolved()));
-    println!("{}", serde_json::to_string_pretty(&Value::Object(out))?);
-    Ok(())
+    let file = where_
+        .map(|p| Value::from(p.display().to_string()))
+        .unwrap_or(Value::Null);
+    let resolved = resolved();
+    if json {
+        let mut out = Map::new();
+        out.insert("file".into(), file);
+        out.insert("resolved".into(), Value::Object(resolved));
+        println!("{}", serde_json::to_string_pretty(&Value::Object(out))?);
+        return Ok(());
+    }
+    let mut lines = Map::new();
+    lines.insert("file".into(), file);
+    lines.extend(resolved);
+    crate::cli::print_answer(&Value::Object(lines), false)
 }
 
 /// `config get KEY`: one resolved value as bare text (a list or object as

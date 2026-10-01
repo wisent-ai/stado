@@ -16,34 +16,34 @@ use document::{init, migrate_identities, validate};
 use keys::{set, unset};
 use show::{get, show};
 
-pub fn run(sub: &str, key: Option<&str>, value: Option<&str>) -> Result<(), CmdError> {
+pub fn run(sub: &str, key: Option<&str>, value: Option<&str>, json: bool) -> Result<(), CmdError> {
     match sub {
         "init" => init(),
         "migrate-identities" => migrate_identities(),
         "validate" => validate(),
-        "show" => show(),
+        "show" => show(json),
         "get" => match key {
             Some(key) => get(key),
-            None => Err(CmdError::click(
+            None => Err(CmdError::usage(
                 "config get needs a resolved key, e.g. stado config get agent_skarbiec_url",
             )),
         },
         "set" => match (key, value) {
             (Some(key), Some(value)) => set(key, value),
-            _ => Err(CmdError::click(
+            _ => Err(CmdError::usage(
                 "config set needs a dotted key and a value, e.g. \
                  stado config set alerts.channels '[\"resend\"]'",
             )),
         },
         "unset" => match key {
             Some(key) => unset(key),
-            None => Err(CmdError::click(
+            None => Err(CmdError::usage(
                 "config unset needs a dotted key, e.g. \
                  stado config unset storage.stado.ca_file",
             )),
         },
-        other => Err(CmdError::click(format!(
-            "unknown config subcommand: {other} (show|validate|init|migrate-identities|set|unset)"
+        other => Err(CmdError::usage(format!(
+            "unknown config subcommand: {other} (show|get|validate|init|migrate-identities|set|unset)"
         ))),
     }
 }

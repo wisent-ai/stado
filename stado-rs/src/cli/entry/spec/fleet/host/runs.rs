@@ -158,7 +158,12 @@ pub(crate) enum HostRunCommands {
         json: bool,
     },
     /// Read TARGET's effective Stado configuration through its fleet channel.
-    ConfigShow { target: String },
+    ConfigShow {
+        target: String,
+        /// Print the host's configuration document as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Persist one dotted Stado configuration value on TARGET.
     ConfigSet {
         target: String,

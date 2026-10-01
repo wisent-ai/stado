@@ -21,13 +21,31 @@ pub(crate) enum RemoteConfigAction<'a> {
 pub(super) async fn remote_config(
     target: &str,
     action: RemoteConfigAction<'_>,
+    json: bool,
 ) -> Result<(), CmdError> {
     let target = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let stdout = remote_config_output(&target, action, &crate::deploy::production_runner()).await?;
-    print!("{stdout}");
-    Ok(())
+    if json {
+        print!("{stdout}");
+        return Ok(());
+    }
+    // The host's own `config show --json` document, as the same
+    // `key: value` lines a local `config show` prints.
+    let document: serde_json::Value = serde_json::from_str(&stdout).map_err(|error| {
+        CmdError::click(format!(
+            "{} answered `config show --json` with something that is not JSON ({error}): {}",
+            target.name,
+            stdout.trim()
+        ))
+    })?;
+    let mut lines = serde_json::Map::new();
+    lines.insert("file".into(), document["file"].clone());
+    if let Some(resolved) = document["resolved"].as_object() {
+        lines.extend(resolved.clone());
+    }
+    crate::cli::print_answer(&serde_json::Value::Object(lines), false)
 }
 
 /// One Stado configuration action on a fleet host — the effective configuration its
@@ -53,12 +71,12 @@ pub(crate) async fn remote_config_output(
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
     let action = match action {
-        RemoteConfigAction::Show => "\"$binary\" config show".to_string(),
+        RemoteConfigAction::Show => "\"$binary\" config show --json".to_string(),
         RemoteConfigAction::Set { key, value } => format!(
             "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
              \"$binary\" config set \"$key\" \"$value\"\n\
-             \"$binary\" config show",
+             \"$binary\" config show --json",
             STANDARD.encode(key.as_bytes()),
             STANDARD.encode(value.as_bytes())
         ),

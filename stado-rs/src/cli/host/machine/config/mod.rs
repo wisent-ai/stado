@@ -15,9 +15,10 @@ use crate::cli::host::machine::config::remote::{
 };
 
 /// Read the effective configuration on a fleet host using the same installed
-/// Stado binary and config path its services consume.
-pub async fn config_show(target: &str) -> Result<(), CmdError> {
-    remote_config(target, RemoteConfigAction::Show).await
+/// Stado binary and config path its services consume: `key: value` lines, or
+/// the host's own JSON document with `--json`.
+pub async fn config_show(target: &str, json: bool) -> Result<(), CmdError> {
+    remote_config(target, RemoteConfigAction::Show, json).await
 }
 
 /// Persist one configuration field on a fleet host. Values travel base64
@@ -97,7 +98,7 @@ pub async fn config_unset(
         "{}\
          key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
          \"$binary\" config unset \"$key\"\n\
-         \"$binary\" config show\n",
+         \"$binary\" config show --json\n",
         remote::CONFIG_SCRIPT_PREFIX,
         STANDARD.encode(key.as_bytes())
     );

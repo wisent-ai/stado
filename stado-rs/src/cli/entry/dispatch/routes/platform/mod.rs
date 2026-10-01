@@ -18,8 +18,8 @@ mod registries;
 pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> {
     match command {
         PlatformCommands::Profiles { name } => profiles::run(name.as_deref()),
-        PlatformCommands::Config { sub, key, value } => {
-            config_cmd::run(&sub, key.as_deref(), value.as_deref())
+        PlatformCommands::Config { sub, key, value, json } => {
+            config_cmd::run(&sub, key.as_deref(), value.as_deref(), json)
         }
         PlatformCommands::Schedule(sub) => match sub {
             ScheduleCommands::Create(args) => schedule::create(&args).await,
