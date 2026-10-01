@@ -182,9 +182,9 @@ impl RegistryStore {
 /// gsutil install (cryptography/pyOpenSSL version mismatch breaking
 /// `module 'OpenSSL.crypto' has no attribute 'sign'`) gsutil exited
 /// non-zero and the agent crashed with 'hostname X not in registry' even
-/// though the registry WAS in GCS — confirmed live on 2026-05-08, when the
-/// workstation's gsutil broke after a pip upgrade and knocked the agent
-/// offline. The GCS SDK was already a hard dependency; using it directly
+/// though the registry WAS in GCS — a workstation's gsutil breaking after a
+/// pip upgrade knocks the agent offline. The GCS SDK was already a hard
+/// dependency; using it directly
 /// removes the gsutil binary as a single point of failure.
 async fn download_registry_blob() -> Result<Option<VersionedText>, String> {
     // One seam for both directions: [`RegistryStore`] resolves the same

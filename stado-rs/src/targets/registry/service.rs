@@ -29,9 +29,9 @@ pub struct Service {
     /// One meaning only, now. This comment used to say that a host carrying
     /// an endpoint is not thereby serving, which reads the map as "where each
     /// host would serve", while `publish` handed the same string out as a
-    /// number to dial. Both readings survived the type, so on 2026-08-11
-    /// `service verify` reported `brama` unreachable on a laptop that merely
-    /// stands by for it and the entry had to be silenced by hand. The other
+    /// number to dial. Both readings survived the type, so `service verify`
+    /// reported a gateway unreachable on a laptop that merely stands by for
+    /// it and the entry had to be silenced by hand. The other
     /// meaning now has [`Service::standby`] and this one has nothing else to
     /// mean.
     #[serde(default)]

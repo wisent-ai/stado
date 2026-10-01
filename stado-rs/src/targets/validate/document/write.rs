@@ -4,9 +4,9 @@ use crate::targets::*;
 /// `inference` failure to writes that actually touch `inference`.
 ///
 /// The whole document used to be refused for any failure anywhere, and that
-/// blast radius was the defect. On 2026-08-31 a single field —
-/// `inference.routes["wisent-backend/evaluation"]` set to `"best"` while
-/// `inference.deployments` was empty — froze every write in every domain:
+/// blast radius was the defect: a single field — an `inference` route set
+/// to `"best"` while `inference.deployments` is empty — freezes every write
+/// in every domain:
 /// `declare-version`, `promote-version`, `service adopt`, a `disk_cleanup`
 /// edit, all of it. A release could not be declared for a host because of a
 /// model route it never touches.

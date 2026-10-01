@@ -76,10 +76,10 @@ pub async fn fetch_registry_or_last_good_detail(
 }
 
 /// The last-known-good copy for a reader whose authority read already failed
-/// with `cause`, or gave up on it: a diagnostic whose read budget ran out
-/// before the authority answered (`stado host gates` on 2026-09-27, while the
-/// object API answered 503 after longer than the budget) still has this copy
-/// to read, and without it reported every section as never read.
+/// with `cause`, or gave up on it: a diagnostic whose read budget runs out
+/// before the authority answers (an object API answering 503 after longer
+/// than the budget) still has this copy to read, and without it reports
+/// every section as never read.
 pub fn last_good_after(cause: &str) -> Option<(Registry, Option<RegistryCopyNotice>)> {
     let (registry, meta, age) = load_last_good().filter(|_| !store_is_local_filesystem())?;
     let mut notice = format!(

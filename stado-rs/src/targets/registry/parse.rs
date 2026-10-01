@@ -43,9 +43,9 @@ pub enum RegistryError {
 ///
 /// [`Registry::extra`] is load-bearing, not cosmetic. A registry write
 /// replaces the WHOLE document, so a writer built from a checkout that does
-/// not model a key deletes it for everyone: on 2026-08-04 the canonical
-/// document lost `channels`, `enrollment` and `fleets` exactly that way,
-/// between one read and the next. Round-tripping the unmodelled keys
+/// not model a key deletes it for everyone: a canonical document loses
+/// whole top-level blocks exactly that way, between one read and the next.
+/// Round-tripping the unmodelled keys
 /// (`schema_version` and `inference` today) makes serializing a `Registry`
 /// back a lossless copy of what was read, whatever the writer's vintage.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
