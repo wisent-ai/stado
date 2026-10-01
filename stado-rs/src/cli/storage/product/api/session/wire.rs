@@ -1,5 +1,5 @@
-//! Reading one response: the JSON shape, the success body under its ceiling,
-//! and the refusal a failure renders as.
+//! Reading one response: the JSON shape, the success body, and the refusal a
+//! failure renders as.
 
 use crate::cli::storage::*;
 
@@ -22,7 +22,7 @@ impl RemoteObjectApi {
     {
         let status = response.status();
         let body = self
-            .success_body(response, max_object_api_json_body(), operation, bearer)
+            .success_body(response, operation, bearer)
             .await?;
         serde_json::from_slice(&body).map_err(|error| {
             CmdError::click(format!(
@@ -34,20 +34,11 @@ impl RemoteObjectApi {
     pub(in crate::cli::storage) async fn success_body(
         &self,
         mut response: reqwest::Response,
-        limit: usize,
         operation: &str,
         bearer: Option<&str>,
     ) -> Result<Vec<u8>, CmdError> {
         if !response.status().is_success() {
             return Err(self.response_error(response, bearer).await);
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > limit as u64)
-        {
-            return Err(CmdError::click(format!(
-                "Stado object API {operation} response exceeds the {limit}-byte limit"
-            )));
         }
         let capacity = response
             .content_length()
@@ -61,11 +52,6 @@ impl RemoteObjectApi {
                 body.len()
             ))
         })? {
-            if chunk.len() > limit.saturating_sub(body.len()) {
-                return Err(CmdError::click(format!(
-                    "Stado object API {operation} response exceeds the {limit}-byte limit"
-                )));
-            }
             body.extend_from_slice(&chunk);
         }
         Ok(body)
@@ -78,13 +64,10 @@ impl RemoteObjectApi {
     ) -> CmdError {
         let status = response.status();
         let endpoint = response.url().clone();
-        let declared_length = response.content_length();
-        let max_body = max_object_api_error_body();
         let mut body = Vec::new();
-        let mut truncated = false;
-        while body.len() < max_body {
-            let chunk = match response.chunk().await {
-                Ok(Some(chunk)) => chunk,
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => body.extend_from_slice(&chunk),
                 Ok(None) => break,
                 Err(error) => {
                     let detail = response_body_detail(&body, self.generic_bearer(), bearer);
@@ -93,30 +76,11 @@ impl RemoteObjectApi {
                          {detail}; body read failed: {error}"
                     ));
                 }
-            };
-            let remaining = max_body - body.len();
-            if chunk.len() > remaining {
-                body.extend_from_slice(&chunk[..remaining]);
-                truncated = true;
-                break;
             }
-            body.extend_from_slice(&chunk);
-        }
-        if body.len() == max_body
-            && declared_length
-                .map(|length| length > max_body as u64)
-                .unwrap_or(true)
-        {
-            truncated = true;
         }
         let detail = response_body_detail(&body, self.generic_bearer(), bearer);
-        let suffix = if truncated {
-            " [response body truncated]"
-        } else {
-            ""
-        };
         CmdError::click(format!(
-            "Stado object API returned HTTP {status} from {endpoint}: {detail}{suffix}"
+            "Stado object API returned HTTP {status} from {endpoint}: {detail}"
         ))
     }
 }

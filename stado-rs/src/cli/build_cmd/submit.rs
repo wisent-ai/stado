@@ -115,22 +115,6 @@ pub(crate) fn snapshot_source(reading: &SourceReading) -> Result<StagedSource, C
     let snapshot_phase = super::timing::phase("snapshot the committed tree");
     let archive = snapshot(&reading.root, &reading.commit)?;
     drop(snapshot_phase);
-    // The object API takes one body of at most `max_object_bytes`; a larger
-    // upload is dropped by the server before any answer, and the client read
-    // it as 'connection closed before message completed' — echo-web and
-    // wisent-app failed that way on every batch of 2026-09-30 while smaller
-    // archives passed (4324cf0e). The limit is known here, before any write.
-    let limit = crate::remote::object_store::max_object_bytes();
-    if archive.len() > limit {
-        return Err(CmdError::refused(format!(
-            "{} at {}: the source archive is {} bytes, above the object API's {limit}-byte \
-             limit for one object; remove large committed files from the tree (build \
-             artifacts, models, media) or move them to their own stored input",
-            reading.manifest.product,
-            reading.commit,
-            archive.len()
-        )));
-    }
     let source_sha256 = release_control::sha256_bytes(&archive);
     let manifest_sha256 = release_control::sha256_bytes(&reading.manifest_bytes);
     let source_uri = format!(

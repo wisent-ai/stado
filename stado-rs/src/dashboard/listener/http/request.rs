@@ -162,18 +162,20 @@ pub(crate) async fn read_request(
                 "mutating object and registry import requests require Content-Length",
             ));
         }
-        None => usize::default(),
+        None => 0,
     };
+    // An object PUT carries whatever the authenticated writer stores; the
+    // object API sets no size of its own on it.
     let max_body_bytes = if object_put {
-        crate::remote::object_store::max_object_bytes()
+        None
     } else if method == "POST" && path == "/api/operator/run" {
-        operator_console::MAX_REQUEST_BYTES
+        Some(operator_console::MAX_REQUEST_BYTES)
     } else if registry_import {
-        MAX_REGISTRY_IMPORT_BYTES
+        Some(MAX_REGISTRY_IMPORT_BYTES)
     } else {
-        MAX_HEAD_BYTES
+        Some(MAX_HEAD_BYTES)
     };
-    if content_length > max_body_bytes {
+    if let Some(max_body_bytes) = max_body_bytes.filter(|max| content_length > *max) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(

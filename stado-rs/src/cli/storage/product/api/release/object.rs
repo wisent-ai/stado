@@ -8,7 +8,6 @@ impl RemoteObjectApi {
         uri: &str,
     ) -> Result<Vec<u8>, CmdError> {
         let origin = self.endpoint("/api/release/object", &[("uri", uri)])?;
-        let limit = max_object_api_download_body();
         let mut body = Vec::new();
         let mut last_read_error = None;
 
@@ -101,11 +100,6 @@ impl RemoteObjectApi {
                         .content_length()
                         .and_then(|length| usize::try_from(length).ok())
                 };
-                if total.is_some_and(|total| total > limit) {
-                    return Err(CmdError::click(format!(
-                        "Stado object API release GET response exceeds the {limit}-byte limit"
-                    )));
-                }
                 if let Some(total) = total {
                     body.reserve(total.saturating_sub(body.capacity()));
                 }
@@ -113,15 +107,7 @@ impl RemoteObjectApi {
                 let mut response = response;
                 loop {
                     match response.chunk().await {
-                        Ok(Some(chunk)) => {
-                            if chunk.len() > limit.saturating_sub(body.len()) {
-                                return Err(CmdError::click(format!(
-                                    "Stado object API release GET response exceeds the \
-                                     {limit}-byte limit"
-                                )));
-                            }
-                            body.extend_from_slice(&chunk);
-                        }
+                        Ok(Some(chunk)) => body.extend_from_slice(&chunk),
                         // The stream ending is not the object ending. The
                         // release route streams an unranged GET until its own
                         // window closes and then closes the body cleanly, with

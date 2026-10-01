@@ -90,11 +90,8 @@ impl Dashboard {
                 )
             }
         };
-        if payload.size == 0 || payload.size > crate::remote::object_store::max_object_bytes() {
-            return object_compose_error(
-                http_status("400"),
-                "composition size is outside the object API limit",
-            );
+        if payload.chunks.is_empty() {
+            return object_compose_error(http_status("400"), "composition names no chunks");
         }
         let expected_chunk_count = payload.size.div_ceil(OBJECT_API_CHUNK_BYTES);
         if payload.chunks.len() != expected_chunk_count {

@@ -145,9 +145,9 @@ impl Dashboard {
     /// It bounds the first request as much as a reused one: a connection that
     /// is opened and then abandoned holds a task and a file descriptor exactly
     /// like an idle reused one, and the accept loop puts no bound on how many
-    /// of those may exist. Only the head is bounded, never the body -- one
-    /// object PUT may declare up to `max_object_bytes`, and a slow upload is
-    /// progress rather than idleness.
+    /// of those may exist. Only the head is bounded, never the body -- an
+    /// object PUT may carry any size, and a slow upload is progress rather
+    /// than idleness.
     ///
     /// It must stay strictly LONGER than the object client's pool idle timeout
     /// (90 s: reqwest's default, made explicit alongside the keyed client).

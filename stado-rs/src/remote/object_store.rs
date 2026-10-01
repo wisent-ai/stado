@@ -11,11 +11,6 @@ use std::fmt;
 use crate::queue::StorageError;
 
 pub const ROOT_PREFIX: &str = "ecosystem/";
-/// Exact body limit shared by the object API server and client.
-pub fn max_object_bytes() -> usize {
-    (u32::MAX as usize / u8::BITS as usize).saturating_add(usize::from(true))
-}
-
 /// Largest independently authenticated chunk accepted by the object API.
 ///
 /// The client and server share this value: raising it on only one side either

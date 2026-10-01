@@ -27,12 +27,7 @@ impl RemoteObjectApi {
             .ok_or_else(|| CmdError::click("Stado object API omitted the CAS version"))?
             .to_string();
         let bytes = self
-            .success_body(
-                response,
-                max_object_api_download_body(),
-                "versioned object GET",
-                bearer.as_deref(),
-            )
+            .success_body(response, "versioned object GET", bearer.as_deref())
             .await?;
         Ok(Some((bytes, version)))
     }

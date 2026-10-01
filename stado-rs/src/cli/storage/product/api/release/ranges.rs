@@ -7,15 +7,12 @@ impl RemoteObjectApi {
         &self,
         origin: url::Url,
     ) -> Result<Vec<u8>, CmdError> {
-        let limit = max_object_api_download_body();
         let mut body = Vec::new();
         let mut failures = 0usize;
 
         'download: loop {
             let start = body.len();
-            let end = start
-                .saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1))
-                .min(limit.saturating_sub(1));
+            let end = start.saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1));
             let mut endpoint = origin.clone();
             let mut selected = None;
             for hop in 0..=3 {
@@ -64,11 +61,6 @@ impl RemoteObjectApi {
                 )));
             }
             let (end_exclusive, total) = partial_content_bounds(&response, start, "release GET")?;
-            if total > limit {
-                return Err(CmdError::click(format!(
-                    "Stado object API release GET response exceeds the {limit}-byte limit"
-                )));
-            }
             body.reserve(total.saturating_sub(body.capacity()));
 
             let mut response = response;

@@ -22,15 +22,12 @@ impl RemoteObjectApi {
         bearer: Option<&str>,
         optional: bool,
     ) -> Result<Option<Vec<u8>>, CmdError> {
-        let limit = max_object_api_download_body();
         let mut body = Vec::new();
         let mut failures = 0usize;
 
         'download: loop {
             let start = body.len();
-            let end = start
-                .saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1))
-                .min(limit.saturating_sub(1));
+            let end = start.saturating_add(OBJECT_API_CHUNK_BYTES.saturating_sub(1));
             let response = match self
                 .request_as(reqwest::Method::GET, endpoint.clone(), bearer)
                 .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
@@ -61,11 +58,6 @@ impl RemoteObjectApi {
                 )));
             }
             let (end_exclusive, total) = partial_content_bounds(&response, start, "object GET")?;
-            if total > limit {
-                return Err(CmdError::click(format!(
-                    "Stado object API object GET response exceeds the {limit}-byte limit"
-                )));
-            }
             body.reserve(total.saturating_sub(body.capacity()));
 
             let mut response = response;
@@ -119,7 +111,6 @@ impl RemoteObjectApi {
     ) -> Result<Option<Vec<u8>>, CmdError> {
         let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
         let bearer = self.release_bearer(uri).await?;
-        let limit = max_object_api_download_body();
         let mut body = Vec::new();
         let mut last_read_error = None;
 
@@ -212,11 +203,6 @@ impl RemoteObjectApi {
                     .content_length()
                     .and_then(|length| usize::try_from(length).ok())
             };
-            if total.is_some_and(|total| total > limit) {
-                return Err(CmdError::click(format!(
-                    "Stado object API object GET response exceeds the {limit}-byte limit"
-                )));
-            }
             if let Some(total) = total {
                 body.reserve(total.saturating_sub(body.capacity()));
             }
@@ -224,15 +210,7 @@ impl RemoteObjectApi {
             let mut response = response;
             loop {
                 match response.chunk().await {
-                    Ok(Some(chunk)) => {
-                        if chunk.len() > limit.saturating_sub(body.len()) {
-                            return Err(CmdError::click(format!(
-                                "Stado object API object GET response exceeds the \
-                                 {limit}-byte limit"
-                            )));
-                        }
-                        body.extend_from_slice(&chunk);
-                    }
+                    Ok(Some(chunk)) => body.extend_from_slice(&chunk),
                     Ok(None) if total.is_some_and(|total| body.len() != total) => {
                         last_read_error = Some(format!(
                             "Stado object API object GET response ended after {} of {} bytes",

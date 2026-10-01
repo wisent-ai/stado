@@ -8,18 +8,6 @@ pub(in crate::cli::storage) mod release;
 pub(in crate::cli::storage) mod session;
 pub(in crate::cli::storage) mod write;
 
-pub(in crate::cli::storage) fn max_object_api_error_body() -> usize {
-    usize::from(u16::MAX)
-}
-
-pub(in crate::cli::storage) fn max_object_api_json_body() -> usize {
-    max_object_api_error_body() * u8::BITS as usize * u8::BITS as usize * u16::BITS as usize
-}
-
-pub(in crate::cli::storage) fn max_object_api_download_body() -> usize {
-    crate::remote::object_store::max_object_bytes()
-}
-
 pub(in crate::cli::storage) enum RemoteObjectAuth {
     Generic(String),
     PublisherOnly,
