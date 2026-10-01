@@ -26,16 +26,16 @@
 //!   bookkeeping.
 //! - Local APFS snapshots come from `tmutil listlocalsnapshots /`, and they
 //!   are here because NOTHING in this product can reclaim them and their
-//!   blocks are already inside the `used` figure above. On
-//!   `control-host` on 2026-08-18 the janitor's cleaners and the declared
-//!   space-reclamation filesystem stages between them accounted for every
-//!   consumer an operator could act on, and three OS-update snapshots sat
-//!   outside all of it — the kind of thing that holds tens of GiB and turns
-//!   "the product says the disk is accounted for" into a false statement.
+//!   blocks are already inside the `used` figure above. The janitor's
+//!   cleaners and the declared space-reclamation filesystem stages between
+//!   them account for every consumer an operator can act on, and OS-update
+//!   snapshots sit outside all of it — the kind of thing that holds tens of
+//!   GiB and turns "the product says the disk is accounted for" into a
+//!   false statement.
 //!   Reported, never touched. macOS publishes no size for a snapshot:
 //!   `tmutil`, `diskutil apfs listSnapshots` and `diskutil info` all name
-//!   them and none of them measures them (checked on macOS 26.5 on both this
-//!   control plane's host and the mini), so the count and the host's own
+//!   them and none of them measures them (checked on current macOS on
+//!   managed hosts), so the count and the host's own
 //!   names are reported and no byte figure is invented from them.
 //!
 //! Like [`crate::deploy::host_recovery`]'s script, the remote program is

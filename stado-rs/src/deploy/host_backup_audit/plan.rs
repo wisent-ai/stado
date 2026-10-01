@@ -1,4 +1,4 @@
-//! What the operator asked for, and the program text that carries it: the
+//! The requested audit, and the program text that carries it: the
 //! markers substituted into the remote program and the plan itself.
 
 use super::remote_program::REMOTE_SCRIPT_TEMPLATE;
@@ -14,7 +14,7 @@ const OBJECTS_HEX_MARK: &str = "@OBJECTS_HEX@";
 /// Marker for namespace names whose backup-visible object metadata is listed.
 const INVENTORY_NAMESPACES_HEX_MARK: &str = "@INVENTORY_NAMESPACES_HEX@";
 
-/// One pass over one host's replica, as the operator asked for it.
+/// One pass over one host's replica, as requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditPlan {
     /// Namespace a bare replica path maps into on the primary side.

@@ -158,10 +158,10 @@ pub fn resolve_target<'a>(
 /// when the store does not answer.
 ///
 /// A host command that cannot resolve its own host while the registry store
-/// is unreachable goes silent exactly when the fleet does: on 2026-08-19
-/// every `stado host ...` invocation against a mac mini that had dropped off
-/// the network failed with one line about the store, and the question — which
-/// host went quiet, and when — went unanswered because no reader would speak
+/// is unreachable goes silent exactly when the fleet does: every
+/// `stado host ...` invocation against a host that has dropped off the
+/// network fails with one line about the store, and the question — which
+/// host went quiet, and when — goes unanswered because no reader will speak
 /// without the authority. The copy is not an empty registry and never invents
 /// a target: an unknown name still fails, and [`resolve_target`]'s refusals
 /// are unchanged.

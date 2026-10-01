@@ -9,10 +9,10 @@
 //! accumulate `current` as a plain copied directory beside hand-named backups
 //! like `current.before-<change>-<timestamp>`, there is no version identity to
 //! report, and nothing can say which build is running or what it is compatible
-//! with. On 2026-08-04 a Skarbiec rebuilt in place began answering
-//! `400 field required` to clients that had not moved with it, and took out a
-//! health beacon and a gateway on the same host; no lineage existed to consult
-//! because neither side was a published artifact.
+//! with. A vault rebuilt in place begins answering `400 field required` to
+//! clients that have not moved with it, and takes out a health beacon and a
+//! gateway on the same host; no lineage exists to consult because neither
+//! side is a published artifact.
 //!
 //! The two halves of the answer already exist. `stado artifact` publishes
 //! immutable versioned manifests with aliases and lineage, and `service deploy`
