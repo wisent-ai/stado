@@ -34,7 +34,7 @@ pub use crate::cli::release_submit::run::submit::submit;
 
 pub(crate) use crate::cli::release_submit::builds::jobs::platforms::enqueue_platforms;
 pub(crate) use crate::cli::release_submit::builds::jobs::terminal::{
-    refresh_build, terminal as terminal_job,
+    read_terminal_job, refresh_build,
 };
 pub(crate) use crate::cli::release_submit::run::reports::{
     matching_runs, recent_runs, recorded_runs, RecordedRun, RunFilter,

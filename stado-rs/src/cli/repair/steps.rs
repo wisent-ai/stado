@@ -100,42 +100,41 @@ fn storage_root<'a>(execution: &'a RepairExecution<'a>) -> BoxFuture<'a, Result<
             .map_err(|error| CmdError::click(error.to_string()))?;
         accepted.outcome?;
 
-        // The resident worker owns the long operation. Read its durable status
-        // until it has written the proof receipt rather than treating process
-        // launch as proof that storage was reconciled.
-        for _ in 0..180 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let status =
-                host::storage_root_reconcile_result(execution.target, &transaction, "status")
-                    .await
-                    .map_err(|error| CmdError::click(error.to_string()))?;
-            status.outcome?;
-            match status
-                .report
-                .pointer("/operation_owner/status")
-                .and_then(Value::as_str)
-            {
-                Some("succeeded") => return Ok(status.report),
-                Some("executing") => continue,
-                Some(state) => {
-                    let detail = status
-                        .report
-                        .pointer("/operation_owner/error")
-                        .and_then(Value::as_str)
-                        .unwrap_or("the resident worker supplied no failure detail")
-                        .trim_end_matches('.');
-                    return Err(CmdError::click(format!(
-                        "{} storage-root repair ended {state}; {detail}.",
-                        execution.target
-                    )));
-                }
-                None => continue,
+        // The resident worker owns the long operation. Its durable status is
+        // the proof; process launch is not. The status is read once and
+        // reported as it stands.
+        let status = host::storage_root_reconcile_result(execution.target, &transaction, "status")
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        status.outcome?;
+        match status
+            .report
+            .pointer("/operation_owner/status")
+            .and_then(Value::as_str)
+        {
+            Some("succeeded") => Ok(status.report),
+            Some("executing") => Err(CmdError::click(format!(
+                "{} storage-root repair transaction {transaction} is still executing in the \
+                 resident worker; its durable status records the outcome when it ends.",
+                execution.target
+            ))),
+            Some(state) => {
+                let detail = status
+                    .report
+                    .pointer("/operation_owner/error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the resident worker supplied no failure detail")
+                    .trim_end_matches('.');
+                Err(CmdError::click(format!(
+                    "{} storage-root repair ended {state}; {detail}.",
+                    execution.target
+                )))
             }
+            None => Err(CmdError::click(format!(
+                "{} storage-root repair transaction {transaction} wrote no operation owner status.",
+                execution.target
+            ))),
         }
-        Err(CmdError::click(format!(
-            "{} storage-root repair produced no durable completion proof within 360 seconds; inspect transaction {transaction}.",
-            execution.target
-        )))
     })
 }
 

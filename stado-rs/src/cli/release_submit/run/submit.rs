@@ -216,8 +216,7 @@ pub(super) async fn continue_run(
         artifacts.insert(p.clone(), a);
     }
     // A refusal that left only optional platforms unbuilt is recorded, not
-    // fatal: the manifest declared them skippable (see
-    // `constants::OPTIONAL_PLATFORM_CLAIM_GRACE_S`). Failing here threw away
+    // fatal: the manifest declared them skippable. Failing here threw away
     // skarbiec 0.4.5's published darwin build on every resume because its
     // optional linux-amd64 had no builder allowed its signing secret.
     if let Some(error) = enqueue_failure {

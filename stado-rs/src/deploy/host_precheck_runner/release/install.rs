@@ -1,8 +1,6 @@
 //! Installing one declared runner on one host, with everything its profile
 //! declares it needs before the installer runs.
 
-use std::time::Duration;
-
 use serde_json::{json, Value};
 
 use crate::deploy::host_precheck_runner::accounts::brama::{
@@ -135,42 +133,36 @@ async fn install_profile(
     }
     // What the host did is not what GitHub holds. The registration is read
     // back from the scope it was made against, and an install that produced
-    // no runner there is a failure however cleanly the program exited.
-    let status = tokio::time::timeout(Duration::from_secs(60), async {
-        loop {
-            match github_runner(scope, &runner_name).await {
-                RunnerRecord::Present { status } if status == "online" => return Ok(status),
-                RunnerRecord::Present { .. } => {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-                RunnerRecord::Absent { listed } => {
-                    return Err(DeployError(format!(
-                        "{}: {} installation exited successfully, but GitHub lists no runner \
-                         named {runner_name} under {}; listed runners: {listed:?}",
-                        target.name,
-                        profile.name,
-                        scope.label()
-                    )));
-                }
-                RunnerRecord::Unreadable { detail } => {
-                    return Err(DeployError(format!(
-                        "{}: {} installation cannot be verified at {}: {detail}",
-                        target.name,
-                        profile.name,
-                        scope.label()
-                    )));
-                }
-            }
+    // no online runner there is a failure however cleanly the program exited.
+    let status = match github_runner(scope, &runner_name).await {
+        RunnerRecord::Present { status } if status == "online" => status,
+        RunnerRecord::Present { status } => {
+            return Err(DeployError(format!(
+                "{}: {} installation exited successfully, and GitHub lists {runner_name} under \
+                 {} as {status}, not online",
+                target.name,
+                profile.name,
+                scope.label()
+            )));
         }
-    })
-    .await
-    .map_err(|_| {
-        DeployError(format!(
-            "{}: {runner_name} did not report online at {} within 60 seconds",
-            target.name,
-            scope.label()
-        ))
-    })??;
+        RunnerRecord::Absent { listed } => {
+            return Err(DeployError(format!(
+                "{}: {} installation exited successfully, but GitHub lists no runner \
+                 named {runner_name} under {}; listed runners: {listed:?}",
+                target.name,
+                profile.name,
+                scope.label()
+            )));
+        }
+        RunnerRecord::Unreadable { detail } => {
+            return Err(DeployError(format!(
+                "{}: {} installation cannot be verified at {}: {detail}",
+                target.name,
+                profile.name,
+                scope.label()
+            )));
+        }
+    };
     value["registration"] = json!({
         "scope": scope.label(),
         "runner": runner_name,

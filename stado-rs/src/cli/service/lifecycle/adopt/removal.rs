@@ -57,30 +57,6 @@ async fn finish_directory_retirement(
     .await
 }
 
-/// Repeat only a host-confirmed retirement whose immediate end-state probe
-/// caught one last external start. The declaration stays withdrawn for the
-/// whole loop, and every pass reapplies the init-system fence; transport
-/// failures and explicit host refusals are never retried.
-async fn retire_service_stably(
-    target: &crate::targets::ComputeTarget,
-    service: &ManagedService,
-    sudo_password: Option<&str>,
-    runner: &crate::deploy::Runner,
-) -> Result<service::RemoteReport, DeployError> {
-    let mut report = service::retire_service(target, service, sudo_password, runner).await?;
-    for _ in 1..6 {
-        if report.succeeded("retired")
-            || report.status != "retired"
-            || report.postcondition_state != host_channel::POSTCONDITION_UNMET
-        {
-            return Ok(report);
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        report = service::retire_service(target, service, sudo_password, runner).await?;
-    }
-    Ok(report)
-}
-
 pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let declared = service::declared_services(&target);
@@ -105,20 +81,16 @@ pub(crate) async fn retire(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         None
     };
     with_service_mutation_lease(&found, || async {
-        let (removed, _, fence) = suspend_service_declaration(host, unit).await?;
+        let (removed, _) = suspend_service_declaration(host, unit).await?;
 
         if removed.unit_id().is_empty() && removed.path.is_empty() {
             let generation = finish_directory_retirement(&removed, unit).await?;
             return render_mutation("retired", &removed, &generation, None, json);
         }
-        if let Err(error) = wait_for_reconciler_fence(fence.as_ref()).await {
-            let failure =
-                format!("{host}: could not fence {unit} from the active coordinator: {error}");
-            return Err(retirement_failure(&removed, failure).await);
-        }
 
         let report =
-            match retire_service_stably(&target, &removed, sudo_password.as_deref(), &runner).await
+            match service::retire_service(&target, &removed, sudo_password.as_deref(), &runner)
+                .await
             {
                 Ok(report) => report,
                 Err(error) => {
@@ -176,7 +148,7 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
         None
     };
     with_service_mutation_lease(&found, || async {
-        let (removed, _, fence) = suspend_service_declaration(host, unit).await?;
+        let (removed, _) = suspend_service_declaration(host, unit).await?;
 
         if removed.unit_id().is_empty() && path.is_empty() {
             let generation = finish_directory_retirement(&removed, unit).await?;
@@ -192,15 +164,10 @@ pub(crate) async fn remove(unit: &str, host: &str, json: bool) -> Result<(), Cmd
             }
             return render_mutation("removed", &removed, &generation, None, false);
         }
-        if let Err(error) = wait_for_reconciler_fence(fence.as_ref()).await {
-            let failure = format!(
-                "{host}: could not fence {unit} from the active coordinator: {error}; its file was not touched"
-            );
-            return Err(retirement_failure(&removed, failure).await);
-        }
 
         let report =
-            match retire_service_stably(&target, &removed, sudo_password.as_deref(), &runner).await
+            match service::retire_service(&target, &removed, sudo_password.as_deref(), &runner)
+                .await
             {
                 Ok(report) => report,
                 Err(error) => {

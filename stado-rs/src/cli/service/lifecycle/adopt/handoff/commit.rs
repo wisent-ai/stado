@@ -1,11 +1,10 @@
-//! Finishing a handoff whose registry write has landed: the reconciler
-//! fence, the active-binary re-check against the receipt, and the receipt's
-//! last two status transitions.
+//! Finishing a handoff whose registry write has landed: the active-binary
+//! re-check against the receipt, and the receipt's last two status
+//! transitions.
 
 use super::*;
 
 pub(super) async fn finish_handoff_under_lease(
-    document: &Value,
     target: &crate::targets::ComputeTarget,
     installed_stado: &str,
     receipt_path: &std::path::Path,
@@ -47,22 +46,6 @@ pub(super) async fn finish_handoff_under_lease(
     }
     report["status"] = json!("registry_committed");
     persist_handoff_receipt(receipt_path, &report, true)?;
-    let fence_capture = capture_reconciler_fence(document).await;
-    report["reconciler_fence"] = json!({
-        "status": if fence_capture.is_ok() { "pending" } else { "capture_failed" },
-        "baseline_report_id": fence_capture
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .and_then(|fence| fence.baseline_report.as_deref()),
-        "timeout_seconds": fence_capture
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .map(|fence| fence.timeout_seconds),
-        "error": fence_capture.as_ref().err().map(ToString::to_string),
-    });
-    persist_handoff_receipt(receipt_path, &report, true)?;
     let active = host_channel::run_program(
         target,
         &[
@@ -101,8 +84,6 @@ pub(super) async fn finish_handoff_under_lease(
             )));
         }
     }
-    let fence = fence_capture?;
-    wait_for_reconciler_fence(fence.as_ref()).await?;
     let label = service_label_print::print_label(
         target,
         &legacy_label,
@@ -119,7 +100,6 @@ pub(super) async fn finish_handoff_under_lease(
     require_no_executable_caller(target, &legacy_program, &runner).await?;
     report["status"] = json!("handed_off");
     report["retirement"]["status"] = json!("eligible");
-    report["reconciler_fence"]["status"] = json!("satisfied");
     persist_handoff_receipt(receipt_path, &report, true)?;
     if json_output {
         print_json(&report)
@@ -133,7 +113,6 @@ pub(super) async fn finish_handoff_under_lease(
 }
 
 pub(super) async fn finish_committed_handoff(
-    document: &Value,
     target: &crate::targets::ComputeTarget,
     installed_stado: &str,
     receipt_path: &std::path::Path,
@@ -151,7 +130,6 @@ pub(super) async fn finish_committed_handoff(
         .to_owned();
     with_service_mutation_subject(&host, &legacy_label, || {
         finish_handoff_under_lease(
-            document,
             target,
             installed_stado,
             receipt_path,

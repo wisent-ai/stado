@@ -86,11 +86,11 @@ pub struct BuildSubmitArgs {
 pub struct BuildStatusArgs {
     /// Full build ID from `stado build submit` or `stado build list`.
     pub build_id: String,
-    /// Follow the submission until every platform's job is queued (at most
-    /// 20 minutes), then every job to its end, so the answer is `passed` or
-    /// `failed`, never `waiting`.
+    /// Re-read the build every this many seconds until every platform's job
+    /// is queued and then ended, so the answer is `passed` or `failed`,
+    /// never `waiting`.
     #[arg(long)]
-    pub wait: bool,
+    pub wait_seconds: Option<u64>,
     #[arg(long)]
     pub json: bool,
 }

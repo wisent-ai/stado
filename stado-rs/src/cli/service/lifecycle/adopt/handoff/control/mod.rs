@@ -151,7 +151,6 @@ pub(crate) async fn handoff_release_control(
         ) {
             let installed_stado = format!("{}/.stado/bin/stado", target_policy.home);
             return finish_committed_handoff(
-                &document,
                 &target,
                 &installed_stado,
                 &receipt_path,

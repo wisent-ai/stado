@@ -24,26 +24,20 @@ where
         "service-lifecycle-{}",
         chrono::Utc::now().timestamp_micros()
     );
-    let mut lease = None;
-    for _ in 0..300 {
-        lease = crate::autonomy::storage::acquire_placement_lease(
-            &store,
-            &subject,
-            &decision,
-            "service-lifecycle",
-            1800,
-            chrono::Utc::now(),
-        )
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-        if lease.is_some() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    let lease = lease.ok_or_else(|| {
+    let lease = crate::autonomy::storage::acquire_placement_lease(
+        &store,
+        &subject,
+        &decision,
+        "service-lifecycle",
+        1800,
+        chrono::Utc::now(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?
+    .ok_or_else(|| {
         CmdError::click(format!(
-            "{subject} stayed under another mutation lease for 300 seconds"
+            "{subject} is held under another mutation lease; run the command again once that \
+             mutation has finished"
         ))
     })?;
     let result = operation().await;
@@ -78,92 +72,17 @@ where
     with_service_mutation_subject(&service.host, service.unit_id(), operation).await
 }
 
-#[derive(Clone)]
-pub(super) struct ReconcilerFence {
-    pub(super) baseline_report: Option<String>,
-    pub(super) timeout_seconds: u64,
-}
-
-fn active_coordinator_interval(document: &Value) -> Option<u64> {
-    document
-        .get("coordinators")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|coordinator| coordinator.get("active").and_then(Value::as_bool) == Some(true))
-        .filter_map(|coordinator| coordinator.get("interval_seconds").and_then(Value::as_u64))
-        .max()
-        .map(|seconds| seconds.clamp(15, 600))
-}
-
-async fn reconciler_report_id(store: &JobStorage) -> Result<Option<String>, CmdError> {
-    crate::autonomy::storage::read_json::<
-        crate::autonomy::service_reconciler::ServiceReconcileReport,
-    >(
-        store,
-        crate::autonomy::service_reconciler::LATEST_REPORT,
-    )
-    .await
-    .map(|report| report.map(|report| report.created_at))
-    .map_err(|error| CmdError::click(error.to_string()))
-}
-
-pub(super) async fn capture_reconciler_fence(
-    document: &Value,
-) -> Result<Option<ReconcilerFence>, CmdError> {
-    let Some(interval) = active_coordinator_interval(document) else {
-        return Ok(None);
-    };
-    let store = beacon_store().await?;
-    Ok(Some(ReconcilerFence {
-        baseline_report: reconciler_report_id(&store).await?,
-        timeout_seconds: interval.saturating_mul(2).saturating_add(60).min(900),
-    }))
-}
-
-pub(super) async fn wait_for_reconciler_fence(
-    fence: Option<&ReconcilerFence>,
-) -> Result<(), CmdError> {
-    let Some(fence) = fence else {
-        return Ok(());
-    };
-    let store = beacon_store().await?;
-    let started = tokio::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(fence.timeout_seconds);
-    loop {
-        let read_error = match reconciler_report_id(&store).await {
-            Ok(Some(current)) if Some(&current) != fence.baseline_report.as_ref() => return Ok(()),
-            Ok(_) => None,
-            Err(error) => Some(error.to_string()),
-        };
-        if started.elapsed() >= timeout {
-            let detail = read_error
-                .map(|error| format!("; the last report read failed: {error}"))
-                .unwrap_or_default();
-            return Err(CmdError::click(format!(
-                "the active coordinator published no newer service-reconcile report within {} seconds{detail}",
-                fence.timeout_seconds
-            )));
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-}
-
-/// Remove a declaration before stopping its unit.
-///
-/// A coordinator from before the per-service lease can already hold an old
-/// snapshot. The report fence waits until that pass has published its result;
-/// after that publication no action from the old snapshot remains in flight,
-/// while every later pass sees the withdrawn declaration.
+/// Remove a declaration before stopping its unit. The caller holds the
+/// per-unit mutation lease the autonomy reconciler also takes, so no
+/// reconciler pass acts on the unit while it is stopped.
 pub(super) async fn suspend_service_declaration(
     host: &str,
     unit: &str,
-) -> Result<(ManagedService, String, Option<ReconcilerFence>), CmdError> {
+) -> Result<(ManagedService, String), CmdError> {
     let (mut document, expected_generation) = registry::fetch_versioned_document().await?;
-    let fence = capture_reconciler_fence(&document).await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
     let generation = registry::push_document_if(&document, &expected_generation).await?;
-    Ok((removed, generation, fence))
+    Ok((removed, generation))
 }
 
 pub(super) async fn restore_service_declaration(

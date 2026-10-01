@@ -157,7 +157,7 @@ pub(crate) async fn revisit_once(
     let (outcome, service_target) =
         match service::restart_local_unit(target, &pick.unit, &pick.unit_path, None).await {
             Ok(service_target) => {
-                let after = settle(target, target_name, &pick.unit, pick.pid).await;
+                let after = settle(target, target_name, &pick.unit).await;
                 (
                     AttemptOutcome::Observed(refresh_outcome(&pick.running, after.as_ref())),
                     service_target,

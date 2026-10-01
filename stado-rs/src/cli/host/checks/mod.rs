@@ -41,5 +41,3 @@ const HOST_HEALTH_BEACON_UNIT_LINUX: &str = "stado-host-beacon.service";
 const HOST_HEALTH_AUTH_UNAVAILABLE: &str = "host-health authorization unavailable";
 const HOST_HEALTH_LOG_LINES: u32 = 80;
 const OBJECT_API_SERVICE: &str = "stado-object-api";
-const LINK_REPAIR_WAIT_SECONDS: u64 = 90;
-const LINK_REPAIR_POLL_SECONDS: u64 = 5;

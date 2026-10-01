@@ -106,7 +106,7 @@ pub async fn refresh_image(name: &str, if_needed: bool, json_output: bool) -> Re
             CmdError::click(format!("{} was not restarted: {reason}", before.unit))
         })?;
 
-    let after = settle(local, &host, name, before.pid).await;
+    let after = settle(local, &host, name).await;
     emit(&before, after.as_ref(), &service, json_output);
     verdict(&before, after.as_ref(), &running, &installed)
 }

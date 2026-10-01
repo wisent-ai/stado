@@ -66,7 +66,9 @@ pub(super) async fn retire_before_ensure(
     entry: Option<&crate::deploy::service_catalog::CatalogService>,
     runner: &crate::deploy::Runner,
 ) -> Result<Vec<service::Reversible>, CmdError> {
-    let Some(entry) = entry else { return Ok(Vec::new()) };
+    let Some(entry) = entry else {
+        return Ok(Vec::new());
+    };
     let (retirements, reversible) = service::retire_units_reversibly(target, entry, runner).await;
     let mut failed = Vec::new();
     for retirement in retirements {
@@ -114,5 +116,8 @@ fn given_back_sentence(steps: &[String]) -> String {
     if steps.is_empty() {
         return String::new();
     }
-    format!(". The units retired for it were given back: {}", steps.join("; "))
+    format!(
+        ". The units retired for it were given back: {}",
+        steps.join("; ")
+    )
 }

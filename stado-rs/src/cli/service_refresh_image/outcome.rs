@@ -3,8 +3,6 @@
 use crate::cli::CmdError;
 use crate::deploy::service::{ImageIdentity, UnitImageObservation};
 
-use super::settle::RESTART_WINDOW;
-
 /// What the second read found.
 ///
 /// Separated from the sentence and the exit code so the two branches that
@@ -99,10 +97,9 @@ pub(super) fn verdict(
     Err(CmdError::click(match outcome {
         RefreshOutcome::OnDeclaredFile => unreachable!("handled above"),
         RefreshOutcome::NotRunning => format!(
-            "{unit} was restarted and nothing is executing its argument vector {}s later. The \
-             unit is now not running at all, which is worse than the stale image it was on: \
-             check `stado service status {unit}`",
-            RESTART_WINDOW.as_secs()
+            "{unit} was restarted and nothing is executing its argument vector. The unit is now \
+             not running at all, which is worse than the stale image it was on: check `stado \
+             service status {unit}`"
         ),
         RefreshOutcome::Unread => format!(
             "{unit} was restarted and the result could not be read, so whether it is on the \

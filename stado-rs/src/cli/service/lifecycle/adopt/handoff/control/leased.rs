@@ -204,7 +204,6 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
         receipt["expected_generation"] = json!(expected_generation);
         receipt["generation"] = Value::Null;
         receipt["status"] = json!("prepared");
-        receipt["reconciler_fence"] = json!({"status": "not_captured"});
         receipt
     } else {
         json!({
@@ -232,9 +231,6 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
                 "active_binary": active_binary["path"],
                 "readiness_url": readiness_url,
             },
-            "reconciler_fence": {
-                "status": "not_captured",
-            },
             "legacy": {
                 "label": legacy_label,
                 "loaded": false,
@@ -255,7 +251,6 @@ pub(super) async fn handoff_under_lease(context: HandoffContext<'_>) -> Result<(
     persist_handoff_receipt(&receipt_path, &report, true)?;
 
     finish_handoff_under_lease(
-        &document,
         &target,
         &installed_stado,
         &receipt_path,

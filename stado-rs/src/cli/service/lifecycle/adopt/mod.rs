@@ -12,8 +12,8 @@ mod lease;
 pub(crate) mod removal;
 
 use lease::{
-    capture_reconciler_fence, restore_service_declaration, suspend_service_declaration,
-    wait_for_reconciler_fence, with_service_mutation_lease, with_service_mutation_subject,
+    restore_service_declaration, suspend_service_declaration, with_service_mutation_lease,
+    with_service_mutation_subject,
 };
 
 pub(crate) struct OnboardingOptions<'a> {

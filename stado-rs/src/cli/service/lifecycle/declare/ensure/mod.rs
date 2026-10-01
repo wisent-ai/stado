@@ -90,27 +90,9 @@ async fn persist_ensure_record(
     Ok::<_, CmdError>(audited)
 }
 
-/// A changed unit may own the registry API itself. Wait for an actual
-/// authoritative read after activation, not merely the new process's PID.
-/// Only reads are repeated; the host action and conditional write never are.
+/// A changed unit may own the registry API itself. Read the registry
+/// authoritatively after activation, not merely the new process's PID; a
+/// registry that is not answering yet is that read's own error.
 async fn registry_after_host_change() -> Result<(Value, String), CmdError> {
-    // A registry that is restarting answers when it is back, and that answer
-    // is what this wait is for. A non-retryable failure still ends it at once,
-    // and the operator interrupting the command ends it too; what no longer
-    // ends it is a number that called a slow restart an outage.
-    loop {
-        match registry::fetch_versioned_document().await {
-            Ok(snapshot) => return Ok(snapshot),
-            Err(error) => {
-                let code = error
-                    .failure
-                    .unwrap_or(crate::primitives::failure::FailureCode::Unknown);
-                if !code.retryable() {
-                    return Err(error);
-                }
-                let _ = error;
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
+    registry::fetch_versioned_document().await
 }

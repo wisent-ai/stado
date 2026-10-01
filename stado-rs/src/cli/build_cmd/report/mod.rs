@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use progress::Progress;
 
 use crate::cli::build_cmd::{require_build_id, BuildStatusArgs};
-use crate::cli::release_submit::{build_path, load_build, refresh_build, save_build, terminal_job};
+use crate::cli::release_submit::{
+    build_path, load_build, read_terminal_job, refresh_build, save_build,
+};
 use crate::cli::CmdError;
 use crate::queue::storage::JobStorage;
 use crate::release_control;
@@ -40,8 +42,12 @@ pub(super) fn summary(build: &BuildRun) -> String {
 
 /// The build as it stands now: its record brought up to date from the queue
 /// and its jobs' receipts, and saved when that changed anything. With
-/// `wait`, every platform still building is followed to its job's end first.
-pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun, CmdError> {
+/// `wait`, the build is re-read at that period until its submission has
+/// queued every platform's job and every job has ended.
+pub(crate) async fn current_build(
+    build_id: &str,
+    wait: Option<std::time::Duration>,
+) -> Result<BuildRun, CmdError> {
     require_build_id(build_id)?;
     let mut build = load_build(build_id)
         .await?
@@ -63,11 +69,13 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
     else {
         return Err(CmdError::click("build manifest disables releases"));
     };
-    if wait {
-        build = queued_build(build, manifest.platforms.len()).await?;
+    if let Some(period) = wait {
+        build = queued_build(build, manifest.platforms.len(), period).await?;
         for platform in build.platforms.values() {
             if platform.state == PlatformRunState::Submitted {
-                terminal_job(&store, &platform.job_id).await?;
+                while read_terminal_job(&store, &platform.job_id).await?.is_none() {
+                    tokio::time::sleep(period).await;
+                }
             }
         }
     }
@@ -79,34 +87,21 @@ pub(crate) async fn current_build(build_id: &str, wait: bool) -> Result<BuildRun
     Ok(build)
 }
 
-/// How long `--wait` lets a submission take to queue every platform's job.
-/// Staging and queueing took six and a half minutes on 2026-09-23; a
-/// submitter that died between recording the build and queueing its jobs
-/// leaves a record that would otherwise be waited on forever.
-const QUEUEING_LIMIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
-const QUEUEING_POLL: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// The build once its submission has queued a job for every platform the
-/// manifest declares, or recorded why it could not. A build is recorded
-/// before its jobs are queued, so `--wait` read in that gap used to answer
-/// `waiting` at once, which is the one answer it promises never to give.
-async fn queued_build(mut build: BuildRun, declared: usize) -> Result<BuildRun, CmdError> {
-    let started = std::time::Instant::now();
+/// manifest declares, or recorded why it could not, re-read every `period`.
+/// A build is recorded before its jobs are queued, so a wait read in that gap
+/// used to answer `waiting` at once, which is the one answer it promises
+/// never to give.
+async fn queued_build(
+    mut build: BuildRun,
+    declared: usize,
+    period: std::time::Duration,
+) -> Result<BuildRun, CmdError> {
     while build.platforms.len() < declared
         && build.state == BuildRunState::Waiting
         && build.failure.is_none()
     {
-        if started.elapsed() >= QUEUEING_LIMIT {
-            return Err(CmdError::click(format!(
-                "build {} queued {} of {declared} platform job(s) in {} minutes; its submitter \
-                 stopped before queueing the rest. `stado build submit` with the same commit and \
-                 version queues them",
-                build.build_id,
-                build.platforms.len(),
-                QUEUEING_LIMIT.as_secs() / 60,
-            )));
-        }
-        tokio::time::sleep(QUEUEING_POLL).await;
+        tokio::time::sleep(period).await;
         build = load_build(&build.build_id)
             .await?
             .ok_or_else(|| CmdError::click(format!("build {} disappeared", build.build_id)))?;
@@ -173,18 +168,14 @@ async fn platform_progress(build: &BuildRun) -> Result<BTreeMap<String, Progress
     Ok(progress)
 }
 
-/// How often a text `--wait` rereads the jobs to report a new step. A step
-/// lasts from seconds to half an hour; a quarter of a minute says when one
-/// started without rereading every log each heartbeat.
-const FOLLOW_POLL: std::time::Duration = std::time::Duration::from_secs(15);
-
-/// Follow a build on stderr until no platform is still building: each
-/// platform's queue wait, every step as it starts and as it ends, and how
-/// long it took. `--json` stays one document and does not follow.
-async fn follow(build_id: &str) -> Result<(), CmdError> {
+/// Follow a build on stderr until no platform is still building, re-reading
+/// it every `period`: each platform's queue wait, every step as it starts and
+/// as it ends, and how long it took. `--json` stays one document and does not
+/// follow.
+async fn follow(build_id: &str, period: std::time::Duration) -> Result<(), CmdError> {
     let mut said = std::collections::HashSet::new();
     loop {
-        let build = current_build(build_id, false).await?;
+        let build = current_build(build_id, None).await?;
         let progress = platform_progress(&build).await?;
         for (name, progress) in &progress {
             let mut lines = progress.lines(false);
@@ -204,11 +195,11 @@ async fn follow(build_id: &str) -> Result<(), CmdError> {
             }
         }
         // A build whose submitter has not queued a job yet has nothing to
-        // follow; `current_build` with `wait` owns that wait and its limit.
-        // A build that already failed on one platform still has the other's
-        // job to wait for, and `--wait` waits for it: following stopped at
-        // the failure used to leave that wait silent for as long as the
-        // other job ran, which was an hour twice on one day.
+        // follow; `current_build` with a wait owns that wait. A build that
+        // already failed on one platform still has the other's job to wait
+        // for, and the wait waits for it: following stopped at the failure
+        // used to leave that wait silent for as long as the other job ran,
+        // which was an hour twice on one day.
         let building = build
             .platforms
             .values()
@@ -216,15 +207,16 @@ async fn follow(build_id: &str) -> Result<(), CmdError> {
         if !building {
             return Ok(());
         }
-        tokio::time::sleep(FOLLOW_POLL).await;
+        tokio::time::sleep(period).await;
     }
 }
 
 pub(super) async fn status(args: &BuildStatusArgs) -> Result<(), CmdError> {
-    if args.wait && !args.json {
-        follow(&args.build_id).await?;
+    let wait = args.wait_seconds.map(std::time::Duration::from_secs);
+    if let (Some(period), false) = (wait, args.json) {
+        follow(&args.build_id, period).await?;
     }
-    let build = current_build(&args.build_id, args.wait).await?;
+    let build = current_build(&args.build_id, wait).await?;
     let progress = platform_progress(&build).await?;
     if args.json {
         let mut document = serde_json::to_value(&build)?;
