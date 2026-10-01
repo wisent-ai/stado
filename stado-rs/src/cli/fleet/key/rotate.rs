@@ -183,16 +183,19 @@ async fn store_on_owner(
 }
 
 /// `key generate TARGET` — store a fresh pair and print only the public key.
-pub async fn generate(runner: &Runner, target: &str) -> Result<bool, String> {
+pub async fn generate(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
     let (public_key, fingerprint) = generate_stored(runner, target).await?;
-    println!("stored credential item {} ({fingerprint})", item_id(target));
-    println!("public key: {public_key}");
-    Ok(true)
+    let item = item_id(target);
+    super::commands::answer(
+        as_json,
+        &json!({ "target": target, "item": item, "fingerprint": fingerprint, "public_key": public_key }),
+        &format!("stored credential item {item} ({fingerprint})\npublic key: {public_key}"),
+    )
 }
 
 /// `key rotate TARGET` — replace the target key end to end, restoring the old
 /// credential-store item if the new key cannot open the channel.
-pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
+pub async fn rotate(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
     let client = configured_client()?;
     // The rollback below writes this item back, so both halves of the pair and
     // the description beside them are read explicitly. `private_key` and
@@ -232,11 +235,19 @@ pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
     match verify_new_key(runner, target).await {
         Ok(answered) => {
             remove_public_key(runner, target, &old_public).await?;
-            println!(
-                "rotated '{target}': {old_fingerprint} -> {} (answered as {answered})",
-                pair.fingerprint
-            );
-            Ok(true)
+            super::commands::answer(
+                as_json,
+                &json!({
+                    "target": target,
+                    "from": old_fingerprint,
+                    "to": pair.fingerprint,
+                    "answered_as": answered,
+                }),
+                &format!(
+                    "rotated '{target}': {old_fingerprint} -> {} (answered as {answered})",
+                    pair.fingerprint
+                ),
+            )
         }
         Err(exc) => {
             client

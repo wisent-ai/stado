@@ -18,10 +18,15 @@ use crate::queue::JobStorage;
 /// entrance that no longer exists, and leaving it behind would make `invite`
 /// build a one-liner on a dead address — the exact failure this whole command
 /// exists to prevent.
-pub async fn down() -> Result<bool, String> {
+pub async fn down(as_json: bool) -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let Some(ingress) = published(&store).await? else {
-        println!("no ingress is published; nothing to stop");
+        if as_json {
+            let answer = serde_json::json!({ "published": false, "stopped": false });
+            crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        } else {
+            println!("no ingress is published; nothing to stop");
+        }
         return Ok(true);
     };
     let this_machine = crate::providers::vast::system_hostname();
@@ -38,6 +43,22 @@ pub async fn down() -> Result<bool, String> {
     store.delete_blob(INGRESS_PATH).await.map_err(|exc| {
         format!("both processes were stopped but {INGRESS_PATH} could not be removed: {exc}")
     })?;
+    if as_json {
+        let answer = serde_json::json!({
+            "published": true,
+            "stopped": true,
+            "base_url": ingress.base_url,
+            "tunnel": { "pgid": ingress.pid_hint.tunnel_pgid, "signalled": tunnel_stopped },
+            "listener": {
+                "pgid": ingress.pid_hint.listener_pgid,
+                "port": ingress.listener_port,
+                "signalled": listener_stopped,
+            },
+            "unpublished": INGRESS_PATH,
+        });
+        crate::cli::print_answer(&answer, true).map_err(|exc| exc.to_string())?;
+        return Ok(true);
+    }
     println!("ingress {} is down", ingress.base_url);
     println!(
         "  tunnel:   {}",

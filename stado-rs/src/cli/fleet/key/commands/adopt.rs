@@ -158,7 +158,7 @@ async fn ensure_public_key(runner: &Runner, target: &str) -> Result<String, Stri
         return Ok(public_key.trim().to_string());
     }
     println!("no key pair for '{target}' yet; minting one into {id}");
-    rotate::generate(runner, target).await?;
+    rotate::generate(runner, target, false).await?;
     configured_client()?
         .read_declared_string(&id, "public_key")
         .await

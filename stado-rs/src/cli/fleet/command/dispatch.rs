@@ -72,7 +72,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         FleetCommands::Ingress(sub) => match sub {
             IngressCommands::Up { port, named } => ingress::up(port, named).await,
             IngressCommands::Status { json } => ingress::status(json).await,
-            IngressCommands::Down => ingress::down().await,
+            IngressCommands::Down { json } => ingress::down(json).await,
         },
         FleetCommands::Methods { json } => enroll::catalog::methods(json).await,
         FleetCommands::Join { json } => enroll::join(json).await,
@@ -85,13 +85,19 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         FleetCommands::Key(sub) => {
             let runner = crate::deploy::production_runner();
             match sub {
-                KeyCommands::Add { target, from } => key::add(&runner, &target, &from).await,
+                KeyCommands::Add { target, from, json } => {
+                    key::add(&runner, &target, &from, json).await
+                }
                 KeyCommands::Ls { json } => key::ls(json).await,
                 KeyCommands::Rm { target, json } => key::rm(&target, json).await,
-                KeyCommands::Install { target } => key::install(&runner, &target).await,
-                KeyCommands::Check { target } => key::check(&runner, &target).await,
-                KeyCommands::Generate { target } => key::rotate::generate(&runner, &target).await,
-                KeyCommands::Rotate { target } => key::rotate::rotate(&runner, &target).await,
+                KeyCommands::Install { target, json } => key::install(&runner, &target, json).await,
+                KeyCommands::Check { target, json } => key::check(&runner, &target, json).await,
+                KeyCommands::Generate { target, json } => {
+                    key::rotate::generate(&runner, &target, json).await
+                }
+                KeyCommands::Rotate { target, json } => {
+                    key::rotate::rotate(&runner, &target, json).await
+                }
             }
         }
     }

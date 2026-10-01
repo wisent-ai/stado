@@ -10,10 +10,25 @@ use super::super::store::{
     ITEM_TYPE,
 };
 
+/// One key command's answer: the sentence a person reads, or with `--json`
+/// the document carrying the same facts.
+pub(in crate::cli::fleet::key) fn answer(
+    as_json: bool,
+    document: &serde_json::Value,
+    sentence: &str,
+) -> Result<bool, String> {
+    if as_json {
+        crate::cli::print_answer(document, true).map_err(|exc| exc.to_string())?;
+    } else {
+        println!("{sentence}");
+    }
+    Ok(true)
+}
+
 /// `key add TARGET --from PATH` — move an existing private key into the
 /// selected store. The source file is removed only after a read-back verifies
 /// the stored material; private content is never printed.
-pub async fn add(runner: &Runner, target: &str, from: &str) -> Result<bool, String> {
+pub async fn add(runner: &Runner, target: &str, from: &str, as_json: bool) -> Result<bool, String> {
     let metadata = std::fs::symlink_metadata(from)
         .map_err(|exc| format!("cannot inspect key file {from}: {exc}"))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
@@ -105,8 +120,11 @@ pub async fn add(runner: &Runner, target: &str, from: &str) -> Result<bool, Stri
         });
     }
     let _ = std::fs::remove_file(format!("{from}.pub"));
-    println!("moved key into credential item {id} ({fingerprint})");
-    Ok(true)
+    answer(
+        as_json,
+        &json!({ "target": target, "item": id, "fingerprint": fingerprint }),
+        &format!("moved key into credential item {id} ({fingerprint})"),
+    )
 }
 
 /// `key ls [--json]` — metadata of every stored SSH host key. No private fields.
@@ -183,7 +201,7 @@ pub async fn rm(target: &str, as_json: bool) -> Result<bool, String> {
 
 /// `key install TARGET` — append the stored public key to the target's
 /// authorized_keys through the existing credential-store-backed channel.
-pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
+pub async fn install(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
     let client = configured_client()?;
     let public_key = client
         .read_declared_string(&item_id(target), "public_key")
@@ -211,12 +229,15 @@ pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
     );
     let (argv, _key) = channel_argv(target, destination, &command).await?;
     run_checked(runner, CommandSpec::new(argv), "authorized_keys install").await?;
-    println!("installed public key for '{target}' into authorized_keys on {destination}");
-    Ok(true)
+    answer(
+        as_json,
+        &json!({ "target": target, "installed": true, "destination": destination }),
+        &format!("installed public key for '{target}' into authorized_keys on {destination}"),
+    )
 }
 
 /// `key check TARGET` — verify the selected-store key opens the channel.
-pub async fn check(runner: &Runner, target: &str) -> Result<bool, String> {
+pub async fn check(runner: &Runner, target: &str, as_json: bool) -> Result<bool, String> {
     let registry = crate::targets::load_registry_auto()
         .await
         .map_err(|exc| exc.to_string())?;
@@ -229,9 +250,12 @@ pub async fn check(runner: &Runner, target: &str) -> Result<bool, String> {
     let destination = connection.destination;
     let (argv, _key) = channel_argv(target, destination, "hostname").await?;
     let answered = run_checked(runner, CommandSpec::new(argv), "hostname over the channel").await?;
-    println!(
-        "credential-store key verified: {destination} answered as {}",
-        answered.trim()
-    );
-    Ok(true)
+    answer(
+        as_json,
+        &json!({ "target": target, "destination": destination, "answered_as": answered.trim() }),
+        &format!(
+            "credential-store key verified: {destination} answered as {}",
+            answered.trim()
+        ),
+    )
 }

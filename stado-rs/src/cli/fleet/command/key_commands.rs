@@ -11,6 +11,9 @@ pub enum KeyCommands {
         /// Private key file removed after verified storage.
         #[arg(long)]
         from: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// List stored SSH host keys (metadata only).
     Ls {
@@ -30,20 +33,32 @@ pub enum KeyCommands {
     Install {
         /// Registry target.
         target: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Verify the stored key opens the channel to the target.
     Check {
         /// Registry target.
         target: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Generate a fresh ed25519 pair for the target into the credential store.
     Generate {
         /// Registry target.
         target: String,
+        /// Emit the machine-readable document instead of the lines.
+        #[arg(long)]
+        json: bool,
     },
     /// Rotate the target's key end to end, with rollback on failure.
     Rotate {
         /// Registry target.
         target: String,
+        /// Emit the machine-readable document instead of the sentence.
+        #[arg(long)]
+        json: bool,
     },
 }

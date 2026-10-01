@@ -29,5 +29,9 @@ pub enum IngressCommands {
         json: bool,
     },
     /// Close the tunnel, stop the listener, and unpublish the address.
-    Down,
+    Down {
+        /// Emit the machine-readable document instead of the lines.
+        #[arg(long)]
+        json: bool,
+    },
 }

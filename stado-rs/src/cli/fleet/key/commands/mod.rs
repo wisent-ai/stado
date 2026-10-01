@@ -7,3 +7,4 @@ mod manage;
 
 pub use adopt::{install_first_contact, AdoptOutcome};
 pub use manage::{add, check, install, ls, rm};
+pub(in crate::cli::fleet::key) use manage::answer;
