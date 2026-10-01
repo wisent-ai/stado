@@ -1703,3 +1703,56 @@ products:
   approval_note: 'Operator, 2026-09-03: "releases: false is not an argument against
     cataloguing" - the catalogue already carries kind: cargo products built from a
     checkout, and "it is a product in everything but the record".'
+- id: compute-marketplace
+  name: Compute Marketplace
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/compute.wisent.com
+  description: 'A private, conditional Stado surface for evaluating an operator-controlled
+    GPU catalogue and direct capacity resale: a web interface, one backend process
+    per host, and instances that run as Stado machine jobs.'
+  roadmap: []
+  integrations:
+  - product: stado
+    description: Every instance is one Stado machine job whose command runs the
+      customer's container; the backend reads and cancels those jobs through the
+      Stado CLI.
+    source: compute.wisent.com/backend/src/scheduler/cloud.rs
+  evidence:
+  - wisent-ai/compute.wisent.com/README.md
+  - wisent-ai/compute.wisent.com/docs/operations.md
+  surfaces:
+  - kind: web
+    repository: wisent-ai/compute.wisent.com
+  - kind: service
+    repository: wisent-ai/compute.wisent.com
+  installations:
+  - surface: web
+    kind: local-build
+    repository: wisent-ai/compute.wisent.com
+    command: cd frontend && npm ci && npm run build
+  - surface: service
+    kind: cargo
+    repository: wisent-ai/compute.wisent.com
+    manifest: Cargo.toml
+    binaries:
+    - wisent-backend
+  service:
+    installable: true
+    unit: com.wisent.compute-marketplace
+    program: $HOME/.stado/bin/wisent-backend
+    args: []
+    summary: The one Compute Marketplace process per host, the backend API; the
+      frontend is a web release and machine work is Stado's.
+    retired_units:
+    - com.wisent.compute.marketplace-backend
+    - com.wisent.compute.marketplace-frontend
+    - com.wisent.compute.marketplace-agent
+  dependencies:
+  - product: stado
+    surface: service
+    for_surface: service
+  - product: skarbiec
+    surface: service
+    for_surface: service
