@@ -14,13 +14,12 @@ use crate::cli::host::checks::{
 /// `stado host link TARGET [--json]` — why this host went quiet, in one
 /// payload.
 ///
-/// The incident: between 18:29 and 18:35 UTC on 2026-08-19 control-host
-/// answered no ping and no ssh, then came back on `direct 10.0.0.253:41641`.
-/// Six minutes of a host being unreachable left no trace anywhere in this
-/// product. The only evidence was two ping packets an operator happened to
-/// send, and the reader-side refusals it caused — "service directory cache is
-/// stale", "registry authority exited: ssh connect Operation timed out" — went
-/// to `~/.stado/logs/stado-resolver.err` and nowhere a person would look. This
+/// A control host that answers no ping and no ssh for minutes and then comes
+/// back on a direct path leaves no trace anywhere in this product: the only
+/// evidence is the ping packets an operator happens to send, and the
+/// reader-side refusals it causes — "service directory cache is stale",
+/// "registry authority exited: ssh connect Operation timed out" — go to the
+/// resolver's error log and nowhere a person would look. This
 /// command is the trace: the host's own account of its path and its sleep and
 /// wake times, the silences recorded against it, and what refused because of
 /// them.
@@ -41,9 +40,9 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
 
     // The registry through the last-known-good cache, not the authority alone.
     // This is the command an operator runs while the control plane is the thing
-    // that is sick: on 2026-08-19 every host command died on the same refused
-    // ssh the operator was trying to diagnose, which is a diagnostic that dies
-    // with its subject.
+    // that is sick: every host command dying on the same refused ssh the
+    // operator is trying to diagnose is a diagnostic that dies with its
+    // subject.
     let (registry, notice) = crate::targets::fetch_registry_or_last_good()
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;

@@ -57,9 +57,9 @@ if [ -d "$bin" ]; then
     if [ "$kind" = binary ] && [ ! -x "$program" ]; then kind=marker; fi
     # The manifest is a claim about specific bytes. Reporting its commit without
     # checking it still describes the file beside it is the same unverified
-    # declaration this command exists to find: on 2026-08-12 this laptop's
-    # manifest named a commit while the binary next to it had been replaced by
-    # hand, and the tool repeated the manifest with a straight face.
+    # declaration this command exists to find: a manifest can name a commit
+    # while the binary next to it has been replaced by hand, and a tool that
+    # repeats the manifest repeats a fiction.
     digest=-
     if [ "$kind" = binary ]; then
       if [ -x /usr/bin/shasum ]; then

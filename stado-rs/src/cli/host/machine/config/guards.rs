@@ -164,9 +164,8 @@ pub(super) fn warn_unbacked_object_namespace(target: &str, key: &str, value: &st
 /// time, and the other three fail exactly the same way: a publisher, client or
 /// deployer whose Skarbiec item is outside the host's verifier grant closes
 /// that verifier, and `stado doctor` then answers `release verifier grant item
-/// set mismatch (missing=[...])` — which happened four times on 2026-09-04
-/// alone, each time hours after the declaration, each time blocking a release
-/// train, and each time repaired by the one command this note names.
+/// set mismatch (missing=[...])` — hours after the declaration, blocking a
+/// release train, and repaired each time by the one command this note names.
 ///
 /// Only the remedy differs per map, so only the remedy is looked up here.
 pub(super) fn warn_unbacked_verifier_item(target: &str, key: &str, value: &str) {

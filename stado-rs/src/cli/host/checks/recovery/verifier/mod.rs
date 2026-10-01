@@ -76,11 +76,11 @@ pub(crate) async fn apply_object_verifier_repair(target: &str) -> Result<Value, 
     })?;
     let items = crate::config::object_verifier_items(namespaces);
     // Reconciliation used to derive "exact" solely from this machine's
-    // declaration. On 2026-09-04 the target declared `spis-crawls`, this
-    // machine did not, and the command removed nothing missing locally before
-    // reporting exact=true while the target's whole object boundary stayed
-    // closed. Read the configuration the target's services actually consume
-    // and refuse before touching its grant when the two inputs differ.
+    // declaration: a namespace the target declares and this machine does not
+    // is removed nowhere, and the command reports exact=true while the
+    // target's whole object boundary stays closed. Read the configuration
+    // the target's services actually consume and refuse before touching its
+    // grant when the two inputs differ.
     let canonical = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;

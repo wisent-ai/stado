@@ -10,10 +10,9 @@ use crate::cli::CmdError;
 ///
 /// A registry write is a whole-document replace, so a caller holding a stale
 /// or differently-modelled copy silently deletes every key its own model does
-/// not know about. That is not hypothetical: on 2026-08-04 the canonical
-/// document lost `channels`, `enrollment` and `fleets` between one read and
-/// the next, and gained a `service_directory` block no checkout in the tree
-/// modelled at the time — divergent builds writing the same object, each
+/// not know about: the canonical document loses whole sections between one
+/// read and the next, and gains a block no checkout in the tree models —
+/// divergent builds writing the same object, each
 /// erasing what it could not name. `targets::Registry` now keeps unmodelled
 /// top-level keys in `extra`, and `fetch_document` hands read-modify-write
 /// callers the raw document; this is the backstop for a payload that came
@@ -107,8 +106,8 @@ pub(super) fn refuse_unsafe_replace(
             // whole document is replaced, so a writer holding an older copy
             // publishes its older directory over a newer one and every
             // consumer's staleness check silently starts agreeing with it.
-            // Observed on 2026-08-12, when the directory went from generation
-            // 10 back to 5 and two corrected endpoints reverted with it.
+            // A directory going from a later generation back to an earlier
+            // one reverts every endpoint corrected in between.
             if let (Some(before), Some(after)) = (
                 service_directory_generation(&blob.content),
                 service_directory_generation(payload),
@@ -123,14 +122,13 @@ pub(super) fn refuse_unsafe_replace(
                          --force only if publishing the older directory is the intent."
                     )));
                 }
-                // The same lost update one notch subtler, and the one that
-                // actually happened. On 2026-09-01 a corrected brama endpoint
-                // was published, and a writer holding a copy from before it
-                // pushed its own directory back at the SAME generation. The
-                // decrease guard above never fired, every consumer's
-                // staleness check agreed with the reverted copy, and the
-                // correction was gone with nothing recording that it had
-                // been.
+                // The same lost update one notch subtler: a corrected
+                // endpoint is published, and a writer holding a copy from
+                // before it pushes its own directory back at the SAME
+                // generation. The decrease guard above never fires, every
+                // consumer's staleness check agrees with the reverted copy,
+                // and the correction is gone with nothing recording that it
+                // had been.
                 //
                 // `push --if-generation` now refuses that write outright, and
                 // read-modify-write callers have always used `push_document_if`
@@ -165,16 +163,13 @@ pub(super) fn refuse_unsafe_replace(
     // The floor `--force` may not cross. Every other guard here answers "did
     // the caller mean to drop this?"; this one answers "is this a fleet at
     // all?", and no legitimate edit to a three-host registry leaves zero
-    // targets. On 2026-09-01 a worker ran
-    // `stado registry push --force < /tmp/registry_updated.json`: the command
-    // takes a PATH, so stdin was never read, `source_path(None)` resolved to
-    // the repository's bundled `data/fleet/registry.json` - 65 bytes,
-    // `{"schema_version":2,"coordinators":[],"targets":[]}` - and `--force`
-    // waved it past the deleted-key guard that had refused the first attempt.
-    // The live document lost all three targets, all eighteen of the mini's
-    // service declarations, and the `fleets`, `inference`,
-    // `placement_profiles`, `release_control` and `service_directory` keys.
-    // `stado service reap` then answered that the always-on Mac is not in the
+    // targets. The command takes a PATH, so a caller that pipes a document on
+    // stdin and passes `--force` has `source_path(None)` resolve to the
+    // repository's bundled `data/fleet/registry.json` — an empty fleet of
+    // `{"schema_version":2,"coordinators":[],"targets":[]}` — and `--force`
+    // waves it past the deleted-key guard. The live document then loses
+    // every target, every service declaration and every fleet-level key, and
+    // `stado service reap` answers that the always-on host is not in the
     // canonical registry.
     if !allow_empty_fleet {
         if let Some(blob) = current {

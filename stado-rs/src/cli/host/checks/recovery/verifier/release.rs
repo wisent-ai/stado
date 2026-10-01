@@ -108,9 +108,9 @@ pub(crate) async fn apply_service_verifier_repair(target: &str) -> Result<Value,
 ///
 /// `command` is the metadata Skarbiec is asked for: `grants`, `vaults` or
 /// `list`. Grants were `skarbiec tokens` until Skarbiec retired that word for
-/// `grant list`; on 2026-09-18 every `release-verifier` repair on the fleet
-/// answered `unknown command: tokens` for that reason, so the words Skarbiec
-/// actually takes are chosen here.
+/// `grant list`, after which every `release-verifier` repair answered
+/// `unknown command: tokens`, so the words Skarbiec actually takes are
+/// chosen here.
 pub(super) async fn remote_skarbiec_metadata(
     target: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
