@@ -82,8 +82,8 @@ struct VastReadiness: Decodable, Equatable, Sendable {
     }
 }
 
-/// `stado vast monitor`: what Vast says about our machine beside what the
-/// queue holds.
+/// `stado market monitor --provider vast`: what Vast says about our machine
+/// beside what the queue holds.
 struct VastSnapshot: Decodable, Equatable, Sendable {
     struct Credential: Decodable, Equatable, Sendable {
         let channel: VastReadiness.Channel
@@ -115,7 +115,8 @@ struct VastSnapshot: Decodable, Equatable, Sendable {
     }
 }
 
-/// The one place that runs `stado vast` and holds what it answered.
+/// The one place that runs `stado market --provider vast` and holds what it
+/// answered.
 ///
 /// Readiness exits non-zero whenever the fleet cannot earn and still prints
 /// its whole document, so this store keeps the payload of a failed run rather
@@ -140,7 +141,7 @@ final class VastStore: ObservableObject {
     }
 
     nonisolated static func readinessArguments(vaultHost: String?) -> [String] {
-        var arguments = ["vast", "readiness", "--json"]
+        var arguments = ["market", "readiness", "--provider", "vast", "--json"]
         if let vaultHost, !vaultHost.isEmpty {
             arguments += ["--vault-host", vaultHost]
         }
@@ -148,23 +149,27 @@ final class VastStore: ObservableObject {
     }
 
     nonisolated static func monitorArguments() -> [String] {
-        ["vast", "monitor", "--json"]
+        ["market", "monitor", "--provider", "vast", "--json"]
     }
 
     nonisolated static func previewArguments(idleWindowSeconds: Int, priceGPU: Double) -> [String] {
         [
-            "vast", "auto-list", "--dry-run", "--once",
+            "market", "auto-list", "--provider", "vast", "--dry-run", "--once",
             "--idle-window-s", String(idleWindowSeconds),
             "--price-gpu", String(priceGPU),
+            "--max-duration-s", String(EarningConstants.maxRentalSeconds),
         ]
     }
 
-    nonisolated static func listArguments(priceGPU: Double) -> [String] {
-        ["vast", "list", "--price-gpu", String(priceGPU), "--json"]
+    nonisolated static func listArguments(priceGPU: Double, priceDisk: Double) -> [String] {
+        [
+            "market", "list", "--provider", "vast",
+            "--price-gpu", String(priceGPU), "--price-disk", String(priceDisk), "--json",
+        ]
     }
 
     nonisolated static func unlistArguments() -> [String] {
-        ["vast", "unlist", "--json"]
+        ["market", "unlist", "--provider", "vast", "--json"]
     }
 
     func refresh(vaultHost: String? = nil) async {
@@ -218,8 +223,11 @@ final class VastStore: ObservableObject {
         }
     }
 
-    func list(priceGPU: Double) async {
-        await mutate(Self.listArguments(priceGPU: priceGPU), what: "Listed at $\(priceGPU)/h")
+    func list(priceGPU: Double, priceDisk: Double) async {
+        await mutate(
+            Self.listArguments(priceGPU: priceGPU, priceDisk: priceDisk),
+            what: "Listed at $\(priceGPU)/h and $\(priceDisk)/GB-month"
+        )
     }
 
     func unlist() async {

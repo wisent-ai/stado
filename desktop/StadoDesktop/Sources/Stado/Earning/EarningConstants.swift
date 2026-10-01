@@ -1,13 +1,18 @@
 import Foundation
 
-/// The defaults the earning screen runs `stado vast` with: the CLI's own
-/// price and idle window, repeated here so the form opens on what the daemon
-/// would do unattended.
+/// The values the earning form opens on. `stado market` has no price or
+/// window of its own: every one is an argument, and these are the starting
+/// values of the fields that supply them.
 enum EarningConstants {
-    /// `stado vast auto-list --price-gpu` default, in US dollars per hour.
+    /// Starting `--price-gpu`, in US dollars per GPU-hour.
     static let defaultPriceGPU: Double = 0.50
-    /// `stado vast auto-list --idle-window-s` default.
+    /// Starting `--price-disk`, in US dollars per GB-month.
+    static let defaultPriceDisk: Double = 0.05
+    /// Starting `--idle-window-s` for the preview.
     static let defaultIdleWindowSeconds: Int = 300
+    /// `--max-duration-s` the preview evaluates with: the longest single
+    /// rental an offer allows.
+    static let maxRentalSeconds: Int = 3600
     /// The idle windows the preview stepper offers: from listing the moment
     /// the queue empties up to an hour, which is also the default cap on a
     /// single rental.

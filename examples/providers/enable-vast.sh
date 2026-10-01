@@ -1,18 +1,22 @@
 #!/bin/sh
-# enable-vast.sh — light up the vast.ai marketplace for your stado.
+# enable-vast.sh — offer this fleet's idle GPU on the Vast.ai marketplace.
 # The key comes from YOUR env: VAST_API_KEY (vast.ai console, account page).
-# Usage: sh enable-vast.sh
+# Usage: VAST_HOST=<host whose vault serves Skarbiec> PRICE_GPU=<usd/hour> \
+#          PRICE_DISK=<usd/GB-month> sh enable-vast.sh
 set -eu
 
-SB=${SKARBIEC_BIN:-skarbiec}
+: "${VAST_API_KEY:?VAST_API_KEY must hold the vast.ai API key}"
+: "${VAST_HOST:?VAST_HOST must name the host whose vault serves Skarbiec}"
+: "${PRICE_GPU:?PRICE_GPU must hold the per-GPU-hour price in USD}"
+: "${PRICE_DISK:?PRICE_DISK must hold the per-GB-month disk price in USD}"
 
-# 1. api key into YOUR skarbiec (field per the vast provider contract)
-"$SB" set stado-vast --type env "api_key=$VAST_API_KEY"
+# 1. the key into the fleet vault as item `vast`, field `api_key`; it travels
+#    on standard input, never as an argument
+printf '{"api_key":"%s"}' "$VAST_API_KEY" |
+  stado credentials item put --host "$VAST_HOST" --type api-key vast
 
-# 2. enable the provider in the stado config
-jq '.providers = ((.providers + ["vast"]) | unique) | .providers_disabled -= ["vast"]' \
-  ~/.config/stado/config.json > ~/.config/stado/config.json.new
-mv ~/.config/stado/config.json.new ~/.config/stado/config.json
+# 2. confirm the marketplace accepts it
+stado market readiness --provider vast
 
-# 3. verify with a marketplace listing
-stado vast list
+# 3. list the machine
+stado market list --provider vast --price-gpu "$PRICE_GPU" --price-disk "$PRICE_DISK"

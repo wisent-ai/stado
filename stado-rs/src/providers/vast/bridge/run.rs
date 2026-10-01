@@ -50,8 +50,8 @@ pub async fn auto_list_loop(
     if client.is_none() && !params.dry_run {
         return Err(VastError::config(
             "auto-list without --dry-run needs a Vast.ai API key; run it with \
-             --dry-run to see the decisions, or `stado vast readiness` for what \
-             is missing",
+             --dry-run to see the decisions, or `stado market readiness --provider vast` \
+             for what is missing",
         ));
     }
     // WC_VAST_MAX_DURATION_S env wins (cli.py uneditable).

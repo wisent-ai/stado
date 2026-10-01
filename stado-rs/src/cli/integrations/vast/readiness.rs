@@ -1,17 +1,13 @@
-//! `stado vast readiness` — whether this machine can actually earn on
-//! Vast.ai, and when it cannot, which provisioning step is missing.
+//! `stado market readiness --provider vast` — whether this machine can
+//! actually earn on Vast.ai, and when it cannot, which provisioning step is
+//! missing.
 //!
-//! Every other command in this group answered the same sentence for three
-//! different states: `stado vast status` says `Skarbiec item
-//! stado-vast field api_key is required` under a `403 consumer not authorized
-//! to read item field`, while the fleet vault on the host serving Skarbiec
-//! declared no `stado-vast` item at all: the refusal named a grant that could
-//! not exist, and the operator had no command that would say so.
-//!
-//! This one asks all three authorities in order — the Skarbiec channel this
-//! host has, the vault that would hold the item, and Vast.ai itself — and
-//! reports what each answered. A key that resolves is not the verdict:
-//! `ready` means Vast.ai accepted it and named our machine.
+//! It asks three authorities in order — the Skarbiec channel this host has,
+//! the vault that would hold the item, and Vast.ai itself — and reports what
+//! each answered, so a `403 consumer not authorized to read item field` is
+//! told apart from a vault that declares no item at all. A key that resolves
+//! is not the verdict: `ready` means Vast.ai accepted it and named our
+//! machine.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -219,7 +215,7 @@ fn remedy(report: &Readiness, reading: &VastCredentialReading) -> Vec<String> {
             format!(
                 "replace the {FIELD} field of {ITEM} on {vault} with a key from console.vast.ai"
             ),
-            "stado vast readiness".to_string(),
+            "stado market readiness --provider vast".to_string(),
         ],
         Verdict::ItemAbsent => vec![
             format!(
@@ -227,9 +223,9 @@ fn remedy(report: &Readiness, reading: &VastCredentialReading) -> Vec<String> {
                  (payload on stdin: an api-key document carrying {FIELD})"
             ),
             grant,
-            "stado vast readiness".to_string(),
+            "stado market readiness --provider vast".to_string(),
         ],
-        Verdict::NotAuthorized => vec![grant, "stado vast readiness".to_string()],
+        Verdict::NotAuthorized => vec![grant, "stado market readiness --provider vast".to_string()],
         Verdict::NoChannel => vec![
             "run this on the host that carries the bridge, or install that host's \
              agent grant file"
@@ -237,7 +233,7 @@ fn remedy(report: &Readiness, reading: &VastCredentialReading) -> Vec<String> {
         ],
         Verdict::Unknown => vec![
             format!("stado credentials item show --host {vault} {ITEM}"),
-            "stado vast readiness --vault-host <host>".to_string(),
+            "stado market readiness --provider vast --vault-host <host>".to_string(),
         ],
     }
 }

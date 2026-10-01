@@ -92,7 +92,7 @@ pub(crate) use entry::spec::jobs::{
 pub(crate) use entry::spec::spend::billing::BillingCommands;
 pub(crate) use entry::spec::spend::cost::CostCommands;
 pub(crate) use entry::spec::spend::quota::QuotaCommands;
-pub(crate) use entry::spec::spend::vast::VastCommands;
+pub(crate) use entry::spec::spend::market::{MarketCommands, MarketProvider};
 
 /// One answer in the two forms cli.md rule 13 asks for, from the same value:
 /// pretty JSON with `--json`, otherwise one `key: value` line per top-level

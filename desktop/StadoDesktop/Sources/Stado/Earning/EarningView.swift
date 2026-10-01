@@ -3,16 +3,16 @@ import WisentDesignSystem
 
 /// Whether the fleet is earning from its idle GPU, and what is stopping it.
 ///
-/// The screen exists because the capability had no graphical surface at all:
-/// `stado vast` could list the box on the Vast.ai marketplace, take it down
-/// when work arrives, and say why it cannot, while the console showed none of
-/// it. Every panel here runs the same command a terminal would and shows the
+/// The same capability as `stado market --provider vast`: list the box on the
+/// Vast.ai marketplace, take it down when work arrives, and say why it
+/// cannot. Every panel runs the same command a terminal would and shows the
 /// CLI's own sentences.
 struct EarningView: View {
     @ObservedObject var store: VastStore
     let scope: String
 
     @State private var priceGPU = EarningConstants.defaultPriceGPU
+    @State private var priceDisk = EarningConstants.defaultPriceDisk
     @State private var idleWindowSeconds = EarningConstants.defaultIdleWindowSeconds
     @State private var pendingListing = false
     @State private var pendingRemoval = false
@@ -30,7 +30,7 @@ struct EarningView: View {
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
                 if let problem = store.problem {
-                    WisentErrorBanner(title: "stado vast refused", detail: problem)
+                    WisentErrorBanner(title: "stado market refused", detail: problem)
                 }
                 verdictPanel
                 snapshotPanel
@@ -81,7 +81,7 @@ struct EarningView: View {
         } else if store.isRefreshing {
             WisentEmptyPanel(
                 title: "Reading",
-                detail: "stado vast readiness --json asks the channel, the vault and Vast.ai.",
+                detail: "stado market readiness --provider vast --json asks the channel, the vault and Vast.ai.",
                 symbol: "dollarsign.circle"
             )
         } else {
@@ -112,7 +112,7 @@ struct EarningView: View {
             } else if let problem = store.snapshotProblem {
                 Text(problem).foregroundStyle(WisentDesign.danger).textSelection(.enabled)
             } else {
-                Text("stado vast monitor has not answered yet.")
+                Text("stado market monitor --provider vast has not answered yet.")
                     .font(WisentTypeScale.caption())
             }
         }
@@ -157,6 +157,8 @@ struct EarningView: View {
             HStack(spacing: WisentDesign.Space.x3) {
                 TextField("Price per GPU-hour", value: $priceGPU, format: .number)
                     .frame(width: EarningConstants.priceFieldWidth)
+                TextField("Price per GB-month", value: $priceDisk, format: .number)
+                    .frame(width: EarningConstants.priceFieldWidth)
                 Button("List…") { pendingListing = true }
                     .disabled(store.isWorking)
                 Button("Unlist…", role: .destructive) { pendingRemoval = true }
@@ -173,19 +175,19 @@ struct EarningView: View {
     private var listingDialog: WisentDecisionDialog {
         WisentDecisionDialog(
             tone: .warning,
-            title: "List this machine at $\(priceGPU)/h?",
+            title: "List this machine at $\(priceGPU)/h and $\(priceDisk)/GB-month?",
             lines: [
                 "Renters can take the GPU until the offer is removed. Work this fleet queues will wait for a rental already running."
             ],
             listing: [
-                "command: " + StadoCLI.commandLine(VastStore.listArguments(priceGPU: priceGPU))
+                "command: " + StadoCLI.commandLine(VastStore.listArguments(priceGPU: priceGPU, priceDisk: priceDisk))
             ],
             footnote: "Runs the same command a terminal would.",
             actions: [
                 WisentAction("Cancel", kind: .secondary) { pendingListing = false },
                 WisentAction("List", symbol: "dollarsign.circle", kind: .primary) {
                     pendingListing = false
-                    Task { await store.list(priceGPU: priceGPU) }
+                    Task { await store.list(priceGPU: priceGPU, priceDisk: priceDisk) }
                 },
             ]
         )

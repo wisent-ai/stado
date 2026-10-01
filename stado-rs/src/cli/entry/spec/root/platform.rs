@@ -109,9 +109,10 @@ pub(crate) enum PlatformCommands {
         print_install_script: bool,
     },
 
-    /// Vast.ai marketplace host-listing (rent our idle GPU).
+    /// Offer this fleet's idle GPU on a compute marketplace, and withdraw it
+    /// when the queue has work.
     #[command(subcommand)]
-    Vast(VastCommands),
+    Market(MarketCommands),
 
     /// Inspect and reap live agent VMs across the configured cloud providers.
     #[command(subcommand)]

@@ -1,14 +1,12 @@
 //! Vast credential resolution: the two Skarbiec channels the host bridge
-//! reads `stado-vast/api_key` through, the reading each attempt produces, and
-//! the availability probe the CLI gates the auto-list bridge on.
+//! reads `vast/api_key` through, the reading each attempt produces, and the
+//! availability probe the CLI gates the auto-list bridge on.
 //!
-//! The reading is structured rather than a bare string because the string
-//! could only ever say "empty", and "empty" was the answer for three
-//! different states: this host has no Skarbiec channel at all, the channel
-//! answered and refused, or the vault holds no such item. Reporting a missing
-//! `stado-vast` item as `403 consumer not authorized to read item field`
-//! names a grant that cannot exist. `stado vast readiness` turns this reading
-//! plus the vault's own answer into one verdict.
+//! The reading is structured rather than a bare string because "empty" is
+//! the answer for three different states: this host has no Skarbiec channel
+//! at all, the channel answered and refused, or the vault holds no such item.
+//! `stado market readiness --provider vast` turns this reading plus the
+//! vault's own answer into one verdict.
 
 use serde::Serialize;
 
@@ -57,10 +55,10 @@ impl VastCredentialChannel {
     }
 }
 
-/// What one attempt to read `stado-vast/api_key` observed.
+/// What one attempt to read `vast/api_key` observed.
 ///
 /// The key itself is never serialized: this record is printed by
-/// `stado vast readiness` and read by Stado Desktop.
+/// `stado market readiness --provider vast` and read by Stado Desktop.
 #[derive(Debug, Clone, Serialize)]
 pub struct VastCredentialReading {
     #[serde(skip)]
@@ -86,8 +84,8 @@ impl VastCredentialReading {
         };
         format!(
             "no Vast.ai API key on this host: {cause}. This machine cannot list \
-             capacity until stado-vast/api_key resolves; `stado vast readiness` \
-             reports whether the fleet vault declares the item and which grant \
+             capacity until vast/api_key resolves; `stado market readiness --provider \
+             vast` reports whether the fleet vault declares the item and which grant \
              is missing"
         )
     }

@@ -1,47 +1,51 @@
-//! `stado vast` command group.
+//! The Vast.ai adapter behind `stado market --provider vast`.
 //!
-//! Port of the `vast` group in `stado/cli.py`: `list`, `unlist`, `status`,
-//! `monitor`, and the `auto-list` daemon, plus the `readiness` verdict this
-//! port added. Output is `json.dumps(..., indent=2)` like the Python click
-//! commands (2-space pretty JSON with ensure_ascii escaping).
-//!
-//! Deviation: Python's monitor/auto-list probes always construct a GCS
-//! client; the Rust port routes through [`JobStorage`], which honors
-//! `WC_STORAGE_BACKEND` — on the lab box (the only place this runs) the
-//! backend is gcs either way.
-//!
-//! Second deviation, 2026-09-20: a dry run builds no client. `--dry-run`
-//! promises the toggle decisions without calling the Vast API, and it refused
-//! without `stado-vast/api_key` — so the flag could not be used on the
-//! machine an operator reaches for it on, and the decision loop was
-//! unobservable everywhere it was not already provisioned.
+//! `list`, `unlist`, `status`, `monitor`, the `auto-list` loop and the
+//! `readiness` verdict, each against Vast.ai's host API. Monitor and
+//! auto-list read the queue through [`JobStorage`], which honors
+//! `WC_STORAGE_BACKEND`. A dry run builds no client: `--dry-run` promises the
+//! toggle decisions without calling the marketplace, so it needs no
+//! credential.
 
 mod readiness;
 
 use serde_json::json;
 
-use crate::cli::{CmdError, VastCommands};
+use crate::cli::{CmdError, MarketCommands, MarketProvider};
 use crate::providers::vast::{self, AutoListParams, ListMachineParams, VastClient, VastError};
 use crate::queue::JobStorage;
 
-/// Dispatch one `vast` subcommand.
-pub(crate) async fn dispatch(command: &VastCommands) -> Result<(), CmdError> {
+/// Dispatch one `market` subcommand to the marketplace it names.
+pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
     match command {
-        VastCommands::List {
+        MarketCommands::List {
+            provider: MarketProvider::Vast,
             price_gpu,
             price_disk,
             price_min_bid,
             json,
         } => list(*price_gpu, *price_disk, *price_min_bid, *json).await,
-        VastCommands::Unlist { json } => unlist(*json).await,
-        VastCommands::Status { json } => status(*json).await,
-        VastCommands::Readiness {
+        MarketCommands::Unlist {
+            provider: MarketProvider::Vast,
+            json,
+        } => unlist(*json).await,
+        MarketCommands::Status {
+            provider: MarketProvider::Vast,
+            json,
+        } => status(*json).await,
+        MarketCommands::Readiness {
+            provider: MarketProvider::Vast,
             vault_host,
             no_vault_check,
             json,
         } => readiness::report(vault_host.clone(), *no_vault_check, *json).await,
-        VastCommands::Monitor { bucket, json } => monitor(bucket, *json).await,
-        VastCommands::AutoList {
+        MarketCommands::Monitor {
+            provider: MarketProvider::Vast,
+            bucket,
+            json,
+        } => monitor(bucket.as_deref().unwrap_or_else(crate::config::bucket), *json).await,
+        MarketCommands::AutoList {
+            provider: MarketProvider::Vast,
             idle_window_s,
             poll_interval_s,
             price_gpu,

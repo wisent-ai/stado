@@ -159,9 +159,9 @@ const REGISTRY: &[ToolSpec] = &[
         }),
     },
     ToolSpec {
-        name: "stado_vast_status",
-        cli: &["vast", "status", "--json"],
-        desc: "Show Vast.ai's current view of our machine (rentals, listed); read-only.",
+        name: "stado_market_status",
+        cli: &["market", "status", "--provider", "vast", "--json"],
+        desc: "Show the Vast.ai marketplace's current view of our machine (rentals, listed); read-only.",
         arg: None,
     },
 ];

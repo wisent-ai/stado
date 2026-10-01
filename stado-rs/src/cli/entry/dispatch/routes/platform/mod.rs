@@ -59,7 +59,7 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
         PlatformCommands::Build(sub) => build_cmd::dispatch(sub).await,
         PlatformCommands::Release(sub) => release_cmd::dispatch(sub).await,
         PlatformCommands::Cost(sub) => cost::dispatch(&sub).await,
-        PlatformCommands::Vast(sub) => vast::dispatch(&sub).await,
+        PlatformCommands::Market(sub) => vast::dispatch(&sub).await,
         PlatformCommands::Quota { json, sub } => quota::dispatch(json, &sub).await,
         PlatformCommands::Registry(sub) => registries::dispatch(sub).await,
         PlatformCommands::Fleet(sub) => fleet::run(sub).await,

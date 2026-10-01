@@ -30,6 +30,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "job",
     "machine",
     "mail",
+    "market",
     "optimize",
     "overview",
     "placement",
@@ -52,7 +53,6 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "status",
     "storage",
     "submit",
-    "vast",
     "web",
     "workdirs",
     "workload",
@@ -143,10 +143,10 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     if family == "web" && operation == "origin" {
         return matches!(detail, "list" | "status");
     }
-    // The bridge's preview reads the queue and calls no Vast endpoint, but
-    // only when it is bounded: a daemon cannot answer a request, so the
-    // graphical surface asks for exactly one evaluation.
-    if family == "vast" && operation == "auto-list" {
+    // The listing preview reads the queue and calls no marketplace, but only
+    // when it is bounded: a loop cannot answer a request, so the graphical
+    // surface asks for exactly one evaluation.
+    if family == "market" && operation == "auto-list" {
         return args.iter().any(|arg| arg == "--dry-run") && args.iter().any(|arg| arg == "--once");
     }
     if matches!(
@@ -213,7 +213,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 "storage",
                 "ls" | "stat" | "cat" | "verify" | "objects" | "url"
             )
-            | ("vast", "status" | "readiness" | "monitor")
+            | ("market", "status" | "readiness" | "monitor")
             | ("web", "status")
             | ("alerts", "channels")
     )
