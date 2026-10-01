@@ -10,8 +10,13 @@ pub(crate) enum MachineCommands {
         #[arg(long, required = true)]
         request_file: String,
     },
-    /// Read one job directly by ID.
-    Status { job_id: String },
+    /// Read one job directly by ID; `--until terminal` holds the read until
+    /// the job ends.
+    Status {
+        job_id: String,
+        #[arg(long, value_enum)]
+        until: Option<StatusHold>,
+    },
     /// Read a byte-cursor page from the canonical command log.
     Logs {
         job_id: String,
@@ -28,6 +33,13 @@ pub(crate) enum MachineCommands {
         #[arg(long, required = true)]
         output_dir: String,
     },
+}
+
+/// What `stado machine status --until` holds the read for.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum StatusHold {
+    /// Answer once the job is completed, uploaded, failed or cancelled.
+    Terminal,
 }
 
 #[derive(Subcommand)]

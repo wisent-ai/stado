@@ -74,4 +74,44 @@ impl MachineFacade {
         out.insert("job".into(), normalize_job(&job));
         Ok(Value::Object(out))
     }
+
+    /// `status`, held until the job ends. The change watch on the terminal
+    /// prefixes is armed before the first read, so a job that ends between
+    /// that read and the wait still wakes it; the answer comes when the
+    /// job's terminal record is written, by this process or any other on the
+    /// store's device. A failed watch is the error, never a silent re-read.
+    pub async fn status_until_terminal(&self, job_id: &str) -> Result<Value, MachineError> {
+        let mut watch = self
+            .store
+            .watch_prefixes(&crate::queue::runs::TERMINAL_PREFIXES)
+            .map_err(|error| {
+                MachineError::new(
+                    "HOLD_UNAVAILABLE",
+                    format!("until terminal cannot hold this read: {error}"),
+                )
+            })?;
+        loop {
+            let status = self.status(job_id).await?;
+            if status.pointer("/job/terminal").and_then(Value::as_bool) != Some(false) {
+                return Ok(status);
+            }
+            watch = tokio::task::spawn_blocking(move || {
+                let mut armed = watch;
+                armed.next().map(|()| armed)
+            })
+            .await
+            .map_err(|error| {
+                MachineError::new(
+                    "HOLD_FAILED",
+                    format!("the change watch holding {job_id} stopped: {error}"),
+                )
+            })?
+            .map_err(|error| {
+                MachineError::new(
+                    "HOLD_FAILED",
+                    format!("the change watch holding {job_id} failed: {error}"),
+                )
+            })?;
+        }
+    }
 }

@@ -42,70 +42,23 @@ impl Dashboard {
             Ok(parsed) => parsed,
             Err(response) => return response,
         };
-        // A held read arms the store's change watch on the terminal prefixes
-        // before its first read, so a job that ends between that read and the
-        // wait still wakes it; it answers when the job's terminal record is
-        // written, by this process or any other on the store's device.
-        let mut watch = if hold {
-            match self
-                .store
-                .watch_prefixes(&crate::queue::runs::TERMINAL_PREFIXES)
-            {
-                Ok(watch) => Some(watch),
-                Err(error) => {
-                    return machine_result_response(Err(MachineError::new(
-                        "HOLD_UNAVAILABLE",
-                        format!("until=terminal cannot hold this read: {error}"),
-                    )))
-                }
-            }
-        } else {
-            None
-        };
-        let result = loop {
-            let result = self.machine_facade().status(job_id).await;
-            let target_allowed = result
-                .as_ref()
-                .ok()
-                .and_then(machine_result_target)
-                .is_some_and(|target| client.allows_target(target));
-            if !target_allowed {
-                return machine_result_response(Err(MachineError::new(
-                    "UNAUTHORIZED",
-                    "unauthorized",
-                )));
-            }
-            let running = result
-                .as_ref()
-                .ok()
-                .and_then(|value| value.pointer("/job/terminal"))
-                .and_then(Value::as_bool)
-                == Some(false);
-            let Some(armed) = watch.take().filter(|_| running) else {
-                break result;
-            };
-            let woken = tokio::task::spawn_blocking(move || {
-                let mut armed = armed;
-                armed.next().map(|()| armed)
-            })
-            .await;
-            match woken {
-                Ok(Ok(armed)) => watch = Some(armed),
-                Ok(Err(error)) => {
-                    return machine_result_response(Err(MachineError::new(
-                        "HOLD_FAILED",
-                        format!("the change watch holding {job_id} failed: {error}"),
-                    )))
-                }
-                Err(error) => {
-                    return machine_result_response(Err(MachineError::new(
-                        "HOLD_FAILED",
-                        format!("the change watch holding {job_id} stopped: {error}"),
-                    )))
-                }
-            }
-        };
-        machine_result_response(result)
+        let facade = self.machine_facade();
+        let result = facade.status(job_id).await;
+        let target_allowed = result
+            .as_ref()
+            .ok()
+            .and_then(machine_result_target)
+            .is_some_and(|target| client.allows_target(target));
+        if !target_allowed {
+            return machine_result_response(Err(MachineError::new(
+                "UNAUTHORIZED",
+                "unauthorized",
+            )));
+        }
+        if !hold {
+            return machine_result_response(result);
+        }
+        machine_result_response(facade.status_until_terminal(job_id).await)
     }
 
     pub(crate) async fn post_machine_submit(&self, request: &Request) -> Response {

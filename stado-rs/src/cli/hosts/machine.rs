@@ -66,10 +66,19 @@ pub async fn submit(request_file: &str) -> Result<(), CmdError> {
     .await
 }
 
-/// `machine status JOB_ID`: read one job directly by ID.
-pub async fn status(job_id: &str) -> Result<(), CmdError> {
+/// `machine status JOB_ID [--until terminal]`: read one job directly by ID,
+/// or hold the read until the job ends.
+pub async fn status(job_id: &str, until_terminal: bool) -> Result<(), CmdError> {
     let job_id = job_id.to_string();
-    invoke(async move { MachineFacade::new().await?.status(&job_id).await }).await
+    invoke(async move {
+        let facade = MachineFacade::new().await?;
+        if until_terminal {
+            facade.status_until_terminal(&job_id).await
+        } else {
+            facade.status(&job_id).await
+        }
+    })
+    .await
 }
 
 /// `machine logs JOB_ID --cursor N --limit N`: read a byte-cursor page from

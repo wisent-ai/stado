@@ -23,7 +23,9 @@ pub(crate) async fn dispatch(command: WorkCommands) -> Result<(), CmdError> {
         },
         WorkCommands::Machine(sub) => match sub {
             MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
-            MachineCommands::Status { job_id } => machine::status(&job_id).await,
+            MachineCommands::Status { job_id, until } => {
+                machine::status(&job_id, matches!(until, Some(StatusHold::Terminal))).await
+            }
             MachineCommands::Logs {
                 job_id,
                 cursor,

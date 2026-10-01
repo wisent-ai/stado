@@ -87,7 +87,7 @@ pub(crate) use entry::spec::fleet::registry::{
 };
 pub(crate) use entry::spec::jobs::{
     ArtifactAliasCommands, ArtifactCommands, ArtifactImportCommands, MachineCommands,
-    ScheduleCommands,
+    ScheduleCommands, StatusHold,
 };
 pub(crate) use entry::spec::spend::billing::BillingCommands;
 pub(crate) use entry::spec::spend::cost::CostCommands;
