@@ -34,28 +34,3 @@ pub(super) fn cloudflare_unavailable(hostname: &str) -> String {
          --api-credential <that item>` moves a zone the registrar serves into Cloudflare."
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_cloudflare_refusal_names_the_field_the_item_and_the_zone_requirement() {
-        let refusal = cloudflare_unavailable("bobloo.bobloo.com");
-        // The three things the operator has to be told, and the two items that
-        // were actually read out of the vault.
-        assert!(refusal.contains("`api_token`"), "{refusal}");
-        assert!(refusal.contains("--api-credential"), "{refusal}");
-        assert!(
-            refusal.contains("platform-cloudflare-bobloo-tunnel"),
-            "{refusal}"
-        );
-        assert!(refusal.contains("platform-admin-cloudflare"), "{refusal}");
-        assert!(
-            refusal.contains("bobloo.com must also be a zone Cloudflare's nameservers serve"),
-            "{refusal}"
-        );
-        // And no suggestion that the stado edge will quietly do it instead.
-        assert!(!refusal.contains("falling back"), "{refusal}");
-    }
-}

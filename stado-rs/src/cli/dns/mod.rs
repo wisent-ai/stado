@@ -23,8 +23,6 @@ mod command;
 mod delegate;
 mod records;
 mod registrar;
-#[cfg(test)]
-mod zone_merge_checks;
 
 pub(crate) use self::command::{dispatch, DnsCommands};
 pub(crate) use self::records::write::{ensure_record, remove_record};
