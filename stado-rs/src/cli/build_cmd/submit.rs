@@ -205,10 +205,64 @@ pub(crate) async fn stage_source(reading: &SourceReading) -> Result<StagedSource
     Ok(staged)
 }
 
+/// The same reading narrowed to `platforms`: the manifest keeps only those
+/// platforms and the deliveries that run on them, and is what the build
+/// records, so its jobs, its enrollment and any release of it cover exactly
+/// these platforms. A platform the manifest does not declare, or a kept
+/// delivery that waits on a dropped one, is refused before anything is written.
+fn restrict_platforms(
+    mut reading: SourceReading,
+    platforms: &[String],
+) -> Result<SourceReading, CmdError> {
+    let declared: Vec<String> = reading.manifest.platforms.keys().cloned().collect();
+    if let Some(unknown) = platforms
+        .iter()
+        .find(|platform| !declared.contains(platform))
+    {
+        return Err(CmdError::usage(format!(
+            "{} declares no platform {unknown}; declared: {}",
+            reading.manifest.product,
+            declared.join(", ")
+        )));
+    }
+    let manifest = &mut reading.manifest;
+    manifest
+        .platforms
+        .retain(|platform, _| platforms.contains(platform));
+    let dropped: Vec<String> = manifest
+        .deliveries
+        .iter()
+        .filter(|delivery| !platforms.contains(&delivery.platform))
+        .map(|delivery| delivery.name.clone())
+        .collect();
+    manifest
+        .deliveries
+        .retain(|delivery| platforms.contains(&delivery.platform));
+    if let Some((delivery, waits_on)) = manifest.deliveries.iter().find_map(|delivery| {
+        delivery
+            .after
+            .iter()
+            .find(|name| dropped.contains(name))
+            .map(|name| (delivery.name.clone(), name.clone()))
+    }) {
+        return Err(CmdError::usage(format!(
+            "delivery {delivery} waits on {waits_on}, which runs on a platform this build leaves out; build that platform too"
+        )));
+    }
+    reading.manifest_bytes = serde_json::to_vec_pretty(&reading.manifest)?;
+    reading.product = ProductManifest::Release(reading.manifest.clone());
+    Ok(reading)
+}
+
 pub(super) async fn submit(args: &BuildSubmitArgs) -> Result<(), CmdError> {
     let reading = {
         let _phase = super::timing::phase("read the committed manifest and version");
         read_source(&args.source, args.commit.as_deref(), &args.version)?
+    };
+    let reading = if args.platforms.is_empty() {
+        reading
+    } else {
+        restrict_platforms(reading, &args.platforms)?
     };
     {
         let _phase = super::timing::phase("ensure the object store");

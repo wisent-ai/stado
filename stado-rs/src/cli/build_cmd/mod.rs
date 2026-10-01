@@ -73,6 +73,11 @@ pub struct BuildSubmitArgs {
     /// The version that commit declares in its version source.
     #[arg(long)]
     pub version: String,
+    /// Build only this declared platform; repeat for several. The build and
+    /// any release of it then cover exactly these platforms. Without it every
+    /// platform the manifest declares is built.
+    #[arg(long = "platform")]
+    pub platforms: Vec<String>,
     #[arg(long)]
     pub json: bool,
 }
