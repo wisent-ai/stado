@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado fleet ingress down` and `stado fleet key add|install|check|generate|rotate` take `--json`. `ingress down --json` prints `{published, stopped, base_url, tunnel, listener, unpublished}`; the key commands print the target with what each did: the stored `item` and `fingerprint` (`generate` adds the `public_key`), the `destination` installed into or answered from, and for `rotate` the `from` and `to` fingerprints.
