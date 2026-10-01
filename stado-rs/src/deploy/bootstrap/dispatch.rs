@@ -112,7 +112,7 @@ pub async fn run_bootstrap(
         }
         if let Some(c) = registry.lookup_coordinator(target) {
             if c.runtime == "daemon" || c.runtime == "cron" {
-                return Err(one_process_refusal(target, "--coordinator").into());
+                return Err(one_process_refusal(target, &format!("--coordinator {target}")).into());
             }
             if c.runtime == "gcp_cloud_function" {
                 return Err(format!(

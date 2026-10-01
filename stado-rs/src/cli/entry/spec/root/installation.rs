@@ -82,7 +82,7 @@ pub(crate) enum InstallationCommands {
         dry_run: bool,
     },
 
-    /// Install the registry-controlled cleanup watch on this Mac.
+    /// Refused: disk cleanup is the --disk-cleanup role of com.wisent.stado; names that option and `stado service ensure stado --host`.
     #[command(name = "install-disk-cleanup")]
     InstallDiskCleanup,
 

@@ -241,7 +241,6 @@ fn product_read_only(args: &[String]) -> bool {
             words.get(1).copied().unwrap_or(""),
             "inspect" | "report" | "residue"
         ),
-        "schedule" => !flag("--install") && !flag("--remove"),
         "sync" => flag("--dry-run"),
         "create" => flag("--status"),
         _ => false,

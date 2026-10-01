@@ -2,8 +2,8 @@
 //! another host and report what it freed.
 //!
 //! The janitor already exists: `stado disk-cleanup` enforces the cleanup
-//! policy the registry declares, and `stado install-disk-cleanup` installs
-//! its watch. Both are local-only — they act on the Mac you are sitting at —
+//! policy the registry declares, and `stado serve --disk-cleanup` runs its
+//! watch. Both are local-only — they act on the Mac you are sitting at —
 //! so a fleet host that drifts below its low watermark cannot be brought back
 //! from anywhere.
 //!

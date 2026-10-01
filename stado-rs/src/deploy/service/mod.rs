@@ -42,8 +42,8 @@
 //!
 //! Unit rendering for [`deploy_service`] is not reimplemented here: it goes
 //! through `deploy/local_install.rs::InstallPlan`, the same renderer
-//! `stado bootstrap --local` and `stado install-disk-cleanup` use, so a
-//! service deployed remotely is byte-identical to one installed locally.
+//! `stado bootstrap --local` uses, so a service deployed remotely is
+//! byte-identical to one installed locally.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

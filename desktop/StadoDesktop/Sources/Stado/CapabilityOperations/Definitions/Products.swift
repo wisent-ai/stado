@@ -57,9 +57,6 @@ enum NativeProductOperations {
             .init(id: "host", label: "Stado host for service surfaces", option: "--host"),
             .init(id: "fetch", label: "Fetch canonical origins first", option: "--fetch", flag: true),
         ]),
-        .init(id: "schedule", title: "Read the product update agents", path: ["product", "schedule"], hostPlacement: .none, mutates: false),
-        .init(id: "schedule-install", title: "Install or update the product update agents", path: ["product", "schedule"], hostPlacement: .none, fixedArguments: ["--install"]),
-        .init(id: "schedule-remove", title: "Remove the product update agents", path: ["product", "schedule"], hostPlacement: .none, fixedArguments: ["--remove"]),
         .init(id: "paths", title: "Inspect executable ownership and PATH collisions", path: ["product", "paths"], hostPlacement: .none, mutates: false),
         // `--json` belongs to the operation, before the arguments it forwards
         // to the compiler, so it is part of the path here.

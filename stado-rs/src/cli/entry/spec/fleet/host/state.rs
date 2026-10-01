@@ -85,7 +85,7 @@ pub(crate) enum HostStateCommands {
     /// Run TARGET's own registry-authorized cleanup pass and report what it
     /// freed.
     ///
-    /// `stado disk-cleanup` and `stado install-disk-cleanup` act on the
+    /// `stado disk-cleanup` and the `--disk-cleanup` role act on the
     /// machine they are typed on, so a fleet host that drifts below its low
     /// watermark has no way back: Stado refuses every placement on it,
     /// including the deployment that would fix the host. This runs the

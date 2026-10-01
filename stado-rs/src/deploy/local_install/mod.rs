@@ -1,22 +1,20 @@
 //! Local-machine install path for `stado bootstrap --local`.
 //!
-//! Port of `stado/deploy/local_install.py`, cut over to the Rust release
-//! binaries. Picks the right init system for the host OS and writes a
-//! per-user service that runs `stado agent` (for kind=local targets) or
-//! `stado coordinator` (for runtime=daemon coordinators) so it persists
-//! across reboots without sudo or ssh. Units ExecStart the release
-//! binaries in `~/.stado/bin/` (populated from the exact immutable release
-//! exposed by the public Stado API, by [`artifact::ensure_bins`] when missing).
-//! Job runtimes belong to the submitted workload, not to the unit.
+//! Picks the init system for the host OS and writes the one per-user Stado
+//! unit, com.wisent.stado, running `stado serve` with every role the host
+//! declares, so it persists across reboots without sudo or ssh. The install
+//! reads this machine's separate Stado units (agent, coordinator, disk
+//! cleanup, failure fixer, watchdog), merges them into that unit and retires
+//! them ([`unit::host`]); no other kind is installed on its own. Units
+//! ExecStart the release binaries in `~/.stado/bin/` (populated from the exact
+//! immutable release exposed by the public Stado API, by
+//! [`artifact::ensure_bins`] when missing). Job runtimes belong to the
+//! submitted workload, not to the unit.
 //!
 //! Darwin: launchd plist at ~/Library/LaunchAgents/<label>.plist
 //!         loaded with `launchctl bootstrap gui/<uid> <plist>`.
 //! Linux : systemd --user unit at ~/.config/systemd/user/<name>.service
 //!         enabled with `systemctl --user enable --now <name>`.
-//!
-//! The plist/unit rendering is shared with `stado install-disk-cleanup`
-//! (which is the `kind == "disk-cleanup"` slice of this module — see
-//! `cli/disk_cleanup.rs`).
 //!
 //! One component per install stage: [`artifact`] reads the release archive and
 //! places the binaries a unit ExecStarts, [`unit`] renders what is about to be

@@ -1,14 +1,12 @@
 //! `stado disk-cleanup` / `stado install-disk-cleanup`.
 //!
-//! Port of the `disk_cleanup` and `install_disk_cleanup` commands from
-//! `stado/cli.py`. The install side is the `kind == "disk-cleanup"` slice
-//! of `stado/deploy/local_install.py` and now delegates to the shared
-//! implementation in [`crate::deploy::local_install`] — faithful to
-//! `install_local(SimpleNamespace(name="disk-cleanup"), "disk-cleanup",
-//! False, click.echo)`, including the guard that never puts the HF write
-//! token into the disk-cleanup unit env.
+//! `disk-cleanup` runs the registry-declared cleanup pass on this machine.
+//! `install-disk-cleanup` installs nothing: the cleanup watch is the
+//! `--disk-cleanup` role of com.wisent.stado, the one Stado process on a
+//! host, and the command refuses with that option and the
+//! `stado service ensure` call that declares it.
 //!
-//! DEVIATION from Python: `--dry-run` has no Python original. It runs
+//! `--dry-run` runs
 //! [`crate::providers::local::disk_cleanup::preview_cleanup_once`] instead
 //! of `run_cleanup_once`, and is the target-local primitive used by the
 //! `registry_cleanup` stage of `stado space reclaim`.
