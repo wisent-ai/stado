@@ -18,6 +18,8 @@
 //! Like [`crate::deploy::host_recovery`]'s script, the remote program is a
 //! fixed text with the two operator values spliced in shell-quoted.
 
+pub mod unmount;
+
 use serde_json::{json, Map, Value};
 
 use crate::deploy::{host_channel, shlex_quote, DeployError, Runner};

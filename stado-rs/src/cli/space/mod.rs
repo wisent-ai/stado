@@ -9,10 +9,12 @@ mod ops;
 mod policies;
 mod report;
 pub mod watermark;
+mod volume;
 mod work_root;
 
 use ops::{reclaim, relocate, remove_file, retire_file};
 use report::{print_json, report};
+pub use volume::SpaceVolumeCommands;
 
 #[derive(Subcommand)]
 pub enum SpaceCommands {
@@ -68,7 +70,7 @@ pub enum SpaceCommands {
         #[command(subcommand)]
         command: SpaceFileCommands,
     },
-    /// Mount a disk the host has attached, durably, so the fleet can be told to use it.
+    /// Mount or unmount a disk the host has attached, durably, so the fleet can be told to use it.
     Volume {
         #[command(subcommand)]
         command: SpaceVolumeCommands,
@@ -105,26 +107,6 @@ pub enum SpaceCommands {
         apply: bool,
         #[arg(long, default_value_t = 0)]
         limit: usize,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum SpaceVolumeCommands {
-    /// Mount one block device at a mount point and write its fstab line by UUID.
-    ///
-    /// Mounts, never formats: a device with no filesystem is refused by
-    /// name. `stado space report TARGET` lists the host's block devices and
-    /// which of them nothing has mounted.
-    Mount {
-        target: String,
-        /// The /dev leaf, such as sdb1 or nvme0n1p2.
-        #[arg(long)]
-        device: String,
-        /// The absolute directory the filesystem is mounted at, such as /mnt/wd16tb.
-        #[arg(long)]
-        mount_point: String,
         #[arg(long)]
         json: bool,
     },
@@ -204,14 +186,7 @@ pub async fn dispatch(command: SpaceCommands) -> Result<(), CmdError> {
             reason,
             json,
         } => reclaim(&target, &stages, apply, reason.as_deref(), json).await,
-        SpaceCommands::Volume { command } => match command {
-            SpaceVolumeCommands::Mount {
-                target,
-                device,
-                mount_point,
-                json,
-            } => ops::mount_volume(&target, &device, &mount_point, json).await,
-        },
+        SpaceCommands::Volume { command } => volume::dispatch(command).await,
         SpaceCommands::WorkRoot { target, path, json } => {
             work_root::dispatch(&target, path.as_deref(), json).await
         }
