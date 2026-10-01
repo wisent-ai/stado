@@ -10,16 +10,13 @@ use super::super::log;
 
 /// Best-effort delete of a GCE VM named `hostname`.
 ///
-/// The requeue paths in check_running_jobs (orphan + VM-gone) previously
-/// moved running -> queue without calling provider.delete_instance, so
-/// the prior agent's training subprocess kept running on the
-/// supposedly-gone VM and producing duplicate writes against the same
-/// gs://wisent-compute/ckpts/<run>/ path. Confirmed live 2026-05-18 for
-/// job 724084db:
-/// 4 concurrent trainers (workstation + 3 GCP VMs) all
-/// racing on the same ckpt prefix because each transient "VM missing
-/// from fleet listing" requeue spawned a new dispatch without
-/// terminating the old subprocess.
+/// A requeue path (orphan + VM-gone) that moves running -> queue without
+/// calling provider.delete_instance leaves the prior agent's training
+/// subprocess running on the supposedly-gone VM, producing duplicate writes
+/// against the same gs://wisent-compute/ckpts/<run>/ path: several concurrent
+/// trainers racing on one ckpt prefix because each transient "VM missing
+/// from fleet listing" requeue spawned a new dispatch without terminating the
+/// old subprocess.
 ///
 /// Looks up the full <name>@<zone> ref from `vm_cache` (a dict
 /// {hostname: full_ref} built by the caller) and falls back to a fresh

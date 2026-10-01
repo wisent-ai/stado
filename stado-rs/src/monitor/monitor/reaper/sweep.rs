@@ -47,11 +47,10 @@ pub async fn reap_dead_agents(
     //     heartbeating. A hung claimed subprocess pins VRAM forever while the
     //     top-of-loop heartbeat keeps the worker publication fresh, so it is
     //     invisible to Branch A (capacity fresh) and Branch B (historical
-    //     completions keep it in completed_refs). Confirmed live 2026-05-17
-    //     (gcp-wisent-agent-80gb-1778921111-0: free_vram_gb=0, last_started_at
-    //     frozen 2026-05-16T09:17:32, 127 gpt-oss-20b jobs dead-pinned hours).
-    // BOOT/IDLE 1800s: 900s reaped real 14m boots (3ef705b2/931b865e/f3fd41fb
-    // ricocheting dispatch<->reap, confirmed 2026-05-15 02:24Z).
+    //     completions keep it in completed_refs), while the jobs pinned to it
+    //     stay dead for hours.
+    // BOOT/IDLE 1800s: a 900s grace reaps real 14-minute boots, and a VM then
+    // ricochets between dispatch and reap.
     const BOOT_GRACE_SECONDS: f64 = 1800.0;
     const IDLE_GRACE_SECONDS: f64 = 1800.0; // half-window grace for first completion
                                             // Build the completed-refs set ONLY if any VM is old enough to need it.

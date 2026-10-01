@@ -40,11 +40,10 @@ fn ckpt_prefix_from_command(cmd: &str) -> Option<String> {
 /// saturates the box's outbound network and starves the small heartbeat
 /// PUT, so the heartbeat ages past the orphan threshold WHILE the job
 /// is demonstrably alive — it is in the middle of writing that very
-/// checkpoint. Confirmed live 2026-05-16: job 724084db was requeued
-/// 'local agent live but job heartbeat stale (orphan)' at 23:18:29
-/// while `[ckpt] sync step 1530` had completed at 23:12 and step
-/// 1520->1521 stalled ~1h on the GCS upload; the orphan branch was
-/// burning the restart budget (15/20) on healthy checkpoint uploads.
+/// checkpoint. A guard that reads the heartbeat alone requeues such a job as
+/// 'local agent live but job heartbeat stale (orphan)' while its checkpoint
+/// sync is mid-upload, and burns the restart budget on healthy checkpoint
+/// uploads.
 ///
 /// The newest blob under the checkpoint prefix is the liveness signal:
 /// while a multi-GB checkpoint uploads, its shard blobs are
@@ -128,11 +127,10 @@ async fn job_command_for_jid(store: &JobStorage, jid: &str) -> String {
 /// blob written within threshold_seconds — the same
 /// network-saturation-immune proof-of-life as the orphan-branch guard:
 /// the multi-GB checkpoint upload that starves the heartbeat IS what
-/// produces fresh ckpt blobs. Confirmed live 2026-05-17: job 724084db
-/// was reaped 'VM reaped (wedged agent)' restart 16 at 20:42:17 while
-/// checkpoint-2480 (17.28 GiB) had finalized 20:31:26 — the wedged
-/// reaper's heartbeat-only defer-guard lost the race to the
-/// network-starved heartbeat. Branches A/B/C now also consult this.
+/// produces fresh ckpt blobs. A heartbeat-only defer-guard loses the race to
+/// the network-starved heartbeat and reaps a job as 'VM reaped (wedged
+/// agent)' minutes after a multi-GiB checkpoint finalized. Branches A/B/C
+/// also consult this.
 pub async fn any_job_checkpoint_fresh_jids(
     store: &JobStorage,
     jids: &[String],

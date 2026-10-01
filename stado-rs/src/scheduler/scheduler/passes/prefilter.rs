@@ -12,12 +12,11 @@ use crate::config;
 /// Metadata-only prefilter (NO body downloads): keep only jobs whose
 /// accelerator has available quota this tick, so a backlog of
 /// UNDISPATCHABLE jobs cannot saturate the per-tick window and starve
-/// dispatchable work. Confirmed live 2026-06-01: 435 jobs sized to
-/// nvidia-tesla-k80 (0 fleet k80 quota) filled the 200-job FIFO window
-/// every tick -> the only bucket formed was k80 -> "Skip:
-/// 0 quota" ->
-/// scheduled 0 for the WHOLE fleet, including brand-new t4/l4 jobs queued
-/// behind the stuck backlog. write_job stamps gpu_mem_gb, gpu_type, and
+/// dispatchable work. A backlog of jobs sized to an accelerator with zero
+/// fleet quota fills the FIFO window every tick, the only bucket formed is
+/// that one, it skips on "0 quota", and the WHOLE fleet schedules nothing,
+/// including brand-new jobs queued behind the stuck backlog.
+/// write_job stamps gpu_mem_gb, gpu_type, and
 /// priority into blob metadata, so this filters + orders the whole queue
 /// cheaply and we read only the surviving window's bodies.
 /// The stuck backlog stays queued and untouched — it just stops blocking.

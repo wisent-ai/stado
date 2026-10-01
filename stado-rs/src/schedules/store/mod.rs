@@ -39,9 +39,8 @@ fn path(schedule_id: &str) -> String {
 ///
 /// A plain no-generation download on the wisent-compute bucket can return
 /// a stale (edge-cached) copy of an object that was just overwritten in
-/// place — confirmed live 2026-06-01: a schedule's next_due_at update read
-/// back as the OLD value via `store._download_text` even though the new
-/// generation was already the latest. The existing queue never hit this
+/// place: a schedule's next_due_at update reads back as the OLD value even
+/// though the new generation is already the latest. The queue never hits this
 /// because it is write-once-then-delete; schedules overwrite the same blob
 /// every tick (read-modify-write of next_due_at), which is exactly the
 /// pattern the cache breaks. `read_text_versioned` fetches the current

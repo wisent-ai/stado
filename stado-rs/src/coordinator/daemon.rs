@@ -107,13 +107,12 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
         // initial resolve at process start captures the entry once and
         // never re-checks; if an operator pushes a new registry that
         // removes/renames the entry to stop a racing daemon, the running
-        // process keeps reaping VMs forever using the cached entry.
-        // Confirmed live 2026-05-15: a stale mac mini daemon kept deleting
-        // fresh-heartbeat Llama/Qwen3 VMs for 4+ hours after the registry
-        // entry was removed because pip drift never fired (the daemon was
-        // already on the latest published version). Re-resolving each tick
-        // means a registry change takes effect within one interval_seconds
-        // without depending on a new release being published.
+        // process keeps reaping VMs forever using the cached entry: a stale
+        // daemon that is already on the latest published version never sees
+        // pip drift fire, and keeps deleting fresh-heartbeat VMs for hours
+        // after its registry entry is gone. Re-resolving each tick means a
+        // registry change takes effect within one interval_seconds without
+        // depending on a new release being published.
         // The canonical registry is read from configured Stado storage and is
         // the only self-survival authority. A registry we could not read is
         // not an authority at all, even when primary reads are failing over.

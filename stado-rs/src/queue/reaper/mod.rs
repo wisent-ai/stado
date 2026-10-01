@@ -6,8 +6,7 @@
 //!   agent VMs. A fleet with no cloud arm (local/box workers only, or a
 //!   provider API outage failing the arm) never runs it, so a worker that
 //!   dies mid-job leaves the job in `running/` forever — phantom capacity
-//!   the scheduler keeps counting. Confirmed live 2026-08-19/20: two jobs
-//!   sat in `running` with no live worker behind them for hours.
+//!   the scheduler keeps counting, with no live worker behind it.
 //! - [`crate::monitor::reap`] deletes per-job blobs of fully-terminal runs
 //!   and never touches live records.
 //!
