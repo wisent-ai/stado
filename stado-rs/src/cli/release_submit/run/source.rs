@@ -239,6 +239,17 @@ pub(crate) fn run_manifest_path(run: &crate::release_pipeline::ReleaseRun) -> St
     }
 }
 pub(crate) async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
+    // The object API drops a request whose body passes its limit without an
+    // answer, which reads as an outage ("connection closed before message
+    // completed") and names neither the object nor the size. Say both here.
+    let limit = crate::remote::object_store::max_object_bytes();
+    if bytes.len() > limit {
+        return Err(CmdError::click(format!(
+            "{path} is {} bytes and the object API takes at most {limit} bytes in one object; \
+             shrink the committed tree (large generated or captured data belongs outside the repository)",
+            bytes.len()
+        )));
+    }
     let store = JobStorage::new()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
