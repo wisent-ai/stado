@@ -74,8 +74,16 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     // down the read fails with "error sending request". On this workstation that
     // alternation ran 641 restarts while the desktop app quietly fell back to a
     // local vault and showed no subscriptions at all. Name the contradiction
-    // once instead of oscillating between its two halves.
-    if !recovered {
+    // once instead of oscillating between its two halves. It exists only for a
+    // process whose registry backend is that client route: the one host
+    // process reads its registry from the local store it serves
+    // (`WC_STORAGE_BACKEND=local`), and the URL the config keeps for other
+    // clients of this host is then not the address this process reads through.
+    let reads_through_client_route = matches!(
+        crate::config::wc_storage_backend(),
+        "stado" | "stado-object"
+    );
+    if !recovered && reads_through_client_route {
         let store_url = crate::config::wc_stado_storage_url();
         if let Ok(parsed) = url::Url::parse(store_url.trim()) {
             if let (Some(host), Some(port)) = (parsed.host_str(), parsed.port()) {
