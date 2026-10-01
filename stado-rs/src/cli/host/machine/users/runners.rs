@@ -62,11 +62,13 @@ async fn declare_power_cap(target: &str, watts: Option<u32>, json: bool) -> Resu
   "$nvidia_smi" --id="$gpu" --power-limit={watts} >/dev/null
 done"#
         ),
-        None => r#""$nvidia_smi" --query-gpu=index,power.default_limit --format=csv,noheader,nounits |
+        None => {
+            r#""$nvidia_smi" --query-gpu=index,power.default_limit --format=csv,noheader,nounits |
 while IFS=', ' read -r gpu limit; do
   "$nvidia_smi" --id="$gpu" --power-limit="$limit" >/dev/null
 done"#
-            .to_string(),
+                .to_string()
+        }
     };
 
     let script = format!(
@@ -86,7 +88,10 @@ fi
   --format=csv,noheader,nounits
 "#
     );
-    let declared = watts.map_or_else(|| "the driver default".to_string(), |watts| format!("{watts} W"));
+    let declared = watts.map_or_else(
+        || "the driver default".to_string(),
+        |watts| format!("{watts} W"),
+    );
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
@@ -113,7 +118,10 @@ fi
             }))?
         );
     } else {
-        println!("{target}: gpu_power_limit_watts={} (generation {generation})", watts.map_or_else(|| "unset".to_string(), |watts| watts.to_string()));
+        println!(
+            "{target}: gpu_power_limit_watts={} (generation {generation})",
+            watts.map_or_else(|| "unset".to_string(), |watts| watts.to_string())
+        );
         print!("{}", output.stdout);
     }
     Ok(())

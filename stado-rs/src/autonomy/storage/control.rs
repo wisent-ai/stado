@@ -91,12 +91,16 @@ pub async fn set_control(
     actor: impl Into<String>,
 ) -> Result<ControlState, StorageError> {
     let actor = actor.into();
-    update(store, "autonomy control state changed concurrently", |state| {
-        state.emergency_paused = emergency_paused;
-        state.reason = reason;
-        state.changed_at = Utc::now().to_rfc3339();
-        state.changed_by = actor;
-    })
+    update(
+        store,
+        "autonomy control state changed concurrently",
+        |state| {
+            state.emergency_paused = emergency_paused;
+            state.reason = reason;
+            state.changed_at = Utc::now().to_rfc3339();
+            state.changed_by = actor;
+        },
+    )
     .await
 }
 
@@ -113,7 +117,9 @@ pub async fn record_mutation_outcome(
     let cooldown_seconds = NonZeroU64::new(cooldown_seconds)
         .and_then(|value| i64::try_from(value.get()).ok())
         .ok_or_else(|| {
-            StorageError::Other("circuit-breaker cooldown must fit positive i64 seconds".to_string())
+            StorageError::Other(
+                "circuit-breaker cooldown must fit positive i64 seconds".to_string(),
+            )
         })?;
     update(
         store,

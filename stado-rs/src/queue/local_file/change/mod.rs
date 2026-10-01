@@ -31,7 +31,10 @@ impl LocalBackend {
             .collect()
     }
 
-    pub(super) fn arm_watch(&self, prefixes: &[&str]) -> Result<Box<dyn ChangeWatch>, StorageError> {
+    pub(super) fn arm_watch(
+        &self,
+        prefixes: &[&str],
+    ) -> Result<Box<dyn ChangeWatch>, StorageError> {
         let directories = self.watched_directories(prefixes)?;
         platform::arm(&directories).map(|watch| Box::new(watch) as Box<dyn ChangeWatch>)
     }
@@ -69,7 +72,10 @@ mod platform {
         let mut changes = Vec::with_capacity(directories.len());
         for directory in directories {
             let file = File::open(directory).map_err(|error| {
-                StorageError::Other(format!("cannot open {} to watch it: {error}", directory.display()))
+                StorageError::Other(format!(
+                    "cannot open {} to watch it: {error}",
+                    directory.display()
+                ))
             })?;
             changes.push(KEvent::new(
                 file.as_raw_fd() as usize,

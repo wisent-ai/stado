@@ -13,9 +13,7 @@ use uuid::Uuid;
 
 use crate::queue::copy::Endpoint;
 
-use super::model::{
-    Action, Condition, Finding, Intent, InventorySnapshot, OperationScope, Plan,
-};
+use super::model::{Action, Condition, Finding, Intent, InventorySnapshot, OperationScope, Plan};
 use super::CmdError;
 
 pub fn new_plan(

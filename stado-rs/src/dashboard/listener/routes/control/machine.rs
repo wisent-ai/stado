@@ -50,10 +50,7 @@ impl Dashboard {
             .and_then(machine_result_target)
             .is_some_and(|target| client.allows_target(target));
         if !target_allowed {
-            return machine_result_response(Err(MachineError::new(
-                "UNAUTHORIZED",
-                "unauthorized",
-            )));
+            return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         }
         if !hold {
             return machine_result_response(result);

@@ -16,8 +16,8 @@ mod gate;
 mod predecessors;
 mod receipts;
 mod reconcilers;
-mod replacements;
 mod repair;
+mod replacements;
 mod run;
 
 pub use receipts::{ServiceReconcileOutcome, ServiceReconcileReport, ServiceReconcileSummary};

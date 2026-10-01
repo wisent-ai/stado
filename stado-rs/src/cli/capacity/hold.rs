@@ -65,7 +65,9 @@ pub(super) async fn hold(kind: &str, target: &str, json_output: bool) -> Result<
 async fn until_released() -> Result<(), CmdError> {
     use tokio::signal::unix::{signal, SignalKind};
     let listen = |kind: SignalKind| {
-        signal(kind).map_err(|error| CmdError::click(format!("could not listen for the release signal: {error}")))
+        signal(kind).map_err(|error| {
+            CmdError::click(format!("could not listen for the release signal: {error}"))
+        })
     };
     let mut interrupt = listen(SignalKind::interrupt())?;
     let mut terminate = listen(SignalKind::terminate())?;
@@ -81,7 +83,7 @@ async fn until_released() -> Result<(), CmdError> {
 /// Returns when the process receives Ctrl-C.
 #[cfg(not(unix))]
 async fn until_released() -> Result<(), CmdError> {
-    tokio::signal::ctrl_c()
-        .await
-        .map_err(|error| CmdError::click(format!("could not listen for the release signal: {error}")))
+    tokio::signal::ctrl_c().await.map_err(|error| {
+        CmdError::click(format!("could not listen for the release signal: {error}"))
+    })
 }

@@ -65,13 +65,25 @@ async fn unmount(target: &str, mount_point: &str, json_output: bool) -> Result<(
         .await
         .map_err(|error| CmdError::click(error.to_string()).machine_readable(json_output))?;
     if json_output {
-        print_json(&Value::Object(unmount::to_report(&target, mount_point, &outcome)))?;
+        print_json(&Value::Object(unmount::to_report(
+            &target,
+            mount_point,
+            &outcome,
+        )))?;
     } else if outcome.error.is_none() {
         let what = if outcome.unmounted_now || outcome.fstab_removed {
             format!(
                 "unmounted: {}; fstab line {}",
-                if outcome.unmounted_now { "yes" } else { "was not mounted" },
-                if outcome.fstab_removed { "removed" } else { "was not present" }
+                if outcome.unmounted_now {
+                    "yes"
+                } else {
+                    "was not mounted"
+                },
+                if outcome.fstab_removed {
+                    "removed"
+                } else {
+                    "was not present"
+                }
             )
         } else {
             "neither mounted nor declared; nothing changed".to_string()
@@ -79,7 +91,9 @@ async fn unmount(target: &str, mount_point: &str, json_output: bool) -> Result<(
         println!("{}: {mount_point} {what}", target.name);
     }
     if let Some(error) = outcome.error {
-        return Err(CmdError::click(format!("{}: {error}", target.name)).machine_readable(json_output));
+        return Err(
+            CmdError::click(format!("{}: {error}", target.name)).machine_readable(json_output)
+        );
     }
     Ok(())
 }

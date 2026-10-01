@@ -110,10 +110,22 @@ fn envelope(status: u16, value: Value, cap: usize) -> Response {
 
 fn error_response(error: HandlerError) -> Response {
     let (status, code) = match error {
-        HandlerError::BadRequest => (http_status(reqwest::StatusCode::BAD_REQUEST), "invalid_request"),
-        HandlerError::ProviderUnavailable => (http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE), "integration_unavailable"),
-        HandlerError::UpstreamFailure => (http_status(reqwest::StatusCode::BAD_GATEWAY), "upstream_failure"),
-        HandlerError::ResponseTooLarge => (http_status(reqwest::StatusCode::BAD_GATEWAY), "response_too_large"),
+        HandlerError::BadRequest => (
+            http_status(reqwest::StatusCode::BAD_REQUEST),
+            "invalid_request",
+        ),
+        HandlerError::ProviderUnavailable => (
+            http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+            "integration_unavailable",
+        ),
+        HandlerError::UpstreamFailure => (
+            http_status(reqwest::StatusCode::BAD_GATEWAY),
+            "upstream_failure",
+        ),
+        HandlerError::ResponseTooLarge => (
+            http_status(reqwest::StatusCode::BAD_GATEWAY),
+            "response_too_large",
+        ),
     };
     envelope_uncapped(status, json!({"ok": false, "error": {"code": code}}))
 }

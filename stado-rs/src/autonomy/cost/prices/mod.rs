@@ -128,9 +128,11 @@ pub async fn refresh_prices(policy: &AutonomyPolicy) -> PriceBook {
         .iter()
         .flat_map(|source| source.quotes.iter().cloned())
         .collect();
-    PriceBook { created_at: observed_at.to_rfc3339(),
-    sources,
-    quotes, }
+    PriceBook {
+        created_at: observed_at.to_rfc3339(),
+        sources,
+        quotes,
+    }
 }
 
 fn infer_accelerator(description: &str) -> Option<String> {

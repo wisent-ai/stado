@@ -191,7 +191,9 @@ pub async fn edit(
         ));
     }
     if let Some(cron) = cron.filter(|cron| !cron_is_valid(cron)) {
-        return Err(CmdError::click(format!("invalid cron expression: '{cron}'")));
+        return Err(CmdError::click(format!(
+            "invalid cron expression: '{cron}'"
+        )));
     }
     let store = JobStorage::new().await?;
     let Some(current) = read_schedule(&store, schedule_id).await? else {
@@ -199,9 +201,8 @@ pub async fn edit(
     };
     let new_cron = cron.unwrap_or(&current.cron).to_string();
     let new_tz = tz.unwrap_or(&current.tz).to_string();
-    let next_due = compute_next_due(&new_cron, Utc::now(), &new_tz).map_err(|exc| {
-        CmdError::click(format!("could not compute next run ({new_tz}): {exc}"))
-    })?;
+    let next_due = compute_next_due(&new_cron, Utc::now(), &new_tz)
+        .map_err(|exc| CmdError::click(format!("could not compute next run ({new_tz}): {exc}")))?;
     let next_due = isoformat_utc(next_due);
     let edited = schedules::edit_schedule(&store, schedule_id, |sched| {
         if let Some(command) = command {

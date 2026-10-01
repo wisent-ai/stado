@@ -85,9 +85,9 @@ pub async fn unassign(target: &str) -> Result<bool, String> {
     .await
     .map_err(|exc| exc.to_string())?;
     match left.into_inner().expect("unassign result lock") {
-        Some(fleet) => println!(
-            "target '{target}' removed from fleet '{fleet}' (generation {generation})"
-        ),
+        Some(fleet) => {
+            println!("target '{target}' removed from fleet '{fleet}' (generation {generation})")
+        }
         None => println!("target '{target}' was in no fleet; nothing changed"),
     }
     Ok(true)

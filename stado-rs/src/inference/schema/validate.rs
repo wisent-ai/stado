@@ -89,7 +89,9 @@ pub fn validate(document: &Value) -> Result<(), String> {
         if deployment
             .resources
             .kv_cache_memory_gb
-            .is_some_and(|value| std::num::NonZeroU64::new(value).is_none() || value > target_vram_gb)
+            .is_some_and(|value| {
+                std::num::NonZeroU64::new(value).is_none() || value > target_vram_gb
+            })
         {
             return Err(format!(
                 "{location}.resources.kv_cache_memory_gb: must be positive and at most the target's {target_vram_gb} GiB VRAM"

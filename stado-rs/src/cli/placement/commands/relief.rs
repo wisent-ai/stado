@@ -24,10 +24,10 @@ pub(super) async fn relief(json_output: bool) -> Result<(), CmdError> {
     >(&store, LATEST_REPORT)
     .await?;
     let rows: Vec<ReliefRow> = plan(&document, &parsed, &hosts)
-    .map_err(CmdError::click)?
-    .into_iter()
-    .map(|outcome| outcome.row)
-    .collect();
+        .map_err(CmdError::click)?
+        .into_iter()
+        .map(|outcome| outcome.row)
+        .collect();
     if json_output {
         println!(
             "{}",

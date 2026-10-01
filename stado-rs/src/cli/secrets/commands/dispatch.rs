@@ -239,7 +239,10 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
                 if outcome == RenewOutcome::Failed {
                     return Err(CmdError::click(format!(
                         "agent grant renewal failed: {}",
-                        lines.last().map(String::as_str).unwrap_or("no step reported why")
+                        lines
+                            .last()
+                            .map(String::as_str)
+                            .unwrap_or("no step reported why")
                     )));
                 }
                 Ok(())

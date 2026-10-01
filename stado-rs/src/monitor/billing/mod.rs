@@ -81,8 +81,8 @@ use health::emit_alerts;
 
 pub use health::{
     apply_health, commit_firing, dispatch_signals, humanize, providers, HealthEvaluation,
-    ProviderHealth, Signal, HEALTH_KEY, SECONDS_PER_DAY, SECONDS_PER_HOUR,
-    SECONDS_PER_MINUTE, SECONDS_PER_SECOND,
+    ProviderHealth, Signal, HEALTH_KEY, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
+    SECONDS_PER_SECOND,
 };
 
 /// Blob written every tick (Python `_BLOB`).

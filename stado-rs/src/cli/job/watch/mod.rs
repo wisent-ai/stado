@@ -48,7 +48,9 @@ pub(super) async fn watch(job_id: &str, follow: bool, json: bool) -> Result<(), 
             armed.next().map(|()| armed)
         })
         .await
-        .map_err(|error| CmdError::click(format!("the change watch on {job_id} stopped: {error}")))?;
+        .map_err(|error| {
+            CmdError::click(format!("the change watch on {job_id} stopped: {error}"))
+        })?;
         watch = Some(woken.map_err(|error| {
             CmdError::click(format!("the change watch on {job_id} failed: {error}"))
         })?);

@@ -22,18 +22,8 @@ pub(super) fn failure_service(matches: &clap::ArgMatches) -> &'static str {
     match matches.subcommand_name().unwrap_or_default() {
         "submit" | "status" | "cancel" | "results" | "job" | "machine" | "queue" | "storage"
         | "artifact" => "queue",
-        "fleet"
-        | "host"
-        | "space"
-        | "registry"
-        | "builds"
-        | "service"
-        | "instances"
-        | "resources"
-        | "recovery"
-        | "bootstrap"
-        | "doctor"
-        | "disk-cleanup" => "fleet",
+        "fleet" | "host" | "space" | "registry" | "builds" | "service" | "instances"
+        | "resources" | "recovery" | "bootstrap" | "doctor" | "disk-cleanup" => "fleet",
         "credentials" => "credentials",
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",

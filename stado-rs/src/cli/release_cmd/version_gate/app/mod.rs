@@ -138,7 +138,10 @@ pub(super) fn surface(tree: AppTree) -> Result<(), CmdError> {
     let load = surface::tree(&tree.root);
     let version = surface::declared_version(&load, &tree.sources).map_err(CmdError::click)?;
     let names = surface::of(&load, &tree.sources).map_err(CmdError::click)?;
-    println!("{}", pretty(&serde_json::json!({ "version": version, "surface": names })));
+    println!(
+        "{}",
+        pretty(&serde_json::json!({ "version": version, "surface": names }))
+    );
     Ok(())
 }
 

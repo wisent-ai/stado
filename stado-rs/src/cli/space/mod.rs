@@ -8,8 +8,8 @@ mod coverage;
 mod ops;
 mod policies;
 mod report;
-pub mod watermark;
 mod volume;
+pub mod watermark;
 mod work_root;
 
 use ops::{reclaim, relocate, remove_file, retire_file};

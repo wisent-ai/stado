@@ -118,8 +118,16 @@ async fn changed(
         armed.next().map(|()| armed)
     })
     .await
-    .map_err(|error| CmdError::click(format!("the change watch on build {build_id} stopped: {error}")))?
-    .map_err(|error| CmdError::click(format!("the change watch on build {build_id} failed: {error}")))
+    .map_err(|error| {
+        CmdError::click(format!(
+            "the change watch on build {build_id} stopped: {error}"
+        ))
+    })?
+    .map_err(|error| {
+        CmdError::click(format!(
+            "the change watch on build {build_id} failed: {error}"
+        ))
+    })
 }
 
 fn print_build(build: &BuildRun, progress: &BTreeMap<String, Progress>) {
