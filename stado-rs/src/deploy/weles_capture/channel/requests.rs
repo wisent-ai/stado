@@ -26,9 +26,9 @@ fn trajectory_stop(payload: &Value) -> Option<String> {
 /// The report inside a captured stream. A trajectory prints it on its own
 /// stdout, so it arrives as a line inside `stdout_tail` — and when the run
 /// was driven through another layer, as a line inside a report inside that
-/// string. Both are searched, newest line first: on 2026-09-21 the
-/// authenticator enrolment's `google_push_not_approved` sat one level deeper
-/// than the first reading looked, and the operator got the raw 502 envelope.
+/// string. Both are searched, newest line first: a trajectory's stop reason
+/// can sit one level deeper than the first reading looks, and the operator
+/// then gets the raw 502 envelope instead of it.
 fn nested_stop(payload: &Value) -> Option<String> {
     match payload {
         Value::String(text) => text

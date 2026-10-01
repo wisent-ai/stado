@@ -22,9 +22,8 @@ use crate::deploy::service::*;
 /// privileged command that works, because ending a process nothing will
 /// respawn is how a degraded control plane becomes a dead one. That refusal
 /// used to be the only answer here, and it sent the operator to a host repair
-/// that does not re-bootstrap a system daemon either:
-/// on 2026-08-19 the object API answered 503 to the whole fleet for an
-/// afternoon with no product path back.
+/// that does not re-bootstrap a system daemon either, so an object API
+/// answering 503 to the whole fleet had no product path back.
 pub async fn restart_service(
     target: &ComputeTarget,
     service: &ManagedService,

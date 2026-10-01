@@ -51,11 +51,10 @@ say() {
 elif [ \"$os\" = \"Linux\" ]; then
   # The same search the Darwin branch above makes, for the same reason it was
   # widened: adoption looked only at this login's user units and reported a
-  # running system unit as absent. On 2026-09-03 that unit was
-  # `wisent-compute-agent.service` on the fleet's only linux-amd64 builder --
-  # loaded, running a stado image that refuses today's registry document, and
-  # so unmanaged that nothing could cycle it while every linux release build
-  # queued behind it.
+  # running system unit as absent: the compute agent on a builder, loaded,
+  # running an image that refuses the current registry document, and so
+  # unmanaged that nothing could cycle it while every release build queued
+  # behind it.
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
   if [ -z \"$unit_path\" ]; then
     if [ -f \"$HOME/.config/systemd/user/$unit\" ]; then
@@ -146,11 +145,11 @@ fi
 /// halves are required, so the reported domain is one the next `launchctl`
 /// verb can actually address.
 ///
-/// What that read answers on control-host on 2026-08-19, through
+/// What that read answers on a headless control host, through
 /// `stado host exec` (read-only, allowlisted): `who` prints nothing,
 /// `loginwindow` runs as root, no `Dock`, `Finder` or `SystemUIServer`
 /// process exists for any account, and the login's own `launchctl list`
-/// holds 62 background `com.apple.*` agents and no `com.wisent.*` label.
+/// holds only background `com.apple.*` agents and no `com.wisent.*` label.
 /// Nobody is logged in graphically there, so `gui/501` does not exist, and
 /// the honest answer for that host's agent is the `user/501` fallback —
 /// reported as the reason the agent cannot be loaded instead of papered over

@@ -20,11 +20,9 @@
 /// after the bootstrap failed: a second `launchctl asuser` attempt, a
 /// `launchctl submit` of a `<label>-recovery` job, and finally a `perl`-exec
 /// of the unit's argv in the background, reported as
-/// `restarted: direct process <pid>`. On 2026-08-19 that last line is what
-/// `stado service restart com.wisent.compute.service.stado-agent-mini --host
-/// control-host` returned, beside `postcondition unmet: no job at
-/// user/501/com.wisent.compute.service.stado-agent-mini` — a bare process
-/// under the ssh session, no unit behind it, and a report an operator read as
+/// `restarted: direct process <pid>`. That last line beside `postcondition
+/// unmet: no job at user/501/<label>` is a bare process under the ssh
+/// session, no unit behind it, and a report an operator reads as
 /// success. A process that dies with the login that spawned it is not a
 /// restarted service, so a bootstrap that leaves no job in the domain the
 /// restart used is [`STATUS_NOT_LOADED`]: the domain, launchd's own words and
@@ -33,10 +31,9 @@ pub(crate) const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ \"${stado_reload_unit:-0}\" != 1 ] && $launch print \"$domain/$unit\" >/dev/null 2>&1; then
     # An in-place kick re-execs the argv launchd already holds. It cannot
     # apply a unit file whose program or arguments have changed, and it
-    # reports success either way -- which is how two restarts and an ensure
-    # of com.wisent.compute.service.stado-local-control-plane on 2026-09-03
-    # all said `restarted` while the job kept executing the shared global
-    # binary the plist no longer named. A silent no-op is the worst available
+    # reports success either way -- which is how restarts and an ensure can
+    # all say `restarted` while the job keeps executing the shared global
+    # binary the plist no longer names. A silent no-op is the worst available
     # answer, so the two vectors are compared first and a job whose argv has
     # drifted from its file goes to the unload-and-bootstrap path below, which
     # is the only one that can carry the change.
@@ -101,9 +98,9 @@ fi
 /// The status word is `declares`, not `runs`, and the difference is a
 /// multi-day outage. This body reaches no process table and asks launchd
 /// nothing; it read `ProgramArguments` out of the plist and then said `runs`,
-/// so on 2026-08-30 it reported `com.wisent.always-on.weles` as `runs` while
-/// both pids the preceding restart had reported were already gone and the
-/// unit's stderr ended in `EADDRINUSE`. A word that means "this file exists
+/// reporting a unit as `runs` while both pids the preceding restart had
+/// reported were already gone and the unit's stderr ended in `EADDRINUSE`.
+/// A word that means "this file exists
 /// and declares this" must not be spelled like a word that means "this is
 /// serving". Whether the unit is the process on its own port is
 /// [`crate::deploy::service_serving`]'s question.

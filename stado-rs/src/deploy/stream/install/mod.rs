@@ -1,5 +1,5 @@
 //! The reconcile pass: what has to hold before the host is touched, which
-//! storage half the operator asked for, and the report the run leaves behind.
+//! storage half was requested, and the report the run leaves behind.
 
 use serde_json::Value;
 

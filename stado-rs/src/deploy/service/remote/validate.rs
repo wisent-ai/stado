@@ -38,7 +38,7 @@ pub fn quote_unit_path(path: &str) -> Result<String, DeployError> {
 /// an absolute path or a path rooted at the target user's home. The value
 /// travels base64-encoded, but rejecting parent traversal keeps a typo from
 /// turning a credential sync into an unrelated file rewrite. `label` names the
-/// destination the way the operator asked for it -- an environment file for
+/// destination by the command that names it -- an environment file for
 /// `service secret-sync`, a token file for `service token-file-sync` -- so a
 /// refusal says which of a command's paths was wrong.
 pub(crate) fn validate_home_rooted_file(path: &str, label: &str) -> Result<(), DeployError> {

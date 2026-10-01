@@ -1,5 +1,5 @@
 //! The half of the storage question that reshapes a host: only reached when
-//! the operator asked for it, and spliced into the reconcile program where the
+//! it was requested, and spliced into the reconcile program where the
 //! library's free space has just been read.
 
 pub(super) const LIBRARY_BIND: &str = r#"if [ "$library_device" = "$root_device" ] && [ "$library_free_kib" -lt "$minimum_kib" ]; then

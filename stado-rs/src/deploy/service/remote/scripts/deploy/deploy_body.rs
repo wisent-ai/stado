@@ -30,8 +30,8 @@ if [ \"$os\" = \"Darwin\" ]; then
   $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
   # `retire` leaves the label disabled, and launchd refuses to bootstrap a
   # disabled label with `5: Input/output error` — so a retire followed by a
-  # deploy of the same name could never load, and on 2026-09-16 a replica
-  # sync unit stayed down between the two. Enable first; enabling a label
+  # deploy of the same name could never load, leaving a unit down between
+  # the two. Enable first; enabling a label
   # that is not disabled is a no-op.
   $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
   detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)

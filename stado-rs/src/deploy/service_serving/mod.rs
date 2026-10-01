@@ -1,11 +1,10 @@
 //! Is the declared unit the process on its own port?
 //!
 //! NO Python original. This module exists because of what `service show`
-//! answered on 2026-08-30. It reported `com.wisent.always-on.weles` as `runs`
-//! while both pids the preceding restart had reported were already gone from
-//! `ps` and the unit's stderr ended in `EADDRINUSE 127.0.0.1:58101`. The unit
-//! was dead and the control plane called it healthy, which is why nobody
-//! noticed for days.
+//! can answer: a unit reported as `runs` while both pids the preceding
+//! restart reported are already gone from `ps` and the unit's stderr ends in
+//! `EADDRINUSE`. The unit is dead and the control plane calls it healthy,
+//! which is why nobody notices for days.
 //!
 //! The reason is worth stating exactly, because it is a shape this fleet has
 //! now met three times. `SHOW_BODY` says `runs` whenever the unit FILE exists:
