@@ -2,8 +2,8 @@
 //!
 //! The ceiling used to be asked by each caller that knew it was submitting a
 //! build: a recipe poller, a run-now command, and the release pipeline.
-//! Every one of them asked, and the fleet still started six builds in an hour
-//! against a ceiling of three on 2026-09-21, because the count is only ever
+//! Every one of them asked, and the fleet could still start twice the
+//! ceiling in an hour, because the count is only ever
 //! as good as the paths that remember to ask. A path nobody updated —
 //! `stado job rerun`, a raw `stado submit` carrying a build command, a client
 //! built before the ceiling existed — spends the day and leaves the counter
@@ -53,7 +53,10 @@ pub async fn charge(
     asked_by: &str,
     intent: Option<&BuildIntent<'_>>,
 ) -> Result<(), String> {
-    let builds: Vec<&String> = commands.iter().filter(|command| compiles(command)).collect();
+    let builds: Vec<&String> = commands
+        .iter()
+        .filter(|command| compiles(command))
+        .collect();
     if builds.is_empty() {
         return Ok(());
     }

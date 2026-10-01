@@ -112,9 +112,9 @@ pub fn read_state_in(home: &Path) -> Value {
 
 /// The last time this writer attempted a pass, in epoch seconds.
 ///
-/// Per writer, not shared, and that distinction is load-bearing: the disk
-/// janitor learned it on 2026-08-31, when two janitors on one host gated each
-/// other out of every pass because they read one another's stamp.
+/// Per writer, not shared, and that distinction is load-bearing: two
+/// janitors on one host reading one another's stamp gate each other out of
+/// every pass.
 pub fn writer_last_attempt(state: &Value, writer: &str) -> Option<f64> {
     state
         .get(WRITER_ATTEMPTS)

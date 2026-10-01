@@ -11,8 +11,6 @@ pub const RUN_PREFIX: &str = "runs";
 /// admission order in the queue — and the orders are deliberate, so the
 /// repair is not one shared list but one shared spelling. A site declares
 /// the order it needs out of these names; nobody re-types the words.
-/// Asked for on 2026-09-19: "znajdz wszystkie miejsca gdzie jest obecnie
-/// uzywana keywordowa logika. w jaki sposob powinno to byc naprawione".
 ///
 /// `QUEUE` is the prefix, not the state: a job under it reports `queued`.
 pub const QUEUE: &str = "queue";

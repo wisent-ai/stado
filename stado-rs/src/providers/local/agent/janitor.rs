@@ -181,7 +181,7 @@ impl JanitorReports {
                         // the reason this whole module exists: a pass must
                         // never sit between the agent and its capacity
                         // publication. It is here rather than in its own unit
-                        // because the operator asked for automatic policy, and
+                        // because memory policy is automatic, and
                         // the tick is the one thing that already runs on every
                         // host that claims work.
                         let memory = crate::providers::local::host_memory::run_memory_pass_once(

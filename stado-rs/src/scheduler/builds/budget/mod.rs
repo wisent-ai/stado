@@ -1,14 +1,12 @@
 //! The fleet's daily build budget: how many native build jobs this fleet
 //! submits in one UTC day, counted wherever a build is enqueued.
 //!
-//! The workshop's rule is three builds a day, and until 2026-09-21 nothing
-//! in the product held anyone to it. That day one session, refused
-//! `stado release submit`, declared a recipe and ran it: two 52-minute
-//! darwin builds plus a poller that enqueued another every ten minutes, on
-//! a host already under memory pressure. The operator, reading the queue:
-//! "czyli obszedles w ten sposob nasz ci/cd pipeline gdzie jest limit 3
-//! buildow dziennie". A ceiling that lives only in an agreement is not a
-//! ceiling; it is a sentence somebody remembers.
+//! The workshop's rule is three builds a day, and a product that does not
+//! hold anyone to it lets a session refused `stado release submit` declare a
+//! recipe and run it: long native builds plus a poller that enqueues another
+//! every few minutes, on a host already under memory pressure. A ceiling
+//! that lives only in an agreement is not a ceiling; it is a sentence
+//! somebody remembers.
 //!
 //! The charge is taken where a job is submitted ([`super::charge`]), so no
 //! path can spend without being counted: the release pipeline asks this

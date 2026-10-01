@@ -17,10 +17,10 @@ pub const UNVERIFIED: &str = "unverified";
 ///
 /// Deliberately not [`OBSERVED`]: an answer was the whole of that word's
 /// evidence, which is how a declaration naming a port another service had
-/// taken stayed green. On 2026-08-31 `brama` was declared on
-/// `http://127.0.0.1:8080` while it served 18080 and an unrelated FastAPI job
-/// held 8080; every probe read `HTTP 404` as an answer and reported
-/// [`OBSERVED`] for seventeen hours. Deliberately not [`UNREACHABLE`] either,
+/// taken stays green: a gateway declared on one loopback port while it
+/// serves another and an unrelated job holds the declared one has every
+/// probe read `HTTP 404` as an answer and report [`OBSERVED`] for hours.
+/// Deliberately not [`UNREACHABLE`] either,
 /// because the socket is alive and restarting the declared service repairs
 /// nothing — the declaration is what is wrong. This is a failure.
 pub const MISOWNED: &str = "misowned";

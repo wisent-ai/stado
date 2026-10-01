@@ -1,16 +1,13 @@
 //! Durable record of a host going quiet, and of the readers that refused
 //! while it was quiet.
 //!
-//! NO Python original. The incident it exists for: on 2026-08-19 between
-//! 18:29 and 18:35 UTC `control-host` dropped off the tailnet — 100%
-//! ping loss, ssh timing out, then `direct 10.0.0.253:41641` again with
-//! 13-215 ms. Six minutes of a production host being unreachable, and
-//! afterwards the product could not say it had happened. The beacon prefix
-//! only ever holds the LATEST document per host, so the gap closed over
-//! itself the moment the host came back: `host_health/<host>.json` was
-//! fresh again and nothing anywhere remembered that it had been stale. The
-//! only evidence that survived was an operator's two ping packets in a
-//! terminal.
+//! NO Python original. The shape it exists for: a production host drops
+//! off the tailnet for minutes — full ping loss, ssh failing, then a direct
+//! path again — and afterwards the product cannot say it happened. The
+//! beacon prefix only ever holds the LATEST document per host, so the gap
+//! closes over itself the moment the host comes back: `host_health/<host>.json`
+//! is fresh again and nothing anywhere remembers that it was stale. The
+//! only evidence that survives is an operator's ping packets in a terminal.
 //!
 //! The readers knew. The resolver refused resolutions with "service
 //! directory cache is stale (store generation ...)" and its registry read

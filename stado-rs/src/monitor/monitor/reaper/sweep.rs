@@ -71,10 +71,8 @@ pub async fn reap_dead_agents(
     // mid-extraction on its FIRST big job (e.g. gpt-oss-20b 80GB shards)
     // legitimately exceeds IDLE_GRACE_SECONDS=1800 before producing its
     // first completion. Without this check, the never-worked reaper kills
-    // healthy VMs and the parent jobs ricochet through restart cycles.
-    // Confirmed live on 2026-05-07: reaper killed 23+ working VMs in one
-    // hour, triggering the "never-worked reap (>5 in 1h)" alert email
-    // storm.
+    // healthy VMs and the parent jobs ricochet through restart cycles,
+    // triggering the "never-worked reap (>5 in 1h)" alert email storm.
     let mut active_refs: HashSet<String> = HashSet::new();
     if needs_completions_scan {
         for job in store.list_jobs("running", 0).await? {
@@ -87,9 +85,8 @@ pub async fn reap_dead_agents(
     // capacity blob is stale BUT a running job assigned to its VM still
     // has a fresh heartbeat — agent is alive, just starved on its
     // broadcast tick by a training subprocess. Without this guard the
-    // reaper destroys productive VMs (Llama-1B 5k run was reaped 3 times
-    // mid-training on 2026-05-12 because rollout steps exceeded
-    // CAPACITY_STALE_SECONDS).
+    // reaper destroys productive VMs mid-training because rollout steps
+    // exceed CAPACITY_STALE_SECONDS.
     let ref_to_jids = hg::build_ref_to_jids(store).await?;
     const HB_THRESHOLD: f64 = 1800.0;
     for (instance_ref_full, age_seconds) in refs {
