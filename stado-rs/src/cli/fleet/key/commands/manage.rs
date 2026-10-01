@@ -109,8 +109,8 @@ pub async fn add(runner: &Runner, target: &str, from: &str) -> Result<bool, Stri
     Ok(true)
 }
 
-/// `key ls` — metadata of every stored SSH host key. No private fields.
-pub async fn ls() -> Result<bool, String> {
+/// `key ls [--json]` — metadata of every stored SSH host key. No private fields.
+pub async fn ls(json_output: bool) -> Result<bool, String> {
     let client = configured_client()?;
     let items = client.list_items().await.map_err(|exc| exc.to_string())?;
     let mut shown = Vec::new();
@@ -120,32 +120,33 @@ pub async fn ls() -> Result<bool, String> {
         }
         // `fingerprint` and `key_type` are schema CONTEXT on a `key-pair`, not
         // fields: Skarbiec's canonical form keeps the two halves of the key as
-        // fields and everything descriptive beside them. Asking for them as
-        // fields is refused, and the refusal used to arrive here as two blank
-        // columns, which reads as a key with no fingerprint rather than as a
-        // read of the wrong place. The private field is never asked for.
+        // fields and everything descriptive beside them. The private field is
+        // never asked for. A context that cannot be read is that item's error,
+        // not two blank columns that read as a key with no fingerprint.
         let context = client
             .read_field(&item.id, "context")
             .await
-            .unwrap_or_else(|_| json!({}));
+            .map_err(|exc| format!("cannot read the context of credential item {}: {exc}", item.id))?;
         let described = |name: &str| {
             context
                 .get(name)
                 .and_then(|value| value.as_str().map(str::to_string))
                 .unwrap_or_default()
         };
-        shown.push(format!(
-            "{}\t{}\t{}",
-            item.id,
-            described("key_type"),
-            described("fingerprint")
-        ));
+        shown.push(json!({
+            "item": item.id,
+            "key_type": described("key_type"),
+            "fingerprint": described("fingerprint"),
+        }));
     }
-    if shown.is_empty() {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&shown).map_err(|exc| exc.to_string())?);
+    } else if shown.is_empty() {
         println!("no SSH host keys in the credential store");
     } else {
-        for line in &shown {
-            println!("{line}");
+        for row in &shown {
+            let text = |name: &str| row[name].as_str().unwrap_or_default().to_string();
+            println!("{}\t{}\t{}", text("item"), text("key_type"), text("fingerprint"));
         }
     }
     Ok(true)

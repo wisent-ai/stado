@@ -13,7 +13,11 @@ pub enum KeyCommands {
         from: String,
     },
     /// List stored SSH host keys (metadata only).
-    Ls,
+    Ls {
+        /// Emit the keys as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove a target's SSH key from the credential store.
     Rm {
         /// Registry target.

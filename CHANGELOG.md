@@ -21,3 +21,4 @@ The version-bump commit moves them with `stado product changelog --version V`;
 ## Unreleased
 
 - `stado host user delete USERNAME --target T` requires `--confirm USERNAME` (cli.md rule 16): the account, and its home directory unless `--keep-home`, cannot be restored, so a missing or different confirmation is refused with exit 2 before the host is contacted, naming what would be removed. `--json` prints the target, SSH target, username, status, OS and whether the home was kept (rule 13).
+- `stado fleet key ls --json` prints each stored SSH host key's item, key type and fingerprint as JSON (cli.md rule 13). A key whose context cannot be read now fails the listing with `cannot read the context of credential item <item>: <error>` instead of printing it with two blank columns.

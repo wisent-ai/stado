@@ -82,7 +82,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
             let runner = crate::deploy::production_runner();
             match sub {
                 KeyCommands::Add { target, from } => key::add(&runner, &target, &from).await,
-                KeyCommands::Ls => key::ls().await,
+                KeyCommands::Ls { json } => key::ls(json).await,
                 KeyCommands::Rm { target } => key::rm(&target).await,
                 KeyCommands::Install { target } => key::install(&runner, &target).await,
                 KeyCommands::Check { target } => key::check(&runner, &target).await,
