@@ -17,13 +17,12 @@ mod errors;
 mod payload;
 mod records;
 
-/// Named out of tree by `http` (`DEFAULT_BASE_URL`, `DEFAULT_TIMEOUT`, the
+/// Named out of tree by `http` (`DEFAULT_BASE_URL`, the
 /// bounded read and the retryable-status test), by `client::lifecycle`
 /// (`HTTP_NOT_FOUND` on delete) and by `client::validate_box_id`
 /// (`box_id_pattern`).
 pub use constants::{
-    box_id_pattern, DEFAULT_BOX_API_URL, DEFAULT_TIMEOUT_SECONDS, HTTP_NOT_FOUND, MAX_JSON_BYTES,
-    TRANSIENT_HTTP,
+    box_id_pattern, DEFAULT_BOX_API_URL, HTTP_NOT_FOUND, MAX_JSON_BYTES, TRANSIENT_HTTP,
 };
 /// Named out of tree as `crate::providers::r#box::{BoxError, BoxApiError}`:
 /// re-exported again by the parent, converted by `providers::ProviderError`

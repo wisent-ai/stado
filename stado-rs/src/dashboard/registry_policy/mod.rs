@@ -1,14 +1,13 @@
 //! The registry and cleanup routes Stado Desktop calls to read and edit a
 //! fleet's cleanup policy, run the local janitor, and import registry data.
 //!
-//! They existed only on the client side until 2026-09-02. `CleanupClient` and
-//! `FleetControl` in the desktop app had been written against
+//! They used to exist only on the client side. `CleanupClient` and
+//! `FleetControl` in the desktop app were written against
 //! `api/registry.json`, `api/registry/policy`, `api/cleanup.json` and
-//! `api/cleanup/run` for some time, and all four answered `404` on the live
-//! dashboard — verified by probing every port this listener binds, and by
-//! grepping the whole crate, where `registry/policy` and `cleanup/run` did not
-//! appear at all. So the graphical surface could neither show a policy nor
-//! change one, while the command line could set exactly one cleaner root.
+//! `api/cleanup/run`, and all four answered `404` on the live dashboard,
+//! because no listener route carried them. So the graphical surface could
+//! neither show a policy nor change one, while the command line could set
+//! exactly one cleaner root.
 //!
 //! What the projection deliberately does NOT do: it never returns routing or
 //! SSH material, and a write accepts only the whitelisted policy keys. The

@@ -216,7 +216,10 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
     }
 
     if let Err(error) = crate::targets::validate_registry(&document) {
-        return send_json(http_status(reqwest::StatusCode::BAD_REQUEST), &json!({"error": error.to_string()}));
+        return send_json(
+            http_status(reqwest::StatusCode::BAD_REQUEST),
+            &json!({"error": error.to_string()}),
+        );
     }
     let payload = match serde_json::to_string_pretty(&document) {
         Ok(payload) => format!("{payload}\n"),

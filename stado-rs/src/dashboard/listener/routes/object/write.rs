@@ -47,10 +47,9 @@ impl Dashboard {
         // described as "release publication", validated once at startup and
         // required by NO route, so it read `false` until someone restarted the
         // unit and no request could ever reopen it — `boundaries_available`
-        // revalidates only what a request requires. On 2026-08-31 an operator
-        // read that field, believed its description, and held the quietest
-        // publication window of the night waiting for a value with no
-        // mechanism to change.
+        // revalidates only what a request requires. An operator who reads
+        // that field and believes its description holds a publication
+        // window waiting for a value with no mechanism to change.
         //
         // Ordinary object traffic is deliberately unaffected: only a
         // release-policy coordinate adds the requirement, because only it

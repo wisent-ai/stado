@@ -38,10 +38,10 @@ pub enum TtlUpdate {
 
 impl BoxClient {
     /// Build a client with a validated transport (Python constructor
-    /// defaults: `base_url=DEFAULT_BOX_API_URL`, `timeout_seconds=70`).
-    pub fn new(api_key: &str, base_url: &str, timeout_seconds: f64) -> Result<Self, BoxError> {
+    /// default: `base_url=DEFAULT_BOX_API_URL`).
+    pub fn new(api_key: &str, base_url: &str) -> Result<Self, BoxError> {
         Ok(BoxClient {
-            transport: BoxHttpTransport::new(api_key, base_url, timeout_seconds)?,
+            transport: BoxHttpTransport::new(api_key, base_url)?,
         })
     }
 
@@ -68,9 +68,9 @@ impl BoxClient {
     }
 
     /// Build a client whose API key is read from Skarbiec by the transport.
-    pub fn from_skarbiec(base_url: &str, timeout_seconds: f64) -> Result<Self, BoxError> {
+    pub fn from_skarbiec(base_url: &str) -> Result<Self, BoxError> {
         Ok(BoxClient {
-            transport: BoxHttpTransport::from_skarbiec(base_url, timeout_seconds)?,
+            transport: BoxHttpTransport::from_skarbiec(base_url)?,
         })
     }
 }

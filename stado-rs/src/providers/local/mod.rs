@@ -11,7 +11,6 @@
 
 pub mod accelerators;
 pub mod agent;
-pub mod cloud;
 pub mod disk;
 pub mod disk_cleanup;
 pub mod disk_staging;

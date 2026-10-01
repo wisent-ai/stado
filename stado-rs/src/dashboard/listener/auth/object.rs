@@ -67,11 +67,11 @@ pub(crate) async fn authorize_host_health(
 /// [`ReleaseRefusal`] already learned this lesson on the release route: one
 /// code for every refusal cost a day, because "no declaration", "key outside
 /// the declared prefixes", "no bearer at all" and "the wrong bearer" need
-/// opposite repairs and read identically. The object route kept collapsing
-/// them, and on 2026-09-05 it answered `object_grant_does_not_cover_key` for
-/// `stado://spis-crawls/runs/…` on a host whose configuration declares
-/// `runs/` with `get` — so the message named the one cause that was not
-/// true, and the real one had to be found by excluding hypotheses again.
+/// opposite repairs and read identically. A route that collapses them
+/// answers `object_grant_does_not_cover_key` for a key on a host whose
+/// configuration declares that prefix with `get` — so the message names the
+/// one cause that is not true, and the real one has to be found by
+/// excluding hypotheses again.
 pub(crate) async fn authorize_object(
     dashboard: &Dashboard,
     request: &Request,
@@ -111,8 +111,8 @@ pub(crate) async fn authorize_object(
 ///
 /// A bare `{"error":"unauthorized"}` covers three faults that need opposite
 /// repairs — no publisher declared for the key, no bearer presented at all,
-/// and a bearer that does not match the publisher item — and on 2026-09-03 it
-/// cost most of a day. `stado storage stat` answered it for
+/// and a bearer that does not match the publisher item — and costs most of
+/// a day. `stado storage stat` answered it for
 /// `stado://system/release-catalog/<product>.json` for every product,
 /// including ones that publish successfully, while the same publisher bearer
 /// authorized `stado://sources/<product>/…` on the same host in the same

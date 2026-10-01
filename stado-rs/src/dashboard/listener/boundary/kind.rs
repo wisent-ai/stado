@@ -50,7 +50,7 @@ impl Boundary {
     ///   `/api/object/stat`, and the two POST object routes.
     /// - `Release` — the same object routes when the coordinate resolves to a
     ///   release policy, because `authorize_release` reads that verifier's
-    ///   material. It required NO route until 2026-08-31: enumerated,
+    ///   material. It used to be required by NO route: enumerated,
     ///   labelled, described, validated once at startup, reported in
     ///   `/healthz`, and consulted nowhere — so it read `false` until a
     ///   restart and no request could reopen it, because

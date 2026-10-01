@@ -200,29 +200,4 @@ impl BoxClient {
             Err(err) => Err(err),
         }
     }
-
-    /// Python `wait_for_state`: poll `get_box` until the state enters
-    /// `states` or the deadline lapses (transport error, like Python).
-    pub async fn wait_for_state(
-        &self,
-        box_id: &str,
-        states: &[&str],
-        deadline_seconds: f64,
-        poll_seconds: f64,
-    ) -> Result<BoxInfo, BoxError> {
-        let deadline = tokio::time::Instant::now()
-            + tokio::time::Duration::from_secs_f64(deadline_seconds.max(0.0));
-        loop {
-            let info = self.get_box(box_id).await?;
-            if states.contains(&info.state.as_str()) {
-                return Ok(info);
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(BoxError::transport("timed out waiting for Box state"));
-            }
-            tokio::time::sleep(remaining.min(tokio::time::Duration::from_secs_f64(poll_seconds)))
-                .await;
-        }
-    }
 }

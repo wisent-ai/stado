@@ -184,8 +184,7 @@ impl ArmClient {
     }
 }
 
-/// ARM resource path of a VM (no api-version). Crate-visible for the
-/// agent's self-delete ([`crate::providers::local::cloud::azure_self`]).
+/// ARM resource path of a VM (no api-version).
 pub(crate) fn vm_path(subscription: &str, rg: &str, name: &str) -> String {
     format!(
         "/subscriptions/{subscription}\

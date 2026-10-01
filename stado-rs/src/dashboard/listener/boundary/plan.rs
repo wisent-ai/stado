@@ -15,9 +15,8 @@ use super::Boundary;
 /// precisely because the key IS a release key. So the boundary was required by
 /// nothing that could reach it: closed once, closed for the life of the
 /// process, and no request, credential or amount of asking could reopen it.
-/// Two reads on 2026-09-03 proved it — a successful stat and a rejected
-/// object read, both against a release coordinate, `release` still `false`
-/// after each.
+/// Two reads prove it — a successful stat and a rejected object read, both
+/// against a release coordinate, `release` still `false` after each.
 ///
 /// Inverting the predicate does not fix that. It moves the deadlock from
 /// silent to loud: every release-coordinate read on a process whose `release`

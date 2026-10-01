@@ -8,7 +8,6 @@
 mod instances;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde_json::Value;
 
@@ -48,9 +47,6 @@ struct Inner {
     project: String,
     base_url: String,
     auth: Option<Arc<dyn gcp_auth::TokenProvider>>,
-    /// Delay between LRO polls. Python `op.result()` uses the SDK default
-    /// (~1s); tests shrink this to milliseconds.
-    poll_interval: Duration,
 }
 
 impl GceClient {
@@ -61,21 +57,15 @@ impl GceClient {
         let auth = crate::skarbiec::gcp_provider()
             .await
             .map_err(|err| GceError::Auth(err.to_string()))?;
-        Ok(Self::assemble(
-            project,
-            COMPUTE_API_BASE,
-            Some(auth),
-            Duration::from_secs(1),
-        ))
+        Ok(Self::assemble(project, COMPUTE_API_BASE, Some(auth)))
     }
 
     /// Bind to an explicit base URL without credentials (loopback mocks in
-    /// tests) and with a near-zero LRO poll interval.
+    /// tests).
     fn assemble(
         project: &str,
         base_url: &str,
         auth: Option<Arc<dyn gcp_auth::TokenProvider>>,
-        poll_interval: Duration,
     ) -> Self {
         GceClient {
             inner: Arc::new(Inner {
@@ -83,7 +73,6 @@ impl GceClient {
                 project: project.to_string(),
                 base_url: base_url.trim_end_matches('/').to_string(),
                 auth,
-                poll_interval,
             }),
         }
     }
@@ -211,11 +200,13 @@ impl GceClient {
         Ok(true)
     }
 
-    /// Poll a zone operation until DONE (Python `op.result()`). When the
+    /// Wait on a zone operation through Compute's own `operations.wait`
+    /// method until it is DONE (Python `op.result()`). The method returns when
+    /// the operation is done or when Compute's own wait ends, so it is asked
+    /// again while the operation runs; this client adds no pause. When the
     /// operation completes with an error, the `error.errors[].code` values
     /// (e.g. QUOTA_EXCEEDED, ZONE_RESOURCE_POOL_EXHAUSTED) are surfaced in
-    /// the [`GceError::Api`] message — this is where Python's substring
-    /// classification reads them from.
+    /// the [`GceError::Api`] message.
     pub async fn wait_zone_operation(
         &self,
         zone: &str,
@@ -223,12 +214,16 @@ impl GceClient {
         desc: &str,
     ) -> Result<(), GceError> {
         let path = format!(
-            "/projects/{}/zones/{zone}/operations/{operation}",
+            "/projects/{}/zones/{zone}/operations/{operation}/wait",
             self.project()
         );
         loop {
             let op = self
-                .get(&path, &format!("get operation {operation}"))
+                .post(
+                    &path,
+                    &Value::Object(serde_json::Map::new()),
+                    &format!("wait on operation {operation}"),
+                )
                 .await?;
             if op.get("status").and_then(Value::as_str) == Some("DONE") {
                 if let Some(error) = op.get("error") {
@@ -252,7 +247,7 @@ impl GceClient {
                 }
                 return Ok(());
             }
-            tokio::time::sleep(self.inner.poll_interval).await;
+            eprintln!("GCE {desc}: operation {operation} is still running after Compute's wait; waiting again");
         }
     }
 }

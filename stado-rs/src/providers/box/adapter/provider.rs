@@ -27,11 +27,7 @@ impl BoxProvider {
     pub fn from_env() -> Result<Self, BoxError> {
         let base_url =
             std::env::var("BOX_API_URL").unwrap_or_else(|_| http::DEFAULT_BASE_URL.to_string());
-        let timeout: f64 = std::env::var("BOX_API_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "70".to_string())
-            .parse()
-            .map_err(|_| BoxError::configuration("BOX_API_TIMEOUT_SECONDS must be a number"))?;
-        let client = BoxClient::from_skarbiec(&base_url, timeout)?;
+        let client = BoxClient::from_skarbiec(&base_url)?;
         Self::from_client_env_ttl(client)
     }
 

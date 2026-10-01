@@ -39,10 +39,7 @@ pub enum TokenError {
 /// Refresh the cached token this many seconds before its expiry.
 const TOKEN_REFRESH_SKEW_S: i64 = 300;
 
-/// IMDS API version. The Instance Metadata Service versions the whole
-/// service rather than the endpoint, so the same pin covers the
-/// managed-identity token request here and the instance-metadata probe
-/// in [`crate::providers::local::cloud::azure_self`].
+/// IMDS API version for the managed-identity token request.
 pub(crate) const IMDS_API_VERSION: &str = "2018-02-01";
 
 /// A freshly acquired token: value + seconds until expiry.

@@ -75,12 +75,10 @@ pub(super) fn api_error(status: u16, raw: &[u8]) -> BoxError {
     .into()
 }
 
-/// Python `except (URLError, TimeoutError, socket.timeout, OSError)`:
-/// redacted, class-name-only transport failure.
+/// Python `except (URLError, OSError)`: redacted, class-name-only transport
+/// failure.
 pub(super) fn transport_error(err: reqwest::Error) -> BoxError {
-    let kind = if err.is_timeout() {
-        "timeout"
-    } else if err.is_connect() {
+    let kind = if err.is_connect() {
         "connect_error"
     } else {
         "transport_error"

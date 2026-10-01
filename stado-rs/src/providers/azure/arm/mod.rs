@@ -10,9 +10,7 @@ pub(crate) use verbs::vm_path;
 
 /// ARM REST base.
 pub const ARM_API_BASE: &str = "https://management.azure.com";
-/// Compute RP API version for VM resource paths. Crate-visible so the
-/// agent's self-delete ([`crate::providers::local::cloud::azure_self`]) targets
-/// the same VM contract this provider creates against.
+/// Compute RP API version for VM resource paths.
 pub(crate) const COMPUTE_API_VERSION: &str = "2023-09-01";
 pub(super) const NETWORK_API_VERSION: &str = "2023-09-01";
 /// OAuth scope for the client-credentials token request.
