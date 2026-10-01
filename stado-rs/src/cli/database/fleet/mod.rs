@@ -19,7 +19,10 @@ use crate::cli::CmdError;
 
 use super::supabase::owner_vault;
 
+mod destroy;
 mod postgres;
+
+pub(super) use destroy::destroy;
 
 /// How long `place` may run on the placed host: initdb, the certificate and
 /// the unit install together.

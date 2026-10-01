@@ -164,6 +164,23 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Destroy a fleet database: the inverse of `create --provider fleet`.
+    ///
+    /// Removes the managed unit `<name>-database` that serves a postgres
+    /// database on its host, deletes the credential item from the owner vault
+    /// (restorably, as Skarbiec deletes), and withdraws the declaration last,
+    /// so a run that stops part-way can be run again. The data directory
+    /// `~/.stado/databases/<name>/` on the host is left in place and named.
+    Destroy {
+        name: String,
+        /// Host the database was placed on (default: the vault owner, where
+        /// `create` places it).
+        #[arg(long)]
+        host: Option<String>,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Grant one or more consumers access to a declared database.
     ///
     /// Adds each consumer to the declaration and widens that consumer's own
