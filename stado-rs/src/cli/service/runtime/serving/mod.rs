@@ -51,12 +51,12 @@ async fn directory_port(name: &str, host: &str) -> Option<u16> {
 /// `service verify`'s ownership judgement resolves the unit through
 /// [`crate::targets::Registry::service_unit`] — which reads `managed_service`
 /// and, when a placement profile owns the service instead, that profile's
-/// `units` map. The two disagreed: on 2026-09-01 `service verify` judged
-/// brama's port by label while `service serving brama` refused with "is not a
-/// registry-managed service" on both hosts, because brama carries a
-/// `placement_profile` and no `managed_service`. The command #248 points an
-/// operator at could not answer for the one service the check was written
-/// for. One resolution chain, both commands.
+/// `units` map. The two used to disagree: `service verify` judged a
+/// gateway's port by label while `service serving <gateway>` refused with
+/// "is not a registry-managed service" on every host, because the gateway
+/// carries a `placement_profile` and no `managed_service`. The command the
+/// check pointed an operator at could not answer for the one service the
+/// check was written for. One resolution chain, both commands.
 ///
 /// The label path is tried first so a host that declares a unit under a name
 /// the directory also uses keeps resolving to its own declaration.

@@ -110,12 +110,11 @@ pub enum EnvironmentCommands {
     ///
     /// `show` reports what the unit file declares and used to spell that
     /// `runs`; `endpoint-check` reports whether anything answers on a declared
-    /// port. Neither asks the one question an outage turns on. On 2026-08-30
-    /// `com.wisent.always-on.weles` was reported `runs` while both pids its
-    /// last restart produced were already gone and its stderr ended in
-    /// `EADDRINUSE 127.0.0.1:58101`: something WAS listening there, and it was
-    /// a different launchd job — the undeclared unit the Weles release
-    /// deployer bootstraps, running an identical argument vector.
+    /// port. Neither asks the one question an outage turns on: a unit can be
+    /// reported `runs` while both pids its last restart produced are already
+    /// gone and its stderr ends in `EADDRINUSE` — something IS listening
+    /// there, and it is a different launchd job, the undeclared unit a
+    /// release deployer bootstraps, running an identical argument vector.
     ///
     /// So ownership here is decided by launchd label, never by argv. The pid
     /// holding each port is walked up its own parent chain until a pid appears

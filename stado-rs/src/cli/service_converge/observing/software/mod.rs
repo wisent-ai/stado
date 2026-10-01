@@ -3,10 +3,10 @@
 //! `stado release status` judges every rollout target against the newest
 //! software report on file and never contacts a host itself, so something has
 //! to write that report. `stado host software` did until the host verbs
-//! collapsed into the release capability on 2026-09-06 and the verb was
-//! deleted with no writer put in its place: four days later every target read
-//! `reported stale (4d)` and the sentence beside it sent operators to a
-//! command that answered `Usage: stado host <COMMAND>`. The live read that
+//! collapsed into the release capability and the verb was deleted with no
+//! writer put in its place: every target then read `reported stale` and the
+//! sentence beside it sent operators to a command that answered `Usage:
+//! stado host <COMMAND>`. The live read that
 //! replaced the verb is `stado release host-state`, so the report is written
 //! here, on the visit that command already makes.
 //!

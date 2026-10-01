@@ -81,9 +81,9 @@ pub(crate) async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> 
             failures.push(format!("{}: {}", declared.host, updated.failure()));
         }
         // Read the key back through the same channel. A writer that cannot see
-        // its own write is not a writer, it is a hope: on 2026-08-30 this
-        // command reported `env_set` twice for a value a host-side reconciler
-        // restored within seconds, and nothing said so.
+        // its own write is not a writer, it is a hope: this command used to
+        // report `env_set` for a value a host-side reconciler restored within
+        // seconds, and nothing said so.
         let verdict = if wrote {
             let readback = if unit_env {
                 verify_unit_env_write(&target, declared, key, value, &runner).await?

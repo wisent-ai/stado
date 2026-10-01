@@ -5,10 +5,10 @@
 //! `stado service grant-sync brama --host <H> --consumer
 //! oko-model-router-client --capability read:oko-model-router#token
 //! --token-file oko-model-router-skarbiec-token`. Nobody remembered them, so
-//! grants were issued from the shell instead — 26 in the week of 2026-09-12,
-//! one of them into the vault replica its owner overwrote within the hour —
-//! and Oko's judge named the missing product side on 2026-09-20: "deklaracja
-//! konsumentów mintująca granty automatycznie z rejestru".
+//! grants were issued from the shell instead — dozens in a week, some into
+//! the vault replica its owner overwrote within the hour. The missing
+//! product side is a consumer declaration that mints grants from the
+//! registry.
 //!
 //! Now the directory carries them beside the consumer it authorizes
 //! (`service_directory.services.<service>.consumers.<consumer>.grants`), this

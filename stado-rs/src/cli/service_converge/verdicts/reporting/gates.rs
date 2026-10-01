@@ -82,7 +82,7 @@ pub(in crate::cli::service_converge) fn report_gate_diagnostics(rows: &[Row], ex
 
 /// Apply mode: anything short of `in-sync` is a failed apply.
 ///
-/// The operator asked for the host to be brought to the declared version, so
+/// An apply asks for the host to be brought to the declared version, so
 /// the only acceptable end state is one this command has confirmed by reading
 /// the host again. `unknown` counts as failure here and does not in report
 /// mode, and that is the intended difference: before an apply it means nobody
