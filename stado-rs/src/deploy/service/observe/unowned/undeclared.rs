@@ -83,14 +83,13 @@ pub struct UndeclaredUnit {
     /// The argument vector the pid launchd holds is ACTUALLY executing, as the
     /// process table reports it, or empty when the label holds no pid.
     ///
-    /// The declaration and the process are two different facts and this fleet
-    /// has had them disagree: `com.wisent.compute.service.stado-local-control-plane`
-    /// declares `stado coordinator` and launchd was holding a five-day-old
-    /// `stado dashboard` under it — a command the product deleted on
-    /// 2026-08-19, whose refresh loop still forced a disk-cleanup pass every
-    /// two minutes and stamped the janitor's shared interval out from under
-    /// the queue agent. Every report that read the unit file agreed with
-    /// itself and none of them was looking at the process.
+    /// The declaration and the process are two different facts and they can
+    /// disagree: a unit can declare `stado coordinator` while launchd holds a
+    /// days-old process of a command the product has since deleted under it,
+    /// whose refresh loop still forces a disk-cleanup pass every two minutes
+    /// and stamps the janitor's shared interval out from under the queue
+    /// agent. Every report that reads the unit file agrees with itself and
+    /// none of them is looking at the process.
     pub running_program: String,
     /// When that process started, and when the binary it is executing was
     /// last written. A process older than its own binary is running code

@@ -3,10 +3,10 @@
 //!
 //! The queue's own jobs are counted by the agent that runs them. Everything
 //! else Stado places on a host — an interactive Jeden session over
-//! `stado workload attach`, a browser task over `stado workload run` — used
-//! to hold nothing: the host kept publishing itself as free, and on
-//! 2026-09-17 a machine could be handed any number of Jeden sessions while
-//! the scheduler read it as idle. A reservation is the missing object: one
+//! `stado workload attach`, a browser task over `stado workload run` — holds
+//! nothing unless it is written down: the host keeps publishing itself as
+//! free and can be handed any number of Jeden sessions while the scheduler
+//! reads it as idle. A reservation is that object: one
 //! document per placed workload, heartbeated while the process lives,
 //! subtracted by the agent from what it publishes, and gone when the process
 //! ends or its holder stops answering.

@@ -79,8 +79,8 @@ fi
 if stage_enabled foreign_home_trees; then
 before=$(free_kb)
 # macOS-style home trees on a Linux host. `/Users/<name>` exists on Linux only
-# as debris of a job or delivery that carried a hard-wired Mac path — on
-# 2026-08-19 one such tree held 10.9 GiB of build cache on the GPU builder.
+# as debris of a job or delivery that carried a hard-wired Mac path, and one
+# such tree can hold gigabytes of build cache on a builder.
 # The uname gate makes this stage a no-op on every macOS host, where /Users is
 # the real home root; held() still protects a tree a live process names.
 if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Linux" ] && [ -d /Users ]; then

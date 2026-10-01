@@ -86,10 +86,9 @@ pub const UV_INSTALLER: &str = "/opt/homebrew/bin/uv";
 /// The Appium server CLI, as Homebrew and a global npm prefix lay it down.
 ///
 /// Spis's crawl coordinator asks this host, through this very channel, whether
-/// the mobile placement can run at all before it submits a job. Until
-/// 2026-09-03 the answer it got was "not an approved host-exec command", which
-/// reads as a policy gap and hid the only fact that mattered: whether the
-/// program is on the machine.
+/// the mobile placement can run at all before it submits a job. An answer of
+/// "not an approved host-exec command" reads as a policy gap and hides the
+/// only fact that matters: whether the program is on the machine.
 pub const APPIUM_CLI: &str = "/opt/homebrew/bin/appium";
 
 /// The Android platform-tools bridge, at the two absolute paths the fleet's

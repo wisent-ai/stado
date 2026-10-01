@@ -108,11 +108,10 @@ printf 'kronika agent: %s\nbrama route: %s\nkronika signing secret: owner=%s\nli
 ///
 /// A listener whose long poll to GitHub's broker is cut keeps its process and
 /// its `state = running`, and takes no jobs: `install` sees a running service
-/// and leaves it alone, so nothing in this product could recover it. On
-/// 2026-09-06 a reinstall cut that session at 18:51:45 —
-/// `[ERR BrokerServer] System.Net.Sockets.SocketException (89): Operation
-/// canceled` — and a Skarbiec documentation gate then sat queued for half an
-/// hour against a host that looked healthy in every other reading.
+/// and leaves it alone, so nothing else in this product could recover it. A
+/// reinstall cuts that session (`[ERR BrokerServer]
+/// System.Net.Sockets.SocketException (89): Operation canceled`), and a gate
+/// then sits queued against a host that looks healthy in every other reading.
 ///
 /// `kickstart -k` replaces the job without a window in which it does not
 /// exist, and the wait is on the runner's own log rather than on the daemon

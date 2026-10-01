@@ -213,11 +213,11 @@ pub async fn install_declared(
         value["repository_bootstrap"] = repository_bootstrap;
     }
     // The model-review bearer is a Brama capability for the repository's CI,
-    // not a property of the runner. Minting it inside `install` meant a Brama
-    // that refused a route — HTTP 401 on `PUT /v1/admin/routes`, measured on
-    // 2026-09-09 — stopped a repository from getting a runner at all, for a
-    // secret its checks never read. `runner model-review` reconciles it, and
-    // the report says so rather than leaving the capability unnamed.
+    // not a property of the runner. Minting it inside `install` would let a
+    // Brama that refuses a route (HTTP 401 on `PUT /v1/admin/routes`) stop a
+    // repository from getting a runner at all, for a secret its checks never
+    // read. `runner model-review` reconciles it, and the report says so rather
+    // than leaving the capability unnamed.
     if profile.needs_model_review() {
         value["model_review"] = match repository {
             Some(repository) => json!({

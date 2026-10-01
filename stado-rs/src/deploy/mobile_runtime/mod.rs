@@ -5,16 +5,14 @@
 //! Android capture placements then have no driver to open an application
 //! with and no bridge to reach a device through.
 //!
-//! The probe half already existed and the repair half did not.
-//! [`super::host_exec`] approved `appium --version`,
-//! `appium driver list --installed`, `which adb` and `adb devices -l` on
-//! 2026-09-03 precisely so a crawl coordinator could ask a placement host
-//! whether it can run before submitting a job. Nothing could act on the
-//! answer: the software report says what a host runs and stops there, and the
-//! only remaining route was an `npm install -g appium` typed into somebody's
-//! terminal — the unrepeatable, unauditable change
-//! [`super::weles_browser_runtime`] was written to replace for Playwright.
-//! This is the same shape for the same reason.
+//! The probe half exists so the repair half can: [`super::host_exec`]
+//! approves `appium --version`, `appium driver list --installed`, `which adb`
+//! and `adb devices -l` precisely so a crawl coordinator can ask a placement
+//! host whether it can run before submitting a job. A software report that
+//! says what a host runs and stops there leaves `npm install -g appium` typed
+//! into somebody's terminal as the only route — the unrepeatable, unauditable
+//! change [`super::weles_browser_runtime`] was written to replace for
+//! Playwright. This is the same shape for the same reason.
 //!
 //! Four properties are deliberate:
 //!

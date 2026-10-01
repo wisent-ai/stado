@@ -120,9 +120,8 @@ pub(in crate::doctor) async fn check_release_integrity() -> Check {
         // claim carries no list of what a complete coordinate holds, so
         // `missing_release_objects` can only answer `absent: SHA256SUMS` —
         // the same sentence it gives a coordinate that published eight
-        // objects of nine. `stado/0.14.4/darwin-arm64` read exactly that on
-        // 2026-09-03 while holding one 144-byte object, and the number was
-        // already spent.
+        // objects of nine, and a coordinate holding one tiny claim object
+        // reads exactly that while its number is already spent.
         if coordinate.claim_only() {
             let (status, sentence) = claim_only_verdict(product, coordinate).await;
             findings.note(status, sentence);

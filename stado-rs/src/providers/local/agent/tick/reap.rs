@@ -2,11 +2,10 @@
 //!
 //! [`crate::queue::reaper`] completes a release job whose worker lease
 //! expired from its verified receipt and archive, and it is CAS-fenced, so
-//! any caller may run it. Its only caller was the coordinator tick, and on
-//! 2026-09-28 the fleet's coordinator ran an old Stado on a memory-starved
-//! host and ticked about twice an hour: the darwin job of stado 0.22.17
-//! finished every step and uploaded its receipt, its agent restarted onto an
-//! installed Stado before writing the terminal state, and the build stayed
+//! any caller may run it. With the coordinator tick as its only caller, a
+//! coordinator that ticks rarely (an old Stado on a memory-starved host)
+//! leaves a job that finished every step and uploaded its receipt — its agent
+//! restarted onto an installed Stado before writing the terminal state —
 //! `building` for hours with its release unpublished.
 //!
 //! An idle agent therefore asks the reaper about the jobs whose work trees on

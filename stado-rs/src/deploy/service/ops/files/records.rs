@@ -101,10 +101,10 @@ pub async fn tail_logs(
 
 /// The most log bytes one read may pull across the host channel.
 ///
-/// A cap in lines cannot bound a transfer and cannot bound a diagnosis: on
-/// 2026-09-05 `stado host unit-log … --lines 40000` returned 500 lines of the
-/// object API's request log, which covered a few minutes, and an event at
-/// 13:17 was already unreadable at 14:10. Bytes bound the transfer honestly.
+/// A cap in lines cannot bound a transfer and cannot bound a diagnosis:
+/// hundreds of lines of the object API's request log cover a few minutes,
+/// and an event an hour old is already unreadable. Bytes bound the transfer
+/// honestly.
 pub const LOG_WINDOW_BYTES: usize = 4 * 1024 * 1024;
 
 /// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,

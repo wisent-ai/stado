@@ -94,12 +94,11 @@ pub struct CleanupState {
     /// of the binary that wrote it.
     ///
     /// The state file has several writers on an always-on host: the queue agent
-    /// every tick, and a `disk-cleanup --watch` unit on its own timer. On
-    /// 2026-08-31 the agent reported `interval_noop` with no errors at
-    /// 14:55:24Z and this command read `invalid_or_unavailable_policy` from the
-    /// same path 46 seconds later. Both readings were true about their own
-    /// writer and neither was true about the host, so `outcome` alone told an
-    /// operator whichever answer arrived last.
+    /// every tick, and a `disk-cleanup --watch` unit on its own timer. The agent
+    /// can report `interval_noop` with no errors while this command reads
+    /// `invalid_or_unavailable_policy` from the same path seconds later: both
+    /// readings are true about their own writer and neither about the host, so
+    /// `outcome` alone tells an operator whichever answer arrived last.
     ///
     /// Reporting it does not arbitrate. It makes the reading say whose verdict
     /// it is, which is the difference between a fact and a coin toss.

@@ -53,11 +53,11 @@ stado_loaded_identity() {
 #
 # `comm` is the image the kernel runs, and for a program that is a launcher it
 # is the launcher's exec target: `bin/start-web` execs node, so every web unit
-# reports `node` and equality with the program fails for all of them. On
-# 2026-09-05 that refused the reload of two running sites with `pid 6678
-# executes [node]; expected [.../current/darwin-arm/bin/start-web]` and
-# restarted every healthy web unit on each ensure pass, because the idle check
-# read the same `no`. A launcher's process still runs the product: its image,
+# reports `node` and equality with the program fails for all of them, which
+# refuses the reload of a running site with `pid … executes [node]; expected
+# [.../current/darwin-arm/bin/start-web]` and restarts every healthy web unit
+# on each ensure pass, because the idle check reads the same `no`. A
+# launcher's process still runs the product: its image,
 # an argument, or its working directory lies under the product root that the
 # `current` link belongs to. That is the evidence accepted here, and it is one
 # rule for the idle check and the post-reload verification, so one process
@@ -67,10 +67,10 @@ stado_loaded_identity() {
 # no longer named is the case that comparison exists for.
 # Whether the process image is still the file installed at the program path.
 # An install that replaces the program in place (a rename over it) leaves the
-# path, and so `comm`, unchanged while the process keeps the old inode: on
-# 2026-09-23 skarbiec 0.4.3 was installed and its unit went on running 0.4.2
-# because this check read `already_correct`. An image that cannot be read is
-# not evidence of a replacement, so it counts as current.
+# path, and so `comm`, unchanged while the process keeps the old inode, so a
+# unit goes on running the previous version because this check reads
+# `already_correct`. An image that cannot be read is not evidence of a
+# replacement, so it counts as current.
 stado_image_current() {
   if [ \"$os\" = Darwin ]; then
     running_inode=$(/usr/sbin/lsof -a -p \"$1\" -d txt -Fi 2>/dev/null | /usr/bin/sed -n 's/^i//p' | /usr/bin/head -n 1)

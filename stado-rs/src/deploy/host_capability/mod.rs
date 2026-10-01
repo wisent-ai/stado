@@ -1,11 +1,10 @@
 //! Skarbiec capability operations on the host that will redeem them.
 //!
-//! NO Python original. This module exists because of a gap found on
-//! 2026-08-31 on the first real use of `host weles-browser-task
-//! --sign-in-origin`: the capability pair was minted with a local
-//! `skarbiec capability-issue`, following the only precedent in the product
-//! ([`super::host_precheck_runner`] issues the Apple sign-in's pair that way),
-//! and a Weles worker on another host could never redeem it.
+//! NO Python original. A capability pair minted with a local `skarbiec
+//! capability-issue` — the only precedent in the product, which
+//! [`super::host_precheck_runner`] follows for the Apple sign-in's pair — can
+//! never be redeemed by a Weles worker on another host, which is what `host
+//! weles-browser-task --sign-in-origin` needs.
 //!
 //! Capabilities are per-host on both ends. Issuing writes into the state file
 //! beside the vault of the machine that issues, and redemption is a UNIX

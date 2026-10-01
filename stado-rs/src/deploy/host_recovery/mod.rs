@@ -34,15 +34,14 @@ pub const WC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/stado"];
 /// exclusively by the authenticated Stado service API.
 ///
 /// The path here is the LAST RESORT, not the answer: [`plan_agents`] prefers
-/// what the target's `services` array declares. Both spellings existed for a
-/// year and they disagreed — the registry adopted the beacon on control-host
-/// at `/Library/LaunchDaemons/com.wisent.host-health-beacon.plist` on
-/// 2026-08-07, having verified it there, while this constant went on looking
-/// in `~/Library/LaunchAgents`. So every pass reported `missing_plist` about
-/// a file the host has, printed `status: ok` underneath it, and the operator
-/// reading that report concluded the beacon was uninstalled. A declaration
-/// nothing checks against the world is exactly the defect this module's own
-/// report is supposed to catch.
+/// what the target's `services` array declares. When the two spellings
+/// disagree — the registry adopting the beacon under
+/// `/Library/LaunchDaemons/` while this constant looks in
+/// `~/Library/LaunchAgents` — every pass reports `missing_plist` about a file
+/// the host has, prints `status: ok` underneath it, and the operator reading
+/// that report concludes the beacon is uninstalled. A declaration nothing
+/// checks against the world is exactly the defect this module's own report is
+/// supposed to catch.
 pub const MANAGED_AGENTS: &[(&str, &str)] = &[(
     "com.wisent.host-health-beacon",
     "$HOME/Library/LaunchAgents/com.wisent.host-health-beacon.plist",

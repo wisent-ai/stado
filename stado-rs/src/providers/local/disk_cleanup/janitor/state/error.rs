@@ -52,9 +52,8 @@ impl JanitorError {
     ///
     /// Distinct from [`JanitorError::value`] because the journal entry is the
     /// operator's only signal, and `policy:ValueError` says "the registry is
-    /// invalid" — which was false for all 8348 refusals between
-    /// 2026-08-20 and 2026-09-02. The registry was valid; the running process
-    /// was older than it. Three build eras refused today's document for three
+    /// invalid" — false when the registry is valid and the running process is
+    /// older than it. Successive build eras refuse the current document for
     /// different reasons (an unknown cleaner name, then a changed required
     /// field set), each indistinguishable in the journal from a corrupt file,
     /// and each cleared only by an unrelated restart onto a newer build.

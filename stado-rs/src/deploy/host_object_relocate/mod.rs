@@ -2,15 +2,14 @@
 //! INSIDE the store, on the declared host that holds it.
 //!
 //! The object API exposes GET, PUT, DELETE, list and stat and nothing else:
-//! there is no move and no server-side copy. So for as long as this fleet has
-//! needed to re-address an object, the only way to do it was to download the
-//! body to the control plane and upload it back under the other key. On
-//! 2026-08-30 that is what took the always-on mac's release ingress down for
-//! ten minutes: 134 MiB GGUF parts of `jeden-goal-qwen3-4b` pulled through the
-//! loopback writer tunnel, retried, and a peer's publish answering 502 behind
-//! them. The bytes never needed to move at all. Both stores are directories on
-//! that machine, and a re-address inside one directory tree is a `link` and an
-//! `unlink` — no network, no writer, no body in flight.
+//! there is no move and no server-side copy. Re-addressing an object by
+//! downloading the body to the control plane and uploading it back under the
+//! other key pulls every byte through the loopback writer tunnel, retries, and
+//! leaves a peer's publish answering 502 behind it — enough to take a host's
+//! release ingress down for minutes. The bytes never need to move at all. Both
+//! stores are directories on that machine, and a re-address inside one
+//! directory tree is a `link` and an `unlink` — no network, no writer, no body
+//! in flight.
 //!
 //! Adding a move route to the object API would have been the other answer. It
 //! is the worse one: a new verb on a live store, reachable by anything holding

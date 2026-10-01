@@ -49,11 +49,10 @@ pub(in crate::doctor) async fn check_release_channel() -> Check {
     }
 
     // A 200 for a 201-byte manifest proves the name answers. It does not prove
-    // the route the release archive will travel, and those came apart on
-    // 2026-09-02: this check passed while the same origin resolved to the
-    // public `ts.net` front end and a release train moved 20 MB per 55 seconds
-    // until it was cancelled. Ask where the origin actually is before asking
-    // what it serves.
+    // the route the release archive will travel: this check can pass while
+    // the same origin resolves to the public `ts.net` front end and a release
+    // train crawls at kilobytes per second. Ask where the origin actually is
+    // before asking what it serves.
     findings_for_origin_route(&api, &mut findings).await;
 
     let uri =

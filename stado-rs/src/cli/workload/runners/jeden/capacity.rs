@@ -47,10 +47,9 @@ fn live_entry<'a>(target: &ComputeTarget, capacity: &'a [Value]) -> Option<&'a V
 /// nothing when it is accepting.
 ///
 /// A detached session is pinned to the host its placement chose, so a host
-/// that publishes `accepting_jobs: false` would hold the session queued
-/// until that clears. Both Macs reported `disk_pressure_active` on
-/// 2026-09-19 while a session sat pinned to one of them; refusing here
-/// moves the placement to a host that can claim it.
+/// that publishes `accepting_jobs: false` (disk pressure, say) would hold
+/// the session queued until that clears; refusing here moves the placement
+/// to a host that can claim it.
 pub(super) fn admission_refusal(target: &ComputeTarget, capacity: &[Value]) -> Option<String> {
     let live = live_entry(target, capacity)?;
     if live

@@ -121,10 +121,8 @@ impl Provider for GcpProvider {
                     // sharing one job_id both write to the same GCS log
                     // path gs://wisent-compute/status/<job>/output/
                     // command_output.log, producing interleaved-writer logs
-                    // and double-charged compute. Confirmed live
-                    // 2026-05-15: Qwen3 job 724084db had concurrent
-                    // subprocesses at step 539 (25s/step) and step 68
-                    // (80s/step) in the same log. Probe this zone before
+                    // (two subprocesses at different steps in the same log)
+                    // and double-charged compute. Probe this zone before
                     // continuing: if the VM actually exists, return its ref
                     // instead of falling through.
                     if let Ok(Some(status)) = client.instance_status(zone, name).await {
