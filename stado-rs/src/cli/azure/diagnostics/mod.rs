@@ -48,9 +48,8 @@ pub(in crate::cli::azure) async fn unusual_activity(
             let http = reqwest::Client::new();
             let denies =
                 list_unusual_activity_denies(&http, &operator.access_token, &subscription).await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
+            crate::cli::print_answer(
+                &json!({
                     "operator": {
                         "account": operator.account,
                         "tenant_id": operator.tenant_id,
@@ -64,8 +63,9 @@ pub(in crate::cli::azure) async fn unusual_activity(
                     } else {
                         "run `stado azure unusual-activity open-ticket ... --confirm`; Azure Support must remove system-protected assignments"
                     }
-                }))?
-            );
+                }),
+                args.json,
+            )?;
             Ok(())
         }
         UnusualActivityCommands::OpenTicket(args) => {
@@ -96,7 +96,7 @@ pub(in crate::cli::azure) async fn unusual_activity(
             let receipt_path = home_path(".stado/azure-unusual-activity-ticket.json");
             receipt["receipt_file"] = Value::String(receipt_path.to_string_lossy().into_owned());
             persist_unusual_activity_receipt(&receipt)?;
-            println!("{}", serde_json::to_string_pretty(&receipt)?);
+            crate::cli::print_answer(&receipt, args.common.json)?;
             Ok(())
         }
     }

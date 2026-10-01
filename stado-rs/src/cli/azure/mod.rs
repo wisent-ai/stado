@@ -114,6 +114,9 @@ pub struct UnusualActivityCommonArgs {
     /// Owner-only Skarbiec item containing the operator refresh token.
     #[arg(long, default_value = DEFAULT_OPERATOR_ITEM)]
     operator_item: String,
+    /// Print the report as JSON instead of `key: value` lines.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]

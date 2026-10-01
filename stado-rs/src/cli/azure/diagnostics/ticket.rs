@@ -2,7 +2,6 @@
 //! opens exactly one case per set of denies, and the receipt kept on disk.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -16,17 +15,6 @@ use super::super::{
 use super::arm::{azure_collection, azure_get_json};
 use super::home_path;
 use super::support::{discover_rbac_support_classification, support_display_name};
-
-/// How long Azure asked the caller to wait before polling again, if it said.
-fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    headers
-        .get(reqwest::header::RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()
-        .map(Duration::from_secs)
-}
 
 fn deny_ticket_description(tenant: &str, subscription: &str, denies: &[Value]) -> String {
     let assignments = denies
@@ -182,7 +170,6 @@ pub(super) async fn create_unusual_activity_ticket(
         .or_else(|| response.headers().get("azure-asyncoperation"))
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let first_wait = retry_after(response.headers());
     let text = response.text().await.unwrap_or_default();
     let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     if !status.is_success() {
@@ -191,43 +178,27 @@ pub(super) async fn create_unusual_activity_ticket(
             body.get("error").unwrap_or(&body)
         )));
     }
-    // An accepted request is polled for as long as Azure keeps answering
-    // `202 Accepted` and names a Retry-After; without one there is nothing
-    // to wait for, and the ticket is read as it stands.
-    if status == reqwest::StatusCode::ACCEPTED {
-        if let Some(url) = operation_url {
-            let mut wait = first_wait;
-            while let Some(delay) = wait {
-                tokio::time::sleep(delay).await;
-                let poll = http
-                    .get(&url)
-                    .bearer_auth(&operator.access_token)
-                    .send()
-                    .await?;
-                if poll.status() != reqwest::StatusCode::ACCEPTED {
-                    break;
-                }
-                wait = retry_after(poll.headers());
-            }
-        }
-    }
-    let ticket = azure_get_json(http, &operator.access_token, &ticket_url)
-        .await
-        .unwrap_or_else(|_| {
-            json!({
-                "id": format!("/subscriptions/{subscription}/providers/Microsoft.Support/supportTickets/{ticket_name}"),
-                "name": ticket_name.clone(),
-                "properties": {
-                    "status": "Submitted; status read is blocked by the active deny assignment",
-                    "title": UNUSUAL_ACTIVITY_TITLE
-                }
-            })
-        });
+    // A `202 Accepted` is Azure saying the ticket is still being created. The
+    // ticket is read once, as it stands now, and the operation Azure named is
+    // kept in the receipt (`pending_operation`); nothing here sleeps on
+    // Azure's Retry-After.
+    let pending_operation = (status == reqwest::StatusCode::ACCEPTED)
+        .then_some(operation_url)
+        .flatten();
+    let ticket = match azure_get_json(http, &operator.access_token, &ticket_url).await {
+        Ok(ticket) => ticket,
+        Err(error) => json!({
+            "id": format!("/subscriptions/{subscription}/providers/Microsoft.Support/supportTickets/{ticket_name}"),
+            "name": ticket_name.clone(),
+            "read_error": error.to_string(),
+        }),
+    };
     Ok(json!({
-        "outcome": "created",
+        "outcome": if pending_operation.is_some() { "accepted" } else { "created" },
         "ticket_name": ticket_name,
         "service": support_display_name(&service),
         "problem_classification": support_display_name(&classification),
+        "pending_operation": pending_operation,
         "ticket": ticket
     }))
 }
