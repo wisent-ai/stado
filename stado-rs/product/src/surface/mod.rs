@@ -145,9 +145,10 @@ fn check(package: &Path, module: Option<&str>, report: &mut Value) -> Result<Str
 
 /// Run `stado product surface`, returning the exit status.
 pub fn run(arguments: &clap::ArgMatches, _runtime: &Runtime) -> Result<i32> {
-    let package = arguments
-        .get_one::<String>("package-path")
-        .map_or_else(std::env::current_dir, |path| absolute(Path::new(path)))?;
+    let package = match arguments.get_one::<String>("package-path") {
+        Some(path) => absolute(Path::new(path))?,
+        None => std::env::current_dir()?,
+    };
     let module = arguments.get_one::<String>("module").map(String::as_str);
     let json_output = arguments.get_flag("json");
     let mut report = json!({"package_path": package, "stado_version": crate::build().version,
