@@ -18,7 +18,11 @@ struct EnrollmentCopyBlock: View {
     /// fails with the same refusal as a revoked invitation.
     var isSecret = false
 
-    @State private var copied = false
+    /// The text last put on the pasteboard from this block. "Copied" holds
+    /// while the block still shows that text, and clears when it changes.
+    @State private var copiedText: String?
+
+    private var copied: Bool { copiedText == text }
 
     var body: some View {
         HStack(alignment: .top, spacing: WisentDesign.Space.x3) {
@@ -60,11 +64,7 @@ struct EnrollmentCopyBlock: View {
     private func copy() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        copied = true
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            copied = false
-        }
+        copiedText = text
     }
 }
 
