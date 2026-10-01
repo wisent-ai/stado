@@ -3,11 +3,10 @@
 //! arm below matches on its own result, so a channel that cannot deliver
 //! costs one failure line and none of the channels after it.
 //!
-//! The fan-out also answers the caller. Until 2026-09-21 it answered nobody:
-//! every outcome went to the `[alert]` stderr sink, `stado alerts send`
-//! exited zero whether the mail left or every channel refused, and a program
-//! that pages an operator through it — Weles, waiting for a phone approval —
-//! recorded "the operator was told" from an exit status that could not say
+//! The fan-out also answers the caller. A fan-out whose every outcome goes
+//! only to the `[alert]` stderr sink exits zero whether the mail left or
+//! every channel refused, and a program that pages an operator through it
+//! records "the operator was told" from an exit status that cannot say
 //! otherwise. The report below is what makes that claim checkable.
 
 use super::send::{

@@ -91,10 +91,9 @@ pub(super) fn retain_archive(archive: &Path, destination: &Path) -> Result<(), C
 /// Write the version this delivery installed into the host's own
 /// `targets[].managed_versions`, so the declaration follows the delivery.
 ///
-/// Until 2026-09-18 nothing did: a fleet delivery installed 0.21.9 on the
-/// RTX host while its declaration stayed at 0.20.11, and every later
+/// A delivery that leaves the declaration where it was makes every later
 /// `release host-state` read `host-ahead: the declaration is stale, not the
-/// host` and refused to deliver anything to it until an operator moved the
+/// host` and refuse to deliver anything until an operator moves the
 /// declaration by hand. The delivery is the fact; the declaration records it.
 pub(super) async fn declare_delivered_version(binary: &str, version: &str) -> Result<(), CmdError> {
     let hostname = crate::providers::vast::system_hostname();

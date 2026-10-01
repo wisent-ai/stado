@@ -8,14 +8,13 @@ use serde::{Deserialize, Serialize};
 
 /// Where `serve` publishes what it holds, under `~/.stado`.
 ///
-/// Until 2026-08-19 the directory generation and the reason an upstream read
-/// failed lived in this process's memory and in an 83 MiB stderr log, nowhere
-/// else. So while this host's resolver sat in a launchd restart loop -- `last
-/// exit code = 69: EX_UNAVAILABLE`, restarted on a five second
-/// `ThrottleInterval` -- the two questions the operator had, which generation
-/// it holds and why it cannot load another, had no answer anywhere in the
-/// product. This file is the answer and [`status`] is its reader. It stays
-/// readable with the resolver stopped, which is exactly when it gets read.
+/// The directory generation the resolver holds and the reason an upstream
+/// read failed must live somewhere other than this process's memory and its
+/// stderr log: while a resolver sits in a launchd restart loop, the two
+/// questions an operator has -- which generation it holds and why it cannot
+/// load another -- need an answer in the product. This file is the answer
+/// and [`status`] is its reader. It stays readable with the resolver
+/// stopped, which is exactly when it gets read.
 pub(super) const STATE_FILE: &str = "resolver-state.json";
 
 /// Operator override for [`STATE_FILE`]'s location, absolute.

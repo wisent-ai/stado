@@ -30,13 +30,11 @@ pub struct ServiceEndpoint {
 /// One Skarbiec grant a consumer needs to use a service, declared beside the
 /// consumer instead of typed into a command.
 ///
-/// Until 2026-09-20 a consumer's grant existed only as flags somebody
-/// remembered: `stado service grant-sync brama --host H --consumer
-/// oko-model-router-client --capability … --token-file …`. Oko's catalogue
-/// holds 26 credentials issued by hand in one week, and the gate that now
-/// refuses them points here: what the product reads is declared where the
-/// service is declared, and `stado service grants <SERVICE> --apply` mints
-/// every declared one.
+/// A grant that exists only as flags somebody remembers (`stado service
+/// grant-sync <service> --host H --consumer … --capability … --token-file …`)
+/// is a credential issued by hand, and the gate that refuses those points
+/// here: what the product reads is declared where the service is declared,
+/// and `stado service grants <SERVICE> --apply` mints every declared one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConsumerGrant {
     /// Exact Skarbiec consumer name the product reads under.

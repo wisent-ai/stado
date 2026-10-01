@@ -93,11 +93,10 @@ fi
 export STADO_BIN
 
 # The release gate downstream asks whether the public channel serves the exact
-# release this host runs. Until 2026-09-02 it asked about `release.version` in
-# the operator config, which no deploy ever writes: the 0.13.42 deploy verified
-# 0.7.22, a version published in July. The coordinate that cannot drift is the
-# binary that was just installed, so it names itself here unless the caller
-# pinned one on purpose.
+# release this host runs. `release.version` in the operator config is not that
+# coordinate: no deploy writes it, so it drifts. The coordinate that cannot
+# drift is the binary that was just installed, so it names itself here unless
+# the caller pinned one on purpose.
 #
 # The answer is the word after the program name, never the last word. `--version`
 # reads `stado 0.14.9 (rev 519ae967a13d-dirty)` since the build stamp joined the

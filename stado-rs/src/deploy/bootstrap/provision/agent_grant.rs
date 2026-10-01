@@ -1,17 +1,13 @@
 //! The dedicated workload-agent grant a remote host receives at bootstrap,
 //! for every platform.
 //!
-//! Until 2026-09-18 only a Darwin host got one. The Linux branch wrote its
-//! systemd units with no `WC_AGENT_SKARBIEC_*` declaration at all, so a
-//! Linux agent had no consumer, no bearer and no item list, and declined
-//! every job that declared a secret with "workload secrets require a
+//! A Linux agent whose systemd unit carries no `WC_AGENT_SKARBIEC_*`
+//! declaration has no consumer, no bearer and no item list, and declines
+//! every job that declares a secret with "workload secrets require a
 //! dedicated agent Skarbiec grant; leaving it queued for a host that can
-//! resolve it". The fleet's only Linux builder declined every Skarbiec and
-//! Brama `linux-amd64` release build for weeks that way — twelve pinned jobs,
-//! the oldest twenty-five days in the queue — while `host gates` said it was
-//! claiming. Same defect, second platform: the grant is now one function,
-//! and the Linux unit carries the same declaration the Darwin installer
-//! receives on its command line.
+//! resolve it" while `host gates` says it is claiming. The grant is one
+//! function, and the Linux unit carries the same declaration the Darwin
+//! installer receives on its command line.
 
 use crate::deploy::{shlex_quote, CommandSpec, DeployError, Runner};
 
