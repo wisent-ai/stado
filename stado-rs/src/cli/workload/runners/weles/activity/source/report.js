@@ -92,17 +92,21 @@ const described = allDescribed.slice(0, runLimit);
 const probePort = (port) =>
   new Promise((resolve) => {
     const socket = net.createConnection({ host: '127.0.0.1', port });
-    const finish = (listening) => {
+    const finish = (listening, error = null) => {
       socket.destroy();
-      resolve(listening);
+      resolve({ listening, error });
     };
-    socket.setTimeout(1500);
     socket.once('connect', () => finish(true));
-    socket.once('timeout', () => finish(false));
-    socket.once('error', () => finish(false));
+    socket.once('error', (error) => finish(false, {
+      operation: 'connect',
+      code: error.code ?? null,
+      message: error.message,
+      address: error.address ?? null,
+      port: error.port ?? null,
+    }));
   });
 
-probePort(apiPort).then((listening) => {
+probePort(apiPort).then(({ listening, error }) => {
   const document = {
     schema_version: 1,
     host: shortHostname || hostname,
@@ -116,6 +120,7 @@ probePort(apiPort).then((listening) => {
     api: {
       endpoint: `http://127.0.0.1:${apiPort}`,
       listening,
+      error,
     },
     run_total: runTotal,
     runs: described,

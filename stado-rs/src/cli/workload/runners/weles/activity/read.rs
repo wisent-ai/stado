@@ -105,14 +105,17 @@ pub(crate) async fn weles_activity(target: &str, json_output: bool) -> Result<()
         worker["staged_release"].as_str().unwrap_or("unknown"),
         worker["newest_release"].as_str().unwrap_or("unknown"),
         if report["api"]["listening"].as_bool().unwrap_or_default() {
-            "answering"
+            "TCP connected"
         } else {
-            "silent"
+            "TCP connection failed"
         },
         report["api"]["endpoint"]
             .as_str()
             .unwrap_or("unknown endpoint"),
     );
+    if !report["api"]["error"].is_null() {
+        println!("{target}: API connection error: {}", report["api"]["error"]);
+    }
     let runs = report["runs"].as_array().map_or(&[][..], Vec::as_slice);
     println!(
         "{target}: {} recorded run(s), {} newest below",
