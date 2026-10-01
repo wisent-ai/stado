@@ -13,9 +13,6 @@ pub const CODE_PARSE_ERROR: i64 = -32700;
 pub const CODE_METHOD_NOT_FOUND: i64 = -32601;
 /// Python `CODE_INTERNAL_ERROR` — -32000 as written, not the spec's -32603.
 pub const CODE_INTERNAL_ERROR: i64 = -32000;
-/// Subprocess timeout for one CLI dispatch (Python
-/// `SUBPROCESS_TIMEOUT_SECONDS`).
-pub const SUBPROCESS_TIMEOUT_SECONDS: u64 = 600;
 
 /// A tool failure carrying the JSON-RPC error code to report (Python
 /// `ToolError`).

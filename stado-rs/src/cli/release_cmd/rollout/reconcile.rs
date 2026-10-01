@@ -16,7 +16,13 @@ pub(in crate::cli::release_cmd) async fn agent(args: &ReleaseAgentArgs) -> Resul
             .await
             .map_err(CmdError::click)?
     } else {
-        return crate::release_agent::agent(&args.target, product, false, args.interval_seconds)
+        let interval = args.interval_seconds.ok_or_else(|| {
+            CmdError::usage(
+                "the release agent loop needs --interval-seconds: the seconds between reconcile \
+                 passes; use --once for a single pass",
+            )
+        })?;
+        return crate::release_agent::agent(&args.target, product, false, interval)
             .await
             .map_err(CmdError::click);
     };

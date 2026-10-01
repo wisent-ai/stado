@@ -12,7 +12,9 @@ use crate::release_agent::rollout::serving::discover::pid_alive;
 use crate::release_agent::state::evidence::release_log;
 use crate::release_agent::state::records::ProcessRecord;
 use crate::release_cause::{QuarantineCause, Refusal};
-use crate::release_control::{self, ProductReleasePolicy, ReleaseManifest, ReleaseTargetPolicy};
+use crate::release_control::{
+    self, ProductReleasePolicy, ReleaseManifest, ReleaseTargetPolicy, RolloutStrategy,
+};
 
 fn expand_home(value: &str, home: &str) -> String {
     value.replace("{home}", home)
@@ -155,53 +157,44 @@ pub(crate) async fn not_ready_because(record: &ProcessRecord, path: &str) -> Opt
     }
 }
 
-/// Wait for readiness, returning the last reason it was refused.
+/// Ask for readiness every `strategy.readiness_poll_seconds` until it answers
+/// or `strategy.readiness_timeout_seconds` have passed, returning the last
+/// reason it was refused. Both are the release policy's declared values.
 pub(crate) async fn await_ready_because(
     record: &ProcessRecord,
     readiness_path: &str,
-    seconds: u64,
+    strategy: &RolloutStrategy,
 ) -> Option<Refusal> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(strategy.readiness_timeout_seconds);
     loop {
         let reason = not_ready_because(record, readiness_path).await?;
         if tokio::time::Instant::now() >= deadline {
             return Some(reason);
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
     }
 }
 
-/// How long a release that is already serving may keep refusing its readiness
-/// probe before the agent treats it as lost. One refused probe is a busy host;
-/// half a minute of them is a release that is not serving.
-pub(crate) const LOST_READINESS_CONFIRMATION_SECONDS: u64 = 30;
-
-/// Why a release that was serving is no longer ready, confirmed over a window,
-/// or `None` when it answers.
+/// Why a release that was serving is no longer ready, confirmed over the
+/// policy's declared readiness window, or `None` when it answers.
 ///
 /// One refused probe is not a lost release. A release can be rolled back and
-/// quarantined for `did not answer within 3s` while its process is alive and
-/// its own log, seconds either side, shows it working through a long sweep on
-/// a busy host. A release that is really gone stays gone, so the verdict is confirmed
-/// before it costs a rollback. A process that has exited is reported at once:
-/// there is nothing to wait for, and holding a rollback for half a minute over
-/// a pid that is already gone is time the fleet spends serving nothing.
+/// quarantined for one refused probe while its process is alive and its own
+/// log, seconds either side, shows it working through a long sweep on a busy
+/// host. A release that is really gone stays gone, so the verdict is
+/// confirmed before it costs a rollback. A process that has exited is
+/// reported at once: there is nothing to wait for.
 pub(crate) async fn lost_readiness_because(
     record: &ProcessRecord,
     readiness_path: &str,
-) -> Option<Refusal> {
-    lost_readiness_within(record, readiness_path, LOST_READINESS_CONFIRMATION_SECONDS).await
-}
-
-async fn lost_readiness_within(
-    record: &ProcessRecord,
-    readiness_path: &str,
-    seconds: u64,
+    strategy: &RolloutStrategy,
 ) -> Option<Refusal> {
     let first = not_ready_because(record, readiness_path).await?;
     if !pid_alive(record.pid) {
         return Some(first);
     }
-    let confirmed = await_ready_because(record, readiness_path, seconds).await?;
+    let confirmed = await_ready_because(record, readiness_path, strategy).await?;
+    let seconds = strategy.readiness_timeout_seconds;
     Some(confirmed.context(|said| format!("{said}, for {seconds}s (first refusal: {first})")))
 }

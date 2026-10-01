@@ -197,20 +197,12 @@ pub(in crate::deploy::host_gui_automation) async fn reconcile_runtime(
     )
     .await?;
 
-    let mut socket_ready = false;
-    for _ in 0..20 {
-        if invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], None, runner)
-            .await?
-            .ok()
-        {
-            socket_ready = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
-    if !socket_ready {
+    if !invoke_as_gui_user(target, &user, &["/bin/test", "-S", &socket], None, runner)
+        .await?
+        .ok()
+    {
         return Err(DeployError(format!(
-            "CuaDriver LaunchAgent started but did not create {socket}"
+            "CuaDriver LaunchAgent started but {socket} is not a socket"
         )));
     }
     items.push(("cua-driver-runtime".to_string(), "running".to_string()));

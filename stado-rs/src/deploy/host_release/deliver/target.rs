@@ -8,7 +8,7 @@ use super::super::{
 };
 use super::phases::{activate_phase, prove_active_image, stage_phase, unit_state_before};
 use super::restart::restart_units;
-use super::verify::{planned_steps, verify_stable_binds, STABLE_BIND_BUDGET_SECONDS};
+use super::verify::{planned_steps, verify_stable_binds};
 use super::{base_release_report, fail, step_entry, step_failure};
 use crate::deploy::{host_channel, DeployError, Runner};
 use crate::targets::ComputeTarget;
@@ -252,7 +252,7 @@ async fn release_target_inner(
             &mut report,
             1,
             format!(
-                "the release is active and the units restarted, but {} declared stable bind(s) are                  not listening after {STABLE_BIND_BUDGET_SECONDS}s: {}. The release agent                  publishes these ports; read its log with `stado host unit-log {}                  com.wisent.stado.release-agent` before rolling anything else",
+                "the release is active and the units restarted, but {} declared stable bind(s) are                  not listening: {}. The release agent                  publishes these ports; read its log with `stado host unit-log {}                  com.wisent.stado.release-agent` before rolling anything else",
                 missing.len(),
                 missing.join(", "),
                 target.name

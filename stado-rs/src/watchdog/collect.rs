@@ -54,8 +54,8 @@ fn tail_chars(s: &str, n: usize) -> String {
 }
 
 /// The diagnostic command set, byte-exact argvs from `cli.py::_collect`.
-/// (name, argv, timeout_s)
-fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
+/// (name, argv)
+fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>)> {
     let argv = |parts: &[&str]| parts.iter().map(|s| s.to_string()).collect();
     vec![
         (
@@ -67,7 +67,6 @@ fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
                 "--no-pager",
                 "-l",
             ]),
-            12,
         ),
         (
             "systemctl-health",
@@ -78,7 +77,6 @@ fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
                 "--no-pager",
                 "-l",
             ]),
-            12,
         ),
         (
             "journal-agent",
@@ -90,7 +88,6 @@ fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
                 "240",
                 "--no-pager",
             ]),
-            20,
         ),
         (
             "journal-health",
@@ -102,7 +99,6 @@ fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
                 "120",
                 "--no-pager",
             ]),
-            20,
         ),
         (
             "ps",
@@ -112,11 +108,10 @@ fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
                 "pid,ppid,stat,pcpu,pmem,comm,args",
                 "--sort=-%cpu",
             ]),
-            12,
         ),
-        ("nvidia-smi", argv(&["nvidia-smi"]), 12),
-        ("df", argv(&["df", "-h"]), 12),
-        ("memory", argv(&["free", "-h"]), 12),
+        ("nvidia-smi", argv(&["nvidia-smi"])),
+        ("df", argv(&["df", "-h"])),
+        ("memory", argv(&["free", "-h"])),
         (
             "capacity-list",
             vec![
@@ -126,7 +121,6 @@ fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
                 "ls".into(),
                 format!("gs://{bucket}/capacity/"),
             ],
-            20,
         ),
     ]
 }
@@ -134,28 +128,18 @@ fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
 /// Python `_run`: one fault-isolated command result as a JSON dict. Key
 /// insertion order matches the Python dict literals (the upload is
 /// `sort_keys=True`, so this only matters for readability).
-fn run_one(name: &str, argv: &[String], timeout_s: u64, runner: &dyn CommandRunner) -> Value {
+fn run_one(name: &str, argv: &[String], runner: &dyn CommandRunner) -> Value {
     let started = std::time::Instant::now();
     let elapsed = || round3(started.elapsed().as_secs_f64());
     let argv_json = Value::Array(argv.iter().map(|a| Value::from(a.as_str())).collect());
-    match runner.run(argv, timeout_s) {
-        Ok(RunOutcome::Completed { rc, stdout, stderr }) => json!({
+    match runner.run(argv) {
+        Ok(RunOutcome { rc, stdout, stderr }) => json!({
             "name": name,
             "cmd": argv_json,
             "rc": rc,
             "elapsed_s": elapsed(),
             "stdout_tail": tail_chars(&stdout, STDOUT_TAIL_CHARS),
             "stderr_tail": tail_chars(&stderr, STDOUT_TAIL_CHARS),
-        }),
-        Ok(RunOutcome::TimedOut { stdout, stderr }) => json!({
-            "name": name,
-            "cmd": argv_json,
-            "rc": Value::Null,
-            "elapsed_s": elapsed(),
-            "timeout_s": timeout_s,
-            "stdout_tail": tail_chars(&stdout, STDOUT_TAIL_CHARS),
-            "stderr_tail": tail_chars(&stderr, STDOUT_TAIL_CHARS),
-            "timed_out": true,
         }),
         Err(err) => {
             // Python: f"{type(exc).__name__}: {exc}" — for the common case
@@ -223,8 +207,8 @@ pub fn collect(bucket: &str, runner: &dyn CommandRunner) -> Value {
     let host = hostname();
     let home = std::env::var("HOME").unwrap_or_default();
     let mut command_results = Map::new();
-    for (name, argv, timeout_s) in commands(bucket) {
-        command_results.insert(name.to_string(), run_one(name, &argv, timeout_s, runner));
+    for (name, argv) in commands(bucket) {
+        command_results.insert(name.to_string(), run_one(name, &argv, runner));
     }
     json!({
         "schema": "wisent-box-diagnostics-v1",

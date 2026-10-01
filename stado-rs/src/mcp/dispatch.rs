@@ -1,15 +1,13 @@
 //! Dispatch: CLI resolution, the subprocess call behind every tool, and
 //! the JSON-RPC method routing that reaches them.
 
-use std::time::Duration;
-
 use serde_json::{json, Map, Value};
 
 use crate::primitives::procutil::{run_capture, Capture};
 
 use super::protocol::{
     error_response, ToolError, CODE_INTERNAL_ERROR, CODE_METHOD_NOT_FOUND, JSONRPC_VERSION,
-    PROTOCOL_VERSION, SUBPROCESS_TIMEOUT_SECONDS,
+    PROTOCOL_VERSION,
 };
 use super::tools::{tool_by_name, TOOLS};
 
@@ -39,33 +37,21 @@ fn run(cli_tokens: &[&str], extra: &[String]) -> Result<String, ToolError> {
     let mut argv = stado_argv();
     argv.extend(cli_tokens.iter().map(|token| token.to_string()));
     argv.extend(extra.iter().cloned());
-    let capture = run_capture(&argv, Duration::from_secs(SUBPROCESS_TIMEOUT_SECONDS))
+    let Capture { rc, stdout, stderr } = run_capture(&argv)
         .map_err(|err| ToolError::internal(format!("stado CLI not found: {err}")))?;
-    match capture {
-        Capture::TimedOut { .. } => {
-            let rendered: Vec<String> =
-                argv.iter().map(|a| crate::models::py_str_repr(a)).collect();
-            Err(ToolError::internal(format!(
-                "stado CLI timed out: Command '[{}]' timed out after {SUBPROCESS_TIMEOUT_SECONDS} seconds",
-                rendered.join(", ")
-            )))
-        }
-        Capture::Completed { rc, stdout, stderr } => {
-            if rc != 0 {
-                let detail = if stderr.trim().is_empty() {
-                    stdout.trim()
-                } else {
-                    stderr.trim()
-                };
-                return Err(ToolError::internal(if detail.is_empty() {
-                    format!("stado {} exited nonzero", cli_tokens.join(" "))
-                } else {
-                    detail.to_string()
-                }));
-            }
-            Ok(stdout)
-        }
+    if rc != 0 {
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        return Err(ToolError::internal(if detail.is_empty() {
+            format!("stado {} exited nonzero", cli_tokens.join(" "))
+        } else {
+            detail.to_string()
+        }));
     }
+    Ok(stdout)
 }
 
 /// Python `_text_result`.

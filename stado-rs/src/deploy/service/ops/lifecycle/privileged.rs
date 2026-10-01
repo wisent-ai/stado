@@ -75,32 +75,24 @@ pub(super) async fn privileged_restart_system_daemon(
                 target.name, bootout.code, detail
             )));
         }
-        let mut unloaded = false;
-        for _ in 0..15 {
-            let print = host_channel::run_program_with_stdin(
-                target,
-                &[
-                    "/usr/bin/sudo",
-                    "-S",
-                    "-p",
-                    "",
-                    "/bin/launchctl",
-                    "print",
-                    &qualified,
-                ],
-                &format!("{password}\n"),
-                runner,
-            )
-            .await?;
-            if !print.ok() {
-                unloaded = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-        if !unloaded {
+        let print = host_channel::run_program_with_stdin(
+            target,
+            &[
+                "/usr/bin/sudo",
+                "-S",
+                "-p",
+                "",
+                "/bin/launchctl",
+                "print",
+                &qualified,
+            ],
+            &format!("{password}\n"),
+            runner,
+        )
+        .await?;
+        if print.ok() {
             return Err(DeployError(format!(
-                "privileged launchd bootout on {} returned, but {} remained loaded after 15s",
+                "privileged launchd bootout on {} returned, and launchctl print still finds {}",
                 target.name, qualified
             )));
         }
@@ -206,34 +198,31 @@ pub(super) async fn privileged_restart_system_daemon(
         )));
     }
 
-    for _ in 0..15 {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let (_, daemon) = inspect_system_daemon(target, service, runner).await?;
-        if let Some(daemon) = daemon.filter(|daemon| !daemon.owned_pids.is_empty()) {
-            return Ok(RemoteReport {
-                os: "Darwin".to_string(),
-                domain: "system".to_string(),
-                domain_status: DOMAIN_STATUS_SYSTEM.to_string(),
-                domain_reason: "the unit file is a system LaunchDaemon".to_string(),
-                unit: service.unit_id().to_string(),
-                path: service.path.clone(),
-                status: "restarted".to_string(),
-                detail: format!(
-                    "launchctl {} the system daemon with pid(s) {}",
-                    if reload_unit { "reloaded" } else { "restarted" },
-                    daemon.owned_pids.join(" ")
-                ),
-                postcondition: RUNNING_DESCRIBE.to_string(),
-                postcondition_state: host_channel::POSTCONDITION_MET.to_string(),
-                postcondition_detail: "launchd reports a process for the unit".to_string(),
-                ..RemoteReport::default()
-            });
-        }
-    }
-    Err(DeployError(format!(
-        "{} accepted the privileged {} but no process appeared for {} in 15 seconds",
-        target.name,
-        if reload_unit { "reload" } else { "kickstart" },
-        service.unit_id()
-    )))
+    let (_, daemon) = inspect_system_daemon(target, service, runner).await?;
+    let Some(daemon) = daemon.filter(|daemon| !daemon.owned_pids.is_empty()) else {
+        return Err(DeployError(format!(
+            "{} accepted the privileged {} and launchd reports no process for {}",
+            target.name,
+            if reload_unit { "reload" } else { "kickstart" },
+            service.unit_id()
+        )));
+    };
+    Ok(RemoteReport {
+        os: "Darwin".to_string(),
+        domain: "system".to_string(),
+        domain_status: DOMAIN_STATUS_SYSTEM.to_string(),
+        domain_reason: "the unit file is a system LaunchDaemon".to_string(),
+        unit: service.unit_id().to_string(),
+        path: service.path.clone(),
+        status: "restarted".to_string(),
+        detail: format!(
+            "launchctl {} the system daemon with pid(s) {}",
+            if reload_unit { "reloaded" } else { "restarted" },
+            daemon.owned_pids.join(" ")
+        ),
+        postcondition: RUNNING_DESCRIBE.to_string(),
+        postcondition_state: host_channel::POSTCONDITION_MET.to_string(),
+        postcondition_detail: "launchd reports a process for the unit".to_string(),
+        ..RemoteReport::default()
+    })
 }

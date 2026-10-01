@@ -8,13 +8,13 @@ use crate::release_agent::state::document::save_state;
 use crate::release_agent::state::evidence::quarantine_with_logs;
 use crate::release_agent::state::records::{HostReleaseState, RolloutPhase};
 use crate::release_cause::Refusal;
-use crate::release_control::ReleaseTargetPolicy;
+use crate::release_control::{ReleaseTargetPolicy, RolloutStrategy};
 
 pub(crate) async fn rollback(
     target: &ReleaseTargetPolicy,
     state: &mut HostReleaseState,
     reason: Refusal,
-    readiness_timeout_seconds: u64,
+    strategy: &RolloutStrategy,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
     let reason = if let Some(record) = &failed {
@@ -32,13 +32,7 @@ pub(crate) async fn rollback(
         let product = state.product.clone();
         let generation = state.rollout_generation;
         ensure_active_proxy(
-            target,
-            &serving,
-            &product,
-            generation,
-            &previous,
-            state,
-            readiness_timeout_seconds,
+            target, &serving, &product, generation, &previous, state, strategy,
         )
         .await?;
         if let Some(record) = &failed {

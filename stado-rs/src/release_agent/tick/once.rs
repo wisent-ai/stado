@@ -146,6 +146,6 @@ pub async fn agent(
         if once {
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_secs(interval_seconds.max(5))).await;
+        tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
     }
 }

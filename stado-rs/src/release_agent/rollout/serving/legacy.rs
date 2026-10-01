@@ -149,9 +149,19 @@ fn legacy_listening_ports(label: &str) -> Result<Vec<u16>, String> {
         return Ok(Vec::new());
     };
     let listening = Command::new("/usr/sbin/lsof")
-        .args(["-nP", "-a", "-p", &pid.to_string(), "-iTCP", "-sTCP:LISTEN", "-Fn"])
+        .args([
+            "-nP",
+            "-a",
+            "-p",
+            &pid.to_string(),
+            "-iTCP",
+            "-sTCP:LISTEN",
+            "-Fn",
+        ])
         .output()
-        .map_err(|error| format!("cannot read the listeners of legacy {label} (pid {pid}): {error}"))?;
+        .map_err(|error| {
+            format!("cannot read the listeners of legacy {label} (pid {pid}): {error}")
+        })?;
     let mut ports: Vec<u16> = String::from_utf8_lossy(&listening.stdout)
         .lines()
         .filter_map(|line| line.strip_prefix('n'))

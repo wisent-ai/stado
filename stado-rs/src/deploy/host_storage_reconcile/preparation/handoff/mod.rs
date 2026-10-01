@@ -54,26 +54,20 @@ pub(in crate::deploy::host_storage_reconcile) async fn acquire_storage_write_fen
     if guard.is_none() {
         let file = LocalBackend::open_write_fence_lock(&root)
             .map_err(|error| DeployError(error.to_string()))?;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            match fs2::FileExt::try_lock_exclusive(&file) {
-                Ok(()) => break,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err(DeployError(
-                            "in-flight local storage writes did not finish within 30 seconds; \
-                             the recorded handoff remains resumable"
-                                .to_string(),
-                        ));
-                    }
-                    sleep(Duration::from_millis(25)).await;
-                }
-                Err(error) => {
-                    return Err(DeployError(format!(
-                        "cannot acquire storage write fence {}: {error}",
-                        paths.0.display()
-                    )))
-                }
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(DeployError(
+                    "local storage writes are in flight and hold the write fence; the recorded \
+                     handoff remains resumable"
+                        .to_string(),
+                ));
+            }
+            Err(error) => {
+                return Err(DeployError(format!(
+                    "cannot acquire storage write fence {}: {error}",
+                    paths.0.display()
+                )))
             }
         }
         *guard = Some(file);

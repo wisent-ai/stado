@@ -50,7 +50,7 @@ pub(crate) async fn reconcile_product(
         target,
         product,
         install_root,
-        policy.strategy.readiness_timeout_seconds,
+        &policy.strategy,
         candidate_is_owed_the_bind,
         &mut state,
     )
@@ -95,18 +95,12 @@ pub(crate) async fn reconcile_product(
                 desired.rollout_generation,
                 &active,
                 &mut state,
-                policy.strategy.readiness_timeout_seconds,
+                &policy.strategy,
             )
             .await
             {
                 if policy.strategy.automatic_rollback {
-                    rollback(
-                        target,
-                        &mut state,
-                        reason,
-                        policy.strategy.readiness_timeout_seconds,
-                    )
-                    .await?;
+                    rollback(target, &mut state, reason, &policy.strategy).await?;
                 } else {
                     state.phase = RolloutPhase::Failed;
                     state.detail = reason.sentence;
@@ -151,18 +145,12 @@ pub(crate) async fn reconcile_product(
             desired.rollout_generation,
             &active,
             &mut state,
-            policy.strategy.readiness_timeout_seconds,
+            &policy.strategy,
         )
         .await;
         if let Err(reason) = proxy_result {
             if policy.strategy.automatic_rollback {
-                rollback(
-                    target,
-                    &mut state,
-                    reason,
-                    policy.strategy.readiness_timeout_seconds,
-                )
-                .await?;
+                rollback(target, &mut state, reason, &policy.strategy).await?;
             } else {
                 state.phase = RolloutPhase::Failed;
                 state.detail = reason.sentence;
@@ -179,13 +167,15 @@ pub(crate) async fn reconcile_product(
             state.cutover_at.get_or_insert_with(Utc::now);
             save_state(target, &mut state)?;
             tokio::time::sleep(Duration::from_secs(policy.strategy.drain_timeout_seconds)).await;
-            if let Some(why) = lost_readiness_because(&active, &serving.readiness_path).await {
+            if let Some(why) =
+                lost_readiness_because(&active, &serving.readiness_path, &policy.strategy).await
+            {
                 if policy.strategy.automatic_rollback {
                     rollback(
                         target,
                         &mut state,
                         why.context(|said| format!("candidate failed during drain: {said}")),
-                        policy.strategy.readiness_timeout_seconds,
+                        &policy.strategy,
                     )
                     .await?;
                 } else {

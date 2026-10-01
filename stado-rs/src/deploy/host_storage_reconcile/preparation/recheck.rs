@@ -1,37 +1,19 @@
 use super::*;
 
+/// The label as launchd prints it. A running process whose identity fields
+/// are not all present is returned as read; the callers judge it.
 pub(in crate::deploy::host_storage_reconcile) async fn print_settled_label(
     target: &crate::targets::ComputeTarget,
     label: &str,
     runner: &Runner,
 ) -> Result<crate::deploy::service_label_print::LabelState, DeployError> {
-    let mut state = crate::deploy::service_label_print::print_label(
+    crate::deploy::service_label_print::print_label(
         target,
         label,
         service::BootoutScope::Any,
         runner,
     )
-    .await?;
-    for _ in 0..2 {
-        let complete = state.pid.is_none()
-            || (state.process_started_at.is_some()
-                && state.process_executable.is_some()
-                && state.process_device.is_some()
-                && state.process_inode.is_some()
-                && state.process_sha256.is_some());
-        if complete {
-            return Ok(state);
-        }
-        sleep(Duration::from_secs(1)).await;
-        state = crate::deploy::service_label_print::print_label(
-            target,
-            label,
-            service::BootoutScope::Any,
-            runner,
-        )
-        .await?;
-    }
-    Ok(state)
+    .await
 }
 
 pub(in crate::deploy::host_storage_reconcile) async fn recheck_lifecycle_fence(

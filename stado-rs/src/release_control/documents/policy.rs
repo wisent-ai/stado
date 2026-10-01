@@ -131,6 +131,10 @@ impl ReleaseTargetPolicy {
 pub struct RolloutStrategy {
     pub kind: StrategyKind,
     pub readiness_timeout_seconds: u64,
+    /// Seconds between readiness probes while a release is given
+    /// `readiness_timeout_seconds` to answer. Declared by the operator; the
+    /// agent chooses no cadence of its own.
+    pub readiness_poll_seconds: u64,
     pub drain_timeout_seconds: u64,
     pub rollback_window_seconds: u64,
     pub automatic_rollback: bool,

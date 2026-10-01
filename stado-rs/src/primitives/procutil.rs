@@ -1,81 +1,34 @@
-//! Synchronous subprocess capture with a timeout.
+//! Synchronous subprocess capture.
 //!
-//! Shared by the watchdog (per-diagnostic command timeout) and the MCP
-//! server (600 s CLI dispatch timeout). Reproduces the slice of Python
-//! `subprocess.run(..., capture_output=True, text=True, timeout=...)` both
-//! consumers rely on: captured stdout/stderr, the exit code, and a kill +
-//! partial-output result on timeout (`subprocess.TimeoutExpired`).
+//! Shared by the watchdog (per-diagnostic commands) and the MCP server (CLI
+//! dispatch). Reproduces the slice of Python
+//! `subprocess.run(..., capture_output=True, text=True)` both consumers rely
+//! on: captured stdout/stderr and the exit code. The child runs to completion.
 
-use std::io::Read;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
 
-/// Outcome of [`run_capture`].
+/// Outcome of [`run_capture`]: the child exited on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Capture {
-    /// The child exited on its own.
-    Completed {
-        rc: i32,
-        stdout: String,
-        stderr: String,
-    },
-    /// The deadline passed; the child was killed and reaped. stdout/stderr
-    /// hold whatever the child wrote before the kill (Python
-    /// `TimeoutExpired.stdout` / `.stderr`).
-    TimedOut { stdout: String, stderr: String },
+pub(crate) struct Capture {
+    pub(crate) rc: i32,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
-/// Run `argv` capturing stdout/stderr, killing the child after `timeout`.
-/// A spawn failure surfaces as the `io::Error` (Python's generic
-/// `except Exception` branch / `FileNotFoundError`).
-pub(crate) fn run_capture(argv: &[String], timeout: Duration) -> std::io::Result<Capture> {
-    let Some(program) = argv.first() else {
+/// Run `argv` capturing stdout/stderr until it exits. A spawn failure
+/// surfaces as the `io::Error` (Python's generic `except Exception` branch /
+/// `FileNotFoundError`).
+pub(crate) fn run_capture(argv: &[String]) -> std::io::Result<Capture> {
+    let Some((program, args)) = argv.split_first() else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "empty argv",
         ));
     };
-    let mut child = Command::new(program)
-        .args(&argv[1..])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let mut out_pipe = child.stdout.take().expect("stdout piped");
-    let mut err_pipe = child.stderr.take().expect("stderr piped");
-    let out_thread = thread::spawn(move || -> Vec<u8> {
-        let mut buf = Vec::new();
-        out_pipe.read_to_end(&mut buf).ok();
-        buf
-    });
-    let err_thread = thread::spawn(move || -> Vec<u8> {
-        let mut buf = Vec::new();
-        err_pipe.read_to_end(&mut buf).ok();
-        buf
-    });
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait()? {
-            Some(status) => {
-                let stdout = out_thread.join().unwrap_or_default();
-                let stderr = err_thread.join().unwrap_or_default();
-                return Ok(Capture::Completed {
-                    rc: status.code().unwrap_or(-1),
-                    stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&stderr).into_owned(),
-                });
-            }
-            None if Instant::now() >= deadline => {
-                child.kill().ok();
-                child.wait().ok();
-                let stdout = out_thread.join().unwrap_or_default();
-                let stderr = err_thread.join().unwrap_or_default();
-                return Ok(Capture::TimedOut {
-                    stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&stderr).into_owned(),
-                });
-            }
-            None => thread::sleep(Duration::from_millis(20)),
-        }
-    }
+    let output = Command::new(program).args(args).output()?;
+    Ok(Capture {
+        rc: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }

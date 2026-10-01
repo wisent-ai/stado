@@ -63,8 +63,10 @@ pub struct ReleaseAgentArgs {
     pub(crate) product: Option<String>,
     #[arg(long)]
     pub(crate) once: bool,
-    #[arg(long, default_value_t = crate::release_agent::DEFAULT_INTERVAL_SECONDS)]
-    pub(crate) interval_seconds: u64,
+    /// Seconds between reconcile passes when the agent runs as a loop.
+    /// Required without --once.
+    #[arg(long)]
+    pub(crate) interval_seconds: Option<u64>,
     #[arg(long)]
     pub(crate) json: bool,
 }

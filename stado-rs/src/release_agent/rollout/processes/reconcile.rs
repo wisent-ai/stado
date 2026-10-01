@@ -9,7 +9,7 @@ use crate::release_agent::rollout::serving::legacy::{restore_legacy, stop_legacy
 use crate::release_agent::rollout::serving::proxy::{proxy_upstream_port, stable_bind_ready};
 use crate::release_agent::state::document::save_state;
 use crate::release_agent::state::records::HostReleaseState;
-use crate::release_control::ReleaseTargetPolicy;
+use crate::release_control::{ReleaseTargetPolicy, RolloutStrategy};
 
 /// Reconcile a listener retained by the host when a finite release command
 /// ended before saving its owner pid in the host state document.
@@ -30,7 +30,7 @@ pub(crate) async fn reconcile_stable_proxy(
     target: &ReleaseTargetPolicy,
     product: &str,
     install_root: &str,
-    readiness_timeout_seconds: u64,
+    strategy: &RolloutStrategy,
     leave_bind_for_candidate: bool,
     state: &mut HostReleaseState,
 ) -> Result<(), String> {
@@ -64,8 +64,8 @@ pub(crate) async fn reconcile_stable_proxy(
                 return Ok(());
             }
             restore_legacy(target)?;
-            let deadline =
-                tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);
+            let deadline = tokio::time::Instant::now()
+                + Duration::from_secs(strategy.readiness_timeout_seconds);
             while !stable_bind_ready(&serving).await {
                 if tokio::time::Instant::now() >= deadline {
                     return Err(format!(
@@ -73,7 +73,7 @@ pub(crate) async fn reconcile_stable_proxy(
                         serving.stable_bind
                     ));
                 }
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
             }
             eprintln!(
                 "restored legacy {product} on {}: no release proxy and no owned release held the bind",
@@ -125,7 +125,8 @@ pub(crate) async fn reconcile_stable_proxy(
     .await?;
     restore_legacy(target)?;
     if target.legacy_launchd_plist.is_some() {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(strategy.readiness_timeout_seconds);
         while !stable_bind_ready(&serving).await {
             if tokio::time::Instant::now() >= deadline {
                 return Err(format!(
@@ -133,7 +134,7 @@ pub(crate) async fn reconcile_stable_proxy(
                     serving.stable_bind
                 ));
             }
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
         }
     }
     state.proxy_pid = None;

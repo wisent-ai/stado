@@ -12,7 +12,9 @@ use crate::release_agent::rollout::candidate::stage::marker_path;
 use crate::release_agent::state::document::proxy_state_path;
 use crate::release_agent::state::records::{HostReleaseState, ProcessRecord};
 use crate::release_cause::Refusal;
-use crate::release_control::{self, BlueGreenServing, ReleaseManifest, ReleaseTargetPolicy};
+use crate::release_control::{
+    self, BlueGreenServing, ReleaseManifest, ReleaseTargetPolicy, RolloutStrategy,
+};
 
 /// Prove that the exact live Stado proxy routes the exact staged release and
 /// that the product accepts its declared readiness request on the stable bind.
@@ -29,7 +31,7 @@ async fn stable_bind_answer(
     product: &str,
     generation: u64,
     active: &ProcessRecord,
-    readiness_timeout_seconds: u64,
+    strategy: &RolloutStrategy,
 ) -> Result<(), String> {
     if !pid_alive(proxy_pid) {
         return Err(format!("stable release proxy pid {proxy_pid} is gone"));
@@ -67,32 +69,23 @@ async fn stable_bind_answer(
 
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
     let client = reqwest::Client::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(readiness_timeout_seconds);
-    let mut last_error = None;
+    let timeout = strategy.readiness_timeout_seconds;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
     loop {
         if !pid_alive(proxy_pid) {
             return Err(format!("stable release proxy pid {proxy_pid} is gone"));
         }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return Err(format!(
-                "{url} did not become ready within {readiness_timeout_seconds}s; {}",
-                last_error
-                    .as_deref()
-                    .unwrap_or("no response before the deadline")
-            ));
-        }
-        last_error = Some(match client.get(&url).send().await {
+        let last_error = match client.get(&url).send().await {
             Ok(response) if response.status().is_success() => return Ok(()),
             Ok(response) => format!("HTTP {}", response.status()),
             Err(error) => format!("{error:#}"),
-        });
-        tokio::time::sleep(
-            deadline
-                .saturating_duration_since(tokio::time::Instant::now())
-                .min(Duration::from_millis(200)),
-        )
-        .await;
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "{url} did not become ready within {timeout}s; {last_error}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
     }
 }
 
@@ -103,16 +96,15 @@ pub(crate) async fn ensure_active_proxy(
     generation: u64,
     active: &ProcessRecord,
     state: &mut HostReleaseState,
-    readiness_timeout_seconds: u64,
+    strategy: &RolloutStrategy,
 ) -> Result<(), Refusal> {
     // The probe's own sentence travels with the verdict. A quarantine list
     // reading `active release lost readiness` for two digests in a row says
-    // nothing about whether the candidate answered 503, refused the
-    // connection, or took longer than the 3s the probe allows on a busy host.
-    // Three different repairs, one word.
+    // nothing about whether the candidate answered 503 or refused the
+    // connection. Two different repairs, one word.
     // One refused probe is not a lost release either; the confirmation window
     // lives in `lost_readiness_because`.
-    if let Some(why) = lost_readiness_because(active, &serving.readiness_path).await {
+    if let Some(why) = lost_readiness_because(active, &serving.readiness_path, strategy).await {
         return Err(why.context(|said| format!("active release lost readiness: {said}")));
     }
     // A legacy unit can be loaded again after cutover while the stable proxy
@@ -150,13 +142,7 @@ pub(crate) async fn ensure_active_proxy(
 
     state.proxy_pid = Some(proxy_pid);
     stable_bind_answer(
-        proxy_pid,
-        target,
-        serving,
-        product,
-        generation,
-        active,
-        readiness_timeout_seconds,
+        proxy_pid, target, serving, product, generation, active, strategy,
     )
     .await
     .map_err(|why| format!("stable release proxy is invalid: {why}").into())

@@ -112,34 +112,27 @@ pub(super) async fn recycle_systemd(
                         "{context}: {unit} pid {main_pid} could not be restarted onto the installed inode: {error}"
                     )
                 })?;
-            let mut replacement = None;
-            for _ in 0..60 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let Some(new_pid) = systemctl_stdout(user, &show_args)
-                    .await
-                    .ok()
-                    .and_then(|value| value.trim().parse::<u32>().ok())
-                    .filter(|pid| *pid != 0)
-                else {
-                    continue;
-                };
-                let verified = crate::deploy::service::running_images(&[new_pid])
-                    .ok()
-                    .is_some_and(|images| {
-                        images
-                            .get(&new_pid)
-                            .is_some_and(|image| image.is_same_file(&installed))
-                    });
-                if verified {
-                    replacement = Some(new_pid);
-                    break;
-                }
-            }
-            let Some(new_pid) = replacement else {
+            // `systemctl try-restart` returns once systemd has finished the
+            // restart job, so the unit's MainPID is read once.
+            let new_pid = systemctl_stdout(user, &show_args)
+                .await
+                .map_err(|error| format!("{context}: {unit}: MainPID unreadable: {error}"))?
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|pid| *pid != 0)
+                .ok_or_else(|| format!("{context}: {unit} restarted and has no main pid"))?;
+            let verified = crate::deploy::service::running_images(&[new_pid])
+                .map_err(|error| {
+                    format!("{context}: {unit} pid {new_pid} image unreadable: {error}")
+                })?
+                .get(&new_pid)
+                .is_some_and(|image| image.is_same_file(&installed));
+            if !verified {
                 return Err(format!(
-                    "{context}: {unit} restarted but no replacement pid mapped the installed inode within 30s"
+                    "{context}: {unit} restarted, and its pid {new_pid} does not map the installed inode"
                 ));
-            };
+            }
             log_fn(&format!(
                 "{context}: restarted {unit}; pid {main_pid} held the replaced inode and pid {new_pid} maps the installed inode"
             ));

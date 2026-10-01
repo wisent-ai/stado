@@ -27,7 +27,7 @@ mod transport;
 pub use dispatch::{call_tool, handle, stado_argv};
 pub use protocol::{
     ToolError, CODE_INTERNAL_ERROR, CODE_METHOD_NOT_FOUND, CODE_PARSE_ERROR, JSONRPC_VERSION,
-    PROTOCOL_VERSION, SUBPROCESS_TIMEOUT_SECONDS,
+    PROTOCOL_VERSION,
 };
 pub use tools::tool_definitions;
 pub use transport::serve;

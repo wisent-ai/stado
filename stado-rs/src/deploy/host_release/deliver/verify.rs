@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use serde_json::{json, Value};
 
 use super::super::ReleasePlan;
@@ -7,11 +5,7 @@ use crate::deploy::products::{Install, Readback};
 use crate::deploy::{host_channel, service, Runner};
 use crate::targets::ComputeTarget;
 
-/// How long a restarted agent is given to publish its stable binds.
-pub(super) const STABLE_BIND_BUDGET_SECONDS: u64 = 120;
-
-/// Poll every stable bind this host declares until it listens, and report
-/// each one.
+/// Read every stable bind this host declares once, and report each one.
 ///
 /// The registry comes through the reader that falls back to this host's
 /// last-known-good copy, because the outage this guard exists to catch is one
@@ -32,18 +26,9 @@ pub(super) async fn verify_stable_binds(
     if plans.is_empty() {
         return (verdicts, missing);
     }
-    let deadline = std::time::Instant::now() + Duration::from_secs(STABLE_BIND_BUDGET_SECONDS);
     for plan in plans {
         let port = plan.bind.rsplit(':').next().unwrap_or_default().to_string();
-        let listening = loop {
-            if stable_bind_listening(target, &port, runner).await {
-                break true;
-            }
-            if std::time::Instant::now() >= deadline {
-                break false;
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        };
+        let listening = stable_bind_listening(target, &port, runner).await;
         verdicts.insert(
             plan.bind.clone(),
             json!({

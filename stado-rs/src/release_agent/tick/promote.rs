@@ -124,12 +124,8 @@ pub(crate) async fn promote_candidate(
     state.phase = RolloutPhase::CandidateRunning;
     state.detail = format!("candidate pid={} port={port}", process.pid);
     save_state(target, state)?;
-    if let Some(why) = await_ready_because(
-        &process,
-        &serving.readiness_path,
-        policy.strategy.readiness_timeout_seconds,
-    )
-    .await
+    if let Some(why) =
+        await_ready_because(&process, &serving.readiness_path, &policy.strategy).await
     {
         terminate(&process);
         let timeout = policy.strategy.readiness_timeout_seconds;
@@ -166,18 +162,12 @@ pub(crate) async fn promote_candidate(
         desired.rollout_generation,
         &process,
         state,
-        policy.strategy.readiness_timeout_seconds,
+        &policy.strategy,
     )
     .await;
     if let Err(reason) = proxy_result {
         if policy.strategy.automatic_rollback {
-            rollback(
-                target,
-                state,
-                reason,
-                policy.strategy.readiness_timeout_seconds,
-            )
-            .await?;
+            rollback(target, state, reason, &policy.strategy).await?;
         } else {
             state.phase = RolloutPhase::Failed;
             state.detail = reason.sentence;
@@ -194,13 +184,15 @@ pub(crate) async fn promote_candidate(
         .active
         .clone()
         .ok_or_else(|| "routed release lost its active process record".to_string())?;
-    if let Some(why) = lost_readiness_because(&active, &serving.readiness_path).await {
+    if let Some(why) =
+        lost_readiness_because(&active, &serving.readiness_path, &policy.strategy).await
+    {
         if policy.strategy.automatic_rollback {
             rollback(
                 target,
                 state,
                 why.context(|said| format!("candidate failed during drain: {said}")),
-                policy.strategy.readiness_timeout_seconds,
+                &policy.strategy,
             )
             .await?;
         } else {
