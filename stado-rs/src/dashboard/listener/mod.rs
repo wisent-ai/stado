@@ -24,8 +24,6 @@ use crate::rate_limit::RateLimiter;
 use auth::CachedObjectToken;
 use boundary::BoundaryAvailability;
 
-pub use boundary::BOUNDARY_TIMEOUT_OVERRIDE_PATH;
-
 pub(crate) use auth::constant_time_eq;
 pub(crate) use boundary::Boundary;
 pub(crate) use http::{

@@ -9,8 +9,6 @@ mod request;
 mod response;
 
 use futures::stream::{FuturesUnordered, StreamExt};
-use std::time::Duration;
-
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -94,49 +92,16 @@ impl Dashboard {
             );
             return self.serve_on(listener).await;
         }
-        // Every verifier reads shared Skarbiec vault/audit state. Starting all
-        // boundaries together can overwhelm the listener and fail the whole
-        // control plane on a transient connection reset, so validate them in
-        // deterministic order with an independent timeout per boundary
-        // ([`boundary_timeout`]).
-        //
-        // A verdict used to be recorded once and never revisited, so one slow
-        // or reset read shut a boundary until somebody restarted the unit --
-        // and `object` shutting means `503 object authorization unavailable`
-        // for the whole fleet. That happened four times in one afternoon, each
-        // time cured by an identical retry, so the retry belongs here instead
-        // of in the operator's hands. The eager sweep below is that retry; the
-        // inline recheck in [`Dashboard::recover_boundary`] is the other half,
-        // because a boundary that resets an hour after startup never reaches
-        // this code again.
-        // Do not hold the listener behind this sweep. A slow upstream used to
-        // leave the socket bound but unserved for minutes, so launchd and every
-        // recovery client saw a timeout instead of the available `/healthz`
-        // report. Routes remain closed until their own boundary is ready and
-        // can revalidate it inline through `boundaries_available`.
+        // Every verifier reads shared Skarbiec vault/audit state, so the
+        // boundaries are validated one after another, each until its verifier
+        // answers. A boundary that fails records the verifier's own error and
+        // stays closed; the inline recheck in [`Dashboard::recover_boundary`]
+        // revalidates it when a request needs it. The listener serves while
+        // this runs, so `/healthz` answers and routes stay closed until their
+        // own boundary is ready.
         let validation = async {
-            let attempts = std::env::var("WC_DASHBOARD_BOUNDARY_ATTEMPTS")
-                .ok()
-                .and_then(|value| value.trim().parse::<usize>().ok())
-                .filter(|count| *count > 0)
-                .unwrap_or(3);
-            let retry_pause = Duration::from_secs(2);
             for boundary in Boundary::ALL {
-                let mut outcome = self.validate_boundary(boundary).await;
-                let mut attempt = 1;
-                while attempt < attempts && outcome.is_err() {
-                    eprintln!(
-                    "[dashboard] {} boundary attempt {attempt} of {attempts} did not settle; retrying",
-                    boundary.label()
-                );
-                    tokio::time::sleep(retry_pause).await;
-                    outcome = self.validate_boundary(boundary).await;
-                    attempt += 1;
-                }
-                // Only `object` used to report why it failed, so every other
-                // boundary said "unavailable" and left the operator guessing which
-                // grant, item set or endpoint was at fault. The verdict is useless
-                // without the reason, so the log carries the verifier's own words.
+                let outcome = self.validate_boundary(boundary).await;
                 if let Err(error) = &outcome {
                     eprintln!("[dashboard] {} boundary error: {error}", boundary.label());
                     eprintln!("[dashboard] {} boundary unavailable", boundary.label());

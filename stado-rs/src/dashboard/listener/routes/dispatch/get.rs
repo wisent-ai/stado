@@ -64,17 +64,10 @@ impl Dashboard {
                 }),
             );
         }
-        // The operator's read of the same state, with each boundary's reason.
-        //
-        // `/healthz` cannot carry it and should not, and until this route
-        // existed the sentence was reachable nowhere on a live process: the
-        // verdict is held in memory, the holder logs no boundary line unless
-        // it revalidates, and the standing remedy points at a unit log that on
-        // one host does not exist. So a closed boundary was one bit, and one
-        // bit cannot distinguish `validation did not settle within N seconds`
-        // — arithmetic, answered by the item budget — from `item set mismatch`
-        // or `missing or empty`, which is a credential answer and is not fixed
-        // by restarting anything.
+        // The operator's read of the same state, with each boundary's reason:
+        // the verdict is held in memory, so this route is where a closed
+        // boundary's own sentence (`item set mismatch`, `missing or empty`)
+        // can be read on a live process.
         //
         // Loopback-only, like every route on this listener, and it publishes
         // the verifier's own sentence rather than any material: what refused

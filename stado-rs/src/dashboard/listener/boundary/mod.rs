@@ -1,7 +1,7 @@
 //! The authorization boundaries this listener gates its routes on: the
 //! vocabulary ([`kind`]), every boundary's live verdict ([`state`]), the
-//! validation budget ([`budget`]), the per-request plan ([`plan`]), and the
-//! validate/record/recover sequence one request runs against them.
+//! inline recheck cooldown ([`budget`]), the per-request plan ([`plan`]), and
+//! the validate/record/recover sequence one request runs against them.
 
 mod budget;
 mod kind;
@@ -14,45 +14,30 @@ use crate::dashboard::integration;
 use crate::rate_limit;
 
 use super::Dashboard;
-use budget::{boundary_recheck_cooldown, boundary_timeout};
+use budget::boundary_recheck_cooldown;
 use state::{BoundaryVerdict, Recheck};
-
-pub use budget::BOUNDARY_TIMEOUT_OVERRIDE_PATH;
 
 pub(crate) use kind::Boundary;
 pub(crate) use plan::{boundary_plan, requires_object_boundary, BoundaryPlan};
 pub(crate) use state::BoundaryAvailability;
 
 impl Dashboard {
-    /// Run exactly one boundary's verifier once, bounded by
-    /// [`boundary_timeout`], and flatten every failure shape — refusal,
-    /// timeout, misconfiguration — into the one sentence an operator reads in
-    /// the log and in `last_error`.
+    /// Run exactly one boundary's verifier once, until it answers, and
+    /// flatten every failure shape — refusal, misconfiguration — into the one
+    /// sentence an operator reads in the log and in `last_error`.
     pub(crate) async fn validate_boundary(&self, boundary: Boundary) -> Result<(), String> {
-        let timeout = boundary_timeout(boundary);
-        macro_rules! bounded {
-            ($call:expr) => {
-                match tokio::time::timeout(timeout, $call).await {
-                    Ok(Ok(_)) => Ok(()),
-                    Ok(Err(error)) => Err(error.to_string()),
-                    Err(_) => Err(format!(
-                        "validation did not settle within {} seconds, reading one vault field \
-                         per mapped item serially; a vault that accepts connections without \
-                         answering inside that budget looks identical to a missing grant here",
-                        timeout.as_secs()
-                    )),
-                }
-            };
+        fn flat<T, E: std::fmt::Display>(outcome: Result<T, E>) -> Result<(), String> {
+            outcome.map(|_| ()).map_err(|error| error.to_string())
         }
         match boundary {
-            Boundary::Object => bounded!(crate::skarbiec::validate_object_verifier()),
-            Boundary::Release => bounded!(crate::skarbiec::validate_release_verifier()),
-            Boundary::Machine => bounded!(crate::skarbiec::validate_machine_verifier()),
-            Boundary::Service => bounded!(crate::skarbiec::validate_service_verifier()),
-            Boundary::RateLimitVerifier => bounded!(rate_limit::validate_verifier()),
-            Boundary::RateLimitState => bounded!(self.rate_limiter.restore()),
-            Boundary::Integration => bounded!(integration::validate_startup()),
-            Boundary::Registry => bounded!(crate::skarbiec::validate_registry_verifier()),
+            Boundary::Object => flat(crate::skarbiec::validate_object_verifier().await),
+            Boundary::Release => flat(crate::skarbiec::validate_release_verifier().await),
+            Boundary::Machine => flat(crate::skarbiec::validate_machine_verifier().await),
+            Boundary::Service => flat(crate::skarbiec::validate_service_verifier().await),
+            Boundary::RateLimitVerifier => flat(rate_limit::validate_verifier().await),
+            Boundary::RateLimitState => flat(self.rate_limiter.restore().await),
+            Boundary::Integration => flat(integration::validate_startup().await),
+            Boundary::Registry => flat(crate::skarbiec::validate_registry_verifier().await),
         }
     }
 
