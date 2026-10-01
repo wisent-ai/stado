@@ -7,8 +7,8 @@ use crate::deploy::host_precheck_runner::declaration::runner_target;
 use crate::deploy::host_precheck_runner::platform::{replace, Platform};
 use crate::deploy::host_precheck_runner::signing::apple::{
     developer_id_bundle, issue_apple_capability, publish_developer_id_secrets,
-    required_remote_file, APPLE_DEVELOPER_ID_ACTION, DEVELOPER_ID_FINISH, DEVELOPER_ID_ITEM,
-    DEVELOPER_ID_PREPARE,
+    required_remote_file, APPLE_DEVELOPER_ID_ACTION, DEVELOPER_ID_FINISH, DEVELOPER_ID_KIND,
+    DEVELOPER_ID_PREPARE, DEVELOPER_ID_ROLE,
 };
 use crate::deploy::host_precheck_runner::verdict::report::command_failure;
 use crate::deploy::{
@@ -24,7 +24,7 @@ use crate::deploy::{
 /// Skarbiec, and publishes repository secrets. A later run reuses that bundle.
 pub async fn bootstrap_developer_id(
     target_name: &str,
-    account_item: &str,
+    account_role: &str,
     repositories: &[String],
 ) -> Result<Value, DeployError> {
     if repositories.is_empty() {
@@ -36,7 +36,7 @@ pub async fn bootstrap_developer_id(
     if let Some((p12, password, identity, not_after)) = developer_id_bundle()? {
         publish_developer_id_secrets(repositories, &p12, &password, &identity, &github_token)?;
         return Ok(json!({
-            "certificate": DEVELOPER_ID_ITEM,
+            "certificate_role": DEVELOPER_ID_ROLE,
             "identity": identity,
             "not_after": not_after,
             "repositories": repositories,
@@ -162,13 +162,9 @@ pub async fn bootstrap_developer_id(
             &channel,
             APPLE_DEVELOPER_ID_ACTION,
             json!({
-                // `login_item`, because that is the key Weles reads.
-                // dispatch.js resolves `params.login_item ?? params.vault_login_item`
-                // into WELES_LOGIN_ITEM and has never looked at `account_item`,
-                // so this parameter arrived, was ignored, and the trajectory
-                // refused with "invalid Apple account item" before opening a
-                // browser — every time, since the day it was written.
-                "login_item": account_item,
+                // The Apple account is asked for by role; the worker selects
+                // the Skarbiec item that plays it.
+                "login_role": account_role,
                 "apple_csr_path": format!("{work}/request.csr"),
                 "apple_certificate_path": format!("{work}/certificate.cer"),
                 "system_consent": "account-holder-2fa",
@@ -200,19 +196,18 @@ pub async fn bootstrap_developer_id(
     let password = required_remote_file(&target, &format!("{work}/certificate.password")).await?;
     let identity = required_remote_file(&target, &format!("{work}/certificate.identity")).await?;
     let not_after = required_remote_file(&target, &format!("{work}/certificate.not-after")).await?;
-    crate::credential_store::owner::write_item(
-        DEVELOPER_ID_ITEM,
-        "certificate",
+    crate::credential_store::owner::write_role_item(
+        DEVELOPER_ID_ROLE,
+        DEVELOPER_ID_KIND,
         &json!({
-            "identity": identity,
+            "certificate_p12_base64": p12,
+            "certificate_password": password,
+            "sign_identity": identity,
             "not_after": not_after,
-            "p12": p12,
-            "password": password,
         }),
         &json!({
             "issuer": "Apple Developer",
             "purpose": "desktop-release-signing",
-            "target": target.name,
         }),
     )
     .map_err(|error| DeployError(error.to_string()))?;
@@ -232,7 +227,7 @@ pub async fn bootstrap_developer_id(
     }
 
     Ok(json!({
-        "certificate": DEVELOPER_ID_ITEM,
+        "certificate_role": DEVELOPER_ID_ROLE,
         "identity": identity,
         "not_after": not_after,
         "repositories": repositories,

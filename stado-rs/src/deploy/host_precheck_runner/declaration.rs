@@ -35,7 +35,7 @@ pub struct RunnerProfile {
     pub secrets: Vec<String>,
     pub accepts_repository_scope: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub developer_id_account_item: Option<String>,
+    pub developer_id_account_role: Option<String>,
 }
 
 impl RunnerProfile {
@@ -138,13 +138,13 @@ fn parse_declaration() -> Result<RunnerProfileDeclaration, String> {
         }
         if profile.needs_publisher_bootstrap()
             && profile
-                .developer_id_account_item
+                .developer_id_account_role
                 .as_deref()
                 .unwrap_or("")
                 .is_empty()
         {
             return Err(format!(
-                "{} declares no developer_id_account_item; add it to {DECLARATION_PATH}",
+                "{} declares no developer_id_account_role; add it to {DECLARATION_PATH}",
                 profile.name
             ));
         }

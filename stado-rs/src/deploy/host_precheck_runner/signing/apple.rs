@@ -9,7 +9,11 @@ use crate::deploy::host_precheck_runner::accounts::github::{
 use crate::deploy::{host_capability, host_channel, production_runner, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
-pub(crate) const DEVELOPER_ID_ITEM: &str = "desktop-release-developer-id";
+/// The role the Developer ID signing identity plays in the owner vault — the
+/// same role every darwin release recipe and `weles apple-developer-id` use —
+/// with the recipe's field names.
+pub(crate) const DEVELOPER_ID_ROLE: &str = "macos-developer-id";
+pub(crate) const DEVELOPER_ID_KIND: &str = "bundle";
 const MACOS_CERT_P12_SECRET: &str = "MACOS_CERT_P12";
 const MACOS_CERT_PASSWORD_SECRET: &str = "MACOS_CERT_PASSWORD";
 const MACOS_SIGN_IDENTITY_SECRET: &str = "MACOS_SIGN_IDENTITY";
@@ -37,19 +41,19 @@ pub(crate) fn publish_developer_id_secrets(
 
 pub(crate) fn developer_id_bundle() -> Result<Option<(String, String, String, String)>, DeployError>
 {
-    if !crate::credential_store::owner::item_exists(DEVELOPER_ID_ITEM)
+    let Some(item) = crate::credential_store::owner::item_playing_role(DEVELOPER_ID_ROLE)
         .map_err(|error| DeployError(error.to_string()))?
-    {
+    else {
         return Ok(None);
-    }
+    };
     let read = |field| {
-        crate::credential_store::owner::read_string(DEVELOPER_ID_ITEM, field)
+        crate::credential_store::owner::read_string(&item, field)
             .map_err(|error| DeployError(error.to_string()))
     };
     Ok(Some((
-        read("p12")?,
-        read("password")?,
-        read("identity")?,
+        read("certificate_p12_base64")?,
+        read("certificate_password")?,
+        read("sign_identity")?,
         read("not_after")?,
     )))
 }

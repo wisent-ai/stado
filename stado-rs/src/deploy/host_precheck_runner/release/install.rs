@@ -205,9 +205,9 @@ pub async fn install_declared(
     let repository_bootstrap = if let Some(repository) = repository {
         if profile.needs_publisher_bootstrap() {
             let bootstrap = bootstrap_publisher_repository(repository).await?;
-            let developer_id = match &profile.developer_id_account_item {
-                Some(account_item) => {
-                    bootstrap_developer_id(target_name, account_item, &[repository.to_string()])
+            let developer_id = match &profile.developer_id_account_role {
+                Some(account_role) => {
+                    bootstrap_developer_id(target_name, account_role, &[repository.to_string()])
                         .await?
                 }
                 None => Value::Null,

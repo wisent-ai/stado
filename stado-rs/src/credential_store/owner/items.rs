@@ -70,12 +70,12 @@ pub fn store_json(
     Ok(())
 }
 
-/// Check the owner vault itself for one live item.
+/// The live items of the resolved owner vault, with their tags.
 ///
 /// Reads and writes must use the same vault. Consulting the broker list here
 /// can report an item absent while the owner vault already holds its signing
 /// key, which would rotate that key during an otherwise idempotent bootstrap.
-pub fn item_exists(id: &str) -> Result<bool, SkarbiecError> {
+fn owner_items() -> Result<Vec<crate::skarbiec::ItemInfo>, SkarbiecError> {
     let output = std::process::Command::new(binary()?)
         .arg("list")
         .env("SKARBIEC_VAULT_FILE", vault()?)
@@ -89,13 +89,68 @@ pub fn item_exists(id: &str) -> Result<bool, SkarbiecError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let items: Vec<Value> = serde_json::from_slice(&output.stdout).map_err(|error| {
-        SkarbiecError::Deployment(format!("skarbiec owner list is not valid JSON: {error}"))
-    })?;
-    Ok(items.iter().any(|item| {
-        item.get("id").and_then(Value::as_str) == Some(id)
-            && item.get("deleted").and_then(Value::as_bool) != Some(true)
-    }))
+    let items: Vec<crate::skarbiec::ItemInfo> =
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            SkarbiecError::Deployment(format!("skarbiec owner list is not valid JSON: {error}"))
+        })?;
+    Ok(items
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .collect())
+}
+
+/// Check the owner vault itself for one live item.
+pub fn item_exists(id: &str) -> Result<bool, SkarbiecError> {
+    Ok(owner_items()?.iter().any(|item| item.id == id))
+}
+
+/// The id of the one live owner-vault item that plays `role`, or none.
+/// Several items in one role are refused, because choosing would be a guess.
+pub fn item_playing_role(role: &str) -> Result<Option<String>, SkarbiecError> {
+    let items = owner_items()?;
+    match crate::skarbiec::roles::holders(&items, role).as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.id.clone())),
+        several => Err(SkarbiecError::Deployment(format!(
+            "{} owner-vault items carry {}; exactly one item may play role {role}",
+            several.len(),
+            crate::skarbiec::roles::role_tag(role)
+        ))),
+    }
+}
+
+/// Write the item that plays `role` in the resolved owner vault: the one
+/// holder is rewritten, and when none exists a new item is created under a
+/// random id and tagged `stado:role:<role>`. Returns the item's id.
+pub fn write_role_item(
+    role: &str,
+    item_type: &str,
+    fields: &Value,
+    context: &Value,
+) -> Result<String, SkarbiecError> {
+    if let Some(id) = item_playing_role(role)? {
+        write_item(&id, item_type, fields, context)?;
+        return Ok(id);
+    }
+    let id = crate::skarbiec::roles::fresh_item_id();
+    write_item(&id, item_type, fields, context)?;
+    let output = std::process::Command::new(binary()?)
+        .arg("retag")
+        .arg(&id)
+        .arg("--tags")
+        .arg(crate::skarbiec::roles::role_tag(role))
+        .env("SKARBIEC_VAULT_FILE", vault()?)
+        .env_remove("SKARBIEC_UNLOCK")
+        .env_remove("SKARBIEC_UNLOCK_FILE")
+        .output()
+        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    if !output.status.success() {
+        return Err(SkarbiecError::Deployment(format!(
+            "skarbiec stored the {role} secret as {id} but could not tag it with its role: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(id)
 }
 
 /// Read one exact string field from the resolved owner vault.
