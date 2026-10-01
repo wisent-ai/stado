@@ -52,10 +52,9 @@ static MACHINE_TYPE_ZONES: LazyLock<HashMap<String, Vec<String>>> = LazyLock::ne
                 "us-east5-a".to_string(),
                 "us-east5-b".to_string(),
                 "europe-west4-a".to_string(),
-                // Removed 2026-05-01: machine-type not present in
-                // europe-west4-b; NVIDIA_A100_80GB_GPUS regional quota is 0
-                // in us-east4, so us-east4-c was generating "Quota exceeded"
-                // errors every tick.
+                // Not europe-west4-b: the machine type is not present there.
+                // Not us-east4-c: the NVIDIA_A100_80GB_GPUS regional quota is
+                // 0 in us-east4, so it answers "Quota exceeded" every tick.
             ],
         ),
         (
@@ -68,13 +67,11 @@ static MACHINE_TYPE_ZONES: LazyLock<HashMap<String, Vec<String>>> = LazyLock::ne
                 "europe-west4-a".to_string(),
                 "europe-west4-b".to_string(),
                 "us-east1-b".to_string(),
-                // us-east1-c, us-east4-a, us-east4-b removed 2026-05-01:
-                // confirmed via
+                // Not us-east1-c, us-east4-a or us-east4-b:
                 // `gcloud compute machine-types describe a2-highgpu-1g --zone=...`
-                // that the SKU is not present in those zones; the dispatcher
-                // was logging "Machine type does not exist" on every attempt
-                // against them which wasted Cloud Function ticks and slowed
-                // fleet ramp-up.
+                // shows the SKU absent there, and a zone that answers
+                // "Machine type does not exist" on every attempt wastes
+                // dispatcher ticks and slows fleet ramp-up.
             ],
         ),
         (
@@ -90,10 +87,9 @@ static MACHINE_TYPE_ZONES: LazyLock<HashMap<String, Vec<String>>> = LazyLock::ne
                 "us-east1-d".to_string(),
                 "us-east4-a".to_string(),
                 "us-east4-c".to_string(),
-                // Removed 2026-05-01: g2-standard-4 not present in
-                // us-east4-b, us-east5-a, us-east5-b. Confirmed via gcloud
-                // compute machine-types describe; the dispatcher was logging
-                // "Invalid machine type" each tick for these zones.
+                // Not us-east4-b, us-east5-a or us-east5-b: g2-standard-4 is
+                // absent there (`gcloud compute machine-types describe`), and
+                // the dispatcher would log "Invalid machine type" each tick.
             ],
         ),
     ])

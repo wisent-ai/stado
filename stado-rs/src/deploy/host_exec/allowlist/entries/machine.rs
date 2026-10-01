@@ -60,24 +60,22 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
         argv: &["/usr/bin/du", "-xk", "-d", "2", "/"],
         why: "attributes a full root filesystem two directory levels deep; -x stays on one \
               filesystem, -k is a fixed unit, the depth and the root are fixed words, and du \
-              writes nothing. Added 2026-08-19: the linux builder sat at 100% used and every \
-              declared cleaner and reclaim stage measured zero, so the operator had no \
-              sanctioned way to even name what was eating the disk",
+              writes nothing. When a builder sits at 100% used while every declared cleaner \
+              and reclaim stage measures zero, this is the sanctioned way to name what is \
+              eating the disk",
     },
     ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "3", "/"],
         why: "attributes a full root filesystem one level below the existing depth-two report; \
-              the depth and root remain fixed, read-only words. Added 2026-09-04 after the \
-              Ubuntu builder reached 100% while depth two named 16 GiB in /root/.stado, \
-              20 GiB in /home/ubuntu and 26 GiB in /mnt/wd16tb but could not identify any \
-              directory a declared cleaner could safely own",
+              the depth and root remain fixed, read-only words. Depth two can name tens of \
+              GiB under a few roots without identifying any directory a declared cleaner \
+              could safely own",
     },
     ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "2", "/root/.stado/work"],
         why: "attributes the root-owned Stado work tree two levels deep; the path and depth \
-              are fixed and read-only. Added 2026-09-04 after the Ubuntu builder reached \
-              100% with 13 GiB below this one managed root while every reclaim stage \
-              reported zero items",
+              are fixed and read-only, for a builder that fills up below this one managed \
+              root while every reclaim stage reports zero items",
     },
     ApprovedCommand {
         argv: &["/usr/bin/du", "-xk", "-d", "2", "/home/ubuntu/.cache"],
@@ -113,8 +111,7 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
         why: "lists the OS scratch directory's own entries with their modification times; the \
               path is a fixed word, no operator selector is appended, and ls writes nothing. \
               Sizes alone cannot separate a wedged product's live scratch from an abandoned \
-              tree, and deleting an unclassified 14 GB is not a repair. Added 2026-09-04 \
-              beside the du entry above, for the same outage",
+              tree, and deleting an unclassified tree is not a repair",
     },
     ApprovedCommand {
         argv: &["/usr/bin/who"],
@@ -162,11 +159,11 @@ pub const MACHINE_READS: &[ApprovedCommand] = &[
     ApprovedCommand {
         argv: FIGMA_EXPORT_LOG_STAT,
         why: "reads only byte size and modification epoch for the fixed manual Figma export \
-              log inside the managed account's Stado work tree. Added 2026-09-04 because a \
-              job can renew its lease for hours while redirecting every progress byte away \
-              from the canonical zero-byte job log; without two measurements of this file \
-              the fleet cannot distinguish useful work from a hang. The path and format are \
-              compile-time constants, no operator word is appended, and stat writes nothing",
+              log inside the managed account's Stado work tree. A job can renew its lease for \
+              hours while redirecting every progress byte away from the canonical zero-byte \
+              job log; without two measurements of this file the fleet cannot distinguish \
+              useful work from a hang. The path and format are compile-time constants, no \
+              operator word is appended, and stat writes nothing",
     },
     ApprovedCommand {
         argv: FIGMA_EXPORT_WORK_TREE_SIZE,

@@ -83,10 +83,9 @@ pub async fn assign_jobs_at(
         return Ok(0);
     }
     seed_running_jobs(store, &mut agents, now, history, log_fn).await?;
-    // Aggregate skip counts + parallel writes:
-    // 900+ per-job skip log lines
-    // were eating ~300s of the 540s tick budget; serial assignment writes
-    // added ~10s. Confirmed live 02:54Z 2026-05-15.
+    // Aggregate skip counts + parallel writes: hundreds of per-job skip log
+    // lines eat most of a tick's budget, and serial assignment writes add
+    // seconds more.
     let mut schedulable: Vec<(i64, f64, Job)> = Vec::new();
     // Insertion-ordered (model, task) -> count, matching the Python dict's
     // stable top-5 ordering (ties keep first-seen order).

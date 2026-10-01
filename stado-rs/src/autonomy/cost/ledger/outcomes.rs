@@ -37,11 +37,11 @@ impl OutcomeSummary {
 /// [`crate::autonomy::lifecycle`] would delete the record anyway, so
 /// re-examining it is work the deployment has already declared worthless.
 ///
-/// Before 2026-09-02 this function downloaded every decision, feedback, savings
-/// and measurement record ever written and then read one or two job objects per
-/// decision — 11,514 objects and roughly 16,000 more job reads per tick against
-/// a store that also serves the public release channel. That is what held the
-/// 0.13.42 release download at 570 KB/s until the deploy failed.
+/// A measurement that downloads every decision, feedback, savings and
+/// measurement record ever written and then reads one or two job objects per
+/// decision costs tens of thousands of object reads per tick against a store
+/// that also serves the public release channel, and starves a release
+/// download of bandwidth.
 pub async fn measure_outcomes(
     store: &JobStorage,
     policy: &AutonomyPolicy,

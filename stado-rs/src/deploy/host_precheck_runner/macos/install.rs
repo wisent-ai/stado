@@ -61,8 +61,8 @@ if [ "$runner_registered" -eq 0 ] || [ "$runtime_repaired" -eq 1 ]; then
 fi
 # Registration runs when this host holds no runner, and again whenever the
 # declaration moved: a runner configured against one scope, group or label set
-# is not the runner the caller asked for. Before 2026-09-09 only the first case
-# existed, so an install that moved the scope exited 0 and registered nothing.
+# is not the runner the caller asked for, and an install that moves the scope
+# must not exit 0 having registered nothing.
 if [ "$runner_registered" -eq 0 ] || [ "$reconfigure" = 1 ]; then
   if [ "$runner_registered" -eq 0 ]; then
     root rm -rf "$runner_root"

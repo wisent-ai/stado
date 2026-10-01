@@ -1,7 +1,6 @@
 //! Runtime-history machinery for the makespan matcher, split out of
-//! `makespan/mod.rs` so that module stays focused (Python split it to keep
-//! `makespan/__init__.py` under the 300-line file-size limit — the guard
-//! fired when the capacity-aware assignment guard was added 2026-05-17).
+//! `makespan/mod.rs` so that module stays focused and under the 300-line
+//! file-size limit.
 //! Mean per-(model,task) runtime is rebuilt from completed/ blobs on a TTL
 //! and used to order the queue (LPT) and project agent finish times. This
 //! module has NO dependency on makespan's matcher functions so the

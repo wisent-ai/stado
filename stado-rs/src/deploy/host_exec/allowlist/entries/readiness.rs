@@ -110,14 +110,13 @@ pub const READINESS_READS: &[ApprovedCommand] = &[
         why: "reports whether Android platform-tools are on the managed login's PATH; it takes \
               a fixed executable name, reads no application state, and writes nothing",
     },
-    // The four crawl prerequisites, added 2026-09-03. Spis's crawl coordinator
-    // preflights a placement host through this channel before it submits any
-    // job, and for these four the channel answered "not an approved host-exec
-    // command". That refusal is indistinguishable from "the program is
-    // missing", so the 2026-09-01 crawl run recorded fifteen catalogs as
-    // preflight_failed without anybody being able to say which of the two it
-    // was. Each entry prints a version or a self-check, takes no
-    // operator-supplied word, installs nothing and mutates nothing.
+    // The four crawl prerequisites. Spis's crawl coordinator preflights a
+    // placement host through this channel before it submits any job, and a
+    // channel that answers "not an approved host-exec command" for them is
+    // indistinguishable from "the program is missing", so a crawl run would
+    // record catalogs as preflight_failed without anybody being able to say
+    // which of the two it was. Each entry prints a version or a self-check,
+    // takes no operator-supplied word, installs nothing and mutates nothing.
     ApprovedCommand {
         argv: &[APPIUM_CLI, "--version"],
         why: "prints the installed Appium server's version, probing the absolute paths this \

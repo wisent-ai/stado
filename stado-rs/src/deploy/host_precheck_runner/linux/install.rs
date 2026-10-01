@@ -33,10 +33,9 @@ done
 
 # Registration happens when this host holds no runner, and again whenever the
 # declaration moved: a runner already configured against one scope, group or
-# label set is not the runner the caller asked for. Before 2026-09-09 this
-# branch tested only `.runner`, so `install --repository X` on a host that
-# already carried a runner exited 0, reported the profile as installed, and
-# registered nothing at all.
+# label set is not the runner the caller asked for. Testing only `.runner`
+# would let `install --repository X` on a host that already carries a runner
+# exit 0, report the profile as installed, and register nothing at all.
 if [ ! -f "$runner_root/.runner" ] || [ "$reconfigure" = 1 ]; then
   if [ ! -f "$runner_root/.runner" ]; then
     curl --fail --silent --show-error --location --max-time 120 \

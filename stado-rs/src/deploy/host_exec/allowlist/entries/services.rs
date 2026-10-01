@@ -73,7 +73,7 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
               nothing",
     },
     // The three reads a web product's release and its unit need before either
-    // one runs, added 2026-09-02. `stado web` builds a Node product on a fleet
+    // one runs. `stado web` builds a Node product on a fleet
     // builder with `npm ci` and runs it on a fleet host with `npm run start`,
     // and the public hostname in front of it is terminated by a
     // registry-managed Caddy unit. Each of those three facts is a property of
@@ -142,15 +142,13 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
             "--no-legend",
         ],
         why: "lists this host's systemd services, the Linux counterpart of the `launchctl \
-              list` entry above. Added 2026-09-03: the fleet's one linux-amd64 builder had \
-              been running a two-day-old stado image that refuses today's registry document \
-              (`policy:ValueError`), so its own janitor never learned a low watermark and it \
-              claimed nothing -- every release build for that platform queued behind it. \
-              Naming the unit that holds that process is the first step of the repair, and \
-              this table could not name a systemd unit at all: `launchctl list` answers only \
-              on macOS. `list-units` is systemd's read-only verb with every selector fixed \
-              here; the mutating verbs (start, stop, restart, enable, daemon-reload) are \
-              absent from this table and cannot be reached through it",
+              list` entry above. A Linux builder running a stale stado image that refuses \
+              the current registry document claims nothing while every release build for \
+              its platform queues behind it, and naming the unit that holds that process is \
+              the first step of the repair: `launchctl list` answers only on macOS. \
+              `list-units` is systemd's read-only verb with every selector fixed here; the \
+              mutating verbs (start, stop, restart, enable, daemon-reload) are absent from \
+              this table and cannot be reached through it",
     },
     ApprovedCommand {
         argv: &["/bin/cat", "/etc/ssh/sshd_config"],
@@ -250,12 +248,12 @@ pub const SERVICE_AND_RUNTIME_READS: &[ApprovedCommand] = &[
     ApprovedCommand {
         argv: PROBIERZ_RUN_ROOT_CREATE,
         why: "creates only the fixed `$HOME/.stado/work/runs` parent used by target-scoped \
-              Probierz deliveries. Added 2026-09-06 because the byk-auth journey previously \
-              opened a raw SSH shell only to create its run root before rsync, bypassing the \
-              target channel Stado owns. The operator supplies no path or run id: the fixed \
-              script derives HOME on the target, sets umask 077, refuses symlinked or \
-              foreign-owned components, creates missing components one at a time, and fixes \
-              the final root at mode 0700. Canonical per-run UUID children are admitted by \
-              `stado host deliver`, not by this allowlist entry",
+              Probierz deliveries, so a journey never opens a raw SSH shell only to create \
+              its run root before rsync, bypassing the target channel Stado owns. The \
+              operator supplies no path or run id: the fixed script derives HOME on the \
+              target, sets umask 077, refuses symlinked or foreign-owned components, creates \
+              missing components one at a time, and fixes the final root at mode 0700. \
+              Canonical per-run UUID children are admitted by `stado host deliver`, not by \
+              this allowlist entry",
     },
 ];

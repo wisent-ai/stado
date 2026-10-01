@@ -6,14 +6,13 @@ use super::super::programs::{BRAMA_LAUNCHER, KIMI_CLI, TAILSCALE_PROGRAM};
 use super::super::ApprovedCommand;
 
 pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
-    // The four reads a connectivity gap needs, added 2026-08-19. Between
-    // 18:29 and 18:35 UTC control-host answered no ping and no ssh, then
-    // came back on a direct path; every fact about that gap — when the host
-    // slept and woke, whether its path was direct or relayed and to which
-    // endpoint, whether its own view of the tailnet was degraded, and which
-    // interface had dropped — was read by an operator over a private ssh
-    // session, eleven times, because no sanctioned path existed. These are
-    // that path.
+    // The four reads a connectivity gap needs. When a host answers no ping
+    // and no ssh and then comes back, every fact about the gap — when the
+    // host slept and woke, whether its path was direct or relayed and to
+    // which endpoint, whether its own view of the tailnet was degraded, and
+    // which interface had dropped — would otherwise be read by an operator
+    // over a private ssh session, because no sanctioned path existed. These
+    // are that path.
     ApprovedCommand {
         argv: &["/usr/bin/pmset", "-g", "log"],
         why: "prints the power-management event log: every sleep, every wake, and the reason \
@@ -105,7 +104,7 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               exactly and never appends operator words. What it prints are the addresses the \
               registry already holds",
     },
-    // The three sign-in repairs, added 2026-09-02. These are the only entries
+    // The three sign-in repairs. These are the only entries
     // in this table that change anything, and they are here because the thing
     // they change cannot be reached any other way: a provider grant the vendor
     // has disowned is replaced by one browser sign-in, that sign-in belongs to
@@ -233,10 +232,10 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               parser before the subcommand body, so no login is started and no browser \
               opens",
     },
-    // The proof the sign-in entries above are judged by, added 2026-09-02. A
-    // repaired credential that redeems is not a repaired gateway: the vault can
-    // yield a value the provider then refuses, which is exactly the state
-    // 2026-08-27 left, and only a real completion separates the two. It runs
+    // The proof the sign-in entries above are judged by. A repaired
+    // credential that redeems is not a repaired gateway: the vault can yield
+    // a value the provider then refuses, and only a real completion
+    // separates the two. It runs
     // through the same subscription dispatch a caller reaches, on the host, so
     // no bearer of any kind crosses this channel.
     ApprovedCommand {
