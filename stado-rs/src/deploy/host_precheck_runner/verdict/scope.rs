@@ -7,10 +7,9 @@ use crate::deploy::DeployError;
 /// Where a runner registers. GitHub answers a registration token at two
 /// addresses and they are not interchangeable: the organization endpoint needs
 /// the organization's self-hosted-runner permission, and the repository
-/// endpoint needs admin on that one repository. On 2026-08-10 and again on
-/// 2026-09-06 the fleet's credential was refused at the first and accepted at
-/// the second — proven, not assumed — and five separate diagnoses read that
-/// 403 as "runners cannot be managed from here". They can; the door is
+/// endpoint needs admin on that one repository. A fleet credential refused
+/// at the first and accepted at the second — proven, not assumed — gets its
+/// 403 read as "runners cannot be managed from here". They can; the door is
 /// different, and a runner registered to a repository serves that repository
 /// only. Which door was used is part of the answer, so it is recorded on the
 /// host and reported by `status`.

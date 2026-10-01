@@ -147,11 +147,10 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
 /// question, and the operator would believe whichever they ran first.
 ///
 /// `disk_cleanup_stalled` rides here beside the pressure and the two numbers
-/// because a release verdict is where this fleet actually looks. The host
-/// that stopped every release on 2026-09-02 had reported the pressure and the
-/// numbers correctly for days; what no verdict anywhere said was that the
-/// janitor which was supposed to resolve them had not completed a pass since
-/// 2026-08-18.
+/// because a release verdict is where this fleet actually looks. A host that
+/// stops every release can report the pressure and the numbers correctly for
+/// days; what no verdict anywhere says is that the janitor which is supposed
+/// to resolve them has not completed a pass in weeks.
 pub fn gates_section(gates: &HostGates) -> Value {
     let state_known = gates
         .observations
@@ -169,9 +168,9 @@ pub fn gates_section(gates: &HostGates) -> Value {
         "free_gb": gates.free_gb,
         "low_watermark_gb": gates.low_watermark_gb,
         // The memory half rides here for the same reason: a release verdict is
-        // where this fleet actually looks, and on 2026-09-10 the builder that
-        // stopped every `skarbiec` Linux publication was refusing placement
-        // for memory pressure while every surface reported only its disk.
+        // where this fleet actually looks, and a builder that stops every
+        // publication can be refusing placement for memory pressure while
+        // every surface reports only its disk.
         "memory_pressure_active": gates.memory.pressure_active,
         "memory_available_gb": gates.memory.available_gb,
         "memory_low_watermark_gb": gates.memory.low_watermark_gb,

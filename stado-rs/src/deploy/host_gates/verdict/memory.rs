@@ -23,9 +23,9 @@ pub const MEMORY_PRESSURE_ACTIVE: &str =
     crate::providers::local::host_memory::MEMORY_PRESSURE_ACTIVE;
 
 /// Swap over its watermark on a host that still has its memory headroom. A
-/// note and never a blocker: refusing work frees no memory, and on 2026-09-10
-/// exactly this condition withheld the fleet's only Linux builder for three
-/// consecutive `skarbiec` releases.
+/// note and never a blocker: refusing work frees no memory, and exactly this
+/// condition as a blocker withholds a fleet's only builder for release
+/// after release.
 pub const MEMORY_SWAP_OVER_WATERMARK: &str = "memory_swap_over_watermark";
 
 /// Where the memory half of the verdict was read.

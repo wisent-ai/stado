@@ -233,7 +233,7 @@ LockPersonality=true
 # '.profile' is a file rather than a directory, and it is here because a
 # toolchain a repository's checks install writes it: rustup-init refused with
 # "could not amend shell profile: '<root>/.profile': Read-only file system"
-# and failed probierz-landing's documentation check on 2026-09-09. HOME is
+# and failed a product's documentation check. HOME is
 # this root, so a job that installs any toolchain needs that one file and
 # nothing else around it.
 #

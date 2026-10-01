@@ -78,10 +78,10 @@ pub fn parse_output(stdout: &str, target: &ComputeTarget) -> Result<Value, Deplo
 /// overall `status` carry what happened to it.
 ///
 /// `status: ok` used to mean nothing more than "the pass reached its last
-/// line". On 2026-08-19 an operator ran this against control-host to get
-/// the object API back, read `status: ok` with `launchd_domain: {name:
-/// user/501, status: background}` underneath it, and reasonably concluded the
-/// recovery had run. It had: it cleaned the disk, decommissioned the
+/// line". An operator running this against a control host to get the object
+/// API back reads `status: ok` with `launchd_domain: {name: user/501,
+/// status: background}` underneath it, and reasonably concludes the
+/// recovery has run. It has: it cleaned the disk, decommissioned the
 /// coordinator, and did nothing whatsoever about the units it was asked to
 /// re-bootstrap, because they are system daemons and it is not root.
 ///

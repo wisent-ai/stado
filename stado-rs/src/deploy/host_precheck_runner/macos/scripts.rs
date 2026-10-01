@@ -74,8 +74,8 @@ secret_meta=$(root stat -f '%Su %Sg %Lp' "$runner_root/.stado/kronika-agent-auth
 # process exists. A registration the runner can no longer use leaves the
 # process up and every job for this label queued forever; the only place that
 # shows is the runner's own diagnostic log, and nothing in this product read
-# it. On 2026-09-06 a Skarbiec documentation gate sat queued for half an hour
-# against a host whose daemon was `state = running`.
+# it, so a documentation gate sits queued for half an hour against a host
+# whose daemon is `state = running`.
 newest_log=$(root sh -c "ls -t \"$runner_root\"/_diag/Runner_*.log 2>/dev/null | head -n 1")
 if [ -n "$newest_log" ]; then
   listener_state=$(root tail -n 400 "$newest_log" |
@@ -167,10 +167,9 @@ fi
 
 # A listener launchd no longer owns keeps the registration's session and
 # writes nothing, so the managed job cannot take over and every job for these
-# labels queues forever. That is the state this host was in on 2026-09-06: a
-# `Runner.Listener` under the runner root, owned by stado-precheck, whose last
-# log line was `Shutting down JobDispatcher` from a kickstart three quarters
-# of an hour earlier.
+# labels queues forever: a `Runner.Listener` under the runner root, owned by
+# the precheck account, whose last log line is `Shutting down JobDispatcher`
+# from a kickstart long before.
 #
 # Only processes whose executable is UNDER THIS RUNNER'S ROOT are signalled,
 # and only after the ordinary restart has already failed to produce a fresh

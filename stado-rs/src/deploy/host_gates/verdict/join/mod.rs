@@ -79,11 +79,11 @@ pub fn assemble(
     // It blocks only while the disk is also under pressure, and that is the
     // case where a stalled janitor genuinely must refuse work: the host is
     // already below the watermark, nothing is bringing it back, and admitting
-    // a job onto an unmanaged disk is how the fifteen-day incident ended. Above
+    // a job onto an unmanaged disk is how a weeks-long incident ends. Above
     // the watermark it is a NOTE. Refusing work on a host with headroom does
     // not create a single byte of space; it only removes capacity from the
-    // fleet, and it removed the always-on Mac from the fleet on 2026-09-03 over
-    // a janitor that was healthy. The condition stays visible either way —
+    // fleet, removing the always-on host over a janitor that is healthy.
+    // The condition stays visible either way —
     // `disk_cleanup_stalled` is carried as a field and embedded in the release
     // verdict, so nothing that could see this before has stopped seeing it.
     if janitor.stalled && disk_pressure_unresolved {

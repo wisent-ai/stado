@@ -185,10 +185,9 @@ before=$(free_kb)
 # to, and nothing else reclaims: under `~/.stado/releases/<product>/<version>/`
 # the attestation copy and retained archive of each delivered version, and
 # under `~/.stado/bin` one dated backup of the binary per install day. Each
-# Stado release adds roughly 200 MB of both per host; on 2026-09-10 the Linux
-# builder carried 3.0 GiB of the former and 1.35 GiB of the latter, and the
-# always-on mini 9.1 GiB, while every declared cleaner reported nothing to
-# take.
+# Stado release adds roughly 200 MB of both per host, so a builder or an
+# always-on host carries gigabytes of them while every declared cleaner
+# reports nothing to take.
 #
 # The version the host is running is pinned by the installed coordinate the
 # same delivery writes (`~/.stado/bin/<product>.release-version`): its

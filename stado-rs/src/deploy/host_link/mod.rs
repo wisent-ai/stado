@@ -1,9 +1,9 @@
 //! The beacon's `link` block: a host's own account of its connectivity.
 //!
-//! A connectivity gap used to leave no trace in this product. On 2026-08-19 a
-//! fleet Mac went unreachable for six minutes — 100% ping loss, ssh timing
-//! out, then `direct 10.0.0.253:41641` back with 13–215 ms — and the only
-//! evidence anywhere was the two ping packets an operator happened to send.
+//! A connectivity gap used to leave no trace in this product: a fleet host
+//! goes unreachable for minutes — full ping loss, ssh failing, then a direct
+//! path back — and the only evidence anywhere is the ping packets an
+//! operator happened to send.
 //! The beacon a host publishes about itself is where that evidence belongs:
 //! it is collected ON the host, so it can name the sleep it just came out of
 //! and the tailnet path it holds right now. No reader can see either.
