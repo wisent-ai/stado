@@ -24,7 +24,7 @@ impl BoxRuntime<'_> {
             job_state::FAILED
         }
         .to_string();
-        lease.last_error = error.chars().take(512).collect();
+        lease.last_error = error.to_string();
         if lease.state == LeaseState::Running.as_str() {
             let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
             lease.transition(LeaseState::Collecting, &owner, &token)?;
@@ -42,7 +42,7 @@ impl BoxRuntime<'_> {
         resource_released: bool,
     ) -> Result<(), BoxDispatchError> {
         lease.result_state = job_state::FAILED.to_string();
-        lease.last_error = error.chars().take(512).collect();
+        lease.last_error = error.to_string();
         let terminal = [
             LeaseState::Failed.as_str(),
             LeaseState::Releasing.as_str(),

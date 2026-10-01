@@ -141,7 +141,7 @@ impl GceClient {
         }
         let message = error.get("message").and_then(Value::as_str).unwrap_or("");
         let detail = if message.is_empty() && codes.is_empty() {
-            text.chars().take(280).collect::<String>()
+            text.to_string()
         } else {
             format!("{} {message}", codes.join(" ")).trim().to_string()
         };

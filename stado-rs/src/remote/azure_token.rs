@@ -109,7 +109,7 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
         let text = response.text().await.unwrap_or_default();
         return Err(TokenError::Auth(format!(
             "IMDS GET -> HTTP {status}: {}",
-            text.chars().take(280).collect::<String>()
+            text
         )));
     }
     let body: Value = response.json().await.unwrap_or(Value::Null);
@@ -163,7 +163,7 @@ async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenG
         let text = response.text().await.unwrap_or_default();
         return Err(TokenError::Auth(format!(
             "{item} client-credentials -> HTTP {status}: {}",
-            text.chars().take(280).collect::<String>()
+            text
         )));
     }
     let body: Value = response.json().await.unwrap_or(Value::Null);

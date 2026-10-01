@@ -130,6 +130,6 @@ pub(crate) async fn set_inference_container_running(
     Err(format!(
         "docker inference transition exited {}: {}",
         output.status,
-        detail.trim().chars().take(400).collect::<String>()
+        detail.trim()
     ))
 }

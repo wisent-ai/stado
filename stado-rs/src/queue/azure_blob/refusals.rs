@@ -15,10 +15,7 @@ impl AzureBlobBackend {
     pub(super) async fn api_error(response: reqwest::Response, op: &str) -> StorageError {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
-        StorageError::Other(format!(
-            "Azure blob {op} -> HTTP {status}: {}",
-            text.chars().take(280).collect::<String>()
-        ))
+        StorageError::Other(format!("Azure blob {op} -> HTTP {status}: {}", text))
     }
 
     /// Pass through success; anything else becomes an error via

@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use super::{oko, HandlerError, HandlerResult};
 
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
-const DIAGNOSTIC_CHARACTERS: usize = 8192;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -235,6 +234,6 @@ pub(super) async fn handle(action: &str, body: &[u8]) -> HandlerResult {
     Ok(
         json!({"hostId": host, "operation": action, "exitStatus": output.code,
         "data": data.unwrap_or(Value::Null),
-        "diagnostic": output.stderr.chars().take(DIAGNOSTIC_CHARACTERS).collect::<String>()}),
+        "diagnostic": output.stderr}),
     )
 }

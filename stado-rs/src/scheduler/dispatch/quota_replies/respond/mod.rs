@@ -132,9 +132,9 @@ pub fn respond_to_open_quota_tickets(
                 "name": name, "region": region, "ok": false,
                 "action": "error",
                 "error": if err.stderr().is_empty() {
-                    err.to_string().chars().take(240).collect::<String>()
+                    err.to_string()
                 } else {
-                    err.stderr().chars().take(240).collect::<String>()
+                    err.stderr().to_string()
                 },
             })),
         }

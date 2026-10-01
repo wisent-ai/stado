@@ -117,7 +117,7 @@ pub(crate) async fn measure(
         if !cuda_ok {
             log_fn(&format!(
                 "NVIDIA driver probe failed; GPU jobs disabled while CPU jobs remain eligible: {}",
-                cuda_detail.chars().take(160).collect::<String>()
+                cuda_detail
             ));
             *free_vram_gb = 0;
             cards.clear();

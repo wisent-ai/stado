@@ -135,7 +135,7 @@ pub(super) async fn call(parameters: Vec<(String, String)>) -> Result<String, Cm
         return Err(CmdError::click(format!(
             "Namecheap refused the request: {}",
             if errors.is_empty() {
-                body.chars().take(400).collect::<String>()
+                body.to_string()
             } else {
                 errors.join("; ")
             }

@@ -112,7 +112,7 @@ impl ArmClient {
         let code = error.get("code").and_then(Value::as_str).unwrap_or("");
         let message = error.get("message").and_then(Value::as_str).unwrap_or("");
         let detail = if code.is_empty() && message.is_empty() {
-            text.chars().take(280).collect::<String>()
+            text.to_string()
         } else {
             format!("{code} {message}").trim().to_string()
         };

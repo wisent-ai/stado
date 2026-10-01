@@ -79,12 +79,7 @@ impl BoxDispatchError {
 
 /// Python `_log_failure`.
 pub(super) fn log_failure(job_id: &str, exc: &BoxDispatchError) {
-    let text: String = exc
-        .to_string()
-        .replace(['\r', '\n'], " ")
-        .chars()
-        .take(512)
-        .collect();
+    let text: String = exc.to_string().replace(['\r', '\n'], " ");
     eprintln!("[box] job={job_id} {}: {text}", exc.type_name());
 }
 
@@ -95,7 +90,7 @@ pub(super) async fn fail_queued(
     message: &str,
 ) -> Result<(), BoxDispatchError> {
     job.state = job_state::FAILED.to_string();
-    job.error = Some(message.chars().take(512).collect());
+    job.error = Some(message.to_string());
     job.failed_at = Some(now_iso());
     store.move_job(job, "queue", "failed").await?;
     Ok(())

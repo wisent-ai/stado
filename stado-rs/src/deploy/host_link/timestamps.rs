@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 
-use super::{InterfaceChange, MAX_DETAIL_CHARS, MAX_INTERFACE_CHANGES};
+use super::{InterfaceChange, MAX_INTERFACE_CHANGES};
 
 /// One timestamp in the fleet's spelling: UTC, seconds, `Z`.
 pub(super) fn iso(stamp: DateTime<FixedOffset>) -> String {
@@ -34,13 +34,9 @@ pub(super) fn parse_stamp(raw: &str) -> Option<DateTime<FixedOffset>> {
         .find_map(|format| DateTime::parse_from_str(raw.trim(), format).ok())
 }
 
-/// One log line's own sentence, flattened and truncated.
+/// One log line's own sentence, flattened.
 pub(super) fn detail_of(raw: &str) -> String {
-    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= MAX_DETAIL_CHARS {
-        return flat;
-    }
-    flat.chars().take(MAX_DETAIL_CHARS).collect()
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Keep the newest [`MAX_INTERFACE_CHANGES`], in log order.

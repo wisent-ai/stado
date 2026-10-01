@@ -84,7 +84,7 @@ impl JanitorError {
     /// Python `_error_code`: bounded diagnostics without paths, values,
     /// or credentials.
     pub fn error_code(&self) -> String {
-        self.code.chars().take(80).collect()
+        self.code.to_string()
     }
 }
 

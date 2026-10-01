@@ -115,11 +115,7 @@ impl SnapshotSource {
             let sentence = if detail.is_empty() {
                 format!("registry authority exited with {status}")
             } else {
-                format!(
-                    "registry authority exited with {}: {}",
-                    status,
-                    detail.chars().take(4096).collect::<String>()
-                )
+                format!("registry authority exited with {}: {}", status, detail)
             };
             // Only the two transport branches publish. An authority that
             // answers with an oversized or unparseable snapshot is reachable

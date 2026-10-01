@@ -45,10 +45,6 @@ use tailnet::tailnet_path;
 /// and an unbounded list would grow the document without bound.
 const MAX_INTERFACE_CHANGES: usize = 8;
 
-/// Longest `detail` sentence kept, in characters. Matches the truncation the
-/// recovery channel already applies to captured tool output.
-const MAX_DETAIL_CHARS: usize = 160;
-
 /// Log window when the beacon interval is unset: the beacon's own default
 /// cadence, so "since the previous beacon" needs no persisted state.
 const DEFAULT_WINDOW_SECONDS: i64 = 300;
@@ -80,8 +76,8 @@ pub const SOURCE_UNSUPPORTED: &str = "unsupported";
 pub struct InterfaceChange {
     /// When the platform log recorded it (UTC, seconds).
     pub at: String,
-    /// The log line's own sentence, flattened to one line and truncated to
-    /// [`MAX_DETAIL_CHARS`]. Never reworded: a reader diagnosing a silence
+    /// The log line's own sentence, flattened to one line. Never reworded:
+    /// a reader diagnosing a silence
     /// needs the wording the machine used.
     pub detail: String,
 }

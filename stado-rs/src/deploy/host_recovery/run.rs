@@ -67,7 +67,7 @@ pub async fn recover_host_with_registry(
     if output.code != 0 {
         let detail = output.detail().trim();
         let error = match detail.lines().next_back() {
-            Some(last) => last.chars().take(300).collect::<String>(),
+            Some(last) => last.to_string(),
             None => "remote recovery failed".to_string(),
         };
         report["error"] = json!(error);

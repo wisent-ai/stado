@@ -96,7 +96,7 @@ impl VastClient {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if !status.is_success() {
-            let head: String = text.chars().take(280).collect();
+            let head: String = text.to_string();
             return Err(VastError::Api(format!(
                 "Vast.ai {method} {path} -> HTTP {}: {head}",
                 status.as_u16()

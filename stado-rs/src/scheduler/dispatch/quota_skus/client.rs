@@ -101,7 +101,7 @@ impl CloudQuotasClient {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
-            let head: String = text.chars().take(280).collect();
+            let head: String = text.to_string();
             return Err(CatalogError::Api(format!(
                 "Cloud Quotas {desc} -> HTTP {status}: {head}"
             )));
@@ -225,7 +225,7 @@ impl CloudQuotasClient {
             if !response.status().is_success() {
                 let status = response.status().as_u16();
                 let text = response.text().await.unwrap_or_default();
-                let head: String = text.chars().take(280).collect();
+                let head: String = text.to_string();
                 return Err(CatalogError::Api(format!(
                     "Cloud Quotas list_quota_infos -> HTTP {status}: {head}"
                 )));
