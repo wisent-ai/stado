@@ -79,7 +79,6 @@ async fn run_script_with_bound<'a>(
     let output = runner(CommandSpec {
         argv,
         stdin: Some(script.to_string()),
-        timeout: bound,
     })
     .await
     .map_err(DeployError)?;

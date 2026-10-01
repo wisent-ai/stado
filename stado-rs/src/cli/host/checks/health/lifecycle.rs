@@ -24,8 +24,7 @@ async fn local_systemd_properties(
         "--".to_string(),
         unit.to_string(),
     ]);
-    let mut spec = crate::deploy::CommandSpec::new(argv);
-    spec.timeout = Some(std::time::Duration::from_secs(2));
+    let spec = crate::deploy::CommandSpec::new(argv);
     let output = runner(spec).await.ok()?;
     if !output.ok() {
         return None;

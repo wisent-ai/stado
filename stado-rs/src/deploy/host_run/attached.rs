@@ -100,7 +100,6 @@ async fn forward_signal(
     let output = production_runner()(CommandSpec {
         argv,
         stdin: Some(script),
-        timeout: Some(SIGNAL_TIMEOUT),
     })
     .await
     .map_err(DeployError)?;

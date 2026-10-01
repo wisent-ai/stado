@@ -219,7 +219,6 @@ pub async fn install_first_contact(
     let spec = CommandSpec {
         argv: first_contact_argv(destination),
         stdin: Some(format!("{line}\n")),
-        timeout: None,
     };
     let output = runner(spec).await?;
     if !output.ok() {

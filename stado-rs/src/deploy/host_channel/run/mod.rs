@@ -75,7 +75,6 @@ async fn run_program_with_timeout_and_connection<'a>(
         let output = runner(CommandSpec {
             argv: program.iter().map(|word| word.to_string()).collect(),
             stdin: None,
-            timeout: Some(timeout),
         })
         .await
         .map_err(DeployError)?;
@@ -85,13 +84,9 @@ async fn run_program_with_timeout_and_connection<'a>(
     let key = ssh_key::materialize(target.channel_key()).await?;
     let connection = select_connection_with_key(target, &key, runner).await?;
     let argv = ssh_key::add_identity(ssh_program_argv(connection.destination, program), &key)?;
-    let output = runner(CommandSpec {
-        argv,
-        stdin: None,
-        timeout: Some(timeout),
-    })
-    .await
-    .map_err(DeployError)?;
+    let output = runner(CommandSpec { argv, stdin: None })
+        .await
+        .map_err(DeployError)?;
     Ok((output, UsedConnection::Ssh(connection)))
 }
 
@@ -120,7 +115,6 @@ pub async fn run_program_with_stdin_and_connection<'a>(
         let output = runner(CommandSpec {
             argv: program.iter().map(|word| word.to_string()).collect(),
             stdin: Some(stdin.to_string()),
-            timeout: Some(remote_timeout()),
         })
         .await
         .map_err(DeployError)?;
@@ -133,7 +127,6 @@ pub async fn run_program_with_stdin_and_connection<'a>(
     let output = runner(CommandSpec {
         argv,
         stdin: Some(stdin.to_string()),
-        timeout: Some(remote_timeout()),
     })
     .await
     .map_err(DeployError)?;

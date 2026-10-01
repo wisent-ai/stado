@@ -34,12 +34,7 @@ async fn probe_connection(
             };
         }
     };
-    let result = runner(CommandSpec {
-        argv,
-        stdin: None,
-        timeout: Some(CONNECTION_PROBE_TIMEOUT),
-    })
-    .await;
+    let result = runner(CommandSpec { argv, stdin: None }).await;
     match result {
         Ok(output) if output.ok() => SshConnectionProbe {
             name: connection.name.to_string(),

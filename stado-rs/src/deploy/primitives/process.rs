@@ -1,11 +1,8 @@
 //! The production runner's process execution: a locally owned process group
-//! per invocation, concurrent stdin/stdout/stderr communication, and the
-//! deadline that covers all of it.
-
-use std::time::Duration;
+//! per invocation and concurrent stdin/stdout/stderr communication, until the
+//! command exits.
 
 use super::command::{CommandOutput, CommandSpec};
-use super::helpers::py_list_repr;
 
 struct OwnedProcessGroup {
     child_id: Option<u32>,
@@ -92,8 +89,8 @@ pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, Stri
     let mut stderr = child.stderr.take().ok_or("child stderr was not piped")?;
 
     // Feed stdin and drain both output pipes concurrently, then reap the direct
-    // child. The deadline covers the whole communication, including pipe EOF:
-    // a descendant retaining stdout cannot outlive supervision indefinitely.
+    // child. The command runs until it exits; its exit code and output are the
+    // answer, and nothing ends it early.
     let communication = async {
         let mut stdout_bytes = Vec::new();
         let mut stderr_bytes = Vec::new();
@@ -113,27 +110,7 @@ pub(super) async fn run_process(spec: CommandSpec) -> Result<CommandOutput, Stri
         let status = child.wait().await?;
         Ok::<_, std::io::Error>((status, stdout_bytes, stderr_bytes))
     };
-    let completed = match spec.timeout {
-        Some(limit) => match tokio::time::timeout(limit, communication).await {
-            Ok(result) => result.map_err(|error| error.to_string())?,
-            Err(_) => {
-                let group_kill_error = owned_group.terminate();
-                if group_kill_error.is_some() {
-                    let _ = child.start_kill();
-                }
-                let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-                let argv_repr = py_list_repr(&spec.argv);
-                let detail = group_kill_error.map_or_else(String::new, |error| {
-                    format!("; locally owned process-group kill failed: {error}")
-                });
-                return Err(format!(
-                    "Command '{argv_repr}' timed out after {} seconds{detail}",
-                    limit.as_secs()
-                ));
-            }
-        },
-        None => communication.await.map_err(|error| error.to_string())?,
-    };
+    let completed = communication.await.map_err(|error| error.to_string())?;
     owned_group.disarm();
     let (status, stdout, stderr) = completed;
     Ok(CommandOutput {

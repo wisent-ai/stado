@@ -34,8 +34,7 @@ pub(super) async fn probe_within(
     argv: Vec<String>,
     cap: std::time::Duration,
 ) -> Option<CommandOutput> {
-    let mut spec = CommandSpec::new(argv);
-    spec.timeout = Some(cap);
+    let spec = CommandSpec::new(argv);
     match runner(spec).await {
         Ok(output) if output.ok() => Some(output),
         _ => None,

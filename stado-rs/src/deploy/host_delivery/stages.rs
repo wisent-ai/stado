@@ -128,13 +128,9 @@ pub(super) async fn transfer(
             source,
             format!("{}:{stage_argument}", connection.destination),
         ]);
-        let output = runner(CommandSpec {
-            argv,
-            stdin,
-            timeout: Some(TRANSFER_TIMEOUT),
-        })
-        .await
-        .map_err(DeployError)?;
+        let output = runner(CommandSpec { argv, stdin })
+            .await
+            .map_err(DeployError)?;
         drop(key);
         if !output.ok() {
             return Err(DeployError(format!(
@@ -145,13 +141,9 @@ pub(super) async fn transfer(
         }
         return Ok(());
     }
-    let output = runner(CommandSpec {
-        argv,
-        stdin,
-        timeout: Some(TRANSFER_TIMEOUT),
-    })
-    .await
-    .map_err(DeployError)?;
+    let output = runner(CommandSpec { argv, stdin })
+        .await
+        .map_err(DeployError)?;
     if !output.ok() {
         return Err(DeployError(format!(
             "{}: delivery transfer failed: {}",
