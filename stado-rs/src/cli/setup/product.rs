@@ -18,10 +18,9 @@ use crate::cli::CmdError;
 /// through `WISENT_CODESIGN_CREDENTIAL_ITEM` or `WISENT_CODESIGN_CERTIFICATE_PEM`.
 ///
 /// It is named because the machine running Stado keeps no identity of its own:
-/// on 2026-09-20 `stado product update skrzynka --surface cli` refused with
-/// "Apple signing identity is missing or ambiguous: Apple Development: Created
-/// via API (685D4U2G83)" on a Mac whose keychain held one unrelated
-/// certificate, while that exact certificate was in the vault the whole time.
+/// a `stado product update` otherwise refuses with "Apple signing identity is
+/// missing or ambiguous" on a Mac whose keychain holds one unrelated
+/// certificate, while the right certificate is in the vault the whole time.
 pub const SIGNING_CREDENTIAL_ITEM: &str = "desktop-signing-apple-development";
 
 /// One parsed `stado product` invocation. Its operations are declared once, by

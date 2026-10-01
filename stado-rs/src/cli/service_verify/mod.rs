@@ -7,14 +7,14 @@
 //! while nothing the fleet declares is actually reachable, because not one of
 //! them goes and looks.
 //!
-//! On 2026-08-11 that cost twelve days of a worker's output. The directory
-//! declared `stado-object-api` active on a laptop. The service-directory schema
-//! requires endpoints be host-relative loopback, so every other host reached it
-//! through a forward. The laptop was closed, the forward had no upstream, and
-//! the worker on the always-on Mac refused 29,616 times to claim work whose
-//! diagnostics it could not upload. Every declaration involved was valid.
-//! `config validate`, `registry validate` and `doctor` all passed throughout,
-//! on both machines, because none of them was ever about reachability.
+//! That can cost weeks of a worker's output. A directory declares the object
+//! API active on a laptop. The service-directory schema requires endpoints
+//! be host-relative loopback, so every other host reaches it through a
+//! forward. The laptop closes, the forward has no upstream, and the worker
+//! on the always-on host refuses tens of thousands of times to claim work
+//! whose diagnostics it cannot upload. Every declaration involved is valid.
+//! `config validate`, `registry validate` and `doctor` all pass throughout,
+//! on both machines, because none of them is about reachability.
 //!
 //! `identity verify` already exists for exactly this reason, one aisle over: it
 //! reads the host instead of trusting the binding, "because these identities are

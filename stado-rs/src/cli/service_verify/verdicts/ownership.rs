@@ -9,12 +9,11 @@ use crate::cli::service_verify::Finding;
 ///
 /// A probe proves a socket is alive and nothing more. That was the whole of
 /// [`OBSERVED`]'s evidence, and it is why a wrong declaration can read green
-/// indefinitely: on 2026-08-31 the directory put `brama` on
-/// `http://127.0.0.1:8080` while brama served 18080, an unrelated FastAPI job
-/// held 8080, and every sweep recorded `HTTP 404` as an answer. Seventeen
-/// hours of a documentation gate failing on a 404 followed, and no check in
-/// this binary contradicted the declaration, because none of them asked who
-/// owned the port.
+/// indefinitely: the directory puts the gateway on one loopback port while
+/// the gateway serves another, an unrelated job holds the declared port, and
+/// every sweep records `HTTP 404` as an answer. Hours of a documentation
+/// gate failing on a 404 follow, and no check in this binary contradicts the
+/// declaration, because none of them asks who owns the port.
 ///
 /// [`crate::deploy::service_serving`] already answers exactly that, by launchd
 /// label and never by argv, so this reuses it rather than growing a second
@@ -33,9 +32,9 @@ use crate::cli::service_verify::Finding;
 ///   product declares `release_control.products.<p>.targets.<host>.stable_bind`
 ///   and serves it through the rollout's stable proxy, never through the
 ///   service's own launchd job, so "the declared unit does not hold this port"
-///   is the declared design rather than a fault. Judging it by label reported
-///   `misowned` against brama on 2026-09-01 for a declaration that was right,
-///   and `verify` exited non-zero on a healthy fleet. The port is still named
+///   is the declared design rather than a fault. Judging it by label reports
+///   `misowned` for a declaration that is right, and `verify` exits non-zero
+///   on a healthy fleet. The port is still named
 ///   in the detail, so a squatter sharing it stays visible.
 ///
 /// Ownership that cannot be established leaves the row exactly as it was and

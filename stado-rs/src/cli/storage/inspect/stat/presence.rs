@@ -9,9 +9,9 @@ use crate::cli::storage::*;
 /// into `unreachable`, so a `401` refusal, a `503` boundary that is down and
 /// the resolver's own `502 upstream unavailable` all arrived as one verdict,
 /// separable only by reading a detail string -- and a caller asking "is this
-/// coordinate spent" cannot branch on prose. Two releases turned on that
-/// question on 2026-09-03 and got `unreachable` for three different causes
-/// with three different remedies. Each of these is something a reader can act
+/// coordinate spent" cannot branch on prose. A release turning on that
+/// question gets `unreachable` for three different causes with three
+/// different remedies. Each of these is something a reader can act
 /// on: fix a credential for the refused, retry the unavailable, chase the
 /// transport for the unreachable.
 pub(in crate::cli::storage) enum Presence {

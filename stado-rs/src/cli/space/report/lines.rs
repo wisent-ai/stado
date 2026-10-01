@@ -71,8 +71,8 @@ pub(super) fn print_volumes(report: &Value) {
 /// Three facts, in the order an operator needs them: what the host has, what
 /// it is measured against and whether it is over, and what the last pass
 /// actually did. A number with no watermark beside it is what this report
-/// printed before 2026-09-06, and it is why a host that could not give a
-/// runtime its heap read as healthy.
+/// used to print, and it is why a host that could not give a runtime its
+/// heap read as healthy.
 pub(super) fn print_memory(memory: &Value) {
     let policy = memory
         .get("declaration")

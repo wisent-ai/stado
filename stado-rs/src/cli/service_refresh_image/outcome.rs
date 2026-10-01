@@ -108,7 +108,7 @@ pub(super) fn verdict(
         RefreshOutcome::Unchanged => format!(
             "{unit} was restarted and the restart did not take effect: the new process is \
              executing the same {running} it was on before. launchd re-execs the declared path \
-             and the path was never the problem — pid 49727 did exactly this on 2026-09-03. The \
+             and the path was never the problem. The \
              declared file at {} is {}",
             declared.path,
             declared.describe()

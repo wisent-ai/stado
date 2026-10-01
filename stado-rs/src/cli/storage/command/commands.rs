@@ -31,10 +31,10 @@ pub enum StorageCommands {
     /// `put` stages a large body as `<key>.__stado_upload/<upload-id>/<index>`
     /// parts and composition promotes them in one step, deleting the parts as
     /// it goes. A publisher that dies between the last part and composition
-    /// leaves the parts and no object: on 2026-09-04 the `stado` 0.15.25
-    /// darwin-arm64 archive sat as 19 unfinalised parts, 57 MiB of a
-    /// coordinate nothing could read, and nothing in the product could remove
-    /// them - `rm` refuses the whole `releases` namespace as immutable, which
+    /// leaves the parts and no object: an archive sits as unfinalised parts,
+    /// tens of MiB of a coordinate nothing can read, and nothing in the
+    /// product could remove them - `rm` refuses the whole `releases` namespace
+    /// as immutable, which
     /// is true of published objects and false of staged parts. The object API
     /// already authorizes a part's DELETE against its TARGET's publisher, so
     /// the boundary for this was in place and only the command was missing.

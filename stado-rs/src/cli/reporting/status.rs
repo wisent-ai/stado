@@ -98,12 +98,10 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
     // ([`crate::models::job_state::is_terminal`]), and `uploaded` is the
     // separate terminal state an HuggingFace upload worker sets. This line
     // used to call the `completed` count "extracted (awaiting upload)", which
-    // says those jobs are waiting for something. On 2026-08-31 that sentence
-    // cost an evening: 52 completed jobs, 41 of them from 17-19 August, were
-    // read as a stalled upload queue, tied to a replica that was regrowing
-    // 15 GiB every ten minutes, and offered as one defect with three faces.
-    // The replica was the coordinator's own cross-addressed replication tick;
-    // nothing was ever awaiting an upload. A count is named after the state it
+    // says those jobs are waiting for something: completed jobs get read as
+    // a stalled upload queue, tied to whatever else is misbehaving on the
+    // host, and offered as one defect with several faces when nothing was
+    // ever awaiting an upload. A count is named after the state it
     // counts.
     println!(
         "\n{} running, {} queued, {} completed, {} uploaded, {} failed, {} cancelled",

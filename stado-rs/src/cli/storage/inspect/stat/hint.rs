@@ -13,7 +13,7 @@
 /// nobody meant to ask about, which `CmdError` classifies as `auth` and
 /// reports as "the credentials this command used were rejected".
 ///
-/// On 2026-09-01 that cost an investigation into a credential that was never
+/// That costs an investigation into a credential that was never
 /// broken: the same object answered `present` through
 /// `stado://releases/stado/0.13.20/darwin-arm64/SHA256SUMS` in the same second,
 /// and `/api/release/object` served it unauthenticated. The refusal was

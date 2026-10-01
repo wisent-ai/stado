@@ -92,8 +92,8 @@ async fn channels(json: bool) -> Result<(), CmdError> {
 /// Deliver one alert now, and say on stdout what each channel did with it.
 ///
 /// The per-channel `[alert]` lines go to stderr for a human tailing the
-/// monitor; they are not an answer a program can read, and until 2026-09-21
-/// this command exited zero even when every channel refused. A caller that
+/// monitor; they are not an answer a program can read, and this command
+/// used to exit zero even when every channel refused. A caller that
 /// pages an operator — Weles, waiting for a phone approval it cannot give
 /// itself — then recorded "the operator was told" from an exit status that
 /// could not say otherwise. Now the outcome is the exit status: nothing
