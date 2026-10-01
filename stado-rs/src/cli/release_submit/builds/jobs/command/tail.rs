@@ -130,15 +130,12 @@ upload_output_object() {
   return 1
 }
 printf '%s\n' "[release-worker-bootstrap] workdir=$work tmpdir=$TMPDIR legacy_link=$old"
+if ! ensure_legacy_link; then
+  printf '%s\n' "[release-worker-bootstrap] cannot preserve legacy link: $old" >&2
+  exit 1
+fi
 "$HOME/.stado/bin/stado" release worker --request release-request.json &
 worker_pid=$!
-while kill -0 "$worker_pid" 2>/dev/null; do
-  if ! ensure_legacy_link; then
-    printf '%s\n' "[release-worker-bootstrap] cannot preserve legacy link: $old" >&2
-    terminate_job_group
-  fi
-  /bin/sleep 2
-done
 wait "$worker_pid"
 rc=$?
 evidence_upload_failed=0
@@ -198,57 +195,37 @@ if ! ensure_legacy_link; then
   printf '%s\n' "[release-worker-bootstrap] cannot preserve legacy link: $old" >&2
   terminate_job_group
 fi
+# The legacy link stays until the job is terminal. `stado job watch --follow`
+# returns when the job's lifecycle ends, so the link is removed at that event;
+# a watch that ends without a terminal record is reported and the link is
+# left for the operator to see, not retried on a timer.
 if [ "$old" != "$work" ]; then
   (
-    while [ -d "$work" ]; do
-      if ! owned_directory "$work/tmp"; then
-        printf '%s\n' "[release-worker-bootstrap] unsafe proof directory: $work/tmp" >&2
-        break
-      fi
-      response=$(/usr/bin/mktemp "$work/tmp/stado-watch.XXXXXX") || {
-        /bin/sleep 2
-        continue
-      }
-      if ! owned_regular_file "$response" || ! /bin/chmod 600 "$response"; then
-        /bin/rm -f -- "$response"
-        /bin/sleep 2
-        continue
-      fi
-      "$HOME/.stado/bin/stado" job watch "$WC_JOB_ID" --follow --json >"$response" &
-      watch_pid=$!
-      while kill -0 "$watch_pid" 2>/dev/null; do
-        if [ ! -d "$work" ]; then
-          /bin/kill -TERM "$watch_pid" 2>/dev/null || true
-          break
-        fi
-        if ! ensure_legacy_link; then
-          if [ ! -d "$work" ]; then
-            /bin/kill -TERM "$watch_pid" 2>/dev/null || true
-            break
-          fi
-          terminate_job_group
-        fi
-        /bin/sleep 2
-      done
-      wait "$watch_pid" 2>/dev/null || true
-      if [ ! -d "$work" ]; then
-        /bin/rm -f -- "$response"
-        break
-      fi
-      if owned_regular_file "$response" &&
-        /usr/bin/grep -Eq '^[[:space:]]*"terminal":[[:space:]]*true,?[[:space:]]*$' "$response"; then
-        /bin/rm -f -- "$response"
-        printf '%s\n' "[release-worker-bootstrap] lifecycle job_id=$WC_JOB_ID terminal=true"
-        break
-      fi
+    if ! owned_directory "$work/tmp"; then
+      printf '%s\n' "[release-worker-bootstrap] unsafe proof directory: $work/tmp" >&2
+      exit 1
+    fi
+    response=$(/usr/bin/mktemp "$work/tmp/stado-watch.XXXXXX") || {
+      printf '%s\n' "[release-worker-bootstrap] cannot create the lifecycle watch file in $work/tmp" >&2
+      exit 1
+    }
+    if ! owned_regular_file "$response" || ! /bin/chmod 600 "$response"; then
       /bin/rm -f -- "$response"
-      if ! ensure_legacy_link; then
-        [ ! -d "$work" ] && break
-        terminate_job_group
-      fi
-      /bin/sleep 2
-    done
-    unlink_verified_legacy || exit 1
+      printf '%s\n' "[release-worker-bootstrap] lifecycle watch file is not owned by this user: $response" >&2
+      exit 1
+    fi
+    "$HOME/.stado/bin/stado" job watch "$WC_JOB_ID" --follow --json >"$response"
+    watch_rc=$?
+    if owned_regular_file "$response" &&
+      /usr/bin/grep -Eq '^[[:space:]]*"terminal":[[:space:]]*true,?[[:space:]]*$' "$response"; then
+      /bin/rm -f -- "$response"
+      printf '%s\n' "[release-worker-bootstrap] lifecycle job_id=$WC_JOB_ID terminal=true"
+      unlink_verified_legacy || exit 1
+      exit 0
+    fi
+    /bin/rm -f -- "$response"
+    printf '%s\n' "[release-worker-bootstrap] lifecycle watch for job_id=$WC_JOB_ID ended with status $watch_rc and no terminal record; legacy link $old kept" >&2
+    exit 1
   ) </dev/null &
 fi
 exit "$rc"

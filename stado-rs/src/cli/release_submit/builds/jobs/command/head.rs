@@ -49,8 +49,6 @@ esac
 job_pgid=$$
 terminate_job_group() {
   trap '' TERM
-  /bin/kill -TERM "-$job_pgid" 2>/dev/null || true
-  /bin/sleep 2
   /bin/kill -KILL "-$job_pgid" 2>/dev/null || true
   exit 1
 }
