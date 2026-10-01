@@ -166,10 +166,10 @@ pub fn judge(
 
     // The command each sentence names is the one live read this binary still
     // has: `stado host software` refreshed this report until the host verbs
-    // collapsed into the release capability on 2026-09-06, and for four days
-    // afterwards `release status` kept sending operators to a verb that
-    // answered `Usage: stado host <COMMAND>`. Nothing wrote a report in those
-    // four days either, which is why every host read `stale`.
+    // collapsed into the release capability, after which `release status`
+    // kept sending operators to a verb that answered `Usage: stado host
+    // <COMMAND>`. Nothing wrote a report in that time either, which is why
+    // every host read `stale`.
     match &report.freshness {
         Freshness::Never => {
             finding.fail(format!(

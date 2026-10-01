@@ -31,7 +31,7 @@ pub(in crate::fleet_shape) fn replica_addressing(result: &mut Sweep) {
     // no way to tell from the output whether the pairing was sound or simply
     // never read.
     // What the config FILE declares, beside what the resolver answers. These
-    // disagreed on this control plane on 2026-08-31: the file declares
+    // can disagree on a control plane: the file declares
     // `storage.backup.backend = local` with a path, `stado config show`
     // resolves `wc_backup_storage_backend` to empty, `stado doctor`'s backup
     // row passes with "no mandatory S3 replica" — and a `storage ls` in the

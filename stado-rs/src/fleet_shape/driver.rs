@@ -122,8 +122,8 @@ async fn host_findings(
         .map_err(|error| error.to_string())?;
     duplicate_domains(target, &loaded, &mut findings);
     process_identity(target, &loaded, &mut findings, &mut notes);
-    // The five checks added on 2026-09-02, each one a state that was found by
-    // hand during the #286 hunt and that nothing would have reported again.
+    // Five checks, each one a state that was once found by hand and that
+    // nothing would have reported again.
     let mut labels_measured = 0_usize;
     let mut runs_measured = 0_usize;
     let mut env_measured = 0_usize;

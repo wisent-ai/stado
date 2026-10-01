@@ -64,18 +64,17 @@ pub struct Registry {
     /// `TheDrummer/Cydonia-24B-v4.3` -> `erotic-roleplay`). A model with a
     /// declared purpose may only be selected by an alias whose first segment
     /// is that purpose, as a route or as a fallback. Models without an entry
-    /// are unrestricted. This exists because on 2026-08-26 the fleet's agent
-    /// aliases (`weles/agent/primary`, `wisent-backend/chat/*`) were found
-    /// pointing at an erotic-roleplay finetune: nothing in the registry said
-    /// what the model was for, so nothing could refuse the binding.
+    /// are unrestricted. This exists because agent aliases can otherwise be
+    /// found pointing at a roleplay finetune: nothing in the registry says
+    /// what the model is for, so nothing can refuse the binding.
     #[serde(default)]
     pub model_purposes: BTreeMap<String, String>,
     /// Declared purpose per alias, for the aliases whose name does not carry
     /// it. `wisent-backend/chat/primary` is the product's own roleplay chat and
     /// its first segment is the consumer, not a purpose, so the namespace rule
-    /// alone cannot express what the operator decided twice: on 2026-08-19 that
-    /// this alias must serve Cydonia, and on 2026-08-26 that Cydonia must serve
-    /// nothing agentic. Declaring the alias's purpose keeps both — an agent
+    /// alone cannot express two decisions at once: that this alias must serve
+    /// a given model, and that the model must serve nothing agentic.
+    /// Declaring the alias's purpose keeps both — an agent
     /// alias with no entry still falls back to its first segment and is still
     /// refused. Do not populate this or `model_purposes` until every host runs
     /// a release that models it: an older binary ignores the field, judges the

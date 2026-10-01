@@ -1,16 +1,14 @@
 //! What is this host actually running, and did Stado put it there?
 //!
-//! On 2026-08-18 `stado release status` printed
-//! `brama target=control-host desired=0.2.27 observed=unreported` and
-//! exited zero. A host that had never once said what it runs was rendered
-//! indistinguishable from a healthy one, in the command an operator reaches for
-//! to ask exactly that. On the same day two machines were running a skarbiec
-//! built on somebody's laptop — 0.2.1 here, 0.2.3 on control-host, neither
-//! of them in any published release — and the pre-fix binary was stripping the
-//! `brama:agent:<id>` tags off a live credential every rotation, which removed a
-//! working subscription from the fleet while the credential itself stayed valid.
-//! No screen in this fleet could name the program doing it, because no screen
-//! knew the program existed.
+//! `stado release status` used to print `desired=<version>
+//! observed=unreported` and exit zero. A host that has never once said what
+//! it runs is then indistinguishable from a healthy one, in the command an
+//! operator reaches for to ask exactly that. Machines can run a vault built
+//! on somebody's laptop, at versions no published release carries, with a
+//! pre-fix binary stripping agent tags off a live credential every rotation,
+//! which removes a working subscription from the fleet while the credential
+//! itself stays valid. No screen in the fleet can name the program doing it,
+//! because no screen knows the program exists.
 //!
 //! Three separate silences, one shape: the fleet stored **declarations** about
 //! software and never an **observation** of it. `managed_versions` says what a
@@ -56,10 +54,10 @@
 //!
 //! The report has exactly one writer, and it is the live read an operator
 //! already reaches for. `stado host software` wrote it until the host verbs
-//! collapsed into the release capability on 2026-09-06; that change deleted
-//! the verb and kept everything the verb fed, so for four days `release
-//! status` judged reports nothing could refresh and sent operators to a
-//! command that no longer parsed. [`refresh`] is the writer now, and
+//! collapsed into the release capability; that change deleted the verb and
+//! kept everything the verb fed, so `release status` judged reports nothing
+//! could refresh and sent operators to a command that no longer parsed.
+//! [`refresh`] is the writer now, and
 //! `stado release host-state` calls it on every report and every apply: one
 //! command reads the host, and both the drift verdict and this report come
 //! out of that one visit.

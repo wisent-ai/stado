@@ -18,14 +18,14 @@ use crate::targets::ComputeTarget;
 /// that artefact is versioned by content hash and the declaration names the
 /// `current` link rather than what it points at.
 ///
-/// On 2026-08-31 that blind spot held the fleet's object API — the store
-/// behind `stado://probierz` and the release ingress — on an artefact from
-/// before 2026-08-19 while the same host's `.stado/bin/stado` had been
-/// 0.13.13 since that morning, `service converge` read `in-sync`, and the
-/// plist and the process agreed with each other all day. That artefact
-/// predates #158 and #168, which is why a replica whose replication was
-/// switched off kept being written to, and it predates #206, which is why a
-/// state file an operator reads had a writer nobody could name.
+/// That blind spot can hold the fleet's object API — the store behind the
+/// evidence namespace and the release ingress — on an artefact weeks old
+/// while the same host's `.stado/bin/stado` is current, `service converge`
+/// reads `in-sync`, and the plist and the process agree with each other all
+/// day. An artefact that predates the replication guards is why a replica
+/// whose replication was switched off keeps being written to, and one that
+/// predates the state-file writer is why a state file an operator reads has
+/// a writer nobody can name.
 pub(in crate::fleet_shape) fn service_artefacts(
     target: &ComputeTarget,
     reading: &Value,

@@ -2,12 +2,12 @@
 //!
 //! The identity used to be named by id. `GITHUB_CREDENTIAL_ITEM` was the
 //! literal `"GITHUB_TOKEN"` compiled into the runner lifecycle, so replacing
-//! the credential meant editing Rust and shipping a release. On 2026-09-07
-//! that cost the fleet a day: `GET /orgs/wisent-ai/actions/runner-groups`
-//! answered HTTP 403 "You must be an org admin or have the runners and runner
-//! groups fine-grained permission" for the identity that item holds — an OAuth
-//! token carrying `read:org` where the endpoint answers only `admin:org` — and
-//! there was nowhere to say "use the other one" without a code change.
+//! the credential meant editing Rust and shipping a release. That costs a
+//! day when the organization's runner-groups endpoint answers HTTP 403 "You
+//! must be an org admin or have the runners and runner groups fine-grained
+//! permission" for the identity that item holds — an OAuth token carrying
+//! `read:org` where the endpoint answers only `admin:org` — and there is
+//! nowhere to say "use the other one" without a code change.
 //!
 //! The declaration names a Skarbiec route instead of an item. Skarbiec answers
 //! which item and field a route reaches, reading what the vault and its route

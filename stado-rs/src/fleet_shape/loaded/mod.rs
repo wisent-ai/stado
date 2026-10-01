@@ -47,22 +47,20 @@ pub(in crate::fleet_shape) fn duplicate_domains(
 /// A loaded label runs the program its own unit file declares, and runs the
 /// binary that is on disk now.
 ///
-/// Two facts, one read, and this fleet has had both of them wrong on the same
-/// host at the same time. Nothing was looking:
+/// Two facts, one read, and a fleet can have both of them wrong on the same
+/// host at the same time with nothing looking:
 ///
-/// - `com.wisent.compute.service.stado-local-control-plane` declares
-///   `stado coordinator`, and launchd was holding a `stado dashboard` from
-///   2026-08-26 under it — a command the product DELETED on 2026-08-19,
-///   whose refresh loop forced a disk-cleanup pass every two minutes. Each
-///   forced pass stamped the janitor's shared interval, so the queue agent's
-///   own pass returned `interval_noop` before reaching a single cleaner, and
-///   the always-on mac ran with disk maintenance switched off while every
-///   report that read the unit file agreed with itself.
+/// - The control-plane unit declares `stado coordinator`, and launchd holds
+///   a `stado dashboard` under it — a command the product has deleted,
+///   whose refresh loop forces a disk-cleanup pass every two minutes. Each
+///   forced pass stamps the janitor's shared interval, so the queue agent's
+///   own pass returns `interval_noop` before reaching a single cleaner, and
+///   the always-on host runs with disk maintenance switched off while every
+///   report that reads the unit file agrees with itself.
 /// - A process older than the binary it executes is running code nobody
 ///   shipped. `service converge` already answers this per service, one
-///   service at a time, by hand; on 2026-08-31 the mini had a delivery land
-///   at 07:13Z and labels still executing the previous version hours later,
-///   and no sweep said so.
+///   service at a time, by hand; a delivery can land and labels still
+///   execute the previous version hours later with no sweep saying so.
 ///
 /// Both come free with the label read the sweep already does, which is the
 /// whole reason to ask them here: the cost of the answer is zero and the cost

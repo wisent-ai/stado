@@ -47,8 +47,8 @@ pub use resources::stores::health_disagreement;
 /// The prose note beside it says the same thing in a sentence an operator
 /// reads. This is the same number in a field something else can consume: a
 /// count nobody can query is a count nobody can trend, gate or alert on, and
-/// on 2026-09-03 answering "did the prefix rule actually look at anything"
-/// meant parsing a 54,894-character string by hand.
+/// answering "did the prefix rule actually look at anything" otherwise
+/// means parsing a very long string by hand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Measurement {
     /// Stable id of the rule that did the interrogating, or of the check
