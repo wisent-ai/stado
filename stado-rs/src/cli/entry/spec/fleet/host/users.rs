@@ -30,6 +30,9 @@ pub(crate) enum HostUserCommands {
         dry_run: bool,
         #[arg(long, default_value = "gcs", value_parser = ["gcs", "local", "auto"])]
         registry_source: String,
+        /// Emit one JSON document listing every host's outcome.
+        #[arg(long)]
+        json: bool,
     },
     /// Delete USERNAME from a registry-managed host over SSH. The account,
     /// and its home directory unless --keep-home, cannot be restored, so the

@@ -42,6 +42,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
             require_password_change,
             dry_run,
             registry_source,
+            json,
         }) => {
             host::user_create(
                 &username,
@@ -53,6 +54,7 @@ async fn state(command: HostStateCommands) -> Result<(), CmdError> {
                 require_password_change,
                 dry_run,
                 &registry_source,
+                json,
             )
             .await
         }

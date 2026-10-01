@@ -55,11 +55,12 @@ pub async fn user_delete(
 }
 
 /// Read one line with terminal echo disabled (Python
-/// `click.prompt(..., hide_input=True)`).
+/// `click.prompt(..., hide_input=True)`). The prompt goes to stderr so
+/// stdout carries only the answer, which `--json` keeps parseable.
 fn prompt_hidden(prompt: &str) -> Result<String, CmdError> {
     use std::io::Write;
-    print!("{prompt}: ");
-    std::io::stdout().flush()?;
+    eprint!("{prompt}: ");
+    std::io::stderr().flush()?;
     // SAFETY: isatty/tcgetattr/tcsetattr on fd 0 with a valid termios
     // buffer; the original settings are always restored below.
     let tty = unsafe { nix::libc::isatty(nix::libc::STDIN_FILENO) } == 1;
@@ -79,7 +80,7 @@ fn prompt_hidden(prompt: &str) -> Result<String, CmdError> {
         unsafe {
             nix::libc::tcsetattr(nix::libc::STDIN_FILENO, nix::libc::TCSANOW, &original);
         }
-        println!();
+        eprintln!();
     }
     read?;
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
@@ -98,8 +99,9 @@ fn prompt_initial_password() -> Result<String, CmdError> {
     }
 }
 
-/// `stado host user create USERNAME ...` — create the account on selected
-/// registry-managed hosts over SSH (Python `host_user_create` in cli.py).
+/// `stado host user create USERNAME ... [--json]` — create the account on
+/// selected registry-managed hosts over SSH (Python `host_user_create` in
+/// cli.py): one line per host, or one JSON document listing every outcome.
 #[allow(clippy::too_many_arguments)]
 pub async fn user_create(
     username: &str,
@@ -111,6 +113,7 @@ pub async fn user_create(
     require_password_change: bool,
     dry_run: bool,
     registry_source: &str,
+    json: bool,
 ) -> Result<(), CmdError> {
     let password = if dry_run {
         None
@@ -134,6 +137,28 @@ pub async fn user_create(
     let results = provision_users(&options, &targets, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let failed = results.iter().any(|result| !result.ok());
+    if json {
+        let hosts: Vec<serde_json::Value> = results
+            .iter()
+            .map(|result| {
+                serde_json::json!({
+                    "target": result.target,
+                    "ssh_target": result.ssh,
+                    "status": result.status,
+                    "os": result.os_name,
+                    "detail": result.detail,
+                })
+            })
+            .collect();
+        let report = serde_json::json!({
+            "username": username,
+            "dry_run": dry_run,
+            "hosts": hosts,
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return if failed { Err(CmdError::silent(1)) } else { Ok(()) };
+    }
     for result in &results {
         match result.status.as_str() {
             "failed" => {
@@ -156,7 +181,7 @@ pub async fn user_create(
             }
         }
     }
-    if results.iter().any(|result| !result.ok()) {
+    if failed {
         // click.exceptions.Exit(1): the [failed] lines above are the report.
         return Err(CmdError::silent(1));
     }
