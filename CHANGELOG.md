@@ -19,5 +19,3 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
-
-- `stado database destroy NAME [--host HOST] [--json]` undoes `create --provider fleet`: it removes the managed unit that serves a postgres database, deletes the declared credential item from the owner vault, then withdraws the declaration, so a run that stops part-way can be run again. The data directory stays and is named. `remove` still withdraws only the declaration. Stado Desktop's operations list carries the same command.
