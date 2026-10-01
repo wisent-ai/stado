@@ -1,4 +1,4 @@
-//! Every `stado secrets` verb and its arguments.
+//! Every `stado credentials` verb and its arguments.
 
 use clap::Subcommand;
 

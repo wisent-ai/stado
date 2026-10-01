@@ -92,6 +92,9 @@ fn decoded(output: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+/// The `stado` command group that reads credential fields.
+const CREDENTIALS_GROUP: &str = "credentials";
+
 async fn field(
     database: &FleetDatabase,
     route: &str,
@@ -112,7 +115,7 @@ async fn field(
             database.token_file().display().to_string(),
         ),
     ];
-    let arguments = ["secrets", "get", item, "--field", field];
+    let arguments = [CREDENTIALS_GROUP, "get", item, "--field", field];
     let output = run(
         database,
         "read credential field",
@@ -124,7 +127,7 @@ async fn field(
         Error::new(
             "read credential field",
             format!(
-                "stado secrets get {item} --field {field} as {} answered an empty value",
+                "stado credentials get {item} --field {field} as {} answered an empty value",
                 database.credential_consumer
             ),
         )

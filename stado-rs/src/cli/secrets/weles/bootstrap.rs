@@ -30,7 +30,7 @@ fn generated_authority(
 /// this command kept them in a vault of their own — it created
 /// `weles-skarbiec.vault.json` under a `weles-skarbiec-owner` identity when the
 /// path was missing. That made Weles the one writer in the fleet whose
-/// credentials no other reader could open: `stado secrets ls`, the desktop
+/// credentials no other reader could open: `stado credentials ls`, the desktop
 /// console and every consumer grant resolve against the canonical store, and an
 /// item written into the side vault is absent from all of them.
 ///

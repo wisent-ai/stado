@@ -5,10 +5,10 @@
 set -eu
 
 # store
-printf '%s' "$EXAMPLE_SECRET" | stado secrets put demo-vendor
+printf '%s' "$EXAMPLE_SECRET" | stado credentials put demo-vendor
 
 # read back
-stado secrets get demo-vendor
+stado credentials get demo-vendor
 
 # what this grant may see
-stado secrets ls
+stado credentials ls

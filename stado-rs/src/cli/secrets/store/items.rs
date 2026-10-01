@@ -24,7 +24,7 @@ pub(crate) async fn put(
     let input = read_value_from_stdin()?;
     if input.is_empty() {
         return Err(CmdError::click(
-            "stdin was empty; pipe the value in (stado secrets put NAME < file)",
+            "stdin was empty; pipe the value in (stado credentials put NAME < file)",
         ));
     }
     let value: Value = serde_json::from_str(&input).unwrap_or_else(|_| json!({"value": input}));

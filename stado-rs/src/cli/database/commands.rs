@@ -32,7 +32,7 @@ pub(crate) enum DatabaseCommands {
     /// Writes `database_api.databases.<name>` through the same validated,
     /// atomic write every other configuration change uses. The credential
     /// item `<name>-database` is implied; provision its fields with
-    /// `stado secrets put <name>-database`.
+    /// `stado credentials put <name>-database`.
     Declare {
         /// Logical database name (lowercase letters, digits, dashes).
         name: String,

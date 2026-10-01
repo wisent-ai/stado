@@ -82,10 +82,6 @@ pub(crate) enum InstallationCommands {
         dry_run: bool,
     },
 
-    /// Refused: disk cleanup is the --disk-cleanup role of com.wisent.stado; names that option and `stado service ensure stado --host`.
-    #[command(name = "install-disk-cleanup")]
-    InstallDiskCleanup,
-
     /// Preview every directory directly under ~/.stado/work, including job
     /// and run areas. --apply removes them all, even when active.
     Workdirs {

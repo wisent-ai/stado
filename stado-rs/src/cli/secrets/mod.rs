@@ -1,4 +1,4 @@
-//! `stado secrets` — operator surface for the selected credential store.
+//! `stado credentials` — operator surface for the selected credential store.
 //!
 //! Secret values travel in request bodies, never argv. The backend selected by
 //! `STADO_CREDENTIALS_STORE` owns every item; changing it is completed through

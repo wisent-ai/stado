@@ -42,7 +42,7 @@ pub(super) const MANAGED_STADO: &str = ".stado/bin/stado";
 pub(super) const DEFAULT_LEDGER: &str = ".jeden/sessions";
 pub(super) const SESSION_ROOT_VARIABLE: &str = "JEDEN_SESSION_ROOT";
 /// The grant file a host reads its own Skarbiec credentials through. Jeden
-/// asks `stado secrets get` for its signing secret and gateway bearer, and
+/// asks `stado credentials get` for its signing secret and gateway bearer, and
 /// that read needs this file; a host without it gets the same credentials
 /// from the fleet, as declared job secrets its agent resolves.
 pub(super) const OPERATOR_GRANT_FILE: &str = ".stado/local-operator-skarbiec-token";

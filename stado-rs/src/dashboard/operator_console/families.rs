@@ -26,7 +26,6 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "host",
     "identity",
     "inference",
-    "install-disk-cleanup",
     "instances",
     "job",
     "machine",
@@ -48,7 +47,6 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "route",
     "schedule",
     "scratch",
-    "secrets",
     "service",
     "space",
     "status",
@@ -199,7 +197,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 "list" | "status" | "report" | "credential" | "diagnostics"
             )
             | ("schedule", "list" | "show")
-            | ("secrets", "ls" | "doctor" | "inspect-vault")
+            | ("credentials", "ls" | "doctor" | "inspect-vault")
             | (
                 "service",
                 "directory"

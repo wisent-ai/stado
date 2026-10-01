@@ -34,7 +34,7 @@ pub(crate) async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Res
                 Some("readable") | Some("empty") => {}
                 _ => {
                     return Err(CmdError::click(format!(
-                        "refusing to restore {name}: Skarbiec cannot be opened by any key here; own a readable vault first (see `stado secrets doctor`)"
+                        "refusing to restore {name}: Skarbiec cannot be opened by any key here; own a readable vault first (see `stado credentials doctor`)"
                     )))
                 }
             }

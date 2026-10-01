@@ -105,7 +105,7 @@ struct DatabaseDeclareForm: View {
             Text("Declare a database")
                 .font(WisentTypeScale.section())
                 .foregroundStyle(WisentDesign.ink)
-            Text("Writes database_api.databases into the Stado configuration through stado database declare. Provision the credential item <name>-database with stado secrets put.")
+            Text("Writes database_api.databases into the Stado configuration through stado database declare. Provision the credential item <name>-database with stado credentials put.")
                 .font(WisentTypeScale.caption())
                 .foregroundStyle(WisentDesign.muted)
 

@@ -1,10 +1,8 @@
-//! `stado disk-cleanup` / `stado install-disk-cleanup`.
+//! `stado disk-cleanup`.
 //!
 //! `disk-cleanup` runs the registry-declared cleanup pass on this machine.
-//! `install-disk-cleanup` installs nothing: the cleanup watch is the
-//! `--disk-cleanup` role of com.wisent.stado, the one Stado process on a
-//! host, and the command refuses with that option and the
-//! `stado service ensure` call that declares it.
+//! The standing cleanup watch is the `--disk-cleanup` role of
+//! com.wisent.stado, the one Stado process on a host.
 //!
 //! `--dry-run` runs
 //! [`crate::providers::local::disk_cleanup::preview_cleanup_once`] instead
@@ -94,12 +92,4 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
             })?;
         tokio::time::sleep(Duration::from_secs(interval)).await;
     }
-}
-
-/// `install-disk-cleanup`: disk cleanup is the `--disk-cleanup` role of
-/// com.wisent.stado, so no separate unit is installed.
-pub async fn install() -> Result<(), CmdError> {
-    Err(CmdError::click(
-        crate::deploy::bootstrap::one_process_refusal("disk-cleanup", "--disk-cleanup"),
-    ))
 }

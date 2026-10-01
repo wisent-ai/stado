@@ -6,7 +6,7 @@
 //! Implemented and wired to the library: `capabilities`,
 //! `submit`, `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
 //! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`, `resources`,
-//! `install-disk-cleanup`, `bootstrap`, `recovery`, the complete `host`,
+//! `bootstrap`, `recovery`, the complete `host`,
 //! `registry`, and `quota` groups, plus coordinator and dashboard control planes.
 //!
 //! The declaration of that tree, the process entry point and the failure type

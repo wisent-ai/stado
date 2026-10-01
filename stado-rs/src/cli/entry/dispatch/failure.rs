@@ -33,9 +33,8 @@ pub(super) fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         | "recovery"
         | "bootstrap"
         | "doctor"
-        | "disk-cleanup"
-        | "install-disk-cleanup" => "fleet",
-        "secrets" => "credentials",
+        | "disk-cleanup" => "fleet",
+        "credentials" => "credentials",
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",
         "azure" | "cloudflare" | "vast" | "blast-radius" => "provider",

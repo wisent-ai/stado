@@ -3,7 +3,7 @@
 //! The selector is also persisted as `credentials.store` in Stado's config.
 //! An environment override that differs from the persisted selector is a
 //! pending migration, not an empty new store: normal reads and writes fail
-//! closed until `stado secrets migrate` moves every item and commits the new
+//! closed until `stado credentials migrate` moves every item and commits the new
 //! selector.
 //!
 //! Supported backends:
@@ -156,7 +156,7 @@ pub(crate) fn selected() -> Result<Backend, SkarbiecError> {
     let requested = parse_selector(&requested_selector()?)?;
     if requested != configured {
         return Err(SkarbiecError::Deployment(format!(
-            "credential store change pending ({} -> {}); run `stado secrets migrate` before credential access",
+            "credential store change pending ({} -> {}); run `stado credentials migrate` before credential access",
             configured.locator(),
             requested.locator()
         )));
