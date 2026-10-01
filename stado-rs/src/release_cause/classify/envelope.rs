@@ -7,17 +7,15 @@
 //! point by the emitting product, the code by the shared catalogue — so a
 //! classifier keyed to them survives every rewording of the sentence.
 //!
-//! The sentences in [`super::needles`] do not. On 2026-09-19 the operator
-//! asked where keyword logic decides things in this codebase and how it
-//! should be repaired; `release doctor brama` was one of the answers, because
-//! it reads a cause by looking for English in a log tail. The same day it
+//! The sentence lists that once stood beside this reader are gone: on
+//! 2026-09-19 the operator asked where keyword logic decides things in this
+//! codebase, and `release doctor brama` was one of the answers, because it
+//! read a cause by looking for English in a log tail. The same day it
 //! reported `capability_routes_unmapped` from evidence its own register had
 //! truncated to `no capability route maps reso…`, with the resource name —
 //! the one thing an operator needs — cut off, while the envelope beside it
-//! carried that resource in `detail`.
-//!
-//! The envelope wins when it is there; the sentences remain for a log line
-//! written before a product adopted the package.
+//! carried that resource in `detail`. On 2026-10-01 the remaining sentence
+//! lists were removed; a log line without an envelope names no cause.
 
 use serde_json::Value;
 use wisent_errors::Code;

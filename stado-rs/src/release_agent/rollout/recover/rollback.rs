@@ -7,12 +7,13 @@ use crate::release_agent::rollout::serving::legacy::restore_legacy;
 use crate::release_agent::state::document::save_state;
 use crate::release_agent::state::evidence::quarantine_with_logs;
 use crate::release_agent::state::records::{HostReleaseState, RolloutPhase};
+use crate::release_cause::Refusal;
 use crate::release_control::ReleaseTargetPolicy;
 
 pub(crate) async fn rollback(
     target: &ReleaseTargetPolicy,
     state: &mut HostReleaseState,
-    reason: String,
+    reason: Refusal,
     readiness_timeout_seconds: u64,
 ) -> Result<(), String> {
     let failed = state.active.take().or_else(|| state.candidate.take());
@@ -24,7 +25,7 @@ pub(crate) async fn rollback(
             .insert(record.artifact_sha256.clone(), failure);
         reason
     } else {
-        reason
+        reason.sentence
     };
     if let Some(previous) = state.previous.take() {
         let serving = target.blue_green_serving()?;

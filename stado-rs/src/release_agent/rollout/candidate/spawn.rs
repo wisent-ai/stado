@@ -7,9 +7,11 @@ use std::time::Duration;
 
 use chrono::Utc;
 
+use crate::release_agent::rollout::processes::inventory::listener_pid;
 use crate::release_agent::rollout::serving::discover::pid_alive;
 use crate::release_agent::state::evidence::release_log;
 use crate::release_agent::state::records::ProcessRecord;
+use crate::release_cause::{QuarantineCause, Refusal};
 use crate::release_control::{self, ProductReleasePolicy, ReleaseManifest, ReleaseTargetPolicy};
 
 fn expand_home(value: &str, home: &str) -> String {
@@ -116,18 +118,40 @@ pub(crate) fn spawn_release(
 /// `Starting brama server on 127.0.0.1:18080` seconds earlier, and the record
 /// could not distinguish a dead process from a refused connection from an HTTP
 /// status. Every hypothesis had to be excluded by reading the product's source.
-pub(crate) async fn not_ready_because(record: &ProcessRecord, path: &str) -> Option<String> {
+///
+/// The cause is named here, where it is observed: a pid that is gone while
+/// another process listens on the candidate's port is a port somebody else
+/// holds; a pid that is gone with the port free is a process that vanished;
+/// a probe the HTTP client gave up on is a probe nobody answered.
+pub(crate) async fn not_ready_because(record: &ProcessRecord, path: &str) -> Option<Refusal> {
     if !pid_alive(record.pid) {
-        return Some(format!("pid {} is gone", record.pid));
+        let holder = listener_pid(Some(record.port)).filter(|pid| *pid != record.pid);
+        return Some(match holder {
+            Some(holder) => Refusal::observed(
+                QuarantineCause::StableBindOccupied,
+                format!(
+                    "pid {} is gone while pid {holder} listens on its port {}",
+                    record.pid, record.port
+                ),
+            ),
+            None => Refusal::observed(
+                QuarantineCause::ReleaseProcessVanished,
+                format!("pid {} is gone", record.pid),
+            ),
+        });
     }
     let url = format!("http://127.0.0.1:{}{}", record.port, path);
     // The probe waits for the candidate's answer: a release working through a
     // long sweep is slow, not lost, and only its own answer says which.
     match reqwest::Client::new().get(&url).send().await {
         Ok(response) if response.status().is_success() => None,
-        Ok(response) => Some(format!("{url} answered HTTP {}", response.status())),
-        Err(error) if error.is_connect() => Some(format!("{url} refused the connection")),
-        Err(error) => Some(format!("{url} failed: {error}")),
+        Ok(response) => Some(format!("{url} answered HTTP {}", response.status()).into()),
+        Err(error) if error.is_connect() => Some(format!("{url} refused the connection").into()),
+        Err(error) if error.is_timeout() => Some(Refusal::observed(
+            QuarantineCause::ReadinessProbeUnanswered,
+            format!("{url} did not answer: {error}"),
+        )),
+        Err(error) => Some(format!("{url} failed: {error}").into()),
     }
 }
 
@@ -136,13 +160,10 @@ pub(crate) async fn await_ready_because(
     record: &ProcessRecord,
     readiness_path: &str,
     seconds: u64,
-) -> Option<String> {
+) -> Option<Refusal> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     loop {
-        let reason = match not_ready_because(record, readiness_path).await {
-            None => return None,
-            Some(reason) => reason,
-        };
+        let reason = not_ready_because(record, readiness_path).await?;
         if tokio::time::Instant::now() >= deadline {
             return Some(reason);
         }
@@ -168,7 +189,7 @@ pub(crate) const LOST_READINESS_CONFIRMATION_SECONDS: u64 = 30;
 pub(crate) async fn lost_readiness_because(
     record: &ProcessRecord,
     readiness_path: &str,
-) -> Option<String> {
+) -> Option<Refusal> {
     lost_readiness_within(record, readiness_path, LOST_READINESS_CONFIRMATION_SECONDS).await
 }
 
@@ -176,13 +197,11 @@ async fn lost_readiness_within(
     record: &ProcessRecord,
     readiness_path: &str,
     seconds: u64,
-) -> Option<String> {
+) -> Option<Refusal> {
     let first = not_ready_because(record, readiness_path).await?;
     if !pid_alive(record.pid) {
         return Some(first);
     }
     let confirmed = await_ready_because(record, readiness_path, seconds).await?;
-    Some(format!(
-        "{confirmed}, for {seconds}s (first refusal: {first})"
-    ))
+    Some(confirmed.context(|said| format!("{said}, for {seconds}s (first refusal: {first})")))
 }

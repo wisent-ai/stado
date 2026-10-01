@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- A quarantine's cause is no longer guessed from English sentences in the candidate's log. The release agent names the cause where it observes it: a manifest without rollback compatibility is `rollback_compatibility_undeclared`; a candidate pid that is gone while another process listens on its port is `stable_bind_occupied`, and gone with the port free is `release_process_vanished`; a readiness request the HTTP client gave up on is `readiness_probe_unanswered`. A product's own `wisent-errors` envelope in the candidate's log still outranks what the agent saw. A log line without an envelope names no cause, so a record that only a sentence list used to classify now reads `unclassified`.

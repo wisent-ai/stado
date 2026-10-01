@@ -81,18 +81,20 @@ pub struct QuarantineRecord {
 }
 
 impl QuarantineRecord {
-    /// Record one refusal, naming its cause from the reason itself.
+    /// Record one refusal from its sentence alone: the cause is whatever a
+    /// product failure envelope inside it names.
     ///
-    /// For refusals before a process starts — a rejected rollback-compatibility
-    /// declaration or a fetch that failed — the reason is all available evidence.
+    /// For refusals before a process starts, such as a fetch that failed, the
+    /// reason is all available evidence.
     pub(crate) fn new(reason: String) -> Self {
         let classified = release_cause::classify(&reason);
-        Self {
-            reason,
-            quarantined_at: Utc::now(),
-            cause: classified.cause,
-            evidence: classified.evidence,
-        }
+        Self::classified(reason, classified)
+    }
+
+    /// Record one refusal whose cause the agent observed itself.
+    pub(crate) fn observed(refusal: release_cause::Refusal) -> Self {
+        let classified = release_cause::Classification::observed(refusal.cause, &refusal.sentence);
+        Self::classified(refusal.sentence, classified)
     }
 
     /// Record one refusal whose cause was read from more of the candidate's
@@ -106,15 +108,12 @@ impl QuarantineRecord {
         }
     }
 
-    /// The named cause this record carries, derived from its reason when the
-    /// record has none of its own.
+    /// The named cause this record carries, derived from a failure envelope
+    /// in its reason when the record has none of its own.
     ///
     /// Every record written before the agent classified anything carries no
-    /// name, so reading only the stored field reports a host's whole history
-    /// as unclassified. Re-deriving costs one pass over a string the caller
-    /// already holds and is idempotent: the stored name came from the same
-    /// classifier over a superset of the same text, so a record that really is
-    /// unclassified stays unclassified.
+    /// name. Re-deriving reads only the envelope a product wrote into the
+    /// reason, so a record whose reason holds none stays unclassified.
     ///
     /// Stored first, and that order is load-bearing: the agent classifies the
     /// whole log, while the reason kept here is a bounded tail of it, and the

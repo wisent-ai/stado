@@ -1,5 +1,4 @@
-//! Turning a recorded reason back into the lines a human wrote, so the one
-//! line that names the cause can be quoted on its own.
+//! Cleaning and bounding the line kept as a cause's evidence.
 
 /// The evidence line kept beside the cause.
 ///
@@ -64,72 +63,10 @@ pub(super) fn strip_ansi(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// The segments a decisive line could be.
-///
-/// Three separators, each one this crate writes itself. A quarantine reason is
-/// composed as `<symptom>; stderr <path>: <tail>; stdout <path>: <tail>`, and
-/// each tail is a log tail joined with `" | "`. Splitting on real newlines
-/// alone would quote the whole reason back as one "line", which is what the
-/// operator was already staring at.
-fn segments(text: &str) -> impl Iterator<Item = &str> {
-    text.lines()
-        .flat_map(|line| line.split(" | "))
-        .flat_map(|part| part.split("; "))
-        .map(unlabel)
-}
-
-/// Drop the `stderr <path>: ` label the reason puts in front of the first line
-/// of a quoted tail.
-///
-/// Written by [`crate::release_agent`] one line above where the tail is joined,
-/// so this removes a known prefix rather than guessing at one. Without it the
-/// evidence for a record whose decisive sentence is the first line of its
-/// stderr is that sentence with a file path bolted to the front, and the bound
-/// then spends a third of its width on the path.
-fn unlabel(segment: &str) -> &str {
-    let trimmed = segment.trim();
-    for label in ["stderr ", "stdout "] {
-        if let Some(rest) = trimmed.strip_prefix(label) {
-            // `<path>: <line>` — the first `": "` ends the path. A bracketed
-            // note ("[... is empty]") carries no such separator and is left
-            // whole, because the note IS the whole answer in that case.
-            if let Some((_, line)) = rest.split_once(": ") {
-                return line.trim();
-            }
-        }
-    }
-    trimmed
-}
-
-/// The narrowest segment carrying one of `needles`, bounded and trimmed.
-///
-/// Narrowest rather than first: a reason's opening segment is the symptom, and
-/// on a legacy record the first log line is glued to it, so "first match" hands
-/// back the sentence this module exists to stop quoting. The shortest segment
-/// that contains the match is the line that carries it and little else.
-///
-/// Falls back to the whole (bounded) text when no single segment holds the
-/// match, which happens when a needle straddles a join. Reporting the match
-/// without the line it came from would leave the operator with a name and no
-/// quotation.
-pub(super) fn evidence_for(text: &str, needles: &[&str]) -> String {
-    let found = segments(text)
-        .filter(|segment| {
-            let lowered = segment.to_lowercase();
-            needles.iter().any(|needle| lowered.contains(needle))
-        })
-        .min_by_key(|segment| segment.chars().count())
-        .unwrap_or_else(|| text.trim());
-    bound(found)
-}
-
+/// `text` cut to [`EVIDENCE_CHARS`], marked with `…` when cut.
 pub(in crate::release_cause) fn bound(text: &str) -> String {
     match text.char_indices().nth(EVIDENCE_CHARS) {
         None => text.to_string(),
         Some((cut, _)) => format!("{}…", &text[..cut]),
     }
-}
-
-pub(super) fn matches_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| haystack.contains(needle))
 }

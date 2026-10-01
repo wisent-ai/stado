@@ -47,10 +47,12 @@
 
 mod cause;
 mod classify;
+mod refusal;
 mod tally;
 mod wall;
 
 pub use cause::QuarantineCause;
-pub use classify::{classify, Classification};
+pub use classify::{classify, classify_observed, Classification};
+pub use refusal::Refusal;
 pub use tally::{dominant, tally};
 pub use wall::{read_routes_verify, routes_verify_detail, CausePredicate, WallVerdict};

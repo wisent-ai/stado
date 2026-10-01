@@ -19,6 +19,7 @@ use crate::release_agent::state::evidence::quarantine_with_logs;
 use crate::release_agent::state::records::{
     HostReleaseState, QuarantineRecord, RolloutPhase, NO_CANDIDATE_SPAWNED,
 };
+use crate::release_cause::{QuarantineCause, Refusal};
 use crate::release_control::{
     BlueGreenServing, DesiredRelease, ProductReleasePolicy, ReleaseArtifactRef, ReleaseControl,
     ReleaseTargetPolicy,
@@ -89,13 +90,17 @@ pub(crate) async fn promote_candidate(
             .iter()
             .any(|version| version == &active.version)
         {
-            let reason = format!(
-                "release {} does not declare rollback compatibility with {}",
-                manifest.version, active.version
+            let refusal = Refusal::observed(
+                QuarantineCause::RollbackCompatibilityUndeclared,
+                format!(
+                    "release {} does not declare rollback compatibility with {}",
+                    manifest.version, active.version
+                ),
             );
+            let reason = refusal.sentence.clone();
             state.quarantined.insert(
                 artifact.artifact_sha256.clone(),
-                QuarantineRecord::new(reason.clone()),
+                QuarantineRecord::observed(refusal),
             );
             state.phase = RolloutPhase::Quarantined;
             state.detail = reason;
@@ -127,14 +132,14 @@ pub(crate) async fn promote_candidate(
     .await
     {
         terminate(&process);
+        let timeout = policy.strategy.readiness_timeout_seconds;
         let failure = quarantine_with_logs(
             target,
             product,
             &process,
-            &format!(
-                "candidate did not become ready within {}s: {why}",
-                policy.strategy.readiness_timeout_seconds
-            ),
+            &why.context(|said| {
+                format!("candidate did not become ready within {timeout}s: {said}")
+            }),
         );
         let reason = failure.reason.clone();
         state
@@ -175,7 +180,7 @@ pub(crate) async fn promote_candidate(
             .await?;
         } else {
             state.phase = RolloutPhase::Failed;
-            state.detail = reason;
+            state.detail = reason.sentence;
             save_state(target, state)?;
         }
         return Ok(());
@@ -194,7 +199,7 @@ pub(crate) async fn promote_candidate(
             rollback(
                 target,
                 state,
-                format!("candidate failed during drain: {why}"),
+                why.context(|said| format!("candidate failed during drain: {said}")),
                 policy.strategy.readiness_timeout_seconds,
             )
             .await?;

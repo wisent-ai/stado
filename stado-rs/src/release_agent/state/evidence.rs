@@ -5,7 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use super::records::{ProcessRecord, QuarantineRecord};
-use crate::release_cause;
+use crate::release_cause::{self, Refusal};
 use crate::release_control::ReleaseTargetPolicy;
 
 /// One release's own stdout or stderr on its host.
@@ -131,12 +131,14 @@ fn log_evidence(path: &Path, lines: usize, max_chars: usize) -> LogEvidence {
 }
 
 /// Keep the same process evidence for startup, active and drain failures.
-/// The reason carries bounded tails; classification reads the full logs once.
+/// The reason carries bounded tails; the product's own failure envelope in the
+/// full logs names the cause when it wrote one, and otherwise the cause the
+/// agent observed (`why.cause`) stands.
 pub(crate) fn quarantine_with_logs(
     target: &ReleaseTargetPolicy,
     product: &str,
     record: &ProcessRecord,
-    why: &str,
+    why: &Refusal,
 ) -> QuarantineRecord {
     let stderr = log_evidence(
         &release_log_path(target, product, &record.version, "err"),
@@ -152,10 +154,9 @@ pub(crate) fn quarantine_with_logs(
         "{why}; stderr {}; stdout {}",
         stderr.rendered, stdout.rendered
     );
-    let classified = release_cause::classify(&format!(
-        "{why}\n{}\n{}",
-        stderr.body.trim_end(),
-        stdout.body.trim_end()
-    ));
+    let classified = release_cause::classify_observed(
+        &format!("{}\n{}", stderr.body.trim_end(), stdout.body.trim_end()),
+        release_cause::Classification::observed(why.cause, &why.sentence),
+    );
     QuarantineRecord::classified(reason, classified)
 }

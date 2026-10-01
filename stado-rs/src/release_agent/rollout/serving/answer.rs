@@ -11,6 +11,7 @@ use crate::release_agent::rollout::candidate::spawn::lost_readiness_because;
 use crate::release_agent::rollout::candidate::stage::marker_path;
 use crate::release_agent::state::document::proxy_state_path;
 use crate::release_agent::state::records::{HostReleaseState, ProcessRecord};
+use crate::release_cause::Refusal;
 use crate::release_control::{self, BlueGreenServing, ReleaseManifest, ReleaseTargetPolicy};
 
 /// Prove that the exact live Stado proxy routes the exact staged release and
@@ -110,7 +111,7 @@ pub(crate) async fn ensure_active_proxy(
     active: &ProcessRecord,
     state: &mut HostReleaseState,
     readiness_timeout_seconds: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     // The probe's own sentence travels with the verdict. A quarantine list
     // reading `active release lost readiness` for two digests in a row says
     // nothing about whether the candidate answered 503, refused the
@@ -119,7 +120,7 @@ pub(crate) async fn ensure_active_proxy(
     // One refused probe is not a lost release either; the confirmation window
     // lives in `lost_readiness_because`.
     if let Some(why) = lost_readiness_because(active, &serving.readiness_path).await {
-        return Err(format!("active release lost readiness: {why}"));
+        return Err(why.context(|said| format!("active release lost readiness: {said}")));
     }
     // A legacy unit can be loaded again after cutover while the stable proxy
     // remains healthy. Reassert release ownership on every reconcile, not only
@@ -148,7 +149,8 @@ pub(crate) async fn ensure_active_proxy(
         if proxy_pid != owner_pid {
             return Err(format!(
                 "stable release proxy acknowledged owner pid {owner_pid}, but exact owner is pid {proxy_pid}"
-            ));
+            )
+            .into());
         }
         proxy_pid
     };
@@ -164,5 +166,5 @@ pub(crate) async fn ensure_active_proxy(
         readiness_timeout_seconds,
     )
     .await
-    .map_err(|why| format!("stable release proxy is invalid: {why}"))
+    .map_err(|why| format!("stable release proxy is invalid: {why}").into())
 }

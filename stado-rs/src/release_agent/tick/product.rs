@@ -109,7 +109,7 @@ pub(crate) async fn reconcile_product(
                     .await?;
                 } else {
                     state.phase = RolloutPhase::Failed;
-                    state.detail = reason;
+                    state.detail = reason.sentence;
                     save_state(target, &mut state)?;
                 }
                 return Ok(state);
@@ -165,7 +165,7 @@ pub(crate) async fn reconcile_product(
                 .await?;
             } else {
                 state.phase = RolloutPhase::Failed;
-                state.detail = reason;
+                state.detail = reason.sentence;
                 save_state(target, &mut state)?;
             }
             return Ok(state);
@@ -184,7 +184,7 @@ pub(crate) async fn reconcile_product(
                     rollback(
                         target,
                         &mut state,
-                        format!("candidate failed during drain: {why}"),
+                        why.context(|said| format!("candidate failed during drain: {said}")),
                         policy.strategy.readiness_timeout_seconds,
                     )
                     .await?;

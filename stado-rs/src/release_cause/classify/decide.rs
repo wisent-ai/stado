@@ -1,16 +1,17 @@
-//! Naming the cause behind one quarantine, deepest cause first.
+//! Naming the cause behind one quarantine from what carries it as structure:
+//! the failure envelope a product wrote, or the agent's own observation.
 //!
-//! Split out of `classify/mod.rs`, which had grown past the module line cap;
-//! the vocabulary, the envelope reader and the segmenting stay in their own
-//! modules beside this one.
+//! Until 2026-10-01 a cause was also guessed from English sentences in the
+//! candidate's log tail. The operator ordered every decision made by keyword
+//! removed; a sentence list survives no rewording and says nothing a product
+//! did not already say in its envelope. What the agent observed itself — a
+//! release refused for rollback compatibility, a pid gone, a port held by
+//! another process, a probe that timed out — it now names where it observes
+//! it ([`crate::release_agent`]), and a product's own refusal is read from its
+//! `wisent-errors` envelope ([`super::envelope`]).
 
 use super::envelope;
-use super::needles::{
-    CAPABILITY_REDEMPTION_NEEDLES, CAPABILITY_ROUTES_NEEDLES, CREDENTIAL_CANNOT_SERVE_NEEDLES,
-    CREDENTIAL_STORE_NEEDLES, PROCESS_VANISHED_NEEDLES, READINESS_UNANSWERED_NEEDLES,
-    ROLLBACK_COMPATIBILITY_NEEDLES, STABLE_BIND_OCCUPIED_NEEDLES,
-};
-use super::segments::{evidence_for, matches_any, strip_ansi};
+use super::segments::{bound, strip_ansi};
 use crate::release_cause::cause::QuarantineCause;
 
 /// The cause a quarantine's evidence names, and the exact line it was read
@@ -30,84 +31,41 @@ impl Classification {
             evidence: String::new(),
         }
     }
-}
 
-/// Name the cause behind one quarantine, from the reason and whatever of the
-/// candidate's own output is available.
-///
-/// Order encodes causality, not convenience, and it is the whole correctness
-/// argument of this function. The recorded outage produced a log naming both
-/// `no value at provider:kimi:…#value` and `capability is not issued`: the
-/// empty vault field is why the capability was refused, so a classifier that
-/// checked redemption first would have reported the consequence and sent the
-/// operator to the capability lifecycle instead of the credential.
-///
-/// An envelope the emitting service wrote outranks all five: both of its
-/// keys are declared vocabulary, so it says what broke without anyone
-/// reading English, and its `detail` is the sentence the operator needs.
-/// The sentences below remain for a line written before a product adopted
-/// `wisent-errors`.
-///
-/// Otherwise the deepest thing the evidence can name wins:
-///
-/// 1. the agent's own refusal, which no log can contradict;
-/// 2. the store not opening, below which nothing can work;
-/// 3. a routed coordinate that cannot serve;
-/// 4. no route at all;
-/// 5. a capability refused when it was spent — last, because every cause above
-///    can produce this sentence as a symptom.
-///
-/// Anything else is [`QuarantineCause::Unclassified`], with no evidence line:
-/// there is no honest sentence to quote.
-pub fn classify(text: &str) -> Classification {
-    let clean = strip_ansi(text);
-    if let Some(named) = envelope::classify(&clean) {
-        return Classification {
-            cause: named.cause,
-            evidence: named.evidence,
-        };
-    }
-    let haystack = clean.to_lowercase();
-    for (needles, cause) in [
-        (
-            ROLLBACK_COMPATIBILITY_NEEDLES,
-            QuarantineCause::RollbackCompatibilityUndeclared,
-        ),
-        (
-            CREDENTIAL_STORE_NEEDLES,
-            QuarantineCause::CredentialStoreUnreadable,
-        ),
-        (
-            CREDENTIAL_CANNOT_SERVE_NEEDLES,
-            QuarantineCause::CredentialCannotServe,
-        ),
-        (
-            CAPABILITY_ROUTES_NEEDLES,
-            QuarantineCause::CapabilityRoutesUnmapped,
-        ),
-        (
-            CAPABILITY_REDEMPTION_NEEDLES,
-            QuarantineCause::CapabilityRedemptionRefused,
-        ),
-        (
-            STABLE_BIND_OCCUPIED_NEEDLES,
-            QuarantineCause::StableBindOccupied,
-        ),
-        (
-            READINESS_UNANSWERED_NEEDLES,
-            QuarantineCause::ReadinessProbeUnanswered,
-        ),
-        (
-            PROCESS_VANISHED_NEEDLES,
-            QuarantineCause::ReleaseProcessVanished,
-        ),
-    ] {
-        if matches_any(&haystack, needles) {
-            return Classification {
-                cause,
-                evidence: evidence_for(&clean, needles),
-            };
+    /// What the agent itself observed, with the sentence it observed it in.
+    pub fn observed(cause: QuarantineCause, sentence: &str) -> Self {
+        if !cause.is_classified() {
+            return Self::unclassified();
+        }
+        Self {
+            cause,
+            evidence: bound(&strip_ansi(sentence)),
         }
     }
-    Classification::unclassified()
+}
+
+/// The cause the failure envelopes in `text` name, or
+/// [`QuarantineCause::Unclassified`] when none names one this rollout knows.
+///
+/// A product's envelope is the deepest evidence there is: it is why the
+/// candidate stopped, so it outranks whatever the agent saw from outside.
+pub fn classify(text: &str) -> Classification {
+    match envelope::classify(&strip_ansi(text)) {
+        Some(named) => Classification {
+            cause: named.cause,
+            evidence: named.evidence,
+        },
+        None => Classification::unclassified(),
+    }
+}
+
+/// The product's own envelope in `logs` when it names a cause, otherwise what
+/// the agent observed.
+pub fn classify_observed(logs: &str, observed: Classification) -> Classification {
+    let named = classify(logs);
+    if named.cause.is_classified() {
+        named
+    } else {
+        observed
+    }
 }
