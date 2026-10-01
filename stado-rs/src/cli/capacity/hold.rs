@@ -1,7 +1,6 @@
 //! `stado capacity hold`: take a declared workload kind's reservation on a
-//! host for a fixed time and keep it heartbeated, then release it.
-
-use std::time::Duration;
+//! host and keep it heartbeated until the caller signals the end, then
+//! release it. The hold ends on SIGINT, SIGTERM or SIGHUP, never on a clock.
 
 use serde_json::json;
 
@@ -11,12 +10,7 @@ use crate::fleet_needs::this_requester;
 
 use super::reserve::reserve_for_workload;
 
-pub(super) async fn hold(
-    kind: &str,
-    target: &str,
-    seconds: u64,
-    json_output: bool,
-) -> Result<(), CmdError> {
+pub(super) async fn hold(kind: &str, target: &str, json_output: bool) -> Result<(), CmdError> {
     let declaration = crate::cli::workload::declared(kind)?;
     let registry = read_registry().await?;
     let target = registry
@@ -28,12 +22,7 @@ pub(super) async fn hold(
                 "target '{target}' is not declared; add it to the canonical registry"
             ))
         })?;
-    let holder = format!(
-        "{} hold {}s pid {}",
-        this_requester(),
-        seconds,
-        std::process::id()
-    );
+    let holder = format!("{} hold pid {}", this_requester(), std::process::id());
     let held = match reserve_for_workload(declaration, target, holder).await? {
         Ok(held) => held,
         Err(refusal) => return Err(refusal.into_error()),
@@ -47,13 +36,12 @@ pub(super) async fn hold(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "held": reservation,
-                "seconds": seconds,
                 "key": reservation.key(),
             }))?
         );
     } else {
         println!(
-            "holding {} on {} as {} for {seconds}s ({} cores, {} GiB, {} GiB VRAM)",
+            "holding {} on {} as {} until interrupted ({} cores, {} GiB, {} GiB VRAM)",
             reservation.kind,
             reservation.target,
             reservation.reservation_id,
@@ -62,7 +50,7 @@ pub(super) async fn hold(
             reservation.vram_gb
         );
     }
-    tokio::time::sleep(Duration::from_secs(seconds)).await;
+    until_released().await?;
     held.release()
         .await
         .map_err(|error| CmdError::click(format!("the hold could not be released: {error}")))?;
@@ -70,4 +58,30 @@ pub(super) async fn hold(
         println!("released {}", reservation.reservation_id);
     }
     Ok(())
+}
+
+/// Returns when the process receives SIGINT, SIGTERM or SIGHUP.
+#[cfg(unix)]
+async fn until_released() -> Result<(), CmdError> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let listen = |kind: SignalKind| {
+        signal(kind).map_err(|error| CmdError::click(format!("could not listen for the release signal: {error}")))
+    };
+    let mut interrupt = listen(SignalKind::interrupt())?;
+    let mut terminate = listen(SignalKind::terminate())?;
+    let mut hangup = listen(SignalKind::hangup())?;
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+        _ = hangup.recv() => {}
+    }
+    Ok(())
+}
+
+/// Returns when the process receives Ctrl-C.
+#[cfg(not(unix))]
+async fn until_released() -> Result<(), CmdError> {
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|error| CmdError::click(format!("could not listen for the release signal: {error}")))
 }

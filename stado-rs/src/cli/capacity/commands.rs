@@ -26,16 +26,15 @@ pub enum CapacityCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Take one declared workload kind's reservation on a host and hold it
-    /// for a fixed time, heartbeating it; the host publishes itself net of
-    /// it meanwhile. Ends with the reservation released.
+    /// Take one declared workload kind's reservation on a host and hold it,
+    /// heartbeating it, until this process receives SIGINT, SIGTERM or
+    /// SIGHUP; the host publishes itself net of it meanwhile. Ends with the
+    /// reservation released.
     Hold {
         #[arg(long)]
         kind: String,
         #[arg(long)]
         target: String,
-        #[arg(long)]
-        seconds: u64,
         #[arg(long)]
         json: bool,
     },
@@ -45,12 +44,9 @@ pub async fn dispatch(command: CapacityCommands) -> Result<(), CmdError> {
     match command {
         CapacityCommands::List { json } => list(json).await,
         CapacityCommands::Reservations { target, json } => held(target.as_deref(), json).await,
-        CapacityCommands::Hold {
-            kind,
-            target,
-            seconds,
-            json,
-        } => super::hold::hold(&kind, &target, seconds, json).await,
+        CapacityCommands::Hold { kind, target, json } => {
+            super::hold::hold(&kind, &target, json).await
+        }
     }
 }
 
