@@ -88,34 +88,10 @@ pub async fn run_bootstrap(
             .ok()
             .flatten()
             .is_some_and(crate::deploy::service::requires_daemon_domain);
-        // Special target: failure-fixer is a wisent-compute-internal
-        // daemon, not a registry coordinator entry. Treated like the
-        // local install path but with kind=failure-fixer so the
-        // ExecArgs come from the bash-loop branch in
-        // local_install.exec_args_for.
-        if target == "failure-fixer" {
-            return local_install::install_local(
-                "failure-fixer",
-                "failure-fixer",
-                dry_run,
-                daemon_domain,
-                runner,
-                hf_fetch,
-                echo,
-            )
-            .await;
-        }
-        if target == "watchdog" {
-            return local_install::install_local(
-                "watchdog",
-                "watchdog",
-                dry_run,
-                daemon_domain,
-                runner,
-                hf_fetch,
-                echo,
-            )
-            .await;
+        // The failure fixer and the workstation watchdog are roles of the
+        // host's one Stado process, not units of their own.
+        if let Some(flag) = separate_unit_role(target) {
+            return Err(one_process_refusal(target, flag).into());
         }
         if let Some(t) = registry.lookup(target) {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
@@ -136,16 +112,7 @@ pub async fn run_bootstrap(
         }
         if let Some(c) = registry.lookup_coordinator(target) {
             if c.runtime == "daemon" || c.runtime == "cron" {
-                return local_install::install_local(
-                    &c.name,
-                    "coordinator",
-                    dry_run,
-                    daemon_domain,
-                    runner,
-                    hf_fetch,
-                    echo,
-                )
-                .await;
+                return Err(one_process_refusal(target, "--coordinator").into());
             }
             if c.runtime == "gcp_cloud_function" {
                 return Err(format!(
@@ -179,4 +146,24 @@ pub async fn run_bootstrap(
 /// offline callers).
 pub fn empty_hf_fetcher() -> TokenFetcher {
     Arc::new(|| Box::pin(async { Ok(String::new()) }) as BoxFuture<'static, Result<String, String>>)
+}
+
+/// The `stado serve` option that runs a former standalone install target, or
+/// `None` for a target that is a registry entry.
+fn separate_unit_role(target: &str) -> Option<&'static str> {
+    match target {
+        "failure-fixer" => Some("--failure-fixer-interval-seconds"),
+        "watchdog" => Some("--watchdog"),
+        _ => None,
+    }
+}
+
+/// Why `stado bootstrap --local` no longer installs a unit for `target`, and
+/// how the role reaches the one Stado process instead.
+pub fn one_process_refusal(target: &str, flag: &str) -> String {
+    format!(
+        "'{target}' is a role of com.wisent.stado, the one Stado process on a host, not a unit \
+         of its own: declare `{flag}` in the stado service arguments and run \
+         `stado service ensure stado --host <this host>`"
+    )
 }

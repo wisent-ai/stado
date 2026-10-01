@@ -98,22 +98,10 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
     }
 }
 
-/// `install-disk-cleanup` command body (Python `install_disk_cleanup` →
-/// `install_local(..., "disk-cleanup", False, click.echo)`; dry_run is
-/// always false from this command).
+/// `install-disk-cleanup`: disk cleanup is the `--disk-cleanup` role of
+/// com.wisent.stado, so no separate unit is installed.
 pub async fn install() -> Result<(), CmdError> {
-    let runner = crate::deploy::production_runner();
-    let hf_fetch = crate::deploy::local_install::production_hf_fetcher();
-    let mut echo = |line: &str| println!("{line}");
-    crate::deploy::local_install::install_local(
-        "disk-cleanup",
-        "disk-cleanup",
-        false,
-        crate::deploy::local_install::this_host_requires_daemon_domain().await,
-        &runner,
-        &hf_fetch,
-        &mut echo,
-    )
-    .await
-    .map_err(|exc| CmdError::click(exc.to_string()))
+    Err(CmdError::click(
+        crate::deploy::bootstrap::one_process_refusal("disk-cleanup", "--disk-cleanup"),
+    ))
 }
