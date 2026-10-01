@@ -166,8 +166,13 @@ pub(crate) enum ScheduleCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Print a schedule's full JSON.
-    Show { schedule_id: String },
+    /// Print one schedule: its fields as text, or its full record with --json.
+    Show {
+        schedule_id: String,
+        /// Print the full persisted record as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Change a schedule's command, cron expression or timezone; an enabled
     /// schedule's next run is recomputed from now.
     Edit {

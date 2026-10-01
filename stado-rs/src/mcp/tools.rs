@@ -36,7 +36,7 @@ const REGISTRY: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "stado_cost_report",
-        cli: &["cost", "report"],
+        cli: &["cost", "report", "--json"],
         desc: "Per-target/per-model dollar spend from completed jobs (read-only).",
         arg: None,
     },
@@ -77,7 +77,7 @@ const REGISTRY: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "stado_schedule_show",
-        cli: &["schedule", "show"],
+        cli: &["schedule", "show", "--json"],
         desc: "Print a single schedule's full JSON by id (read-only).",
         arg: Some(ArgSpec {
             name: "schedule_id",
@@ -160,7 +160,7 @@ const REGISTRY: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "stado_vast_status",
-        cli: &["vast", "status"],
+        cli: &["vast", "status", "--json"],
         desc: "Show Vast.ai's current view of our machine (rentals, listed); read-only.",
         arg: None,
     },

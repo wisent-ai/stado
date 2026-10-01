@@ -148,8 +148,9 @@ fn unknown_schedule(schedule_id: &str) -> CmdError {
     CmdError::refused(format!("schedule {schedule_id} not found"))
 }
 
-/// `schedule show ID`: print a schedule's full JSON.
-pub async fn show(schedule_id: &str) -> Result<(), CmdError> {
+/// `schedule show ID [--json]`: one schedule's fields as text, or its full
+/// persisted record as JSON — both from the same record.
+pub async fn show(schedule_id: &str, json: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let Some(s) = read_schedule(&store, schedule_id)
         .await?
@@ -157,8 +158,8 @@ pub async fn show(schedule_id: &str) -> Result<(), CmdError> {
     else {
         return Err(unknown_schedule(schedule_id));
     };
-    println!("{}", s.to_json());
-    Ok(())
+    let record: serde_json::Value = serde_json::from_str(&s.to_json())?;
+    crate::cli::print_answer(&record, json)
 }
 
 /// `schedule rm ID`: delete a schedule (does not affect jobs it already
