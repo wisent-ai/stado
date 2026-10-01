@@ -19,3 +19,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado dns undelegate <zone>` hands a zone `stado dns delegate` moved into Cloudflare back to the registrar's own nameservers (cli.md rule 2). It is refused, naming the records and changing nothing, while Cloudflare serves a record the registrar's host list lacks; after the switch it reads the registrar back and fails if the registrar still does not serve the zone. `--json` prints the zone, record count and nameservers before and after.

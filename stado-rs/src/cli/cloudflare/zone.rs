@@ -140,3 +140,44 @@ pub(crate) async fn import_zone(
         already,
     })
 }
+
+/// Every record Cloudflare serves for `zone`, as entries the registrar's
+/// records are compared with. A zone the account does not hold is a refusal:
+/// there is nothing to take back from it.
+pub(crate) async fn zone_entries(api_credential: &str, zone: &str) -> Result<Vec<ZoneEntry>, CmdError> {
+    let (account_id, client) = account_access(api_credential).await?;
+    let found = client
+        .get(
+            "/zones",
+            &[("name", zone), ("account.id", account_id.as_str())],
+        )
+        .await?;
+    let Some(record) = result_array(&found, "Cloudflare zone lookup")?.first().cloned() else {
+        return Err(CmdError::click(format!(
+            "Cloudflare holds no zone {zone} in this account, so there is nothing to undelegate"
+        )));
+    };
+    let zone_id = required_string(&record, "id")?;
+    let listed = client
+        .get(&format!("/zones/{zone_id}/dns_records"), &[("per_page", "5000000")])
+        .await?;
+    result_array(&listed, "Cloudflare DNS record list")?
+        .iter()
+        .map(|existing| {
+            Ok(ZoneEntry {
+                name: required_string(existing, "name")?,
+                record_type: required_string(existing, "type")?,
+                content: required_string(existing, "content")?,
+                priority: existing
+                    .get("priority")
+                    .and_then(Value::as_u64)
+                    .and_then(|priority| u16::try_from(priority).ok()),
+                ttl: existing
+                    .get("ttl")
+                    .and_then(Value::as_u64)
+                    .and_then(|ttl| u32::try_from(ttl).ok())
+                    .unwrap_or(1),
+            })
+        })
+        .collect()
+}

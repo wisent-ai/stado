@@ -1,5 +1,6 @@
-//! `stado dns delegate <zone> --to cloudflare` — move a zone the registrar
-//! serves into Cloudflare, records first and nameservers last.
+//! `stado dns delegate <zone>` — move a zone the registrar serves into
+//! Cloudflare, records first and nameservers last — and its inverse,
+//! `stado dns undelegate <zone>`, which hands the zone back to the registrar.
 //!
 //! Stado could not publish a hostname by itself: the mini's router drops
 //! inbound 80 and 443, and Azure's subscription policy refuses a public
@@ -17,7 +18,7 @@
 
 use serde_json::json;
 
-use crate::cli::cloudflare::{import_zone, ZoneEntry};
+use crate::cli::cloudflare::{import_zone, zone_entries, ZoneEntry};
 use crate::cli::CmdError;
 
 use super::records::{get_hosts, Record};
@@ -160,6 +161,93 @@ pub(super) async fn delegate(
             before.join(", "),
             after.join(", "),
             imported.status
+        );
+    }
+    Ok(())
+}
+
+/// Whether two entries name the same record: Cloudflare quotes TXT content
+/// and reports names in lower case, so neither difference counts.
+fn same_entry(left: &ZoneEntry, right: &ZoneEntry) -> bool {
+    left.record_type.eq_ignore_ascii_case(&right.record_type)
+        && left.name.eq_ignore_ascii_case(&right.name)
+        && left.content.trim_matches('"').trim_end_matches('.')
+            == right.content.trim_matches('"').trim_end_matches('.')
+        && left.priority == right.priority
+}
+
+/// Point the registrar back at its own nameservers, but only when every
+/// record Cloudflare serves is also in the registrar's host list: moving the
+/// nameservers back would otherwise silently drop the records added since the
+/// zone was delegated. The refusal names them and changes nothing.
+pub(super) async fn undelegate(
+    zone: &str,
+    api_credential: &str,
+    credential: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let zone = Zone::parse(zone)?;
+    let registrar = Registrar::read(credential).await?;
+    let held: Vec<ZoneEntry> = get_hosts(&registrar, &zone)
+        .await?
+        .iter()
+        .filter_map(|record| entry(&zone, record).ok())
+        .collect();
+    let served = zone_entries(api_credential, &zone.name).await?;
+    let missing: Vec<String> = served
+        .iter()
+        .filter(|record| !held.iter().any(|kept| same_entry(kept, record)))
+        .map(|record| format!("{} {} {}", record.record_type, record.name, record.content))
+        .collect();
+    if !missing.is_empty() {
+        return Err(CmdError::click(format!(
+            "{} was not handed back: the registrar's host list lacks {} that Cloudflare serves; \
+             add them with `stado dns set` or remove them in Cloudflare, then run this again. \
+             Nothing was changed.",
+            zone.name,
+            missing.join(", ")
+        )));
+    }
+
+    let before = nameservers(&registrar, &zone).await?;
+    let mut parameters = registrar.base(&zone);
+    parameters.push((
+        "Command".into(),
+        "namecheap.domains.dns.setDefault".to_string(),
+    ));
+    call(parameters).await?;
+    let mut parameters = registrar.base(&zone);
+    parameters.push((
+        "Command".into(),
+        "namecheap.domains.dns.getList".to_string(),
+    ));
+    let listed = call(parameters).await?;
+    if !listed.contains("IsUsingOurDNS=\"true\"") {
+        return Err(CmdError::click(format!(
+            "{} was set back to the registrar's nameservers, but the registrar still answers \
+             that it does not serve the zone",
+            zone.name
+        )));
+    }
+    let after = nameservers(&registrar, &zone).await?;
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "zone": zone.name,
+                "records": held.len(),
+                "nameservers_before": before,
+                "nameservers": after,
+            }))?
+        );
+    } else {
+        println!(
+            "{}: served by the registrar again with {} records; nameservers {} -> {}",
+            zone.name,
+            held.len(),
+            before.join(", "),
+            after.join(", ")
         );
     }
     Ok(())

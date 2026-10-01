@@ -95,6 +95,24 @@ pub(crate) enum DnsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Hand a delegated zone back to the registrar's own nameservers.
+    ///
+    /// Refused, naming the records, while Cloudflare serves a record the
+    /// registrar's host list does not hold; nothing is changed then.
+    Undelegate {
+        /// Zone name, for example wisent.com.
+        zone: String,
+        /// Skarbiec item holding a Cloudflare API token in `api_key` that may
+        /// read the zone's DNS records.
+        #[arg(long, default_value = crate::cli::cloudflare::ACQUIRED_API_CREDENTIAL)]
+        api_credential: String,
+        /// Skarbiec item holding api_user, api_key, username and client_ip.
+        #[arg(long, default_value = DEFAULT_CREDENTIAL)]
+        credential: String,
+        /// Emit machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub(crate) async fn dispatch(command: DnsCommands) -> Result<(), CmdError> {
@@ -139,6 +157,12 @@ pub(crate) async fn dispatch(command: DnsCommands) -> Result<(), CmdError> {
             credential,
             json,
         } => super::delegate::delegate(&zone, &api_credential, &credential, json).await,
+        DnsCommands::Undelegate {
+            zone,
+            api_credential,
+            credential,
+            json,
+        } => super::delegate::undelegate(&zone, &api_credential, &credential, json).await,
     }
 }
 
