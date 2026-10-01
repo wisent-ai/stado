@@ -93,6 +93,13 @@ pub enum ReadCommands {
         json: bool,
     },
 
+    /// End the duplicate copies of one program on HOST that no declared
+    /// label holds.
+    ///
+    /// Every process whose command line contains `--command` is listed. A
+    /// row a declared launchd label or systemd unit holds is `kept` and never
+    /// signalled; every other row reads `would_end` until `--apply` sends it
+    /// SIGTERM.
     Reap {
         /// Registry host to reap. Required: this signals processes.
         #[arg(long)]
