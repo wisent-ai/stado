@@ -108,6 +108,7 @@ struct MemoryView: View {
                 )
             }
         }
+        .task { await refresh() }
         .sheet(item: $review) { pending in
             MemoryReviewDialog(
                 request: pending,

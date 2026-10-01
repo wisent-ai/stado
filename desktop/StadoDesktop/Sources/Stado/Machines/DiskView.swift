@@ -49,6 +49,7 @@ struct DiskView: View {
                 )
             }
         }
+        .task { await cleanupStore.refresh() }
         .sheet(isPresented: $showsCleanupDecision) {
             if let report = cleanupStore.report {
                 decisionDialog(report)

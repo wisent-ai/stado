@@ -16,34 +16,17 @@ final class CleanupStore: ObservableObject {
 
     private let client: CleanupClient
     private let defaults: UserDefaults
-    private var pollingTask: Task<Void, Never>?
     private var requestGeneration = 0
 
+    /// No background timer: the report is read when a screen that shows it
+    /// appears, when the operator asks, and after a pass the operator ran.
     init(
         defaults: UserDefaults = .standard,
-        client: CleanupClient = CleanupClient(),
-        startsPolling: Bool = true
+        client: CleanupClient = CleanupClient()
     ) {
         self.defaults = defaults
         self.client = client
         dashboardURLString = DashboardEndpointPreference.load(from: defaults)
-
-        guard startsPolling else { return }
-        pollingTask = Task { [weak self] in
-            await self?.refresh()
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(60))
-                } catch {
-                    return
-                }
-                await self?.refresh()
-            }
-        }
-    }
-
-    deinit {
-        pollingTask?.cancel()
     }
 
     var report: CleanupReport? { response?.report }

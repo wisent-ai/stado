@@ -54,6 +54,7 @@ struct CleanupMenuView: View {
         .padding(WisentDesign.Space.x5)
         .frame(width: 380)
         .background(WisentDesign.canvas)
+        .task { await store.refresh() }
     }
 
     private var header: some View {
