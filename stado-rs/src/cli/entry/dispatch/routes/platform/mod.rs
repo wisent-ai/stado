@@ -25,6 +25,22 @@ pub(crate) async fn dispatch(command: PlatformCommands) -> Result<(), CmdError> 
             ScheduleCommands::Create(args) => schedule::create(&args).await,
             ScheduleCommands::List { json } => schedule::list(json).await,
             ScheduleCommands::Show { schedule_id } => schedule::show(&schedule_id).await,
+            ScheduleCommands::Edit {
+                schedule_id,
+                command,
+                cron,
+                tz,
+                json,
+            } => {
+                schedule::edit(
+                    &schedule_id,
+                    command.as_deref(),
+                    cron.as_deref(),
+                    tz.as_deref(),
+                    json,
+                )
+                .await
+            }
             ScheduleCommands::Rm { schedule_id } => schedule::rm(&schedule_id).await,
             ScheduleCommands::Pause { schedule_id } => schedule::pause(&schedule_id).await,
             ScheduleCommands::Resume { schedule_id } => schedule::resume(&schedule_id).await,

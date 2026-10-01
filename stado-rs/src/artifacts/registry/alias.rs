@@ -116,6 +116,48 @@ impl ArtifactRegistry {
         Ok(alias_ref)
     }
 
+    /// Delete a mutable alias, only while it still targets
+    /// `expected_target`: an alias someone retargeted since it was read is
+    /// refused, never removed. The versions it pointed at are untouched.
+    /// Returns whether an alias was removed; an alias that is already
+    /// absent answers `false`, so a repeated removal changes nothing.
+    pub async fn remove_alias(
+        &self,
+        alias_ref: &ArtifactRef,
+        expected_target: &str,
+    ) -> Result<bool, RegistryError> {
+        let path = alias_path(alias_ref);
+        let Some(current) = self.store.read_text_versioned(&path).await? else {
+            return Ok(false);
+        };
+        let current_record: Value = serde_json::from_str(&current.content).map_err(|exc| {
+            ArtifactError::new(
+                "ARTIFACT_CORRUPT_ALIAS",
+                format!("invalid alias record for {alias_ref}: {exc}"),
+            )
+        })?;
+        let current_target = current_record
+            .get("target_version")
+            .map(stringify_json_scalar)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "ARTIFACT_CORRUPT_ALIAS",
+                    format!("invalid alias record for {alias_ref}: missing 'target_version'"),
+                )
+            })?;
+        if current_target != expected_target {
+            return Err(ArtifactError::new(
+                "ARTIFACT_ALIAS_CONFLICT",
+                format!(
+                    "alias {alias_ref} targets {current_target}, not expected {expected_target}; nothing was removed"
+                ),
+            )
+            .into());
+        }
+        self.store.delete_blob(&path).await?;
+        Ok(true)
+    }
+
     /// Aliases (sorted) currently pointing at this exact version. Python
     /// `ArtifactRegistry.aliases_for`.
     pub async fn aliases_for(&self, reference: &ArtifactRef) -> Result<Vec<String>, RegistryError> {

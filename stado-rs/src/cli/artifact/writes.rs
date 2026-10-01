@@ -156,3 +156,27 @@ pub(super) async fn alias_set(
     }
     Ok(())
 }
+
+pub(super) async fn alias_remove(
+    alias_ref: &str,
+    expected_target: &str,
+    as_json: bool,
+) -> Result<(), CmdError> {
+    let alias_ref = parse_ref(alias_ref)?;
+    let removed = registry()
+        .await?
+        .remove_alias(&alias_ref, expected_target)
+        .await?;
+    if as_json {
+        let value = Value::Object(Map::from_iter([
+            ("alias_ref".into(), Value::from(alias_ref.to_string())),
+            ("removed".into(), Value::from(removed)),
+        ]));
+        println!("{}", json_sorted(&value));
+    } else if removed {
+        println!("removed {alias_ref}");
+    } else {
+        println!("{alias_ref} does not exist; nothing to remove");
+    }
+    Ok(())
+}

@@ -18,7 +18,7 @@ use super::{ArtifactAliasCommands, ArtifactCommands, ArtifactImportCommands, Cmd
 
 use self::reads::{lineage, list, resolve, show};
 use self::verification::verify;
-use self::writes::{alias_set, import_activations, publish};
+use self::writes::{alias_remove, alias_set, import_activations, publish};
 
 /// Python `_artifact_call`: ArtifactError → `Error: {code}: {message}`
 /// (exit 1); storage failures print their bare message.
@@ -98,6 +98,11 @@ pub(super) async fn dispatch(sub: ArtifactCommands) -> Result<(), CmdError> {
             expected_previous,
             json,
         }) => alias_set(&target_ref, &alias, expected_previous.as_deref(), json).await,
+        ArtifactCommands::Alias(ArtifactAliasCommands::Remove {
+            alias_ref,
+            expected_target,
+            json,
+        }) => alias_remove(&alias_ref, &expected_target, json).await,
         ArtifactCommands::Verify { r#ref, full, json } => verify(&r#ref, full, json).await,
         ArtifactCommands::Lineage { r#ref, json } => lineage(&r#ref, json).await,
     }

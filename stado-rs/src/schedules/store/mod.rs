@@ -144,6 +144,39 @@ pub async fn set_schedule_enabled(
     )))
 }
 
+/// CAS-apply `edit` to a live schedule, preserving any pending occurrence
+/// lease; `None` when absent or deleted. `edit` sees the current record on
+/// every attempt, so a concurrent change is never overwritten.
+pub async fn edit_schedule(
+    store: &JobStorage,
+    schedule_id: &str,
+    edit: impl Fn(&mut Schedule),
+) -> Result<Option<Schedule>, StorageError> {
+    let path = path(schedule_id);
+    for _ in 0..16 {
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            return Ok(None);
+        };
+        let mut sched = Schedule::from_json(&versioned.content)?;
+        if sched.deleted {
+            return Ok(None);
+        }
+        edit(&mut sched);
+        match store
+            .compare_and_swap_text(&path, &versioned.version, &sched.to_json())
+            .await
+        {
+            Ok(_) => return Ok(Some(sched)),
+            Err(StorageError::StorageConflict(_)) => continue,
+            Err(StorageError::NotFound(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(StorageError::StorageConflict(format!(
+        "schedule {schedule_id} remained contended during edit"
+    )))
+}
+
 /// CAS-write a durable deletion tombstone; `false` when absent/already deleted.
 pub async fn delete_schedule(store: &JobStorage, schedule_id: &str) -> Result<bool, StorageError> {
     let path = path(schedule_id);

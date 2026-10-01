@@ -173,6 +173,58 @@ pub async fn rm(schedule_id: &str) -> Result<(), CmdError> {
     }
 }
 
+/// `schedule edit ID [--command] [--cron] [--tz]`: change what a schedule
+/// submits or when. Nothing given is a usage error; an invalid cron or a
+/// timezone the cron cannot be computed in is refused before anything is
+/// written. An enabled schedule's next run is recomputed from now unless an
+/// occurrence is already leased.
+pub async fn edit(
+    schedule_id: &str,
+    command: Option<&str>,
+    cron: Option<&str>,
+    tz: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    if command.is_none() && cron.is_none() && tz.is_none() {
+        return Err(CmdError::click(
+            "schedule edit needs at least one of --command, --cron or --tz",
+        ));
+    }
+    if let Some(cron) = cron.filter(|cron| !cron_is_valid(cron)) {
+        return Err(CmdError::click(format!("invalid cron expression: '{cron}'")));
+    }
+    let store = JobStorage::new().await?;
+    let Some(current) = read_schedule(&store, schedule_id).await? else {
+        return Err(unknown_schedule(schedule_id));
+    };
+    let new_cron = cron.unwrap_or(&current.cron).to_string();
+    let new_tz = tz.unwrap_or(&current.tz).to_string();
+    let next_due = compute_next_due(&new_cron, Utc::now(), &new_tz).map_err(|exc| {
+        CmdError::click(format!("could not compute next run ({new_tz}): {exc}"))
+    })?;
+    let next_due = isoformat_utc(next_due);
+    let edited = schedules::edit_schedule(&store, schedule_id, |sched| {
+        if let Some(command) = command {
+            sched.command = command.to_string();
+        }
+        sched.cron = new_cron.clone();
+        sched.tz = new_tz.clone();
+        if sched.enabled && sched.pending_occurrence.is_none() {
+            sched.next_due_at = next_due.clone();
+        }
+    })
+    .await?
+    .ok_or_else(|| unknown_schedule(schedule_id))?;
+    if json {
+        println!("{}", edited.to_json());
+    } else {
+        println!("edited schedule {schedule_id}");
+        println!("  cron:     {}  ({})", edited.cron, edited.tz);
+        println!("  next run: {}", edited.next_due_at);
+    }
+    Ok(())
+}
+
 /// Python `_set_enabled`.
 async fn set_enabled(schedule_id: &str, enabled: bool) -> Result<Schedule, CmdError> {
     let store = JobStorage::new().await?;

@@ -143,6 +143,17 @@ pub(crate) enum ArtifactAliasCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Delete an alias while it still targets --expected-target; the
+    /// versions it pointed at stay. An absent alias is reported, not refused.
+    Remove {
+        /// The alias as a reference whose version part is the alias name.
+        alias_ref: String,
+        /// The version the alias must still target for the removal to happen.
+        #[arg(long)]
+        expected_target: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -157,6 +168,23 @@ pub(crate) enum ScheduleCommands {
     },
     /// Print a schedule's full JSON.
     Show { schedule_id: String },
+    /// Change a schedule's command, cron expression or timezone; an enabled
+    /// schedule's next run is recomputed from now.
+    Edit {
+        schedule_id: String,
+        /// New command the schedule submits.
+        #[arg(long)]
+        command: Option<String>,
+        /// New 5-field cron expression.
+        #[arg(long)]
+        cron: Option<String>,
+        /// New IANA timezone the cron is interpreted in.
+        #[arg(long)]
+        tz: Option<String>,
+        /// Emit the persisted schedule as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete a schedule (does not affect jobs it already submitted).
     Rm { schedule_id: String },
     /// Disable a schedule without deleting it.

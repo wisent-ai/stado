@@ -52,7 +52,8 @@ pub use cron::{compute_next_due, cron_is_valid, CronError};
 pub use fire::{fire_due_schedules, fire_schedule_now};
 pub use model::{Schedule, ScheduleOccurrenceReservation};
 pub use store::{
-    delete_schedule, list_schedules, read_schedule, set_schedule_enabled, write_schedule,
+    delete_schedule, edit_schedule, list_schedules, read_schedule, set_schedule_enabled,
+    write_schedule,
 };
 
 // Shared inside the schedules tree only: each component imports what it needs

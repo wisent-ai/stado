@@ -19,3 +19,6 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado schedule edit ID [--command C] [--cron EXPR] [--tz ZONE] [--json]` changes what a schedule submits or when, through the same compare-and-swap update pause and resume use; an enabled schedule's next run is recomputed from now unless an occurrence is already leased. Naming none of the three is a usage error, and an invalid cron or a timezone the next run cannot be computed in is refused before anything is written.
+- `stado artifact alias remove ALIAS_REF --expected-target VERSION [--json]` deletes an alias while it still targets VERSION; an alias retargeted since is refused with `ARTIFACT_ALIAS_CONFLICT` and nothing is removed, the versions stay, and an absent alias answers `removed: false`.
