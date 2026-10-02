@@ -114,20 +114,35 @@ pub(crate) async fn refresh_build(
         if platform.state != PlatformRunState::Submitted {
             continue;
         }
-        let Some(job) = read_terminal_job(store, &platform.job_id).await? else {
-            continue;
-        };
         let job_id = platform.job_id.clone();
-        if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) {
-            platform.state = PlatformRunState::Failed;
-            platform.failure = Some(format!(
-                "build job {job_id} ended {}{}",
-                job.state,
-                job_output_tail(store, &job_id).await
-            ));
-            continue;
-        }
         let prefix = format!("status/{job_id}/output/");
+        // The queue's run reaper retires a settled job's record on its own
+        // cadence, and a status read on another host's cadence may come
+        // after it. The job's receipt outlives the record (the reaper keeps
+        // a release job's output), and it is what every publish verifies, so
+        // a job with no record and a receipt is judged by the receipt. A job
+        // with neither is still queued or running.
+        match read_terminal_job(store, &job_id).await? {
+            Some(job) if matches!(job.state.as_str(), job_state::FAILED | job_state::CANCELLED) => {
+                platform.state = PlatformRunState::Failed;
+                platform.failure = Some(format!(
+                    "build job {job_id} ended {}{}",
+                    job.state,
+                    job_output_tail(store, &job_id).await
+                ));
+                continue;
+            }
+            Some(_) => {}
+            None => {
+                if store
+                    .read_bytes(&format!("{prefix}receipt.json"))
+                    .await?
+                    .is_none()
+                {
+                    continue;
+                }
+            }
+        }
         let receipt = match store.read_bytes(&format!("{prefix}receipt.json")).await? {
             Some(bytes) => serde_json::from_slice::<BuildReceipt>(&bytes).map_err(|error| {
                 CmdError::click(format!(
