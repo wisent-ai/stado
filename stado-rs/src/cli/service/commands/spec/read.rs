@@ -147,12 +147,12 @@ pub enum ReadCommands {
         /// reported as baseline and never as arrivals.
         #[arg(long)]
         command: String,
-        /// How long to watch, in seconds.
-        #[arg(long, default_value_t = 300)]
+        /// How long to watch, in seconds. No duration is assumed.
+        #[arg(long)]
         seconds: u64,
-        /// Gap between samples, in milliseconds. The default catches a parent
-        /// that lives about a second; tighten it for one that does not.
-        #[arg(long, default_value_t = 1000)]
+        /// Gap between samples, in milliseconds: shorter than the life of
+        /// the parent being caught. No gap is assumed.
+        #[arg(long)]
         interval_ms: u64,
         #[arg(long)]
         json: bool,
