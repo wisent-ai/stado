@@ -12,11 +12,14 @@ pub(super) async fn list(json_output: bool) -> Result<(), CmdError> {
     let databases = crate::config::database_api_databases()
         .map_err(|problems| CmdError::click(problems.join("; ")))?;
     let document = registry_document().await?;
-    let routes = directory_routes(&document)?;
+    let routes = document
+        .get("service_directory")
+        .map(|_| directory_routes(&document))
+        .transpose()?;
 
     let mut rows = Vec::new();
     for (name, database) in databases {
-        let route = routes.get(name);
+        let route = routes.and_then(|routes| routes.get(name));
         rows.push(json!({
             "database": name,
             "engine": database.engine(),

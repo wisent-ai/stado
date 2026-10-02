@@ -28,9 +28,11 @@ fn validate_snapshot(payload: SnapshotPayload) -> Result<(Value, String, u64), S
     ))
 }
 
-pub(crate) async fn read_local_snapshot(
+/// Read the selected registry store without requiring a service directory.
+/// Each caller validates the document for the surface that consumes it.
+pub(crate) async fn read_local_document(
     store: &RegistryStore,
-) -> Result<(Value, String, u64), CmdError> {
+) -> Result<(Value, String), CmdError> {
     let blob = store
         .read_versioned()
         .await
@@ -44,8 +46,15 @@ pub(crate) async fn read_local_snapshot(
         .ok_or_else(|| CmdError::click(format!("no registry document at {}", store.location())))?;
     let document: Value = serde_json::from_str(&blob.content)
         .map_err(|error| CmdError::click(format!("invalid registry JSON: {error}")))?;
+    Ok((document, blob.version))
+}
+
+pub(crate) async fn read_local_snapshot(
+    store: &RegistryStore,
+) -> Result<(Value, String, u64), CmdError> {
+    let (document, store_version) = read_local_document(store).await?;
     validate_snapshot(SnapshotPayload {
-        store_version: blob.version,
+        store_version,
         document,
     })
     .map_err(CmdError::click)

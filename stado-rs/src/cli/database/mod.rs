@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::targets::RegistryStore;
 
-use super::resolver::read_local_snapshot;
+use super::resolver::read_local_document;
 use super::CmdError;
 
 mod commands;
@@ -150,10 +150,15 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
 }
 
 async fn registry_document() -> Result<Value, CmdError> {
-    let store = Arc::new(RegistryStore::open().await?);
-    let (bootstrap, _, _) = read_local_snapshot(&store).await?;
+    let store = RegistryStore::open().await?;
+    let (bootstrap, _) = read_local_document(&store).await?;
+    crate::targets::validate_registry(&bootstrap)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if bootstrap.get("service_directory").is_none() {
+        return Ok(bootstrap);
+    }
     let target = super::resolver::current_target(&bootstrap).map_err(CmdError::click)?;
-    let source = super::resolver::snapshot_source(Some(store), &bootstrap, &target)
+    let source = super::resolver::snapshot_source(Some(Arc::new(store)), &bootstrap, &target)
         .map_err(CmdError::click)?;
     let (document, _, _) = source
         .fetch(crate::monitor::host_silence::READER_CLI)

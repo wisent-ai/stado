@@ -1,14 +1,14 @@
-//! The database plane through the real `stado` binary, against an isolated
-//! configuration file under Cargo's target directory: a database of any
-//! engine is declared, listed with its engine, removed and confirmed gone,
-//! and `create --provider external` refuses a URL that disagrees with
-//! `--engine` or names a sqlite file, before anything reaches a vault.
+//! The database plane through the real `stado` binary, against an initialized
+//! configuration and HOME under Cargo's target directory. Databases of any
+//! engine are declared, listed and removed without an operator registry.
+//! External URL refusals happen before anything reaches a vault.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
+mod placement;
 
 struct Isolated {
     directory: PathBuf,
@@ -25,14 +25,22 @@ impl Isolated {
         }
         std::fs::create_dir_all(&directory).expect("create the isolated directory");
         let config = directory.join("stado.config.json");
-        std::fs::write(&config, "{}\n").expect("write the empty configuration");
-        Self { directory, config }
+        let isolated = Self { directory, config };
+        let output = isolated.run(&["config", "init"], None);
+        assert!(
+            output.status.success(),
+            "initialize the isolated profile: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        isolated
     }
 
     fn run(&self, arguments: &[&str], input: Option<&str>) -> Output {
         let mut child = Command::new(env!("CARGO_BIN_EXE_stado"))
             .args(arguments)
             .env("STADO_CONFIG", &self.config)
+            .env("HOME", &self.directory)
+            .current_dir(&self.directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -234,6 +242,8 @@ fn a_refused_registry_connection_keeps_its_transport_cause_and_failure_class() {
             "--json",
         ])
         .env("STADO_CONFIG", &isolated.config)
+        .env("HOME", &isolated.directory)
+        .current_dir(&isolated.directory)
         .env("WC_STORAGE_BACKEND", "stado")
         .env("WC_STADO_STORAGE_URL", &origin)
         .env("WC_STADO_STORAGE_TOKEN_FILE", &token)

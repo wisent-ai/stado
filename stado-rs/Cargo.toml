@@ -117,6 +117,10 @@ name = "database"
 path = "../tests/database/lifecycle.rs"
 
 [[test]]
+name = "config-init"
+path = "../tests/config/init.rs"
+
+[[test]]
 name = "desktop-api-journey"
 path = "../tests/desktop_api/journey.rs"
 

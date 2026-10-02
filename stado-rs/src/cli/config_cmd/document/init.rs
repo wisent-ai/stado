@@ -68,12 +68,17 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// `config init`: write the commented template to ~/.stado/config.json.
+/// `config init`: write the template to STADO_CONFIG or ~/.stado/config.json.
 pub(in crate::cli::config_cmd) fn init() -> Result<(), CmdError> {
     let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
-    let path = std::path::Path::new(&home)
-        .join(".stado")
-        .join("config.json");
+    let selected = std::env::var(config_file::FILE_ENV).unwrap_or_default();
+    let path = if selected.trim().is_empty() {
+        std::path::Path::new(&home)
+            .join(".stado")
+            .join("config.json")
+    } else {
+        config_file::expand_tilde(selected.trim())
+    };
     if path.exists() {
         return Err(CmdError::click(format!(
             "config file already exists: {}",
