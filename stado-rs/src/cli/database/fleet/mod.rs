@@ -8,8 +8,9 @@
 //! credential item `<name>-database` into the owner vault; for postgres it
 //! also installs the managed unit `<name>-database` that serves it.
 //!
-//! SQLite has no listener: its item names the host and the file, and only a
-//! consumer on that host can open it. Postgres is served over TLS; see
+//! SQLite has no listener: its item names the host and the file, and its
+//! `pooler_url` is `sqlite://<file>`, so `stado_database::connect` opens it
+//! for a consumer on that host. Postgres is served over TLS; see
 //! [`postgres`].
 
 use serde_json::{json, Value};
@@ -175,7 +176,15 @@ async fn place_sqlite(
     }
     let item = format!("{name}-database");
     let path = file.display().to_string();
-    let fields = json!({ "engine": "sqlite", "provider": "fleet", "host": here, "path": path });
+    // `pooler_url` is the field every consumer reads; a file has no server to
+    // verify, so the item carries no `ca_certificate`.
+    let fields = json!({
+        "engine": "sqlite",
+        "provider": "fleet",
+        "host": here,
+        "path": path,
+        "pooler_url": format!("sqlite://{path}"),
+    });
     let context = json!({ "engine": "sqlite", "provider": "fleet", "product": name });
     if let Err(error) = owner.store(&item, "bundle", &fields, &context).await {
         // A file this run created and no item names is a database nothing

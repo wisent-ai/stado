@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- `stado_database::connect` opens a fleet SQLite database. `stado database place` now writes `pooler_url` (`sqlite://<file>`) into a SQLite item beside its host and path, and the library reads it without a certificate, since a file has no server to verify. Before, a SQLite database Stado created had no field any consumer could read. A missing file is refused naming the file and that it opens only on the host that holds it. `<PRODUCT>_DATABASE_URL=sqlite://…` needs no `_CA_FILE`.

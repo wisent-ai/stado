@@ -51,8 +51,8 @@ fn stopped() -> Error {
     Error::Conversion("the fleet database task stopped before it answered".to_owned())
 }
 
-/// The statement in the dialect of the server it runs on: Postgres for every
-/// database Stado places, MySQL for an external MySQL server.
+/// The statement in the dialect of the database it runs on: Postgres, MySQL
+/// or SQLite, as the connection's backend says.
 fn statement(backend: DbBackend, sql: &str, params: impl Params) -> SeaStatement {
     SeaStatement::from_sql_and_values(backend, sql, params.values())
 }

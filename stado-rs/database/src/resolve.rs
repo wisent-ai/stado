@@ -13,12 +13,17 @@ use crate::{Error, FleetDatabase};
 
 /// Where a resolved database is reached: the credential item that holds it,
 /// its connection URL, and the certificate authority the server is verified
-/// against.
+/// against. A `sqlite://` file has no server, so its certificate is empty.
 #[derive(Clone, Debug)]
 pub struct Credentials {
     pub item: String,
     pub pooler_url: String,
     pub ca_certificate: String,
+}
+
+/// A URL naming a SQLite file rather than a server to verify.
+pub(crate) fn is_file_url(url: &str) -> bool {
+    url.starts_with("sqlite:")
 }
 
 #[derive(Deserialize)]
@@ -142,15 +147,23 @@ async fn field(
 
 /// The database a product names in its own environment, for a machine
 /// without Stado or Skarbiec: `<PRODUCT>_DATABASE_URL` (dashes become
-/// underscores, letters upper case) and `<PRODUCT>_DATABASE_CA_FILE`, the
-/// PEM bundle the server is verified against. Nothing when the URL is unset;
-/// a refusal naming the variable when it is set and its certificate is not.
+/// underscores, letters upper case) and, for a server, `<PRODUCT>_DATABASE_CA_FILE`,
+/// the PEM bundle it is verified against. Nothing when the URL is unset; a
+/// refusal naming the variable when a server's certificate is not set.
 fn from_environment(database: &FleetDatabase) -> Option<Result<Credentials, Error>> {
     let prefix = database.name.to_uppercase().replace('-', "_");
     let url_variable = format!("{prefix}_DATABASE_URL");
     let url = std::env::var(&url_variable)
         .ok()
         .filter(|value| !value.trim().is_empty())?;
+    let url = url.trim().to_string();
+    if is_file_url(&url) {
+        return Some(Ok(Credentials {
+            item: url_variable,
+            pooler_url: url,
+            ca_certificate: String::new(),
+        }));
+    }
     let ca_variable = format!("{prefix}_DATABASE_CA_FILE");
     let Some(ca_file) = std::env::var_os(&ca_variable).filter(|value| !value.is_empty()) else {
         return Some(Err(Error::new(
@@ -171,7 +184,7 @@ fn from_environment(database: &FleetDatabase) -> Option<Result<Credentials, Erro
             })
             .map(|ca_certificate| Credentials {
                 item: url_variable,
-                pooler_url: url.trim().to_string(),
+                pooler_url: url,
                 ca_certificate,
             }),
     )
@@ -210,7 +223,11 @@ pub(crate) async fn credentials(database: &FleetDatabase) -> Result<Credentials,
     .await?;
     let item = resolution.credential_item;
     let pooler_url = field(database, &route.url, &item, "pooler_url").await?;
-    let ca_certificate = field(database, &route.url, &item, "ca_certificate").await?;
+    let ca_certificate = if is_file_url(&pooler_url) {
+        String::new()
+    } else {
+        field(database, &route.url, &item, "ca_certificate").await?
+    };
     Ok(Credentials {
         item,
         pooler_url,

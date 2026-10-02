@@ -17,9 +17,10 @@ pub mod sync;
 
 use std::path::PathBuf;
 
-use sea_orm::{DatabaseConnection, SqlxMySqlConnector, SqlxPostgresConnector};
+use sea_orm::{DatabaseConnection, SqlxMySqlConnector, SqlxPostgresConnector, SqlxSqliteConnector};
 use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 /// The Stado-side names of one product's database.
 #[derive(Clone, Debug)]
@@ -92,20 +93,22 @@ pub async fn credentials(database: &FleetDatabase) -> Result<Credentials, Error>
 }
 
 /// Resolve the product's fleet database through Stado and Skarbiec and open
-/// a SeaORM connection to it over TLS verified against the provider's root.
-/// The URL's scheme says which server it is: `postgres://` or
-/// `postgresql://` is Postgres, `mysql://` is MySQL. Any other engine is
+/// a SeaORM connection to it. The URL's scheme says which database it is:
+/// `postgres://` or `postgresql://` is Postgres and `mysql://` is MySQL, both
+/// over TLS verified against the provider's root; `sqlite://<file>` is a
+/// fleet SQLite file, opened on the host that holds it. Any other engine is
 /// refused with its scheme named; it is opened from [`credentials`].
 pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Error> {
     let found = resolve::credentials(database).await?;
     match found.pooler_url.split_once("://").map(|(scheme, _)| scheme) {
         Some("mysql") => return connect_mysql(database, found).await,
+        Some("sqlite") => return connect_sqlite(database, found).await,
         Some("postgres" | "postgresql") => {}
         scheme => {
             return Err(Error::new(
                 "read pooler_url",
                 format!(
-                    "{}#pooler_url is a {} URL; connect opens postgres and mysql through SeaORM, so open this engine with its own driver from stado_database::credentials",
+                    "{}#pooler_url is a {} URL; connect opens postgres, mysql and sqlite through SeaORM, so open this engine with its own driver from stado_database::credentials",
                     found.item,
                     scheme.unwrap_or("schemeless")
                 ),
@@ -167,4 +170,33 @@ async fn connect_mysql(
             )
         })?;
     Ok(SqlxMySqlConnector::from_sqlx_mysql_pool(pool))
+}
+
+/// A fleet SQLite database is a file on one host. It is opened as it is,
+/// never created here: a missing file means this is not the host that holds
+/// it, and the refusal names the file.
+async fn connect_sqlite(
+    database: &FleetDatabase,
+    found: resolve::Credentials,
+) -> Result<DatabaseConnection, Error> {
+    let options: SqliteConnectOptions = found.pooler_url.parse().map_err(|error| {
+        Error::new(
+            "read pooler_url",
+            format!("{}#pooler_url is not a SQLite URL: {error}", found.item),
+        )
+    })?;
+    let file = options.get_filename().display().to_string();
+    let pool = SqlitePoolOptions::new()
+        .connect_with(options.create_if_missing(false))
+        .await
+        .map_err(|error| {
+            Error::new(
+                "connect",
+                format!(
+                    "opening {} at {file} through {}#pooler_url failed (a fleet SQLite file opens only on the host that holds it): {error}",
+                    database.name, found.item
+                ),
+            )
+        })?;
+    Ok(SqlxSqliteConnector::from_sqlx_sqlite_pool(pool))
 }
