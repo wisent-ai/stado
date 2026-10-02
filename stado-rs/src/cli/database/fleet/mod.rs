@@ -34,6 +34,12 @@ pub(super) async fn create(
     json_output: bool,
 ) -> Result<(), CmdError> {
     checked(name, engine)?;
+    let declaration = super::verbs::prepare_declaration(
+        name,
+        engine,
+        &["read".to_string(), "write".to_string()],
+        consumers,
+    )?;
     let (owner, here) = crate::cli::release_catalog::fleet_hosts().await?;
     let host = host.map(str::to_string).unwrap_or(owner);
     let placed = if host == here {
@@ -58,12 +64,7 @@ pub(super) async fn create(
             ))
         })?
     };
-    let declared = super::verbs::declaration(
-        name,
-        engine,
-        &["read".to_string(), "write".to_string()],
-        consumers,
-    )?;
+    let declared = declaration.persist()?;
     let outcome = json!({
         "created": name,
         "provider": "fleet",

@@ -93,6 +93,12 @@ pub(super) async fn create(
             "--provider external brings a server; a sqlite file is created with --provider fleet",
         ));
     }
+    let declaration = super::verbs::prepare_declaration(
+        name,
+        engine,
+        &["read".to_string(), "write".to_string()],
+        consumers,
+    )?;
     let certificate = std::fs::read_to_string(ca_certificate).map_err(|error| {
         CmdError::click(format!(
             "--ca-certificate {}: {error}",
@@ -116,12 +122,7 @@ pub(super) async fn create(
     });
     let context = json!({ "engine": engine, "provider": "external", "product": name });
     owner.store(&item, "bundle", &fields, &context).await?;
-    let declared = super::verbs::declaration(
-        name,
-        engine,
-        &["read".to_string(), "write".to_string()],
-        consumers,
-    )?;
+    let declared = declaration.persist()?;
     let outcome = json!({
         "created": name,
         "provider": "external",

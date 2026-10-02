@@ -158,11 +158,12 @@ pub(in crate::cli::database) async fn create(
     accept_monthly_usd: Option<u64>,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    if !super::super::writes::canonical_name(name) {
-        return Err(CmdError::usage(
-            "NAME must be lowercase letters, digits and dashes",
-        ));
-    }
+    let declaration = super::super::verbs::prepare_declaration(
+        name,
+        "postgres",
+        &["read".to_string(), "write".to_string()],
+        consumers,
+    )?;
     let token = field(TOKEN_ITEM, "value").await?;
     let listed = call(reqwest::Method::GET, "/projects", &token, None).await?;
     let projects = listed.as_array().cloned().unwrap_or_default();
@@ -212,12 +213,7 @@ pub(in crate::cli::database) async fn create(
     let context = json!({ "engine": "postgres", "provider": "supabase", "product": name });
     owner.store(&item, "bundle", &fields, &context).await?;
 
-    let declared = super::super::verbs::declaration(
-        name,
-        "postgres",
-        &["read".to_string(), "write".to_string()],
-        consumers,
-    )?;
+    let declared = declaration.persist()?;
     let outcome = json!({
         "created": name,
         "project_ref": reference,

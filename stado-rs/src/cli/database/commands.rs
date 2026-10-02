@@ -71,6 +71,11 @@ pub(crate) enum DatabaseCommands {
     /// and the database is declared for its consumers. A fleet or supabase
     /// database of that name is reused, never duplicated; an external one is
     /// re-pointed at the URL given.
+    ///
+    /// The database name and consumer identities are checked before placement,
+    /// provider requests or credential writes. An invalid name or consumer
+    /// identity exits with code 2 and names the rejected value before any
+    /// database is created or its credential item is rewritten.
     Create {
         /// Logical database name (lowercase letters, digits, dashes).
         name: String,

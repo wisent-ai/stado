@@ -14,17 +14,37 @@ pub(super) fn declare(
     consumers: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
-    report_mutation(json_output, declaration(name, engine, scopes, consumers)?)
+    report_mutation(
+        json_output,
+        prepare_declaration(name, engine, scopes, consumers)?.persist()?,
+    )
 }
 
-/// Write one declaration and return its report, printing nothing: `create`
-/// folds it into its own single answer.
-pub(super) fn declaration(
-    name: &str,
+pub(super) struct PreparedDeclaration<'a> {
+    name: &'a str,
+    document: Value,
+}
+
+impl PreparedDeclaration<'_> {
+    pub(super) fn persist(self) -> Result<Value, CmdError> {
+        let mut report = self.document.clone();
+        report["declared"] = json!(self.name);
+        report["item"] = json!(format!("{}-database", self.name));
+        mutate_databases(|map| {
+            map.insert(self.name.to_string(), self.document);
+            Ok(())
+        })?;
+        Ok(report)
+    }
+}
+
+/// Validate and normalize before provisioning; persist only after the provider succeeds.
+pub(super) fn prepare_declaration<'a>(
+    name: &'a str,
     engine: &str,
     scopes: &[String],
     consumers: &[String],
-) -> Result<Value, CmdError> {
+) -> Result<PreparedDeclaration<'a>, CmdError> {
     if !canonical_name(name) {
         return Err(CmdError::usage(
             "NAME must be lowercase letters, digits and dashes",
@@ -61,22 +81,14 @@ pub(super) fn declaration(
         }
     }
 
-    let declaration = json!({
-        "engine": engine,
-        "scopes": clean_scopes,
-        "consumers": clean_consumers,
-    });
-    mutate_databases(|map| {
-        map.insert(name.to_string(), declaration.clone());
-        Ok(())
-    })?;
-    Ok(json!({
-        "declared": name,
-        "engine": engine,
-        "scopes": clean_scopes,
-        "consumers": clean_consumers,
-        "item": format!("{name}-database"),
-    }))
+    Ok(PreparedDeclaration {
+        name,
+        document: json!({
+            "engine": engine,
+            "scopes": clean_scopes,
+            "consumers": clean_consumers,
+        }),
+    })
 }
 
 pub(super) fn remove(name: &str, json_output: bool) -> Result<(), CmdError> {
