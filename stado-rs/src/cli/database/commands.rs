@@ -56,8 +56,9 @@ pub(crate) enum DatabaseCommands {
     /// the database itself on one fleet host -- the vault owner unless
     /// `--host` names another -- with no vendor and no bill, through `stado
     /// database place` on that host. `supabase` creates a hosted Postgres
-    /// project in the organization and region of the ANCHOR database's
-    /// project and refuses unless `--accept-monthly-usd` covers what one
+    /// project in the organization and region of `--anchor`'s project, or,
+    /// without it, the one organization and region every project the token
+    /// sees shares, and refuses unless `--accept-monthly-usd` covers what one
     /// more project adds to the compute bill. Either way the credential item
     /// `<name>-database` is written into the owner vault and the database is
     /// declared for its consumers; an existing database of that name is
