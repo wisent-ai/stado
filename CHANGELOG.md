@@ -17,3 +17,5 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - [0.15](changelog/0.15.md)
 
 ## Unreleased
+
+- A release pass no longer records its failure over a run another pass has advanced since it read it. The control host's release agent and `stado release resume` both walk a run; the pass that lost the write race (`Stado storage version changed for runs/release-pipeline/<run>/run.json`) marked the run `failed`, and every delivery worker then refused its job with "the run is Failed, not delivering".

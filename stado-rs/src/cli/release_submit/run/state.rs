@@ -91,7 +91,37 @@ pub(crate) async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
     )
     .await
 }
+/// Record this pass's failure on the run — unless another pass wrote the run
+/// since this one last read or saved it. Two finishers (the control host's
+/// release agent and `stado release resume`) walk the same run; the one that
+/// lost the write race, or that judged a delivery from a stale copy, used to
+/// overwrite the winner's progress with `failed`, and the delivery workers
+/// then refused their own jobs ("the run is Failed, not delivering").
 pub(crate) async fn persist_failure(run: &mut ReleaseRun, error: CmdError) -> CmdError {
+    match load(&run.run_id).await {
+        Ok(Some(stored)) if stored.updated_at != run.updated_at => {
+            return CmdError {
+                message: Some(format!(
+                    "{error}; another pass advanced release run {} since this one read it \
+                     (state {:?}), so this pass's failure was not recorded over it",
+                    run.run_id, stored.state
+                )),
+                code: error.code,
+                ..CmdError::default()
+            };
+        }
+        Ok(_) => {}
+        Err(load_error) => {
+            return CmdError {
+                message: Some(format!(
+                    "{error}; the release run could not be read to record the failure: \
+                     {load_error}"
+                )),
+                code: error.code,
+                ..CmdError::default()
+            };
+        }
+    }
     run.state = ReleaseRunState::Failed;
     run.failure = Some(error.to_string());
     if let Err(save_error) = save(run).await {
