@@ -79,7 +79,11 @@ pub(super) async fn job_state_and_cost(
                 return Ok(Some(((*state).to_string(), build_seconds(&job), error)));
             }
             Ok(None) => continue,
-            Err(error) => return Err(format!("job {job_id} under {state} could not be read: {error}")),
+            Err(error) => {
+                return Err(format!(
+                    "job {job_id} under {state} could not be read: {error}"
+                ))
+            }
         }
     }
     Ok(None)
