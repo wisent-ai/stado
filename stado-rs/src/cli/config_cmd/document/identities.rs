@@ -53,6 +53,7 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
     // without carrying its names left every `secret_fields` entry naming a
     // role the document does not declare, so the configuration failed its own
     // validation and every incoming Stado refused the host.
+    let mut dropped = Vec::new();
     if let Some(agent) = root
         .get_mut("agent")
         .and_then(|value| value.get_mut("skarbiec"))
@@ -63,6 +64,57 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
                 agent.insert("roles".into(), items);
                 removed.push("agent.skarbiec.items (now agent.skarbiec.roles)");
             }
+        }
+        // A `role#field` whose role the agent never held could not be read
+        // by any job before the rename either: the agent's grant covered its
+        // listed items only. It is withdrawn, named, rather than granted.
+        let roles: Vec<String> = agent
+            .get("roles")
+            .and_then(Value::as_array)
+            .map(|roles| {
+                roles
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(fields) = agent.get_mut("secret_fields").and_then(Value::as_array_mut) {
+            fields.retain(|entry| {
+                let Some(reference) = entry.as_str() else {
+                    return true;
+                };
+                let role = reference
+                    .split_once('#')
+                    .map_or(reference, |(role, _)| role);
+                let held = roles.iter().any(|declared| declared == role);
+                if !held {
+                    dropped.push(reference.to_string());
+                }
+                held
+            });
+        }
+    }
+    // The backend's messaging items became its roles. The set is fixed — the
+    // notifier reads exactly these — so the old item list, one entry per
+    // channel, becomes that set; the optional email channel stays only where
+    // one was declared.
+    if let Some(items) = root
+        .get_mut("backend")
+        .and_then(|value| value.get_mut("messaging"))
+        .and_then(|value| value.get_mut("skarbiec"))
+        .and_then(|value| value.get_mut("items"))
+        .and_then(Value::as_array_mut)
+    {
+        let required = crate::dashboard::operator_auth::REQUIRED_ROLES;
+        let email = crate::dashboard::operator_auth::EMAIL_ROLE;
+        let mut roles: Vec<Value> = required.iter().map(|role| Value::from(*role)).collect();
+        if items.len() > required.len() {
+            roles.push(Value::from(email));
+        }
+        if *items != roles {
+            *items = roles;
+            removed.push("backend.messaging.skarbiec.items item ids (now its roles)");
         }
     }
     for key in RETIRED {
@@ -143,7 +195,9 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             removed.push("agent.skarbiec.consumer");
         }
     }
-    let changed = !removed.is_empty() || previous.as_ref().and_then(Value::as_str) != Some("stado");
+    let changed = !removed.is_empty()
+        || !dropped.is_empty()
+        || previous.as_ref().and_then(Value::as_str) != Some("stado");
     if !changed {
         println!(
             "{}: identity configuration already uses stado",
@@ -205,9 +259,11 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
     }
     std::fs::rename(&temporary, &path)?;
     println!(
-        "{}: migrated identity settings to stado; removed {}; previous file: {}",
+        "{}: migrated identity settings to stado; removed {}; withdrew secret_fields of roles \
+         the agent never held: [{}]; previous file: {}",
         path.display(),
         removed.join(", "),
+        dropped.join(", "),
         backup.display()
     );
     Ok(())
