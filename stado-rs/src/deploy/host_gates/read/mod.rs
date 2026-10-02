@@ -29,8 +29,8 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         },
     )
     .await;
-    // The authority read gave up (the object API can answer its 503 after
-    // longer than the budget); the last-known-good copy is still local.
+    // The authority read failed; retain a readable last-known-good copy as
+    // explicitly historical evidence rather than a current authority read.
     let registry = registry.or_else(|| {
         let cause = registry_read.detail.clone().unwrap_or_default();
         crate::targets::last_good_after(&cause)
