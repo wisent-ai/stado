@@ -2,7 +2,6 @@
 //! proxy in front of it when nothing already stands there.
 
 use std::path::Path;
-use std::time::Duration;
 
 use super::discover::{exact_proxy_pid, pid_alive, proxy_process_matches};
 use super::legacy::stop_legacy;
@@ -31,7 +30,6 @@ async fn stable_bind_answer(
     product: &str,
     generation: u64,
     active: &ProcessRecord,
-    strategy: &RolloutStrategy,
 ) -> Result<(), String> {
     if !pid_alive(proxy_pid) {
         return Err(format!("stable release proxy pid {proxy_pid} is gone"));
@@ -67,25 +65,15 @@ async fn stable_bind_answer(
         ));
     }
 
+    // The candidate has already answered its readiness request, the proxy owns
+    // the stable listener, and the proxy reads its target on every accepted
+    // connection. One request therefore decides: a refusal here is a real
+    // routing fault, reported as it happened.
     let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
-    let client = reqwest::Client::new();
-    let timeout = strategy.readiness_timeout_seconds;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
-    loop {
-        if !pid_alive(proxy_pid) {
-            return Err(format!("stable release proxy pid {proxy_pid} is gone"));
-        }
-        let last_error = match client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => return Ok(()),
-            Ok(response) => format!("HTTP {}", response.status()),
-            Err(error) => format!("{error:#}"),
-        };
-        if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "{url} did not become ready within {timeout}s; {last_error}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
+    match reqwest::Client::new().get(&url).send().await {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(format!("{url} answered HTTP {}", response.status())),
+        Err(error) => Err(format!("{url} did not answer: {error:#}")),
     }
 }
 
@@ -141,9 +129,7 @@ pub(crate) async fn ensure_active_proxy(
     };
 
     state.proxy_pid = Some(proxy_pid);
-    stable_bind_answer(
-        proxy_pid, target, serving, product, generation, active, strategy,
-    )
-    .await
-    .map_err(|why| format!("stable release proxy is invalid: {why}").into())
+    stable_bind_answer(proxy_pid, target, serving, product, generation, active)
+        .await
+        .map_err(|why| format!("stable release proxy is invalid: {why}").into())
 }
