@@ -208,6 +208,13 @@ pub struct MobileRuntime {
     /// command without the one its platform needs.
     #[serde(default, deserialize_with = "de_null_as_default")]
     pub drivers: Vec<String>,
+    /// The URL the Appium server listens on, as reached from this host
+    /// (`http://127.0.0.1:4723` when it listens on loopback). A crawl
+    /// coordinator reads it from here and hands it to the worker; nothing
+    /// assumes a port. A host that declares drivers and no address is not a
+    /// mobile placement, and the coordinator says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
     /// Whether this host must carry Android platform-tools, the package
     /// `adb` lives in. Declared as a requirement and not as a version: the
     /// vendor publishes one rolling `latest` archive per platform and stamps
