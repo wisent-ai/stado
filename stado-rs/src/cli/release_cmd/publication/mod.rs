@@ -80,7 +80,9 @@ pub struct ReleasePrepareArgs {
     minimum_stado_version: String,
     #[arg(long = "rollback-compatible-with")]
     rollback_compatible_with: Vec<String>,
-    #[arg(long, default_value = "unknown")]
+    /// The host that built the archive, recorded in the signed manifest and
+    /// matched against its build receipt. A manifest never says `unknown`.
+    #[arg(long)]
     builder: String,
     #[arg(long)]
     json: bool,
