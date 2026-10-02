@@ -56,12 +56,13 @@ pub enum CredentialItemCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Stamp payload fingerprints onto the owner vault's items so the
-    /// duplicate report and the duplicate refusal cover every row.
-    StampFingerprints {
+    /// Bring the owner vault to Skarbiec's current schema: the v2 envelope,
+    /// an item_uid on every item and a payload fingerprint on every active
+    /// item, so the duplicate report and the duplicate refusal cover every row.
+    Upgrade {
         #[arg(long)]
         host: String,
-        /// Write the fingerprints. Without it, report what the pass would do.
+        /// Write the changes. Without it, report what the pass would do.
         #[arg(long)]
         apply: bool,
         #[arg(long)]

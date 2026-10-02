@@ -1,29 +1,24 @@
-//! Stamp payload fingerprints on the host that owns the vault.
+//! Bring the vault to Skarbiec's current schema on the host that owns it.
 //!
-//! Skarbiec 0.3.12 carries `stamp-fingerprints`, which describes every item
-//! written before payload fingerprints existed so that the duplicate report
-//! and the exact-duplicate refusal cover the whole vault. Running it on a
-//! machine that holds a replica is wasted work: the pass stamps every item
-//! in the replica, the owner's next sync replaces the file, and the report
-//! is blind again within the hour. It is the same shape as a grant written
-//! by hand to a replica.
+//! `skarbiec upgrade` is Skarbiec's one idempotent schema pass: the v2
+//! envelope, an `item_uid` on every item and a payload fingerprint on every
+//! active item, so the duplicate report and the exact-duplicate refusal cover
+//! the whole vault. Running it on a machine that holds a replica is wasted
+//! work: the pass changes every item in the replica, the owner's next sync
+//! replaces the file, and the vault is behind again within the hour. It is
+//! the same shape as a grant written by hand to a replica.
 //!
 //! The owner key and the canonical vault live on one host, so the pass runs
-//! there and nowhere else, and this reports what that host answered.
+//! there and nowhere else, and this reports what that host answered. A
+//! Skarbiec build without the verb refuses it as an unknown command, and that
+//! refusal is the error reported here.
 
 use serde_json::{json, Value};
 
 use crate::cli::host::machine::users::credentials::credential_host;
 use crate::cli::CmdError;
 
-/// The verb's own name, matched as a substring of the binary's strings. A
-/// build that predates the pass carries it nowhere, and a build that has it
-/// carries it in the advertised command list. Substring, not a whole line:
-/// rustc packs string literals into one unterminated blob, so a whole-line
-/// match reports absent on a binary that has the verb.
-const USAGE_MARK: &str = "stamp-fingerprints";
-
-pub async fn stamp_vault_fingerprints(
+pub async fn upgrade_vault(
     target: &str,
     apply: bool,
     json_output: bool,
@@ -38,7 +33,7 @@ pub async fn stamp_vault_fingerprints(
 
     let refused = |detail: String| {
         CmdError::click(format!(
-            "{}: the vault at {vault} could not be stamped: {detail}",
+            "{}: the vault at {vault} could not be upgraded: {detail}",
             resolved.name
         ))
     };
@@ -62,23 +57,6 @@ pub async fn stamp_vault_fingerprints(
     {
         return Err(refused(format!("no vault at {vault}")));
     }
-    let capable = crate::deploy::host_channel::run_command(
-        &resolved,
-        &format!(
-            "strings -a {} 2>/dev/null | grep -q {}",
-            crate::deploy::shlex_quote(&skarbiec),
-            crate::deploy::shlex_quote(USAGE_MARK)
-        ),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !capable.ok() {
-        return Err(refused(format!(
-            "the Skarbiec build at {skarbiec} predates the stamping pass; deliver 0.3.12 or later \
-             to this host first"
-        )));
-    }
 
     let coverage = read_json(
         &resolved,
@@ -90,12 +68,8 @@ pub async fn stamp_vault_fingerprints(
     )
     .await
     .map_err(refused)?;
-    let verb = if apply {
-        "stamp-fingerprints --apply"
-    } else {
-        "stamp-fingerprints"
-    };
-    let stamped = read_json(&resolved, &gnupg_home, &vault, &skarbiec, verb, &runner)
+    let verb = if apply { "upgrade --apply" } else { "upgrade" };
+    let pass = read_json(&resolved, &gnupg_home, &vault, &skarbiec, verb, &runner)
         .await
         .map_err(refused)?;
     let after = read_json(
@@ -109,7 +83,8 @@ pub async fn stamp_vault_fingerprints(
     .await
     .map_err(refused)?;
 
-    let unreadable = stamped
+    let fingerprints = pass.get("fingerprints").cloned().unwrap_or(Value::Null);
+    let unreadable = fingerprints
         .get("unreadable")
         .and_then(Value::as_array)
         .map(Vec::len)
@@ -122,23 +97,28 @@ pub async fn stamp_vault_fingerprints(
                 "vault": vault,
                 "applied": apply,
                 "before": coverage,
-                "pass": stamped,
+                "pass": pass,
                 "after": after,
             }))?
         );
     } else {
         println!(
-            "{}: {} of {} items were comparable before, {} after; {} {}, {unreadable} unreadable",
+            "{}: envelope {} -> {} ({}); item_uids {} {}; fingerprints {} {}, {unreadable} unreadable",
+            resolved.name,
+            field(&pass["envelope"], "from"),
+            field(&pass["envelope"], "to"),
+            if pass["envelope"]["needed"].as_bool() == Some(true) { "migration needed" } else { "current" },
+            field(&pass["item_uids"], if apply { "stamped" } else { "missing" }),
+            if apply { "stamped" } else { "missing" },
+            field(&fingerprints, "stamped"),
+            if apply { "stamped" } else { "would be stamped" },
+        );
+        println!(
+            "{}: {} of {} items were comparable before, {} after; duplicate groups {} -> {}",
             resolved.name,
             field(&coverage, "compared"),
             field(&coverage, "active_items"),
             field(&after, "compared"),
-            field(&stamped, "stamped"),
-            if apply { "stamped" } else { "would be stamped" },
-        );
-        println!(
-            "{}: duplicate groups {} -> {}",
-            resolved.name,
             field(&coverage, "groups"),
             field(&after, "groups")
         );

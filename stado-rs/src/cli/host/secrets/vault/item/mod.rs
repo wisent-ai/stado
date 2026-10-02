@@ -4,7 +4,7 @@
 pub(in crate::cli::host) mod change;
 pub(in crate::cli::host) mod put;
 pub(in crate::cli::host) mod show;
-pub(in crate::cli::host) mod stamp;
+pub(in crate::cli::host) mod upgrade;
 
 use serde_json::Value;
 

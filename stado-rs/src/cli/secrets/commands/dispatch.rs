@@ -102,8 +102,8 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
             CredentialItemCommands::Delete { host, item, json } => {
                 super::host::delete_vault_item(&host, &item, json).await
             }
-            CredentialItemCommands::StampFingerprints { host, apply, json } => {
-                super::host::stamp_vault_fingerprints(&host, apply, json).await
+            CredentialItemCommands::Upgrade { host, apply, json } => {
+                super::host::upgrade_vault(&host, apply, json).await
             }
             CredentialItemCommands::SigningProfile(args) => super::host::apple_profile(args).await,
             CredentialItemCommands::SummarizeLocal => super::host::summarize_item_local(),
