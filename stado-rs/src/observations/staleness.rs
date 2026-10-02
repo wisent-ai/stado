@@ -8,13 +8,9 @@ use chrono::{DateTime, Utc};
 use super::observation::Observation;
 use super::store::load;
 
-/// How long an observation speaks for the present.
+/// The shared display freshness window: one hour.
 ///
-/// One hour. A closed lid, a killed process and a revoked forward all happen
-/// in under a second, so no TTL makes a stored observation equal to a live
-/// probe; this is the window the fleet accepts being wrong in, chosen so that
-/// a routine sweep keeps every fact green and a fleet nobody is sweeping goes
-/// visibly amber within the working hour rather than silently in twelve days.
+/// A TTL bounds the use of stored evidence; it does not replace a live probe.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(3600);
 
 /// How old the fleet's knowledge of one fact is.
@@ -29,8 +25,7 @@ pub enum Freshness {
     Fresh(Observation),
     /// The most recent observation, older than the TTL. History, not state.
     Stale(Observation),
-    /// No machine has ever recorded a look at this fact. Not a failure, and
-    /// not a pass; the absence of evidence, which is what the twelve days were.
+    /// No observation exists for this fact. Neither a failure nor a pass.
     Never,
 }
 
@@ -51,11 +46,7 @@ pub fn freshness(fact: &str, ttl: Duration) -> Freshness {
 
 /// [`freshness`] against records already in hand.
 ///
-/// A table asks this once per row. Re-reading and re-parsing the whole file
-/// for each cell would make the cost of showing freshness scale with the size
-/// of the fleet, and a column that gets slower the more services you run is a
-/// column somebody eventually deletes -- which is how the fact lost its reader
-/// the first time.
+/// Reuses one loaded set for a table instead of re-reading the store per cell.
 pub fn freshness_in(records: &[Observation], fact: &str, ttl: Duration) -> Freshness {
     let mut newest: Option<(DateTime<Utc>, &Observation)> = None;
     let mut undated: Option<&Observation> = None;

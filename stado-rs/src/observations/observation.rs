@@ -12,32 +12,21 @@ pub const UNREACHABLE: &str = "unreachable";
 /// look" and "I looked and it is gone" send an operator to two different
 /// machines.
 pub const UNVERIFIED: &str = "unverified";
-/// Something answered at the declared place and it is the wrong program: the
-/// port is held by a launchd job other than the one declared to serve it.
+/// The endpoint answered, but its listener is not the declared program.
 ///
-/// Deliberately not [`OBSERVED`]: an answer was the whole of that word's
-/// evidence, which is how a declaration naming a port another service had
-/// taken stays green: a gateway declared on one loopback port while it
-/// serves another and an unrelated job holds the declared one has every
-/// probe read `HTTP 404` as an answer and report [`OBSERVED`] for hours.
-/// Deliberately not [`UNREACHABLE`] either,
-/// because the socket is alive and restarting the declared service repairs
-/// nothing — the declaration is what is wrong. This is a failure.
+/// This ownership failure is neither a successful observation nor an
+/// unreachable socket. Restarting the declared program does not establish
+/// ownership of a port held by another unit.
 pub const MISOWNED: &str = "misowned";
-/// A host the directory declares a standby for a service answered on its
-/// standby address: a second copy is serving beside the active host. A
-/// standby is by definition not serving, so this is a failure; for Skarbiec it
-/// is a second vault taking writes the owner never sees.
+/// A declared standby is answering beside the active service.
+/// This is an ownership failure, not proof that the active endpoint works.
 pub const STANDBY_SERVING: &str = "standby_serving";
 
 /// One look, by one machine, at one fact, at one moment.
 ///
-/// Every field is a `String` because this record crosses a file, a helper
-/// script's stdout and two CLI surfaces, and each place it is narrowed to an
-/// enum is a place an unrecognised state gets flattened into a known one. The
-/// states this tree writes are [`OBSERVED`], [`UNREACHABLE`], [`UNVERIFIED`]
-/// and [`MISOWNED`]; a state written by something newer is carried through
-/// verbatim rather than rounded down to the nearest word we already know.
+/// String fields preserve outcomes written by newer versions. Current
+/// outcomes include [`OBSERVED`], [`UNREACHABLE`], [`UNVERIFIED`], [`MISOWNED`]
+/// and [`STANDBY_SERVING`]; an unknown outcome is never coerced to one of them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observation {
     /// What was checked, in a form every checker spells identically.
@@ -48,14 +37,13 @@ pub struct Observation {
     /// and not defaultable: an observation whose vantage is unknown cannot be
     /// compared against the next one, so it is not evidence of anything.
     pub vantage: String,
-    /// [`OBSERVED`], [`UNREACHABLE`], [`UNVERIFIED`], [`MISOWNED`], or a word
-    /// from a newer writer, passed through.
+    /// A shared outcome constant, or a newer writer's value preserved verbatim.
     pub state: String,
     /// Why, in the operating system's own words where there are any. The
     /// difference between "connection refused" and "timed out" is the
     /// difference between a dead process and a dead route.
     pub detail: String,
-    /// RFC 3339, UTC. The field the outage needed.
+    /// When the observation was recorded, in RFC 3339 UTC.
     pub at: String,
 }
 

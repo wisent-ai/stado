@@ -1,49 +1,25 @@
-//! Compute-target registry: data models, hostname validation, capability
-//! admission, and local-file loading.
+//! Registry models, validation, capability admission, and loading.
 //!
-//! Port of `stado/targets/__init__.py` (dataclasses + loader),
-//! `stado/targets/validation.py` (registry-v2 contract + hostname
-//! normalization), and `stado/targets/capabilities.py` (workload admission
-//! against declared target capabilities — pure logic over the [`Job`]
-//! model).
+//! The configured canonical backend supplies the target, service-directory,
+//! placement and build declarations used by the fleet. Workload admission
+//! compares [`Job`] requirements with those declared capabilities.
+//! [`Registry::extra`] preserves top-level fields this reader does not model.
 //!
-//! The registry is the single source of truth for every box the queue can
-//! route to: workstations, GCP zonal dispatchers, vast.ai pools. Like
-//! Python, [`fetch_registry_remote`] fetches `registry.json` with a
-//! short-TTL in-process cache and is the fleet-survival authority
-//! (`source="gcs"`), while [`load_registry_auto`] adds the bundled file as
-//! a fallback (`source="auto"`). On the "gcs" backend the fetch still goes
-//! through the crate's GCS JSON-API backend, never gsutil: a broken gsutil
-//! install knocks the agent offline even though the registry is in GCS.
+//! [`fetch_registry_remote`] reads that authority with an in-process cache.
+//! It returns [`RegistryFetchError`] instead of an empty registry when the
+//! store cannot answer: an unavailable authority does not prove that a host
+//! was removed and must not authorize the coordinator's rogue-daemon cleanup.
 //!
-//! The same document carries the fleet's [`ServiceDirectory`] — which host
-//! currently serves each service and which consumers may call it — and the
-//! [`PlacementProfile`] groups that move those services between hosts.
-//! [`Registry`] keeps every top-level key it does not model in `extra`, so a
-//! writer built from this checkout cannot delete a block a newer publisher
-//! added.
+//! Validated reads from a non-local store can update
+//! `~/.stado/cache/registry-last-good.json`. [`fetch_registry_or_last_good`]
+//! may serve that snapshot with [`Registry::staleness_seconds`] and a
+//! diagnostic when the authority is unavailable. Local filesystem stores do
+//! not populate or consume that cache.
 //!
-//! DEVIATION from Python: the fetch follows `WC_STORAGE_BACKEND` instead of
-//! hardcoding GCS. Python reads GCS unconditionally, so on an Azure-only
-//! deployment the write side compare-and-swaps `registry.json` into the
-//! Azure container (`cli::registry` — `stado registry push`, which already
-//! goes through the configured store) while every reader consults a GCS
-//! object nobody writes. The "gcs" read path is unchanged.
-//!
-//! [`fetch_registry_remote`] returns [`RegistryFetchError`] rather than an
-//! empty registry, because "the store is unreachable" and "the registry
-//! does not list you" drive opposite decisions in the coordinator's
-//! rogue-daemon kill switch.
-//!
-//! A reader is not required to die with the authority. Every canonical read
-//! that parses is copied to `~/.stado/cache/registry-last-good.json` with a
-//! dated sidecar, and [`fetch_registry_or_last_good`] serves that copy —
-//! carrying its age in [`Registry::staleness_seconds`] and one sentence for
-//! the operator — when the store does not answer. The bundled snapshot stays
-//! BELOW the cache, reachable only through [`load_registry_auto`]. What does
-//! not change is the kill switch's authority: [`fetch_registry_remote`] still
-//! fails rather than answer from a copy, because "the registry no longer
-//! lists you" may only be concluded from the registry itself.
+//! Only [`load_registry_auto`] can fall back further to the bundled empty
+//! template. Authoritative reads do not use either fallback, and explicit
+//! registry upload and validation commands never select the bundled template
+//! as their input.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};

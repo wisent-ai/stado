@@ -1,97 +1,24 @@
-//! Does the service directory still describe the world, or only itself?
+//! Verify service declarations from the hosts that consume them.
 //!
-//! Every other check in this binary compares Stado's declarations against each
-//! other. `config validate` checks the document against a schema. `registry
-//! validate` checks placement profiles against targets. `doctor` checks that a
-//! backend the config names can be constructed. All of them can pass in full
-//! while nothing the fleet declares is actually reachable, because not one of
-//! them goes and looks.
+//! Schema validation cannot establish reachability. This command drives each
+//! entry's verification descriptor: probe kind, vantage and required answer.
+//! A serving-host probe alone does not prove that another consumer can reach
+//! the endpoint it was given.
 //!
-//! That can cost weeks of a worker's output. A directory declares the object
-//! API active on a laptop. The service-directory schema requires endpoints
-//! be host-relative loopback, so every other host reaches it through a
-//! forward. The laptop closes, the forward has no upstream, and the worker
-//! on the always-on host refuses tens of thousands of times to claim work
-//! whose diagnostics it cannot upload. Every declaration involved is valid.
-//! `config validate`, `registry validate` and `doctor` all pass throughout,
-//! on both machines, because none of them is about reachability.
+//! Reachability outcomes distinguish an observed answer, an unreachable
+//! endpoint, and a probe that could not run. Unsupported descriptors remain
+//! `unverified` with their cause; registry validation also reports unsupported
+//! kinds or vantages. An omitted descriptor uses the model's default.
 //!
-//! `identity verify` already exists for exactly this reason, one aisle over: it
-//! reads the host instead of trusting the binding, "because these identities are
-//! granted elsewhere and revoked without notice". A service endpoint is granted
-//! elsewhere and revoked without notice too -- by a lid closing. This module is
-//! that same idea applied to the declarations the whole fleet routes through.
+//! `Service::endpoints` names consumer addresses. `Service::standby` names
+//! addresses a host would serve after placement changes; `address_for` and
+//! `standby_for` keep those meanings separate.
 //!
-//! Three states, never two:
-//!
-//!   observed     something answered at the declared endpoint, from the host
-//!                that is told to call it. The declaration is true right now.
-//!   unreachable  nothing answered. The declaration is false, and this is the
-//!                state that hid for twelve days behind a passing validator.
-//!   unverified   the probe could not run: host down, channel refused, the
-//!                remote's own stado too old to answer. Kept apart from
-//!                `unreachable` deliberately --
-//!                "I did not look" and "I looked and it is gone" send an
-//!                operator to two different places, and collapsing them is how a
-//!                fleet learns to ignore its own reports.
-//!
-//! The vantage is the point. A service is verified from each consumer's own
-//! host, over the endpoint that consumer is handed, because that is the only
-//! question with an operational answer. Probing from the serving host proves the
-//! process is alive and proves nothing about whether the fleet can reach it --
-//! which is precisely the gap this fleet fell into.
-//!
-//! What is probed, and from where, is no longer this file's decision. Every
-//! declaration carries its own verification descriptor -- kind, vantage, what
-//! counts as an answer -- and this command is the driver for it. The single
-//! hardcoded probe was correct for every entry the directory holds today and
-//! would have been wrong, silently and with a verdict, for the first entry
-//! that was not an HTTP service: a database socket called `unreachable` while
-//! serving, because the checker asked in a language the service does not
-//! speak. A checker that answers questions it did not ask is the defect this
-//! command was written to remove, not one it may commit.
-//!
-//! An entry that says nothing derives the default, which is precisely the
-//! probe this file used to hardcode, so no existing declaration changes
-//! verdict. A descriptor naming a kind or vantage this build does not
-//! implement is `unverified` with the offending word in the detail, and
-//! `targets::validate_verification` raises the same complaint against its
-//! author when the registry is validated -- long before an operator has to
-//! read it off a sweep.
-//!
-//! One ambiguity used to decide what this command called a failure, and it was
-//! settled in the model rather than here. `Service::endpoints` is keyed by
-//! host, and two readings survived the type: "the address this host uses to
-//! reach the service", which is what `service directory publish` writes into
-//! each host's `~/.stado/forwards/<service>.local`, and "where this host would
-//! serve it if the service moved here", which is what the field's own comment
-//! described. This command followed `publish`, because that is the code
-//! consumers actually run -- and so reported `brama` unreachable on a laptop
-//! that merely stands by for it, silenced at the time by a `from: active-host`
-//! descriptor on that one entry.
-//!
-//! A descriptor on one entry was a patch, not a fix: the next standby address
-//! added would have produced the same false report. The two meanings now have
-//! two fields. `endpoints` is the address a host calls and nothing else;
-//! [`crate::targets::Service::standby`] is the address a host would serve on
-//! after a move, read through `address_for` and `standby_for` so no caller
-//! has to guess which map answers its question. The model was the right place
-//! because a command cannot resolve an ambiguity in the data it reads -- it
-//! can only pick a reading and then be confidently wrong for everyone who
-//! picked the other one, in a report that looks definite either way.
-//!
-//! Consumer probing therefore uses `endpoints` alone. Standby addresses are
-//! listed as their own `unverified` rows: visible, because an address nobody
-//! prints is an address nobody maintains until the move that needs it. They
-//! are dialled once, from the standby host itself: silence there is the
-//! declared state and adds nothing, while an answer is `standby_serving`, a
-//! second copy beside the active host and a failure of the sweep.
-
-// The three state words are imported, never respelled here. This command
-// writes them into the observation record and other commands read them back
-// out of it, so a private copy that drifted by one letter would file rows
-// nothing matches -- a fact with no reader, which is the defect this change
-// exists to remove.
+//! Consumer probes use `endpoints`. Standby addresses remain visible as
+//! unverified declarations and are dialled from their own hosts. Silence at a
+//! standby is expected; an answer is `standby_serving`, an additional serving
+//! copy and a failed sweep. Listener ownership is judged separately from
+//! whether the socket answered. Outcomes use the shared observation vocabulary.
 
 mod checks;
 mod finding;
