@@ -1838,8 +1838,11 @@ products:
   surfaces:
   - kind: cli
     repository: wisent-ai/film
+    docs_origin: https://film.wisent.com
   - kind: service
     repository: wisent-ai/film
+  - kind: web
+    repository: wisent-ai/film-landing
   installations:
   - surface: cli
     kind: cargo
