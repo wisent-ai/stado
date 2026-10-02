@@ -89,9 +89,11 @@ pub fn schema() -> Command {
                 .help(
                     "verify: the post-build test of a schema product; applies every migration, in \
                      file-name order, to a scratch database of the engine and reports the tables it \
-                     made. sqlite: a fresh file under $WISENT_OUTPUT_DIR/schema-verify. postgres: \
-                     the scratch database WISENT_SCRATCH_DATABASE_URL names, through psql. \
-                     supabase: $WISENT_OUTPUT_DIR/release/supabase-source.tar on a local Supabase \
+                     made. sqlite and postgres read release/database-schema.tar, produced by \
+                     source-bundle, never the current checkout. sqlite: a fresh file under \
+                     $WISENT_OUTPUT_DIR/schema-verify. postgres: the scratch database \
+                     WISENT_SCRATCH_DATABASE_URL names, through psql. supabase: \
+                     $WISENT_OUTPUT_DIR/release/supabase-source.tar on a local Supabase \
                      stack (supabase db start, Supabase CLI and Docker on the runner)",
                 ),
         )
@@ -110,12 +112,12 @@ fn engine() -> Arg {
         .help("The engine the schema runs on")
 }
 
-/// Where the `*.sql` migrations of a sqlite or postgres schema sit in the checkout.
+/// Where the `*.sql` migrations sit inside the schema source bundle.
 fn migrations() -> Arg {
     Arg::new("migrations")
         .long("migrations")
         .default_value("migrations")
-        .help("Directory of *.sql migrations, applied in file-name order (sqlite and postgres)")
+        .help("Directory inside database-schema.tar's source/ root; *.sql files run in file-name order (sqlite and postgres)")
 }
 
 /// Where the Supabase project (the directory holding `supabase/`) sits inside
@@ -137,9 +139,11 @@ pub fn deliver() -> Command {
             Command::new("schema")
                 .about(
                     "Apply the verified release's migrations to the product's database on its engine. \
-                     postgres: the migrations the database SCHEMA_DATABASE_URL names has not recorded \
-                     yet, each with its version recorded in wisent_schema_migrations; writes \
-                     schema-receipt.json. supabase: push supabase-source.tar (migrations, functions) \
+                     postgres: verify WISENT_RELEASE_ARCHIVE against WISENT_RELEASE_SHA256, \
+                     read its one database-schema.tar, then apply the migrations the database \
+                     SCHEMA_DATABASE_URL names has not recorded yet, each with its version \
+                     recorded in wisent_schema_migrations; writes schema-receipt.json. \
+                     supabase: push supabase-source.tar (migrations, functions) \
                      to the project SUPABASE_PROJECT_REF with SUPABASE_ACCESS_TOKEN and \
                      SUPABASE_DB_PASSWORD, carrying split migrations in as applied; writes \
                      supabase-receipt.json. sqlite has no delivery: the product applies its own \

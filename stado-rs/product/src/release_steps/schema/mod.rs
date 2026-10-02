@@ -7,6 +7,7 @@
 //! migration history. An engine this program has no adapter for is refused
 //! by name with the ones it has.
 
+mod bundle;
 mod postgres;
 mod sqlite;
 
@@ -76,7 +77,7 @@ pub fn verify(engine: &str, migrations: &str, project_dir: &str) -> Result<i32> 
     match SchemaEngine::parse(engine)? {
         SchemaEngine::Supabase => super::supabase::verify(project_dir),
         SchemaEngine::Sqlite => {
-            let files = migration_files(Path::new(migrations))?;
+            let files = bundle::built(migrations)?;
             let scratch = output_dir()?.join("schema-verify");
             fs::create_dir_all(&scratch)?;
             sqlite::apply_all(
@@ -86,7 +87,7 @@ pub fn verify(engine: &str, migrations: &str, project_dir: &str) -> Result<i32> 
             )
         }
         SchemaEngine::Postgres => {
-            let files = migration_files(Path::new(migrations))?;
+            let files = bundle::built(migrations)?;
             let url = super::required("WISENT_SCRATCH_DATABASE_URL")?;
             postgres::verify(&url, &files, &output_dir()?.join("schema-verify.json"))
         }
@@ -102,7 +103,7 @@ pub fn deliver(engine: &str, migrations: &str, project_dir: &str) -> Result<i32>
              migrations are applied by the product on open"
         ),
         SchemaEngine::Postgres => {
-            let files = migration_files(Path::new(migrations))?;
+            let files = bundle::delivered(migrations)?;
             let url = super::required("SCHEMA_DATABASE_URL")?;
             postgres::deliver(&url, &files, &output_dir()?.join("schema-receipt.json"))
         }
