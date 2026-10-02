@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
-use super::ACTIVE_RELEASE_PUBLISHERS;
 use serde_json::Value;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,16 +44,17 @@ impl ReleasePublisher {
     }
 }
 
+/// The declared publisher table, held to its own rules: every entry names
+/// its product's item and `<product>/` prefix, once. Which products need a
+/// publisher is decided where a product is submitted — `build submit` and
+/// `release submit` declare one for a product this host lacks — not by a
+/// list in this binary: a name added to such a list closed the release
+/// boundary of every host whose configuration had not caught up, before any
+/// release of that product existed.
 pub(crate) fn parse_release_publishers(
     value: Option<&Value>,
 ) -> Result<BTreeMap<String, ReleasePublisher>, Vec<String>> {
-    let publishers = parse_declared_release_publishers(value)?;
-    let problems = missing_release_publishers(&publishers);
-    if problems.is_empty() {
-        Ok(publishers)
-    } else {
-        Err(problems)
-    }
+    parse_declared_release_publishers(value)
 }
 
 fn parse_declared_release_publishers(
@@ -152,14 +152,6 @@ fn parse_declared_release_publishers(
     }
 }
 
-fn missing_release_publishers(publishers: &BTreeMap<String, ReleasePublisher>) -> Vec<String> {
-    ACTIVE_RELEASE_PUBLISHERS
-        .iter()
-        .filter(|&&required| !publishers.contains_key(required))
-        .map(|required| format!("release_api.publishers is missing active publisher {required:?}"))
-        .collect()
-}
-
 static RELEASE_API_PUBLISHERS: LazyLock<Result<BTreeMap<String, ReleasePublisher>, Vec<String>>> =
     LazyLock::new(|| {
         let configured = match std::env::var("WC_RELEASE_API_PUBLISHERS")
@@ -178,17 +170,11 @@ static RELEASE_API_PUBLISHERS: LazyLock<Result<BTreeMap<String, ReleasePublisher
         };
         parse_declared_release_publishers(configured.as_ref())
     });
-static RELEASE_API_PUBLISHER_REQUIREMENTS: LazyLock<Vec<String>> =
-    LazyLock::new(|| match &*RELEASE_API_PUBLISHERS {
-        Ok(publishers) => missing_release_publishers(publishers),
-        Err(_) => Vec::new(),
-    });
 
 pub fn release_api_publishers(
 ) -> Result<&'static BTreeMap<String, ReleasePublisher>, &'static [String]> {
     match &*RELEASE_API_PUBLISHERS {
-        Ok(publishers) if RELEASE_API_PUBLISHER_REQUIREMENTS.is_empty() => Ok(publishers),
-        Ok(_) => Err(RELEASE_API_PUBLISHER_REQUIREMENTS.as_slice()),
+        Ok(publishers) => Ok(publishers),
         Err(problems) => Err(problems.as_slice()),
     }
 }

@@ -4,18 +4,3 @@
 mod publishers;
 
 pub use publishers::*;
-
-/// Active authenticated software publishers. Public readers use the separate
-/// tokenless release GET route.
-pub const ACTIVE_RELEASE_PUBLISHERS: &[&str] = &[
-    "brama",
-    "compute-marketplace",
-    "film",
-    "image-video-router",
-    "obraz",
-    "oko",
-    "skarbiec",
-    "stado",
-    "trading-autonomy",
-    "wisent-backend",
-];
