@@ -37,9 +37,11 @@ pub async fn pinned_artifact(leaf: &str, sha256: &str) -> Result<Vec<u8>, Deploy
     Ok(bytes)
 }
 /// One field of the fleet's Apple signing certificate: the broker grant first,
-/// then the owner vault, naming both failures rather than one.
+/// then the owner vault, naming both failures rather than one. The item is
+/// one Stado names by id, so it is read as named, never selected by role.
 pub(crate) async fn signing_credential(field: &str) -> Result<String, DeployError> {
-    let broker = crate::credential_store::read_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).await;
+    let broker =
+        crate::credential_store::read_declared_string(APPLE_SIGNING_CERTIFICATE_ITEM, field).await;
     if let Ok(Some(value)) = &broker {
         if !value.is_empty() {
             return Ok(value.clone());

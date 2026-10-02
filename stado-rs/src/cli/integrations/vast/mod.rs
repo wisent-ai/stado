@@ -43,7 +43,13 @@ pub(crate) async fn dispatch(command: &MarketCommands) -> Result<(), CmdError> {
             provider: MarketProvider::Vast,
             bucket,
             json,
-        } => monitor(bucket.as_deref().unwrap_or_else(crate::config::bucket), *json).await,
+        } => {
+            monitor(
+                bucket.as_deref().unwrap_or_else(|| crate::config::bucket()),
+                *json,
+            )
+            .await
+        }
         MarketCommands::AutoList {
             provider: MarketProvider::Vast,
             idle_window_s,

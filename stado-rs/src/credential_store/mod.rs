@@ -212,6 +212,22 @@ pub async fn read_string(id: &str, field: &str) -> Result<Option<String>, Skarbi
     }
 }
 
+/// [`read_string`] for an item Stado names by id — a fleet key, the Apple
+/// signing certificate — read as named, never selected by role.
+pub async fn read_declared_string(
+    item: &str,
+    field: &str,
+) -> Result<Option<String>, SkarbiecError> {
+    match selected()? {
+        Backend::Skarbiec { url } => {
+            configured_client(url.as_deref())?
+                .read_declared_string(item, field)
+                .await
+        }
+        Backend::File { path } => file::file_read_string(&path, item, field),
+    }
+}
+
 /// The broker's base URL when the selected store is a Skarbiec, and `None`
 /// when it is a file. Exposed for diagnostics that need to talk to the broker
 /// directly rather than through a `Client`, which would need a grant the probe

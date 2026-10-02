@@ -23,6 +23,11 @@ pub fn recipe<'a>(product: &'a Value, surface: &str) -> Result<&'a Value> {
 /// `without` names products this machine does without. A dependency on one of
 /// them is skipped only when the catalogue gives it an `alternative`; any
 /// other is refused, so nothing is installed half-wired.
+// Every argument is a distinct coordinate of one installation: the runtime,
+// the catalogue, the product, its surface, the host, an exact pin, the
+// dependencies left out and the recursion stack; a struct would move the
+// same eight names one level out.
+#[allow(clippy::too_many_arguments)]
 pub fn perform(
     runtime: &Runtime,
     document: &Value,
@@ -126,6 +131,7 @@ pub fn perform(
                         document,
                         dependency_product,
                         dependency_surface,
+                        None,
                         None,
                         &without,
                         stack,
