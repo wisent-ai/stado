@@ -171,6 +171,25 @@ impl JobStorage {
                     );
                     return Ok(false);
                 }
+                // The run manifest is there and this build cannot read it:
+                // a submission a newer writer recorded with a field this
+                // build does not know, or an entry that no longer matches
+                // its job. The same answer as a missing manifest: the
+                // source stays fenced, the record stays, recovery by a build
+                // that reads it finishes the move. Ending the pass here ended
+                // the whole host process, and with it the fleet's object API,
+                // every ten seconds for as long as the record existed.
+                Err(StorageError::Other(detail)) => {
+                    tracing::warn!(
+                        event = "transition_run_manifest_unreadable",
+                        job = %transition.job_id,
+                        transition = %transition.transition_id,
+                        detail = %detail,
+                        "the run manifest of a settled job cannot be read by this build; its \
+                         transition is left for recovery and the rest of this pass continues"
+                    );
+                    return Ok(false);
+                }
                 Err(error) => return Err(error),
             }
         }
