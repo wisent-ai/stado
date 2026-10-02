@@ -21,9 +21,15 @@ jobs:
       # address that loopback-only service directly.
       STADO_WRITER_API_URL: http://127.0.0.1:18776
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      STADO_CONTROL_TARGET: ${{ vars.STADO_CONTROL_TARGET }}
+      STADO_OBJECT_HOST: ${{ vars.STADO_OBJECT_HOST }}
       
       
     steps:
+      - name: Require declared release targets
+        run: |
+          : "${STADO_CONTROL_TARGET:?Set the STADO_CONTROL_TARGET repository variable}"
+          : "${STADO_OBJECT_HOST:?Set the STADO_OBJECT_HOST repository variable}"
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -74,7 +80,7 @@ jobs:
           # Skarbiec authorization path.
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           resolver_report="$RUNNER_TEMP/product-release-resolver.json"
-          if ! "$stado_bin" resolver status --target lukasz-macbook --json \
+          if ! "$stado_bin" resolver status --target "${STADO_CONTROL_TARGET:?}" --json \
               > "$resolver_report"; then
             echo "::notice::The resolver is globally degraded; checking the exact release adapter"
           fi
@@ -106,7 +112,7 @@ jobs:
           }
           release_product="$(jq -er '.product' "$GITHUB_WORKSPACE/product/.wisent-release.json")"
           retry_reconcile "$stado_bin" host reconcile-release-verifier \
-            charless-mac-mini --json
+            "${STADO_OBJECT_HOST:?}" --json
           canary="$RUNNER_TEMP/product-release-write-preflight.json"
           printf '{"schema":"stado.product-release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
@@ -141,7 +147,7 @@ jobs:
             )"
             "$stado_bin" service restart \
               "$host_unit" \
-              --host charless-mac-mini --json || true
+              --host "${STADO_OBJECT_HOST:?}" --json || true
             # The restart can close its own host transport before returning a
             # receipt. Only the authenticated write/read postcondition below
             # decides whether it succeeded. The declared local resolver

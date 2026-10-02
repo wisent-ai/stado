@@ -6,32 +6,19 @@ on:
       - "stado-v*"
 
 concurrency:
-  # Per TAG, not one group for every release. Two attempts at the SAME version
-  # should supersede each other -- a re-run of `stado-v1.2.3` replaces its own
-  # predecessor, which is what `cancel-in-progress` is for here. Two DIFFERENT
-  # versions have nothing to supersede: each publishes to its own immutable
-  # coordinate, and `stado/0.13.7/...` shares not one object with
-  # `stado/0.13.8/...`.
-  #
-  # The old shared group made a newer tag cancel an older tag's train, and the
-  # comment that justified it was wrong on its own terms: it said a cancelled
-  # attempt "can be resumed safely by its successor", but the successor is a
-  # DIFFERENT VERSION publishing elsewhere, so it resumes nothing. Create-only
-  # puts mean a cancelled train leaves an empty or partial coordinate that no
-  # later attempt can ever complete, because the objects are immutable.
-  #
-  # It costs version numbers. Tags arriving every few minutes while a train
-  # needs ~30 (about 6 to build, then an 80 MB archive per platform at
-  # roughly half a megabyte a second) mean no train ever reaches its publish
-  # step and a coordinate is left permanently short of objects.
-  #
-  # This is #172's argument one level up: independent immutable coordinates are
-  # independent work, and the pipeline must stop letting one destroy another.
-  # It also needs nobody else's agreement. A run's concurrency group is read
-  # from the workflow file in its own tree, so the moment a tag carries this,
-  # that train is in a group of one and no other tag can cancel it.
+  # Attempts at one tag may supersede each other. Different tags publish
+  # independent immutable coordinates and must not cancel one another.
   group: wisent-compute-release-train-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  STADO_CONTROL_TARGET: ${{ vars.STADO_CONTROL_TARGET }}
+  STADO_OBJECT_HOST: ${{ vars.STADO_OBJECT_HOST }}
+  STADO_OBJECT_HOME: ${{ vars.STADO_OBJECT_HOME }}
+  STADO_OBJECT_CONFIG_PATH: ${{ vars.STADO_OBJECT_CONFIG_PATH }}
+  STADO_OBJECT_VAULT_FILE: ${{ vars.STADO_OBJECT_VAULT_FILE }}
+  STADO_OBJECT_STORAGE_PATH: ${{ vars.STADO_OBJECT_STORAGE_PATH }}
+  STADO_OBJECT_BACKUP_PATH: ${{ vars.STADO_OBJECT_BACKUP_PATH }}
 
 jobs:
   qualification:
@@ -100,21 +87,8 @@ jobs:
           echo "::error::Timed out waiting for exact source qualification on $SOURCE_SHA"
           exit 1
 
-  # The version and channel this tag names, resolved once, off the contended
-  # runner, before either platform builds anything.
-  #
-  # It used to live inside the Linux job, which is why `deploy-control-plane`
-  # had to declare `needs: release` merely to read `channel` -- and that one
-  # line was the whole coupling. It cost the macOS platform two versions:
-  # 0.10.0's Linux job was cancelled and 0.12.0's failed in a read-back of
-  # already-published Linux bytes, and in both cases the darwin job executed
-  # zero steps and its coordinate was left at 0 of 9 objects. Nothing was
-  # wrong with darwin's inputs either time.
-  #
-  # Resolving identity here makes the two platforms siblings: each publishes
-  # to its own immutable coordinate, each is judged on its own, and neither
-  # can strand the other. Both still assert their own completeness before
-  # reporting success, so a platform ends whole or empty, never partial.
+  # Resolve tag identity independently of platform publication. Each platform
+  # must prove its own immutable coordinate is complete before reporting success.
   identity:
     needs: qualification
     runs-on: ubuntu-latest
@@ -157,18 +131,14 @@ jobs:
     env:
       STADO_VERSION: ${{ needs.identity.outputs.version }}
     steps:
+      - name: Require declared control target
+        run: ': "${STADO_CONTROL_TARGET:?Set the STADO_CONTROL_TARGET repository variable}"'
       - uses: actions/checkout@v5
-      # The 0.16.7 job already cleaned this exact Cargo target immediately
-      # before the identical locked build and still exhausted the volume. Its
-      # later `host reclaim` could never run because the binary it needed was
-      # the build that failed. Reclaim the runner's declared non-checkout roots
-      # with the installed product first; the bounded janitor substage may
-      # spend its own shared scan budget, but host reclaim then continues
-      # through its separately declared scratch, delivery, cache and clone
-      # stages.
+      # The installed client reclaims declared non-checkout roots before the
+      # candidate is compiled; a candidate cannot recover its own failed build.
       - name: Reclaim declared runner capacity
         run: |
-          "$HOME/.stado/bin/stado" host reclaim lukasz-macbook --apply \
+          "$HOME/.stado/bin/stado" host reclaim "${STADO_CONTROL_TARGET:?}" --apply \
             --reason "stado $STADO_VERSION release build requires declared host capacity" \
             --json
       # Cargo output is checkout-relative, not the `.stado/build-work` tree
@@ -183,7 +153,7 @@ jobs:
       - name: Require candidate build admission
         run: |
           set -uo pipefail
-          gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
+          gates=$("$HOME/.stado/bin/stado" host gates "${STADO_CONTROL_TARGET:?}" --json)
           printf '%s' "$gates" | /usr/bin/jq -e -r '.disk as $d
             | if $d.free_gb == null or $d.low_watermark_gb == null
               then error("host gates did not report free_gb and low_watermark_gb")
@@ -195,13 +165,13 @@ jobs:
       - name: Reclaim declared capacity with candidate
         run: |
           "$GITHUB_WORKSPACE/stado-rs/target/release/stado" host reclaim \
-            lukasz-macbook --apply \
+            "${STADO_CONTROL_TARGET:?}" --apply \
             --reason "stado $STADO_VERSION candidate completes declared host reclamation" \
             --json
       - name: Require declared build capacity
         run: |
           "$GITHUB_WORKSPACE/stado-rs/target/release/stado" host gates \
-            lukasz-macbook --json --require-disk target
+            "${STADO_CONTROL_TARGET:?}" --json --require-disk target
 
       # Every call below first claims one create-only record at version scope,
       # then its platform record. The shared version write is the arbitration
@@ -228,7 +198,7 @@ jobs:
         if: always()
         run: |
           set -uo pipefail
-          gates=$("$HOME/.stado/bin/stado" host gates lukasz-macbook --json)
+          gates=$("$HOME/.stado/bin/stado" host gates "${STADO_CONTROL_TARGET:?}" --json)
           printf '%s' "$gates" | /usr/bin/jq -e -r '.disk as $d
             | if $d.free_gb == null or $d.target_free_gb == null or $d.free_gb < $d.target_free_gb
               then error("runner capacity below target after scratch reset: \($d.free_gb) < \($d.target_free_gb)")
@@ -246,25 +216,9 @@ jobs:
           (needs.identity.outputs.channel != 'stable' ||
            needs.deploy-control-plane.result == 'success') }}
     runs-on: [self-hosted, stado-control-plane]
-    # NO shared concurrency group here, deliberately. The capacity job is a
-    # completed prerequisite, not a group that can evict this pending build.
-    #
-    # I added `group: stado-control-plane-runner` with cancel-in-progress
-    # false in #172, meaning to make PR gates queue for the single runner
-    # instead of competing for it. It did the opposite. GitHub allows exactly
-    # ONE pending job per concurrency group: when a second job becomes
-    # pending in the group, the one already waiting is CANCELLED. So on the
-    # 0.13.0 train this job sat pending behind the darwin job from 00:18:56Z,
-    # a `writer-transfer-check` for another branch entered the group at
-    # 00:35:12Z, and this job was cancelled one second later at 00:35:13Z
-    # having executed zero steps. The group converted "wait your turn" into
-    # "be evicted by the next PR push", which is strictly worse than no group
-    # at all.
-    #
-    # A self-hosted runner already queues jobs natively, and GitHub does not
-    # cancel a job for waiting on a busy runner. Contention here costs time,
-    # never a platform. Do not re-add a concurrency group to make runner
-    # sharing orderly: it cannot express "queue" for more than one waiter.
+    # The runner queues work without cancelling pending jobs. A shared GitHub
+    # concurrency group retains only one pending job and can cancel another
+    # platform's publication, so capacity is a prerequisite, not a shared group.
     permissions:
       contents: read
     env:
@@ -280,12 +234,16 @@ jobs:
       
       
     steps:
-      # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
-      # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
-      # least 2.327.1 and this control plane runs 2.336.0. Held at the oldest major
-      # that resolves the deprecation rather than the newest one published, because
-      # this job publishes create-only release objects and a checkout that changes
-      # behaviour under it cannot be corrected after the fact.
+      - name: Require declared object service expectations
+        run: |
+          : "${STADO_CONTROL_TARGET:?Set the STADO_CONTROL_TARGET repository variable}"
+          : "${STADO_OBJECT_HOST:?Set the STADO_OBJECT_HOST repository variable}"
+          : "${STADO_OBJECT_HOME:?Set the STADO_OBJECT_HOME repository variable}"
+          : "${STADO_OBJECT_CONFIG_PATH:?Set the STADO_OBJECT_CONFIG_PATH repository variable}"
+          : "${STADO_OBJECT_VAULT_FILE:?Set the STADO_OBJECT_VAULT_FILE repository variable}"
+          : "${STADO_OBJECT_STORAGE_PATH:?Set the STADO_OBJECT_STORAGE_PATH repository variable}"
+          : "${STADO_OBJECT_BACKUP_PATH:?Set the STADO_OBJECT_BACKUP_PATH repository variable}"
+      # Checkout v5 uses Node 24 and requires runner 2.327.1 or newer.
       - uses: actions/checkout@v5
 
       - name: Prepare release implementation
@@ -694,7 +652,7 @@ jobs:
           # It installs the unit under the label the host's Stado catalog
           # declares, and that process retires the label it replaced.
           retry_command "$stado_bin" host recover-object-api \
-            charless-mac-mini --json \
+            "${STADO_OBJECT_HOST:?}" --json \
             > "$RUNNER_TEMP/object-api-recovery.json"
           "$stado_bin" product catalog --output "$RUNNER_TEMP/service-catalog.json"
           host_unit="$(
@@ -703,21 +661,26 @@ jobs:
           )"
           "$stado_bin" service env \
             "$host_unit" \
-            --host charless-mac-mini --json \
+            --host "${STADO_OBJECT_HOST:?}" --json \
             > "$RUNNER_TEMP/object-api-environment.json"
-          jq -e '
+          jq -e \
+            --arg home "$STADO_OBJECT_HOME" \
+            --arg config "$STADO_OBJECT_CONFIG_PATH" \
+            --arg vault "$STADO_OBJECT_VAULT_FILE" \
+            --arg storage "$STADO_OBJECT_STORAGE_PATH" \
+            --arg backup "$STADO_OBJECT_BACKUP_PATH" '
             length == 1 and
-            .[0].environment.HOME == "/Users/charles" and
-            .[0].environment.STADO_CONFIG == "/Users/charles/.config/stado/config.json" and
-            .[0].environment.SKARBIEC_VAULT_FILE == "/Users/charles/.stado/skarbiec.vault.json" and
+            .[0].environment.HOME == $home and
+            .[0].environment.STADO_CONFIG == $config and
+            .[0].environment.SKARBIEC_VAULT_FILE == $vault and
             # service env deliberately redacts token-file variables. Recovery
             # already proved their exact checked-in values before persisting the plist.
             .[0].environment.WC_OBJECT_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
             .[0].environment.WC_RELEASE_SKARBIEC_TOKEN_FILE == "[REDACTED]" and
             .[0].environment.WC_STORAGE_BACKEND == "local" and
-            .[0].environment.WC_LOCAL_STORAGE_PATH == "/Users/charles/.stado/local-storage" and
+            .[0].environment.WC_LOCAL_STORAGE_PATH == $storage and
             .[0].environment.WC_BACKUP_STORAGE_BACKEND == "local" and
-            .[0].environment.WC_BACKUP_LOCAL_STORAGE_PATH == "/Users/charles/.stado/local-backup"
+            .[0].environment.WC_BACKUP_LOCAL_STORAGE_PATH == $backup
           ' "$RUNNER_TEMP/object-api-environment.json" >/dev/null
           preflight() {
             # This release owns only the Stado product prefix. Its authenticated
@@ -747,7 +710,7 @@ jobs:
           }
           reconcile_release_lifecycles() {
             retry_command "$stado_bin" host reconcile-release-verifier \
-              charless-mac-mini --json \
+              "${STADO_OBJECT_HOST:?}" --json \
               > "$RUNNER_TEMP/release-lifecycles.json"
             jq -e '
               .exact == true and
@@ -793,28 +756,28 @@ jobs:
             # route this job is about to disturb.
             "$stado_bin" service show \
               "$host_unit" \
-              --host charless-mac-mini --json \
+              --host "${STADO_OBJECT_HOST:?}" --json \
               > "$RUNNER_TEMP/object-service-before-restart.json"
-            jq -e --arg unit "$host_unit" '
+            jq -e --arg unit "$host_unit" --arg host "$STADO_OBJECT_HOST" '
               length == 1 and
               .[0].unit == $unit and
-              .[0].host == "charless-mac-mini" and
+              .[0].host == $host and
               .[0].status == "runs" and
               (.[0].detail | contains("dashboard --bind 127.0.0.1 --port 8765"))
             ' "$RUNNER_TEMP/object-service-before-restart.json" >/dev/null
             "$stado_bin" service directory connect stado-object-api \
-              --target lukasz-macbook --no-verify --json \
+              --target "${STADO_CONTROL_TARGET:?}" --no-verify --json \
               > "$RUNNER_TEMP/object-dependency-before-restart.json"
-            jq -e '
+            jq -e --arg host "$STADO_OBJECT_HOST" --arg target "$STADO_CONTROL_TARGET" '
               .service == "stado-object-api" and
-              .placed_on == "charless-mac-mini" and
-              .from == "lukasz-macbook"
+              .placed_on == $host and
+              .from == $target
             ' "$RUNNER_TEMP/object-dependency-before-restart.json" >/dev/null
 
             restart_status=0
             "$stado_bin" service restart \
               "$host_unit" \
-              --host charless-mac-mini --json \
+              --host "${STADO_OBJECT_HOST:?}" --json \
               > "$RUNNER_TEMP/object-service-restart.json" ||
               restart_status=$?
             if [ "$restart_status" -ne 0 ]; then
@@ -979,6 +942,8 @@ jobs:
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
     steps:
+      - name: Require declared object host
+        run: ': "${STADO_OBJECT_HOST:?Set the STADO_OBJECT_HOST repository variable}"'
       - name: Check out exact source revision
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1548,7 +1513,7 @@ jobs:
         if: always()
         run: |
           "$HOME/.stado/bin/stado" host recover-object-api \
-            charless-mac-mini --json \
+            "${STADO_OBJECT_HOST:?}" --json \
             > "$RUNNER_TEMP/object-service-recovery.json"
 
       - name: Validate public native release delivery

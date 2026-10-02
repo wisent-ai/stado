@@ -23,7 +23,10 @@ jobs:
       STADO_WRITER_API_URL: http://127.0.0.1:18776
       STADO_PUBLIC_RELEASE_API_URL: ${{ vars.STADO_API_URL || 'https://stado.wisent.com' }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      STADO_OBJECT_HOST: ${{ vars.STADO_OBJECT_HOST }}
     steps:
+      - name: Require declared object host
+        run: ': "${STADO_OBJECT_HOST:?Set the STADO_OBJECT_HOST repository variable}"'
       - uses: actions/checkout@v5
 
       - name: Prepare release implementation
@@ -394,7 +397,7 @@ jobs:
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           object_service_ok() {
             status="$(
-              "$stado_bin" host exec charless-mac-mini -- \
+              "$stado_bin" host exec "${STADO_OBJECT_HOST:?}" -- \
                 /usr/bin/curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
                 'http://127.0.0.1:8765/api/release/object?uri=stado://releases/precondition'
             )"
@@ -407,7 +410,7 @@ jobs:
           # connection exposes it. Public bytes are verified through the
           # configured release origin after each coordinate is published.
           if ! object_service_ok; then
-            "$stado_bin" host recover-object-api charless-mac-mini --json \
+            "$stado_bin" host recover-object-api "${STADO_OBJECT_HOST:?}" --json \
               > "$RUNNER_TEMP/object-service-recovery.json"
           fi
           object_service_ok
