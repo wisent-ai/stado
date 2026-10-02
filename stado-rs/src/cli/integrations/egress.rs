@@ -35,8 +35,8 @@ pub enum MobileCommands {
         /// Loopback address to listen on. Non-loopback binds are refused.
         #[arg(long, default_value = "127.0.0.1")]
         bind: IpAddr,
-        /// Local proxy port consumed by Weles.
-        #[arg(long, default_value_t = 8781)]
+        /// Local proxy port the browser is pointed at; no port is assumed.
+        #[arg(long)]
         port: u16,
     },
 }
