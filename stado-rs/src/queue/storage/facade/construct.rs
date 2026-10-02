@@ -258,4 +258,21 @@ impl StoreRoot {
             root.to_path_buf()
         }
     }
+
+    /// The top of the store a queue client on the serving host is rooted
+    /// under, when `queue_root` put it in the served queue namespace. Objects
+    /// of other namespaces — a published release among them — live under
+    /// that top, not under the client's queue directory.
+    pub(crate) fn served_top(client_root: &std::path::Path) -> Option<std::path::PathBuf> {
+        let tail = Self::namespace_tail();
+        client_root
+            .ends_with(&tail)
+            .then(|| {
+                client_root
+                    .ancestors()
+                    .nth(tail.components().count())
+                    .map(std::path::Path::to_path_buf)
+            })
+            .flatten()
+    }
 }

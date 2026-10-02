@@ -24,7 +24,24 @@ impl JobStorage {
     /// One `stado://releases/...` object off the public release channel —
     /// see [`BlobBackend::download_release`] for why the plain blob read is
     /// the wrong route for a cross-namespace software artifact.
+    ///
+    /// A queue client on the host that serves the object API is rooted in the
+    /// served queue namespace (`ecosystem/<queue namespace>/`), so the
+    /// release's storage path resolved under that root named a file that does
+    /// not exist, and every delivery queued to that host failed with "input
+    /// archive is absent" for an archive the same host was serving. The
+    /// release is read from the top of the store instead.
     pub async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        if let Some(top) = self
+            .local_path
+            .as_deref()
+            .and_then(|path| super::construct::StoreRoot::served_top(Path::new(path)))
+        {
+            let object = crate::remote::object_store::ObjectRef::parse(uri)
+                .map_err(|error| StorageError::Other(error.to_string()))?;
+            let top = crate::queue::local_file::LocalBackend::new(&top.to_string_lossy())?;
+            return crate::queue::BlobBackend::download_bytes(&top, &object.storage_path()).await;
+        }
         self.backend.download_release(uri).await
     }
 

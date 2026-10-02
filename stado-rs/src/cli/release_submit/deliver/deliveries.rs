@@ -133,9 +133,15 @@ pub(crate) async fn run_deliveries(
         }
     }
     save(run).await?;
+    // The run is judged once every delivery has its verdict. Failing it while
+    // a sibling is still queued on its host made that sibling's worker refuse
+    // its own job ("the run is Failed, not delivering"), so one host's failure
+    // withheld the release from every other host. The failed delivery's
+    // verdict is already on the run; the pass that finds the last one ended
+    // reports it.
     match required_failure {
+        _ if pending => Ok(Deliveries::Pending),
         Some(failure) => Err(CmdError::click(failure)),
-        None if pending => Ok(Deliveries::Pending),
         None => Ok(Deliveries::Complete),
     }
 }
