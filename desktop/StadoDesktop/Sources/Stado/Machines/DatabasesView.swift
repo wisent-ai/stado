@@ -19,6 +19,7 @@ struct DatabasesView: View {
     @State private var isCreating = false
     @State private var isPushing = false
     @State private var pendingRemoval: DatabaseRow?
+    @State private var pendingDestruction: DatabaseRow?
     @State private var consumerEditor: ConsumerEdit?
 
     var body: some View {
@@ -80,6 +81,9 @@ struct DatabasesView: View {
         .sheet(item: $pendingRemoval) { row in
             removalDialog(row)
         }
+        .sheet(item: $pendingDestruction) { row in
+            destructionDialog(row)
+        }
     }
 
     private func removalDialog(_ row: DatabaseRow) -> WisentDecisionDialog {
@@ -96,6 +100,34 @@ struct DatabasesView: View {
                 WisentAction("Remove", symbol: "trash", kind: .primary) {
                     pendingRemoval = nil
                     Task { await store.remove(name: row.database) }
+                },
+            ]
+        )
+    }
+
+    /// The inverse of Create…: the CLI reads the provider from the credential
+    /// item, refuses an external server, and deletes a Supabase project only
+    /// when the second action passes --delete-project.
+    private func destructionDialog(_ row: DatabaseRow) -> WisentDecisionDialog {
+        WisentDecisionDialog(
+            tone: .danger,
+            title: "Destroy \(row.database)?",
+            lines: [
+                "A fleet database loses its serving unit, its credential item \(row.item) and its declaration; its data directory stays on the host.",
+                "A Supabase database is deleted with its hosted project and every row in it, which cannot be restored.",
+                "An external server is refused: Remove… withdraws its declaration instead.",
+            ],
+            listing: ["command: stado database destroy \(row.database) [--delete-project]"],
+            footnote: "Runs stado database destroy \(row.database) --json; the second action adds --delete-project.",
+            actions: [
+                WisentAction("Keep it", kind: .secondary) { pendingDestruction = nil },
+                WisentAction("Destroy", symbol: "flame", kind: .secondary) {
+                    pendingDestruction = nil
+                    Task { await store.destroy(name: row.database, deleteProject: false) }
+                },
+                WisentAction("Destroy and delete its Supabase project", symbol: "trash", kind: .primary) {
+                    pendingDestruction = nil
+                    Task { await store.destroy(name: row.database, deleteProject: true) }
                 },
             ]
         )
@@ -159,6 +191,9 @@ struct DatabasesView: View {
                         Divider()
                         Button("Remove…", role: .destructive) {
                             pendingRemoval = row
+                        }
+                        Button("Destroy…", role: .destructive) {
+                            pendingDestruction = row
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")

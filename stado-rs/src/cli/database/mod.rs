@@ -44,8 +44,8 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             json,
         } => declare(&name, &engine, &scopes, &consumers, json),
         DatabaseCommands::Remove { name, json } => remove(&name, json),
-        DatabaseCommands::Destroy { name, host, json } => {
-            fleet::destroy(&name, host.as_deref(), json).await
+        DatabaseCommands::Destroy { name, host, delete_project, json } => {
+            fleet::destroy(&name, host.as_deref(), delete_project, json).await
         }
         DatabaseCommands::Create {
             name,

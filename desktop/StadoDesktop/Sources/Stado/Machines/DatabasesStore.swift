@@ -62,6 +62,12 @@ final class DatabasesStore: ObservableObject {
         ["database", "remove", name, "--json"]
     }
 
+    /// `stado database destroy`, the inverse of create. `deleteProject` is the
+    /// CLI's `--delete-project`, which a Supabase database requires.
+    nonisolated static func destroyArguments(name: String, deleteProject: Bool) -> [String] {
+        ["database", "destroy", name] + (deleteProject ? ["--delete-project"] : []) + ["--json"]
+    }
+
     /// `stado database create` on any provider. Blank fields are left out so
     /// the CLI chooses: postgres on fleet and supabase, the connection URL's
     /// own engine on external, the vault owner as the fleet host. A supabase
@@ -209,6 +215,10 @@ final class DatabasesStore: ObservableObject {
 
     func remove(name: String) async -> Bool {
         await mutate(Self.removeArguments(name: name))
+    }
+
+    func destroy(name: String, deleteProject: Bool) async -> Bool {
+        await mutate(Self.destroyArguments(name: name, deleteProject: deleteProject))
     }
 
     func grant(_ consumers: [String], database name: String) async -> Bool {

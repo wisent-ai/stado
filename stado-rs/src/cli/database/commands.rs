@@ -174,19 +174,27 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Destroy a fleet database: the inverse of `create --provider fleet`.
+    /// Destroy a database Stado created: the inverse of `create`.
     ///
-    /// Removes the managed unit `<name>-database` that serves a postgres
-    /// database on its host, deletes the credential item from the owner vault
-    /// (restorably, as Skarbiec deletes), and withdraws the declaration last,
-    /// so a run that stops part-way can be run again. The data directory
-    /// `~/.stado/databases/<name>/` on the host is left in place and named.
+    /// A fleet database: removes the managed unit `<name>-database` that
+    /// serves a postgres database on its host; its data directory
+    /// `~/.stado/databases/<name>/` is left in place and named. A Supabase
+    /// database: deletes the hosted project with every row it holds, and only
+    /// with `--delete-project`. Then the credential item is deleted from the
+    /// owner vault (restorably, as Skarbiec deletes) and the declaration is
+    /// withdrawn last, so a run that stops part-way can be run again. An
+    /// external database is a server Stado does not run: it is refused, and
+    /// `remove` withdraws its declaration.
     Destroy {
         name: String,
         /// Host the database was placed on (default: the vault owner, where
         /// `create` places it).
         #[arg(long)]
         host: Option<String>,
+        /// Required for a Supabase database: its hosted project and every row
+        /// in it are deleted and cannot be restored.
+        #[arg(long)]
+        delete_project: bool,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,

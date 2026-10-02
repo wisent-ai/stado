@@ -18,6 +18,7 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- `stado database destroy` is the inverse of `create` for every provider Stado creates with, read from the credential item. A Supabase database's hosted project is deleted through the management API, only with `--delete-project` (it takes every row with it); an external database is refused with `stado database remove`, which withdraws the declaration and leaves the server alone. Before, `destroy` treated every declaration as a fleet database: on a Supabase or external one it deleted the credential item and the declaration and left the project or server running with nothing pointing at it.
 - The `--disk-cleanup` role of `com.wisent.stado` keeps running when a pass reports `invalid_or_unavailable_policy`. When the report has no `check_interval_seconds`, the watch reads its cadence from the host's registry declaration through the last-known-good copy. It ends only when the target declares no `disk_cleanup`.
 - An unreadable settled-job run manifest leaves the job for recovery with `transition_run_manifest_unreadable`, while the remaining lifecycle pass continues.
 - `stado build status` judges a platform from the job's retained receipt when the run reaper has retired its terminal job record, matching `release submit`.
