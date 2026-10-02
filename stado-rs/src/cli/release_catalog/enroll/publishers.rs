@@ -12,7 +12,7 @@ use reqwest::StatusCode;
 use crate::cli::CmdError;
 use crate::release_pipeline::ReleasePipelineManifest;
 
-use super::super::publisher::{declare_publisher_on_fleet, ensure_publisher, publisher_product};
+use super::super::publisher::{declare_publisher_on_fleet, ensure_publisher};
 
 /// Ensure `manifest`'s own publisher and the publisher of every input it reads.
 pub(super) async fn ensure_publishers(manifest: &ReleasePipelineManifest) -> Result<(), CmdError> {
@@ -24,19 +24,14 @@ pub(super) async fn ensure_publishers(manifest: &ReleasePipelineManifest) -> Res
         if readable(&role).await? {
             continue;
         }
-        let product = publisher_product(&role).ok_or_else(|| {
-            CmdError::click(format!(
-                "{}: input {name} is published under role {role}, which is not a release \
-                 publisher role",
-                manifest.product
-            ))
-        })?;
+        // The configuration reader validates that each publisher's item is
+        // its product name and its prefix is exactly `<product>/`.
         eprintln!(
             "{}: input {name} is published under role {role}, which Stado cannot read; \
-             declaring {product}'s publisher on the vault owner",
+             declaring {role}'s publisher on the vault owner",
             manifest.product
         );
-        declare_publisher_on_fleet(product).await?;
+        declare_publisher_on_fleet(&role).await?;
     }
     Ok(())
 }

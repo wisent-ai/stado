@@ -52,10 +52,8 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             removed.push(*key);
         }
     }
-    // A product is its own identity: its publisher entry names the role
-    // `<product>-release-publisher` and its deployer entry the product's role,
-    // and a deployer no longer carries a consumer of its own. The vault
-    // decides which item plays each role.
+    // Publishers and deployers both use the product's own identity.
+    // A deployer no longer carries a consumer of its own.
     for (section, entries) in [("release_api", "publishers"), ("service_api", "deployers")] {
         let Some(table) = root
             .get_mut(section)
@@ -68,12 +66,8 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
             let Some(entry) = entry.as_object_mut() else {
                 continue;
             };
-            let role = match section {
-                "release_api" => format!("{product}-release-publisher"),
-                _ => product.clone(),
-            };
-            if entry.get("item").and_then(Value::as_str) != Some(role.as_str()) {
-                entry.insert("item".into(), Value::from(role));
+            if entry.get("item").and_then(Value::as_str) != Some(product.as_str()) {
+                entry.insert("item".into(), Value::String(product.clone()));
                 removed.push("a product entry not naming its role");
             }
             if entry.remove("consumer").is_some() {

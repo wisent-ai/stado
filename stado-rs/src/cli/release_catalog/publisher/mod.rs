@@ -3,7 +3,7 @@
 //! from the typed operations this fleet already has.
 //!
 //! The command stores the product's publisher bearer in the role
-//! `<product>-release-publisher`, grants Stado read access, declares it on the
+//! named after the product, grants Stado read access, declares it on the
 //! participating hosts and checks their release policies.
 
 use serde_json::{json, Value};
@@ -27,23 +27,12 @@ pub(super) use withdraw::withdraw_publisher;
 /// verifier reconciliation mints (`openssl rand -hex 32`).
 const BEARER_BYTES: usize = 32;
 
-/// The suffix that makes a role a product's release publisher role.
-const PUBLISHER_ROLE_SUFFIX: &str = "-release-publisher";
-
-/// The publisher role and prefix a product's declaration names. The
-/// declaration's `item` key holds the role: the vault, not the declaration,
-/// decides which item plays it.
+/// The publisher item is the product itself; its scope is `<product>/`.
+/// This matches the strict release publisher configuration contract.
 pub(super) fn publisher_declaration(product: &str) -> (String, Value) {
-    let role = format!("{product}{PUBLISHER_ROLE_SUFFIX}");
+    let role = product.to_owned();
     let declared = json!({ "item": role, "prefix": format!("{product}/") });
     (role, declared)
-}
-
-/// The product whose publisher plays `role`, or `None` for a role that is no
-/// release publisher's.
-pub(super) fn publisher_product(role: &str) -> Option<&str> {
-    role.strip_suffix(PUBLISHER_ROLE_SUFFIX)
-        .filter(|product| !product.is_empty())
 }
 
 /// A fresh bearer: two random UUIDs' bytes, hex encoded, so no shell and no

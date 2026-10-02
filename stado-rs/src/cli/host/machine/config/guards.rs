@@ -13,8 +13,8 @@ use crate::cli::host::secrets::vault::item::read_vault_phase;
 /// `/api/object` read of a `system/release-catalog/*` key then answers 401 or
 /// 503, for every product, including the ones publishing perfectly.
 ///
-/// A product declared as a publisher with no `<product>-release-publisher`
-/// item in the vault makes the boundary report
+/// A product declared as a publisher without its product-named item
+/// in the vault makes the boundary report
 /// `release verifier grant item set mismatch (missing=[...], unexpected=[...])`
 /// on the host and nowhere an operator is looking. A publisher declaration
 /// whose item does not exist is the defect, never the missing item: mint the
