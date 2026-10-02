@@ -115,8 +115,10 @@ impl ResolverState {
 
     pub(super) async fn refresh(&self) -> Result<bool, String> {
         let source = self.source.read().await.clone();
-        let (document, store_version, generation) =
-            source.fetch(host_silence::READER_RESOLVER).await?;
+        let (document, store_version, generation) = source
+            .fetch(host_silence::READER_RESOLVER)
+            .await
+            .map_err(|error| error.to_string())?;
         let serialized = serde_json::to_string(&document)
             .map_err(|error| format!("cannot serialize validated registry snapshot: {error}"))?;
         // A refused cache does not fail the refresh: the document this

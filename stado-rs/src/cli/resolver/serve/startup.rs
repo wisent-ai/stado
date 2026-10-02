@@ -74,7 +74,10 @@ async fn load_startup(
             directory.generation,
         )
     } else {
-        source.fetch(host_silence::READER_RESOLVER).await?
+        source
+            .fetch(host_silence::READER_RESOLVER)
+            .await
+            .map_err(|error| error.to_string())?
     };
     Ok(Startup {
         source,

@@ -185,3 +185,61 @@ fn an_external_sqlite_url_is_refused() {
 fn an_external_create_without_a_url_is_refused() {
     Isolated::new("external-empty").create_external(None, None, "standard input was empty");
 }
+
+#[test]
+#[cfg(unix)]
+fn a_refused_registry_connection_keeps_its_transport_cause_and_failure_class() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let isolated = Isolated::new("registry-connection-refused");
+    isolated.succeed(&[
+        "database", "declare", "ledger", "--engine", "postgres",
+        "--consumer", "probe", "--json",
+    ]);
+    let before = std::fs::read(&isolated.config).expect("read the declared database");
+
+    // Reserve a real TCP endpoint without listening. The kernel refuses the
+    // connection; no HTTP server or canned provider response is involved.
+    let reserved = tokio::net::TcpSocket::new_v4().expect("create the reserved socket");
+    reserved
+        .bind(([127, 0, 0, 1], 0).into())
+        .expect("reserve an isolated loopback port");
+    let origin = format!("http://{}", reserved.local_addr().expect("read the reserved port"));
+    let token = isolated.directory.join("transport-token");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&token)
+        .expect("create the test-owned token file")
+        .write_all(b"transport-test-no-listener")
+        .expect("write the token that cannot reach a server");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stado"))
+        .args(["database", "resolve", "ledger", "--consumer", "probe", "--json"])
+        .env("STADO_CONFIG", &isolated.config)
+        .env("WC_STORAGE_BACKEND", "stado")
+        .env("WC_STADO_STORAGE_URL", &origin)
+        .env("WC_STADO_STORAGE_TOKEN_FILE", &token)
+        .env("WC_STADO_STORAGE_CA_FILE", "")
+        .env("NO_PROXY", "127.0.0.1")
+        .env("no_proxy", "127.0.0.1")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run database resolution through the real transport");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(wisent_errors::Code::RETRY_EXIT),
+        "the connection refusal lost its retryable failure class: {stderr}"
+    );
+    assert!(stderr.contains("infra_down"), "missing failure code: {stderr}");
+    assert!(stderr.contains(&origin), "missing failed endpoint: {stderr}");
+    let cause = std::io::Error::from_raw_os_error(nix::libc::ECONNREFUSED).to_string();
+    assert!(stderr.contains(&cause), "missing native cause {cause:?}: {stderr}");
+    assert_eq!(
+        before,
+        std::fs::read(&isolated.config).expect("read configuration after refusal"),
+        "a refused read changed the declared database"
+    );
+}

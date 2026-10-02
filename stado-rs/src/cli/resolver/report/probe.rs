@@ -93,7 +93,7 @@ pub(super) async fn probe_authority(
             source: "ssh",
             reachable: false,
             generation: None,
-            detail: Some(detail),
+            detail: Some(detail.to_string()),
         },
     }
 }

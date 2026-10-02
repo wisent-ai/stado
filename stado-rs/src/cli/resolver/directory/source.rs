@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::service_resolution;
 use crate::targets::{self, RegistryStore};
+use crate::cli::CmdError;
 
 use crate::cli::resolver::authority::execute::execute;
 use crate::cli::resolver::authority::paths::target_ssh_paths;
@@ -39,7 +40,7 @@ impl SnapshotSource {
     /// [`host_silence::READER_RESOLVER`] for the serving loop and its
     /// background refresh, [`host_silence::READER_CLI`] for a one-shot
     /// command.
-    pub(crate) async fn fetch(&self, reader: &str) -> Result<(Value, String, u64), String> {
+    pub(crate) async fn fetch(&self, reader: &str) -> Result<(Value, String, u64), CmdError> {
         match self {
             Self::Local(store) => read_local_snapshot(store).await,
             // Each authority read owns a native connection independent of adapter traffic.
@@ -56,10 +57,10 @@ impl SnapshotSource {
                 Self::fetch_authority_paths(target, ssh, command, reader)
                     .await
                     .map_err(|retry_error| {
-                        format!(
+                        CmdError::click(format!(
                             "{first_error}; second authority read on a fresh SSH session failed: \
                              {retry_error}"
-                        )
+                        ))
                     })
             }
         }

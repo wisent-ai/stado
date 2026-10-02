@@ -30,24 +30,30 @@ fn validate_snapshot(payload: SnapshotPayload) -> Result<(Value, String, u64), S
 
 pub(crate) async fn read_local_snapshot(
     store: &RegistryStore,
-) -> Result<(Value, String, u64), String> {
+) -> Result<(Value, String, u64), CmdError> {
     let blob = store
         .read_versioned()
         .await
-        .map_err(|error| format!("registry read failed: {error}"))?
-        .ok_or_else(|| format!("no registry document at {}", store.location()))?;
+        .map_err(|error| {
+            let mut error = CmdError::from(error);
+            if let Some(message) = error.message.as_mut() {
+                message.insert_str(0, "registry read failed: ");
+            }
+            error
+        })?
+        .ok_or_else(|| CmdError::click(format!("no registry document at {}", store.location())))?;
     let document: Value = serde_json::from_str(&blob.content)
-        .map_err(|error| format!("invalid registry JSON: {error}"))?;
+        .map_err(|error| CmdError::click(format!("invalid registry JSON: {error}")))?;
     validate_snapshot(SnapshotPayload {
         store_version: blob.version,
         document,
     })
+    .map_err(CmdError::click)
 }
 
 pub(super) async fn emit_snapshot() -> Result<(), CmdError> {
     let store = RegistryStore::open().await?;
-    let (document, store_version, _) =
-        read_local_snapshot(&store).await.map_err(CmdError::click)?;
+    let (document, store_version, _) = read_local_snapshot(&store).await?;
     println!(
         "{}",
         serde_json::to_string(&SnapshotPayload {

@@ -137,7 +137,10 @@ impl From<crate::queue::submit::SubmitError> for CmdError {
 
 impl From<crate::queue::StorageError> for CmdError {
     fn from(exc: crate::queue::StorageError) -> Self {
-        Self::click(exc.to_string())
+        match exc {
+            crate::queue::StorageError::Http(error) => Self::from(error),
+            error => Self::click(error.to_string()),
+        }
     }
 }
 
@@ -198,7 +201,13 @@ pub fn http_failure(error: &reqwest::Error) -> String {
 
 impl From<reqwest::Error> for CmdError {
     fn from(exc: reqwest::Error) -> Self {
-        Self::click(http_failure(&exc))
+        let failure = exc
+            .is_connect()
+            .then_some(crate::primitives::failure::FailureCode::InfraDown);
+        Self {
+            failure,
+            ..Self::click(http_failure(&exc))
+        }
     }
 }
 

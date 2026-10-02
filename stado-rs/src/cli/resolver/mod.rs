@@ -99,13 +99,12 @@ fn logical_name(value: &str) -> Result<&str, CmdError> {
 async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
     let service = logical_name(service)?;
     let store = Arc::new(RegistryStore::open().await?);
-    let (bootstrap, _, _) = read_local_snapshot(&store).await.map_err(CmdError::click)?;
+    let (bootstrap, _, _) = read_local_snapshot(&store).await?;
     let target = current_target(&bootstrap).map_err(CmdError::click)?;
     let source = snapshot_source(Some(store), &bootstrap, &target).map_err(CmdError::click)?;
     let (document, _, _) = source
         .fetch(host_silence::READER_CLI)
-        .await
-        .map_err(CmdError::click)?;
+        .await?;
     let resolved =
         service_resolution::resolve(&document, service, consumer).map_err(CmdError::click)?;
     let report = json!({
