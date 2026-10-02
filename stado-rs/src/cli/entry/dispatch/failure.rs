@@ -27,7 +27,7 @@ pub(super) fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "credentials" => "credentials",
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",
-        "azure" | "tunnel" | "market" | "blast-radius" => "provider",
+        "cloud" | "tunnel" | "market" | "blast-radius" => "provider",
         "coordinator"
         | "resolver"
         | "release"

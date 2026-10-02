@@ -55,9 +55,10 @@ pub(crate) enum InstallationCommands {
     #[command(subcommand)]
     Billing(BillingCommands),
 
-    /// Authenticate an Azure operator and repair the Stado RBAC contract.
+    /// Sign a cloud operator in and repair the Stado role contract;
+    /// `--provider` names the cloud.
     #[command(subcommand)]
-    Azure(azure::AzureCommands),
+    Cloud(azure::CloudCommands),
 
     /// Route public hostnames through a tunnel provider's ingress and DNS
     /// with Stado-held credentials; `--provider` names the provider.

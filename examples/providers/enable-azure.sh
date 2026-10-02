@@ -17,5 +17,5 @@ jq '.providers = ((.providers + ["azure"]) | unique) | .providers_disabled -= ["
   ~/.config/stado/config.json > ~/.config/stado/config.json.new
 mv ~/.config/stado/config.json.new ~/.config/stado/config.json
 
-# 3. verify the auth + RBAC contract
-stado azure
+# 3. repair and verify the auth + RBAC contract
+stado cloud repair-rbac --provider azure

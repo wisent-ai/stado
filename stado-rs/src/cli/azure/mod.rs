@@ -1,11 +1,21 @@
-//! Durable Azure operator authentication and RBAC repair.
+//! `stado cloud login|repair-rbac --provider <provider>`: durable operator
+//! authentication and role repair for a cloud provider. The command is named
+//! for what it does; the provider is an argument, and Azure is the one this
+//! module implements.
 //!
-//! `azure login` uses authorization-code + PKCE against the target tenant.
+//! Azure `login` uses authorization-code + PKCE against the target tenant.
 //! `domain_hint=live.com` preserves the Microsoft-account federation used by
 //! Azure refresh credential is written to the globally selected credential
 //! store; authorization codes and access tokens remain process-local.
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
+
+/// The cloud providers operator login and role repair are implemented for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CloudProvider {
+    /// Microsoft Azure: Entra sign-in and Azure RBAC.
+    Azure,
+}
 
 use super::CmdError;
 
@@ -30,7 +40,7 @@ const QUOTA_REQUEST_OPERATOR_ROLE: &str = "0e5f05e5-9ab9-446b-b98d-1e2157c94125"
 const SUPPORT_REQUEST_CONTRIBUTOR_ROLE: &str = "cfd33db0-3dd1-45e3-aa9d-cdbdf3b6f24e";
 
 #[derive(Subcommand)]
-pub enum AzureCommands {
+pub enum CloudCommands {
     /// Sign in through Microsoft Account federation and encrypt the refresh token in Skarbiec.
     Login(LoginArgs),
     /// Apply Stado control-plane/agent roles and inspect a named deny assignment.
@@ -40,6 +50,9 @@ pub enum AzureCommands {
 
 #[derive(Args)]
 pub struct LoginArgs {
+    /// Provider to sign in to. No provider is assumed.
+    #[arg(long, value_enum)]
+    provider: CloudProvider,
     /// Azure tenant containing the guest account and subscription.
     #[arg(long)]
     tenant: String,
@@ -59,6 +72,9 @@ pub struct LoginArgs {
 
 #[derive(Args)]
 pub struct RepairRbacArgs {
+    /// Provider whose role assignments are repaired. No provider is assumed.
+    #[arg(long, value_enum)]
+    provider: CloudProvider,
     /// Azure subscription to repair; defaults to AZURE_SUBSCRIPTION_ID/config.
     #[arg(long)]
     subscription: Option<String>,
@@ -85,10 +101,16 @@ pub struct RepairRbacArgs {
     json: bool,
 }
 
-pub async fn dispatch(command: AzureCommands) -> Result<(), CmdError> {
+pub async fn dispatch(command: CloudCommands) -> Result<(), CmdError> {
     match command {
-        AzureCommands::Login(args) => login(args).await,
-        AzureCommands::RepairRbac(args) => repair_rbac(args).await,
+        CloudCommands::Login(args) => {
+            let CloudProvider::Azure = args.provider;
+            login(args).await
+        }
+        CloudCommands::RepairRbac(args) => {
+            let CloudProvider::Azure = args.provider;
+            repair_rbac(args).await
+        }
     }
 }
 
