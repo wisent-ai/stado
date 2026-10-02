@@ -79,17 +79,41 @@ pub async fn run(once: bool, watch: bool, to_target: bool, dry_run: bool) -> Res
         if !watch {
             return Ok(());
         }
-        // The registry's `check_interval_seconds` is the cadence; a report
-        // that names none ends the watch with that fact.
-        let interval = report
-            .get("check_interval_seconds")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                CmdError::click(
-                    "the cleanup report names no check_interval_seconds, so --watch has no \
-                     declared cadence to run on",
-                )
-            })?;
+        // The registry's `check_interval_seconds` is the cadence. A pass that
+        // could not read its policy — the store answered 502 for one tick —
+        // reports none, and the watch then reads the cadence from the
+        // declaration itself, through the last-known-good registry copy; the
+        // pass's own failure is already in its report. Only a target that
+        // declares no cleanup at all ends the watch with that fact.
+        let interval = match report.get("check_interval_seconds").and_then(Value::as_u64) {
+            Some(interval) => interval,
+            None => declared_cadence().await?,
+        };
         tokio::time::sleep(Duration::from_secs(interval)).await;
     }
+}
+
+/// This host's declared cleanup cadence, from the registry target.
+async fn declared_cadence() -> Result<u64, CmdError> {
+    let hostname = crate::providers::vast::system_hostname();
+    let target = crate::providers::local::agent::lookup_self_auto(&hostname)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{hostname} is not a registry target, so --watch has no declared cadence to run on"
+            ))
+        })?;
+    let declared = target.disk_cleanup.as_ref().ok_or_else(|| {
+        CmdError::click(format!(
+            "{} declares no disk_cleanup, so --watch has no declared cadence to run on",
+            target.name
+        ))
+    })?;
+    u64::try_from(declared.check_interval_seconds).map_err(|_| {
+        CmdError::click(format!(
+            "{} declares check_interval_seconds {}, which is not a cadence",
+            target.name, declared.check_interval_seconds
+        ))
+    })
 }
