@@ -27,6 +27,18 @@ async fn delete_status_dir(store: &JobStorage, job_id: &str) -> Result<(), Stora
     }
 }
 
+/// Whether `run_id` is a release build's submission run: its jobs' output
+/// (`status/<job>/output/`: receipt, archive, log) is the build's evidence
+/// and the bytes a release publishes, read on the release's own cadence
+/// after the job ended. The sweep retires such a job's queue records and
+/// leaves its output to the build that names it.
+fn release_build_submission(run_id: &str) -> bool {
+    run_id.starts_with(&format!(
+        "run-{}-",
+        crate::cli::release_submit::RELEASE_BUILD_RUN_SCOPE
+    ))
+}
+
 /// Delete every lifecycle blob and status entry of a retained run, then record
 /// that the cleanup finished. Idempotent: a blob another pass already removed
 /// is simply absent, and the completion marker is written only once every
@@ -68,7 +80,9 @@ pub(super) async fn sweep_retained_run(
             }
         }
         store.repair_priority_markers(job_id, None).await?;
-        delete_status_dir(store, job_id).await?;
+        if !release_build_submission(run_id) {
+            delete_status_dir(store, job_id).await?;
+        }
     }
     for _ in 0..16 {
         let Some(versioned) = store.read_text_versioned(&path).await? else {

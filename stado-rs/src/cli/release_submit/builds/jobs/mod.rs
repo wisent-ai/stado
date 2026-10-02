@@ -8,6 +8,8 @@ mod fallback;
 pub(in crate::cli::release_submit) mod platforms;
 pub(in crate::cli::release_submit) mod terminal;
 
+pub(crate) use enqueue::RELEASE_BUILD_RUN_SCOPE;
+
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};

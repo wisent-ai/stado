@@ -22,6 +22,14 @@ pub(crate) async fn read_terminal_job(
 
 /// The release job's terminal record. A job that is still queued or running
 /// is an error naming where it is and, when queued, the host it is pinned to.
+///
+/// A terminal record the queue has since retired — the run reaper settles
+/// terminal jobs and deletes their blobs on its own cadence, and a release is
+/// finished on another host's cadence — is answered by the job's own
+/// receipt, which the worker wrote with its exit and which every publish
+/// verifies in full (run, job, builder, source, status, archive digest)
+/// before a byte is published. A job with neither record nor receipt has not
+/// reached a terminal state.
 pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
     if let Some(job) = read_terminal_job(store, id).await? {
         return Ok(job);
@@ -39,8 +47,30 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
             queued.state
         )));
     }
+    if store.read_job("running", id).await?.is_some() {
+        return Err(CmdError::click(format!(
+            "release job {id} is still running"
+        )));
+    }
+    if let Some(bytes) = store
+        .read_bytes(&format!("status/{id}/output/receipt.json"))
+        .await?
+    {
+        let receipt: BuildReceipt = serde_json::from_slice(&bytes)?;
+        let state = if receipt.status == StepStatus::Passed {
+            job_state::COMPLETED
+        } else {
+            job_state::FAILED
+        };
+        return Ok(Job {
+            job_id: id.to_string(),
+            pinned_host: receipt.builder,
+            state: state.to_string(),
+            ..Job::default()
+        });
+    }
     Err(CmdError::click(format!(
-        "release job {id} has not reached a terminal state"
+        "release job {id} has not reached a terminal state, and left no receipt"
     )))
 }
 
