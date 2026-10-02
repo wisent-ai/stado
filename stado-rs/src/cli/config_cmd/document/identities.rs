@@ -47,6 +47,24 @@ pub(in crate::cli::config_cmd) fn migrate_identities() -> Result<(), CmdError> {
         .as_object_mut()
         .ok_or_else(|| CmdError::click("config file must contain a JSON object"))?;
     let mut removed = Vec::new();
+    // `agent.skarbiec.items` named the vault items a job may read; since
+    // secrets are asked for by role those same names are the roles, and
+    // `secret_fields` already spells them as `role#field`. Retiring the key
+    // without carrying its names left every `secret_fields` entry naming a
+    // role the document does not declare, so the configuration failed its own
+    // validation and every incoming Stado refused the host.
+    if let Some(agent) = root
+        .get_mut("agent")
+        .and_then(|value| value.get_mut("skarbiec"))
+        .and_then(Value::as_object_mut)
+    {
+        if !agent.contains_key("roles") {
+            if let Some(items) = agent.get("items").cloned() {
+                agent.insert("roles".into(), items);
+                removed.push("agent.skarbiec.items (now agent.skarbiec.roles)");
+            }
+        }
+    }
     for key in RETIRED {
         if remove(root, key).is_some() {
             removed.push(*key);

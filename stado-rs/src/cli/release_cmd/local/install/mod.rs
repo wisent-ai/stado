@@ -1,6 +1,8 @@
 //! `stado release install-local` — verify the delivered archive, install one
 //! member, and reconcile every reader of the name it replaced.
 
+mod config_gate;
+
 use std::path::{Path, PathBuf};
 
 use crate::cli::CmdError;
@@ -139,30 +141,15 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // control host's binary and every boundary of its object API answered
     // `503 object authorization unavailable`, leaving nothing through which
     // Stado could read, repair or roll itself back. So the incoming binary
-    // validates the configuration first, and one it refuses is not installed.
+    // validates the configuration first, after its own migrations, and one it
+    // refuses is not installed.
     if stado_version.is_some() && !root_already_current {
-        let verdict = std::process::Command::new(&staged)
-            .args(["config", "validate"])
-            .output()
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "cannot run the incoming {name} to validate this host's configuration: {error}"
-                ))
-            })?;
-        if !verdict.status.success() {
+        if let Err(refusal) = config_gate::admit(&staged, &name) {
             let _ = std::fs::remove_file(&staged);
             if let Some(path) = &release_version_stage {
                 let _ = std::fs::remove_file(path);
             }
-            return Err(CmdError::click(format!(
-                "the incoming {name} refuses this host's configuration, so the installed {name} \
-                 was left in place: {}{}Migrate the configuration (`stado credentials grant \
-                 consolidate --host <host> --from <retired consumer> --token-file <path>`, then \
-                 `stado config migrate-identities`, and product-named publisher and deployer \
-                 items) and deliver again.",
-                String::from_utf8_lossy(&verdict.stdout),
-                String::from_utf8_lossy(&verdict.stderr)
-            )));
+            return Err(refusal);
         }
     }
     // Leave the receipt the fleet's provenance check reads, before the
