@@ -145,7 +145,13 @@ pub(crate) async fn dispatch(command: EdgeCommands) -> Result<(), CmdError> {
             contact,
             registrar_credential,
             json,
-        } => declare(&target, &address, &contact, registrar_credential.as_deref(), json),
+        } => declare(
+            &target,
+            &address,
+            &contact,
+            registrar_credential.as_deref(),
+            json,
+        ),
         EdgeCommands::Status { json } => status(json).await,
         EdgeCommands::Hostnames { json } => hostnames(json).await,
         EdgeCommands::Remove {

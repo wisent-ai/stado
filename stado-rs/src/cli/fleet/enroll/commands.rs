@@ -258,7 +258,9 @@ pub async fn approve(
                     "approved '{request_hostname}' as target '{name}' (generation {generation})"
                 );
                 if let Some(fleet) = fleet_name {
-                    println!("target '{name}' assigned to fleet '{fleet}' (generation {generation})");
+                    println!(
+                        "target '{name}' assigned to fleet '{fleet}' (generation {generation})"
+                    );
                 }
             }
         }

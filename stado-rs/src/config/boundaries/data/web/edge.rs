@@ -45,7 +45,10 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
     };
     let mut problems = Vec::new();
     for key in entry.keys() {
-        if !matches!(key.as_str(), "target" | "address" | "contact" | "registrar_credential") {
+        if !matches!(
+            key.as_str(),
+            "target" | "address" | "contact" | "registrar_credential"
+        ) {
             problems.push(format!("web_api.edge contains unsupported key {key:?}"));
         }
     }
@@ -65,9 +68,8 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
         None => None,
         Some(Value::String(item)) if !item.trim().is_empty() => Some(item.clone()),
         Some(_) => {
-            problems.push(
-                "web_api.edge.registrar_credential must name a Skarbiec item".to_string(),
-            );
+            problems
+                .push("web_api.edge.registrar_credential must name a Skarbiec item".to_string());
             None
         }
     };

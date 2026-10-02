@@ -76,8 +76,14 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                         "--host and --port place a fleet database; supabase chooses its own",
                     ));
                 }
-                supabase::create::create(&name, anchor.as_deref(), &consumers, accept_monthly_usd, json)
-                    .await
+                supabase::create::create(
+                    &name,
+                    anchor.as_deref(),
+                    &consumers,
+                    accept_monthly_usd,
+                    json,
+                )
+                .await
             }
             other => Err(CmdError::usage(format!(
                 "--provider must be fleet or supabase, got {other:?}"

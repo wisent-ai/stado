@@ -53,10 +53,7 @@ pub(super) fn cost(plan: &str, running: usize) -> u64 {
 /// project when one is named, otherwise the one organization and region every
 /// project the token sees shares. Several are refused by name, because
 /// choosing between them would be a guess.
-async fn placement(
-    anchor: Option<&str>,
-    projects: &[Value],
-) -> Result<(String, String), CmdError> {
+async fn placement(anchor: Option<&str>, projects: &[Value]) -> Result<(String, String), CmdError> {
     if let Some(anchor) = anchor {
         let anchor_ref = field(&format!("{anchor}-database"), "project_ref").await?;
         let anchor_project = projects
@@ -77,9 +74,7 @@ async fn placement(
     }
     let mut places: Vec<(String, String)> = projects
         .iter()
-        .filter_map(|p| {
-            Some((organization_of(p)?, p["region"].as_str()?.to_string()))
-        })
+        .filter_map(|p| Some((organization_of(p)?, p["region"].as_str()?.to_string())))
         .collect();
     places.sort();
     places.dedup();

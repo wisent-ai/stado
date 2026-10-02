@@ -157,7 +157,11 @@ pub async fn user_create(
             "hosts": hosts,
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
-        return if failed { Err(CmdError::silent(1)) } else { Ok(()) };
+        return if failed {
+            Err(CmdError::silent(1))
+        } else {
+            Ok(())
+        };
     }
     for result in &results {
         match result.status.as_str() {

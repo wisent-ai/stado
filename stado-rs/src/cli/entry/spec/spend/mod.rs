@@ -6,5 +6,5 @@
 
 pub mod billing;
 pub mod cost;
-pub mod quota;
 pub mod market;
+pub mod quota;

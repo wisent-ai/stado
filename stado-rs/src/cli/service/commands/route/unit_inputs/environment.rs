@@ -100,7 +100,9 @@ pub(crate) async fn dispatch(command: EnvironmentCommands) -> Result<(), CmdErro
             // The value arrives base64-encoded on standard input, never in argv.
             let value_b64 = if value_stdin {
                 let text = std::io::read_to_string(std::io::stdin()).map_err(|error| {
-                    CmdError::click(format!("cannot read the value from standard input: {error}"))
+                    CmdError::click(format!(
+                        "cannot read the value from standard input: {error}"
+                    ))
                 })?;
                 Some(text.trim().to_string())
             } else {

@@ -235,7 +235,9 @@ pub async fn enrolled(
     let generation = push_document_if(&next, &expected_generation)
         .await
         .map_err(|exc| exc.to_string())?;
-    say(&format!("registered '{name}', verified as '{hostname}' (generation {generation})"));
+    say(&format!(
+        "registered '{name}', verified as '{hostname}' (generation {generation})"
+    ));
     if bootstrap {
         let bootstrapped = crate::cli::setup::bootstrap::run_reporting(
             Some(name.to_string()),
