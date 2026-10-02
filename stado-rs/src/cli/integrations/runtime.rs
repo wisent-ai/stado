@@ -133,11 +133,9 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     let mut supervisor = supervisor::Supervisor::new();
     // Start an API before resolving host identity unless a worker first needs
     // to apply its environment. An API-only host needs no registry bootstrap.
-    let mut api_store = None;
     if serve_api && !mutates_worker_environment {
         let api =
             api::PreparedApi::prepare(args.bind.take(), args.port, args.api_storage.take()).await?;
-        api_store = Some(api.store());
         supervisor.spawn("api", move || api.run())?;
     }
     let target = supervisor
@@ -172,10 +170,7 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         _ => return Err(CmdError::usage("serve reverse forwarding requires a destination, both loopback ports and its reconciliation interval")),
     };
     let api = if serve_api && mutates_worker_environment {
-        let api =
-            api::PreparedApi::prepare(args.bind.take(), args.port, args.api_storage.take()).await?;
-        api_store = Some(api.store());
-        Some(api)
+        Some(api::PreparedApi::prepare(args.bind.take(), args.port, args.api_storage.take()).await?)
     } else {
         None
     };
@@ -203,10 +198,13 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
         })?;
     }
     if let Some(interval) = args.health_interval_seconds {
-        // A process that serves the host's API publishes its beacon into the
-        // store it serves; any other goes through the API its environment
-        // names, with the beacon grant.
-        let store = api_store.clone();
+        // The beacon goes into the fleet store this process's queue roles
+        // use — the store every reader of `host_health/` reads — not into a
+        // local store this process may serve as an API: a host serving its
+        // own local API published where no fleet reader looked.
+        let store = crate::queue::JobStorage::new()
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
         supervisor.spawn("host-health", move || {
             health_beacons(Duration::from_secs(interval.get()), store)
         })?;
@@ -302,20 +300,14 @@ pub(crate) async fn run(mut args: ServeArgs) -> Result<(), CmdError> {
     supervisor.wait().await
 }
 
-async fn health_beacons(
-    period: Duration,
-    store: Option<crate::queue::JobStorage>,
-) -> Result<(), CmdError> {
+async fn health_beacons(period: Duration, store: crate::queue::JobStorage) -> Result<(), CmdError> {
     let mut schedule = tokio::time::interval(period);
     schedule.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         schedule.tick().await;
         // Every collection runs to completion. A delayed pass skips obsolete
         // scheduled ticks instead of cancelling work or bursting repeated probes.
-        let destination = match &store {
-            Some(store) => crate::cli::host::BeaconDestination::Store(store),
-            None => crate::cli::host::BeaconDestination::Api,
-        };
+        let destination = crate::cli::host::BeaconDestination::Store(&store);
         if let Err(error) = crate::cli::host::collect_beacon_to(destination).await {
             eprintln!("[stado serve host-health] collect-and-publish failed: {error}");
         }

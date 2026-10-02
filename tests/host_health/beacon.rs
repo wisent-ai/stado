@@ -1,9 +1,10 @@
 //! The host's one Stado process publishes the host's health beacon into the
-//! store it serves. One isolated deployment: `config init` seeds a local
-//! registry naming this machine, `stado serve --api --api-local-store …
-//! --health-interval-seconds 1` runs as the real product, and the beacon
-//! object it writes is read back from the store and through `stado registry
-//! beacon-age`, the reader `stado service list` shares.
+//! fleet store its queue roles use — the store `stado registry beacon-age`
+//! and `stado service list` read. One isolated deployment: `config init`
+//! seeds a local registry naming this machine, `stado serve --api
+//! --api-local-store … --health-interval-seconds 1` runs as the real product,
+//! and the beacon is read back through `stado registry beacon-age` and from
+//! the object that reader names.
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -205,7 +206,7 @@ impl Drop for Deployment {
 }
 
 #[test]
-fn the_host_process_publishes_its_beacon_into_the_store_it_serves() {
+fn the_host_process_publishes_its_beacon_where_the_fleet_reads_it() {
     let mut deployment = Deployment::start();
     let registry: Value =
         serde_json::from_slice(&fs::read(deployment.store().join("registry.json")).unwrap())

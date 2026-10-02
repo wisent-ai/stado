@@ -39,13 +39,6 @@ impl PreparedApi {
         Ok(Self { listener, store })
     }
 
-    /// The store this API serves, for the roles of the same process that
-    /// write where the API would: host-health publication needs no network
-    /// hop and no grant when the beacon's destination is this process.
-    pub(super) fn store(&self) -> JobStorage {
-        self.store.clone()
-    }
-
     pub(super) async fn run(self) -> Result<(), CmdError> {
         crate::dashboard::Dashboard::new(self.store)
             .serve_prepared(self.listener)
