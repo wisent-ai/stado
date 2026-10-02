@@ -45,14 +45,10 @@ pub fn billing_providers() -> &'static [String] {
 
 /// BigQuery billing export dataset (env `WC_BILLING_DATASET`).
 ///
-/// Billing-credits collector. Each tick the Cloud Function reads the GCP
-/// BigQuery billing export (gross / credits-applied / net + per-credit
-/// cumulative + 7-day burn) and the Azure available-credit balance, then
-/// writes gs://<BUCKET>/billing_health/credits.json (same convention as
-/// host_health/<host>.json). The export table is account-specific; it is
-/// resolved from env so a different billing account only needs a redeploy
-/// env change, never a code edit. Dataset/table default to the live
-/// wisent-480400 export confirmed present 2026-05-16.
+/// The collector reads gross spend, applied credits, net spend and burn from
+/// the configured billing export, alongside provider credit balances. The
+/// export table is account-specific, so its dataset and table are deployment
+/// inputs rather than values callers should reproduce in code.
 pub fn billing_dataset() -> &'static str {
     BILLING_DATASET.as_str()
 }

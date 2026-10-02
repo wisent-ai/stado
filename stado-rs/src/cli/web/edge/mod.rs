@@ -40,8 +40,8 @@
 //! ask for are comparable because one is only ever produced from the other.
 //!
 //! **Why it is a role of `com.wisent.stado`.** One repository runs one
-//! service (the operator's rule of 2026-09-30, 1e14440a), and the edge is
-//! Stado's. The host's Stado process runs the proxy when it is started with
+//! service, and Stado owns the edge. The host's Stado process runs the proxy
+//! when it is started with
 //! `--edge-caddy <program> --edge-caddyfile <path>` ([`role`]); nothing else
 //! is installed for it. The Caddyfile travels inside the approved host
 //! channel's request body as [`crate::deploy::service::sync_service_file`]

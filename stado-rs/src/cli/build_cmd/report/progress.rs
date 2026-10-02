@@ -51,11 +51,9 @@ pub(crate) struct Progress {
     pub waiting: Option<String>,
     pub steps: Vec<Finished>,
     pub running: Option<Running>,
-    /// When the host last wrote the job's log, and how long ago. The agent
-    /// rewrites it on every heartbeat, so a job whose log stopped moving is a
-    /// job no host is running any more, whatever the queue still says: on
-    /// 2026-09-26 three superseded Stado build jobs read `running for 7h`
-    /// while their logs had not changed since the evening before.
+    /// Last host write and its age, independently of the queue's job state.
+    /// The agent refreshes the log on heartbeats, exposing stale progress
+    /// even when the queue still reports the job as running.
     pub last_output: Option<LastOutput>,
 }
 

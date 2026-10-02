@@ -229,18 +229,9 @@ async fn release_target_inner(
     }
     report.insert("unit_processes".to_string(), json!(unit_processes));
 
-    // Every stable bind this host declares, proven listening before this
-    // reports `ok`.
-    //
-    // A roll restarts the release agent, and the agent is the only thing that
-    // publishes a stable bind. On 2026-09-03 two rolls reported `ok` with
-    // every step `ok`, and Skarbiec's 127.0.0.1:8895 and Brama's
-    // 127.0.0.1:8080 were both unbound behind them: the agent could not read
-    // `release_control` through a closed object boundary, so it published
-    // nothing, and `brama.wisent.com/health` answered 502 for hours while two
-    // release reports said the roll had succeeded. A roll that restarts the
-    // publisher of a serving port and does not look at the port is a roll
-    // that cannot tell success from an outage.
+    // Activation restarts the release agent that publishes stable binds.
+    // Successful process steps do not prove those ports are listening;
+    // verify every declared bind before reporting delivery success.
     let (verdicts, missing) = verify_stable_binds(target, runner).await;
     if !verdicts.is_empty() {
         report.insert("stable_binds".to_string(), json!(verdicts));

@@ -12,9 +12,8 @@ use super::release_output::verified_release_completion;
 use super::signals::{heartbeat_age_seconds, started_age_seconds};
 use super::{ReaperSummary, LEASE_EXPIRED_REASON};
 
-/// Checkpoint-freshness defer window, the same 5400s the monitor's orphan
-/// branch uses: a multi-GB checkpoint upload can starve the heartbeat PUT
-/// while the job is demonstrably alive (2026-05-16/17 incidents).
+/// The monitor's orphan check uses the same checkpoint-freshness window.
+/// Large checkpoint uploads can delay heartbeat writes while work continues.
 const CHECKPOINT_FRESH_SECONDS: f64 = 5400.0;
 
 /// Reap one running job whose lease is expired: requeue on the first

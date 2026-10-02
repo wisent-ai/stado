@@ -237,10 +237,8 @@ pub fn persisted_watermark() -> Option<PublishedWatermark> {
     persisted_watermark_in(&crate::config_file::expand_tilde("~"))
 }
 
-/// Whether a live reading withholds this host from job selection, against the
-/// watermark it published for itself. The rule and its incident live with the
-/// reading, in [`MemoryReading::withholds_placement`], so the pass's report
-/// and this publication can never disagree about whether work is refused.
+/// Compare the live reading with this host's published watermark using
+/// [`MemoryReading::withholds_placement`], the same rule as the pass report.
 pub fn over_published_watermark(
     watermark: PublishedWatermark,
     reading: &MemoryReading,

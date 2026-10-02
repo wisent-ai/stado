@@ -10,13 +10,9 @@ use crate::deploy::DeployError;
 
 /// The named stop a trajectory reported, when the envelope carries one.
 ///
-/// Every Weles trajectory ends by printing one JSON report: `{ok, blocked,
-/// detail, …}`. A refused run answers HTTP 502 with that report in
-/// `stdout_tail` and `result: null`, and the reading below used to take the
-/// whole envelope's last line instead — so `stado credentials seed-enrol`
-/// told the operator `the Weles API refused /run with 502 Bad Gateway:
-/// {"ok":false,"exitCode":4,…}` while the trajectory's own sentence about
-/// which page it could not open sat inside it, unread (2026-09-20).
+/// A refused Weles run can carry its `{ok, blocked, detail, …}` report
+/// inside `stdout_tail` while `result` is null. Read that nested report so
+/// the caller sees the trajectory's cause, not only an HTTP status or exit code.
 fn trajectory_stop(payload: &Value) -> Option<String> {
     named_stop(payload)
         .or_else(|| payload.get("result").and_then(named_stop))

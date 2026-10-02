@@ -5,11 +5,9 @@
 //! rules come from [`crate::deploy::host_state::reboot`] via
 //! [`crate::deploy::host_channel`].
 //!
-//! Three parts, deliberately reported together. "97% full" on its own does
-//! not tell an operator whether anything is going to be done about it, and
-//! "the janitor last ran at 04:12" on its own does not say whether it
-//! helped. The July incident was precisely the pair coming apart: a box at
-//! zero free bytes whose cleanup policy looked fine in the registry.
+//! Report usage, policy and janitor state together. Low free space does not
+//! show whether cleanup is active, and a completed pass does not prove that
+//! it reclaimed enough space for the host's declared watermark.
 //!
 //! No part invents a schema.
 //!

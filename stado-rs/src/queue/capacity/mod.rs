@@ -7,28 +7,16 @@
 //! system and accelerator driver, and accelerator counts are derived from the
 //! memory each workload class requires.
 //!
-//! Scheme:
-//!   <bucket>/capacity/<consumer_id>.json
-//!   {
-//!     "consumer_id": "local-rtx-pro-6000-1",
-//!     "kind": "local",
-//!     "accepting_jobs": true,
-//!     "running_jobs": 2,
-//!     "available_cpu_cores": 20,
-//!     "available_accelerators": {"nvidia-tesla-a100": 1},
-//!     "free_ram_gb": 81.4,
-//!     "free_vram_gb": 63,
-//!     "published_at": "2026-04-25T17:42:00.000Z"
-//!   }
+//! Each `<bucket>/capacity/<consumer_id>.json` object identifies its worker
+//! with `consumer_id` and `kind`, reports `accepting_jobs` and `running_jobs`,
+//! and carries `available_cpu_cores`, per-type `available_accelerators`,
+//! `free_ram_gb` and `free_vram_gb`. `published_at` is an RFC3339 UTC timestamp.
 //!
 //! A publication older than CAPACITY_STALE_SECONDS is ignored.
 //!
-//! Known Python bug (ported as INTENDED, not as written): `capacity.py:121`
-//! raises unless `store._sdk_bucket or store._azure_backend` — the latter an
-//! attribute that never exists on Python `JobStorage` (the backend handle is
-//! `_blob_backend`). The intended precondition is "the backend can list
-//! blobs with metadata", which holds for every Rust `BlobBackend`, so no
-//! gate exists here.
+//! Capacity discovery requires metadata-bearing object listings, supported
+//! by every Rust `BlobBackend`; it does not depend on a provider-specific
+//! SDK handle.
 
 use std::collections::BTreeMap;
 

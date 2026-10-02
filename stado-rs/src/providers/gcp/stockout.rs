@@ -4,13 +4,9 @@
 //!
 //! Port of `stado/providers/gcp/stockout.py`.
 //!
-//! With Cloud Function maxScale=100 and ticks lasting longer than the
-//! 3-minute cron, the function spawns multiple parallel instances, each
-//! with its own process state. A process-local map was insufficient: every
-//! fresh instance re-discovered the same exhausted zones at ~30s per
-//! op.result() call, blowing past the 540s tick timeout. Confirmed in
-//! production logs 01:46-01:48Z 2026-05-15: us-central1-c stocked out twice
-//! in 8 seconds across two parallel function instances.
+//! Concurrent coordinator processes need shared exhaustion observations.
+//! A process-local map makes each new process repeat provider calls against
+//! the same exhausted zones.
 //!
 //! This module persists the stockout map to gs://<bucket>/state/
 //! stockout_zones.json (and the quota map to state/quota_exceeded.json) so
@@ -114,11 +110,8 @@ async fn load(
 
 /// Python `_save_stockouts` and the save half of `mark_region_quota_exceeded`.
 ///
-/// A network blip during a cache write must not crash the entire tick —
-/// the in-process cache still has the marker, and the next tick will retry
-/// the write. Confirmed live 04:07Z 2026-05-15: SSL EOF on the
-/// upload_from_string raised through create_instance and crashed the whole
-/// monitor_jobs handler. Errors are swallowed here.
+/// Cache persistence is best-effort: a failed write does not abort the tick.
+/// The process retains its local marker even when the shared write fails.
 async fn save(store: &JobStorage, blob: &str, map: &BTreeMap<String, f64>) {
     let json = serde_json::to_string(map).unwrap_or_else(|_| "{}".into());
     let _ = store.upload_text(blob, &json).await;

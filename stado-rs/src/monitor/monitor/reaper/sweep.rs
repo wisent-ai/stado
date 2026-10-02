@@ -140,14 +140,9 @@ pub async fn reap_dead_agents(
             && !completed_refs.contains(&instance_ref)
             && !active_refs.contains(&instance_ref)
         {
-            // Branch B (never-worked). Branch A defers on a fresh job
-            // heartbeat; Branch B must too. A long training run never
-            // appears in completed/ and is protected only by the
-            // race-prone active_refs set, so a working VM (Llama 3ef705b2
-            // at step ~3533, heartbeat fresh via the 0.4.224 daemon
-            // thread) was reaped here as "never-worked" at
-            // 2026-05-15T23:14:01 (restart 8). A fresh job heartbeat is
-            // proof the VM is productive — never reap.
+            // A long-running job may have no completion record and may be
+            // absent from the cached active-reference set. Protect fresh
+            // heartbeats and checkpoints before classifying its VM as unused.
             let mut jids_b = ref_to_jids
                 .get(&instance_ref_full)
                 .cloned()
@@ -166,8 +161,7 @@ pub async fn reap_dead_agents(
             if !safety.is_empty() {
                 log(&format!(
                     "defer never-worked reap of {instance_ref_full}: fresh running/ found {} \
-                     (active_refs race; root cause of 724084db restart 16 wedge \
-                     2026-05-17T21:26:07)",
+                     (the cached active reference set is not authoritative)",
                     py_str_list(&safety)
                 ));
                 continue;

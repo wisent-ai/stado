@@ -34,12 +34,9 @@ pub const FAILURE_FIX_PROMPT_ERROR_BYTES: i64 = 4000;
 /// Seconds between failure-fixer scan_and_dispatch iterations when the
 /// LaunchAgent runs in tight loop.
 pub const FAILURE_FIXER_TICK_SECONDS: i64 = 180;
-/// Command substring the LaunchAgent passes to wc-fix scan-dispatch
-/// --command-pattern. Empty string means scan every failed/ blob, which
-/// exhausts Claude Code subscription quota fast (live failure 2026-05-22:
-/// 273 dispatches in one tick burned the daily limit). Set this to the
-/// workload the operator wants the autonomous fixer to target.
-/// raw.extract_and_upload is the canonical activation extraction workload.
+/// Command substring passed to wc-fix scan-dispatch as --command-pattern.
+/// An empty selector covers every failed job and can exhaust the dispatch
+/// budget; keep the autonomous fixer scoped to its declared workload.
 pub const FAILURE_FIXER_COMMAND_PATTERN: &str = "raw.extract_and_upload";
 /// Max fully-terminal runs the by-run reaper deletes per coordinator tick.
 /// Bounds per-tick GCS work so a large backlog drains over several ticks

@@ -1,23 +1,15 @@
 //! Deployment preflight probes behind `stado doctor`.
 //!
-//! NO Python original: the Python CLI has no preflight. Every one of the
-//! six blockers in the 2026-07-26 GCP-billing outage surfaced as a crash
-//! loop or a silently empty UI instead of a check — an azure backend with
-//! no storage account, an all-zero quota, an unreachable release channel,
-//! a missing VM managed identity, a startup template that aborted on
-//! `set -u`, and a fleet that was simply paused. Each of those is cheap to
-//! interrogate directly; none of them was interrogated anywhere.
+//! Probe deployment dependencies directly so configuration, quota, identity
+//! and reachability failures appear as separate findings rather than an
+//! empty interface or a failing process.
 //!
 //! Two properties are load-bearing:
 //!
-//! - **Fault isolation.** One probe failing must never suppress the rest,
-//!   because the useful output is the WHOLE list — the outage looked like
-//!   "quota is zero" until the release channel and the VM identity turned
-//!   out to be broken too. Every probe captures its own error into its own
-//!   [`Check`], exactly as each section of
-//!   [`crate::monitor::billing::collect_billing`] captures its own. Every
-//!   probe runs concurrently, so one slow dependency delays only its own
-//!   row's answer.
+//! - **Fault isolation.** One probe failing must not suppress the others.
+//!   Each captures its own error in its [`Check`], like each section of
+//!   [`crate::monitor::billing::collect_billing`]. Concurrent probes keep
+//!   unrelated dependencies independent.
 //! - **Same code path as production.** The template probe renders through
 //!   [`crate::scheduler::dispatch::agent::bundled_template_for`] with
 //!   credentials resolved from Skarbiec and

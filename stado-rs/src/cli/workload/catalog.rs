@@ -59,14 +59,11 @@ pub struct WorkloadKind {
     /// How long an attached interactive session may do nothing before its
     /// runtime parks and gives its reservation back.
     ///
-    /// An attach holds the kind's reservation for exactly as long as the
-    /// runtime lives, and only the runtime knows whether it is working. On
-    /// 2026-09-22 eight Jeden Desktop tabs held 16 cores and 32 GiB of a
-    /// 12-core laptop for 26 hours at 0.0% CPU, and the laptop refused every
-    /// fleet build with `reservations_exhausted`. The attach hands this to
-    /// the runtime (`JEDEN_PARK_AFTER_SECONDS` for `jeden-session`); the
-    /// runtime parks only when nothing of its own is running, and the attach
-    /// then ends and releases the hold. Absent means the runtime never parks.
+    /// Attach holds the reservation while the runtime lives. Only that
+    /// runtime can determine whether its own work is idle. Attach passes
+    /// this setting to it (`JEDEN_PARK_AFTER_SECONDS` for `jeden-session`);
+    /// parking ends the attachment and releases the hold. Absent means the
+    /// runtime never parks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park_after_seconds: Option<u64>,
     pub report: Vec<String>,

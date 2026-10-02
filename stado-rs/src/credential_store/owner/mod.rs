@@ -1,20 +1,12 @@
 //! Owner-path writes into a Skarbiec vault.
 //!
-//! Skarbiec's `PUT /v1/items` is not a general item write and has not been one
-//! since the vault contracts were rebuilt (Skarbiec 9aa7dd4, 2026-08-04). The
-//! route now requires `id`, `field` and `operation_id`, and outside
-//! `mode=acquire` it refuses anything that is not controlled by the exact Weles
-//! writer presenting the grant. Stado's client still sent the whole item, so the
-//! broker answered every write — `stado credentials put`, `stado fleet key
-//! generate`, `key add`, `key rotate`, the Azure operator credential — with a
-//! bare `400 {"error":"field required"}`. The fleet could read its credentials
-//! and could not mint one, which is why a new host could not be enrolled at all.
+//! Skarbiec's `PUT /v1/items` requires `id`, `field` and `operation_id`;
+//! outside `mode=acquire`, the exact Weles writer must control the item.
+//! That field-write route is not a general owner-authorized item write.
 //!
-//! An item the operator owns is written the way its owner writes it: through the
-//! `skarbiec` CLI against the vault file, which holds the owner key. That is the
-//! same call `stado credentials harvest --restore` already made for a Skarbiec
-//! selector; it lives here now so every write in the process shares it instead
-//! of one path knowing the contract and the rest guessing.
+//! Owner writes use the `skarbiec` CLI against the vault holding the owner
+//! key. Credential creation, rotation and restoration share this path so
+//! callers apply the same authorization and storage contract.
 //!
 //! Field placement belongs to Skarbiec's schema, not to callers: a `ssh-key`
 //! payload normalizes to kind `key-pair` with `private_key`/`public_key` as

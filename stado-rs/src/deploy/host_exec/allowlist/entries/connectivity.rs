@@ -31,8 +31,8 @@ pub const CONNECTIVITY_AND_SIGN_IN: &[ApprovedCommand] = &[
               that change anything (`up`, `down`, `set`, `login`, `logout`, `serve`, `funnel`) \
               are absent from this table. The output carries node names, tailnet addresses and \
               endpoints — the same addresses the registry already holds — and no keys beyond \
-              the public ones every node publishes. This is where `direct 10.0.0.253:41641` \
-              comes from, the line that said the 2026-08-19 gap had ended",
+              the public ones every node publishes. Direct and relayed paths are reported \
+              from the node's current observation",
     },
     ApprovedCommand {
         argv: &[TAILSCALE_PROGRAM, "netcheck"],

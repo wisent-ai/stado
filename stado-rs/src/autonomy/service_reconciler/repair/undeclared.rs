@@ -54,12 +54,9 @@ pub(in crate::autonomy::service_reconciler) async fn reconcile_undeclared(
                     ),
                 ));
             }
-            // `Some(false)` covers two different worlds and only one is a
-            // conflict. A process executing a binary the unit never declared
-            // is unknown ownership and stays refused. A process executing the
-            // declared binary that was REWRITTEN after the process started is
-            // the four-day stale-agent incident, and the in-place kick below
-            // is precisely its repair.
+            // A different running program has unknown ownership and is
+            // refused. When the declared binary was replaced after this
+            // process started, ensure can repair the stale process in place.
             Some(false) => {
                 let same_binary = running
                     .running_binary()

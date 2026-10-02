@@ -52,16 +52,10 @@ pub enum ResolverCommands {
     },
     /// Whether this host's resolver is ready, and why not when it is not.
     ///
-    /// A subcommand rather than another endpoint on the resolver's own API,
-    /// for one reason: the question is asked when the resolver is DOWN. On
-    /// 2026-08-19 this host's resolver sat in a launchd restart loop holding a
-    /// dead ssh control socket, and an answer served on `api_bind` would have
-    /// been unreachable for exactly the window an operator needed it. This
-    /// reads the registry and the state `serve` publishes to
-    /// [`state_path`], so it answers with the resolver stopped, and exits
-    /// non-zero when the answer is not `ready` so a unit or a script can act
-    /// on it. The live process's own `/health` remains where a workload
-    /// checks a resolver it is already talking to.
+    /// Reads the registry and the state `serve` publishes to [`state_path`],
+    /// so diagnostics remain available when the resolver's own API is down.
+    /// A non-ready result exits non-zero. The live process's `/health`
+    /// endpoint remains the check for workloads already connected to it.
     Status {
         /// Registry target whose resolver to report on. Defaults to the
         /// target the published state names, then to this host's identity.

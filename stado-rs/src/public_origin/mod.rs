@@ -36,11 +36,9 @@
 //!   `stado web route` instead, because the fleet's declared web edge already
 //!   terminates TLS for every hostname a web declaration names.
 //!
-//! The key is TOP-LEVEL and unmodelled by [`crate::targets::Registry`], so it
-//! round-trips through `Registry::extra` and a build that predates it preserves
-//! it instead of deleting it on the next write — the 2026-08-04 accident that
-//! lost `channels`, `enrollment` and `fleets`. Validating it here is what makes
-//! an operator learn at the write.
+//! The top-level key round-trips through [`crate::targets::Registry`]'s
+//! extra fields, allowing older readers to preserve declarations they do
+//! not model. This module validates the publication contract on writes.
 
 use serde_json::Value;
 

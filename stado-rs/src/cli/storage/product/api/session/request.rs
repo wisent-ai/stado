@@ -119,16 +119,9 @@ impl RemoteObjectApi {
                     ))
                 })?
         };
-        // A token that cannot become a header value is refused here, by name.
-        // reqwest reports that case as the bare string `builder error`, with no
-        // item, no field and no failure point that means anything: on
-        // 2026-09-03 `stado storage stat
-        // stado://system/release-catalog/preferences-landing.json` answered
-        // exactly that, and the same command for two other products answered
-        // an honest HTTP 401, so the operator's only signal that the fault was
-        // in a credential and not in the network was that one product differed
-        // from the others. A bearer is header material; whether one is usable
-        // is knowable before the request, and the answer names the item.
+        // Validate header material before sending the request. A bare
+        // reqwest builder error loses the credential's identity; these
+        // refusals name its source without printing the bearer.
         if token.is_empty() {
             if let Some(path) = token_file.as_ref() {
                 return Err(CmdError::click(format!(

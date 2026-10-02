@@ -7,21 +7,12 @@ use crate::queue::{JobStorage, StorageError};
 
 use super::LIST_FAILED_SENTINEL;
 
-/// List jids whose running/ blob has instance_ref == ref, read FRESH
-/// at call time. Used by reap_dead_agents as the FINAL safety check
-/// immediately before any delete_instance, to defeat the race that
-/// burned restart 16 of job 724084db at 2026-05-17T21:26:07: Branch B
-/// (never-worked) checked `instance_ref not in active_refs` where
-/// active_refs was a cache built at function entry, list_jobs("running")
-/// DID NOT return 724084db at that tick (transient listing miss), the
-/// gate held, the VM was deleted, and _requeue_jids_after_reap got an
-/// empty jids list (_ref_to_jids came from the same cached listing) —
-/// so the job was left wedged in running/ pointing at a deleted VM,
-/// auto-recovery delayed until heartbeat staled.
+/// Re-read running jobs pointing at this instance immediately before a reap.
+/// A cached listing can miss a new or temporarily unlisted job; it cannot
+/// authorize deleting that job's VM.
 ///
-/// On read-error, returns a sentinel non-empty list so the caller
-/// DEFERS (treats VM as in-use) rather than reaping — same fail-safe
-/// philosophy as any_job_heartbeat_fresh.
+/// A read error returns a non-empty sentinel so callers defer rather than
+/// treating an unobserved instance as unused.
 pub async fn fresh_jids_pointing_to_ref(store: &JobStorage, instance_ref: &str) -> Vec<String> {
     match store.list_jobs("running", 0).await {
         Ok(jobs) => jobs

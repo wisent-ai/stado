@@ -1,9 +1,7 @@
 //! `stado alerts` — the operator surface over [`crate::monitor::alerts`].
 //!
-//! `doctor` reports whether a channel *resolves*; nothing could make one
-//! deliver on purpose. So a deployment could pass preflight with a key the
-//! provider has since revoked, or a sender domain the provider will not
-//! accept, and the first time anyone learned that was during an incident.
+//! Resolving a channel proves its configuration is present, not that the
+//! provider accepts its credential or sender. Delivery needs an actual send.
 //!
 //! `channels` prints which channels resolved and where each one would land.
 //! `send` fans one message out through exactly those channels and reports

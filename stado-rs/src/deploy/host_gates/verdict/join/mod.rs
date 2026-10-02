@@ -72,20 +72,11 @@ pub fn assemble(
     if disk_pressure_unresolved {
         blockers.push(DISK_PRESSURE_UNRESOLVED.to_string());
     }
-    // Directly after the pressure it explains: an operator who reads
-    // "free 45 GiB, watermark 100 GiB" needs the next line to say whether
-    // anything is still trying, and for fifteen days there was no such line.
-    //
-    // It blocks only while the disk is also under pressure, and that is the
-    // case where a stalled janitor genuinely must refuse work: the host is
-    // already below the watermark, nothing is bringing it back, and admitting
-    // a job onto an unmanaged disk is how a weeks-long incident ends. Above
-    // the watermark it is a NOTE. Refusing work on a host with headroom does
-    // not create a single byte of space; it only removes capacity from the
-    // fleet, removing the always-on host over a janitor that is healthy.
-    // The condition stays visible either way —
-    // `disk_cleanup_stalled` is carried as a field and embedded in the release
-    // verdict, so nothing that could see this before has stopped seeing it.
+    // Explain cleanup immediately after disk pressure. A stalled or held
+    // janitor blocks admission only while pressure remains unresolved;
+    // withholding a host with adequate space would not reclaim anything.
+    // The janitor condition stays visible in diagnostic fields regardless
+    // of whether it currently blocks placement.
     if janitor.stalled && disk_pressure_unresolved {
         blockers.push(DISK_CLEANUP_STALLED.to_string());
     }

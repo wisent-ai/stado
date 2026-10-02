@@ -50,13 +50,9 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
     report_outcome(&report, crate::deploy::host_state::uptime::OK_STATUS)
 }
 
-/// `stado host ping TARGET [--json]` — ssh reachability and beacon age in
-/// one verdict (`stado.wisent.com/docs/missing-commands` item three).
-///
-/// The exit status follows the COMBINED verdict, so a box answering ssh
-/// with a five-day-old beacon fails this command. That is the whole point
-/// of it: the July incident's host would have passed an ssh-only ping
-/// every one of those five days.
+/// `stado host ping TARGET [--json]` combines SSH reachability and beacon
+/// freshness in one verdict. SSH access alone does not prove that the host's
+/// agent is reporting current state.
 pub async fn ping(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let store = beacon_store().await.map_err(|exc| exc.to_string());

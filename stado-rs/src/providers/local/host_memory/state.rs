@@ -8,11 +8,8 @@
 //! read it. A second layout would be a second thing to learn for no
 //! difference in meaning.
 //!
-//! The lock is this pass's own file, not the disk janitor's. The two share a
-//! directory and nothing else: a memory pass queued behind a `build_caches`
-//! walk of a large `$HOME` would arrive exactly as late as that walk, and the
-//! incident this pass exists for is measured in the minutes before a process
-//! cannot allocate.
+//! Memory and disk passes share a state directory, not a lock. A slow disk
+//! walk must not delay the memory-pressure observation and repair pass.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;

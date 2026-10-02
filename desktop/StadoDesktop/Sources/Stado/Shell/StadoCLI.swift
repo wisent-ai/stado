@@ -25,12 +25,9 @@ enum StadoCLIError: LocalizedError, Sendable {
 
 /// The product CLI, run as a subprocess, in `--json` mode.
 ///
-/// Every read on the operator screens goes through here rather than through
-/// the dashboard's HTTP bridge, because these commands reach the hosts
-/// themselves: a rollout diagnosis, a log tail off a target, a host's claiming
-/// gates. The bridge projects what was published; these answer what is true on
-/// the machine right now, which is the difference the release incidents turned
-/// on.
+/// Operator diagnostics use the CLI to reach the hosts themselves: rollout
+/// diagnosis, target logs and claiming gates need current observations,
+/// rather than only the state previously published to the dashboard bridge.
 ///
 /// The executable is resolved once and remembered: an app launched from Finder
 /// inherits a four-entry PATH, so the search has to include the places the

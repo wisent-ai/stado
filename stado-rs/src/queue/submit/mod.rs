@@ -125,11 +125,9 @@ pub struct SubmitOptions {
     pub re_submission_of: String,
     pub yieldable: bool,
     pub yield_command: String,
-    /// Declared by submissions written before 2026-10-01, when a yielding
-    /// job was given a grace period of the submitter's choosing; nothing
-    /// reads it now. Accepted so a job already in the queue with it stays
-    /// readable: a record that cannot be read cannot be run, retired or even
-    /// marked failed, and stays `running` on its host for ever.
+    /// Read-only acceptance of a retired submission field. Existing queue
+    /// records remain readable so they can run or be retired; new records
+    /// do not serialize it and scheduling does not use its value.
     #[serde(default, rename = "yield_grace_seconds", skip_serializing)]
     pub retired_yield_grace_seconds: Option<u64>,
     pub pinned_host: String,

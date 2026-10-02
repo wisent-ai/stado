@@ -41,9 +41,8 @@ pub(crate) const REPEAT_CAUSE_LIMIT: usize = 3;
 /// changed. So a run that is still intact *is* the assertion that nothing has
 /// changed, and it needs no extra state to record.
 ///
-/// A new digest is deliberately not a change. That is the exact mistake the
-/// incident made: new digest, new version number, same unserved credential, and
-/// every rollout treated the new digest as a new situation.
+/// A new digest or version does not demonstrate that a shared failing
+/// dependency has changed; the classified cause is the comparison key.
 ///
 /// Consecutive, not "the last three classified": an unclassified quarantine
 /// between two members is a candidate that failed in a way this agent could not
@@ -58,10 +57,8 @@ pub(crate) const REPEAT_CAUSE_LIMIT: usize = 3;
 ///   run on its own;
 /// - fix the cause, after which nothing quarantines and the run stops growing.
 ///
-/// [`QuarantineCause::Unclassified`] never triggers this. Twelve of the twenty
-/// live records are unclassified, seven of them consecutively, and refusing on a
-/// cause the agent could not name would have frozen this product for a month on
-/// no evidence at all.
+/// [`QuarantineCause::Unclassified`] never triggers this: an unnamed cause
+/// cannot establish that consecutive candidates share the same failure.
 pub fn cause_run(state: &HostReleaseState) -> Option<CauseRun> {
     let mut recent: Vec<&QuarantineRecord> = state.quarantined.values().collect();
     // The map is keyed by digest, so its own order is the digest's. Recency is

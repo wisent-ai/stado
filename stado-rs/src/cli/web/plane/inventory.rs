@@ -89,10 +89,7 @@ pub(crate) fn list(json_output: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// The two zones every product answers in, identically: the operator's rule
-/// of 2026-09-30, "wszystkie powinny miec zarowno wisent.com jak i wisent.ai
-/// identyczne odpowiedniki" (Oko 6dd957d5). Six hostnames had no twin and
-/// nothing said so.
+/// Every product hostname has an equivalent in both product zones.
 const TWIN_ZONES: [&str; 2] = ["wisent.com", "wisent.ai"];
 
 /// The same name in the other zone, for a hostname in one of the two.

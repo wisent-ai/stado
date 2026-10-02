@@ -15,10 +15,8 @@ static TS_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("static regex compiles")
 });
 
-/// Parse an ISO-8601 timestamp from the heartbeat blob and return
-/// unix seconds. The agent writes lines like:
-///     RUNNING 2026-05-13T00:26:33.130155+00:00
-/// Returns None if no parseable timestamp is found.
+/// Parse an ISO-8601 timestamp from the heartbeat status line as Unix seconds.
+/// Return None when no timestamp can be parsed.
 fn parse_heartbeat_ts(text: &str) -> Option<f64> {
     if text.is_empty() {
         return None;
@@ -74,17 +72,9 @@ pub async fn any_job_heartbeat_fresh(
         {
             Ok(text) => text,
             Err(_) => {
-                // A coordinator-side GCS read failure is NOT proof the job
-                // is dead. The old `except: text=None` path made a transient
-                // Cloud-Function storage hiccup on one monitor tick read as
-                // "no heartbeat" for EVERY running job, requeuing them all
-                // in the same pass — the synchronized orphan churn (3ef705b2
-                // + 724084db both requeued 2026-05-16T04:09:19, restart 11,
-                // on freshly-written heartbeat blobs). Fail safe: a read
-                // error defers (treat as alive); never let the coordinator's
-                // own read failure destroy a running job. A genuinely dead
-                // job is still caught when the read succeeds (stale ts) or
-                // via the TERMINATED/absent VM path.
+                // A storage read failure does not prove a job is dead.
+                // Defer reaping on unknown state; successful stale-heartbeat
+                // reads and absent or terminated VMs remain independent signals.
                 return true;
             }
         };

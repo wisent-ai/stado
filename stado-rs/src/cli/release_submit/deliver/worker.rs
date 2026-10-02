@@ -140,14 +140,9 @@ pub async fn delivery_worker(args: &DeliveryWorkerArgs) -> Result<(), CmdError> 
     {
         return Err(CmdError::click("delivery input identity mismatch"));
     }
-    // A queue retry runs this worker again in the same job directory. On
-    // 2026-09-10 the second attempt of Stado 0.20.5's delivery to
-    // fleet-macbook died with "immutable release directory already exists"
-    // before it read a byte, because the first attempt's tree was still at
-    // the fixed name. The extractor's refusal is right where a release lands
-    // in its own immutable path; here the tree is scratch, so each attempt
-    // gets a name nothing else holds, re-extracted from the archive whose
-    // digest was just verified.
+    // Queue retries share a job directory. Give each attempt a fresh source
+    // tree so a previous extraction cannot collide with the immutable-path
+    // check; every tree comes from the archive whose digest was verified above.
     let source_root =
         std::env::current_dir()?.join(format!("delivery-source-{}", uuid::Uuid::new_v4().simple()));
     release_control::safe_extract_source_archive(&source_archive, &source_root)

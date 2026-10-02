@@ -93,14 +93,10 @@ impl Sizing {
             }
         }
 
-        // A per_gpu=true peak larger than the smallest live-fleet GPU came
-        // from a bigger card running this memory-elastic workload (grows to
-        // fill VRAM); it is not a valid lower bound for a fleet GPU and
-        // fences the model off the whole smaller fleet. Drop it; if none
-        // remain the model is unmeasured (observed->None) so it sizes via
-        // smallest-live-GPU+escalate, runs, and yields a fleet-representative
-        // sample that then governs via min() -> min-agg self-bootstraps
-        // (gpt-oss-20b 89 on 96GB box vs 50-74 on 80GB, 2026-05-19).
+        // Memory-elastic workloads can fill a larger card without requiring
+        // that capacity. Exclude peaks above the smallest live GPU so they
+        // do not fence the workload off smaller hosts. With no usable peak,
+        // normal first-run sizing and escalation produce a new measurement.
         let smallest_live = self.smallest_live_vram(store).await?;
         let mut out: HashMap<String, i64> = HashMap::new();
         for (model, samples) in peaks {

@@ -117,15 +117,8 @@ pub async fn dispatch_agent_vms_with_template(
             .iter()
             .max_by_key(|j| j.gpu_mem_gb)
             .expect("bucket is non-empty");
-        // No-preemptible policy: per user instruction (2026-05-06), this
-        // codebase is NOT to dispatch Spot/preemptible VMs even when the
-        // job's `preemptible` field is True. Repeated Spot reclaims of
-        // A100-80 capacity in us-central1 caused 8 cloud-agent VMs to be
-        // deleted under instance_termination_action=DELETE in a single
-        // 3-second window (22:21:10-13Z), forcing requeues that burned
-        // restart-budget on misclassified jobs (since fixed in 0.4.55,
-        // but the underlying preemption noise persists). Override the
-        // job-level flag and force every dispatch to STANDARD.
+        // Fleet policy dispatches standard instances even when a job requests
+        // preemption, avoiding provider reclamation of an active agent.
         let preemptible_for_call = false;
         // Render once per bucket: the script depends only on the template,
         // the bucket's accel and the substitution maps, never on the

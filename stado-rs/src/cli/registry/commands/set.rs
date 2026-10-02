@@ -1,12 +1,9 @@
 //! `stado registry set` — change one field of the canonical registry under
 //! the generation it was read at.
 //!
-//! The week of 2026-09-12 held six edits of the shape
-//! `registry pull > ~/.oko/registry-pull.json`, `sed -i '' '309s|...|...|'`,
-//! `registry validate ~/.oko/registry-pull.json`: the whole fleet document
-//! pulled into a scratch file, one line rewritten by hand, the file validated
-//! and thrown away. A line number is not a field, a scratch file is not the
-//! registry, and nothing about that sequence survives to the next edit.
+//! A field path survives document reordering, unlike a line-number edit.
+//! Updating the authority directly also avoids leaving a validated change
+//! only in a scratch copy.
 //!
 //! This is the write half of [`pull --path`](super::pull): the same dotted
 //! path names the field, the value replaces it, and the document goes back

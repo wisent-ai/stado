@@ -1,24 +1,12 @@
-//! Secret material left behind in agent transcripts.
+//! Credential recovery from structured agent transcripts.
 //!
-//! Agent runtimes persist every tool call and result. Those results include
-//! process listings, environment dumps and file reads, so credentials the fleet
-//! never meant to write down are sitting in plain text on disk, dated, in files
-//! nobody prunes. During the vault key-loss incident this turned out to be the
-//! only surviving copy of several live values.
+//! Tool results can contain environment dumps, process arguments and file
+//! reads. This module inventories recoverable credential material already
+//! present in those records.
 //!
-//! Two consequences, and this module exists for both:
-//!
-//! - **Recovery.** A vault whose key material is gone can be rebuilt from what
-//!   the transcripts already contain.
-//! - **Exposure.** The same scan is the inventory of what leaked, which is the
-//!   thing to shrink once recovery is done.
-//!
-//! It reports names, counts, dates and locations. It NEVER returns a secret
-//! value: the whole defect being measured is values reaching places that only
-//! needed names, and a tool that printed them to a terminal, a log or an agent
-//! transcript would be one more of those places. Values move only through
-//! [`value_for`], which the caller must ask for by exact name and which writes
-//! into the selected credential store without passing a shell.
+//! Inventory reports names, counts, dates and locations, not secret values.
+//! Recovery callers request an exact name through [`value_for`] and write
+//! the result into the selected credential store without passing a shell.
 //!
 //! # Reading the stores, not scanning them
 //!

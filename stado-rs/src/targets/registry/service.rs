@@ -105,11 +105,9 @@ impl Service {
     /// The address `host` would serve on after a move, or `None` if it is not
     /// standing by for this service.
     ///
-    /// [`Service::standby`] only, for the same reason in reverse. The pair
-    /// exists so that no caller has to decide which map answers its question:
-    /// one command reading `endpoints` as "would serve here" while another
-    /// read it as "call this" is what cost `brama` a false `unreachable` on
-    /// 2026-08-11.
+    /// Reads only [`Service::standby`]. Current endpoints and destinations
+    /// after a move answer different questions and must not be substituted
+    /// for one another.
     pub fn standby_for(&self, host: &str) -> Option<&ServiceEndpoint> {
         self.standby.get(host)
     }

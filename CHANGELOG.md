@@ -18,6 +18,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- Credential, scheduling, deployment and release-diagnostic explanations describe their rules without private incident timelines or identifiers. Diagnostic fields, policy decisions and command arguments are unchanged.
+
 - `stado service release` takes `--readiness-url` and `--readiness-timeout-seconds` together (cli.md rule 14). The readiness window was 30 s whenever a URL was named without one; now naming either without the other is refused by the parser with exit 2. Pipeline promotion already reads the window its release policy declares.
 - `stado host user create --registry-source` takes `remote`, `local` or `auto`; `gcs` is gone (cli.md rule 14). It never meant Google Cloud Storage: it read the canonical registry from whichever store `WC_STORAGE_BACKEND` selects, which `remote` now says.
 - `stado azure` is now `stado cloud` (cli.md rule 14): `stado cloud login --provider azure …` and `stado cloud repair-rbac --provider azure …`, with the same flags as before. A call without `--provider` is refused by the parser with exit 2. The operator console allows the `cloud` family instead of `azure`, and `examples/providers/enable-azure.sh` ends with `stado cloud repair-rbac --provider azure` (it ended with a bare `stado azure`, which runs nothing).

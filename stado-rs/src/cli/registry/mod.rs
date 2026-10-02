@@ -1,19 +1,12 @@
 //! `stado registry validate|push|pull|self|doctor|host add|beacon-age` —
 //! canonical registry management.
 //!
-//! `validate`, `push` and `pull` port the `registry` group of
-//! `stado/cli.py`. `self`, `doctor`, `host add` and `beacon-age` have NO
-//! Python original: they close items fifteen through seventeen of
-//! `stado.wisent.com/docs/missing-commands`, written after the 2026-07-24
-//! control-host incident, where the registry declared a host that
-//! nothing on the box was honouring and no command could say so.
+//! `validate`, `push` and `pull` manage the document; `self`, `doctor`,
+//! `host add` and `beacon-age` relate its declarations to observed hosts.
 //!
-//! Every read and write goes through [`targets::RegistryStore`], so the
-//! group repairs the registry on whichever store `WC_STORAGE_BACKEND`
-//! selects. It used to hardcode `gs://wisent-compute/registry.json` and
-//! build a `GcsBackend` directly, which on an Azure-only deployment meant
-//! the one document the coordinator's survival check reads
-//! (`targets::fetch_registry_remote`) could be repaired by nobody.
+//! Every read and write goes through [`targets::RegistryStore`] and the
+//! backend selected by `WC_STORAGE_BACKEND`. This keeps management commands
+//! on the same authority as the coordinator's registry reader.
 //!
 //! [`doctor`](fn@doctor) and [`beacon_age`] source liveness from the host beacons
 //! (`monitor/host_health.rs`) and the capacity broadcasts

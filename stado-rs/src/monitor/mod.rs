@@ -12,8 +12,7 @@
 //! - [`host_health`]: read side of the `host_health/<host>.json` beacon.
 //! - [`host_silence`]: durable record of a host's beacon gaps
 //!   (`host_silence/<host>/`) and of the reader refusals they caused
-//!   (`reader_refusals/<host>/`) — the two things the 2026-08-19 Mac mini
-//!   outage left no trace of anywhere in the product.
+//!   (`reader_refusals/<host>/`), preserving the gap and its effect on readers.
 //! - [`reap`]: by-run reaper deleting per-job blobs of fully-terminal runs.
 //!
 //! The Cloud Function entry point (`stado/cloud_function/main.py`,

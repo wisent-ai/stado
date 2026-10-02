@@ -97,14 +97,12 @@ pub(crate) async fn enroll(manifest: &ReleasePipelineManifest) -> Result<Enrollm
     Ok(Enrollment { steps })
 }
 
-/// The operator's ruling of 2026-09-30: web products move to Stado hosting,
-/// "dlaczego mielibysmy cokolwiek robic wspolnego z vercelem" (721ad26f).
+/// Web products build and deliver through Stado hosting, not this retired
+/// provider-specific command.
 const RETIRED_HOSTING_COMMAND: &str = "stado web vercel";
 
-/// Every quality, build, test and delivery step whose argv `matches`, by
-/// name. las and echo built and delivered through `python3 release/*.py`
-/// long after the workshop removed Python, and enrolment passed them; seven
-/// products still deployed to Vercel after the move to Stado hosting.
+/// Name every quality, build, test and delivery step whose argv matches.
+/// Enrollment applies the same command policy to all pipeline stages.
 fn steps_matching(
     manifest: &ReleasePipelineManifest,
     matches: impl Fn(&[String]) -> bool,

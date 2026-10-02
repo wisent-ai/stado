@@ -1,14 +1,8 @@
 //! `stado instances` — read-only cross-provider agent-VM inventory.
 //!
-//! NO Python original: the Python CLI never exposed the running cloud fleet
-//! at all. Both providers that can enumerate their VMs
-//! (`providers/gcp/mod.rs::GcpProvider::list_running_instance_refs_with_age`
-//! and `providers/azure/mod.rs::AzureProvider::list_running_instance_refs_with_age`)
-//! were reachable only from `monitor/monitor.rs::reap_dead_agents`, which
-//! runs inside the coordinator tick and prints nothing an operator can read.
-//! A VM whose agent died therefore billed silently until someone opened the
-//! cloud console — the July host incident and the GCP-billing outage were
-//! both found that way.
+//! Provider inventory is independent of agent heartbeats: an unresponsive
+//! agent can leave a billable VM running. Exposing both observations lets
+//! an operator distinguish an absent beacon from an absent instance.
 //!
 //! Uniform provider access: enumeration rides the existing optional trait
 //! method `providers/mod.rs::Provider::list_running_instance_refs_with_age`

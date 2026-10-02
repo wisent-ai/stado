@@ -111,11 +111,8 @@ pub(super) async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) 
         );
         deliver(target, row, runner, &mut pass).await;
     }
-    // A host that declares a binary and carries none. The first install is a
-    // delivery like any other: nothing is replaced, no process is running the
-    // declared binary, and the alternative - what this command did until
-    // 2026-09-08 - is that a host with no copy could never be given one by
-    // the product at all, so the first copy arrived by hand.
+    // A declared binary with no installed copy uses the same delivery path
+    // as an update, so convergence also covers the first installation.
     for row in rows.iter().filter(|row| row.verdict == HOST_MISSING) {
         eprintln!(
             "{}: declared {} and this host carries no copy of it",

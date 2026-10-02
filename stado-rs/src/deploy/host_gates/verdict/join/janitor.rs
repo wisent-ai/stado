@@ -1,9 +1,8 @@
 //! Whether the host's disk janitor is healthy, held, or silent.
 //!
-//! Three states, and telling them apart is the whole of the 2026-09-03 false
-//! blocker: a janitor being turned away by a running workload is healthy, a
-//! janitor turned away for the whole stall window is a held lock, and a
-//! janitor that is neither running nor prevented is stalled.
+//! A running workload can legitimately prevent a janitor pass. Persistent
+//! prevention reports a held lock; absence of both progress and prevention
+//! reports a stalled janitor. These states require different remedies.
 
 use chrono::{DateTime, Utc};
 

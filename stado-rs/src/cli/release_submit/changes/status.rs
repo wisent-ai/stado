@@ -18,13 +18,9 @@ pub(super) struct Observation {
 
 /// Read each build and receipt once, even when it covers many changes.
 ///
-/// Every frozen batch is an independent read, so they go out together through
-/// the fan-out budget Stado's other bulk object reads use. Read one after
-/// another, the whole build history cost a `changes list` 74 seconds on
-/// 2026-09-23, past the 60 seconds Oko waits for it, so no handoff or
-/// qualification reached Oko's ledger at all.
-/// Each batch also carries the full tickets it froze, so a ticket a batch
-/// covers need not be downloaded again: `frozen` holds them by id.
+/// Independent frozen batches share the bulk object-read concurrency budget.
+/// Each batch already contains its frozen tickets, so `frozen` indexes those
+/// by ID rather than downloading the same ticket again for every change.
 pub(super) async fn observations(
     store: &JobStorage,
     wanted: &std::collections::HashSet<String>,

@@ -69,7 +69,7 @@ impl GcsBackend {
     }
 }
 
-/// Parse an RFC3339 GCS timestamp ("2026-05-16T12:34:56.789Z").
+/// Parse a GCS RFC3339 timestamp and normalize it to UTC.
 pub(super) fn parse_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
     let raw = value.as_str()?;
     DateTime::parse_from_rfc3339(raw)

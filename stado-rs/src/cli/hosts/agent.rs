@@ -252,12 +252,9 @@ pub async fn run(
     match local_agent::run_agent(&gpu_type, idle_shutdown, &kind, poll).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            // A 401 from the object API is not this agent's credential:
-            // the bearer selected the namespace, and the namespace policy
-            // on the object API host did not grant the key. Between
-            // 2026-09-01 and 2026-09-03 that was `job-transitions/`, and
-            // the agent printed only the status code while it restarted
-            // for two days.
+            // Namespace policy can refuse a required key even when the
+            // bearer selected the correct namespace. Name that policy in
+            // the hint rather than suggesting credential replacement.
             let message = error.to_string();
             let hint = if message.contains("HTTP 401") {
                 format!(

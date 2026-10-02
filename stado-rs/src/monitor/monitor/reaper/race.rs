@@ -16,14 +16,9 @@ use super::super::{elapsed_seconds, MonitorError};
 /// (fresh_jids_pointing_to_ref) is a GENUINE active_refs race that must
 /// defer a reap, vs a set of confirmed ORPHANS safe to reap+requeue.
 ///
-/// fresh_jids_pointing_to_ref's "fresh" means "re-listed at call time"
-/// (beats the cached-listing race), NOT "the job is alive" — it returns
-/// every running/ blob pointing at the ref with zero liveness check. On
-/// a CONFIRMED-dead agent (reaper Branch A: consumer_id absent from live
-/// capacity) that made the guard defer on mere blob existence forever:
-/// 0db3438b/6a0fceba sat ~3h on agents that were gone (no capacity
-/// broadcast, heartbeats ~2.5h stale), never requeued, and the whole
-/// gpt-oss-20b queue totally stalled (2026-05-19).
+/// A fresh listing proves only that a running record still exists, not that
+/// its job is alive. On a dead agent, record existence alone must not defer
+/// reaping forever.
 ///
 /// A real race is only when the job is plausibly alive: the GCS re-list
 /// itself failed (fail-safe defer), OR some jid still heartbeats / writes

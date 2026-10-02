@@ -231,10 +231,8 @@ pub(crate) async fn ensure_unit(options: EnsureOptions<'_>) -> Result<EnsureRece
             outcome.report.failure()
         );
         if !outcome.report.postcondition_held() {
-            // A unit that will not stay up on a host where the same program
-            // already runs outside any unit is the four-day incident from the
-            // other side: launchd is being asked for a port a disowned process
-            // still holds.
+            // An unmanaged copy of the same program may still own the
+            // service port and prevent this declared unit from staying up.
             detail.push_str(
                 ". `stado service list --unowned` names a process that may still hold its port",
             );

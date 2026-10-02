@@ -65,8 +65,8 @@ pub(in crate::fleet_shape) fn loaded_without_unit_file(
 
 /// Does a program come out of a root this fleet installs into?
 ///
-/// Asked of the path rather than of a label, because the label is the thing
-/// that lied in every incident this module records.
+/// Inspect the executable path: a service label alone does not establish
+/// which product installed the running program.
 fn fleet_program(program: &str) -> bool {
     let first = program
         .split_whitespace()

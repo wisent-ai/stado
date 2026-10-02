@@ -16,12 +16,11 @@ pub(super) fn iso(stamp: DateTime<FixedOffset>) -> String {
 /// is skipped: a line whose time cannot be read is not evidence.
 pub(super) fn parse_stamp(raw: &str) -> Option<DateTime<FixedOffset>> {
     const FORMATS: [&str; 6] = [
-        // pmset -g log: `2026-08-17 09:23:10 -0700`
+        // pmset -g log: local date and time with a numeric UTC offset.
         "%Y-%m-%d %H:%M:%S %z",
-        // log show --style ndjson: `2026-08-19 11:59:32.869840-0700`
+        // log show --style ndjson: fractional seconds and an unseparated offset.
         "%Y-%m-%d %H:%M:%S%.f%z",
-        // journalctl -o short-iso, as Ubuntu spells it:
-        // `2026-08-17T19:46:46+00:00`
+        // journalctl -o short-iso: ISO date separator and colon-separated offset.
         "%Y-%m-%dT%H:%M:%S%:z",
         // journalctl -o short-iso where the offset carries no colon
         "%Y-%m-%dT%H:%M:%S%z",

@@ -141,18 +141,10 @@ pub(crate) async fn follow_current(
 /// Repoint one unit's program, and refuse to leave behind a unit that cannot
 /// be executed.
 ///
-/// The write is checked because an unchecked one has already happened: on
-/// 2026-09-03 this step rendered
-/// `.../current/darwin-arm/stado coordinator coordinator` for the fleet's
-/// coordinator, wrote it, and reported success. Nothing compared what it had
-/// written against anything, so the only reason the fleet kept dispatching is
-/// that launchd was still holding the previous job in memory; the file would
-/// have taken effect at the next boot, bootout or reload, with no one left to
-/// unwind it. A step that writes a unit now proves the unit it wrote: the
-/// program is an existing executable file on this host, and the rendered
-/// argument vector equals the declared one word for word. Either check
-/// failing restores the file it found and exits non-zero, so the caller gets
-/// a refusal instead of a landmine.
+/// A loaded service can keep running even after its unit file becomes
+/// unusable. Verify the persisted program is executable and its argument
+/// vector exactly matches the declaration; restore the previous file and
+/// return failure if either check fails.
 const REPOINT_BODY: &str = r#"
 [ -f "$unit_path" ] || { printf '%s
 ' "no unit file at $unit_path" >&2; exit 1; }

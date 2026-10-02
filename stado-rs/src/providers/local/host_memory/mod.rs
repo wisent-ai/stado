@@ -11,23 +11,14 @@
 //!
 //! # Why it exists
 //!
-//! A host can run itself out of memory with nothing in this product repairing
-//! it: a GitHub pre-check runner's listener dies with `Failed to create
-//! CoreCLR, HRESULT: 0x8007000C` and exit 137 while the host holds about a
-//! GB free, most of its swap in use, and the memory sits in a logged-in
-//! graphical session.
-//!
-//! Without this module every one of those facts has to be gathered by hand
-//! over ssh. Disk had a
-//! declaration, a watermark, a beacon field, two writers and a reconciler;
-//! memory had none of the five. This module is the missing half, built the
-//! same way, so that what the repair may do is a registry declaration rather
-//! than an operator's judgement in the moment.
+//! Memory pressure can prevent services from starting even when disk cleanup
+//! is healthy. A shared declaration supplies watermarks, observations and
+//! permitted repairs, so automatic action follows recorded policy rather
+//! than an ad hoc decision on the affected host.
 //!
 //! # What a pass may do
 //!
-//! Only what the declaration names, and the set is deliberately the narrowest
-//! one that would have answered this incident:
+//! Only repairs explicitly named by the declaration:
 //!
 //! | Repair | What it does |
 //! | ------ | ------------ |

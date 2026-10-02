@@ -28,32 +28,16 @@ pub const VAULT_CANDIDATE_TAILS: &[&str] = &[
 /// saying so is the whole point: the alternative is a write that appears to
 /// succeed against a store no owner here can open.
 ///
-/// The discovery order is Skarbiec's own — `$HOME/.local/share/skarbiec`,
-/// then `$HOME/.stado`, then `$HOME`, the list `skarbiec`'s `vaults` command
-/// searches. Stado used to name `$HOME/.stado/skarbiec.vault.json` alone,
-/// while the `skarbiec` CLI defaults to `.local/share/skarbiec`. Two tools on
-/// one machine, two answers, and no way for an operator to see the
-/// disagreement: `skarbiec set-json` writes go to `.local/share/skarbiec`
-/// and are simultaneously real, `active` on the host, and invisible to
-/// `stado repair stado --step release-verifier`, which reads the other file.
-/// That closes the fleet's release publication boundary for every product
-/// until the declarations are retracted.
+/// Discovery uses the same candidate paths as Skarbiec so owner reads and
+/// writes do not silently address different files.
 ///
-/// When two candidates carry the SAME owner identity and neither holds all
-/// of the other's items at the same or a later revision, the machine has no
-/// single authoritative vault, and picking either silently is exactly the
-/// failure above. That is refused, naming both paths and their item counts,
-/// because an operator who is told can declare the one they mean and a
-/// program that guesses cannot be corrected. When exactly one candidate holds
-/// everything the others hold, at the same or a later revision, the others
-/// are stale copies of it and it is used, saying so on stderr. The contents
-/// are never merged here.
+/// Same-owner candidates are compared by item ID and revision. Exactly one
+/// candidate containing every other candidate's items at equal or later
+/// revisions is selected and reported on stderr. Otherwise the refusal names
+/// each candidate and its item count. No vault contents are merged.
 ///
-/// The answer is read from `secrets.skarbiec.vault_file`, so it is one
-/// declaration this and every later command shares —
-/// `SKARBIEC_VAULT_FILE` still overrides it, which is how a build is
-/// exercised before it is installed, but an environment variable answers for
-/// one process and the split brain outlives it.
+/// `secrets.skarbiec.vault_file` declares the shared path for subsequent
+/// commands; `SKARBIEC_VAULT_FILE` overrides it for the current process.
 pub fn vault() -> Result<PathBuf, SkarbiecError> {
     let declared = crate::config::skarbiec_vault_file();
     if !declared.trim().is_empty() {
@@ -100,9 +84,9 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
             return Err(SkarbiecError::Deployment(format!(
                 "this machine holds {} vaults that all claim owner {first_owner}: {described}. \
                  There is no single authoritative vault, so a credential write or an \
-                 authoritative read here would silently pick one — which is how six real items \
-                 became invisible to the release verifier. Declare the one you mean, which \
-                 every later command then shares: `stado config set \
+                 authoritative read here could hide items held only by another candidate. \
+                 Declare the one you mean, which every later command then shares: \
+                 `stado config set \
                  secrets.skarbiec.vault_file <path>` locally, or `stado host config-set \
                  <target> secrets.skarbiec.vault_file <path>` for a managed host. \
                  `stado credentials vault` reports this state and each candidate's owner and \

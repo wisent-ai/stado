@@ -107,30 +107,19 @@ pub async fn assign_jobs_at(
                     } else {
                         skip_by_key.push((mt, 1));
                     }
-                    // makespan can't optimally ORDER a no-history job, but it
-                    // must not leave a stale assigned_to that PINS it to an
-                    // agent chosen under a now-obsolete size. gpt-oss-20b was
-                    // pinned to the single 96GB local box back when it was
-                    // mis-sized 89 (cross-GPU-sum bug); after the per-GPU
-                    // sizing fix it fits the idle 80GB fleet, but the skip
-                    // path never cleared the pin so it stayed routed to the
-                    // saturated box and never dispatched (q frozen ~1h+,
-                    // 2026-05-18). Clearing the pin makes it claimable by any
-                    // eligible agent (the documented assigned_to="" semantic);
-                    // history-backed jobs' ordering is unaffected.
+                    // No history means makespan cannot order this job, not
+                    // that an obsolete assignment may keep it pinned.
+                    // Clear the derived assignment so any eligible agent
+                    // can claim it without changing history-backed ordering.
                     if !job.assigned_to.is_empty() {
                         job.assigned_to = String::new();
                         to_write.push(job);
                     }
                     continue;
                 }
-                // High-priority no-history job (one-off training run, e.g.
-                // free_chat_pd GRPO) must not be silently dropped: priority
-                // =999999 jobs were starved in queue indefinitely behind the
-                // history-backed benchmark backlog (Qwen3 724084db queued
-                // 30min+, zero dispatch, 2026-05-15). Conservative long
-                // runtime so it still enters schedulable and the priority
-                // sort below places it first.
+                // A priority job without history still enters scheduling.
+                // A conservative runtime estimate lets the priority sort
+                // place it without requiring an earlier successful run.
                 6.0 * 3600.0
             }
         };

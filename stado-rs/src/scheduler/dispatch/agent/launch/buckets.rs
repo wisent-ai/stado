@@ -46,24 +46,10 @@ pub(crate) async fn bucket_jobs(
         }
         let mut gpu_mem = j.gpu_mem_gb;
         if gpu_mem <= 0 {
-            // Unmeasured on the queue blob — normalize_queue_sizing forces
-            // gpu_mem_gb=0 whenever observed_vram_gb(model) is None at
-            // sizing time (sizing/__init__.py docstring). Previously this
-            // branch was a hard `continue`, which combined with the
-            // always-write-0 behaviour to lock the entire
-            // unmeasured-model queue out of the autoscaler (199
-            // gpt-oss-20b jobs stuck at gpu_mem_gb=0 observed live
-            // 2026-05-20). Recover by:
-            //   1. Re-checking observed_vram_gb (a sibling job of the
-            //      same model may have just completed and populated the
-            //      map),
-            //   2. Using smallest_live_vram() instead — the documented
-            //      start size for unmeasured models (see
-            //      escalate_on_oom). If the job overflows that tier,
-            //      escalate_on_oom climbs to next_live_vram on requeue.
-            // If neither yields a number, the fleet has no live GPU
-            // broadcasting at all and the job is genuinely unschedulable
-            // this tick; defer to the next.
+            // Recheck measurements: another run may have supplied one since
+            // this job was sized. Otherwise try the smallest live GPU tier;
+            // an out-of-memory result can escalate the job on requeue.
+            // With neither a measurement nor live GPU capacity, defer it.
             let model = crate::sizing::model_of(&j.command);
             let peak = if model.is_empty() {
                 None

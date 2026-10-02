@@ -3,14 +3,9 @@
 //!
 //! NO Python original: item three of `stado.wisent.com/docs/missing-commands`.
 //!
-//! Why two signals and not one: a host can answer ssh perfectly while its
-//! health beacon is days old — the disk full, launchd wedged, and the beacon
-//! writer not run since. "Can I ssh in" and "is this box reporting" are
-//! different questions, and a ping that answers only the first is exactly
-//! the tool that lets such an incident run for days. So both are probed,
-//! both are reported, and
-//! the verdict is the WORSE of the two ([`Verdict`] is ordered worst-last
-//! so the combination is a plain `max`).
+//! SSH reachability does not prove that the health-beacon writer is working.
+//! Probe and report both signals. [`Verdict`] orders worse states last, so
+//! their combined verdict is their maximum.
 //!
 //! Signal one is the shared ssh channel ([`crate::deploy::host_channel`],
 //! itself the option set of [`crate::deploy::host_state::reboot`]) running a

@@ -1,7 +1,7 @@
 /// `service ensure`: the unit this host should be running, installed only
 /// where it is not already what it should be.
 ///
-/// Three differences from [`DEPLOY_BODY`], each one an incident:
+/// Three differences from [`DEPLOY_BODY`]:
 ///
 /// - It is idempotent. `deploy` refuses a unit that is already declared and
 ///   bootstraps unconditionally otherwise, so there is no command an operator
@@ -25,12 +25,9 @@
 /// command exists to end.
 pub(super) const ENSURE_BODY_HEAD: &str = "program=@PROGRAM@
 argv=@ARGV@
-# The staged unit is removed inline, on every path, and NO `trap` is installed
-# for it. `host_channel::PostCondition::arm` arms the end-state probe as an EXIT
-# trap before this body runs, and a second `trap ... EXIT` here replaces it: a
-# create pass then wrote the plist, bootstrapped it, left launchd running it
-# with a live pid, and still failed with `postcondition unobserved`, because the
-# probe that would have confirmed the success had been unhooked by the cleanup.
+# Clean up the staged unit directly on every path. The host channel owns the
+# EXIT trap that observes the final state; a second cleanup trap would replace
+# that probe and lose the activation result.
 staged=''
 stado_loaded_identity() {
   loaded_program=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk -F' = ' '$1 ~ /^[[:space:]]*program[[:space:]]*$/ { print $2; exit }')

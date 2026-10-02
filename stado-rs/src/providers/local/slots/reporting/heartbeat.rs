@@ -61,14 +61,9 @@ pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), Sto
 /// the training subprocess is alive — independent of the agent main loop.
 /// Python `_start_heartbeat_thread`.
 ///
-/// The loop-coupled write (slots tick, only fires when the agent reaches
-/// it) let a loop blocked >1800s on another slot's checkpoint pull / drift
-/// check / HF download starve a HEALTHY job's heartbeat, so the CF monitor
-/// orphan-requeued it: Llama 3ef705b2 + Qwen3 724084db were both requeued
-/// in one monitor pass at 2026-05-15T16:18:42 ('local agent live but job
-/// heartbeat stale (orphan)') while training was actively progressing. A
-/// task keyed on pid liveness makes the heartbeat mean 'training process
-/// alive', not 'agent loop ran recently'.
+/// The main loop can be busy downloading another slot's inputs or checking
+/// drift while this process continues working. Key heartbeats to process
+/// liveness so that unrelated loop work cannot make a live job look orphaned.
 pub fn start_heartbeat_task(
     store: JobStorage,
     job_id: String,

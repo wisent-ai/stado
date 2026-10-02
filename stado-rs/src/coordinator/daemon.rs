@@ -146,12 +146,9 @@ pub async fn run(target: Option<&str>, invocation: Invocation) -> Result<i32, St
             .await
             .map_err(|exc| exc.to_string())?;
         log(&format!("tick scheduled={n}"));
-        // Record the queue namespace this coordinator serves into the
-        // canonical registry so submitters can refuse an ambient namespace
-        // the fleet never claims from (the 2026-08-19 silent-stall: a job
-        // submitted under the operator's ambient namespace sat unclaimed
-        // for hours). Ok(false) — already current, empty namespace, or a
-        // lost CAS race — needs no line.
+        // Publish the served queue namespace so submitters can refuse one
+        // this fleet never claims from. An unchanged value, empty namespace
+        // or lost compare-and-swap race needs no success log.
         if let Err(exc) =
             crate::targets::record_fleet_queue_namespace(config::wc_stado_storage_namespace()).await
         {

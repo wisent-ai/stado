@@ -40,9 +40,8 @@ pub async fn relay_apple_challenge(
                     .get("user")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown-user");
-                // The probe's own words: which item disagreed, or what stopped it.
-                // Without them this refusal said only "not drivable" about a laptop
-                // that, asked from itself, answered drivable (2026-09-19).
+                // Preserve the probe's reason so the refusal identifies
+                // the disagreement or failed operation, not just its verdict.
                 let reason = row
                     .get("drivable_reason")
                     .and_then(Value::as_str)

@@ -103,18 +103,12 @@ pub(super) fn diagnosis(facts: &Facts<'_>) -> Value {
             VERDICT_SETTLED
         };
     let summary = cause_summary(&facts.quarantined);
-    // Remedies are for what is blocking *now*, not for every cause in the
-    // host's history. A settled product with an old quarantine was printing
-    // "declare rollback compatibility, then promote it again" under a verdict
-    // of `settled`, which reads as work to do where there is none. The
-    // historical repairs stay in the per-cause table, where they are framed as
-    // history.
+    // Recommend repairs only for current blockers. Historical quarantine
+    // remedies remain in the per-cause table, not the active work list.
     let mut remedies = Vec::new();
     if desired_quarantined {
-        // The cause first, the clear second, in that order and for that
-        // reason: clearing the digest without repairing what it failed on just
-        // spends another candidate on the same wall. This is the mistake the
-        // incident repeated.
+        // Repair the cause before clearing quarantine; otherwise another
+        // candidate can fail for the same unresolved reason.
         if let Some(remedy) = facts
             .quarantined
             .iter()

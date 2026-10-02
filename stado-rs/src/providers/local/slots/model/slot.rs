@@ -65,11 +65,9 @@ impl ActiveSlot {
             .expect("ActiveSlot always has a pid after spawn")
     }
 
-    /// Python `slot["log_file"].flush(); slot["log_file"].close()`. The
-    /// agent keeps no userspace buffer on this file (the child's writes go
-    /// straight to the dup'd fd), so closing our copy is the whole flush —
-    /// what matters is that it happens BEFORE the output upload reads the
-    /// file from disk (see the 2026-05-06 zero-byte-log incident below).
+    /// The child writes directly to a duplicated file descriptor; this
+    /// process adds no userspace buffer. Close our handle before uploading
+    /// the completed log from disk.
     pub(crate) fn close_log(&mut self) {
         self.log_file.take();
     }
