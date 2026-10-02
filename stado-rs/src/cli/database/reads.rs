@@ -11,6 +11,12 @@ use super::{directory_routes, registry_document};
 pub(super) async fn list(json_output: bool) -> Result<(), CmdError> {
     let databases = crate::config::database_api_databases()
         .map_err(|problems| CmdError::click(problems.join("; ")))?;
+    if databases.is_empty() {
+        if json_output {
+            println!("[]");
+        }
+        return Ok(());
+    }
     let document = registry_document().await?;
     let routes = document
         .get("service_directory")
