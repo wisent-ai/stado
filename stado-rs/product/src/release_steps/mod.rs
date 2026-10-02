@@ -23,6 +23,7 @@ mod delivery;
 mod linkage;
 mod npm;
 mod python;
+mod schema;
 mod supabase;
 mod tree_archive;
 
@@ -39,7 +40,7 @@ pub use delivery::run as run_deliver;
 pub use linkage::run as run_linkage;
 pub use npm::pack as run_npm_pack;
 pub use python::run as run_python;
-pub use supabase::verify as run_supabase_verify;
+pub use schema::verify as run_schema_verify;
 pub use tree_archive::run as run_tree_archive;
 
 /// Every archive entry's modification time: 2000-01-01T00:00:00Z, the value

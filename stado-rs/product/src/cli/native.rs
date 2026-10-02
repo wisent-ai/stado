@@ -79,20 +79,43 @@ pub fn npm() -> Command {
         )
 }
 
-pub fn supabase() -> Command {
-    Command::new("supabase")
-        .about("Release steps of a Supabase schema product")
+pub fn schema() -> Command {
+    Command::new("schema")
+        .about("Release steps of a database-schema product on any engine: sqlite, postgres or supabase")
         .arg(
             Arg::new("operation")
                 .required(true)
                 .value_parser(["verify"])
                 .help(
-                    "verify: the post-build test of a supabase-source platform; applies every \
-             migration of $WISENT_OUTPUT_DIR/release/supabase-source.tar to a scratch local \
-             database (supabase db start, Supabase CLI and Docker on the runner) and stops it",
+                    "verify: the post-build test of a schema product; applies every migration, in \
+                     file-name order, to a scratch database of the engine and reports the tables it \
+                     made. sqlite: a fresh file under $WISENT_OUTPUT_DIR/schema-verify. postgres: \
+                     the scratch database WISENT_SCRATCH_DATABASE_URL names, through psql. \
+                     supabase: $WISENT_OUTPUT_DIR/release/supabase-source.tar on a local Supabase \
+                     stack (supabase db start, Supabase CLI and Docker on the runner)",
                 ),
         )
+        .arg(engine())
+        .arg(migrations())
         .arg(project_dir())
+}
+
+/// The engine the schema runs on; there is no default, because the engine is
+/// a fact of the product the manifest declares.
+fn engine() -> Arg {
+    Arg::new("engine")
+        .long("engine")
+        .required(true)
+        .value_parser(["sqlite", "postgres", "supabase"])
+        .help("The engine the schema runs on")
+}
+
+/// Where the `*.sql` migrations of a sqlite or postgres schema sit in the checkout.
+fn migrations() -> Arg {
+    Arg::new("migrations")
+        .long("migrations")
+        .default_value("migrations")
+        .help("Directory of *.sql migrations, applied in file-name order (sqlite and postgres)")
 }
 
 /// Where the Supabase project (the directory holding `supabase/`) sits inside
@@ -101,7 +124,7 @@ fn project_dir() -> Arg {
     Arg::new("project-dir")
         .long("project-dir")
         .default_value(".")
-        .help("Directory inside the bundle that holds supabase/ (default: the bundle root)")
+        .help("Directory inside the bundle that holds supabase/ (supabase; default: the bundle root)")
 }
 
 pub fn deliver() -> Command {
@@ -109,13 +132,19 @@ pub fn deliver() -> Command {
         .about("Release deliveries to hosting providers, run by a manifest's deliveries")
         .subcommand_required(true)
         .subcommand(
-            Command::new("supabase")
+            Command::new("schema")
                 .about(
-                    "Push the verified release's supabase-source.tar (migrations, functions) to the \
-                     Supabase project SUPABASE_PROJECT_REF with SUPABASE_ACCESS_TOKEN and \
+                    "Apply the verified release's migrations to the product's database on its engine. \
+                     postgres: the migrations the database SCHEMA_DATABASE_URL names has not recorded \
+                     yet, each with its version recorded in wisent_schema_migrations; writes \
+                     schema-receipt.json. supabase: push supabase-source.tar (migrations, functions) \
+                     to the project SUPABASE_PROJECT_REF with SUPABASE_ACCESS_TOKEN and \
                      SUPABASE_DB_PASSWORD, carrying split migrations in as applied; writes \
-                     supabase-receipt.json",
+                     supabase-receipt.json. sqlite has no delivery: the product applies its own \
+                     migrations on open",
                 )
+                .arg(engine())
+                .arg(migrations())
                 .arg(project_dir()),
         )
         .subcommand(

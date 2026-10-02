@@ -1,4 +1,4 @@
-//! `stado product supabase verify`: every migration of the staged bundle
+//! `stado product schema verify --engine supabase`: every migration of the staged bundle
 //! applied to a scratch local database that no other run shares.
 
 use std::fs;
@@ -113,7 +113,7 @@ fn free_port(reserved: &mut Vec<std::net::TcpListener>) -> Result<i64> {
     Ok(i64::from(port))
 }
 
-/// `stado product supabase verify`: the post-build test of a supabase-source
+/// `stado product schema verify --engine supabase`: the post-build test of a supabase-source
 /// platform. It unpacks the staged `release/supabase-source.tar` exactly as
 /// the delivery will, starts a scratch local database from its config (the
 /// Supabase CLI applies every migration in order on start, with the auth,

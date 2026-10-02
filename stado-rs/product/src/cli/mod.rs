@@ -60,7 +60,7 @@ pub fn augment(command: Command) -> Command {
         .subcommand(native::source_bundle())
         .subcommand(native::python())
         .subcommand(native::npm())
-        .subcommand(native::supabase())
+        .subcommand(native::schema())
         .subcommand(native::deliver())
         .subcommand(
             Command::new("linkage")
@@ -181,17 +181,17 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
             "pack" => crate::release_steps::run_npm_pack(),
             other => anyhow::bail!("unknown npm release operation {other}"),
         },
-        "supabase" => match arguments
+        "schema" => match arguments
             .get_one::<String>("operation")
-            .context("supabase release operation is missing")?
+            .context("schema release operation is missing")?
             .as_str()
         {
-            "verify" => crate::release_steps::run_supabase_verify(
-                arguments
-                    .get_one::<String>("project-dir")
-                    .map_or(".", String::as_str),
+            "verify" => crate::release_steps::run_schema_verify(
+                arguments.get_one::<String>("engine").context("--engine is required")?,
+                arguments.get_one::<String>("migrations").map_or("migrations", String::as_str),
+                arguments.get_one::<String>("project-dir").map_or(".", String::as_str),
             ),
-            other => anyhow::bail!("unknown supabase release operation {other}"),
+            other => anyhow::bail!("unknown schema release operation {other}"),
         },
         "python" => crate::release_steps::run_python(
             arguments

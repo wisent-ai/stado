@@ -1,9 +1,11 @@
-//! `stado product deliver supabase`: a Supabase project's migrations and
-//! functions, from the verified release, pushed to the project the delivery's
-//! secrets name. The same Python file was copied into wisent-supabase-oko,
-//! -preferences and -wisent-app. Before the push the linked project's history
-//! is reconciled with what the bundle declares (split migrations, a baseline
-//! of versions a hand-built database already holds); see [`history`].
+//! The Supabase adapter of the schema release (`stado product schema verify
+//! --engine supabase` and `deliver schema --engine supabase`): a Supabase
+//! project's migrations and functions, from the verified release, pushed to
+//! the project the delivery's secrets name. The same Python file was copied
+//! into wisent-supabase-oko, -preferences and -wisent-app. Before the push the
+//! linked project's history is reconciled with what the bundle declares (split
+//! migrations, a baseline of versions a hand-built database already holds);
+//! see [`history`].
 
 mod history;
 mod verify;

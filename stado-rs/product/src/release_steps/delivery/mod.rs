@@ -42,7 +42,9 @@ pub fn run(action: &str, arguments: &clap::ArgMatches) -> Result<i32> {
         ),
         "npm" => super::npm::deliver(),
         "render" => render(&text("service-name")?),
-        "supabase" => super::supabase::deliver(
+        "schema" => super::schema::deliver(
+            arguments.get_one::<String>("engine").context("--engine is required")?,
+            arguments.get_one::<String>("migrations").map_or("migrations", String::as_str),
             arguments
                 .get_one::<String>("project-dir")
                 .map_or(".", String::as_str),
