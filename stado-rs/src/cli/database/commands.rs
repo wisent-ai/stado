@@ -80,7 +80,7 @@ pub(crate) enum DatabaseCommands {
         /// Port the fleet database listens on (fleet postgres; default: the first free one from the engine's own).
         #[arg(long)]
         port: Option<u16>,
-        /// Declared database whose project's organization and region the new project joins (supabase).
+        /// Declared database whose project's organization and region the new project joins (supabase); without it, the one organization and region every project the token sees shares.
         #[arg(long)]
         anchor: Option<String>,
         /// Monthly compute cost in USD the operator accepts for the new project (supabase).

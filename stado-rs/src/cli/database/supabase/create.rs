@@ -49,33 +49,71 @@ pub(super) fn cost(plan: &str, running: usize) -> u64 {
     }
 }
 
-/// The organization, region and bill of one more project beside `anchor`;
-/// refuses unless `accepted` covers the added monthly compute.
+/// The organization and region a new project joins: the anchor database's
+/// project when one is named, otherwise the one organization and region every
+/// project the token sees shares. Several are refused by name, because
+/// choosing between them would be a guess.
+async fn placement(
+    anchor: Option<&str>,
+    projects: &[Value],
+) -> Result<(String, String), CmdError> {
+    if let Some(anchor) = anchor {
+        let anchor_ref = field(&format!("{anchor}-database"), "project_ref").await?;
+        let anchor_project = projects
+            .iter()
+            .find(|p| p["ref"] == anchor_ref.as_str())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "anchor project {anchor_ref} is not visible to {TOKEN_ITEM}"
+                ))
+                .stating(crate::primitives::failure::FailureCode::Refused)
+            })?;
+        let slug = organization_of(anchor_project).ok_or_else(|| {
+            CmdError::click(format!("anchor project {anchor_ref} names no organization"))
+                .stating(crate::primitives::failure::FailureCode::Refused)
+        })?;
+        let region = anchor_project["region"].as_str().unwrap_or_default();
+        return Ok((slug, region.to_string()));
+    }
+    let mut places: Vec<(String, String)> = projects
+        .iter()
+        .filter_map(|p| {
+            Some((organization_of(p)?, p["region"].as_str()?.to_string()))
+        })
+        .collect();
+    places.sort();
+    places.dedup();
+    match places.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => Err(CmdError::click(format!(
+            "{TOKEN_ITEM} sees no Supabase project, so no organization and region can be read \
+             from it; create the database with --provider fleet, or name a declared supabase \
+             database with --anchor"
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused)),
+        several => Err(CmdError::click(format!(
+            "{TOKEN_ITEM} sees projects in {}; name the declared supabase database whose \
+             organization and region the new project joins with --anchor",
+            several
+                .iter()
+                .map(|(org, region)| format!("{org} ({region})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .stating(crate::primitives::failure::FailureCode::Refused)),
+    }
+}
+
+/// The organization, region and bill of one more project; refuses unless
+/// `accepted` covers the added monthly compute.
 async fn priced_creation(
     name: &str,
-    anchor: &str,
+    anchor: Option<&str>,
     token: &str,
     projects: &[Value],
     accepted: Option<u64>,
 ) -> Result<(String, String, Value), CmdError> {
-    let anchor_ref = field(&format!("{anchor}-database"), "project_ref").await?;
-    let anchor_project = projects
-        .iter()
-        .find(|p| p["ref"] == anchor_ref.as_str())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "anchor project {anchor_ref} is not visible to {TOKEN_ITEM}"
-            ))
-            .stating(crate::primitives::failure::FailureCode::Refused)
-        })?;
-    let slug = organization_of(anchor_project).ok_or_else(|| {
-        CmdError::click(format!("anchor project {anchor_ref} names no organization"))
-            .stating(crate::primitives::failure::FailureCode::Refused)
-    })?;
-    let region = anchor_project["region"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
+    let (slug, region) = placement(anchor, projects).await?;
     let org = call(
         reqwest::Method::GET,
         &format!("/organizations/{slug}"),
@@ -120,7 +158,7 @@ async fn priced_creation(
 
 pub(in crate::cli::database) async fn create(
     name: &str,
-    anchor: &str,
+    anchor: Option<&str>,
     consumers: &[String],
     accept_monthly_usd: Option<u64>,
     json_output: bool,

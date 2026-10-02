@@ -6,10 +6,6 @@ pub(super) mod adopt;
 pub(super) mod create;
 pub(super) mod owner_vault;
 
-/// The declared database whose project a new Supabase project joins when
-/// `create --provider supabase` names no `--anchor`.
-pub(super) const DEFAULT_ANCHOR: &str = "oko";
-
 use serde_json::{json, Value};
 
 use crate::cli::CmdError;
