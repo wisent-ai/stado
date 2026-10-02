@@ -128,7 +128,7 @@ fn request(action: &str, body: &[u8]) -> Result<(String, Vec<String>), HandlerEr
         "slack-status" | "autonomy-status" | "routines-list" => {
             let value: Host = decode(body)?;
             let argv = match action {
-                "slack-status" => words(&["slack", "status", "--json"]),
+                "slack-status" => words(&["chat", "status", "--provider", "slack", "--json"]),
                 "autonomy-status" => words(&["autonomy", "status"]),
                 _ => words(&["routines", "list", "--json"]),
             };
