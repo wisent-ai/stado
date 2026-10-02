@@ -15,16 +15,15 @@ use report::print_report;
 /// host is claiming nothing, in one payload.
 ///
 /// The exit status follows `claiming`, the way `host ping`'s follows its
-/// combined verdict, so `stado space reclaim mini --apply --reason … && stado
-/// host gates mini` is a usable sentence and a blocked host cannot be
+/// combined verdict, so `stado space reclaim HOST --apply --reason … && stado
+/// host gates HOST` is a usable sentence and a blocked host cannot be
 /// mistaken for a healthy one by a script that only reads status codes.
 /// With `--require-disk`, it follows free space against that declared
 /// threshold instead: the question a build-capacity gate asks.
 ///
-/// The Mac mini sat at roughly 2 GiB free against a 55 GiB policy, its agent
-/// published `disk_pressure_unresolved` every tick, it claimed nothing for
-/// hours, every release build queued behind it — and no command in this CLI
-/// said any of it. This is that sentence.
+/// A host can publish a healthy heartbeat while refusing work because disk
+/// pressure remains unresolved. The admission reason must therefore be
+/// visible alongside free space and the configured policy.
 pub async fn gates(
     host: &str,
     json: bool,

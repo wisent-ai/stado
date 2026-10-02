@@ -2,9 +2,8 @@ import Foundation
 
 /// Which of the candidate's own streams to read off the host.
 ///
-/// stderr first, and stderr alone by default: in the incident the answer was
-/// in `.err` while `.out` was empty, and a reader that opens stdout first
-/// buries it.
+/// Stderr comes first and is the default stream so startup failures remain
+/// visible even when stdout contains no output.
 enum ReleaseLogStreamSelection: String, CaseIterable, Identifiable, Sendable {
     case err
     case out

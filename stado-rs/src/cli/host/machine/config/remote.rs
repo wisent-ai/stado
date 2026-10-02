@@ -60,11 +60,9 @@ pub(super) async fn remote_config(
 /// answer that matters here is exactly "what does the config the services
 /// consume say", which is what this one already asks.
 ///
-/// The incident: the Mac mini's agent unit was re-declared with a
-/// `STADO_CONFIG` naming a config that set `wc_storage_backend: "local"`, so
-/// the agent published its capacity into an on-disk store on that machine and
-/// nothing in the fleet ever read it. `host config-show` could see that field
-/// the whole time; nothing that judged the host asked it.
+/// A successful device-local capacity write does not prove fleet publication.
+/// Host gates inspect the configuration the host consumes, rather than infer
+/// storage reach from a running process or an earlier capacity record.
 pub(crate) async fn remote_config_output(
     target: &ComputeTarget,
     action: RemoteConfigAction<'_>,

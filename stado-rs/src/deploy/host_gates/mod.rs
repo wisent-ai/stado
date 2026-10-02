@@ -1,19 +1,12 @@
 //! `stado host gates HOST` — the one payload that answers "why is this host
 //! claiming nothing".
 //!
-//! NO Python original. The incident it exists for: the Mac mini's data volume
-//! sat at roughly 2 GiB free against a 55 GiB registry policy. Its queue agent
-//! computes [`disk_cleanup::disk_pressure_unresolved`] every tick, publishes
-//! true — `accepting_jobs: false`, no new job, deliberately
-//! ([`crate::providers::local::agent`]). So the host claimed nothing for
-//! hours, every release build queued behind it, and no command in this CLI
-//! said any of it: the former disk report printed free bytes and policy but never
-//! the admission verdict, `registry doctor` listed the host as broadcasting
-//! normally, and the one fact that mattered — the agent had stopped claiming,
-//! on purpose, for a reason it was republishing every tick — existed only
-//! inside `capacity/<consumer>.json`, which nothing read.
+//! Admission depends on the agent's observed state, not merely on a running
+//! process or a recent heartbeat. For example, unresolved disk pressure can
+//! make the agent publish `accepting_jobs: false` and deliberately claim no
+//! work. This command exposes that decision together with its inputs.
 //!
-//! Four sources, joined here and re-derived nowhere:
+//! Diagnostic sources, joined here and re-derived nowhere:
 //!
 //! - the host's own capacity publication (`capacity/<consumer>.json`), whose
 //!   `diag` words are reported VERBATIM. A blocker an operator reads here has
@@ -26,14 +19,9 @@
 //!   cannot disagree about how much space this host has;
 //! - the host's own effective `wc_storage_backend`, read with the exact script
 //!   `stado host config-show` sends, and classified by
-//!   [`crate::capabilities::storage_reach`]. The fourth source exists because
-//!   of a second incident on the same machine: its agent unit was re-declared
-//!   with a `STADO_CONFIG` that set the backend to `local`, so the agent
-//!   published its capacity into an on-disk store on that one box and read a
-//!   stale registry back out of it. Everything above kept reporting normally —
-//!   the agent was running, it was publishing, its numbers were internally
-//!   consistent — and the only true statement was that no host but that one
-//!   could address a single object it wrote. Seventy-four jobs waited days.
+//!   [`crate::capabilities::storage_reach`]. Device-local capacity and registry
+//!   writes can succeed while remaining inaccessible to the fleet; process
+//!   health and locally consistent state do not prove shared storage reach.
 //!
 //! Read-only, and safe against a live production host: one ssh read of one
 //! `df` and one `cat`, one ssh read of `stado config show`, plus one object
@@ -44,8 +32,6 @@
 //! The four sources sit in `read`, the vocabulary they are reported in in
 //! `words`, the shape they are carried in in `gates`, and the join and its
 //! two published documents in `verdict`.
-//!
-//! [`disk_cleanup::disk_pressure_unresolved`]: crate::providers::local::disk_cleanup::disk_pressure_unresolved
 
 mod gates;
 mod read;

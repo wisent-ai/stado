@@ -10,12 +10,7 @@ use crate::targets::ComputeTarget;
 use crate::cli::host::checks::probes::{print_json, report_outcome};
 
 /// `stado host reboot TARGET` — request a graceful reboot through the
-/// approved channel (`stado.wisent.com/docs/missing-commands` item one).
-///
-/// [`crate::deploy::host_state::reboot`] has been complete since July but was
-/// never reachable: `deploy/mod.rs` did not declare the module and no CLI
-/// variant dispatched to it, so the command the incident write-up records
-/// as shipped did not exist. Both halves are wired now.
+/// registered host channel and report whether the request was accepted.
 pub async fn reboot(target: &str) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_state::reboot::reboot_host(target, &runner)

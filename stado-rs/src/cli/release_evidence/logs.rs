@@ -12,8 +12,6 @@ use crate::release_agent::host_log_path;
 
 use super::constants::{STREAM_EMPTY, STREAM_MISSING, STREAM_READ};
 
-/// The tail every operator wanted in the incident: enough to carry a panic
-/// and its backtrace's first frames, short enough to read in a terminal.
 const DEFAULT_LINES: usize = 40;
 
 /// Which of a candidate's two logs to fetch.
@@ -25,9 +23,8 @@ enum StreamArg {
 }
 
 impl StreamArg {
-    /// The file extensions [`crate::release_agent`] writes, in the order an
-    /// operator reads them: stderr first. In the incident the answer was in
-    /// `.err` and `.out` was empty, and printing stdout first buries it.
+    /// The file extensions [`crate::release_agent`] writes. Stderr comes
+    /// first so startup failures remain visible even when stdout is empty.
     fn extensions(self) -> &'static [&'static str] {
         match self {
             Self::Out => &["out"],

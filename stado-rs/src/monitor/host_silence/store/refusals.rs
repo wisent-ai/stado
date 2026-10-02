@@ -15,13 +15,9 @@ use crate::queue::JobStorage;
 
 /// At most one refusal blob per (host, reader, reason) per this interval.
 ///
-/// The bound that matters: a resolver whose cache has gone stale refuses
-/// EVERY request, and the outage that motivated this module lasted six
-/// minutes. Without a throttle the diagnostic writes thousands of near
-/// identical blobs into the store it is trying to keep readable, and the
-/// count an operator reads becomes a measure of request volume rather than
-/// of the fault. One record a minute per distinct refusal preserves the
-/// shape of the incident and nothing else.
+/// Repeated requests can produce the same refusal. Deduplicating by host,
+/// reader and reason separates diagnostic frequency from request volume
+/// and avoids filling the store with equivalent records.
 const REFUSAL_MIN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Hard ceiling on the throttle table, so a pathological caller cycling

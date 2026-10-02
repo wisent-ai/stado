@@ -30,10 +30,8 @@ pub const STATE_NAME: &str = "memory-reclaim-state.json";
 
 /// The memory pass's own exclusive run lock.
 ///
-/// Its own, not the disk janitor's: a memory pass that waited behind a
-/// 13-minute `build_caches` walk would be exactly as late as the walk, and
-/// the incident this exists for is measured in the minutes before a process
-/// cannot allocate.
+/// Memory-pressure recovery must not queue behind disk-cache walks.
+/// Each maintenance subsystem therefore uses its own run lock.
 pub const LOCK_NAME: &str = "memory-reclaim.lock";
 
 /// Seconds one pass may spend before it stops, when the host declares no

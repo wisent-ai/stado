@@ -98,7 +98,7 @@ impl Boundary {
         }
     }
 
-    /// The name the dashboard logs use, and the incident vocabulary with it.
+    /// The boundary label shared by dashboard logs and diagnostic reports.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Boundary::Object => "object authorization",

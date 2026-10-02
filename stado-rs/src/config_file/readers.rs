@@ -160,14 +160,6 @@ fn env_value(name: &str, kind: crate::capabilities::ConfigValueKind) -> Option<V
 /// The value of a catalogued configuration field, taken from the environment or
 /// the loaded config file in the catalog's own precedence.
 ///
-/// Reading by dotted string is no longer available, and the incident that took
-/// it away is `storage.stado.ca_file`: it sat in the deployed configuration for
-/// months, read by nothing, while `config validate` and `doctor` both passed the
-/// whole time — because naming a key was free and binding it to a reader was
-/// optional. Every validator compared the document against itself; none of them
-/// could ask whether any code would ever consult the key, so the fleet published
-/// its object API under a private authority and trusted nothing.
-///
 /// A field is a reader. Requiring one here is what lets the catalog answer "who
 /// reads this?" for every setting, and what lets validation refuse a key that
 /// nobody does.

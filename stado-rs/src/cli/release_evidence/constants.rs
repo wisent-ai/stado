@@ -6,8 +6,7 @@
 pub const STREAM_READ: &str = "read";
 /// No such file on the host. Reported as its own word rather than as an
 /// empty `lines` array: "the product wrote nothing" and "the product never
-/// got far enough to have a log opened for it" send an operator to opposite
-/// places, and the incident turned on exactly that distinction.
+/// got far enough to have a log opened for it" require different diagnoses.
 pub const STREAM_MISSING: &str = "missing";
 /// The file exists and is zero bytes — the agent opened it, so the spawn
 /// happened, and the product said nothing before it went.

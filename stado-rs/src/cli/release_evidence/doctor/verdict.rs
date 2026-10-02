@@ -13,8 +13,8 @@ use super::super::constants::{
 };
 use super::super::quarantine::cause_summary;
 
-/// Every fact the verdict is computed from, so the rule itself holds no I/O
-/// and can be exercised against the exact state the incident left behind.
+/// Explicit inputs keep verdict computation independent of I/O and make
+/// the decision reproducible from the observed state.
 pub(super) struct Facts<'a> {
     pub(super) product: &'a str,
     pub(super) target: &'a str,

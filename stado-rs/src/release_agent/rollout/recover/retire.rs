@@ -105,9 +105,8 @@ impl RetireVerdict {
 
 /// The decision itself, with the audit trail's answer already in hand.
 ///
-/// Separated from the file reads so every branch is exercised from the state
-/// the incident left behind, including the ones a live host will not produce
-/// on demand.
+/// Record interpretation is independent of file I/O, which remains with
+/// the caller.
 pub fn retire_verdict(
     record: &QuarantineRecord,
     last_auto_retirement: Option<DateTime<Utc>>,

@@ -1,13 +1,8 @@
 //! Full service management for registry-managed hosts.
 //!
-//! NO Python original: `stado/` has no service layer at all, and that
-//! absence is the incident this module closes. On the July control-host
-//! outage `com.wisent.weles-api` existed on the box and was wedged, but
-//! nothing in Stado declared it — so no command could list it, restart it,
-//! or even assert that it was supposed to be running.
-//! `stado.wisent.com/docs/missing-commands` items seven through fourteen are the
-//! resulting gap list; this module is their engine and `cli/service.rs` is
-//! their operator surface.
+//! The registry states which services must run. Observation remains separate
+//! from lifecycle operations so a host that cannot be reached still has a
+//! readable declaration and last observed state.
 //!
 //! Two halves, deliberately kept apart:
 //!

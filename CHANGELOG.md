@@ -1,10 +1,8 @@
 # Changelog
 
 Entries for the release being prepared live here. Released entries move into
-`changelog/`, one file per range, because a file this repository cannot edit is
-a file that stops receiving entries: the length gate refuses every write to a
-file past 300 lines, and this one had reached 414. Two product fixes on
-2026-09-08 could not be recorded at all until it was split.
+`changelog/`, one file per version range, so the active file remains within
+the repository's file-size limit.
 
 The version-bump commit moves them with `stado product changelog --version V`;
 `stado build submit` refuses a revision whose Unreleased section still holds entries.

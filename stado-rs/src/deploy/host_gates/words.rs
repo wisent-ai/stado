@@ -63,19 +63,7 @@ pub const CAPACITY_PUBLICATION_STALE: &str = "capacity_publication_stale";
 /// effective `wc_storage_backend` read over the same channel `stado host
 /// config-show` uses.
 ///
-/// The incident: the Mac mini's agent unit was re-declared with a
-/// `STADO_CONFIG` pointing at a config that set `wc_storage_backend` to
-/// `local`, so the agent bound its `JobStorage` to `~/.stado/local-storage` on
-/// that one machine. It kept ticking, kept reading a `registry.json` out of
-/// that private store — a stale 20 GiB watermark against a canonical 15 —
-/// kept computing [`DISK_PRESSURE_UNRESOLVED`] against it, and kept publishing
-/// capacity nothing in the fleet could ever read. Seventy-four jobs, fifty-five
-/// of them pinned to that host, sat in the fleet queue for days. Every surface
-/// in this CLI reported the host in-sync, and this command — the one command
-/// written to answer "why is this host claiming nothing" — could say only
-/// [`CAPACITY_PUBLICATION_STALE`], which was true and was a symptom.
-///
-/// Reported BEFORE [`CAPACITY_PUBLICATION_STALE`] for exactly that reason: a
+/// Reported before [`CAPACITY_PUBLICATION_STALE`]: a
 /// host addressing a private store has no way to publish anything the control
 /// plane will see, so its publication is stale by construction and the
 /// staleness is downstream of this.
@@ -86,11 +74,10 @@ pub const AGENT_STORE_DEVICE_ONLY: &str = "agent_store_device_only";
 /// This host answered with a storage backend this build has no adapter for, so
 /// how far its agent's writes carry is not a thing this command can decide.
 ///
-/// A blocker and not a note, and deliberately: the two cases where a host's
-/// store cannot be shown to be the fleet's are "it demonstrably is not"
-/// ([`AGENT_STORE_DEVICE_ONLY`]) and "this control plane cannot tell", and the
-/// second one is how the first one gets missed for a week. It usually means
-/// the host is running a newer or older Stado than the machine asking.
+/// Both device-only storage and an unrecognized backend prevent validating
+/// fleet reach, so both are blockers rather than informational notes. A
+/// version difference between the host and caller can leave the caller
+/// without an adapter for the host's backend.
 pub const AGENT_STORE_UNKNOWN: &str = "agent_store_unknown";
 
 /// The host did not answer with a storage backend at all — the remote `config

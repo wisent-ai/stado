@@ -1,14 +1,9 @@
 //! One fleet-level answer to "can anything claim this queue".
 //!
-//! NO Python original. The incident it exists for: job `2c4a47aa` sat in
-//! `queue/` for 121 hours and no command in this product said why. `stado
-//! status` listed it under a row of counts that end in "1 queued"; `stado
-//! overview` printed a worker count next to the words "active workers"; and
-//! the one fact that explained the stall — that not a single host in the
-//! registry currently publishes capacity, so nothing can ever claim it —
-//! existed only per-host, one ssh round trip at a time, behind `stado host
-//! gates HOST`. An operator who did not already suspect a specific host had
-//! no way to reach it.
+//! Queue depth and worker counts do not establish whether any host can claim
+//! queued work. This report joins fleet-wide capacity, queued requirements
+//! and declared agent state without requiring the operator to guess which
+//! host to inspect.
 //!
 //! A queue with no claimant looks exactly like an empty queue. This module is
 //! the difference, and it is a report: no exit status, no gate, nothing

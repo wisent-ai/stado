@@ -73,13 +73,9 @@ impl StorageAdapter {
 ///
 /// The lookup exists once because two callers now depend on the same answer for
 /// opposite reasons, and a second spelling of it would let them disagree.
-/// `artifact publish` asks before writing a `stado://` coordinate. The local
-/// queue agent asks about the store it broadcasts its capacity into, after the
-/// always-on mac spent an afternoon publishing into a device store: the unit was
-/// re-declared with `STADO_CONFIG` pointing at a host configuration whose
-/// `storage.backend` is `local`, every publish succeeded, and the fleet read a
-/// broadcast frozen three minutes before the unit changed while 55 jobs pinned
-/// to that host sat in a queue its agent was no longer looking at.
+/// `artifact publish` asks before writing a `stado://` coordinate. The queue
+/// agent asks before broadcasting capacity: a successful write to device-local
+/// storage does not make the publication addressable by the fleet.
 pub fn storage_reach(backend: &str) -> Option<StorageReach> {
     match constructible_variant(RuntimeFacet::Storage, backend)?.adapter {
         RuntimeAdapter::Storage(adapter) => Some(adapter.reach()),

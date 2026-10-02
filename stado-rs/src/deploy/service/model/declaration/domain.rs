@@ -5,16 +5,14 @@ use crate::deploy::service::*;
 // ---------------------------------------------------------------------------
 
 /// The `role` / `host_heuristic` word for a host that is expected to serve
-/// with nobody sitting at it. `control-host` carries it in both fields.
+/// with nobody sitting at it.
 pub const ROLE_ALWAYS_ON: &str = "always-on";
 
 /// Does the registry say this host is meant to keep a graphical account alive?
 ///
-/// `always-on` describes uptime, not the absence of a login. The Mac mini is
-/// both always-on and the declared Weles host; autologin keeps its Aqua domain
-/// alive so browser-facing LaunchAgents can run there. Treating uptime as
-/// headlessness moved those jobs into the system domain, where they competed
-/// with the release-owned user jobs for the same ports.
+/// `always-on` describes uptime, not the absence of a graphical login.
+/// Declared graphical workloads still require their account's session
+/// domain; uptime alone must not move them into the system domain.
 pub fn declared_graphical(target: &ComputeTarget) -> bool {
     target.weles.as_ref().is_some_and(|policy| policy.enabled) || target.display_stream.is_some()
 }

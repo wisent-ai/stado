@@ -210,11 +210,9 @@ pub(super) fn verdict_rows(
 /// Ask the host which artefact the live process under each named unit is
 /// executing, and fill the two process fields of every row it answers for.
 ///
-/// A second read on the same channel rather than two more fields on the version
-/// reporter, because they are two different questions: the reporter answers what
-/// is INSTALLED, this answers what is RUNNING, and the incidents that motivate
-/// this column are precisely the cases where those two disagree while every
-/// other column is correct.
+/// Installed and running artifacts are independent observations. A unit can
+/// keep executing an older artifact after its installed version changes,
+/// so process identity is read separately from the version reporter.
 ///
 /// One round trip per distinct unit, and only for units a row actually names: a
 /// declared binary no unit runs has no process to ask about. A lookup that fails

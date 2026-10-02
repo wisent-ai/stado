@@ -97,10 +97,8 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     )
     .await?;
     let quarantined = quarantine_entries(state.as_ref(), desired_digest);
-    // A failed gate read is a failed diagnosis, not a diagnosis with one
-    // field missing. The Mac mini stopped claiming for hours on a gate
-    // nothing reported; a verdict computed as if the gate were fine would
-    // reproduce that incident with more confidence.
+    // A failed gate read prevents diagnosis; it must not be interpreted as
+    // an absent blocker or a healthy admission state.
     let gates = host_gates::read_host_gates(&target_name, &production_runner())
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -261,9 +259,8 @@ pub(super) async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
                 .collect::<Vec<Vec<String>>>(),
         );
     }
-    // The command that finishes the diagnosis, spelled out. In the incident
-    // the state file's one sentence was the end of the trail; the log the
-    // operator needed had a name nobody had written down.
+    // Include the exact log command so the diagnosis leads to the
+    // candidate's own failure evidence rather than only its stored state.
     if report["verdict"] != *VERDICT_SETTLED {
         if let Some(version) = desired_version {
             println!(

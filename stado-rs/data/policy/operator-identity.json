@@ -5,7 +5,7 @@
     "directories": ["src", "tests", "data", "checks"],
     "extensions": ["rs", "json", "md", "toml"]
   },
-  "why": "wisent-ai/stado is a public repository. Comments in this tree explain themselves with the incident that motivated them, which is right, and several of them have done it by naming the operator's own machines, home directory and words. Those belong in the fleet's registry and in the change's own record, never in source somebody outside this workshop reads. The patterns below are shapes, not names: a pattern that spelled a person or a machine would publish exactly what it exists to keep out.",
+  "why": "Product source and public documentation explain reusable contracts and invariants, not private incident history. Operator identities and machine coordinates belong in their owning registry or operational record. The patterns below describe structural forms rather than literal identities, so the rule itself does not publish the data it protects.",
   "patterns": [
     {
       "name": "home_directory_path",
@@ -15,7 +15,7 @@
     {
       "name": "personal_machine_name",
       "regex": "[A-Za-z0-9]+-(?:mac-mini|macbook|macbook-pro|imac)",
-      "why": "A registry target's name is a fact about one person's hardware. Say what the host was — a 16 GiB always-on Mac, the fleet's Linux builder — instead of which one it is."
+      "why": "Resolve a target's coordinate from the fleet registry. Explain the required capability or observed condition without naming or fingerprinting a particular host."
     },
     {
       "name": "personal_email_address",

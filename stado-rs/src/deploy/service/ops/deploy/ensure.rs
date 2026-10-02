@@ -12,7 +12,7 @@ pub const ACTION_RESTARTED: &str = "restarted";
 pub const ACTION_ALREADY_CORRECT: &str = "already_correct";
 /// The unit was there with the declared Program and argv, but its rendered file
 /// had drifted; this pass installed and activated the desired definition through
-/// the guarded init-system lifecycle. See the incident in [`ensure_service`]:
+/// the guarded init-system lifecycle. For example,
 /// changing `base_unit_environment` to render `HOME` or `STADO_CONFIG` leaves
 /// installed units with stale environments until this definition is reloaded.
 /// On launchd that requires `bootout` then `bootstrap`, not an in-place kick.

@@ -153,9 +153,8 @@ extension HostsView {
         return "\(session.headline)\n\(session.detail)"
     }
 
-    /// The stamp the collector recorded and how long ago that was. The stamp
-    /// alone answers "did it sleep at 18:29"; the age alone answers "was that
-    /// during the gap". The incident needed both.
+    /// Preserve the recorded timestamp for correlation with other events
+    /// and show its age so the observation's freshness is visible.
     func stampDescription(_ value: String?) -> String {
         guard let value, !value.isEmpty else { return "Not reported" }
         guard let date = StadoFormat.date(value) else { return value }

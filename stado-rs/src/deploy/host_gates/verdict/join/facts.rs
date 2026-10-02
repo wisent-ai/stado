@@ -99,11 +99,9 @@ impl Facts {
             _ => None,
         };
 
-        // How late the janitor is against the interval IT declares, measured from
-        // the last pass that actually completed. `last_success_at` and not
-        // `last_pass_at`: the incident this exists for logged a pass every sixty
-        // seconds for fifteen days, so "it ran recently" was true throughout and
-        // meant nothing.
+        // Measure lateness against the declared interval from the last
+        // successful pass. A recent attempt is not evidence that cleanup
+        // completed, so last_pass_at cannot establish freshness.
         let cleanup_success_age_seconds = reading
             .state
             .last_success_at

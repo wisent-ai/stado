@@ -58,16 +58,10 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 /// The environment every managed unit carries, before whatever its own
 /// declaration adds.
 ///
-/// `HOME` and `STADO_CONFIG` are here because launchd sets neither for a job it
-/// starts, and without them a Stado process falls off the end of
-/// [`crate::config_file`]'s search order — `$STADO_CONFIG`,
-/// `./stado.config.json`, `~/.config/stado/config.json`, `~/.stado/config.json`
-/// — and runs on defaults. A coordinator that does that ticks forever against
-/// an empty store: a coordinator unit installed with `PATH` as its only
-/// variable reaps no expired lease and dispatches nothing while pinned jobs
-/// sit in the store it cannot see, whereas the catalog-backed Stado unit on
-/// the same host carries `HOME`, `STADO_CONFIG` and the storage keys, so one
-/// installer produces a working unit and the other does not.
+/// Managed units supply `HOME` and `STADO_CONFIG` explicitly instead of relying
+/// on launchd to provide them. Without these inputs, configuration discovery
+/// can select defaults rather than the host's declared store, leaving a
+/// coordinator unable to see the fleet's jobs or expired leases.
 ///
 /// Both values ride the [`REMOTE_HOME_PLACEHOLDER`] the remote installer
 /// substitutes, so the account is the host's answer and never this machine's.

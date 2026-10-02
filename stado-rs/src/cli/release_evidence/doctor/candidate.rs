@@ -18,10 +18,9 @@ const CANDIDATE_MARKER: &str = "STADO_CANDIDATE";
 /// The one remote program this module owns: is the recorded candidate pid
 /// still there, and what does its readiness path answer.
 ///
-/// `kill -0` is the shell builtin, not `/bin/kill`, so the probe forks
-/// nothing to establish liveness — the fact the incident's state file
-/// reported (`pid 46748 is gone`) and the fact it did not (whether the port
-/// answers) come back from one round trip.
+/// `kill -0` is the shell builtin, not `/bin/kill`, so checking the recorded
+/// process does not fork another process. Liveness and readiness are observed
+/// independently in one round trip; either can fail while the other succeeds.
 ///
 /// A curl failure is not an error here. "Nothing is listening" is an answer
 /// to the operator's question, so the status word is empty and this side

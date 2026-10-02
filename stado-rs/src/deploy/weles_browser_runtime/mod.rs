@@ -1,7 +1,6 @@
 //! Verify and repair the browser runtime a Weles host declares it needs.
 //!
-//! NO Python original. A Weles host missing part of its browser runtime fails
-//! every `generic_browser_task` like this:
+//! A missing browser-runtime component can prevent page creation:
 //!
 //! ```text
 //! browserContext.newPage: Executable doesn't exist at
@@ -14,10 +13,9 @@
 //! task on the host fails. Turning recording off would trade the product's
 //! own evidence for a green run; completing the runtime is the repair.
 //!
-//! Nothing in Stado installed or repaired anything on a host: the software report
-//! says what a host runs and stops there. So the alternative to this module
-//! was an `npx playwright install` typed into somebody's terminal — an
-//! unrepeatable change nobody can audit and nobody can apply to the next host.
+//! Verification reports the installed component state. Explicit repair uses
+//! the host's release requirements, so the same operation can be applied
+//! to any declared Weles host without an ad hoc installation.
 //!
 //! Two properties are deliberate:
 //!
@@ -31,8 +29,7 @@
 //!    [`super::service_file_fetch`] because a clamped or sanitized read of a
 //!    JSON document is not the document.
 //! 2. **Requirements and page readiness are separate facts.** `--component`
-//!    selects the components this invocation requires and `ffmpeg` remains the
-//!    default because recording was the incident this command first repaired.
+//!    selects the components this invocation requires (`ffmpeg` by default).
 //!    Independently, the report checks whether any Chromium, Firefox, or WebKit
 //!    engine is present. Satisfying a recording-only requirement therefore
 //!    cannot report a host with no browser as complete. Repair stays opt-in per

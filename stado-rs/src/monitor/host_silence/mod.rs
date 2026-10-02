@@ -1,20 +1,10 @@
 //! Durable record of a host going quiet, and of the readers that refused
 //! while it was quiet.
 //!
-//! NO Python original. The shape it exists for: a production host drops
-//! off the tailnet for minutes — full ping loss, ssh failing, then a direct
-//! path again — and afterwards the product cannot say it happened. The
-//! beacon prefix only ever holds the LATEST document per host, so the gap
-//! closes over itself the moment the host comes back: `host_health/<host>.json`
-//! is fresh again and nothing anywhere remembers that it was stale. The
-//! only evidence that survives is an operator's ping packets in a terminal.
-//!
-//! The readers knew. The resolver refused resolutions with "service
-//! directory cache is stale (store generation ...)" and its registry read
-//! failed with "registry authority exited with ...: ssh: connect to host
-//! ... Operation timed out" — both true, both timestamped, both written to
-//! `~/.stado/logs/stado-resolver.err` and read by nobody. A refusal that
-//! only a log file knows about is a refusal the product did not make.
+//! A host's newest health beacon replaces its previous one. Once a host
+//! returns, that current document cannot describe the preceding gap.
+//! Persist silence intervals and reader refusals separately so recovery
+//! does not erase the evidence needed to explain an interruption.
 //!
 //! So two blob families, both append-only, both keyed by host:
 //!
@@ -32,17 +22,16 @@
 //! Both live under `state/` and not at the store root; [`SILENCE_PREFIX`]
 //! records why.
 //!
-//! `<host>` is the subject of the refusal, not the machine that refused:
-//! the resolver on the laptop failing to reach the authority on the Mac
-//! mini is evidence about the Mac mini, and it has to land where
-//! `stado host link control-host` will look for it.
+//! `<host>` is the subject of the refusal, not the machine that refused.
+//! A reader's failure to reach an authority belongs to the authority's host,
+//! where `stado host link HOST` can retrieve it.
 //!
 //! The joins and transitions are pure functions over already-loaded
 //! documents ([`beacon_is_silent`], [`open_record`], [`merge_observation`],
 //! [`close_record`], [`summarize_refusals`]) so the truth table is
 //! exercisable without a store, a network, or a sick host.
 //!
-//! The components are the seams this account already had: `records` holds
+//! The components separate persistence from transitions: `records` holds
 //! the three stored documents, `paths` the blob keys they are written
 //! under, `transitions` the pure joins named just above, and `store` the
 //! three things that need a `JobStorage` — reading the two families back,
