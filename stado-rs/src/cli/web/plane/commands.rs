@@ -165,6 +165,16 @@ pub(crate) enum WebCommands {
         /// the package is the checkout root.
         #[arg(long)]
         package: Option<String>,
+        /// A private Git dependency answered from a release input:
+        /// `INPUT=OWNER/REPOSITORY.git`, where INPUT is the manifest's input
+        /// name and the input is a Git bundle directory. Repeatable.
+        #[arg(long = "git-input")]
+        git_inputs: Vec<String>,
+        /// A `file:` dependency outside the package answered from a release
+        /// input: `PATH=INPUT[/SUBPATH]` links PATH, relative to the package,
+        /// to that directory of the input. Repeatable.
+        #[arg(long = "link-input")]
+        link_inputs: Vec<String>,
     },
     /// Build the checked-out web product and stage its runnable tarball.
     ///
@@ -184,6 +194,14 @@ pub(crate) enum WebCommands {
         /// the repository's. Absent, the package is the checkout root.
         #[arg(long)]
         package: Option<String>,
+        /// A private Git dependency answered from a release input:
+        /// `INPUT=OWNER/REPOSITORY.git`. Repeatable; the same as on quality.
+        #[arg(long = "git-input")]
+        git_inputs: Vec<String>,
+        /// A `file:` dependency outside the package answered from a release
+        /// input: `PATH=INPUT[/SUBPATH]`. Repeatable; the same as on quality.
+        #[arg(long = "link-input")]
+        link_inputs: Vec<String>,
     },
     /// A product hosted on Vercel: its prebuilt build on a release worker,
     /// and its production deploy as a manifest delivery.

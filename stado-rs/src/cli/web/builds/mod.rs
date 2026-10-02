@@ -25,6 +25,17 @@ mod tooling;
 
 pub(crate) use steps::{build, quality};
 
+/// Where the web application is and what it reaches outside the checkout:
+/// the `--package`, `--git-input` and `--link-input` both steps take.
+pub(crate) struct Package<'a> {
+    /// The repository-relative directory holding `package.json`, or the root.
+    pub(crate) directory: Option<&'a str>,
+    /// `INPUT=OWNER/REPOSITORY.git` private Git dependencies.
+    pub(crate) git_inputs: &'a [String],
+    /// `PATH=INPUT[/SUBPATH]` `file:` dependencies outside the package.
+    pub(crate) link_inputs: &'a [String],
+}
+
 /// The platform key a web product declares in `.wisent-release.json`. Both
 /// steps refuse any other value: the recipe that invoked us is the web one, so
 /// a different platform means the manifest names this command under a platform

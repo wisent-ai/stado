@@ -9,15 +9,17 @@ use crate::cli::web::builds::contract::release::env::declared_env;
 use crate::cli::web::builds::contract::release::product;
 use crate::cli::web::builds::contract::release::site::site_root;
 use crate::cli::web::builds::contract::worker::worker;
+use crate::cli::web::builds::tooling::inputs::{git_redirects, link_inputs};
 use crate::cli::web::builds::tooling::install::install;
 use crate::cli::web::builds::tooling::node::npm;
+use crate::cli::web::builds::Package;
 use crate::cli::web::LAUNCHER;
 use crate::cli::CmdError;
 
-pub(crate) fn quality(declared_root: Option<&str>, package: Option<&str>) -> Result<(), CmdError> {
+pub(crate) fn quality(declared_root: Option<&str>, package: &Package) -> Result<(), CmdError> {
     let worker = worker()?;
     worker.require_web_platform()?;
-    let project = worker.package(package)?;
+    let project = worker.package(package.directory)?;
     let manifest = manifest_if_present(&project)?;
     // A version is checked against `package.json` only where there is one to
     // check against. A static site's version comes from whatever its
@@ -31,7 +33,9 @@ pub(crate) fn quality(declared_root: Option<&str>, package: Option<&str>) -> Res
     }
     let product = product(&worker.source, manifest.as_ref())?;
     let kind = Kind::of(manifest.as_ref());
-    let variables = declared_env(&worker.source, &worker.platform)?;
+    let mut variables = declared_env(&worker.source, &worker.platform)?;
+    variables.extend(git_redirects(&worker, package.git_inputs)?);
+    link_inputs(&worker, &project, package.link_inputs)?;
     println!(
         "stado web quality: {product} {} in {} ({})",
         worker.version,
