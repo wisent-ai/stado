@@ -258,6 +258,9 @@ fn print_runs(runs: &[Value]) {
             if let Some(failure) = record["failure"].as_str() {
                 println!("    failure: {}", failure.lines().next().unwrap_or(failure));
             }
+            if let Some(error) = record["job_read_error"].as_str() {
+                println!("    job read error: {error}");
+            }
         }
         if let Some(failure) = run["failure"].as_str() {
             // One line of evidence, not the whole log: the first line

@@ -78,6 +78,14 @@ pub enum ReleaseCommands {
     /// release that is getting slower can be seen without one. Stado Desktop
     /// shows the same register, the same durations and the same failure text
     /// on its Releases screen.
+    ///
+    /// An unfinished platform whose job is absent from every queue state is
+    /// reported as failed, with its job id and the missing-job finding.
+    /// Failure of a required platform also makes the observed run failed;
+    /// recorded_state retains the stored run state. A queue-read failure is
+    /// reported separately as job_read_error, not treated as a missing job.
+    /// These are observations: status does not resubmit work or change the
+    /// stored release state.
     Status(ReleaseStatusArgs),
     /// Resolve the exact policy-derived executable of the active signed release.
     #[command(name = "active-binary")]
