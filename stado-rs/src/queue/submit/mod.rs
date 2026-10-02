@@ -139,8 +139,8 @@ pub struct SubmitOptions {
 }
 
 impl Default for SubmitOptions {
-    /// Stado defaults: no provider pin, `repo_extras="train"`, everything
-    /// else empty/zero/false.
+    /// Stado defaults: no provider pin, no pip extras, everything else
+    /// empty/zero/false.
     fn default() -> Self {
         Self {
             provider: String::new(),
@@ -154,7 +154,7 @@ impl Default for SubmitOptions {
             repo: String::new(),
             repo_ref: String::new(),
             repo_workdir: String::new(),
-            repo_extras: "train".into(),
+            repo_extras: String::new(),
             gpu_type: String::new(),
             vram_gb: 0,
             machine_type: String::new(),

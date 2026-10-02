@@ -266,8 +266,8 @@ pub struct ScheduleCreateArgs {
     /// Override cloned-repo dir.
     #[arg(long, default_value = "")]
     pub(crate) repo_workdir: String,
-    /// pip extras on the clone.
-    #[arg(long, default_value = "train")]
+    /// pip extras on the clone; empty (the default) skips install.
+    #[arg(long, default_value = "")]
     pub(crate) repo_extras: String,
     /// Shell snippet placed before the command in the same shell.
     #[arg(long, default_value = "")]

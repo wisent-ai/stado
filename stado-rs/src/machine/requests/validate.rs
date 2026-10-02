@@ -72,7 +72,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     normalized.insert("repo".into(), Value::from(""));
     normalized.insert("repo_ref".into(), Value::from(""));
     normalized.insert("repo_workdir".into(), Value::from(""));
-    normalized.insert("repo_extras".into(), Value::from("train"));
+    normalized.insert("repo_extras".into(), Value::from(""));
     normalized.insert("pre_command".into(), Value::from(""));
     normalized.insert("apt_packages".into(), Value::Array(vec![]));
     normalized.insert("output_uri".into(), Value::from(""));

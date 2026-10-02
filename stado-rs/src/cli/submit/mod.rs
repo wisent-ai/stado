@@ -59,8 +59,8 @@ pub struct SubmitArgs {
     /// Override cloned-repo dir; default = repo basename.
     #[arg(long, default_value = "")]
     repo_workdir: String,
-    /// pip extras to install on the clone; empty skips install.
-    #[arg(long, default_value = "train")]
+    /// pip extras to install on the clone; empty (the default) skips install.
+    #[arg(long, default_value = "")]
     repo_extras: String,
     /// Pin the accelerator label (e.g. 'nvidia-l4', 'nvidia-a100-80gb').
     /// Skips the --model regex inference. Resolves machine_type from

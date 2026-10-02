@@ -59,9 +59,9 @@ pub const PROFILE_KEY_TO_KWARG: &[(&str, &str)] = &[
     ("pin_provider", "pin_to_provider"),
 ];
 
-/// The wisent-compute submit defaults a CLI kwarg is compared against in
-/// [`merge_into_kwargs`]. `repo_extras: "train"` is a historical default —
-/// keep. Ordered like the Python `DEFAULTS` dict.
+/// The submit defaults a CLI kwarg is compared against in
+/// [`merge_into_kwargs`]: each is the CLI's own default, so a profile value
+/// wins over a flag left unset. Ordered like the Python `DEFAULTS` dict.
 fn kwarg_defaults() -> Vec<(&'static str, Value)> {
     vec![
         ("gpu_type", Value::from("")),
@@ -72,7 +72,7 @@ fn kwarg_defaults() -> Vec<(&'static str, Value)> {
         ("repo", Value::from("")),
         ("repo_ref", Value::from("")),
         ("repo_workdir", Value::from("")),
-        ("repo_extras", Value::from("train")),
+        ("repo_extras", Value::from("")),
         ("output_uri", Value::from("")),
         ("verify_command", Value::from("")),
         ("exclusive", Value::from(false)),
