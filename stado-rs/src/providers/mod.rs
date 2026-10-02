@@ -50,7 +50,9 @@ pub enum ProviderError {
     #[error("{0}")]
     Value(String),
     /// The profile explicitly fences this provider.
-    #[error("PROVIDER_DISABLED: provider {0} is fenced by providers_disabled (WC_DISABLED_PROVIDERS)")]
+    #[error(
+        "PROVIDER_DISABLED: provider {0} is fenced by providers_disabled (WC_DISABLED_PROVIDERS)"
+    )]
     Disabled(String),
     /// A caller selected a provider outside the profile's enabled set.
     #[error("PROVIDER_NOT_ENABLED: provider {0} is absent from providers (WC_PROVIDERS)")]
