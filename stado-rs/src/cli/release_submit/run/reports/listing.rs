@@ -13,9 +13,10 @@ use super::jobs::{
 use super::{load_run_value, RUN_STATE_LEAF, RUN_STATE_PREFIX};
 
 /// One platform leg joined to its queue job: which run it belongs to, which
-/// platform it is, and — when the queue still holds the job — the lifecycle
-/// prefix it sits under, the seconds it has cost and the error it ended with.
-type PlatformJoin = (usize, String, Option<JobReading>);
+/// platform it is, and the queue's answer — the lifecycle prefix the job sits
+/// under with its cost and error, `None` when it is under none of the
+/// prefixes read, or why a prefix could not be read.
+type PlatformJoin = (usize, String, Result<Option<JobReading>, String>);
 
 /// Which runs a listing is about: one product, one run by id prefix, one
 /// version. Every field left `None` matches every run.
@@ -159,8 +160,35 @@ pub(crate) async fn matching_runs(
     .collect()
     .await;
     for (index, platform, found) in answers {
-        let Some((state, seconds, error)) = found else {
-            continue;
+        let (state, seconds, error) = match found {
+            Ok(Some(reading)) => reading,
+            // A leg still in flight was looked for under every lifecycle
+            // prefix. A job in none of them was lost: nothing will ever move
+            // it, so "waiting" would be read forever. The leg fails with that
+            // finding, and submit's rule below decides whether the run does.
+            Ok(None) => {
+                let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
+                    continue;
+                };
+                let in_flight = !matches!(
+                    record["state"].as_str(),
+                    Some("published" | "qualified" | "failed")
+                );
+                if in_flight {
+                    let job_id = record["job_id"].as_str().unwrap_or_default().to_owned();
+                    record["state"] = Value::String("failed".into());
+                    record["failure"] = Value::String(format!(
+                        "build job {job_id} is in no queue state (running, queue, completed, uploaded, failed, cancelled); the job was lost and this leg cannot finish — submit the release again"
+                    ));
+                }
+                continue;
+            }
+            Err(reason) => {
+                if let Some(record) = runs[index]["platforms"].get_mut(&platform) {
+                    record["job_read_error"] = Value::String(reason);
+                }
+                continue;
+            }
         };
         let Some(record) = runs[index]["platforms"].get_mut(&platform) else {
             continue;

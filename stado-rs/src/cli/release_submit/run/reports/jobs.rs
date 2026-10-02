@@ -57,12 +57,13 @@ pub(super) fn candidate_prefixes(platform_state: Option<&str>) -> &'static [&'st
 pub(super) type JobReading = (String, Option<i64>, Option<String>);
 
 /// The queue state one job sits in, what it has cost so far, and why it
-/// failed when it did.
+/// failed when it did. `Ok(None)` means the job is under none of `prefixes`;
+/// `Err` carries why a lifecycle prefix could not be read.
 pub(super) async fn job_state_and_cost(
     store: &JobStorage,
     job_id: &str,
     prefixes: &[&str],
-) -> Option<JobReading> {
+) -> Result<Option<JobReading>, String> {
     for state in prefixes {
         match store.read_job(state, job_id).await {
             Ok(Some(job)) => {
@@ -75,13 +76,13 @@ pub(super) async fn job_state_and_cost(
                             format!("the job recorded no error; stado job watch {job_id}")
                         })
                 });
-                return Some(((*state).to_string(), build_seconds(&job), error));
+                return Ok(Some(((*state).to_string(), build_seconds(&job), error)));
             }
             Ok(None) => continue,
-            Err(_) => return None,
+            Err(error) => return Err(format!("job {job_id} under {state} could not be read: {error}")),
         }
     }
-    None
+    Ok(None)
 }
 
 /// Distinct crates the job's streamed log says were compiled so far.
