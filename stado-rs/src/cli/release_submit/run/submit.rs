@@ -14,7 +14,7 @@ use crate::cli::release_submit::builds::jobs::platforms::{
     adopt_build, enqueue_platforms, reconcile_published,
 };
 use crate::cli::release_submit::builds::jobs::terminal::refresh_build;
-use crate::cli::release_submit::deliver::deliveries::run_deliveries;
+use crate::cli::release_submit::deliver::deliveries::{run_deliveries, Deliveries};
 use crate::cli::release_submit::publish::artifact::publish;
 use crate::cli::release_submit::publish::promotion::reconcile;
 use crate::cli::release_submit::publish::signing::signing;
@@ -229,8 +229,25 @@ pub(super) async fn continue_run(
     }
     run.state = ReleaseRunState::Delivering;
     save(&mut run).await?;
-    if let Err(error) = run_deliveries(&mut run, &m, &artifacts, &deliveries).await {
-        return Err(persist_failure(&mut run, error).await);
+    match run_deliveries(&mut run, &m, &artifacts, &deliveries).await {
+        Ok(Deliveries::Complete) => {}
+        // A delivery still queued or running on its host is judged by the
+        // pass that finds it ended; this one leaves the run delivering, and
+        // the release agent's next tick, or `stado release resume`, reads it
+        // again.
+        Ok(Deliveries::Pending) => {
+            save(&mut run).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&run)?)
+            } else {
+                println!(
+                    "release run {} product={} version={} state={:?}: deliveries queued on their hosts; the next release agent tick or `stado release resume {}` collects their verdicts",
+                    run.run_id, run.product, run.version, run.state, run.run_id
+                )
+            }
+            return Ok(());
+        }
+        Err(error) => return Err(persist_failure(&mut run, error).await),
     }
     if m.promotion.reconcile {
         if let Err(error) =

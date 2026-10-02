@@ -31,8 +31,37 @@ pub(crate) async fn read_terminal_job(
 /// before a byte is published. A job with neither record nor receipt has not
 /// reached a terminal state.
 pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
+    match ended(store, id).await? {
+        Ended::Job(job) => Ok(job),
+        Ended::Queued { state, host } => Err(CmdError::click(format!(
+            "release job {id} is still queued ({state}) on {host}; no host has claimed it. The \
+             host's own decline is in its agent log: read it with `stado service logs <unit> \
+             --host <host>`"
+        ))),
+        Ended::Running => Err(CmdError::click(format!(
+            "release job {id} is still running"
+        ))),
+    }
+}
+
+/// Where one release job stands: ended, or not yet.
+pub(crate) enum Ended {
+    /// The job's terminal record, or the job its receipt describes.
+    Job(Job),
+    /// Queued and unclaimed, on the host it is pinned to.
+    Queued {
+        state: String,
+        host: String,
+    },
+    Running,
+}
+
+/// The release job's terminal record, its receipt, or where it still is.
+/// A delivery pass that finds a job queued or running leaves the run
+/// delivering and reads it again on a later pass; nothing here waits.
+pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdError> {
     if let Some(job) = read_terminal_job(store, id).await? {
-        return Ok(job);
+        return Ok(Ended::Job(job));
     }
     if let Some(queued) = store.read_job("queue", id).await? {
         let host = if queued.pinned_host.is_empty() {
@@ -40,17 +69,13 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
         } else {
             queued.pinned_host
         };
-        return Err(CmdError::click(format!(
-            "release job {id} is still queued ({}) on {host}; no host has claimed it. The host's \
-             own decline is in its agent log: read it with `stado service logs <unit> --host \
-             <host>`",
-            queued.state
-        )));
+        return Ok(Ended::Queued {
+            state: queued.state,
+            host,
+        });
     }
     if store.read_job("running", id).await?.is_some() {
-        return Err(CmdError::click(format!(
-            "release job {id} is still running"
-        )));
+        return Ok(Ended::Running);
     }
     if let Some(bytes) = store
         .read_bytes(&format!("status/{id}/output/receipt.json"))
@@ -62,12 +87,12 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
         } else {
             job_state::FAILED
         };
-        return Ok(Job {
+        return Ok(Ended::Job(Job {
             job_id: id.to_string(),
             pinned_host: receipt.builder,
             state: state.to_string(),
             ..Job::default()
-        });
+        }));
     }
     Err(CmdError::click(format!(
         "release job {id} has not reached a terminal state, and left no receipt"

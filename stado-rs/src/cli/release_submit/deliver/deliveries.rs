@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::cli::release_submit::builds::jobs::terminal::{job_output_tail, terminal};
+use crate::cli::release_submit::builds::jobs::terminal::{ended, job_output_tail, Ended};
 use crate::cli::release_submit::deliver::queue::{queue_delivery, record_unqueued};
 use crate::cli::release_submit::run::state::save;
 use crate::cli::CmdError;
@@ -13,12 +13,22 @@ use crate::queue::storage::JobStorage;
 use crate::release_control::{self, ReleaseArtifactRef};
 use crate::release_pipeline::{Delivery, DeliveryRunState, ReleasePipelineManifest, ReleaseRun};
 
+/// What one delivery pass found.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Deliveries {
+    /// Every delivery has its verdict and no required one failed.
+    Complete,
+    /// At least one delivery is still queued or running on its host; the run
+    /// stays delivering and the next pass reads it again.
+    Pending,
+}
+
 pub(crate) async fn run_deliveries(
     run: &mut ReleaseRun,
     m: &ReleasePipelineManifest,
     artifacts: &BTreeMap<String, ReleaseArtifactRef>,
     deliveries: &[Delivery],
-) -> Result<(), CmdError> {
+) -> Result<Deliveries, CmdError> {
     let store = JobStorage::new().await?;
     for d in deliveries.iter().filter(|d| d.after.is_empty()) {
         queue_delivery(run, m, artifacts, &store, d).await?;
@@ -32,6 +42,7 @@ pub(crate) async fn run_deliveries(
     // it names are in: a schema delivery that failed must not be followed by
     // the application that reads that schema.
     let mut required_failure = None;
+    let mut pending = false;
     for d in deliveries {
         let passed = |name: &str| {
             run.deliveries
@@ -58,7 +69,27 @@ pub(crate) async fn run_deliveries(
             }
             continue;
         }
-        let job = terminal(&store, &current.job_id).await?;
+        let job = match ended(&store, &current.job_id).await? {
+            Ended::Job(job) => job,
+            // Queued on its host or running there: nothing to judge yet. The
+            // pass that ends a delivery is the one that finds its record or
+            // receipt; this one records what it saw and leaves the run
+            // delivering. Failing the run here made the delivery worker
+            // refuse its own job a moment later ("the run is Failed, not
+            // delivering") and no host received the release.
+            Ended::Queued { state, host } => {
+                let updated = run.deliveries.get_mut(&d.name).unwrap();
+                updated.failure = Some(format!("queued ({state}) on {host}, not yet claimed"));
+                pending = true;
+                continue;
+            }
+            Ended::Running => {
+                let updated = run.deliveries.get_mut(&d.name).unwrap();
+                updated.failure = Some("running".to_string());
+                pending = true;
+                continue;
+            }
+        };
         let ok = matches!(
             job.state.as_str(),
             job_state::COMPLETED | job_state::UPLOADED
@@ -94,6 +125,7 @@ pub(crate) async fn run_deliveries(
     save(run).await?;
     match required_failure {
         Some(failure) => Err(CmdError::click(failure)),
-        None => Ok(()),
+        None if pending => Ok(Deliveries::Pending),
+        None => Ok(Deliveries::Complete),
     }
 }
