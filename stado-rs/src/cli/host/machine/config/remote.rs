@@ -68,6 +68,12 @@ pub(crate) async fn remote_config_output(
     action: RemoteConfigAction<'_>,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
+    let operation = match &action {
+        RemoteConfigAction::Show => "read configuration (`config show --json`)",
+        RemoteConfigAction::Set { .. } => {
+            "set configuration and read it back (`config set`, then `config show --json`)"
+        }
+    };
     let action = match action {
         RemoteConfigAction::Show => "\"$binary\" config show --json".to_string(),
         RemoteConfigAction::Set { key, value } => format!(
@@ -82,17 +88,24 @@ pub(crate) async fn remote_config_output(
     let script = format!("{CONFIG_SCRIPT_PREFIX}{action}\n");
     let output = crate::deploy::host_channel::run_script(target, &script, runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot {operation} on {} through its host channel: {error}",
+                target.name
+            ))
+        })?;
     if !output.ok() {
-        let detail = output.detail().trim().to_string();
-        return Err(CmdError::click(if detail.is_empty() {
-            format!(
-                "host configuration command on {} exited with code {} and produced no output",
-                target.name, output.code
-            )
-        } else {
-            detail
-        }));
+        let detail = output.detail();
+        return Err(CmdError::click(format!(
+            "cannot {operation} on {} using ~/.stado/bin/stado (exit {}): {}",
+            target.name,
+            output.code,
+            if detail.trim().is_empty() {
+                "no output"
+            } else {
+                detail.trim()
+            }
+        )));
     }
     Ok(output.stdout)
 }

@@ -104,17 +104,20 @@ pub async fn config_unset(
     );
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot unset configuration and read it back on {} through its host channel: {error}",
+                resolved.name
+            ))
+        })?;
     if !output.ok() {
-        // The host's own sentence, not just its last line: `stado config
-        // unset` prints why it refused and a tracing banner after it, so
-        // reporting the last line reports the banner and loses the reason.
-        let detail = output.detail().trim().to_string();
-        return Err(CmdError::click(if detail.is_empty() {
-            "remote Stado configuration command failed".to_string()
-        } else {
-            detail
-        }));
+        let detail = output.detail();
+        return Err(CmdError::click(format!(
+            "cannot unset configuration and read it back on {} using ~/.stado/bin/stado (exit {}): {}",
+            resolved.name,
+            output.code,
+            if detail.trim().is_empty() { "no output" } else { detail.trim() }
+        )));
     }
     print!("{}", output.stdout);
     if let Some(service) = reload_service {
