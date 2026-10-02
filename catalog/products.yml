@@ -1886,8 +1886,11 @@ products:
   surfaces:
   - kind: cli
     repository: wisent-ai/obraz
+    docs_origin: https://obraz.wisent.com
   - kind: service
     repository: wisent-ai/obraz
+  - kind: web
+    repository: wisent-ai/obraz-landing
   installations:
   - surface: cli
     kind: cargo
