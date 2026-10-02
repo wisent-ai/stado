@@ -11,7 +11,11 @@ use tokio::process::Command;
 
 use crate::{Error, FleetDatabase};
 
-pub(crate) struct Credentials {
+/// Where a resolved database is reached: the credential item that holds it,
+/// its connection URL, and the certificate authority the server is verified
+/// against.
+#[derive(Clone, Debug)]
+pub struct Credentials {
     pub item: String,
     pub pooler_url: String,
     pub ca_certificate: String,

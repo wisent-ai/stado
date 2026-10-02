@@ -12,6 +12,7 @@
 //! never writes its own connector, row mapper or SQL client again.
 
 mod resolve;
+pub use resolve::Credentials;
 pub mod sync;
 
 use std::path::PathBuf;
@@ -82,15 +83,34 @@ impl Error {
     }
 }
 
+/// Resolve the product's fleet database through Stado and Skarbiec and
+/// answer its connection URL and certificate authority, for an engine
+/// SeaORM does not speak (MongoDB, Redis, SQL Server, ...): the product opens
+/// it with that engine's own driver, verified against `ca_certificate`.
+pub async fn credentials(database: &FleetDatabase) -> Result<Credentials, Error> {
+    resolve::credentials(database).await
+}
+
 /// Resolve the product's fleet database through Stado and Skarbiec and open
 /// a SeaORM connection to it over TLS verified against the provider's root.
-/// The URL's scheme says which server it is: `mysql://` is a MySQL server
-/// brought in with `stado database create --provider external --engine
-/// mysql`; every other database Stado hands out is Postgres.
+/// The URL's scheme says which server it is: `postgres://` or
+/// `postgresql://` is Postgres, `mysql://` is MySQL. Any other engine is
+/// refused with its scheme named; it is opened from [`credentials`].
 pub async fn connect(database: &FleetDatabase) -> Result<DatabaseConnection, Error> {
     let found = resolve::credentials(database).await?;
-    if found.pooler_url.split_once("://").map(|(scheme, _)| scheme) == Some("mysql") {
-        return connect_mysql(database, found).await;
+    match found.pooler_url.split_once("://").map(|(scheme, _)| scheme) {
+        Some("mysql") => return connect_mysql(database, found).await,
+        Some("postgres" | "postgresql") => {}
+        scheme => {
+            return Err(Error::new(
+                "read pooler_url",
+                format!(
+                    "{}#pooler_url is a {} URL; connect opens postgres and mysql through SeaORM, so open this engine with its own driver from stado_database::credentials",
+                    found.item,
+                    scheme.unwrap_or("schemeless")
+                ),
+            ))
+        }
     }
     let options: PgConnectOptions = found.pooler_url.parse().map_err(|error| {
         Error::new(

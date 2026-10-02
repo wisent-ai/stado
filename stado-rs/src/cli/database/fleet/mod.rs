@@ -113,15 +113,14 @@ fn checked(name: &str, engine: &str) -> Result<(), CmdError> {
     use crate::config::DatabaseEngine;
     match DatabaseEngine::parse(engine) {
         Some(DatabaseEngine::Postgres | DatabaseEngine::Sqlite) => {}
-        Some(DatabaseEngine::Mysql) => {
+        _ if DatabaseEngine::is_engine_name(engine) => {
             return Err(CmdError::usage(format!(
                 "a fleet database runs postgres or sqlite; an existing {engine} server is brought in with --provider external"
             )))
         }
-        None => {
+        _ => {
             return Err(CmdError::usage(format!(
-                "engine must be one of {:?}",
-                DatabaseEngine::names()
+                "engine {engine:?} is not an engine name: the lowercase scheme of its connection URL, such as postgres, mysql or mongodb"
             )))
         }
     }

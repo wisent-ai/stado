@@ -6,36 +6,34 @@ use std::sync::LazyLock;
 use crate::config::canonical_machine_name;
 use serde_json::Value;
 
-/// The engine a declared database speaks. Stado runs postgres and sqlite
-/// itself (`--provider fleet`); mysql is a server the user already runs,
-/// brought in with `--provider external`. The name on the command line and
-/// in the configuration is the variant's serialised name.
+/// The engines Stado runs itself (`--provider fleet`): postgres and sqlite.
+/// A declared database is not limited to these: any engine a connection URL
+/// names (mysql, mongodb, redis, mssql, ...) is a server the user already
+/// runs, brought in with `--provider external` and checked by
+/// [`DatabaseEngine::is_engine_name`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DatabaseEngine {
     Postgres,
     Sqlite,
-    Mysql,
 }
 
 impl DatabaseEngine {
-    pub const ALL: [Self; 3] = [Self::Postgres, Self::Sqlite, Self::Mysql];
-
-    /// The engine `name` spells, or nothing when it spells none.
+    /// The engine Stado runs that `name` spells, or nothing.
     pub fn parse(name: &str) -> Option<Self> {
         serde_json::from_value(Value::String(name.to_string())).ok()
     }
 
-    pub fn name(self) -> String {
-        match serde_json::to_value(self) {
-            Ok(Value::String(name)) => name,
-            other => unreachable!("a unit variant serialises to its name, got {other:?}"),
-        }
-    }
-
-    /// Every engine's name, for a refusal that lists them.
-    pub fn names() -> Vec<String> {
-        Self::ALL.iter().map(|engine| engine.name()).collect()
+    /// Whether `name` can name a database engine: the lowercase scheme of
+    /// its connection URL (RFC 3986: a letter, then letters, digits, `+`,
+    /// `-` or `.`). Any such engine can be declared; only the variants of
+    /// this type can be run by Stado.
+    pub fn is_engine_name(name: &str) -> bool {
+        let mut chars = name.chars();
+        chars.next().is_some_and(|first| first.is_ascii_lowercase())
+            && chars.all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '-' | '.')
+            })
     }
 }
 
@@ -128,11 +126,10 @@ pub(crate) fn parse_database_api_databases(
             ));
         }
         let engine = match entry.get("engine").and_then(Value::as_str) {
-            Some(engine) if DatabaseEngine::parse(engine).is_some() => engine.to_string(),
+            Some(engine) if DatabaseEngine::is_engine_name(engine) => engine.to_string(),
             Some(other) => {
                 problems.push(format!(
-                    "database_api.databases.{name}.engine {other:?} is not one of {:?}",
-                    DatabaseEngine::names()
+                    "database_api.databases.{name}.engine {other:?} is not an engine name: the lowercase scheme of its connection URL, such as postgres, mysql or mongodb"
                 ));
                 String::new()
             }

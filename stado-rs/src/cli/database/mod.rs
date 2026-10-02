@@ -73,7 +73,7 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                         "--provider external needs --ca-certificate: consumers verify the server against it",
                     ));
                 };
-                external::create(&name, &engine, &ca_certificate, &consumers, json).await
+                external::create(&name, engine.as_deref(), &ca_certificate, &consumers, json).await
             }
             "fleet" => {
                 if anchor.is_some() || accept_monthly_usd.is_some() {
@@ -81,12 +81,13 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                         "--anchor and --accept-monthly-usd price a supabase project; a fleet database has no vendor bill",
                     ));
                 }
-                fleet::create(&name, &engine, host.as_deref(), port, &consumers, json).await
+                let engine = engine.as_deref().unwrap_or("postgres");
+                fleet::create(&name, engine, host.as_deref(), port, &consumers, json).await
             }
             "supabase" => {
-                if engine != "postgres" {
+                if let Some(engine) = engine.as_deref().filter(|engine| *engine != "postgres") {
                     return Err(CmdError::usage(format!(
-                        "supabase runs postgres only; --engine {engine} is created with --provider fleet"
+                        "supabase runs postgres only; --engine {engine} is created with --provider fleet or external"
                     )));
                 }
                 if host.is_some() || port.is_some() {

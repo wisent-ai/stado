@@ -1,7 +1,8 @@
-//! `stado database create --provider external`: a Postgres or MySQL server
-//! the user already runs anywhere -- a managed service such as RDS, Cloud
-//! SQL, Neon, PlanetScale or Azure, or a server of their own -- brought
-//! under Stado without Stado creating it.
+//! `stado database create --provider external`: a database server of any
+//! engine the user already runs anywhere -- a managed service such as RDS,
+//! Cloud SQL, Neon, PlanetScale, Atlas or Azure, or a server of their own --
+//! brought under Stado without Stado creating it. The engine is the scheme
+//! of its connection URL: postgres, mysql, mongodb, redis, mssql or any other.
 //!
 //! The connection URL is read from standard input, never from an argument,
 //! so it does not reach the process table or shell history. The server's
@@ -22,25 +23,31 @@ use crate::config::DatabaseEngine;
 
 const URL_SHAPE: &str = "<engine>://user:password@host:port/database";
 
+/// The engine a connection URL's scheme names: the scheme itself, without
+/// the `+srv`-style transport suffix, and `postgres` for `postgresql`.
+fn engine_of(scheme: &str) -> String {
+    let base = scheme.split('+').next().unwrap_or(scheme);
+    if base == "postgresql" {
+        "postgres".to_string()
+    } else {
+        base.to_string()
+    }
+}
+
+/// Create the external database `name`. Its engine is the one its connection
+/// URL names; `engine`, when given, must agree with it.
 pub(super) async fn create(
     name: &str,
-    engine: &str,
+    engine: Option<&str>,
     ca_certificate: &Path,
     consumers: &[String],
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let speaks = match DatabaseEngine::parse(engine) {
-        Some(DatabaseEngine::Sqlite) => return Err(CmdError::usage(
-            "--provider external brings a server; a sqlite file is created with --provider fleet",
-        )),
-        Some(known) => known,
-        None => {
-            return Err(CmdError::usage(format!(
-                "engine must be one of {:?}",
-                DatabaseEngine::names()
-            )))
-        }
-    };
+    if let Some(engine) = engine.filter(|engine| !DatabaseEngine::is_engine_name(engine)) {
+        return Err(CmdError::usage(format!(
+            "engine {engine:?} is not an engine name: the lowercase scheme of its connection URL, such as postgres, mysql or mongodb"
+        )));
+    }
     let mut url = String::new();
     std::io::stdin().read_to_string(&mut url).map_err(|error| {
         CmdError::click(format!(
@@ -63,14 +70,28 @@ pub(super) async fn create(
             "the connection URL on standard input names no host; it must be {URL_SHAPE}"
         )));
     };
-    // Postgres also answers to the scheme postgresql://.
+    // The URL names the engine: postgresql:// is postgres, mongodb+srv:// is
+    // mongodb. A TLS scheme such as rediss:// also answers to --engine redis.
     let scheme = parsed.scheme();
-    let scheme_matches =
-        scheme == speaks.name() || (speaks == DatabaseEngine::Postgres && scheme == "postgresql");
-    if !scheme_matches {
-        return Err(CmdError::usage(format!(
-            "the connection URL on standard input is {scheme}://…, but --engine is {engine}; it must be {URL_SHAPE}"
-        )));
+    let named = engine_of(scheme);
+    let engine = match engine {
+        None => named,
+        Some(given)
+            if given == named || scheme.strip_prefix(given).is_some_and(|rest| rest == "s") =>
+        {
+            given.to_string()
+        }
+        Some(given) => {
+            return Err(CmdError::usage(format!(
+                "the connection URL on standard input is {scheme}://…, but --engine is {given}; drop --engine to take the URL's engine, or give a {given}:// URL"
+            )))
+        }
+    };
+    let engine = engine.as_str();
+    if DatabaseEngine::parse(engine) == Some(DatabaseEngine::Sqlite) {
+        return Err(CmdError::usage(
+            "--provider external brings a server; a sqlite file is created with --provider fleet",
+        ));
     }
     let certificate = std::fs::read_to_string(ca_certificate).map_err(|error| {
         CmdError::click(format!(

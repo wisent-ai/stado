@@ -30,10 +30,9 @@ pub(super) fn declaration(
             "NAME must be lowercase letters, digits and dashes",
         ));
     }
-    if crate::config::DatabaseEngine::parse(engine).is_none() {
+    if !crate::config::DatabaseEngine::is_engine_name(engine) {
         return Err(CmdError::usage(format!(
-            "engine must be one of {:?}",
-            crate::config::DatabaseEngine::names()
+            "engine {engine:?} is not an engine name: the lowercase scheme of its connection URL, such as postgres, mysql or mongodb"
         )));
     }
     let mut clean_scopes: Vec<String> = scopes.to_vec();
