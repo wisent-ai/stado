@@ -52,11 +52,10 @@ pub(crate) enum DatabaseCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Create a database the fleet does not have yet, then declare it.
+    /// Place a fleet database, create a Supabase project, or declare an existing external server.
     ///
-    /// Any engine on any provider (`--provider`). The default provider is
-    /// `fleet`: Stado runs the database itself (postgres, or sqlite with
-    /// `--engine sqlite`) on one fleet host -- the vault owner unless
+    /// The default provider is `fleet`: Stado runs postgres (default) or
+    /// sqlite (`--engine sqlite`) on one fleet host -- the vault owner unless
     /// `--host` names another -- with no vendor and no bill, through `stado
     /// database place` on that host. `supabase` creates a hosted Postgres
     /// project in the organization and region of `--anchor`'s project, or,
