@@ -131,6 +131,6 @@ pub(in crate::cli::stream) async fn apply(
         field(&report, "sunshine_state")
     );
     println!("  ports:    {}", field(&report, "ports"));
-    println!("pair a client with `stado stream pair {target_name} --pin XXXX`");
+    println!("pair a client with `stado stream pair {target_name} --pin XXXX --client <name>`");
     Ok(())
 }

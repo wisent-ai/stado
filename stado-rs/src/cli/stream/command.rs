@@ -72,8 +72,8 @@ pub enum StreamCommands {
         target: String,
         #[arg(long)]
         pin: String,
-        /// Name recorded for the paired client.
-        #[arg(long, default_value = "moonlight")]
+        /// Name recorded for the paired client; no client is assumed.
+        #[arg(long)]
         client: String,
         #[arg(long)]
         json: bool,

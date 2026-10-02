@@ -38,3 +38,4 @@ The version-bump commit moves them with `stado product changelog --version V`;
 - `stado service watch-spawn` needs `--seconds` and `--interval-ms` (cli.md rule 14). It watched for 300 s and sampled every 1000 ms when neither was named; how long to watch and how short-lived a parent it must catch are the caller's to say. A missing one is refused by the parser with exit 2.
 - `stado egress mobile serve` needs `--port` (cli.md rule 14): it listened on 8781 when none was named. The browser's `--proxy` names the same port.
 - `stado release prepare` needs `--builder`. Without it the signed manifest recorded the builder as `unknown`, a provenance field nobody observed, and the build receipt it is matched against could never agree with it. A missing one is refused by the parser with exit 2.
+- `stado stream pair` needs `--client`: it recorded every paired client as `moonlight`, the name of one vendor's app. The hint `stream apply` prints names the flag.
