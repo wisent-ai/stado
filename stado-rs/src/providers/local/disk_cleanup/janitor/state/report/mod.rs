@@ -37,12 +37,11 @@ pub struct Caps {
     pub bytes: bool,
     pub items: bool,
     pub scan: bool,
-    pub deadline: bool,
 }
 
 impl Caps {
     pub fn any(&self) -> bool {
-        self.bytes || self.items || self.scan || self.deadline
+        self.bytes || self.items || self.scan
     }
 }
 
@@ -125,25 +124,10 @@ pub struct CleanupReport {
     /// `invalid_or_unavailable_policy` and `healthy_noop` already say which
     /// non-run this was.
     pub scanned: bool,
-    /// Declared cleaners this pass never scanned, because the scan share or
-    /// the pass deadline was spent before their turn came.
-    ///
-    /// [`scanned`](Self::scanned) says whether a pass reached its cleaners at
-    /// all; this says which of them it never reached, and it exists for the
-    /// same reason: the table publishes `scanned 0, eligible 0, deleted 0`
-    /// for a cleaner that was never given a turn, which is byte-for-byte what
-    /// a cleaner that looked and found nothing emits. With the cleaners
-    /// running in a fixed order and `backup_twins` last, a policy declaring no
-    /// `max_pass_seconds` gives every pass the janitor's own 30 seconds, and
-    /// `build_caches` — which walks all of `$HOME` by design — can end the
-    /// pass inside itself. `backup_twins` then reports zeros with
-    /// `skipped {scan_cap: 1, scan_deadline: 1}` indefinitely, under real
-    /// pressure, while the host refuses every ordinary job. The outcome is
-    /// `cap_reached`, which is true, names the budget and not the cleaner,
-    /// and reads like a finished look at the disk.
-    ///
-    /// Empty when every declared cleaner had its turn, so a reader can tell
-    /// "nothing was eligible" from "nobody looked".
+    /// Declared cleaners whose scan share was exhausted before examining an
+    /// item. This distinguishes an unvisited cleaner from one that looked
+    /// and found nothing eligible. Empty when every declared cleaner had its
+    /// turn; a missing root is reported separately, not as a spent scan share.
     pub unscanned_cleaners: Vec<String>,
     /// Cleaners the policy names that this binary does not implement: the
     /// registry is read by every release at once, and a name a newer release

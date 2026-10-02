@@ -2,7 +2,7 @@
 
 pub(crate) mod file;
 pub(crate) mod holds;
-pub(crate) mod takeover;
+pub(crate) mod ownership;
 pub(crate) mod workload;
 
 use std::io;

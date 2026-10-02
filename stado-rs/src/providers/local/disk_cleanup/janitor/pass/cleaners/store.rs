@@ -40,7 +40,6 @@ pub(super) async fn run_store_cleaners(
         remaining_after_clones,
         shares.declared_after(queue_workdirs::CLEANER),
     );
-    let workdir_deadline = shares.time_share(queue_workdirs::CLEANER);
     let live_jobs = if workdir_budget > 0 && policy.cleaners.contains_key(queue_workdirs::CLEANER) {
         match queue_workdirs::candidate_job_ids(
             home,
@@ -49,7 +48,6 @@ pub(super) async fn run_store_cleaners(
                 .get(queue_workdirs::CLEANER)
                 .and_then(|cleaner| cleaner.root.as_deref()),
             workdir_budget,
-            workdir_deadline,
         ) {
             Ok(candidates) => {
                 let wait = Instant::now();
@@ -78,7 +76,6 @@ pub(super) async fn run_store_cleaners(
         policy,
         attempted_at,
         workdir_budget,
-        workdir_deadline,
         live_jobs.as_deref(),
         report,
     );
@@ -93,7 +90,6 @@ pub(super) async fn run_store_cleaners(
         remaining_after_workdirs,
         shares.declared_after(job_outputs::CLEANER),
     );
-    let outputs_deadline = shares.time_share(job_outputs::CLEANER);
     let status_roots = job_outputs::status_roots(
         home,
         policy
@@ -103,7 +99,7 @@ pub(super) async fn run_store_cleaners(
     );
     let terminal_jobs = if outputs_budget > 0 && policy.cleaners.contains_key(job_outputs::CLEANER)
     {
-        match job_outputs::candidate_job_ids(&status_roots, outputs_budget, outputs_deadline) {
+        match job_outputs::candidate_job_ids(&status_roots, outputs_budget) {
             Ok(candidates) if candidates.is_empty() => Some(BTreeSet::new()),
             Ok(candidates) => {
                 let wait = Instant::now();
@@ -133,7 +129,6 @@ pub(super) async fn run_store_cleaners(
         policy,
         attempted_at,
         outputs_budget,
-        outputs_deadline,
         terminal_jobs.as_ref(),
         report,
     );
@@ -145,7 +140,7 @@ pub(super) async fn run_store_cleaners(
     // The disaster-recovery replica's proven duplicates. It is the only
     // cleaner here that has to READ the bytes it deletes: every object it
     // removes is hashed against the primary in this same pass. Release-store
-    // cleanup remains behind it and receives its own item/time share.
+    // cleanup remains behind it and receives its own scan share.
     let twins_budget = shares.share(
         remaining_after_outputs,
         shares.declared_after(backup_twins::CLEANER),
@@ -155,7 +150,6 @@ pub(super) async fn run_store_cleaners(
         policy,
         crate::config::wc_stado_storage_namespace(),
         twins_budget,
-        shares.time_share(backup_twins::CLEANER),
         report,
     );
     let remaining_after_twins =
@@ -173,7 +167,6 @@ pub(super) async fn run_store_cleaners(
         policy,
         declared_release_versions,
         remaining_after_twins,
-        shares.deadline,
         report,
     );
 }

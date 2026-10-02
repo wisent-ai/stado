@@ -50,7 +50,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use nix::sys::stat::FileStat;
 
@@ -100,15 +99,12 @@ fn entry_names(dir_fd: RawFd) -> Result<BTreeSet<OsString>, JanitorError> {
 /// tagged as regenerable.
 ///
 /// `remaining_scan` is this cleaner's share of `max_scan_items` left by the
-/// cleaners that ran before it, and `deadline` is the pass deadline the HF
-/// scan also honours: unlike the other two roots, this one can be the whole
-/// of `$HOME`, where the walk — not the deletion — is the expensive half.
+/// cleaners that ran before it. A root may cover the whole home directory.
 ///
 /// The durable frontier contains the unvisited directories, not merely the
 /// position of the last visit. Older positional cursors restart once to build
-/// this queue; subsequent passes open the next parent directly. Replaying all
-/// prior levels used to consume the entire deadline with zero newly scanned
-/// directories on every pass.
+/// this queue; subsequent passes open the next parent directly instead of
+/// spending the scan share replaying already examined directories.
 ///
 /// Neither the order nor the cursor changes WHICH directories may be
 /// deleted. Every criterion — the tag, the age, the reserved roots, the
@@ -119,7 +115,6 @@ pub(super) fn scan_build_caches(
     policy: &DiskCleanupPolicy,
     now: f64,
     remaining_scan: i64,
-    deadline: Instant,
     cursor: Option<BuildCachesCursor>,
     report: &mut CleanupReport,
 ) {
@@ -169,7 +164,6 @@ pub(super) fn scan_build_caches(
             policy,
             configured,
             now,
-            deadline,
             remaining_scan,
             root_dev: root_info.st_dev,
             reserved: reserved_roots(home, policy),

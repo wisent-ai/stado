@@ -4,7 +4,6 @@
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use super::super::weles::{dir_size, remove_tree};
 use super::super::{euid, free_bytes, CleanupReport, JanitorError, GIB};
@@ -16,16 +15,12 @@ use crate::targets::DiskCleanupPolicy;
 /// Scan the Chromium clone root and evict the clones of finished launches.
 ///
 /// `remaining_scan` is this cleaner's share of `max_scan_items` left by the
-/// cleaners that ran before it, and `deadline` is the pass deadline the HF and
-/// build-cache scans honour. It matters here and not in
-/// [`super::super::weles`]: sizing one clone means walking a whole browser
-/// bundle, and the root holds one per launch.
+/// cleaners that ran before it.
 pub fn scan_chromium_clones(
     home: &Path,
     policy: &DiskCleanupPolicy,
     now: f64,
     remaining_scan: i64,
-    deadline: Instant,
     report: &mut CleanupReport,
 ) {
     let Some(configured) = policy.cleaners.get(CLEANER) else {
@@ -97,11 +92,6 @@ pub fn scan_chromium_clones(
         };
         let mut deleted_bytes = 0i64;
         for (name, path) in ordered {
-            if Instant::now() >= deadline {
-                report.caps.deadline = true;
-                report.skip_clones("scan_deadline", 1);
-                break;
-            }
             report.clones.scanned_items += 1;
             let name = name.to_string_lossy();
             if !name.starts_with(CLONE_ENTRY_PREFIX) {

@@ -48,11 +48,9 @@ pub const REGISTRY_SCHEMA_VERSION: i64 = 2;
 /// which is the same failure as every other limit in this file that was
 /// declared once and enforced somewhere else.
 ///
-/// The ceiling is not what bounds a pass: `DEADLINE_SECONDS` in
-/// `providers::local::disk_cleanup` does, at 30 seconds of wall clock, and
-/// the build-cache walk resumes from where the previous pass stopped instead
-/// of restarting. So raising this cannot make a pass longer; it only decides
-/// how much of a tree one pass may cross before it hands the cursor on.
+/// The scan ceiling bounds how many directories a pass may cross. The
+/// build-cache walk resumes from its persisted cursor on the next pass.
+/// Raising the ceiling permits more filesystem work; no clock ends a pass.
 pub const MAX_SCAN_ITEMS_CEILING: i64 = 200_000;
 
 /// Raised when a registry does not satisfy the version 2 contract.

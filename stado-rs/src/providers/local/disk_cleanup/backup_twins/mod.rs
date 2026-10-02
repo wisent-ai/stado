@@ -8,7 +8,6 @@ use std::fs::File;
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
@@ -68,7 +67,6 @@ pub fn scan_backup_twins(
     policy: &DiskCleanupPolicy,
     namespace: &str,
     remaining_scan: i64,
-    deadline: Instant,
     report: &mut CleanupReport,
 ) {
     let Some(configured) = policy.cleaners.get(CLEANER) else {
@@ -101,7 +99,6 @@ pub fn scan_backup_twins(
             &backup,
             report.backup_cursor.take(),
             remaining_scan,
-            deadline,
             home_device,
         );
         let result = (|| -> Result<(), JanitorError> {

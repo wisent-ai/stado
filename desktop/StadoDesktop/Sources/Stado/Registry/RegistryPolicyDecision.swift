@@ -24,14 +24,12 @@ enum PolicyDecision: Identifiable {
     case mode(target: String, mode: FleetCleanupMode, current: String)
     case pinned(target: String, value: Bool)
     case number(target: String, field: FleetCleanupNumericField, value: Int, current: Int?)
-    case clearNumber(target: String, field: FleetCleanupNumericField)
 
     var id: String {
         switch self {
         case let .mode(target, mode, _): "mode-\(target)-\(mode.rawValue)"
         case let .pinned(target, value): "pinned-\(target)-\(value)"
         case let .number(target, field, value, _): "number-\(target)-\(field.rawValue)-\(value)"
-        case let .clearNumber(target, field): "clear-\(target)-\(field.rawValue)"
         }
     }
 
@@ -40,7 +38,6 @@ enum PolicyDecision: Identifiable {
         case let .mode(target, _, _): target
         case let .pinned(target, _): target
         case let .number(target, _, _, _): target
-        case let .clearNumber(target, _): target
         }
     }
 }

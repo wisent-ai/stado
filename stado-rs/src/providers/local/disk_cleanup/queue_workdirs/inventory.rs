@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::time::Instant;
 
 use crate::providers::local::disk_cleanup::queue_workdirs::roots::{job_id, open_cleanup_root};
 use crate::providers::local::disk_cleanup::queue_workdirs::{LEGACY_WORK_ROOT, WORKDIR_PREFIX};
@@ -24,7 +23,6 @@ pub fn candidate_job_ids(
     home: &Path,
     configured_root: Option<&str>,
     remaining_scan: i64,
-    deadline: Instant,
 ) -> Result<BTreeSet<String>, JanitorError> {
     let mut ids = BTreeSet::new();
     if remaining_scan <= 0 {
@@ -48,9 +46,6 @@ pub fn candidate_job_ids(
     let mut canonical_remaining = remaining_scan - legacy_budget;
     for name in safefs::DirEntries::open(root_fd.as_raw_fd())? {
         let name = name?;
-        if Instant::now() >= deadline {
-            break;
-        }
         let text = name.to_string_lossy();
         if !text.starts_with(WORKDIR_PREFIX) {
             continue;
@@ -72,9 +67,6 @@ pub fn candidate_job_ids(
         let mut legacy_remaining = legacy_budget;
         for name in safefs::DirEntries::open(legacy_fd.as_raw_fd())? {
             let name = name?;
-            if Instant::now() >= deadline {
-                break;
-            }
             let text = name.to_string_lossy();
             if !text.starts_with(WORKDIR_PREFIX) {
                 continue;

@@ -4,7 +4,6 @@
 use std::collections::VecDeque;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
-use std::time::Instant;
 
 use super::super::build_caches::cursor::CursorPath;
 use super::super::{euid, CleanupReport, JanitorError};
@@ -43,7 +42,6 @@ pub(super) struct Walk {
     cursor: BackupCursor,
     children: Option<std::vec::IntoIter<PathBuf>>,
     remaining: i64,
-    deadline: Instant,
     device: u64,
 }
 
@@ -52,7 +50,6 @@ impl Walk {
         root: &Path,
         previous: Option<BackupCursor>,
         remaining: i64,
-        deadline: Instant,
         device: u64,
     ) -> Self {
         let cursor = previous
@@ -66,7 +63,6 @@ impl Walk {
             cursor,
             children: None,
             remaining,
-            deadline,
             device,
         }
     }
@@ -78,14 +74,9 @@ impl Walk {
             .front()
             .map(|path| path.as_path().to_path_buf())
         {
-            if self.remaining <= 0 || Instant::now() >= self.deadline {
-                if self.remaining <= 0 {
-                    report.caps.scan = true;
-                    report.skip_backup_twins("scan_cap", 1);
-                } else {
-                    report.caps.deadline = true;
-                    report.skip_backup_twins("scan_deadline", 1);
-                }
+            if self.remaining <= 0 {
+                report.caps.scan = true;
+                report.skip_backup_twins("scan_cap", 1);
                 return None;
             }
             let root = self.cursor.root.as_path();

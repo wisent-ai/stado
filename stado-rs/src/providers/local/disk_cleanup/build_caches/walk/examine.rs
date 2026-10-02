@@ -5,7 +5,6 @@
 use std::ffi::OsStr;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
-use std::time::Instant;
 
 use crate::providers::local::disk_cleanup::build_caches::walk::tag::Tag;
 use crate::providers::local::disk_cleanup::build_caches::walk::{Progress, Walk};
@@ -17,8 +16,7 @@ use crate::providers::local::disk_cleanup::{
 
 /// The suffixes macOS gives a bundle: a directory the Finder, the installer
 /// and the operating system treat as one file. A build tool never tags one,
-/// and their payloads are what a walk of a home directory spends its whole
-/// deadline on.
+/// and their payloads can consume a home-directory walk's entire scan share.
 const BUNDLE_SUFFIXES: [&str; 4] = [".app", ".framework", ".bundle", ".xcassets"];
 
 fn is_bundle(name: &OsStr) -> bool {
@@ -52,12 +50,6 @@ impl<'a> Walk<'a> {
             .unwrap_or_default();
         for name in names.range(first..) {
             let relative = parent.join(name);
-            if Instant::now() >= self.deadline {
-                report.caps.deadline = true;
-                report.skip_builds("scan_deadline", 1);
-                self.next_child = Some(relative);
-                return Ok(Progress::Halt);
-            }
             let info = match safefs::fstatat_nofollow(parent_fd, name) {
                 Ok(info) => info,
                 Err(_) => {
@@ -76,7 +68,7 @@ impl<'a> Walk<'a> {
             let absolute = root.join(&relative);
             // A macOS bundle is one opaque item to the person who installed
             // it, and no build tool writes a tagged cache inside one. A walk
-            // that descends anyway can spend every pass's whole deadline on
+            // that descends anyway can spend every pass's whole scan share on
             // an application's payload, its cursor inside some `.app`, and
             // never reach the fleet's own build output.
             if is_bundle(name) {

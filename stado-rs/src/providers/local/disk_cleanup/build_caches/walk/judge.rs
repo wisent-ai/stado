@@ -29,17 +29,15 @@ impl<'a> Walk<'a> {
             return Ok(Progress::Continue);
         }
         report.builds.eligible_items += 1;
-        let mut complete = true;
-        let expected = self.tree_bytes(dir_fd, 0, &mut complete);
+        let expected = match self.tree_bytes(dir_fd, 0) {
+            Ok(bytes) => bytes,
+            Err(mut error) => {
+                error.message = format!("cannot measure cache {name:?}: {}", error.message);
+                report.add_error("build_caches", &error);
+                return Ok(Progress::Continue);
+            }
+        };
         report.builds.expected_bytes += expected;
-        if !complete {
-            // The cache is eligible and its bytes are the bytes proven, so
-            // both are reported — but the pass has to say that the number is
-            // a floor and not the total, or an operator reads a short
-            // `expected_bytes` as the whole of what a cleanup would recover.
-            report.caps.deadline = true;
-            report.skip_builds("scan_deadline", 1);
-        }
         if self.policy.mode != "enforce" {
             return Ok(Progress::Continue);
         }

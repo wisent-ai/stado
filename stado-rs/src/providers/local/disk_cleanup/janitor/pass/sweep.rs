@@ -47,8 +47,6 @@ pub(super) async fn sweep(
         policy,
         attempted_at,
         policy.max_scan_items,
-        std::time::Instant::now()
-            + std::time::Duration::from_secs(policy.max_pass_seconds.unwrap_or(600).max(1) as u64),
         policy.mode == "enforce",
         report,
     );

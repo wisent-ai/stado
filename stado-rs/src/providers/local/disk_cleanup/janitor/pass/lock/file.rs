@@ -16,11 +16,7 @@ use crate::providers::local::disk_cleanup::janitor::{
 /// Python `_open_lock`: open `disk-cleanup.lock` with O_RDWR|O_CREAT|
 /// O_NOFOLLOW, verify it is a regular file owned by us, force 0600.
 pub(crate) fn open_lock(state_dir: &Path) -> Result<File, JanitorError> {
-    open_lock_at(&state_dir.join(LOCK_NAME))
-}
-
-/// The same checks at an exact path, for the takeover's staged file.
-pub(crate) fn open_lock_at(path: &Path) -> Result<File, JanitorError> {
+    let path = state_dir.join(LOCK_NAME);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -53,21 +49,18 @@ pub(crate) fn lock_contended(exc: &io::Error) -> bool {
 pub(crate) struct ExclusiveLock {
     pub(crate) file: File,
     pub(crate) holder_records: Vec<PathBuf>,
-    pub(crate) holder_token: Option<String>,
+    pub(crate) holder_token: String,
 }
 
 impl Drop for ExclusiveLock {
     fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.file);
-        let Some(token) = &self.holder_token else {
-            return;
-        };
         for path in &self.holder_records {
             let current_token = read_lock_holder_at(path).map(|holder| holder.token);
-            if current_token.as_deref() == Some(token.as_str()) {
+            if current_token.as_deref() == Some(self.holder_token.as_str()) {
                 let _ = std::fs::remove_file(path);
             }
         }
+        let _ = fs2::FileExt::unlock(&self.file);
     }
 }
 
@@ -76,9 +69,6 @@ impl Drop for ExclusiveLock {
 pub(crate) struct LockHolder {
     pub(crate) pid: i32,
     pub(crate) acquired_at: f64,
-    /// Epoch seconds by which this holder expects to be finished: its pass
-    /// deadline, not a guess made by the reader.
-    pub(crate) deadline_at: f64,
     pub(crate) writer: String,
     pub(crate) writer_version: String,
     /// Unique ownership token. Empty only for records written by an older
@@ -91,16 +81,8 @@ pub(crate) struct LockHolder {
 pub(crate) enum LockState {
     /// Ours, and the record now says so.
     Held(ExclusiveLock),
-    /// Somebody else holds it and is still inside their declared budget.
+    /// Somebody else holds the kernel lock, regardless of its age.
     Busy { holder: Option<LockHolder> },
-    /// Taken from a holder that is past its own declared deadline. Carries the
-    /// evidence so the pass can report it rather than looking like a normal
-    /// run.
-    TakenOver {
-        lock: ExclusiveLock,
-        from_pid: i32,
-        overdue_seconds: f64,
-    },
 }
 
 fn holder_record_path(state_dir: &Path) -> PathBuf {
@@ -152,7 +134,6 @@ pub(crate) fn lock_token() -> String {
 pub(crate) fn write_lock_holder(
     state_dir: &Path,
     lock: &File,
-    pass_seconds: f64,
     writer: &str,
 ) -> Result<(String, Vec<PathBuf>), JanitorError> {
     let now = epoch_now();
@@ -160,7 +141,6 @@ pub(crate) fn write_lock_holder(
     let record = LockHolder {
         pid: std::process::id() as i32,
         acquired_at: now,
-        deadline_at: now + pass_seconds,
         writer: writer.to_string(),
         writer_version: env!("CARGO_PKG_VERSION").to_string(),
         token: token.clone(),

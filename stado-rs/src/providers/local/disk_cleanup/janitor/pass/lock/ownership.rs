@@ -1,8 +1,4 @@
-//! Who holds this lock, and whether that holder still exists.
-//!
-//! A gone holder flock is already released by the kernel, so asking after the
-//! process is a diagnosis rather than a release mechanism: it is what lets the
-//! report tell a holder that died mid-pass from one that is hung.
+//! Nonblocking kernel ownership and protection of already-retired lock inodes.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -11,19 +7,46 @@ use std::path::Path;
 
 use crate::providers::local::disk_cleanup::janitor::pass::lock::euid;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::{
-    holder_inode_record_path, lock_contended, read_lock_holder,
+    holder_inode_record_path, lock_contended, open_lock, read_lock_holder, write_lock_holder,
+    ExclusiveLock, LockState,
 };
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::build::epoch_now;
-use crate::providers::local::disk_cleanup::janitor::RETIRED_LOCK_PREFIX;
+use crate::providers::local::disk_cleanup::janitor::{LOCK_NAME, RETIRED_LOCK_PREFIX};
+
+pub(crate) fn acquire_lock_state(
+    state_dir: &Path,
+    writer: &str,
+) -> Result<LockState, JanitorError> {
+    let file = open_lock(state_dir)?;
+    match fs2::FileExt::try_lock_exclusive(&file) {
+        Ok(()) => {
+            let canonical = state_dir.join(LOCK_NAME);
+            if !path_names_file(&canonical, &file)? {
+                return Err(JanitorError::os(&format!(
+                    "cleanup lock {} no longer names the opened lock inode; no pass was started",
+                    canonical.display()
+                )));
+            }
+            let (token, records) = write_lock_holder(state_dir, &file, writer)?;
+            Ok(LockState::Held(ExclusiveLock {
+                file,
+                holder_records: records,
+                holder_token: token,
+            }))
+        }
+        Err(error) if lock_contended(&error) => Ok(LockState::Busy {
+            holder: read_lock_holder(state_dir, &file),
+        }),
+        Err(error) => Err(error.into()),
+    }
+}
 
 /// Is a pid still a process on this host?
 ///
 /// `kill(pid, 0)` answers exactly that and nothing else: `ESRCH` means gone,
-/// `EPERM` means alive and owned by somebody else. A gone holder's `flock` is
-/// already released by the kernel, so this is a diagnosis rather than a
-/// release mechanism — it is what lets the report distinguish "the holder
-/// died mid-pass" from "the holder is hung".
+/// `EPERM` means alive and owned by somebody else. This observes process
+/// existence; it neither measures progress nor releases a kernel lock.
 pub(crate) fn pid_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
@@ -34,7 +57,7 @@ pub(crate) fn pid_alive(pid: i32) -> bool {
     }
 }
 
-pub(super) fn open_existing_lock_at(path: &Path) -> Result<File, JanitorError> {
+fn open_existing_lock_at(path: &Path) -> Result<File, JanitorError> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -47,18 +70,24 @@ pub(super) fn open_existing_lock_at(path: &Path) -> Result<File, JanitorError> {
     Ok(file)
 }
 
-pub(super) fn path_names_file(path: &Path, file: &File) -> bool {
-    let Ok(path_info) = std::fs::symlink_metadata(path) else {
-        return false;
-    };
-    let Ok(file_info) = file.metadata() else {
-        return false;
-    };
-    !path_info.file_type().is_symlink()
+fn path_names_file(path: &Path, file: &File) -> Result<bool, JanitorError> {
+    let path_info = std::fs::symlink_metadata(path).map_err(|error| {
+        JanitorError::os(&format!(
+            "cannot inspect cleanup lock {}: {error}",
+            path.display()
+        ))
+    })?;
+    let file_info = file.metadata().map_err(|error| {
+        JanitorError::os(&format!(
+            "cannot inspect opened cleanup lock {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(!path_info.file_type().is_symlink()
         && path_info.is_file()
         && path_info.uid() == euid()
         && path_info.dev() == file_info.dev()
-        && path_info.ino() == file_info.ino()
+        && path_info.ino() == file_info.ino())
 }
 
 /// Who still holds a retired predecessor lock, said in one line.
@@ -69,23 +98,18 @@ pub(super) fn path_names_file(path: &Path, file: &File) -> bool {
 /// inode is still held" and stopping would leave every pass persisting
 /// diagnostics and deleting nothing while the host sits below its disk target
 /// — with no way to learn which process to look at.
-pub(super) fn holder_sentence(state_dir: &Path, file: &File) -> String {
+fn holder_sentence(state_dir: &Path, file: &File) -> String {
     let Some(holder) = read_lock_holder(state_dir, file) else {
-        return "a lock with no holder record".to_string();
+        return "a kernel lock with no readable holder record".to_string();
     };
-    let overdue = epoch_now() - holder.deadline_at;
-    let standing = if overdue > 0.0 {
-        format!("{overdue:.0}s past its own deadline")
-    } else {
-        format!("{:.0}s before its deadline", -overdue)
-    };
+    let age = epoch_now() - holder.acquired_at;
     let living = if pid_alive(holder.pid) {
         "running"
     } else {
         "gone, but its lock is still held by a process that inherited it"
     };
     format!(
-        "pid {} ({} {}), {standing}, {living}",
+        "recorded pid {} ({} {}), acquired {age:.0}s ago, {living}; the kernel lock remains held",
         holder.pid, holder.writer, holder.writer_version
     )
 }
@@ -113,14 +137,14 @@ pub(crate) fn retired_locks_active(
             // A contender can die after creating the hard link but before
             // replacing the canonical pathname. This process owns that same
             // inode exclusively, so the extra name is safe to remove.
-            if path_names_file(&path, &file) {
+            if path_names_file(&path, &file)? {
                 std::fs::remove_file(path)?;
             }
             continue;
         }
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => {
-                let still_named = path_names_file(&path, &file);
+                let still_named = path_names_file(&path, &file)?;
                 let stale_holder = holder_inode_record_path(state_dir, &file)?;
                 fs2::FileExt::unlock(&file)?;
                 if still_named {

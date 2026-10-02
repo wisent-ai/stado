@@ -6,7 +6,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::time::Instant;
 
 use crate::providers::local::disk_cleanup::hf::inventory::locks::scan_lock_state;
 use crate::providers::local::disk_cleanup::hf::inventory::scan_cache;
@@ -44,7 +43,6 @@ pub fn run_hf(
     // first-in-line cleaner spends an entire pass on behalf of every cleaner
     // behind it — see `cleaner_budget` in the parent module.
     scan_limit: i64,
-    deadline: Instant,
     report: &mut CleanupReport,
 ) -> Result<(i64, i64), JanitorError> {
     let Some(configured) = policy.cleaners.get("huggingface_cache") else {
@@ -55,7 +53,7 @@ pub fn run_hf(
         return Ok((0, 0));
     }
 
-    let mut budget = ScanBudget::new(scan_limit, deadline);
+    let mut budget = ScanBudget::new(scan_limit);
     let scan_phase = (|budget: &mut ScanBudget, report: &mut CleanupReport| {
         let parts = [
             OsString::from(".cache"),
@@ -113,9 +111,7 @@ pub fn run_hf(
         Ok(Some(value)) => value,
         Ok(None) => return Ok((0, 0)),
         Err(exc) => {
-            if report.caps.deadline {
-                report.skip_hf("scan_deadline", 1);
-            } else if report.caps.scan {
+            if report.caps.scan {
                 report.skip_hf("scan_cap", 1);
             } else {
                 report.add_error("huggingface_cache", &exc);
@@ -158,10 +154,6 @@ pub fn run_hf(
     let mut expected_total = 0i64;
     let mut scans = scans;
     for (scan_index, candidate_index) in candidates {
-        if Instant::now() >= deadline {
-            report.caps.deadline = true;
-            break;
-        }
         if selected >= policy.max_items_per_pass {
             report.caps.items = true;
             break;

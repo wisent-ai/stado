@@ -143,17 +143,6 @@ extension RegistryView {
                     )
                 }
             )
-            if field.isClearable, live != nil {
-                WisentActionButton(
-                    action: WisentAction(
-                        "Use default…",
-                        symbol: "arrow.uturn.backward",
-                        isEnabled: !fleetStore.mutation.isWorking
-                    ) {
-                        decision = .clearNumber(target: target.name, field: field)
-                    }
-                )
-            }
         }
     }
 }

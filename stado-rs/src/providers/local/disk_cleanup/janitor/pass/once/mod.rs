@@ -11,8 +11,8 @@ use serde_json::Value;
 
 use crate::providers::local::disk_cleanup::janitor::pass::lock::file::LockState;
 use crate::providers::local::disk_cleanup::janitor::pass::lock::holds;
-use crate::providers::local::disk_cleanup::janitor::pass::lock::takeover::{
-    acquire_lock_state, pid_alive, retired_locks_active,
+use crate::providers::local::disk_cleanup::janitor::pass::lock::ownership::{
+    acquire_lock_state, retired_locks_active,
 };
 use crate::providers::local::disk_cleanup::janitor::pass::lock::{ensure_state_dir, secure_home};
 use crate::providers::local::disk_cleanup::janitor::pass::once::entry::CleanupWriter;
@@ -20,15 +20,12 @@ use crate::providers::local::disk_cleanup::janitor::pass::once::finish::{
     finish, preserve_previous_report,
 };
 use crate::providers::local::disk_cleanup::janitor::pass::run_with_lock;
+use crate::providers::local::disk_cleanup::janitor::policy::fetch_canonical_registry;
 use crate::providers::local::disk_cleanup::janitor::policy::roots::free_bytes;
-use crate::providers::local::disk_cleanup::janitor::policy::{
-    fetch_canonical_registry, resolve_canonical_policy,
-};
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::build::epoch_now;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
 use crate::providers::local::disk_cleanup::janitor::state::ControlUpdateAuthority;
-use crate::providers::local::disk_cleanup::janitor::{DEADLINE_SECONDS, LOCK_TAKEOVER_GRACE_S};
 
 // ---------------------------------------------------------------------------
 // run_cleanup_once
@@ -98,57 +95,11 @@ pub(crate) async fn cleanup_once(
     let store_wait = Instant::now();
     let registry = fetch_canonical_registry().await;
     report.store_wait_ms = store_wait.elapsed().as_millis().min(i64::MAX as u128) as i64;
-    // The lock is taken with a stated deadline, and a hold past its own
-    // deadline is answered rather than waited out. `lock_busy` used to be the
-    // only answer this function had for "somebody else has it", and that is
-    // how a host spent nine and a half hours with cleanup disabled while its
-    // gate said `disk_cleanup_stalled` and nothing said WHO or FOR HOW LONG.
-    let pass_seconds = DEADLINE_SECONDS.max(
-        registry
-            .as_ref()
-            .ok()
-            .and_then(|data| resolve_canonical_policy(data, &report.hostname).ok())
-            .and_then(|(_, policy, _, _)| policy.max_pass_seconds)
-            .filter(|seconds| *seconds > 0)
-            .map_or(DEADLINE_SECONDS, |seconds| seconds as f64),
-    );
-    let mut taken_over = false;
-    let writer_label = writer.as_str().to_string();
-    let lock = match acquire_lock_state(&state_dir, pass_seconds, &writer_label) {
+    // Only the kernel can establish ownership. Age is diagnostic information,
+    // never permission to replace a live lock or run a second cleanup.
+    let writer_label = writer.as_str();
+    let lock = match acquire_lock_state(&state_dir, writer_label) {
         Ok(LockState::Held(lock)) => lock,
-        Ok(LockState::TakenOver {
-            lock,
-            from_pid,
-            overdue_seconds,
-        }) => {
-            taken_over = true;
-            let detail = if from_pid == 0 {
-                format!(
-                    "took the janitor run lock from a predecessor that left no holder record, \
-                     {:.0}s past the declared pass deadline plus the \
-                     {LOCK_TAKEOVER_GRACE_S:.0}s grace as the lock file's own age reports it; \
-                     this pass runs in report mode, and enforcement stays disabled until the \
-                     retired predecessor inode no longer has a kernel lock",
-                    overdue_seconds
-                )
-            } else {
-                let liveness = if pid_alive(from_pid) {
-                    "still running and not progressing"
-                } else {
-                    "gone"
-                };
-                format!(
-                    "took the janitor run lock from pid {from_pid} ({liveness}), {:.0}s past the \
-                     deadline that holder recorded plus the {LOCK_TAKEOVER_GRACE_S:.0}s grace; \
-                     this pass runs in report mode, and enforcement stays disabled until the \
-                     retired predecessor inode no longer has a kernel lock",
-                    overdue_seconds
-                )
-            };
-            log_fn(&format!("disk cleanup: {detail}"));
-            report.add_error("lock_taken_over", &JanitorError::os(&detail));
-            lock
-        }
         Ok(LockState::Busy { holder }) => {
             report.lock_busy = true;
             match holder {
@@ -162,31 +113,21 @@ pub(crate) async fn cleanup_once(
                 ) => {}
                 Some(holder) => {
                     let age = epoch_now() - holder.acquired_at;
-                    let remaining = holder.deadline_at - epoch_now();
-                    // Recognizable, not silent: an operator reading a report
-                    // now learns which process holds the lock, how long it has
-                    // held it and whether it is inside its own budget.
                     let detail = format!(
-                        "held for {age:.0}s by pid {} ({} {}), {:.0}s of its declared budget left",
-                        holder.pid,
-                        holder.writer,
-                        holder.writer_version,
-                        remaining.max(0.0)
+                        "kernel lock held; recorded pid {} ({} {}), acquired {age:.0}s ago",
+                        holder.pid, holder.writer, holder.writer_version,
                     );
                     log_fn(&format!("disk cleanup: lock {detail}"));
                     report.add_error("lock_busy", &JanitorError::os(&detail));
                     report.outcome = "lock_busy".to_string();
                 }
                 None => {
-                    // No record at all: a holder from a build older than this
-                    // one, or a lock file created by hand. Say that too.
                     log_fn(
-                        "disk cleanup: lock is held by a process that left no holder record; its \
-                         deadline is unknown, so it will not be taken over",
+                        "disk cleanup: kernel lock is held and no readable holder record is available",
                     );
                     report.add_error(
                         "lock_busy",
-                        &JanitorError::os("held with no holder record; deadline unknown"),
+                        &JanitorError::os("kernel lock held; no readable holder record"),
                     );
                     report.outcome = "lock_busy_unattributed".to_string();
                 }
@@ -247,7 +188,7 @@ pub(crate) async fn cleanup_once(
         log_fn(&format!("disk cleanup: {detail}"));
         report.add_error("lock_predecessor_active", &JanitorError::os(&detail));
     }
-    if taken_over || predecessor_active {
+    if predecessor_active {
         report.outcome = "lock_recovery_report_only".to_string();
         preserve_previous_report(&state_dir, &mut report);
         if let Ok(free) = free_bytes(&home) {

@@ -23,12 +23,6 @@ impl JanitorError {
             message: message.to_string(),
         }
     }
-    pub fn timeout(message: &str) -> Self {
-        Self {
-            code: "TimeoutError",
-            message: message.to_string(),
-        }
-    }
     pub fn blocking(message: &str) -> Self {
         Self {
             code: "BlockingIOError",

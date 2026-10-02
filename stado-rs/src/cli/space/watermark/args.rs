@@ -80,9 +80,6 @@ pub struct WatermarkArgs {
     /// Directories one janitor pass may cross.
     #[arg(long = "disk-max-scan-items")]
     pub disk_max_scan_items: Option<i64>,
-    /// Seconds one janitor pass may spend.
-    #[arg(long = "disk-max-pass-seconds")]
-    pub disk_max_pass_seconds: Option<i64>,
     #[arg(long)]
     pub json: bool,
 }
@@ -133,10 +130,6 @@ impl WatermarkArgs {
                 self.disk_max_items_per_pass.map(Into::into),
             ),
             ("max_scan_items", self.disk_max_scan_items.map(Into::into)),
-            (
-                "max_pass_seconds",
-                self.disk_max_pass_seconds.map(Into::into),
-            ),
         ]
         .into_iter()
         .filter_map(|(key, value)| value.map(|value| (key, value)))

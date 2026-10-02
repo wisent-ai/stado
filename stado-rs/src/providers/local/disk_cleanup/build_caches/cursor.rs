@@ -49,7 +49,7 @@ impl From<CursorPath> for PathBuf {
 /// `frontier[0]` is the directory currently being examined; the remaining
 /// paths are directories already discovered but not yet opened. `next_child`
 /// is the first entry in `frontier[0]` that has not been examined. Persisting
-/// both pieces is what makes a deadline a pause rather than a restart: the
+/// both pieces makes a scan-cap stop resumable rather than a restart: the
 /// next pass opens one parent and continues immediately, without rebuilding
 /// every shallower level of the tree.
 #[derive(Debug, Clone, Deserialize, Serialize)]

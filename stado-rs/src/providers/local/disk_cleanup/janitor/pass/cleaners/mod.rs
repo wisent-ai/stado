@@ -2,7 +2,7 @@
 //!
 //! The rebuildable-cache cleaners run here; the store-backed ones — job work
 //! trees, job outputs, replica twins, release versions — run in [`store`]
-//! with whatever item and time share the first half left.
+//! with whatever scan share the first half left.
 
 pub(crate) mod budget;
 mod store;
@@ -10,11 +10,9 @@ pub(crate) mod summary;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::time::Instant;
 
 use crate::providers::local::disk_cleanup::janitor::state::error::JanitorError;
 use crate::providers::local::disk_cleanup::janitor::state::report::CleanupReport;
-use crate::providers::local::disk_cleanup::janitor::DEADLINE_SECONDS;
 use crate::providers::local::disk_cleanup::{
     backup_twins, build_caches, chromium_clones, hf, job_outputs, queue_workdirs, release_store,
     weles,
@@ -24,7 +22,7 @@ use crate::targets::DiskCleanupPolicy;
 /// The cleaners that walk a filesystem, in the order one pass runs them.
 ///
 /// `local_snapshots` is deliberately not here: it walks nothing, spends no
-/// item or time share, and has to run AFTER these, because what it recovers
+/// scan share, and has to run AFTER these, because what it recovers
 /// is the blocks their deletions left pinned in a Time Machine snapshot.
 pub(crate) const CLEANER_ORDER: [&str; 8] = [
     "huggingface_cache",
@@ -37,31 +35,11 @@ pub(crate) const CLEANER_ORDER: [&str; 8] = [
     release_store::CLEANER,
 ];
 
-/// How one pass divides its item and time budget between the declared
-/// cleaners in [`CLEANER_ORDER`].
-///
-/// Every cleaner used to receive `max_scan_items` minus what the ones
-/// before it had spent, which reads as fair and is not: the cleaners run in
-/// a fixed order, and one whose root is large enough to exhaust the cap
-/// takes the whole pass, every pass, forever: with six declared cleaners, one
-/// can scan almost the whole cap and find NOTHING eligible while the ones
-/// after it each receive a budget of zero and scan nothing — pass after pass,
-/// under real disk pressure, with proven duplicates sitting in the replica
-/// `backup_twins` exists to reclaim. The outcome is `cap_reached`, which is
-/// true and reads like work being done.
-///
-/// An equal share of what is left, with everything unspent rolling forward
-/// to the cleaners behind: a cleaner that scans less than its share leaves
-/// more for the rest, and the last declared cleaner is handed whatever
-/// remains. No cleaner is ever handed zero while it is declared, which is
-/// the property that was missing. Item shares alone do not make the fixed
-/// order fair: a cleaner can spend the whole wall-clock allowance while
-/// staying inside its item share, so each declared cleaner also gets an
-/// equal slice of the time that remains at the instant it starts; an unused
-/// slice stays inside the single global deadline and rolls forward.
+/// Divide the remaining scan capacity between declared cleaners in
+/// [`CLEANER_ORDER`]. Unspent capacity rolls forward to the cleaners behind;
+/// the last declared cleaner receives whatever remains.
 pub(super) struct Shares<'a> {
     policy: &'a DiskCleanupPolicy,
-    pub(super) deadline: Instant,
 }
 
 impl Shares<'_> {
@@ -83,17 +61,9 @@ impl Shares<'_> {
             (remaining / (behind + 1)).max(1).min(remaining)
         }
     }
-
-    /// The instant `current` must stop by.
-    pub(super) fn time_share(&self, current: &str) -> Instant {
-        let now = Instant::now();
-        let remaining = self.deadline.saturating_duration_since(now);
-        let slots = self.declared_after(current).saturating_add(1) as u32;
-        now + remaining / slots
-    }
 }
 
-/// Run every declared cleaner inside its item and time share of the pass.
+/// Run every declared cleaner inside its share of the pass's scan capacity.
 ///
 /// Moved out of `run_with_lock` unchanged. `Err` carries exactly the error
 /// the HuggingFace scan escaped with, which the caller records as `runtime`
@@ -105,19 +75,9 @@ pub(crate) async fn run_cleaners(
     attempted_at: f64,
     report: &mut CleanupReport,
 ) -> Result<(), JanitorError> {
-    // The host's declared pass budget, or this module's own 30 seconds when it
-    // declares none. This is the limit that actually decides how much of a
-    // large tree one pass sees: on a large home `max_scan_items` never binds
-    // and the deadline does, every pass.
-    let pass_seconds = policy
-        .max_pass_seconds
-        .filter(|seconds| *seconds > 0)
-        .map_or(DEADLINE_SECONDS, |seconds| seconds as f64);
-    let deadline = Instant::now() + std::time::Duration::from_secs_f64(pass_seconds);
-    let shares = Shares { policy, deadline };
+    let shares = Shares { policy };
     let declared_after = |current: &str| shares.declared_after(current);
     let share = |remaining: i64, behind: i64| shares.share(remaining, behind);
-    let time_share = |current: &str| shares.time_share(current);
     // Past every early return: from here the cleaner table is a measurement
     // this pass actually made, so the report may carry one.
     report.scanned = true;
@@ -130,7 +90,6 @@ pub(crate) async fn run_cleaners(
         report.active_job_count,
         attempted_at,
         share(policy.max_scan_items, declared_after("huggingface_cache")),
-        time_share("huggingface_cache"),
         report,
     )?;
     let scanned = report.hf.scanned_items;
@@ -143,7 +102,6 @@ pub(crate) async fn run_cleaners(
         policy,
         attempted_at,
         share(remaining_scan, declared_after("weles_recordings")),
-        time_share("weles_recordings"),
         report,
     );
     let remaining_after_weles =
@@ -151,17 +109,13 @@ pub(crate) async fn run_cleaners(
     if remaining_after_weles == 0 && policy.cleaners.contains_key("build_caches") {
         report.caps.scan = true;
     }
-    // The build-cache scan is the only one whose root can be the whole of
-    // `$HOME`: it walks with its item and time shares of what the fixed-layout
-    // cleaners left. It is also the only one that cannot finish in one pass on
-    // a large tree, so it resumes from where the last pass stopped instead of
-    // restarting.
+    // A build-cache root can cover the whole home. Its cursor carries
+    // unexamined directories into the next count-bounded pass.
     build_caches::scan_build_caches(
         home,
         policy,
         attempted_at,
         share(remaining_after_weles, declared_after("build_caches")),
-        time_share("build_caches"),
         report.builds_cursor.take(),
         report,
     );
@@ -174,8 +128,8 @@ pub(crate) async fn run_cleaners(
         report.caps.scan = true;
     }
     // The only cleaner whose root is outside this account's home: macOS puts
-    // the clones in the per-user temporary container. Its unused item and time
-    // shares roll forward to the lifecycle cleaners behind it.
+    // the clones in the per-user temporary container. Its unused scan share
+    // rolls forward to the lifecycle cleaners behind it.
     chromium_clones::scan_chromium_clones(
         home,
         policy,
@@ -184,7 +138,6 @@ pub(crate) async fn run_cleaners(
             remaining_after_builds,
             declared_after(chromium_clones::CLEANER),
         ),
-        time_share(chromium_clones::CLEANER),
         report,
     );
     let remaining_after_clones = (policy.max_scan_items

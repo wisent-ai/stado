@@ -35,12 +35,11 @@ pub(super) use write::set_policy;
 /// change and cannot display is a write nobody can verify. `cleaners` is
 /// absent from both — a cleaner's root is a path on a host, and paths are the
 /// material this projection exists to withhold.
-const POLICY_FIELDS: [&str; 8] = [
+const POLICY_FIELDS: [&str; 7] = [
     "check_interval_seconds",
     "low_free_gb",
     "max_bytes_per_pass",
     "max_items_per_pass",
-    "max_pass_seconds",
     "max_scan_items",
     "mode",
     "target_free_gb",

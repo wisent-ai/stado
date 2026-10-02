@@ -195,7 +195,6 @@ impl CleanupReport {
                 "bytes": self.caps.bytes,
                 "items": self.caps.items,
                 "scan": self.caps.scan,
-                "deadline": self.caps.deadline,
             },
             "lock_busy": self.lock_busy,
             "active_job_count": self.active_job_count,

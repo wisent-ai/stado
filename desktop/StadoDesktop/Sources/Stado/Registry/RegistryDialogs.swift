@@ -107,35 +107,6 @@ extension RegistryView {
                     },
                 ]
             )
-        case let .clearNumber(target, field):
-            WisentDecisionDialog(
-                tone: .warning,
-                title: "Return \(field.title) to the default on \(target)?",
-                lines: [
-                    field.effect,
-                    "Removing the key leaves the janitor's own built-in limit in force, and the registry then declares nothing about it.",
-                ],
-                reasonCode: "clears \(field.rawValue)",
-                listing: [
-                    "POST /api/registry/policy",
-                    "{\"target\": \"\(target)\", \"disk_cleanup\": {\"\(field.rawValue)\": null}}",
-                ],
-                footnote: "Registry generation \(fleetStore.policy?.generation ?? "unknown") at the time this screen was read.",
-                actions: [
-                    WisentAction("Keep the declared value", kind: .secondary) { decision = nil },
-                    WisentAction("Use the default", kind: .destructive) {
-                        decision = nil
-                        drafts["\(target)/\(field.rawValue)"] = nil
-                        Task {
-                            await fleetStore.apply(
-                                .clearCleanupNumber(field),
-                                to: target,
-                                describedAs: "Cleared \(field.rawValue) on \(target)."
-                            )
-                        }
-                    },
-                ]
-            )
         }
     }
 }

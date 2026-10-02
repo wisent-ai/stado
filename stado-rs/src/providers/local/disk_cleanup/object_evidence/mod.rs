@@ -15,7 +15,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use super::janitor::state::report::{CleanerReport, CleanupReport};
 use crate::targets::DiskCleanupPolicy;
@@ -32,7 +31,6 @@ pub fn scan_object_evidence(
     policy: &DiskCleanupPolicy,
     now: f64,
     remaining_scan: i64,
-    deadline: Instant,
     enforcing: bool,
     report: &mut CleanupReport,
 ) {
@@ -66,12 +64,6 @@ pub fn scan_object_evidence(
             continue;
         };
         for entry in entries.flatten() {
-            if Instant::now() >= deadline {
-                report.caps.deadline = true;
-                bump(&mut record.skipped, "scan_deadline");
-                report.object_evidence = record;
-                return;
-            }
             if budget <= 0 {
                 report.caps.scan = true;
                 bump(&mut record.skipped, "scan_cap");

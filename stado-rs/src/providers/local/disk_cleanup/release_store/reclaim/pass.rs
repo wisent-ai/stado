@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::time::Instant;
 
 use crate::providers::local::disk_cleanup::release_store::decision::retention_decision;
 use crate::providers::local::disk_cleanup::release_store::inventory::families::complete_families;
@@ -35,7 +34,6 @@ pub fn scan_release_store(
     policy: &DiskCleanupPolicy,
     declared_pins: &BTreeMap<String, BTreeSet<String>>,
     remaining_scan: i64,
-    deadline: Instant,
     report: &mut CleanupReport,
 ) {
     let Some(configured) = policy.cleaners.get(CLEANER) else {
@@ -101,11 +99,6 @@ pub fn scan_release_store(
                 continue;
             };
             for version_entry in versions.flatten() {
-                if Instant::now() >= deadline {
-                    report.caps.deadline = true;
-                    report.skip_release_store("scan_deadline", 1);
-                    break;
-                }
                 if scanned >= remaining_scan {
                     report.caps.scan = true;
                     report.skip_release_store("scan_cap", 1);

@@ -33,36 +33,14 @@ pub(crate) const STATE_NAME: &str = "disk-cleanup-state.json";
 /// serve this purpose because prevented writers intentionally persist while
 /// another process holds it.
 pub(crate) const STATE_LOCK_NAME: &str = "disk-cleanup-state.lock";
-/// Python `_DEADLINE_SECONDS`.
-pub(crate) const DEADLINE_SECONDS: f64 = 30.0;
 /// Python `_MAX_ERRORS`.
 pub(crate) const MAX_ERRORS: usize = 16;
-/// Who holds the exclusive run lock, and until when they said they would.
-///
-/// `flock` states that somebody holds the lock and can state nothing else.
-/// That is enough while every holder finishes, and not otherwise: one agent
-/// process can hold this lock idle at 0% CPU with sockets open to an object
-/// API whose pid no longer exists, and a hold that never ends disables
-/// cleanup on the host permanently while it reports `disk_cleanup_stalled`.
-/// The kernel frees a dead holder's lock; it cannot free a live holder that
-/// will never come back, and nothing in the file said the holder was overdue.
+/// The exclusive holder's identity and acquisition time, for diagnostics.
 pub(crate) const LOCK_HOLDER_NAME: &str = "disk-cleanup.lock.holder";
-/// How long past a holder's own declared deadline the lock may be taken over.
-///
-/// The criterion is deliberately NOT elapsed time alone: a long pass on a
-/// large tree is healthy, and stealing its lock would produce exactly the
-/// concurrent deletion the lock exists to prevent. It is the holder's OWN
-/// promise — the pass deadline it recorded when it acquired the lock — plus
-/// this grace. A holder past that has either stopped or lied about its
-/// budget, and both are states nobody should have to wait out.
-pub(crate) const LOCK_TAKEOVER_GRACE_S: f64 = 300.0;
 /// Retired lock inodes remain linked under this prefix until their original
 /// holder releases them. A replacement lock must never authorize deletion
 /// while one of these files is still locked.
 pub(crate) const RETIRED_LOCK_PREFIX: &str = "disk-cleanup.lock.retired.";
-/// Serializes the short compare-and-replace sequence between takeover
-/// contenders. It is never held while a cleanup pass runs.
-pub(crate) const TAKEOVER_LOCK_NAME: &str = "disk-cleanup.lock.takeover";
 /// Inode-specific holder records survive a legacy predecessor removing the
 /// canonical holder pathname after its lock inode has been retired.
 pub(crate) const LOCK_HOLDER_INODE_PREFIX: &str = "disk-cleanup.lock.holder.inode.";

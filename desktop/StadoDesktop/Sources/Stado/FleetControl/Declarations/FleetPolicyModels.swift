@@ -135,10 +135,6 @@ struct FleetCleanupPolicy: Decodable, Sendable {
     let maxItemsPerPass: Int?
     let maxBytesPerPass: Int?
     let maxScanItems: Int?
-    /// Seconds one pass may spend. Optional in the registry schema; absent
-    /// means the janitor's own 30, which is what a host that has never
-    /// declared it runs.
-    let maxPassSeconds: Int?
 
     enum CodingKeys: String, CodingKey {
         case mode
@@ -148,7 +144,6 @@ struct FleetCleanupPolicy: Decodable, Sendable {
         case maxItemsPerPass = "max_items_per_pass"
         case maxBytesPerPass = "max_bytes_per_pass"
         case maxScanItems = "max_scan_items"
-        case maxPassSeconds = "max_pass_seconds"
     }
 
     func value(of field: FleetCleanupNumericField) -> Int? {
@@ -159,7 +154,6 @@ struct FleetCleanupPolicy: Decodable, Sendable {
         case .maxItemsPerPass: maxItemsPerPass
         case .maxBytesPerPass: maxBytesPerPass
         case .maxScanItems: maxScanItems
-        case .maxPassSeconds: maxPassSeconds
         }
     }
 }
@@ -177,7 +171,6 @@ enum FleetCleanupNumericField: String, CaseIterable, Identifiable, Sendable {
     case maxItemsPerPass = "max_items_per_pass"
     case maxBytesPerPass = "max_bytes_per_pass"
     case maxScanItems = "max_scan_items"
-    case maxPassSeconds = "max_pass_seconds"
 
     var id: String { rawValue }
 
@@ -189,7 +182,6 @@ enum FleetCleanupNumericField: String, CaseIterable, Identifiable, Sendable {
         case .maxItemsPerPass: "Directories per pass"
         case .maxBytesPerPass: "Bytes per pass"
         case .maxScanItems: "Directories crossed per pass"
-        case .maxPassSeconds: "Seconds per pass"
         }
     }
 
@@ -207,13 +199,9 @@ enum FleetCleanupNumericField: String, CaseIterable, Identifiable, Sendable {
             "The most bytes one pass may delete."
         case .maxScanItems:
             "The most directories one pass may examine before it stops and hands its cursor on."
-        case .maxPassSeconds:
-            "The wall clock one pass may spend. Absent means the janitor's own 30 seconds, which is the limit that binds on a large tree."
         }
     }
 
-    /// Only the optional field can be returned to its default.
-    var isClearable: Bool { self == .maxPassSeconds }
 }
 
 /// The three modes the registry schema accepts for `disk_cleanup.mode`.
@@ -247,9 +235,6 @@ enum FleetPolicyPatch: Sendable {
     case pinnedOnly(Bool)
     case cleanupMode(FleetCleanupMode)
     case cleanupNumber(FleetCleanupNumericField, Int)
-    /// Drop an optional field and return the host to the janitor's default.
-    /// `null` is how the dashboard is told to remove a key rather than set it.
-    case clearCleanupNumber(FleetCleanupNumericField)
     /// The whitelisted `memory_reclaim` fields the Memory screen may rewrite.
     case memoryReclaim(MemoryReclaimPatch)
 
@@ -261,8 +246,6 @@ enum FleetPolicyPatch: Sendable {
             ["disk_cleanup": ["mode": mode.rawValue]]
         case let .cleanupNumber(field, value):
             ["disk_cleanup": [field.rawValue: value]]
-        case let .clearCleanupNumber(field):
-            ["disk_cleanup": [field.rawValue: NSNull()]]
         case let .memoryReclaim(patch):
             [MemoryReclaimPatch.registryKey: patch.fields]
         }

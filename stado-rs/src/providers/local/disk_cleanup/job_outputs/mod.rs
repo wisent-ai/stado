@@ -41,7 +41,6 @@ mod inventory;
 use std::collections::BTreeSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 pub use inventory::candidate_job_ids;
 
@@ -119,7 +118,6 @@ pub fn scan_job_outputs(
     policy: &DiskCleanupPolicy,
     now: f64,
     remaining_scan: i64,
-    deadline: Instant,
     terminal_jobs: Option<&BTreeSet<String>>,
     report: &mut CleanupReport,
 ) {
@@ -148,11 +146,6 @@ pub fn scan_job_outputs(
             .iter()
             .flat_map(|root| terminal.iter().map(move |job_id| (root, job_id)))
         {
-            if Instant::now() >= deadline {
-                report.caps.deadline = true;
-                report.skip_job_outputs("scan_deadline", 1);
-                break;
-            }
             let output = root.join(job_id).join(OUTPUT_DIR);
             if !output.is_dir() {
                 report.skip_job_outputs("output_absent", 1);

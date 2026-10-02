@@ -5,7 +5,6 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::time::Instant;
 
 use crate::providers::local::disk_cleanup::JanitorError;
 
@@ -14,15 +13,14 @@ use crate::providers::local::disk_cleanup::JanitorError;
 pub fn candidate_job_ids(
     status_roots: &[std::path::PathBuf],
     remaining_scan: i64,
-    deadline: Instant,
 ) -> Result<BTreeSet<String>, JanitorError> {
     let mut ids = BTreeSet::new();
     let mut budget = remaining_scan;
     for root in status_roots {
-        if budget <= 0 || Instant::now() >= deadline {
+        if budget <= 0 {
             break;
         }
-        budget -= collect_from(root, budget, deadline, &mut ids)?;
+        budget -= collect_from(root, budget, &mut ids)?;
     }
     Ok(ids)
 }
@@ -31,7 +29,6 @@ pub fn candidate_job_ids(
 fn collect_from(
     status_root: &Path,
     remaining_scan: i64,
-    deadline: Instant,
     ids: &mut BTreeSet<String>,
 ) -> Result<i64, JanitorError> {
     if remaining_scan <= 0 {
@@ -64,7 +61,7 @@ fn collect_from(
         ids.insert(name);
         spent += 1;
         budget -= 1;
-        if budget <= 0 || Instant::now() >= deadline {
+        if budget <= 0 {
             break;
         }
     }

@@ -5,7 +5,6 @@ use std::ffi::OsString;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::time::Instant;
 
 use crate::providers::local::disk_cleanup::queue_workdirs::roots::{job_id, open_cleanup_root};
 use crate::providers::local::disk_cleanup::queue_workdirs::{CLEANER, WORKDIR_PREFIX};
@@ -28,7 +27,6 @@ pub fn scan_queue_workdirs(
     policy: &DiskCleanupPolicy,
     _now: f64,
     remaining_scan: i64,
-    deadline: Instant,
     live_jobs: Option<&[String]>,
     report: &mut CleanupReport,
 ) {
@@ -92,11 +90,6 @@ pub fn scan_queue_workdirs(
         ordered.sort();
         let mut deleted_bytes = 0i64;
         for name in ordered {
-            if Instant::now() >= deadline {
-                report.caps.deadline = true;
-                report.skip_workdirs("scan_deadline", 1);
-                break;
-            }
             report.workdirs.scanned_items += 1;
             let info = match safefs::fstatat_nofollow(root_fd.as_raw_fd(), &name) {
                 Ok(info) => info,

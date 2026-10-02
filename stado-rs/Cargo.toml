@@ -131,3 +131,7 @@ path = "../tests/host_health/beacon.rs"
 [[test]]
 name = "host-configuration-journey"
 path = "../tests/host_health/configuration.rs"
+
+[[test]]
+name = "disk-cleanup"
+path = "../tests/disk_cleanup/lifecycle.rs"

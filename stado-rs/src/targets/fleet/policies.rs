@@ -94,17 +94,6 @@ pub struct DiskCleanupPolicy {
     pub max_bytes_per_pass: i64,
     pub max_items_per_pass: i64,
     pub max_scan_items: i64,
-    /// Seconds one pass may spend before it stops and hands its cursor on.
-    ///
-    /// Optional, and absent means the janitor's own `DEADLINE_SECONDS` — 30 —
-    /// so nothing changes for a host that does not declare it. It exists
-    /// because this can be the one bound that decides: a pass can report
-    /// `caps: {deadline: true, scan: false, items: false, bytes: false}`
-    /// after crossing a small fraction of a large tree, well under its
-    /// declared `max_scan_items`, while every other limit here is tunable and
-    /// none of them is in the way.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_pass_seconds: Option<i64>,
     pub cleaners: BTreeMap<String, DiskCleanerPolicy>,
 }
 
@@ -154,7 +143,6 @@ impl DiskCleanupPolicy {
             max_bytes_per_pass: 64 * 1024_i64.pow(3),
             max_items_per_pass: 512,
             max_scan_items: MAX_SCAN_ITEMS_CEILING,
-            max_pass_seconds: None,
             cleaners,
         }
     }

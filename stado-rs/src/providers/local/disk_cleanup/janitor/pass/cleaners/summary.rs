@@ -27,16 +27,13 @@ pub(crate) fn summarize_scan(policy: &DiskCleanupPolicy, report: &mut CleanupRep
     // out publishes the same three zeros as one that looked and found nothing,
     // and `cap_reached` names the budget rather than the cleaner it stopped.
     //
-    // Keyed on the two skips a budget produces — `scan_cap` and
-    // `scan_deadline` — and never on a zero count alone: a cleaner whose root
+    // Keyed on `scan_cap`, never on a zero count alone: a cleaner whose root
     // does not exist on this host also scans nothing, reports `root_absent`,
     // and is not waiting for a turn. Calling that one unscanned would be this
     // field committing the error it exists to report. The order is the run
     // order, so the answer reads as "the pass ended before these".
     let budget_stopped = |cleaner: &CleanerReport| {
-        cleaner.scanned_items == 0
-            && (cleaner.skipped.contains_key("scan_cap")
-                || cleaner.skipped.contains_key("scan_deadline"))
+        cleaner.scanned_items == 0 && cleaner.skipped.contains_key("scan_cap")
     };
     report.unscanned_cleaners = [
         ("huggingface_cache", &report.hf),

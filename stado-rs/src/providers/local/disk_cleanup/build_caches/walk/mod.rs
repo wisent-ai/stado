@@ -15,7 +15,6 @@ mod tag;
 use std::collections::VecDeque;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use nix::libc::dev_t;
 use nix::sys::stat::FileStat;
@@ -30,7 +29,7 @@ use crate::targets::{DiskCleanerPolicy, DiskCleanupPolicy};
 /// Whether the walk may continue at all, or has spent a pass-wide budget.
 pub(super) enum Progress {
     Continue,
-    /// Scan cap, deadline, or the free-space target: the pass is done and
+    /// Scan cap or the free-space target: the pass is done and
     /// every remaining directory is left unexamined rather than half-judged.
     Halt,
 }
@@ -43,7 +42,6 @@ pub(super) struct Walk<'a> {
     pub(super) configured: &'a DiskCleanerPolicy,
     /// Epoch seconds the pass started (Python-style `time.time()`).
     pub(super) now: f64,
-    pub(super) deadline: Instant,
     /// Directories left in this pass's share of `max_scan_items`.
     pub(super) remaining_scan: i64,
     /// `st_dev` of the scan root. A mount point inside the tree is refused
@@ -55,9 +53,8 @@ pub(super) struct Walk<'a> {
     /// Roots the walk must not even look inside, because looking is what
     /// costs: a macOS privacy prompt, or a cloud download.
     pub(super) privacy: Vec<PathBuf>,
-    /// Folders macOS gates behind a consent dialog and this walk still
-    /// enters: the first open under each is bounded, so a dialog nobody
-    /// answers costs this pass one cleaner and never the host.
+    /// Folders with an asynchronous macOS consent read. A pending answer is
+    /// reported without holding this pass open.
     pub(super) gated: Vec<PathBuf>,
     /// Bytes this pass expects to have freed, against `max_bytes_per_pass`.
     pub(super) deleted_bytes: i64,
@@ -79,17 +76,7 @@ impl<'a> Walk<'a> {
 
     /// Charge one directory to the scan budget, or report which pass-wide
     /// limit stopped the walk.
-    ///
-    /// The deadline is checked first because it is the only limit that can
-    /// be hit by a tree the cleaner has not finished reading: `$HOME` on a
-    /// developer machine holds millions of directories, so "how many did we
-    /// look at" is not on its own a bound on how long we looked.
     fn charge(&mut self, report: &mut CleanupReport) -> Progress {
-        if Instant::now() >= self.deadline {
-            report.caps.deadline = true;
-            report.skip_builds("scan_deadline", 1);
-            return Progress::Halt;
-        }
         if self.remaining_scan <= 0 {
             report.caps.scan = true;
             report.skip_builds("scan_cap", 1);
@@ -124,12 +111,6 @@ impl<'a> Walk<'a> {
         report: &mut CleanupReport,
     ) -> Result<Progress, JanitorError> {
         while let Some(parent) = self.frontier.pop_front().map(PathBuf::from) {
-            if Instant::now() >= self.deadline {
-                self.frontier.push_front(parent.into());
-                report.caps.deadline = true;
-                report.skip_builds("scan_deadline", 1);
-                return Ok(Progress::Halt);
-            }
             let depth = parent.components().count();
             if depth >= MAX_DEPTH {
                 self.next_child = None;
