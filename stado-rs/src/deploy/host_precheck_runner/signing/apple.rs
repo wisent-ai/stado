@@ -10,7 +10,8 @@ use crate::deploy::{host_capability, host_channel, production_runner, DeployErro
 use crate::targets::ComputeTarget;
 
 /// The role the Developer ID signing identity plays in the owner vault — the
-/// same role every darwin release recipe and `weles apple-developer-id` use —
+/// same role every darwin release recipe and `weles developer-certificate
+/// --provider apple` use —
 /// with the recipe's field names.
 pub(crate) const DEVELOPER_ID_ROLE: &str = "macos-developer-id";
 pub(crate) const DEVELOPER_ID_KIND: &str = "bundle";
