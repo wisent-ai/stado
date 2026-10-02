@@ -187,9 +187,15 @@ pub fn run(mut matches: clap::ArgMatches, build: crate::Build) -> Result<i32> {
             .as_str()
         {
             "verify" => crate::release_steps::run_schema_verify(
-                arguments.get_one::<String>("engine").context("--engine is required")?,
-                arguments.get_one::<String>("migrations").map_or("migrations", String::as_str),
-                arguments.get_one::<String>("project-dir").map_or(".", String::as_str),
+                arguments
+                    .get_one::<String>("engine")
+                    .context("--engine is required")?,
+                arguments
+                    .get_one::<String>("migrations")
+                    .map_or("migrations", String::as_str),
+                arguments
+                    .get_one::<String>("project-dir")
+                    .map_or(".", String::as_str),
             ),
             other => anyhow::bail!("unknown schema release operation {other}"),
         },

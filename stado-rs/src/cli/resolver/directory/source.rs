@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::cli::CmdError;
 use crate::service_resolution;
 use crate::targets::{self, RegistryStore};
-use crate::cli::CmdError;
 
 use crate::cli::resolver::authority::execute::execute;
 use crate::cli::resolver::authority::paths::target_ssh_paths;

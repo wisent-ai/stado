@@ -19,38 +19,72 @@ pub struct Service {
 
 impl Service {
     pub fn start() -> Self {
-        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
-        let root = repository.join(".build/desktop-api").join(uuid::Uuid::new_v4().to_string());
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let root = repository
+            .join(".build/desktop-api")
+            .join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(root.join("home")).unwrap();
         fs::create_dir_all(root.join("tmp")).unwrap();
         let config = root.join("config.json");
-        let mut service = Self { root, config, origin: String::new(),
-            report: json!({"commands": [], "outcome": "failed"}), child: None, log: None, client: reqwest::Client::new() };
-        let revision = Command::new("git").current_dir(&repository).args(["rev-parse", "HEAD"]).output().unwrap();
+        let mut service = Self {
+            root,
+            config,
+            origin: String::new(),
+            report: json!({"commands": [], "outcome": "failed"}),
+            child: None,
+            log: None,
+            client: reqwest::Client::new(),
+        };
+        let revision = Command::new("git")
+            .current_dir(&repository)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
         assert!(revision.status.success());
-        let patch = Command::new("git").current_dir(&repository).args(["diff", "--binary", "HEAD"]).output().unwrap();
+        let patch = Command::new("git")
+            .current_dir(&repository)
+            .args(["diff", "--binary", "HEAD"])
+            .output()
+            .unwrap();
         assert!(patch.status.success());
         fs::write(service.root.join("source.patch"), &patch.stdout).unwrap();
-        service.report["source_revision"] = json!(String::from_utf8(revision.stdout).unwrap().trim());
-        service.report["source_patch_sha256"] = json!(format!("{:x}", Sha256::digest(&patch.stdout)));
+        service.report["source_revision"] =
+            json!(String::from_utf8(revision.stdout).unwrap().trim());
+        service.report["source_patch_sha256"] =
+            json!(format!("{:x}", Sha256::digest(&patch.stdout)));
         let mut binary = File::open(env!("CARGO_BIN_EXE_stado")).unwrap();
         let mut digest = Sha256::new();
         let mut buffer = [0u8; 8192];
         loop {
             let count = binary.read(&mut buffer).unwrap();
-            if count == 0 { break; }
+            if count == 0 {
+                break;
+            }
             digest.update(&buffer[..count]);
         }
         service.report["binary_sha256"] = json!(format!("{:x}", digest.finalize()));
         let version = service.cli(&["--version"]);
-        assert!(version.split_whitespace().map(|part| part.trim_matches(['(', ')']))
-            .any(|part| Some(part) == service.report["source_revision"].as_str()),
-            "the tested executable must identify the exact source revision");
+        assert!(
+            version
+                .split_whitespace()
+                .map(|part| part.trim_matches(['(', ')']))
+                .any(|part| Some(part) == service.report["source_revision"].as_str()),
+            "the tested executable must identify the exact source revision"
+        );
         service.report["binary_version"] = json!(version);
         service.cli(&["config", "init"]);
-        let mut child = service.command().args(["dashboard", "--bind", "127.0.0.1", "--port", "0"])
-            .stdout(Stdio::from(File::create(service.root.join("service.stdout")).unwrap()))
-            .stderr(Stdio::piped()).spawn().unwrap();
+        let mut child = service
+            .command()
+            .args(["dashboard", "--bind", "127.0.0.1", "--port", "0"])
+            .stdout(Stdio::from(
+                File::create(service.root.join("service.stdout")).unwrap(),
+            ))
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
         let stderr = child.stderr.take().unwrap();
         service.report["service"] = json!({"arguments": ["dashboard", "--bind", "127.0.0.1", "--port", "0"], "pid": child.id()});
         service.child = Some(child);
@@ -68,7 +102,9 @@ impl Service {
                 }
             }
         }));
-        service.origin = ready.recv().expect("the real service must announce a bound listener; inspect service.stderr");
+        service.origin = ready
+            .recv()
+            .expect("the real service must announce a bound listener; inspect service.stderr");
         service.report["origin"] = json!(service.origin);
         service.save();
         service
@@ -76,9 +112,13 @@ impl Service {
 
     fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_stado"));
-        command.env_clear().env("PATH", std::env::var_os("PATH").unwrap())
-            .env("HOME", self.root.join("home")).env("STADO_CONFIG", &self.config)
-            .env("TMPDIR", self.root.join("tmp")).stdin(Stdio::null());
+        command
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .env("HOME", self.root.join("home"))
+            .env("STADO_CONFIG", &self.config)
+            .env("TMPDIR", self.root.join("tmp"))
+            .stdin(Stdio::null());
         command
     }
 
@@ -96,8 +136,13 @@ impl Service {
 
     pub async fn call(&mut self, body: Value, expected_status: u16) -> Value {
         let endpoint = format!("{}/api/operator/run", self.origin);
-        let response = self.client.post(&endpoint)
-            .header("X-Stado-Action", "operator-command").json(&body).send().await;
+        let response = self
+            .client
+            .post(&endpoint)
+            .header("X-Stado-Action", "operator-command")
+            .json(&body)
+            .send()
+            .await;
         if let Err(error) = &response {
             self.report["commands"].as_array_mut().unwrap().push(json!({"endpoint": endpoint, "request": body, "transport_error": error.to_string()}));
             self.save();
@@ -105,7 +150,9 @@ impl Service {
         let response = response.expect("real API request");
         let status = response.status().as_u16();
         let text = response.text().await.unwrap();
-        self.report["commands"].as_array_mut().unwrap().push(json!({"endpoint": endpoint, "request": body, "http_status": status, "response": text}));
+        self.report["commands"].as_array_mut().unwrap().push(
+            json!({"endpoint": endpoint, "request": body, "http_status": status, "response": text}),
+        );
         self.save();
         assert_eq!(status, expected_status, "{text}");
         serde_json::from_str(&text).unwrap()
@@ -121,7 +168,11 @@ impl Service {
     }
 
     fn save(&self) {
-        fs::write(self.root.join("report.json"), serde_json::to_vec_pretty(&self.report).unwrap()).unwrap();
+        fs::write(
+            self.root.join("report.json"),
+            serde_json::to_vec_pretty(&self.report).unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -134,7 +185,9 @@ impl Drop for Service {
                 Err(error) => self.report["service"]["wait_error"] = json!(error.to_string()),
             }
         }
-        if let Some(log) = self.log.take() { let _ = log.join(); }
+        if let Some(log) = self.log.take() {
+            let _ = log.join();
+        }
         self.save();
         eprintln!("native API evidence: {}", self.root.display());
     }

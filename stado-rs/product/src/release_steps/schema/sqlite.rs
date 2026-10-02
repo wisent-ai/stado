@@ -13,8 +13,12 @@ use super::version_of;
 
 pub fn apply_all(scratch: &Path, files: &[std::path::PathBuf], report: &Path) -> Result<i32> {
     if scratch.exists() {
-        fs::remove_file(scratch)
-            .with_context(|| format!("removing the previous scratch database {}", scratch.display()))?;
+        fs::remove_file(scratch).with_context(|| {
+            format!(
+                "removing the previous scratch database {}",
+                scratch.display()
+            )
+        })?;
     }
     let connection = rusqlite::Connection::open(scratch)
         .with_context(|| format!("opening the scratch SQLite database {}", scratch.display()))?;
@@ -43,8 +47,11 @@ pub fn apply_all(scratch: &Path, files: &[std::path::PathBuf], report: &Path) ->
         "applied": applied,
         "tables": tables,
     });
-    fs::write(report, format!("{}\n", serde_json::to_string_pretty(&record)?))
-        .with_context(|| format!("writing {}", report.display()))?;
+    fs::write(
+        report,
+        format!("{}\n", serde_json::to_string_pretty(&record)?),
+    )
+    .with_context(|| format!("writing {}", report.display()))?;
     println!("{}", serde_json::to_string_pretty(&record)?);
     Ok(0)
 }

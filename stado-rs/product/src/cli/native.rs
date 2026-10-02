@@ -124,7 +124,9 @@ fn project_dir() -> Arg {
     Arg::new("project-dir")
         .long("project-dir")
         .default_value(".")
-        .help("Directory inside the bundle that holds supabase/ (supabase; default: the bundle root)")
+        .help(
+            "Directory inside the bundle that holds supabase/ (supabase; default: the bundle root)",
+        )
 }
 
 pub fn deliver() -> Command {

@@ -55,7 +55,10 @@ pub(crate) fn migration_files(directory: &Path) -> Result<Vec<PathBuf>> {
     }
     files.sort();
     if files.is_empty() {
-        bail!("{} holds no *.sql migration; a schema release applies at least one", directory.display());
+        bail!(
+            "{} holds no *.sql migration; a schema release applies at least one",
+            directory.display()
+        );
     }
     Ok(files)
 }
@@ -63,7 +66,9 @@ pub(crate) fn migration_files(directory: &Path) -> Result<Vec<PathBuf>> {
 /// The migration's version: its file name without `.sql`, the key every
 /// engine's history records.
 pub(crate) fn version_of(path: &Path) -> String {
-    path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// `stado product schema verify --engine E [--migrations DIR] [--project-dir DIR]`.
@@ -74,7 +79,11 @@ pub fn verify(engine: &str, migrations: &str, project_dir: &str) -> Result<i32> 
             let files = migration_files(Path::new(migrations))?;
             let scratch = output_dir()?.join("schema-verify");
             fs::create_dir_all(&scratch)?;
-            sqlite::apply_all(&scratch.join("scratch.sqlite"), &files, &scratch.join("schema-verify.json"))
+            sqlite::apply_all(
+                &scratch.join("scratch.sqlite"),
+                &files,
+                &scratch.join("schema-verify.json"),
+            )
         }
         SchemaEngine::Postgres => {
             let files = migration_files(Path::new(migrations))?;

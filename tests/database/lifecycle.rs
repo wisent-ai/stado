@@ -193,8 +193,14 @@ fn a_refused_registry_connection_keeps_its_transport_cause_and_failure_class() {
 
     let isolated = Isolated::new("registry-connection-refused");
     isolated.succeed(&[
-        "database", "declare", "ledger", "--engine", "postgres",
-        "--consumer", "probe", "--json",
+        "database",
+        "declare",
+        "ledger",
+        "--engine",
+        "postgres",
+        "--consumer",
+        "probe",
+        "--json",
     ]);
     let before = std::fs::read(&isolated.config).expect("read the declared database");
 
@@ -204,7 +210,10 @@ fn a_refused_registry_connection_keeps_its_transport_cause_and_failure_class() {
     reserved
         .bind(([127, 0, 0, 1], 0).into())
         .expect("reserve an isolated loopback port");
-    let origin = format!("http://{}", reserved.local_addr().expect("read the reserved port"));
+    let origin = format!(
+        "http://{}",
+        reserved.local_addr().expect("read the reserved port")
+    );
     let token = isolated.directory.join("transport-token");
     std::fs::OpenOptions::new()
         .write(true)
@@ -216,7 +225,14 @@ fn a_refused_registry_connection_keeps_its_transport_cause_and_failure_class() {
         .expect("write the token that cannot reach a server");
 
     let output = Command::new(env!("CARGO_BIN_EXE_stado"))
-        .args(["database", "resolve", "ledger", "--consumer", "probe", "--json"])
+        .args([
+            "database",
+            "resolve",
+            "ledger",
+            "--consumer",
+            "probe",
+            "--json",
+        ])
         .env("STADO_CONFIG", &isolated.config)
         .env("WC_STORAGE_BACKEND", "stado")
         .env("WC_STADO_STORAGE_URL", &origin)
@@ -233,10 +249,19 @@ fn a_refused_registry_connection_keeps_its_transport_cause_and_failure_class() {
         Some(wisent_errors::Code::RETRY_EXIT),
         "the connection refusal lost its retryable failure class: {stderr}"
     );
-    assert!(stderr.contains("infra_down"), "missing failure code: {stderr}");
-    assert!(stderr.contains(&origin), "missing failed endpoint: {stderr}");
+    assert!(
+        stderr.contains("infra_down"),
+        "missing failure code: {stderr}"
+    );
+    assert!(
+        stderr.contains(&origin),
+        "missing failed endpoint: {stderr}"
+    );
     let cause = std::io::Error::from_raw_os_error(nix::libc::ECONNREFUSED).to_string();
-    assert!(stderr.contains(&cause), "missing native cause {cause:?}: {stderr}");
+    assert!(
+        stderr.contains(&cause),
+        "missing native cause {cause:?}: {stderr}"
+    );
     assert_eq!(
         before,
         std::fs::read(&isolated.config).expect("read configuration after refusal"),

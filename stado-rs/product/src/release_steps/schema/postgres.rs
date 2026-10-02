@@ -7,7 +7,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use serde_json::json;
@@ -17,32 +16,33 @@ use super::version_of;
 
 const HISTORY: &str = "create table if not exists wisent_schema_migrations (\
  version text primary key, applied_at timestamptz not null default now())";
-
-/// Run one psql invocation with the SQL on its standard input and answer its
-/// standard output; psql runs to completion and its own refusal is the error.
-fn psql(url: &str, single_transaction: bool, sql: &str) -> Result<String> {
-    let mut command = Command::new("psql");
-    command.args(["--no-psqlrc", "--quiet", "--tuples-only", "--no-align", "-v", "ON_ERROR_STOP=1"]);
+/// Execute migration files directly. `--single-transaction` requires `-f`
+/// or `-c`; a pipe on stdin alone does not start a transaction in psql.
+fn psql(url: &str, single_transaction: bool, file: Option<&Path>, sql: &str) -> Result<String> {
+    let mut command = std::process::Command::new("psql");
+    command.args([
+        "--no-psqlrc",
+        "--no-password",
+        "--quiet",
+        "--tuples-only",
+        "--no-align",
+        "-v",
+        "ON_ERROR_STOP=1",
+    ]);
     if single_transaction {
         command.arg("--single-transaction");
     }
-    let mut child = command
-        .arg(url)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("cannot run psql; install the PostgreSQL client on the runner")?;
-    {
-        use std::io::Write;
-        child
-            .stdin
-            .take()
-            .context("psql standard input is not open")?
-            .write_all(sql.as_bytes())
-            .context("writing SQL to psql")?;
+    if let Some(file) = file {
+        command.arg("--file").arg(file);
     }
-    let output = child.wait_with_output().context("waiting for psql")?;
+    if !sql.is_empty() {
+        command.args(["--command", sql]);
+    }
+    let output = command
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .context("cannot run psql; install the PostgreSQL client on the runner")?;
     if !output.status.success() {
         bail!(
             "psql exited with {}: {}",
@@ -53,22 +53,19 @@ fn psql(url: &str, single_transaction: bool, sql: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn migration_sql(file: &Path) -> Result<String> {
-    fs::read_to_string(file).with_context(|| format!("reading migration {}", file.display()))
-}
-
 /// Every migration, in order, against the scratch database; a failure names
 /// the migration and carries psql's own sentence.
 pub fn verify(url: &str, files: &[PathBuf], report: &Path) -> Result<i32> {
     let mut applied = Vec::new();
     for file in files {
-        psql(url, true, &migration_sql(file)?)
+        psql(url, true, Some(file), "")
             .with_context(|| format!("migration {} failed on Postgres", file.display()))?;
         applied.push(version_of(file));
     }
     let tables = psql(
         url,
         false,
+        None,
         "select table_name from information_schema.tables where table_schema = 'public' order by 1",
     )?;
     let record = json!({
@@ -76,8 +73,11 @@ pub fn verify(url: &str, files: &[PathBuf], report: &Path) -> Result<i32> {
         "applied": applied,
         "tables": tables.lines().map(str::to_owned).collect::<Vec<_>>(),
     });
-    fs::write(report, format!("{}\n", serde_json::to_string_pretty(&record)?))
-        .with_context(|| format!("writing {}", report.display()))?;
+    fs::write(
+        report,
+        format!("{}\n", serde_json::to_string_pretty(&record)?),
+    )
+    .with_context(|| format!("writing {}", report.display()))?;
     println!("{}", serde_json::to_string_pretty(&record)?);
     Ok(0)
 }
@@ -85,8 +85,17 @@ pub fn verify(url: &str, files: &[PathBuf], report: &Path) -> Result<i32> {
 /// The migrations the real database has not recorded, applied in order,
 /// each with its version recorded in the same transaction.
 pub fn deliver(url: &str, files: &[PathBuf], receipt: &Path) -> Result<i32> {
-    psql(url, false, HISTORY).context("creating the migration history table")?;
-    let recorded = psql(url, false, "select version from wisent_schema_migrations order by 1")?;
+    let product = required("WISENT_PRODUCT")?;
+    let version = required("WISENT_VERSION")?;
+    let release_uri = required("WISENT_RELEASE_URI")?;
+    let release_sha256 = required("WISENT_RELEASE_SHA256")?;
+    psql(url, false, None, HISTORY).context("creating the migration history table")?;
+    let recorded = psql(
+        url,
+        false,
+        None,
+        "select version from wisent_schema_migrations order by 1",
+    )?;
     let recorded: Vec<&str> = recorded.lines().collect();
     let mut applied = Vec::new();
     let mut skipped = Vec::new();
@@ -97,22 +106,28 @@ pub fn deliver(url: &str, files: &[PathBuf], receipt: &Path) -> Result<i32> {
             continue;
         }
         let sql = format!(
-            "{}\ninsert into wisent_schema_migrations (version) values ('{}');\n",
-            migration_sql(file)?,
+            "insert into wisent_schema_migrations (version) values ('{}');",
             version.replace('\'', "''")
         );
-        psql(url, true, &sql)
-            .with_context(|| format!("migration {} failed on the delivered database", file.display()))?;
+        psql(url, true, Some(file), &sql).with_context(|| {
+            format!(
+                "migration {} failed on the delivered database",
+                file.display()
+            )
+        })?;
         applied.push(version);
     }
     let record = json!({
         "schema_version": RECORD_SCHEMA, "channel": "schema", "engine": "postgres",
-        "product": required("WISENT_PRODUCT")?, "version": required("WISENT_VERSION")?,
-        "release_uri": required("WISENT_RELEASE_URI")?,
+        "product": product, "version": version,
+        "release_uri": release_uri, "release_sha256": release_sha256,
         "applied": applied, "already_applied": skipped,
     });
-    fs::write(receipt, format!("{}\n", serde_json::to_string_pretty(&record)?))
-        .with_context(|| format!("writing {}", receipt.display()))?;
+    fs::write(
+        receipt,
+        format!("{}\n", serde_json::to_string_pretty(&record)?),
+    )
+    .with_context(|| format!("writing {}", receipt.display()))?;
     println!("{}", serde_json::to_string_pretty(&record)?);
     Ok(0)
 }
