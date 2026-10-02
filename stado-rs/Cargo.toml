@@ -107,3 +107,7 @@ path = "src/bin/stado_mcp.rs"
 [[bin]]
 name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
+
+[[test]]
+name = "database"
+path = "../tests/database/lifecycle.rs"
