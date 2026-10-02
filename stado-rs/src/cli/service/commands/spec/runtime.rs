@@ -150,6 +150,10 @@ pub enum RuntimeCommands {
     /// outside its own label: launchctl then disowns it, the stale process
     /// keeps the port, and every later restart dies on "address already in
     /// use" while the broken instance serves on.
+    ///
+    /// On Linux a refused systemctl stop names the unit, scope, exit status
+    /// and host error. The command then reads the unit's actual state; an
+    /// active, transitioning or unreadable answer is not a completed stop.
     Stop {
         /// Service name, or the host's own name for the unit.
         name: String,

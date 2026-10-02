@@ -79,11 +79,17 @@ else
   detail=$(stado_systemctl mask --runtime --now \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -ne 0 ]; then
-    say 'retire_failed' \"$rc $detail\"
-  elif stado_systemctl is-active --quiet \"$unit\"; then
-    say 'retire_failed' \"$unit remained active after its runtime mask\"
+    say 'retire_failed' \"systemctl mask --runtime --now $unit exited $rc: $detail\"
   else
-    say 'retired' \"$unit_path\"
+    answer=$(stado_systemctl is-active \"$unit\" 2>&1)
+    case \"$answer\" in
+      active|activating|reloading|deactivating)
+        say 'retire_failed' \"$unit remains $answer after its runtime mask ($systemd_detail)\" ;;
+      inactive|failed|unknown)
+        say 'retired' \"$unit_path ($systemd_detail: systemctl is-active answered $answer)\" ;;
+      *)
+        say 'retire_failed' \"cannot verify $unit after its runtime mask ($systemd_detail): systemctl is-active answered $answer\" ;;
+    esac
   fi
 fi
 ";

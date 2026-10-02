@@ -61,6 +61,11 @@ pub enum LifecycleCommands {
     ///
     /// Unit files are left on disk. Retiring is a management decision, not
     /// a deletion.
+    ///
+    /// On Linux, systemctl mask and the following is-active read must prove
+    /// the unit is no longer running. A failed mask, active or transitioning
+    /// state, or unreadable answer refuses to forget the declaration and
+    /// reports the observed scope and systemctl result.
     Retire {
         /// launchd label or systemd unit name, as the host knows it.
         unit: String,
