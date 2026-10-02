@@ -172,6 +172,9 @@ products:
   - product: skarbiec
     surface: service
     for_surface: service
+    alternative: BRAMA_LOCAL_CREDENTIALS_FILE in ~/.config/brama/service.env names an
+      owner-only provider-to-credential file; the service then starts in standalone mode
+      without Skarbiec
 - id: weles
   name: Weles
   status: active
