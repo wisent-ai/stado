@@ -226,11 +226,12 @@ pub(crate) fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     }
 }
 
-/// Load the declared legacy unit if it is absent. Callers verify the stable
-/// endpoint afterwards; a launchctl exit code cannot establish port ownership.
-pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
+/// Load the declared legacy unit if it is absent, answering whether this call
+/// loaded it. Callers verify the stable endpoint afterwards; a launchctl exit
+/// code cannot establish port ownership.
+pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<bool, String> {
     let Some(plist) = target.legacy_launchd_plist.as_deref() else {
-        return Ok(());
+        return Ok(false);
     };
     let label = target
         .legacy_launchd_label
@@ -250,7 +251,7 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String>
         ));
     }
     if loaded {
-        return Ok(());
+        return Ok(false);
     }
     let bootstrapped = Command::new("/usr/bin/sudo")
         .args(["-n", "/bin/launchctl", "bootstrap", "system", plist])
@@ -259,7 +260,7 @@ pub(crate) fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String>
     // A concurrent owner can load the same label between inspection and
     // bootstrap. Re-read the native state instead of guessing what exit 5 means.
     if legacy_loaded(&service)? {
-        return Ok(());
+        return Ok(true);
     }
     Err(format!(
         "legacy launchd service {service} is not loaded after bootstrap of {plist} \

@@ -1,8 +1,6 @@
 //! One product's own pass: repair the bind, read the declaration, and answer
 //! with the state document whichever branch this tick belongs to.
 
-use std::time::Duration;
-
 use chrono::Utc;
 
 use super::promote::promote_candidate;
@@ -50,7 +48,6 @@ pub(crate) async fn reconcile_product(
         target,
         product,
         install_root,
-        &policy.strategy,
         candidate_is_owed_the_bind,
         &mut state,
     )
@@ -162,11 +159,17 @@ pub(crate) async fn reconcile_product(
             state.phase,
             RolloutPhase::Monitoring | RolloutPhase::Committed
         ) {
-            state.phase = RolloutPhase::Routed;
-            state.detail = format!("stable proxy routed to candidate port {}", active.port);
-            state.cutover_at.get_or_insert_with(Utc::now);
-            save_state(target, &mut state)?;
-            tokio::time::sleep(Duration::from_secs(policy.strategy.drain_timeout_seconds)).await;
+            if state.phase != RolloutPhase::Routed || state.cutover_at.is_none() {
+                state.phase = RolloutPhase::Routed;
+                state.detail = format!("stable proxy routed to candidate port {}", active.port);
+                state.cutover_at.get_or_insert_with(Utc::now);
+                save_state(target, &mut state)?;
+            }
+            // The previous release drains while passes go by; this pass reads
+            // the candidate only once the drain period is over.
+            if seconds_since_cutover(&state) < policy.strategy.drain_timeout_seconds {
+                return Ok(state);
+            }
             if let Some(why) =
                 lost_readiness_because(&active, &serving.readiness_path, &policy.strategy).await
             {
@@ -192,15 +195,7 @@ pub(crate) async fn reconcile_product(
             save_state(target, &mut state)?;
         }
         if state.phase == RolloutPhase::Monitoring {
-            let elapsed = state
-                .cutover_at
-                .map(|cutover| {
-                    Utc::now()
-                        .signed_duration_since(cutover)
-                        .num_seconds()
-                        .max(0) as u64
-                })
-                .unwrap_or_default();
+            let elapsed = seconds_since_cutover(&state);
             if elapsed >= policy.strategy.rollback_window_seconds {
                 if let Some(previous) = state.previous.take() {
                     terminate(&previous);
@@ -230,6 +225,20 @@ pub(crate) async fn reconcile_product(
     )
     .await?;
     Ok(state)
+}
+
+/// Whole seconds since the stable bind was routed to the active release; zero
+/// when the record has no cutover time.
+fn seconds_since_cutover(state: &HostReleaseState) -> u64 {
+    state
+        .cutover_at
+        .map(|cutover| {
+            Utc::now()
+                .signed_duration_since(cutover)
+                .num_seconds()
+                .max(0) as u64
+        })
+        .unwrap_or_default()
 }
 
 /// Whether a candidate is owed the stable bind this tick, so the pass that

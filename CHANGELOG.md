@@ -18,6 +18,8 @@ The version-bump commit moves them with `stado product changelog --version V`;
 
 ## Unreleased
 
+- The host release agent no longer sleeps inside a pass. After routing the stable bind to a candidate it records `routed` and returns; a later pass reads the candidate once the drain period (`drain_timeout_seconds`) has passed since cutover and moves to monitoring or rolls back. When the release path lets go of a stable bind, the declared legacy unit is loaded and the next pass reads its answer; a legacy unit that was already loaded and still does not answer is reported as `legacy <product> is loaded but does not answer on <bind>` instead of being polled until a cutoff.
+
 - Credential, scheduling, deployment and release-diagnostic explanations describe their rules without private incident timelines or identifiers. Diagnostic fields, policy decisions and command arguments are unchanged.
 
 - `stado service release` takes `--readiness-url` and `--readiness-timeout-seconds` together (cli.md rule 14). The readiness window was 30 s whenever a URL was named without one; now naming either without the other is refused by the parser with exit 2. Pipeline promotion already reads the window its release policy declares.

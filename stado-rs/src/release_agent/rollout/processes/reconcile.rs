@@ -1,15 +1,13 @@
 //! The stable bind's own repair pass, run before any rollout branch can
 //! return.
 
-use std::time::Duration;
-
 use super::inventory::{listener_pid, release_processes};
 use crate::release_agent::rollout::serving::discover::exact_proxy_pid;
 use crate::release_agent::rollout::serving::legacy::{restore_legacy, stop_legacy};
 use crate::release_agent::rollout::serving::proxy::{proxy_upstream_port, stable_bind_ready};
 use crate::release_agent::state::document::save_state;
 use crate::release_agent::state::records::HostReleaseState;
-use crate::release_control::{ReleaseTargetPolicy, RolloutStrategy};
+use crate::release_control::ReleaseTargetPolicy;
 
 /// Reconcile a listener retained by the host when a finite release command
 /// ended before saving its owner pid in the host state document.
@@ -30,7 +28,6 @@ pub(crate) async fn reconcile_stable_proxy(
     target: &ReleaseTargetPolicy,
     product: &str,
     install_root: &str,
-    strategy: &RolloutStrategy,
     leave_bind_for_candidate: bool,
     state: &mut HostReleaseState,
 ) -> Result<(), String> {
@@ -63,20 +60,19 @@ pub(crate) async fn reconcile_stable_proxy(
                 );
                 return Ok(());
             }
-            restore_legacy(target)?;
-            let deadline = tokio::time::Instant::now()
-                + Duration::from_secs(strategy.readiness_timeout_seconds);
-            while !stable_bind_ready(&serving).await {
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(format!(
-                        "legacy {product} did not reclaim {} after the release path released it",
-                        serving.stable_bind
-                    ));
-                }
-                tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
+            // A unit this pass loads has not had a chance to answer yet; the
+            // next pass reads the bind again. A unit that was already loaded
+            // and still does not answer is broken, and that is said here.
+            if !restore_legacy(target)? {
+                return Err(format!(
+                    "legacy {product} is loaded but does not answer on {}: no release proxy \
+                     and no owned release holds the bind",
+                    serving.stable_bind
+                ));
             }
             eprintln!(
-                "restored legacy {product} on {}: no release proxy and no owned release held the bind",
+                "loaded legacy {product} to reclaim {}: no release proxy and no owned release \
+                 held the bind; the next pass reads its answer",
                 serving.stable_bind
             );
         }
@@ -124,24 +120,13 @@ pub(crate) async fn reconcile_stable_proxy(
     )
     .await?;
     restore_legacy(target)?;
-    if target.legacy_launchd_plist.is_some() {
-        let deadline =
-            tokio::time::Instant::now() + Duration::from_secs(strategy.readiness_timeout_seconds);
-        while !stable_bind_ready(&serving).await {
-            if tokio::time::Instant::now() >= deadline {
-                return Err(format!(
-                    "legacy {product} did not reclaim {} after orphaned proxy retirement",
-                    serving.stable_bind
-                ));
-            }
-            tokio::time::sleep(Duration::from_secs(strategy.readiness_poll_seconds)).await;
-        }
-    }
     state.proxy_pid = None;
     save_state(target, state)?;
     eprintln!(
         "retired orphaned {product} release proxy pid={proxy_pid}; upstream \
-         {upstream:?} had no ready owned release"
+         {upstream:?} had no ready owned release; the next pass reads the legacy \
+         unit's answer on {}",
+        serving.stable_bind
     );
     Ok(())
 }

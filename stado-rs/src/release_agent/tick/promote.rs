@@ -1,14 +1,10 @@
 //! Stage and burn one new candidate: fetch it, verify it, install it, start
-//! it, route the stable bind to it, and watch it drain.
-
-use std::time::Duration;
+//! it and route the stable bind to it. The drain is read by later passes.
 
 use chrono::Utc;
 
 use crate::release_agent::rollout::candidate::fetch::fetch_candidate;
-use crate::release_agent::rollout::candidate::spawn::{
-    await_ready_because, lost_readiness_because, spawn_release,
-};
+use crate::release_agent::rollout::candidate::spawn::{await_ready_because, spawn_release};
 use crate::release_agent::rollout::candidate::stage::{next_port, stage_release};
 use crate::release_agent::rollout::recover::rollback::rollback;
 use crate::release_agent::rollout::serving::answer::ensure_active_proxy;
@@ -176,35 +172,15 @@ pub(crate) async fn promote_candidate(
         return Ok(());
     }
 
+    // The previous release drains while later passes run; the pass that finds
+    // the drain period over reads the candidate's readiness once and either
+    // moves to monitoring or rolls back (`reconcile_product`).
     state.phase = RolloutPhase::Routed;
-    state.detail = format!("stable proxy routed to candidate port {port}");
-    save_state(target, state)?;
-    tokio::time::sleep(Duration::from_secs(policy.strategy.drain_timeout_seconds)).await;
-    let active = state
-        .active
-        .clone()
-        .ok_or_else(|| "routed release lost its active process record".to_string())?;
-    if let Some(why) =
-        lost_readiness_because(&active, &serving.readiness_path, &policy.strategy).await
-    {
-        if policy.strategy.automatic_rollback {
-            rollback(
-                target,
-                state,
-                why.context(|said| format!("candidate failed during drain: {said}")),
-                &policy.strategy,
-            )
-            .await?;
-        } else {
-            state.phase = RolloutPhase::Failed;
-            state.detail =
-                format!("candidate failed during drain: {why}; automatic rollback is disabled");
-            save_state(target, state)?;
-        }
-        return Ok(());
-    }
-    state.phase = RolloutPhase::Monitoring;
-    state.detail = "previous release drained and retained for rollback window".to_string();
+    state.detail = format!(
+        "stable proxy routed to candidate port {port}; the previous release drains for {} s \
+         before a later pass reads the candidate",
+        policy.strategy.drain_timeout_seconds
+    );
     save_state(target, state)?;
     Ok(())
 }
