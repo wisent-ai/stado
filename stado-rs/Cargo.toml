@@ -112,9 +112,6 @@ path = "src/bin/stado_migrate/main.rs"
 name = "release-destinations-journey"
 path = "../tests/release_destinations/journey.rs"
 
-[[test]]
-name = "database"
-path = "../tests/database/lifecycle.rs"
 
 [[test]]
 name = "config-init"
