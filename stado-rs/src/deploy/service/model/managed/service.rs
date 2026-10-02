@@ -152,7 +152,7 @@ impl ManagedService {
     /// the array is operator-facing state in a hand-editable document, and
     /// a half-filled record should degrade to a listed service with blanks
     /// rather than vanish from the managed set.
-    pub(in crate::deploy::service) fn from_record(host: &str, record: &Map<String, Value>) -> Self {
+    pub(crate) fn from_record(host: &str, record: &Map<String, Value>) -> Self {
         let text = |key: &str| {
             record
                 .get(key)
