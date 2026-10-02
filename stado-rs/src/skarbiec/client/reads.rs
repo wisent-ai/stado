@@ -157,10 +157,11 @@ impl Client {
             return Ok(None);
         }
         let body = Self::response_json(response).await?;
-        Ok(body
-            .get("value")
-            .and_then(Value::as_str)
-            .map(str::to_string))
+        super::super::envelope::plain(
+            body.get("value")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        )
     }
 
     /// Resolve one optional string field of the item a boundary declaration
@@ -199,10 +200,12 @@ impl Client {
         let body = Self::response_json(response)
             .await
             .map_err(|error| error.naming(&self.consumer, item, field))?;
-        Ok(body
-            .get("value")
-            .and_then(Value::as_str)
-            .map(str::to_string))
+        super::super::envelope::plain(
+            body.get("value")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        )
+        .map_err(|error| error.naming(&self.consumer, item, field))
     }
 
     /// Read one item with the configured Stado consumer grant. Flows through

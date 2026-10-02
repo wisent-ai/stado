@@ -22,9 +22,12 @@ pub enum SecretsCommands {
     },
     /// Print one credential item value or one exact string field to stdout.
     Get {
-        /// Credential item id.
+        /// Credential item id. A value whose stored text is an encrypted
+        /// `{"v":…,"c":…}` envelope is refused with the item, the field and
+        /// the envelope version, and nothing is printed.
         name: String,
         /// Print only this string field. The item id and field remain separate.
+        /// A field that is absent or empty is refused.
         #[arg(long)]
         field: Option<String>,
     },

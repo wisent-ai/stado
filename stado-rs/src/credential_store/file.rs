@@ -109,11 +109,19 @@ pub(super) fn file_read_string(
     id: &str,
     field: &str,
 ) -> Result<Option<String>, SkarbiecError> {
-    Ok(read_store_file(path)?
-        .get(id)
-        .and_then(|item| item.get(field))
-        .and_then(Value::as_str)
-        .map(str::to_string))
+    crate::skarbiec::envelope::plain(
+        read_store_file(path)?
+            .get(id)
+            .and_then(|item| item.get(field))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    )
+    .map_err(|error| {
+        SkarbiecError::Deployment(format!(
+            "credential store file {}: item {id:?} field {field:?}: {error}",
+            path.display()
+        ))
+    })
 }
 pub(super) fn file_load(path: &Path) -> Result<Value, SkarbiecError> {
     match std::fs::symlink_metadata(path) {

@@ -111,6 +111,9 @@ pub(crate) async fn get(store: &Store, name: &str, field: Option<&str>) -> Resul
             object.get("value").and_then(Value::as_str),
             object.keys().collect::<Vec<_>>().as_slice(),
         ) {
+            crate::skarbiec::envelope::plain(Some(raw.to_string())).map_err(|error| {
+                CmdError::click(format!("credential item {name:?} field \"value\": {error}"))
+            })?;
             println!("{raw}");
             return Ok(());
         }

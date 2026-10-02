@@ -20,6 +20,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 mod client;
+pub(crate) mod envelope;
 mod gcp;
 pub mod roles;
 mod tokens;
@@ -58,6 +59,10 @@ pub enum SkarbiecError {
     Deployment(String),
     #[error("cannot acquire GCP workload or Skarbiec identity: {0}")]
     GcpAuth(String),
+    /// What is stored is an encrypted `{"v":…,"c":…}` envelope, not the
+    /// value: handed on, it fails later in the consumer as something else.
+    #[error("the stored text is a {version} ciphertext envelope, not the value; store the plain value again with `stado credentials put`")]
+    StoredEnvelope { version: String },
     /// A read that failed, carrying the coordinates of the read and the
     /// failure underneath it unchanged.
     ///
