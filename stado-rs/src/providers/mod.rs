@@ -49,6 +49,12 @@ pub enum ProviderError {
     /// Python `ValueError` (unknown provider, shape rejection).
     #[error("{0}")]
     Value(String),
+    /// The profile explicitly fences this provider.
+    #[error("PROVIDER_DISABLED: provider {0} is fenced by providers_disabled (WC_DISABLED_PROVIDERS)")]
+    Disabled(String),
+    /// A caller selected a provider outside the profile's enabled set.
+    #[error("PROVIDER_NOT_ENABLED: provider {0} is absent from providers (WC_PROVIDERS)")]
+    NotEnabled(String),
     /// Explicit phase-3 stub for provider surface not ported yet.
     #[error("{0}")]
     NotImplemented(String),
@@ -163,16 +169,32 @@ pub trait Provider: Send + Sync {
     }
 }
 
-/// Python `get_provider(name)`. All cloud arms are lazy: credentials and
-/// clients resolve on the first API call, so the factory itself stays
-/// cheap and infallible (see the gcp/aws/azure module docs).
+/// Reject a canonical compute provider before resolving its credentials or client.
+pub(crate) fn require_enabled(name: &str) -> Result<(), ProviderError> {
+    if crate::config::wc_disabled_providers()
+        .iter()
+        .any(|provider| provider == name)
+    {
+        return Err(ProviderError::Disabled(name.to_string()));
+    }
+    if !crate::config::wc_providers()
+        .iter()
+        .any(|provider| provider == name)
+    {
+        return Err(ProviderError::NotEnabled(name.to_string()));
+    }
+    Ok(())
+}
+
+/// Construct only a provider admitted by the selected profile. Cloud credentials
+/// and clients remain lazy; a selector never overrides the profile's fence.
 pub fn get_provider(name: &str) -> Result<Arc<dyn Provider>, ProviderError> {
     let variant = crate::capabilities::constructible_variant(RuntimeFacet::Compute, name)
         .ok_or_else(|| ProviderError::Value(format!("Unknown provider: {name}")))?;
+    require_enabled(variant.id)?;
     match variant.adapter {
         RuntimeAdapter::Compute(ComputeAdapter::Box) => Ok(Arc::new(BoxProvider::from_env()?)),
-        // Lazy: credentials + storage resolve on the first API call, so the
-        // factory itself stays cheap and infallible (see gcp module docs).
+        // Credentials and storage resolve on the first API call.
         RuntimeAdapter::Compute(ComputeAdapter::Gcp) => Ok(Arc::new(gcp::GcpProvider::from_env())),
         RuntimeAdapter::Compute(ComputeAdapter::Aws) => Ok(Arc::new(aws::AwsProvider::from_env())),
         RuntimeAdapter::Compute(ComputeAdapter::Azure) => {

@@ -66,8 +66,17 @@ impl MachineFacade {
                 .map_err(|exc| MachineError::retryable("CANCEL_FAILED", exc.to_string()))?
             {
                 if !instance.local {
-                    let provider = crate::providers::get_provider(&instance.provider)
-                        .map_err(|exc| MachineError::retryable("CANCEL_FAILED", exc.to_string()))?;
+                    let provider = crate::providers::get_provider(&instance.provider).map_err(
+                        |error| match error {
+                            error @ crate::providers::ProviderError::Disabled(_) => {
+                                MachineError::new("PROVIDER_DISABLED", error.to_string())
+                            }
+                            error @ crate::providers::ProviderError::NotEnabled(_) => {
+                                MachineError::new("PROVIDER_NOT_ENABLED", error.to_string())
+                            }
+                            error => MachineError::retryable("CANCEL_FAILED", error.to_string()),
+                        },
+                    )?;
                     provider
                         .delete_instance(&instance.instance_ref)
                         .await

@@ -126,8 +126,7 @@ async fn terminate_instance(store: &JobStorage, job_id: &str) -> Result<Terminat
             instance_ref: instance.instance_ref,
         });
     }
-    let provider = crate::providers::get_provider(&instance.provider)
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let provider = crate::providers::get_provider(&instance.provider)?;
     provider
         .delete_instance(&instance.instance_ref)
         .await

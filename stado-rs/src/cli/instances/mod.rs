@@ -89,6 +89,9 @@ fn fleet_providers(selected: Option<&str>) -> Result<Vec<String>, CmdError> {
                 .map(|provider| provider.as_str().to_string())
         })
         .collect::<Vec<_>>();
+    for provider in &fleet {
+        crate::providers::require_enabled(provider)?;
+    }
     if fleet.is_empty() {
         let choices = enumerable
             .into_iter()

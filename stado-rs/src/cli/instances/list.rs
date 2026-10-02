@@ -12,7 +12,8 @@ use super::output::{echo_json, enumeration_result, format_age, print_errors, yes
 use super::{fleet_providers, InstancesListArgs};
 
 pub(super) async fn list(args: &InstancesListArgs) -> Result<(), CmdError> {
-    let providers = fleet_providers(args.provider.as_deref())?;
+    let providers = fleet_providers(args.provider.as_deref())
+        .map_err(|error| error.machine_readable(args.json))?;
     let store = JobStorage::new().await?;
     let fleet = inventory(&store, &providers).await?;
 

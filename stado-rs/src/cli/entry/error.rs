@@ -213,6 +213,10 @@ impl From<reqwest::Error> for CmdError {
 
 impl From<crate::providers::ProviderError> for CmdError {
     fn from(exc: crate::providers::ProviderError) -> Self {
-        Self::click(exc.to_string())
+        match exc {
+            error @ (crate::providers::ProviderError::Disabled(_)
+            | crate::providers::ProviderError::NotEnabled(_)) => Self::refused(error.to_string()),
+            error => Self::click(error.to_string()),
+        }
     }
 }
