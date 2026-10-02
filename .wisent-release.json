@@ -100,7 +100,7 @@
   },
   "deliveries": [
     {
-      "name": "fleet-macbook",
+      "name": "fleet-darwin",
       "platform": "darwin-arm64",
       "argv": [
         "stado",
@@ -111,21 +111,7 @@
       ],
       "required": true,
       "secret_env": {},
-      "target": "lukasz-macbook"
-    },
-    {
-      "name": "fleet-mini",
-      "platform": "darwin-arm64",
-      "argv": [
-        "stado",
-        "release",
-        "install-local",
-        "--member",
-        "stado"
-      ],
-      "required": true,
-      "secret_env": {},
-      "target": "charless-mac-mini"
+      "target": { "product": "stado" }
     },
     {
       "name": "fleet-linux",
@@ -139,7 +125,7 @@
       ],
       "required": true,
       "secret_env": {},
-      "target": "ubuntu-server-rtx-pro-6000"
+      "target": { "product": "stado" }
     }
   ]
 }
