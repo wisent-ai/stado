@@ -15,7 +15,7 @@ pub const RUNNER_PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-amd64"];
 
 pub use contract::catalog::{CatalogSourceIdentity, ReleaseCatalogEntry};
 pub use contract::manifest::{
-    NonReleaseManifest, ProductManifest, ReleasePipelineManifest, VersionSource,
+    NonReleaseManifest, ProductManifest, ReleasePipelineManifest, VersionSource, WorkerManifest,
 };
 pub use contract::recipe::{
     BuildCommand, Delivery, DeliveryTarget, PipelineChannel, PlatformRecipe, PromotionPolicy,
@@ -29,7 +29,8 @@ pub use records::run::{
 pub use records::scratch::{tree_bytes, ScratchReceipt, SCRATCH_LEAF};
 pub use records::worker::{WorkerInput, WorkerRequest};
 pub use validate::manifest::{
-    parse_product_manifest, validate_product_manifest, validate_release_manifest,
+    parse_product_manifest, parse_worker_manifest, validate_product_manifest,
+    validate_release_manifest,
 };
 pub use validate::predicates::safe_relative;
 pub use validate::roles::{platform_runtime_role, runtime_role, RuntimeRole};

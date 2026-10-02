@@ -19,7 +19,7 @@ use crate::cli::release_submit::ReleaseWorkerArgs;
 use crate::cli::CmdError;
 use crate::release_control;
 use crate::release_pipeline::{
-    self, ArtifactReceipt, ProductManifest, ReceiptInput, StepReceipt, StepStatus, WorkerRequest,
+    self, ArtifactReceipt, ReceiptInput, StepReceipt, StepStatus, WorkerRequest,
 };
 
 pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
@@ -41,12 +41,13 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     {
         return Err(CmdError::click("worker manifest identity mismatch"));
     }
-    let ProductManifest::Release(manifest) =
-        release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)?
-    else {
-        return Err(CmdError::refused("worker manifest declares releases:false"));
-    };
-    if manifest.product != request.product || !manifest.platforms.contains_key(&request.platform) {
+    // The worker reads the product and its platform's recipe, nothing
+    // else: it runs the Stado its host already has, and a delivery or
+    // promotion section that changed shape in this commit is the control
+    // host's to read.
+    let manifest = release_pipeline::parse_worker_manifest(&manifest_bytes, &request.platform)
+        .map_err(CmdError::click)?;
+    if manifest.product != request.product {
         return Err(CmdError::click("worker request disagrees with manifest"));
     }
     let source_bytes = read_named(&request.source_archive, "the source archive")?;

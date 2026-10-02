@@ -44,6 +44,22 @@ pub struct ReleasePipelineManifest {
     pub deliveries: Vec<Delivery>,
 }
 
+/// What a build worker reads of a release manifest: the product and the
+/// platform recipes. A builder runs the Stado its host already has, so the
+/// sections it does not act on — deliveries, promotion, inputs, runtime — are
+/// kept as values rather than parsed, and a shape they take on in a newer
+/// Stado cannot stop the build that carries its reader. The control host
+/// reads the whole manifest as [`ReleasePipelineManifest`] when it submits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerManifest {
+    pub schema_version: u32,
+    pub product: String,
+    pub releases: bool,
+    pub platforms: BTreeMap<String, PlatformRecipe>,
+    #[serde(flatten)]
+    pub rest: BTreeMap<String, serde_json::Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum VersionSource {
