@@ -56,3 +56,20 @@ fn a_malformed_present_directory_is_not_reported_as_an_unplaced_database() {
         corrupt
     );
 }
+
+#[test]
+fn a_present_null_database_plane_is_not_reported_as_an_empty_list() {
+    let isolated = Isolated::new("null-database-plane");
+    let mut document: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&isolated.config).expect("read the isolated configuration"),
+    )
+    .expect("parse the isolated configuration");
+    document["database_api"] = serde_json::Value::Null;
+    let corrupt = serde_json::to_vec(&document).expect("encode the malformed database plane");
+    std::fs::write(&isolated.config, &corrupt).expect("damage only the isolated configuration");
+    isolated.refuse(
+        &["database", "list", "--json"],
+        None,
+        "database_api.databases",
+    );
+}

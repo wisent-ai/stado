@@ -225,9 +225,10 @@ static DATABASE_API_DATABASES: LazyLock<
                 )]
             })
             .and_then(|parsed| parse_database_api_databases(Some(&parsed))),
-        None => {
-            parse_database_api_databases(crate::config_file::get("database_api.databases").as_ref())
-        }
+        None => match crate::config_file::get("database_api") {
+            None => Ok(BTreeMap::new()),
+            Some(section) => parse_database_api_databases(section.get("databases")),
+        },
     };
     configured
 });

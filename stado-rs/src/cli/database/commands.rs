@@ -6,6 +6,9 @@ use clap::Subcommand;
 #[derive(Debug, Subcommand)]
 pub(crate) enum DatabaseCommands {
     /// List declared databases and whether each is placed.
+    ///
+    /// A profile with no database declaration returns an empty list.
+    /// A present malformed database section is refused, not reported as empty.
     List {
         /// Emit machine-readable output.
         #[arg(long)]
