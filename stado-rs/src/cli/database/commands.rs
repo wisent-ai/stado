@@ -59,10 +59,14 @@ pub(crate) enum DatabaseCommands {
     /// project in the organization and region of `--anchor`'s project, or,
     /// without it, the one organization and region every project the token
     /// sees shares, and refuses unless `--accept-monthly-usd` covers what one
-    /// more project adds to the compute bill. Either way the credential item
-    /// `<name>-database` is written into the owner vault and the database is
-    /// declared for its consumers; an existing database of that name is
-    /// reused, never duplicated.
+    /// more project adds to the compute bill. `external` brings a Postgres
+    /// the user already runs anywhere (RDS, Cloud SQL, Neon, Azure, their own
+    /// server): the connection URL is read from standard input and
+    /// `--ca-certificate` names the server's certificate authority. Every way,
+    /// the credential item `<name>-database` is written into the owner vault
+    /// and the database is declared for its consumers. A fleet or supabase
+    /// database of that name is reused, never duplicated; an external one is
+    /// re-pointed at the URL given.
     Create {
         /// Logical database name (lowercase letters, digits, dashes).
         name: String,
@@ -72,9 +76,12 @@ pub(crate) enum DatabaseCommands {
         /// Engine the database speaks: postgres or sqlite.
         #[arg(long, default_value = "postgres")]
         engine: String,
-        /// Who runs it: fleet (Stado, on a fleet host) or supabase.
+        /// Who runs it: fleet (Stado, on a fleet host), supabase, or external (an existing postgres; URL on stdin).
         #[arg(long, default_value = "fleet")]
         provider: String,
+        /// Certificate authority bundle (PEM) of an external server (external).
+        #[arg(long)]
+        ca_certificate: Option<std::path::PathBuf>,
         /// Fleet host the database is placed on (fleet; default: the vault owner).
         #[arg(long)]
         host: Option<String>,

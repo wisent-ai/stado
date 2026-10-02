@@ -16,6 +16,7 @@ use super::resolver::read_local_snapshot;
 use super::CmdError;
 
 mod commands;
+mod external;
 mod fleet;
 mod reads;
 mod supabase;
@@ -51,12 +52,29 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
             consumers,
             engine,
             provider,
+            ca_certificate,
             host,
             port,
             anchor,
             accept_monthly_usd,
             json,
         } => match provider.as_str() {
+            _ if provider != "external" && ca_certificate.is_some() => Err(CmdError::usage(
+                "--ca-certificate names an external server's authority; fleet and supabase databases carry their own",
+            )),
+            "external" => {
+                if host.is_some() || port.is_some() || anchor.is_some() || accept_monthly_usd.is_some() {
+                    return Err(CmdError::usage(
+                        "--provider external takes only --ca-certificate and the connection URL on standard input; the server is already placed",
+                    ));
+                }
+                let Some(ca_certificate) = ca_certificate else {
+                    return Err(CmdError::usage(
+                        "--provider external needs --ca-certificate: consumers verify the server against it",
+                    ));
+                };
+                external::create(&name, &engine, &ca_certificate, &consumers, json).await
+            }
             "fleet" => {
                 if anchor.is_some() || accept_monthly_usd.is_some() {
                     return Err(CmdError::usage(
@@ -86,7 +104,7 @@ pub(crate) async fn dispatch(command: DatabaseCommands) -> Result<(), CmdError> 
                 .await
             }
             other => Err(CmdError::usage(format!(
-                "--provider must be fleet or supabase, got {other:?}"
+                "--provider must be fleet, supabase or external, got {other:?}"
             ))),
         },
         DatabaseCommands::Place {
