@@ -144,10 +144,19 @@ async fn record_terminal_outcome_inner(
         }
         if let Some(existing) = entry.get("outcome") {
             let existing_prefix = existing.get("prefix").and_then(Value::as_str);
-            let existing_job = existing.get("job");
-            if existing_prefix == Some(prefix)
-                && existing_job == Some(&serde_json::to_value(job).expect("Job serialization"))
-            {
+            // The recorded job is compared as this build's model reads it, not
+            // byte for byte: an outcome written by an older build lacks the
+            // fields added since, and that is the same job, not a changed one.
+            let existing_job: Option<crate::models::Job> = existing
+                .get("job")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()?;
+            let same_job = existing_job
+                .map(|recorded| serde_json::to_value(&recorded))
+                .transpose()?
+                == Some(serde_json::to_value(job)?);
+            if existing_prefix == Some(prefix) && same_job {
                 return Ok(());
             }
             return Err(StorageError::Other(format!(
