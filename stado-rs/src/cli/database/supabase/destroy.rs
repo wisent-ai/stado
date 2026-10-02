@@ -8,7 +8,9 @@ use crate::cli::CmdError;
 /// Delete the project `item` names. A project the API no longer knows is
 /// reported as already absent, so a destroy that stopped after this step can
 /// be run again.
-pub(in crate::cli::database) async fn delete_project(item: &str) -> Result<(String, &'static str), CmdError> {
+pub(in crate::cli::database) async fn delete_project(
+    item: &str,
+) -> Result<(String, &'static str), CmdError> {
     let reference = super::field(item, "project_ref").await?;
     let token = super::token().await?;
     let path = format!("/projects/{reference}");

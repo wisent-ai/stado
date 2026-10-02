@@ -56,7 +56,13 @@ pub(in crate::cli::database) async fn destroy(
         }
         let (reference, status) = crate::cli::database::supabase::destroy::delete_project(&item)
             .await
-            .map_err(|error| partial(name, &steps, format!("the Supabase project was not deleted: {error}")))?;
+            .map_err(|error| {
+                partial(
+                    name,
+                    &steps,
+                    format!("the Supabase project was not deleted: {error}"),
+                )
+            })?;
         steps.push(json!({"step": "project", "project_ref": reference, "status": status}));
     }
 
@@ -142,8 +148,14 @@ pub(in crate::cli::database) async fn destroy(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&outcome)?);
     } else {
-        let parts: Vec<&str> = steps.iter().filter_map(|step| step["step"].as_str()).collect();
-        println!("destroyed {name} ({provider}): {} removed; its data is {data}", parts.join(", "));
+        let parts: Vec<&str> = steps
+            .iter()
+            .filter_map(|step| step["step"].as_str())
+            .collect();
+        println!(
+            "destroyed {name} ({provider}): {} removed; its data is {data}",
+            parts.join(", ")
+        );
     }
     Ok(())
 }
