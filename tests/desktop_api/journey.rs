@@ -1,5 +1,6 @@
 //! Real API and CLI reads of one isolated declaration, with persisted state
 //! checks. This does not qualify database provisioning or graphical surfaces.
+mod configuration;
 mod fixture;
 
 use fixture::Service;

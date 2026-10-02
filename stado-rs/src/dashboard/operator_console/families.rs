@@ -187,7 +187,14 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             )
             | (
                 "host",
-                "health" | "inventory" | "uptime" | "ping" | "vaults" | "gates" | "link"
+                "health"
+                    | "inventory"
+                    | "uptime"
+                    | "ping"
+                    | "vaults"
+                    | "gates"
+                    | "link"
+                    | "config-show"
             )
             | ("identity", "list" | "verify")
             | (

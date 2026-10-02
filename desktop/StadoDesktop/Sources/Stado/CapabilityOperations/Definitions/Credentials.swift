@@ -73,5 +73,18 @@ enum NativeCredentialOperations {
         .init(id: "seed-freshness", title: "Inspect authenticator seed freshness", path: ["credentials", "seed-freshness"], fields: [
             .init(id: "item", label: "Login item (optional)", option: "--login-item"),
         ], mutates: false),
+        .init(id: "host-config-show", title: "Read host configuration", path: ["host", "config-show"],
+            hostPlacement: .positional, mutates: false),
+        .init(id: "host-config-set", title: "Set host configuration value", path: ["host", "config-set"],
+            hostPlacement: .positional, fields: [
+                .init(id: "key", label: "Dotted configuration key", required: true),
+                .init(id: "value", label: "JSON value or plain string", required: true),
+                .init(id: "service", label: "Managed service to reconcile (optional)", option: "--reload-service"),
+            ], jsonOutput: false),
+        .init(id: "host-config-unset", title: "Remove host configuration value", path: ["host", "config-unset"],
+            hostPlacement: .positional, fields: [
+                .init(id: "key", label: "Dotted configuration key", required: true),
+                .init(id: "service", label: "Managed service to reconcile (optional)", option: "--reload-service"),
+            ], jsonOutput: false),
     ]
 }

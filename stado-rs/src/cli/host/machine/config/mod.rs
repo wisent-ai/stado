@@ -3,8 +3,6 @@
 pub(in crate::cli::host) mod guards;
 pub(in crate::cli::host) mod remote;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-
 use crate::cli::CmdError;
 
 use crate::cli::host::machine::config::guards::{
@@ -93,33 +91,13 @@ pub async fn config_unset(
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let script = format!(
-        "{}\
-         key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
-         \"$binary\" config unset \"$key\"\n\
-         \"$binary\" config show --json\n",
-        remote::CONFIG_SCRIPT_PREFIX,
-        STANDARD.encode(key.as_bytes())
-    );
-    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "cannot unset configuration and read it back on {} through its host channel: {error}",
-                resolved.name
-            ))
-        })?;
-    if !output.ok() {
-        let detail = output.detail();
-        return Err(CmdError::click(format!(
-            "cannot unset configuration and read it back on {} using ~/.stado/bin/stado (exit {}): {}",
-            resolved.name,
-            output.code,
-            if detail.trim().is_empty() { "no output" } else { detail.trim() }
-        )));
-    }
-    print!("{}", output.stdout);
+    let stdout = remote_config_output(
+        &resolved,
+        RemoteConfigAction::Unset { key },
+        &crate::deploy::production_runner(),
+    )
+    .await?;
+    print!("{stdout}");
     if let Some(service) = reload_service {
         crate::cli::service::reconcile_after_config_change(service, &resolved.name).await?;
     }

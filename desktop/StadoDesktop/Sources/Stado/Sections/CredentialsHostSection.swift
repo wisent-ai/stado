@@ -12,7 +12,7 @@ struct CredentialsHostSection: View {
     var body: some View {
         WisentSectionBox(
             title: "Credentials",
-            detail: "The selected host's declared vault, credential operations and complete native API receipts."
+            detail: "The selected host's configuration, declared vault, credential operations and complete native API receipts."
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 if store.host != host || store.isLoading {

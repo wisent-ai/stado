@@ -1,9 +1,10 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::cli::CmdError;
+use crate::deploy::{CommandOutput, Runner};
 use crate::targets::ComputeTarget;
 
-pub(super) const CONFIG_SCRIPT_PREFIX: &str = "\
+const CONFIG_SCRIPT_PREFIX: &str = "\
 set -euo pipefail\n\
 case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
 export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
@@ -16,6 +17,7 @@ fi\n";
 pub(crate) enum RemoteConfigAction<'a> {
     Show,
     Set { key: &'a str, value: &'a str },
+    Unset { key: &'a str },
 }
 
 pub(super) async fn remote_config(
@@ -31,11 +33,10 @@ pub(super) async fn remote_config(
         print!("{stdout}");
         return Ok(());
     }
-    // The host's own `config show --json` document, as the same
-    // `key: value` lines a local `config show` prints.
+    // The host's native JSON document, rendered as local `config show` text.
     let document: serde_json::Value = serde_json::from_str(&stdout).map_err(|error| {
         CmdError::click(format!(
-            "{} answered `config show --json` with something that is not JSON ({error}): {}",
+            "{} answered the configuration read with something that is not JSON ({error}): {}",
             target.name,
             stdout.trim()
         ))
@@ -68,46 +69,121 @@ pub(crate) async fn remote_config_output(
     action: RemoteConfigAction<'_>,
     runner: &crate::deploy::Runner,
 ) -> Result<String, CmdError> {
-    let operation = match &action {
-        RemoteConfigAction::Show => "read configuration (`config show --json`)",
-        RemoteConfigAction::Set { .. } => {
-            "set configuration and read it back (`config set`, then `config show --json`)"
-        }
-    };
-    let action = match action {
-        RemoteConfigAction::Show => "\"$binary\" config show --json".to_string(),
-        RemoteConfigAction::Set { key, value } => format!(
-            "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
-             value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
-             \"$binary\" config set \"$key\" \"$value\"\n\
-             \"$binary\" config show --json",
-            STANDARD.encode(key.as_bytes()),
-            STANDARD.encode(value.as_bytes())
+    let (operation, command) = match action {
+        RemoteConfigAction::Show => return read_configuration(target, runner).await,
+        RemoteConfigAction::Set { key, value } => (
+            format!("config set {key}"),
+            format!(
+                "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+                 value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+                 \"$binary\" config set \"$key\" \"$value\"",
+                STANDARD.encode(key.as_bytes()),
+                STANDARD.encode(value.as_bytes())
+            ),
+        ),
+        RemoteConfigAction::Unset { key } => (
+            format!("config unset {key}"),
+            format!(
+                "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+                 \"$binary\" config unset \"$key\"",
+                STANDARD.encode(key.as_bytes())
+            ),
         ),
     };
-    let script = format!("{CONFIG_SCRIPT_PREFIX}{action}\n");
-    let output = crate::deploy::host_channel::run_script(target, &script, runner)
+    let output = configuration_command(target, &command, &operation, runner).await?;
+    if !output.ok() {
+        return Err(command_refusal(target, &operation, &output));
+    }
+    // Mutations run once. Their acknowledgement is not part of the JSON document.
+    read_configuration(target, runner).await.map_err(|error| {
+        CmdError::click(format!(
+            "{operation} completed on {} (exit 0), but configuration readback failed: \
+             {error}; mutation output: {}",
+            target.name,
+            output.detail().trim()
+        ))
+    })
+}
+
+async fn configuration_command(
+    target: &ComputeTarget,
+    command: &str,
+    operation: &str,
+    runner: &Runner,
+) -> Result<CommandOutput, CmdError> {
+    let script = format!("{CONFIG_SCRIPT_PREFIX}{command}\n");
+    crate::deploy::host_channel::run_script(target, &script, runner)
         .await
         .map_err(|error| {
             CmdError::click(format!(
-                "cannot {operation} on {} through its host channel: {error}",
+                "cannot run {operation} on {} through its host channel: {error}",
                 target.name
             ))
-        })?;
-    if !output.ok() {
-        let detail = output.detail();
+        })
+}
+
+fn command_refusal(target: &ComputeTarget, operation: &str, output: &CommandOutput) -> CmdError {
+    let detail = output.detail();
+    CmdError::click(format!(
+        "cannot run {operation} on {} using ~/.stado/bin/stado (exit {}): {}",
+        target.name,
+        output.code,
+        if detail.trim().is_empty() {
+            "no output"
+        } else {
+            detail.trim()
+        }
+    ))
+}
+
+async fn read_configuration(target: &ComputeTarget, runner: &Runner) -> Result<String, CmdError> {
+    let explicit = configuration_command(
+        target,
+        "\"$binary\" config show --json",
+        "config show --json",
+        runner,
+    )
+    .await?;
+    if explicit.ok() {
+        return Ok(explicit.stdout);
+    }
+    let explicit_error = command_refusal(target, "config show --json", &explicit);
+    if explicit.code != 2 {
+        return Err(explicit_error);
+    }
+    // Earlier installed CLIs emit the same machine document without the flag.
+    // Only a usage refusal negotiates that form; transport and execution failures do not.
+    let implicit = configuration_command(target, "\"$binary\" config show", "config show", runner)
+        .await
+        .map_err(|error| CmdError::click(format!("{explicit_error}; {error}")))?;
+    if !implicit.ok() {
         return Err(CmdError::click(format!(
-            "cannot {operation} on {} using ~/.stado/bin/stado (exit {}): {}",
-            target.name,
-            output.code,
-            if detail.trim().is_empty() {
-                "no output"
-            } else {
-                detail.trim()
-            }
+            "{explicit_error}; {}",
+            command_refusal(target, "config show", &implicit)
         )));
     }
-    Ok(output.stdout)
+    let document: serde_json::Value = serde_json::from_str(&implicit.stdout).map_err(|error| {
+        CmdError::click(format!(
+            "{explicit_error}; {} config show exited 0 but did not return JSON: {error}; output: {}",
+            target.name, implicit.stdout.trim()
+        ))
+    })?;
+    if document
+        .get("file")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty)
+        || !document
+            .get("resolved")
+            .is_some_and(serde_json::Value::is_object)
+    {
+        return Err(CmdError::click(format!(
+            "{explicit_error}; {} config show exited 0 but returned an invalid configuration \
+             document: expected a nonempty file string and resolved object; output: {}",
+            target.name,
+            implicit.stdout.trim()
+        )));
+    }
+    Ok(implicit.stdout)
 }
 
 /// Run the host's own installed Stado with `arguments`, each carried base64
