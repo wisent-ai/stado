@@ -49,6 +49,11 @@ pub fn commit(
     plan: Prepared,
 ) -> Result<ProductState> {
     let _ownership = ownership::writer(runtime)?;
+    // From here files are replaced: a newer installation of this surface
+    // waits for this one instead of stopping it.
+    crate::common::mark_placing(
+        &crate::state::path(runtime, product, surface)?.with_extension("lock"),
+    )?;
     let existing = ProductState::load(runtime, product, surface)?;
     if existing
         .as_ref()

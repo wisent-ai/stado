@@ -68,14 +68,28 @@ pub fn build() -> stado_product::Build {
     }
 }
 
+/// The stack a product operation runs on. An installation walks the
+/// product's dependency graph by recursion, one `perform` frame per
+/// product, and those frames carry the whole plan; on the 2 MiB a tokio
+/// blocking thread offers, a debug build overflowed on the second level.
+const PRODUCT_OPERATION_STACK: usize = 256 << 20;
+
 pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     // Product operations run compilers, codesign and `stado` subcommands and
-    // wait for them; they are blocking work, kept off the async workers.
-    let status =
-        tokio::task::spawn_blocking(move || stado_product::cli::run(command.matches, build()))
-            .await
-            .map_err(|error| CmdError::click(format!("product operation stopped: {error}")))?
-            .map_err(|error| CmdError::click(format!("{error:#}")))?;
+    // wait for them; they are blocking work, kept off the async workers, on a
+    // thread of their own with the stack the dependency walk needs.
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("product-operation".into())
+        .stack_size(PRODUCT_OPERATION_STACK)
+        .spawn(move || {
+            let _ = sender.send(stado_product::cli::run(command.matches, build()));
+        })
+        .map_err(|error| CmdError::click(format!("product operation could not start: {error}")))?;
+    let status = receiver
+        .await
+        .map_err(|_| CmdError::click("product operation stopped without an answer"))?
+        .map_err(|error| CmdError::click(format!("{error:#}")))?;
     if status == 0 {
         Ok(())
     } else {

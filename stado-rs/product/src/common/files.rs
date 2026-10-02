@@ -68,23 +68,51 @@ pub fn sha256(path: &Path) -> Result<String> {
     Ok(hex::encode(hash.finalize()))
 }
 
+/// How a lock is taken when another process holds it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Take {
+    /// Refuse, naming the holder: what a reconciliation sweep does, because a
+    /// busy surface is not its problem.
+    Refuse,
+    /// Block until the holder releases it, whatever it is doing.
+    Wait,
+    /// A newer installation of the same surface replaces an older one that
+    /// has not started placing files: the holder is told to stop (SIGTERM)
+    /// and the lock is taken once it has gone. A holder already placing is
+    /// waited for, because placement is short and a half-placed surface is
+    /// worse than a late one. This is what `install` and `update` do, as a
+    /// newer fleet build cancels the older builds it supersedes.
+    Supersede,
+}
+
+/// The phase a lock holder records: `preparing` (building, nothing placed)
+/// or `placing` (files being replaced).
+pub const PHASE_PREPARING: &str = "preparing";
+pub const PHASE_PLACING: &str = "placing";
+
 /// Take the exclusive lock at `path` and write who holds it into the file.
 ///
 /// A refusal names that holder — its pid, whether the pid is still alive, its
 /// command line and since when — because "another writer owns" alone left two
 /// sessions installing Stado unable to tell a running install from a stuck one.
 pub fn lock(path: &Path) -> Result<File> {
-    take(path, false)
+    take(path, Take::Refuse)
 }
 
 /// Take the exclusive lock at `path`, blocking until the current holder
 /// releases it. For an operator who asked (`--wait`) to run after a
-/// concurrent install of the same surface rather than be refused by it.
+/// concurrent install of the same surface rather than replace it.
 pub fn lock_waiting(path: &Path) -> Result<File> {
-    take(path, true)
+    take(path, Take::Wait)
 }
 
-fn take(path: &Path, wait: bool) -> Result<File> {
+/// Take the exclusive lock at `path`, replacing a holder still preparing
+/// ([`Take::Supersede`]).
+pub fn lock_superseding(path: &Path) -> Result<File> {
+    take(path, Take::Supersede)
+}
+
+fn take(path: &Path, mode: Take) -> Result<File> {
     fs::create_dir_all(path.parent().context("lock has no parent")?)?;
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -96,25 +124,71 @@ fn take(path: &Path, wait: bool) -> Result<File> {
     let mut file = options.open(path)?;
     if let Err(error) = file.try_lock_exclusive() {
         let holder = holder(path);
-        if !wait {
-            // The io::Error stays the source, so a caller that treats
-            // WouldBlock as "busy" (the reconciliation sweep) still recognizes it.
-            return Err(anyhow::Error::new(error)
-                .context(format!("another writer owns {}; {holder}", path.display())));
+        match mode {
+            Take::Refuse => {
+                // The io::Error stays the source, so a caller that treats
+                // WouldBlock as "busy" (the reconciliation sweep) still recognizes it.
+                return Err(anyhow::Error::new(error)
+                    .context(format!("another writer owns {}; {holder}", path.display())));
+            }
+            Take::Wait => eprintln!("waiting for {}: {holder}", path.display()),
+            Take::Supersede => match record(path) {
+                Some((pid, phase)) if phase == PHASE_PREPARING && alive(pid) => {
+                    eprintln!("superseding the installation {holder}: it has placed nothing yet");
+                    // SAFETY: a signal to a pid read from the lock record this
+                    // process could not take; a pid that is gone answers ESRCH.
+                    let stopped = unsafe { libc::kill(pid, libc::SIGTERM) };
+                    if stopped != 0 {
+                        eprintln!("pid {pid} could not be told to stop; waiting for it instead");
+                    }
+                }
+                _ => eprintln!(
+                    "waiting for {}: {holder} (it is placing files)",
+                    path.display()
+                ),
+            },
         }
-        eprintln!("waiting for {}: {holder}", path.display());
         file.lock_exclusive()
             .with_context(|| format!("waiting for {} failed", path.display()))?;
     }
+    write_record(&mut file, PHASE_PREPARING)?;
+    Ok(file)
+}
+
+/// Record that the holder of `path` (this process) has started placing
+/// files, so a newer installation waits for it instead of stopping it.
+pub fn mark_placing(path: &Path) -> Result<()> {
+    let mut file = OpenOptions::new().write(true).open(path)?;
+    write_record(&mut file, PHASE_PLACING)
+}
+
+fn write_record(file: &mut File, phase: &str) -> Result<()> {
     let record = serde_json::json!({
         "pid": std::process::id(),
         "command": std::env::args().collect::<Vec<_>>().join(" "),
         "acquired_at": chrono::Utc::now().to_rfc3339(),
+        "phase": phase,
     });
     file.set_len(0)?;
     file.write_all(format!("{record}\n").as_bytes())?;
     file.flush()?;
-    Ok(file)
+    Ok(())
+}
+
+/// The pid and phase a lock file records; `None` when it records nothing
+/// readable. A record without a phase is from a Stado that recorded none,
+/// and is treated as placing: never stopped, only waited for.
+fn record(path: &Path) -> Option<(i32, String)> {
+    let text = fs::read_to_string(path).ok()?;
+    let record: Value = serde_json::from_str(text.trim()).ok()?;
+    let pid = i32::try_from(record["pid"].as_u64()?).ok()?;
+    let phase = record["phase"].as_str().unwrap_or(PHASE_PLACING).to_owned();
+    Some((pid, phase))
+}
+
+fn alive(pid: i32) -> bool {
+    // Signal 0 delivers nothing and only asks whether the pid exists.
+    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 /// The holder a lock file records, as one clause for a refusal.

@@ -5,7 +5,9 @@ pub mod runs;
 
 use anyhow::{bail, Context, Result};
 pub use archive::{copy_tree, file_members, platform, relative, unpack};
-pub use files::{atomic_json, atomic_write, lock, lock_waiting, sha256};
+pub use files::{
+    atomic_json, atomic_write, lock, lock_superseding, lock_waiting, mark_placing, sha256,
+};
 pub use process::{capture, checked};
 use serde_json::Value;
 use std::{
@@ -54,15 +56,16 @@ impl Runtime {
         })
     }
 
-    /// The exclusive writer lock of one product surface, waited for when the
-    /// operator asked for `--wait`, refused otherwise.
+    /// The exclusive writer lock of one product surface. A holder still
+    /// preparing (building, nothing placed) is superseded by this process, as
+    /// a newer fleet build cancels the builds it supersedes; a holder already
+    /// placing files is waited for. With `--wait` the holder is kept whatever
+    /// it is doing and this process runs after it.
     pub fn surface_lock(&self, path: &std::path::Path) -> Result<std::fs::File> {
         if self.wait_for_writer {
             lock_waiting(path)
         } else {
-            lock(path).context(
-                "another process is changing this product surface; rerun with --wait to run after it",
-            )
+            lock_superseding(path)
         }
     }
 }

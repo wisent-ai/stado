@@ -19,7 +19,9 @@ pub fn installation(action: &'static str, about: &'static str) -> Command {
     } else {
         command.arg(flag(
             "wait",
-            "Wait for another process installing this surface to finish instead of refusing",
+            "Run after another process changing this surface instead of superseding it: \
+             without --wait a holder still preparing is stopped and replaced, a holder \
+             already placing files is waited for",
         ))
     };
     if action == "install" || action == "update" {
