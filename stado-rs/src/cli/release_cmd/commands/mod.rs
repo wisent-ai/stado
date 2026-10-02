@@ -166,11 +166,14 @@ pub struct ReleasePromoteVersionArgs {
 pub struct ReleaseActivateStagedArgs {
     #[arg(long)]
     host: String,
-    #[arg(long, default_value = "weles-worker")]
+    /// Product whose staged release is activated.
+    #[arg(long)]
     product: String,
-    #[arg(long, default_value = "$HOME/.config/weles/worker.env")]
+    /// Deployment env file declaring the staged coordinates.
+    #[arg(long)]
     env_file: String,
-    #[arg(long, default_value_t = 8788)]
+    /// Port the activated release must answer on.
+    #[arg(long)]
     port: u16,
     #[arg(long)]
     json: bool,

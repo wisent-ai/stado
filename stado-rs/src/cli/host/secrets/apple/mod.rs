@@ -25,8 +25,8 @@ pub struct AppleProfileArgs {
     #[arg(long = "profile", required = true, value_parser = profile_pair)]
     profiles: Vec<(String, String)>,
     /// Item holding the team API key (fields key_id, issuer_id,
-    /// private_key_p8_base64).
-    #[arg(long, default_value = "wisent-apple-notary")]
+    /// private_key_p8_base64). No item is built in.
+    #[arg(long)]
     credentials: String,
     /// Profile type; MAC_APP_DIRECT is a Developer ID profile.
     #[arg(long = "type", default_value = "MAC_APP_DIRECT")]

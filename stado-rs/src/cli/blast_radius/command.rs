@@ -18,8 +18,9 @@ use super::{BlastRadiusReport, FailoverPolicy, Summary};
 
 #[derive(Args, Debug)]
 pub struct BlastRadiusArgs {
-    /// Failed dependency to assess: gcp, azure, aws or local.
-    #[arg(long, default_value = "gcp")]
+    /// Failed dependency to assess: gcp, azure, aws or local. No dependency
+    /// is assumed; the one that failed is named.
+    #[arg(long)]
     dependency: String,
     /// Emit the complete machine-readable report.
     #[arg(long)]
