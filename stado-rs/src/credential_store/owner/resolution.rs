@@ -39,12 +39,15 @@ pub const VAULT_CANDIDATE_TAILS: &[&str] = &[
 /// That closes the fleet's release publication boundary for every product
 /// until the declarations are retracted.
 ///
-/// When two candidates carry the SAME owner identity the machine has no
+/// When two candidates carry the SAME owner identity and neither holds all
+/// of the other's items at the same or a later revision, the machine has no
 /// single authoritative vault, and picking either silently is exactly the
 /// failure above. That is refused, naming both paths and their item counts,
 /// because an operator who is told can declare the one they mean and a
-/// program that guesses cannot be corrected. The contents are never merged
-/// here: which items belong where is the operator's decision.
+/// program that guesses cannot be corrected. When exactly one candidate holds
+/// everything the others hold, at the same or a later revision, the others
+/// are stale copies of it and it is used, saying so on stderr. The contents
+/// are never merged here.
 ///
 /// The answer is read from `secrets.skarbiec.vault_file`, so it is one
 /// declaration this and every later command shares —
@@ -76,6 +79,19 @@ pub fn vault() -> Result<PathBuf, SkarbiecError> {
         .collect();
     if let [(_, first_owner, _), _, ..] = present.as_slice() {
         if present.iter().all(|(_, owner, _)| owner == first_owner) {
+            // One file that already holds every item of every other one, each
+            // at the same or a later revision, loses nothing by being chosen:
+            // the others are older copies of it. Only that case is decided
+            // here; any item another file holds newer, or holds alone, still
+            // refuses, because choosing would hide it.
+            if let Some(path) = subsuming_vault(&present) {
+                eprintln!(
+                    "owner vault: {} holds every item of the other vaults of owner {first_owner} \
+                     at the same or a later revision; using it",
+                    path.display()
+                );
+                return Ok(path);
+            }
             let described = present
                 .iter()
                 .map(|(path, _, items)| format!("{} ({items} items)", path.display()))
@@ -153,4 +169,43 @@ fn vault_identity(path: &std::path::Path) -> Option<(String, usize)> {
         .map(serde_json::Map::len)
         .unwrap_or_default();
     Some((owner, items))
+}
+
+/// Every item id of one vault file and its revision, or `None` when the file
+/// cannot be read or an item carries no revision to compare.
+fn item_revisions(path: &std::path::Path) -> Option<std::collections::BTreeMap<String, u64>> {
+    let document: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    document
+        .get("items")?
+        .as_object()?
+        .iter()
+        .map(|(id, entry)| Some((id.clone(), entry.get("revision")?.as_u64()?)))
+        .collect()
+}
+
+/// The one candidate that holds every item of every other candidate at the
+/// same or a later revision, if exactly one does.
+fn subsuming_vault(present: &[(PathBuf, String, usize)]) -> Option<PathBuf> {
+    let revisions: Vec<(PathBuf, std::collections::BTreeMap<String, u64>)> = present
+        .iter()
+        .map(|(path, _, _)| item_revisions(path).map(|items| (path.clone(), items)))
+        .collect::<Option<_>>()?;
+    let subsuming: Vec<&PathBuf> = revisions
+        .iter()
+        .filter(|(path, items)| {
+            revisions
+                .iter()
+                .filter(|(other, _)| other != path)
+                .all(|(_, others)| {
+                    others
+                        .iter()
+                        .all(|(id, revision)| items.get(id).is_some_and(|held| held >= revision))
+                })
+        })
+        .map(|(path, _)| path)
+        .collect();
+    match subsuming.as_slice() {
+        [only] => Some((*only).clone()),
+        _ => None,
+    }
 }
