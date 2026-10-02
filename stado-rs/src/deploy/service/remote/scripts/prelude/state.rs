@@ -158,16 +158,21 @@ pub(crate) const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
       stado_post 'met' \"$domain/$unit is loaded but not running\"
     fi
   else
+    # systemd's own word, not the exit status of `is-active --quiet`: that
+    # status read as active for a unit `systemctl is-active` answered
+    # `inactive` for, so every stop, retire and remove of a stopped unit
+    # failed this check and restored its declaration.
     stopped_attempt=0
-    while [ \"$stopped_attempt\" -lt 30 ]; do
-      if ! stado_systemctl is-active --quiet \"$unit\"; then break; fi
+    answer=$(stado_systemctl is-active \"$unit\" 2>&1)
+    while [ \"$answer\" = active ] && [ \"$stopped_attempt\" -lt 30 ]; do
       stopped_attempt=$((stopped_attempt + 1))
       /bin/sleep 1
+      answer=$(stado_systemctl is-active \"$unit\" 2>&1)
     done
-    if stado_systemctl is-active --quiet \"$unit\"; then
-      stado_post 'unmet' \"$unit is still active\"
+    if [ \"$answer\" = active ]; then
+      stado_post 'unmet' \"$unit is still active ($systemd_detail, $unit_path: systemctl is-active answered $answer)\"
     else
-      stado_post 'met' \"$unit is not active\"
+      stado_post 'met' \"$unit is not active ($systemd_detail: $answer)\"
     fi
   fi
 ";
