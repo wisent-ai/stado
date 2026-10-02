@@ -16,7 +16,11 @@ use crate::providers::local::disk_cleanup::janitor::{
 /// Python `_open_lock`: open `disk-cleanup.lock` with O_RDWR|O_CREAT|
 /// O_NOFOLLOW, verify it is a regular file owned by us, force 0600.
 pub(crate) fn open_lock(state_dir: &Path) -> Result<File, JanitorError> {
-    let path = state_dir.join(LOCK_NAME);
+    open_lock_at(&state_dir.join(LOCK_NAME))
+}
+
+/// The same checks at an exact path: the state file's own lock beside it.
+pub(crate) fn open_lock_at(path: &Path) -> Result<File, JanitorError> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)

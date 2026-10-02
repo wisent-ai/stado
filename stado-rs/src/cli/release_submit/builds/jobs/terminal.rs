@@ -32,7 +32,7 @@ pub(crate) async fn read_terminal_job(
 /// reached a terminal state.
 pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
     match ended(store, id).await? {
-        Ended::Job(job) => Ok(job),
+        Ended::Job(job) => Ok(*job),
         Ended::Queued { state, host } => Err(CmdError::click(format!(
             "release job {id} is still queued ({state}) on {host}; no host has claimed it. The \
              host's own decline is in its agent log: read it with `stado service logs <unit> \
@@ -47,7 +47,7 @@ pub(crate) async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdErr
 /// Where one release job stands: ended, or not yet.
 pub(crate) enum Ended {
     /// The job's terminal record, or the job its receipt describes.
-    Job(Job),
+    Job(Box<Job>),
     /// Queued and unclaimed, on the host it is pinned to.
     Queued {
         state: String,
@@ -61,7 +61,7 @@ pub(crate) enum Ended {
 /// delivering and reads it again on a later pass; nothing here waits.
 pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdError> {
     if let Some(job) = read_terminal_job(store, id).await? {
-        return Ok(Ended::Job(job));
+        return Ok(Ended::Job(Box::new(job)));
     }
     if let Some(queued) = store.read_job("queue", id).await? {
         let host = if queued.pinned_host.is_empty() {
@@ -87,12 +87,12 @@ pub(crate) async fn ended(store: &JobStorage, id: &str) -> Result<Ended, CmdErro
         } else {
             job_state::FAILED
         };
-        return Ok(Ended::Job(Job {
+        return Ok(Ended::Job(Box::new(Job {
             job_id: id.to_string(),
             pinned_host: receipt.builder,
             state: state.to_string(),
             ..Job::default()
-        }));
+        })));
     }
     Err(CmdError::click(format!(
         "release job {id} has not reached a terminal state, and left no receipt"

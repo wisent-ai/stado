@@ -218,7 +218,7 @@ fn unreadable_cache_size_refuses_deletion_and_preserves_the_cause() {
         }
     }
     let restore = Restore(blocked.clone(), original);
-    fs::set_permissions(&blocked, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
     let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
     fs::File::open(&candidate)
         .unwrap()

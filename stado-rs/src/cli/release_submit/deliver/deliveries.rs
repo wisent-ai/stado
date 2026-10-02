@@ -70,7 +70,7 @@ pub(crate) async fn run_deliveries(
             continue;
         }
         let job = match ended(&store, &current.job_id).await? {
-            Ended::Job(job) => job,
+            Ended::Job(job) => *job,
             // Queued on its host or running there: nothing to judge yet. The
             // pass that ends a delivery is the one that finds its record or
             // receipt; this one records what it saw and leaves the run
