@@ -73,7 +73,16 @@ fn disagreements(
     request: &DeliveryRequest,
 ) -> Vec<String> {
     let mut found = Vec::new();
-    if run.state != ReleaseRunState::Delivering {
+    // A run that is still being walked passes through `waiting` and
+    // `publishing` again on every pass (the release agent's tick, `release
+    // resume`) while its platforms stay published; refusing those states made
+    // a delivery fail whenever a pass happened to be mid-walk. What makes a
+    // coordinate stale is a run that ended or was replaced — and the
+    // platform and digest checks below, which a live run must still pass.
+    if !matches!(
+        run.state,
+        ReleaseRunState::Waiting | ReleaseRunState::Publishing | ReleaseRunState::Delivering
+    ) {
         found.push(format!("the run is {:?}, not delivering", run.state));
     }
     for (field, reads, asked) in [

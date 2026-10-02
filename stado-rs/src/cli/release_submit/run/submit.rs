@@ -118,7 +118,17 @@ pub(super) async fn continue_run(
             return Err(persist_failure(&mut run, error).await);
         }
     }
-    run.state = ReleaseRunState::Waiting;
+    // A pass over a run whose platforms are all published resumes its
+    // deliveries; walking it back through `waiting` and `publishing` made
+    // every delivery worker that started mid-walk refuse its job ("the run is
+    // Publishing, not delivering"), on every tick of the release agent.
+    let already_published = !submitted_platforms.is_empty()
+        && submitted_platforms
+            .iter()
+            .all(|platform| run.platforms[platform].state == PlatformRunState::Published);
+    if !(finish && already_published) {
+        run.state = ReleaseRunState::Waiting;
+    }
     // A platform that could not be queued while others were is not a
     // finished submission: the run says so, and so does the operator's
     // terminal, instead of answering "builds queued" when one platform has
@@ -177,8 +187,10 @@ pub(super) async fn continue_run(
         return Ok(());
     }
     let mut signing_material = None;
-    run.state = ReleaseRunState::Publishing;
-    save(&mut run).await?;
+    if !already_published {
+        run.state = ReleaseRunState::Publishing;
+        save(&mut run).await?;
+    }
     let mut artifacts = BTreeMap::new();
     for p in &submitted_platforms {
         let result = if run.platforms[p].state == PlatformRunState::Published {
