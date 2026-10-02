@@ -129,8 +129,8 @@ pub async fn run(
     idle_shutdown: bool,
     kind: String,
     vast_auto_list: bool,
-    vast_price_gpu: f64,
-    vast_max_duration_s: i64,
+    vast_price_gpu: Option<f64>,
+    vast_max_duration_s: Option<i64>,
     vast_idle_window_s: Option<i64>,
     poll_seconds: Option<u64>,
 ) -> Result<(), CmdError> {
@@ -221,11 +221,20 @@ pub async fn run(
                  before this host is listed",
             )
         })?;
+        let price_gpu = vast_price_gpu.ok_or_else(|| {
+            CmdError::usage("the Vast bridge needs --vast-price-gpu: the per-GPU-hour price in USD")
+        })?;
+        let max_duration_s = vast_max_duration_s.ok_or_else(|| {
+            CmdError::usage(
+                "the Vast bridge needs --vast-max-duration-s: the longest rental in seconds, \
+                 0 for open-ended",
+            )
+        })?;
         let params = vast::AutoListParams {
             idle_window_s,
             poll: Some(poll),
-            price_gpu: vast_price_gpu,
-            duration_s: (vast_max_duration_s > 0).then_some(vast_max_duration_s),
+            price_gpu,
+            duration_s: (max_duration_s > 0).then_some(max_duration_s),
             dry_run: false,
             once: false,
         };
@@ -238,7 +247,7 @@ pub async fn run(
                 eprintln!("[vast] auto-list loop exited: {exc}");
             }
         });
-        println!("[vast] auto-list thread started (price-gpu=${vast_price_gpu}/h)");
+        println!("[vast] auto-list thread started (price-gpu=${price_gpu}/h)");
     }
     match local_agent::run_agent(&gpu_type, idle_shutdown, &kind, poll).await {
         Ok(()) => Ok(()),

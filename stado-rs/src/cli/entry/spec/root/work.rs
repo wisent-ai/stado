@@ -75,12 +75,14 @@ pub(crate) struct AgentOptions {
     /// List idle capacity on Vast.ai using its existing Skarbiec grant.
     #[arg(long)]
     pub vast_auto_list: bool,
-    /// Per-GPU-hour rental price in USD.
-    #[arg(long, default_value_t = 0.50)]
-    pub vast_price_gpu: f64,
-    /// Maximum rental length in seconds; zero leaves it open-ended.
-    #[arg(long, default_value_t = 3600)]
-    pub vast_max_duration_s: i64,
+    /// Per-GPU-hour rental price in USD. Required when the Vast bridge runs;
+    /// no price is built in.
+    #[arg(long)]
+    pub vast_price_gpu: Option<f64>,
+    /// Maximum rental length in seconds; zero leaves it open-ended. Required
+    /// when the Vast bridge runs.
+    #[arg(long)]
+    pub vast_max_duration_s: Option<i64>,
     /// Seconds Stado must be idle before the Vast bridge lists this host.
     /// Required when the bridge runs.
     #[arg(long)]

@@ -11,9 +11,13 @@ impl ServeArgs {
             "serve".to_string(),
             format!("--gpu-type={}", self.worker.gpu_type),
             format!("--kind={}", self.worker.kind),
-            format!("--vast-price-gpu={}", self.worker.vast_price_gpu),
-            format!("--vast-max-duration-s={}", self.worker.vast_max_duration_s),
         ];
+        if let Some(price) = self.worker.vast_price_gpu {
+            args.push(format!("--vast-price-gpu={price}"));
+        }
+        if let Some(seconds) = self.worker.vast_max_duration_s {
+            args.push(format!("--vast-max-duration-s={seconds}"));
+        }
         if self.run_worker {
             args.push("--worker".to_string());
         }
