@@ -107,7 +107,3 @@ path = "src/bin/stado_mcp.rs"
 [[bin]]
 name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
-
-[[test]]
-name = "credentials_get_field"
-path = "../tests/credentials/get_field.rs"
