@@ -1,5 +1,7 @@
-//! The three reads behind `connect`, each through the installed `stado`.
+//! The three reads behind `connect`, each through the installed `stado`, or
+//! the product's own environment on a machine without Stado.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 
 use serde::de::DeserializeOwned;
@@ -134,7 +136,47 @@ async fn field(
     })
 }
 
+/// The database a product names in its own environment, for a machine
+/// without Stado or Skarbiec: `<PRODUCT>_DATABASE_URL` (dashes become
+/// underscores, letters upper case) and `<PRODUCT>_DATABASE_CA_FILE`, the
+/// PEM bundle the server is verified against. Nothing when the URL is unset;
+/// a refusal naming the variable when it is set and its certificate is not.
+fn from_environment(database: &FleetDatabase) -> Option<Result<Credentials, Error>> {
+    let prefix = database.name.to_uppercase().replace('-', "_");
+    let url_variable = format!("{prefix}_DATABASE_URL");
+    let url = std::env::var(&url_variable)
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let ca_variable = format!("{prefix}_DATABASE_CA_FILE");
+    let Some(ca_file) = std::env::var_os(&ca_variable).filter(|value| !value.is_empty()) else {
+        return Some(Err(Error::new(
+            "read environment",
+            format!("{url_variable} is set but {ca_variable} is not; the server is verified against that certificate"),
+        )));
+    };
+    Some(
+        std::fs::read_to_string(&ca_file)
+            .map_err(|error| {
+                Error::new(
+                    "read environment",
+                    format!(
+                        "{ca_variable}={}: {error}",
+                        PathBuf::from(&ca_file).display()
+                    ),
+                )
+            })
+            .map(|ca_certificate| Credentials {
+                item: url_variable,
+                pooler_url: url.trim().to_string(),
+                ca_certificate,
+            }),
+    )
+}
+
 pub(crate) async fn credentials(database: &FleetDatabase) -> Result<Credentials, Error> {
+    if let Some(found) = from_environment(database) {
+        return found;
+    }
     let resolution: Resolution = answer(
         database,
         "resolve database",
