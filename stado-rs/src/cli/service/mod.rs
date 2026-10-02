@@ -169,9 +169,61 @@ pub(crate) async fn declared_matching(
         );
     }
     if found.is_empty() {
+        // A catalog product's one unit is addressable on the host it was
+        // asked for the moment `ensure` created it, before the registry
+        // record lands: the unit a product declares is known from the
+        // catalog, and a unit that came up with no main pid is exactly the
+        // one whose log is needed.
+        if let Some(unit) = host.and_then(|host| catalog_unit(name, host, &registry).transpose()) {
+            return Ok(vec![unit?]);
+        }
         return Err(unmanaged(name, host));
     }
     Ok(found)
+}
+
+/// The unit the service catalog declares for `name`, as the host's own unit,
+/// when `host` is one registry target; `None` when the catalog has no such
+/// product.
+fn catalog_unit(
+    name: &str,
+    host: &str,
+    registry: &crate::targets::Registry,
+) -> Result<Option<ManagedService>, CmdError> {
+    let Some(entry) = crate::deploy::service_catalog::lookup(name)
+        .map_err(|error| CmdError::click(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let Some(label) = entry.unit else {
+        return Ok(None);
+    };
+    let Some(target) = registry
+        .local_targets()
+        .into_iter()
+        .find(|target| target.name == host)
+    else {
+        return Ok(None);
+    };
+    let home = crate::deploy::service_catalog::home_for(target);
+    let service = if target.release_platform.starts_with("linux") {
+        service::systemd_service(
+            &target.name,
+            &format!("{label}.service"),
+            &format!("{home}/.config/systemd/user/{label}.service"),
+            service::SOURCE_REGISTRY,
+            "",
+        )
+    } else {
+        service::launchd_service(
+            &target.name,
+            &label,
+            &format!("{home}/Library/LaunchAgents/{label}.plist"),
+            service::SOURCE_REGISTRY,
+            "",
+        )
+    };
+    Ok(Some(service))
 }
 
 fn unmanaged(name: &str, host: Option<&str>) -> CmdError {
