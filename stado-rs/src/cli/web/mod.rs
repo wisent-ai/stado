@@ -122,8 +122,10 @@ pub(crate) async fn dispatch(command: WebCommands) -> Result<(), CmdError> {
         WebCommands::Route { name, check, json } => route::route(&name, check, json).await,
         WebCommands::Edge(command) => edge::dispatch(command).await,
         WebCommands::Origin(command) => origin::dispatch(command).await,
-        WebCommands::Quality { root } => builds::quality(root.as_deref()),
-        WebCommands::Build { root } => builds::build(root.as_deref()),
+        WebCommands::Quality { root, package } => {
+            builds::quality(root.as_deref(), package.as_deref())
+        }
+        WebCommands::Build { root, package } => builds::build(root.as_deref(), package.as_deref()),
         WebCommands::Vercel(command) => vercel::dispatch(command).await,
     }
 }

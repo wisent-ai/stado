@@ -14,10 +14,11 @@ use crate::cli::web::builds::tooling::node::npm;
 use crate::cli::web::LAUNCHER;
 use crate::cli::CmdError;
 
-pub(crate) fn quality(declared_root: Option<&str>) -> Result<(), CmdError> {
+pub(crate) fn quality(declared_root: Option<&str>, package: Option<&str>) -> Result<(), CmdError> {
     let worker = worker()?;
     worker.require_web_platform()?;
-    let manifest = manifest_if_present(&worker.source)?;
+    let project = worker.package(package)?;
+    let manifest = manifest_if_present(&project)?;
     // A version is checked against `package.json` only where there is one to
     // check against. A static site's version comes from whatever its
     // `version_source` names, and the pipeline has already read it — this
@@ -34,7 +35,7 @@ pub(crate) fn quality(declared_root: Option<&str>) -> Result<(), CmdError> {
     println!(
         "stado web quality: {product} {} in {} ({})",
         worker.version,
-        worker.source.display(),
+        project.display(),
         worker.inputs_report()
     );
 
@@ -68,7 +69,7 @@ pub(crate) fn quality(declared_root: Option<&str>) -> Result<(), CmdError> {
         Kind::Static => {
             // The files are committed, so the one thing this product must
             // have is checkable right now.
-            let root = site_root(&worker.source, declared_root)?;
+            let root = site_root(&project, declared_root)?;
             if !root.join("index.html").is_file() {
                 return Err(CmdError::click(format!(
                     "{} has no index.html and the product declares no build script: a static web product is a directory of files, and `--root` names which directory",
@@ -107,7 +108,7 @@ pub(crate) fn quality(declared_root: Option<&str>) -> Result<(), CmdError> {
         return Ok(());
     }
 
-    install(&worker.source, &variables)?;
+    install(&project, &variables)?;
 
     // The product's own checks, not Stado's opinion of them. A landing site
     // with neither script is a legitimate web product; it just has nothing
@@ -116,7 +117,7 @@ pub(crate) fn quality(declared_root: Option<&str>) -> Result<(), CmdError> {
     let mut ran = Vec::new();
     for check in ["typecheck", "lint"] {
         if script(&manifest, check).is_some() {
-            npm(&worker.source, &["run", check], &variables)?;
+            npm(&project, &["run", check], &variables)?;
             ran.push(check);
         }
     }

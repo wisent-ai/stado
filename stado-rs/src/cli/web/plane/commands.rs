@@ -159,6 +159,12 @@ pub(crate) enum WebCommands {
         /// checkout root.
         #[arg(long)]
         root: Option<String>,
+        /// The directory holding the product's `package.json`,
+        /// repository-relative, for a product whose web application is not
+        /// at the repository root (a `frontend/` beside a backend). Absent,
+        /// the package is the checkout root.
+        #[arg(long)]
+        package: Option<String>,
     },
     /// Build the checked-out web product and stage its runnable tarball.
     ///
@@ -171,6 +177,13 @@ pub(crate) enum WebCommands {
         /// Absent, the site root is the checkout root.
         #[arg(long)]
         root: Option<String>,
+        /// The directory holding the product's `package.json`,
+        /// repository-relative, for a product whose web application is not
+        /// at the repository root. Its install, build and staged tarball are
+        /// that directory's; the product name and the source revision stay
+        /// the repository's. Absent, the package is the checkout root.
+        #[arg(long)]
+        package: Option<String>,
     },
     /// A product hosted on Vercel: its prebuilt build on a release worker,
     /// and its production deploy as a manifest delivery.

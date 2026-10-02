@@ -16,10 +16,14 @@ use crate::cli::web::builds::tooling::node::npm;
 use crate::cli::web::builds::tooling::revision::revision;
 use crate::cli::CmdError;
 
-pub(crate) fn build(declared_root: Option<&str>) -> Result<(), CmdError> {
+pub(crate) fn build(declared_root: Option<&str>, package: Option<&str>) -> Result<(), CmdError> {
     let worker = worker()?;
     worker.require_web_platform()?;
-    let manifest = manifest_if_present(&worker.source)?;
+    // The package is where the web application lives: its manifest, its
+    // install, its build and the tree staged for a server. The product name,
+    // the declared variables and the source revision stay the repository's.
+    let project = worker.package(package)?;
+    let manifest = manifest_if_present(&project)?;
     if let Some(manifest) = &manifest {
         if version_source_is_package_json(&worker.source) {
             require_version(manifest, &worker.version)?;
@@ -31,7 +35,7 @@ pub(crate) fn build(declared_root: Option<&str>) -> Result<(), CmdError> {
     println!(
         "stado web build: {product} {} in {} ({})",
         worker.version,
-        worker.source.display(),
+        project.display(),
         worker.inputs_report()
     );
 
@@ -47,12 +51,12 @@ pub(crate) fn build(declared_root: Option<&str>) -> Result<(), CmdError> {
         // quality step — a re-run of one platform, or a recipe with no
         // quality gate — so the install is repeated when, and only when,
         // there is no tree to build against.
-        if worker.source.join("node_modules").is_dir() {
+        if project.join("node_modules").is_dir() {
             println!("stado web build: node_modules is present from the quality step");
         } else {
-            install(&worker.source, &variables)?;
+            install(&project, &variables)?;
         }
-        npm(&worker.source, &["run", "build"], &variables)?;
+        npm(&project, &["run", "build"], &variables)?;
     } else {
         println!(
             "stado web build: {product} declares no build script; its committed files are the site"
@@ -61,7 +65,7 @@ pub(crate) fn build(declared_root: Option<&str>) -> Result<(), CmdError> {
 
     // Resolved after the build, because a site root a build script writes
     // does not exist before it runs.
-    let root = site_root(&worker.source, declared_root)?;
+    let root = site_root(&project, declared_root)?;
     let revision = revision(&worker.source)?;
     let dist = worker.output.join("dist");
     std::fs::create_dir_all(&dist)
@@ -69,7 +73,7 @@ pub(crate) fn build(declared_root: Option<&str>) -> Result<(), CmdError> {
     let file_name = tarball_name(&product);
     let tarball = dist.join(&file_name);
     let top = top_level(&product, &worker.version);
-    stage(&worker.source, &root, kind, &tarball, &top)?;
+    stage(&project, &root, kind, &tarball, &top)?;
 
     // The digest is streamed rather than taken over the whole file in memory:
     // a tarball carrying node_modules runs to hundreds of megabytes, and the

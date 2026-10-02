@@ -82,4 +82,34 @@ impl Worker {
             format!("release inputs at {}", self.inputs)
         }
     }
+
+    /// The directory holding the product's `package.json`: the checkout, or
+    /// the repository-relative `package` directory inside it. A path that
+    /// leaves the checkout, or a directory that is not there, is refused by
+    /// name rather than building whatever it happens to point at.
+    pub(in crate::cli::web::builds) fn package(
+        &self,
+        package: Option<&str>,
+    ) -> Result<PathBuf, CmdError> {
+        let Some(package) = package else {
+            return Ok(self.source.clone());
+        };
+        let relative = std::path::Path::new(package);
+        let inside = relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)));
+        if package.is_empty() || !inside {
+            return Err(CmdError::click(format!(
+                "--package {package:?} must be a directory inside the checkout, written relative to it"
+            )));
+        }
+        let directory = self.source.join(relative);
+        if !directory.is_dir() {
+            return Err(CmdError::click(format!(
+                "--package names {}, which is not a directory of this checkout",
+                directory.display()
+            )));
+        }
+        Ok(directory)
+    }
 }
