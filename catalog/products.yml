@@ -1127,6 +1127,27 @@ products:
   approved_by: operator
   approved_at: '2026-09-02T19:53:08Z'
   approval_note: 'Approved as an installable Wisent product with both a CLI and a desktop surface.'
+- id: rachuba
+  name: Rachuba
+  status: preview
+  visibility: private
+  family: wisent
+  owner_repository: wisent-ai/rachuba
+  description: Payroll for a company with one employee, and the projection of that employee's
+    own federal return.
+  roadmap: []
+  integrations: []
+  evidence:
+  - wisent-ai/rachuba/README.md
+  surfaces:
+  - kind: cli
+    repository: wisent-ai/rachuba
+    docs_origin: https://rachuba.wisent.com
+  - kind: web
+    repository: wisent-ai/rachuba-landing
+  approved_by: operator
+  approved_at: '2026-10-02T17:13:05Z'
+  approval_note: 'The operator asked for the documentation site to be put up.'
 - id: spis
   name: Spis
   status: active
