@@ -241,11 +241,8 @@ pub(in crate::cli::release_cmd) async fn install_archive(
     // executing the inode it started with, for as long as it lives, because
     // nothing tells launchd or systemd that the file underneath changed.
     //
-    // That is how a delivery can succeed and change nothing: a janitor keeps
-    // executing the previous image of this exact path, answers
-    // `invalid_or_unavailable_policy` on most passes because the policy no
-    // longer validates against the code it was compiled from, and the volume
-    // fills with a janitor running every minute the whole way down.
+    // Installation is not activation: every non-agent reader must execute the
+    // delivered image before it can consume that release's configuration schema.
     //
     // In place, and never the agent: see `self_update::recycle_replaced_units`.
     // Run this image check even when the pathname already matches the delivered

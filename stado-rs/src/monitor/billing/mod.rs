@@ -40,10 +40,8 @@
 //! provider section: `credit_depleted` and `available_balance` only exist
 //! when the query actually succeeded. So the moment an account is closed,
 //! its billing export is revoked, or its service principal is disabled, the
-//! section flips to `no_credentials`/`error`, every balance field vanishes,
-//! and the balance alerts go quiet — the monitoring falls silent precisely
-//! when it matters. That is how the GCP billing outage arrived with zero
-//! warning.
+//! section flips to `no_credentials`/`error` and balance fields disappear.
+//! Account-health alerts must therefore be independent of balance observations.
 //!
 //! [`apply_health`] therefore folds a per-provider health record forward
 //! across ticks inside the same blob ([`HEALTH_KEY`]): the last `ok`

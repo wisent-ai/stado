@@ -73,12 +73,8 @@ pub(super) fn set(key: &str, raw: &str) -> Result<(), CmdError> {
 
 /// `config unset KEY`: remove one dotted key from the config file.
 ///
-/// [`set`] can only add a key or change one, so a declaration that outlived
-/// its reader could not be retired through this product at all. That is how
-/// `storage.stado.ca_file` survived in this deployment: unreachable behind a
-/// loopback `storage.stado.url`, reported by `registry doctor` every run, and
-/// removable only by hand-editing the document `set` exists to stop people
-/// hand-editing.
+/// [`set`] adds or changes a key; retiring a declaration requires removing it,
+/// not replacing its value with `null`.
 ///
 /// Same validation and the same atomic write as [`set`]: a removal that would
 /// leave the document invalid changes nothing. An absent key is reported and

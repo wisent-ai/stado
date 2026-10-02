@@ -53,18 +53,12 @@ pub(in crate::cli::storage) fn configured_object_base_url(
 
 /// The canonical origin from the environment, and then from `api.url`.
 ///
-/// `STADO_API_URL` is a configuration field, not an environment-only switch:
-/// `config::stado_api_url` resolves both, and that is how the scheduler, the
-/// doctor and every enrolment path read it. Reading the environment alone made
-/// `stado host release` refuse a fleet delivery with "STADO_API_URL is
-/// required for canonical release reads" on a host whose own configuration
-/// declared the canonical origin — printed back by `host config-show` while
-/// being refused.
+/// `config::stado_api_url` resolves both sources, matching the scheduler,
+/// doctor and enrolment readers. A file declaration does not require a
+/// duplicate environment override.
 ///
-/// Only the release channel resolves it this way. The private object plane
-/// keeps its own endpoint: widening the shared reader instead sent every
-/// object write to the public origin, and a source archive PUT there answered
-/// `504 FUNCTION_INVOCATION_TIMEOUT` twice before the cause was the diff.
+/// This is the public release-read origin. The private object plane keeps
+/// its own endpoint; object writes must not be redirected to the public origin.
 pub(in crate::cli::storage) fn configured_api_origin() -> Result<Option<url::Url>, CmdError> {
     if let Some(url) = configured_object_base_url("STADO_API_URL")? {
         return Ok(Some(url));
