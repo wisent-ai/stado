@@ -20,7 +20,7 @@ pub async fn pair(
     client_name: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    if pin.len() != "0000".len() || !pin.chars().all(|c| c.is_ascii_digit()) {
+    if pin.len() != 4 || !pin.chars().all(|c| c.is_ascii_digit()) {
         return Err(DeployError(format!(
             "pin {pin:?} is not the four digits Moonlight shows"
         )));

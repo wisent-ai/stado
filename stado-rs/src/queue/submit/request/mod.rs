@@ -100,14 +100,13 @@ pub(super) fn validate_submission(
     }
     let repo = options.repo.trim();
     let repo_ref = options.repo_ref.trim();
-    let full_commit_len = "0000000000000000000000000000000000000000".len();
     if repo.is_empty() {
         if !repo_ref.is_empty() {
             return Err(SubmitError::Validation(
                 "repo_ref is valid only when repo is set".into(),
             ));
         }
-    } else if repo_ref.len() != full_commit_len
+    } else if repo_ref.len() != 40
         || !repo_ref
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))

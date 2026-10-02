@@ -30,8 +30,7 @@ fn repo_prelude(job: &Job) -> String {
         return String::new();
     }
     let repo_ref = job.repo_ref.trim();
-    let sha1_hex_len = "0000000000000000000000000000000000000000".len();
-    if repo_ref.len() != sha1_hex_len
+    if repo_ref.len() != 40
         || !repo_ref
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
