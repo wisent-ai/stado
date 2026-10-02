@@ -162,7 +162,8 @@ final class CloudflareRoutesStore: ObservableObject {
         do {
             lastRouteReceipt = try await cli.json(
                 CloudflareRouteReceipt.self,
-                arguments: draft.arguments
+                arguments: draft.arguments,
+                confirmsMutation: true
             )
             lastRemovalReceipt = nil
             await refreshRoutes(draft.scope)
@@ -180,7 +181,8 @@ final class CloudflareRoutesStore: ObservableObject {
         do {
             lastRemovalReceipt = try await cli.json(
                 CloudflareRouteRemovalReceipt.self,
-                arguments: value.removeArguments(hostname: route.hostname)
+                arguments: value.removeArguments(hostname: route.hostname),
+                confirmsMutation: true
             )
             lastRouteReceipt = nil
             routes.removeAll { $0.hostname == route.hostname }

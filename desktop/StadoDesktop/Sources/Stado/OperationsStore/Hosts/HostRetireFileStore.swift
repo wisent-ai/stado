@@ -113,7 +113,8 @@ final class HostRetireFileStore: ObservableObject {
         do {
             let receipt = try await cli.json(
                 HostRetireFileReceipt.self,
-                arguments: arguments
+                arguments: arguments,
+                confirmsMutation: true
             )
             applied = receipt
             if receipt.isRetired,

@@ -240,7 +240,8 @@ final class VastStore: ObservableObject {
         defer { isWorking = false }
         do {
             let answer = try await cli.text(
-                arguments: arguments
+                arguments: arguments,
+                confirmsMutation: true
             )
             actionOutcome = "\(what). Vast answered: \(answer)"
             problem = nil

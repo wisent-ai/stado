@@ -172,7 +172,8 @@ final class FleetServicesStore: ObservableObject {
         do {
             let report = try await cli.json(
                 ServiceDeployReport.self,
-                arguments: Self.deployArguments(name: entry.name, host: entry.host)
+                arguments: Self.deployArguments(name: entry.name, host: entry.host),
+                confirmsMutation: true
             )
             mutation = report.succeeded
                 ? .succeeded("Deployed \(entry.name) on \(entry.host).")
@@ -183,7 +184,7 @@ final class FleetServicesStore: ObservableObject {
         await refresh(hosts: lastHosts)
     }
 
-    /// `stado service restart <name> --host <host>` through the CLI runner.
+    /// `stado service restart <name> --host <host>` through the operator API.
     ///
     /// The CLI refuses a system LaunchDaemon with its own sentence; the view
     /// never shows this button for one, and the refusal is still what a
@@ -198,7 +199,8 @@ final class FleetServicesStore: ObservableObject {
         do {
             let reports = try await cli.json(
                 [ServiceRestartReport].self,
-                arguments: Self.restartArguments(name: entry.name, host: entry.host)
+                arguments: Self.restartArguments(name: entry.name, host: entry.host),
+                confirmsMutation: true
             )
             if let failed = reports.first(where: { !$0.succeeded }) {
                 mutation = .failed("\(failed.host): \(failed.failureText)")
@@ -227,7 +229,8 @@ final class FleetServicesStore: ObservableObject {
         do {
             let report = try await cli.json(
                 ServiceRemoveReport.self,
-                arguments: Self.removeServiceArguments(name: entry.name, host: entry.host)
+                arguments: Self.removeServiceArguments(name: entry.name, host: entry.host),
+                confirmsMutation: true
             )
             if report.succeeded {
                 mutation = .succeeded(
@@ -249,7 +252,8 @@ final class FleetServicesStore: ObservableObject {
         do {
             let report = try await cli.json(
                 ServiceRunnerRuntimeReport.self,
-                arguments: Self.repairRunnerRuntimeArguments(name: entry.name, host: entry.host)
+                arguments: Self.repairRunnerRuntimeArguments(name: entry.name, host: entry.host),
+                confirmsMutation: true
             )
             mutation = .succeeded(report.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         } catch {

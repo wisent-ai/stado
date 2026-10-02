@@ -102,7 +102,8 @@ final class ProductsStore: ObservableObject {
         do {
             let state = try await cli.json(
                 ProductLifecycleState.self,
-                arguments: Self.lifecycleArguments("status", product: product, surface: surface, host: host)
+                arguments: Self.lifecycleArguments("status", product: product, surface: surface, host: host),
+                destination: surface == "service" ? .selected : .localDevice
             )
             states[key(product, surface)] = state
         } catch {
@@ -118,7 +119,9 @@ final class ProductsStore: ObservableObject {
             let state = try await cli.json(
                 ProductLifecycleState.self,
                 arguments: Self.lifecycleArguments(verb, product: product, surface: surface, host: host,
-                                                   releaseVersion: releaseVersion, sourceCommit: sourceCommit)
+                                                   releaseVersion: releaseVersion, sourceCommit: sourceCommit),
+                confirmsMutation: true,
+                destination: surface == "service" ? .selected : .localDevice
             )
             states[key(product, surface)] = state
             mutation = .succeeded("\(product) \(surface): \(state.status)")

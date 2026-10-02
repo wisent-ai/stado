@@ -18,6 +18,40 @@ enum DashboardEndpointPreference {
     static let lastResortURL = "http://127.0.0.1:8765"
     static let configuredKeyPath = ["storage", "stado", "url"]
 
+    static var configurationURL: URL {
+        let environment = ProcessInfo.processInfo.environment
+        if let path = environment["STADO_CONFIG"], !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: (path.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath)
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("stado.config.json"),
+            home.appendingPathComponent(".config/stado/config.json"),
+            home.appendingPathComponent(".stado/config.json"),
+        ]
+        return candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) ?? candidates[2]
+    }
+
+    /// Local installation must address this device, not a fleet storage proxy.
+    static func deviceURL() throws -> String {
+        let environment = ProcessInfo.processInfo.environment
+        let path = configurationURL
+        let root: [String: Any]
+        if FileManager.default.fileExists(atPath: path.path) {
+            guard let object = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any] else {
+                throw StadoCLIError.failed(exitCode: nil, message: "Stado configuration at \(path.path) must be a JSON object.")
+            }
+            root = object
+        } else {
+            root = [:]
+        }
+        let dashboard = root["dashboard"] as? [String: Any] ?? [:]
+        let bind = environment["WC_DASHBOARD_BIND"] ?? (dashboard["bind"] as? String) ?? "127.0.0.1"
+        let port = environment["WC_DASHBOARD_PORT"] ?? (dashboard["port"] as? NSNumber)?.stringValue ?? "8765"
+        let host = bind.contains(":") ? "[\(bind)]" : bind
+        return try OperationsDashboardAddress("http://\(host):\(port)").displayString
+    }
+
     static var localURL: String {
         ProcessInfo.processInfo.environment["STADO_REGISTRY_API_URL"]
             ?? fleetURLFromConfig() ?? lastResortURL
@@ -27,8 +61,7 @@ enum DashboardEndpointPreference {
     /// object API as this host reaches it (a resolver adapter on a laptop, the
     /// service itself on the authority host).
     static func fleetURLFromConfig(
-        _ path: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/stado/config.json")
+        _ path: URL = DashboardEndpointPreference.configurationURL
     ) -> String? {
         guard let data = try? Data(contentsOf: path),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

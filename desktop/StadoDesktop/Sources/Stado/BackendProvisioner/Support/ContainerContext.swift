@@ -3,17 +3,13 @@ import Foundation
 // MARK: - Container context
 
 extension BackendProvisioner {
-    /// The cloud control plane's image context: the Stado release installer
-    /// this Stado prints (`stado bootstrap --print-install-script`) and a
-    /// Dockerfile that runs it. The image downloads the Linux release of the
-    /// same version from the public release route, checks its manifest and
-    /// digest, and runs `stado cloud-control-plane`; nothing is copied from
-    /// this Mac, whose binary is not a Linux one.
-    func prepareContainerContext(stadoExecutable: URL) async throws -> URL {
-        let installer = try await runCapture(stadoExecutable.path, ["bootstrap", "--print-install-script"])
+    /// Package the exact release installer returned by the chosen Stado API.
+    /// The image downloads and verifies the Linux release; Desktop does not
+    /// invoke a local Stado executable to obtain it.
+    func prepareContainerContext(installer: String) throws -> URL {
         guard installer.contains("release_version=") else {
             throw BackendProvisioningError.commandFailed(
-                "This Stado could not print its release installer (stado bootstrap --print-install-script)."
+                "The Stado API did not return an exact release installer."
             )
         }
         let context = fileManager.temporaryDirectory

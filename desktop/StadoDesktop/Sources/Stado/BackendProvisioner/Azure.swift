@@ -6,13 +6,13 @@ extension BackendProvisioner {
     func provisionAzure(
         deployment: StadoDeployment,
         target: InfrastructureTarget,
+        installer: String,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         let az = try locateExecutable(named: "az", fixed: [
             "/opt/homebrew/bin/az",
             "/usr/local/bin/az"
         ])
-        let stado = try locateStadoCLI()
         let subscription = target.externalID
         let region = target.metadata["location"] ?? "eastus"
         let suffix = deployment.id.lowercased().replacingOccurrences(of: "-", with: "")
@@ -23,7 +23,7 @@ extension BackendProvisioner {
         let environmentName = "stado-\(short)-env"
         let appName = "stado-\(short)"
         let image = "\(registry).azurecr.io/control-plane:\(suffix)"
-        let context = try await prepareContainerContext(stadoExecutable: stado)
+        let context = try prepareContainerContext(installer: installer)
         defer { try? fileManager.removeItem(at: context) }
 
         await onUpdate(.init(phase: "Preparing Microsoft Azure", detail: "Selecting subscription \(subscription)", fraction:

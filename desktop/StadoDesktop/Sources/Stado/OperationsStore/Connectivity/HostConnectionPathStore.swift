@@ -81,7 +81,8 @@ final class HostConnectionPathStore: ObservableObject {
                     name: name,
                     destination: destination,
                     priority: priority
-                )
+                ),
+                confirmsMutation: true
             )
             mutation = .succeeded(
                 receipt.changed
@@ -101,7 +102,8 @@ final class HostConnectionPathStore: ObservableObject {
         do {
             let receipt = try await cli.json(
                 RemoveReceipt.self,
-                arguments: Self.removeArguments(host: host, name: name)
+                arguments: Self.removeArguments(host: host, name: name),
+                confirmsMutation: true
             )
             mutation = .succeeded(
                 receipt.removed

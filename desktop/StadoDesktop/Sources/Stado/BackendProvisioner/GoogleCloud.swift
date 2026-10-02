@@ -6,6 +6,7 @@ extension BackendProvisioner {
     func provisionGCP(
         deployment: StadoDeployment,
         target: InfrastructureTarget,
+        installer: String,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         let gcloud = try locateExecutable(named: "gcloud", fixed: [
@@ -13,7 +14,6 @@ extension BackendProvisioner {
             "/usr/local/bin/gcloud",
             "\(fileManager.homeDirectoryForCurrentUser.path)/google-cloud-sdk/bin/gcloud"
         ])
-        let stado = try locateStadoCLI()
         let project = target.externalID
         let region = target.metadata["region"] ?? "us-central1"
         let suffix = deployment.id.lowercased().replacingOccurrences(of: "-", with: "")
@@ -23,7 +23,7 @@ extension BackendProvisioner {
         let serviceAccount = "\(serviceAccountName)@\(project).iam.gserviceaccount.com"
         let repository = "stado"
         let image = "\(region)-docker.pkg.dev/\(project)/\(repository)/control-plane:\(suffix)"
-        let context = try await prepareContainerContext(stadoExecutable: stado)
+        let context = try prepareContainerContext(installer: installer)
         defer { try? fileManager.removeItem(at: context) }
 
         await onUpdate(.init(phase: "Preparing Google Cloud", detail: "Enabling required APIs in \(project)", fraction:

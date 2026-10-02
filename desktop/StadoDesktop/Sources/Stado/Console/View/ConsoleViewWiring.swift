@@ -6,6 +6,7 @@ extension ConsoleView {
     // MARK: Wiring
 
     func configureAuthorization() {
+        StadoCLI.configureAuthorization(token: auth.session?.accessToken)
         store.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
         enrollmentStore.configureAuthorization(token: auth.session?.accessToken)
@@ -19,6 +20,7 @@ extension ConsoleView {
         let endpoint: String
         if let deployment = deploymentStore.selectedDeployment {
             guard let selectedEndpoint = deployment.endpoint else {
+                StadoCLI.configureEndpoint(nil)
                 store.clearDashboardURL()
                 cleanupStore.clearDashboardURL()
                 inventoryStore.configureEndpoint(nil)
@@ -35,6 +37,7 @@ extension ConsoleView {
             endpoint = DashboardEndpointPreference.localURL
         }
         do {
+            StadoCLI.configureEndpoint(try OperationsDashboardAddress(endpoint).displayString)
             try store.saveDashboardURL(endpoint)
             try cleanupStore.saveDashboardURL(endpoint)
             inventoryStore.configureEndpoint(endpoint)
@@ -45,6 +48,7 @@ extension ConsoleView {
             groupStore.configureEndpoint(endpoint)
             sourceProblem = nil
         } catch {
+            StadoCLI.configureEndpoint(nil)
             store.clearDashboardURL()
             cleanupStore.clearDashboardURL()
             inventoryStore.configureEndpoint(nil)

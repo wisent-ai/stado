@@ -25,6 +25,7 @@ extension BackendProvisioner {
             .map(String.init)
             .map { URL(fileURLWithPath: $0).appendingPathComponent("stado") }
         let fixedCandidates = [
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".stado/bin/stado"),
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/stado"),
             URL(fileURLWithPath: "/opt/homebrew/bin/stado"),
             URL(fileURLWithPath: "/usr/local/bin/stado"),

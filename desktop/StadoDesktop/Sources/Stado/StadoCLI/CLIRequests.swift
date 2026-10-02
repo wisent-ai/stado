@@ -1,33 +1,39 @@
 import Foundation
 
 extension StadoCLI {
-    /// Run `stado <arguments>` and decode its stdout.
-    ///
-    /// `arguments` excludes the program name and includes `--json`: the caller
-    /// names the exact command so the string this console shows in a
-    /// confirmation is the string it runs.
+    /// Decode an operator API receipt. Mutations require the caller's explicit
+    /// review confirmation; read-only operations do not acquire it implicitly.
     nonisolated func json<T: Decodable & Sendable>(
         _ type: T.Type,
         arguments: [String],
-        standardInput: String? = nil
+        standardInput: String? = nil,
+        input: String? = nil,
+        confirmsMutation: Bool = false,
+        destination: Destination = .selected
     ) async throws -> T {
-        try await jsonResult(type, arguments: arguments, standardInput: standardInput).value
+        let result = try await jsonResult(type, arguments: arguments, standardInput: standardInput,
+                                          input: input, confirmsMutation: confirmsMutation, destination: destination)
+        if confirmsMutation, let refusal = result.refusal {
+            throw StadoCLIError.response(exitCode: result.exitCode, stdout: result.stdout,
+                                        stderr: result.stderr, message: refusal)
+        }
+        return result.value
     }
 
-    /// Run one JSON command while retaining its complete process evidence.
-    ///
-    /// A valid payload is always returned, including for a non-zero exit, with
-    /// exact stdout and stderr plus the CLI refusal. An absent or malformed
-    /// payload throws the same evidence in `StadoCLIError.response`. The
-    /// command runs until it exits. `standardInput` is written to its stdin.
+    /// Retain complete API output even when the operation returned non-zero.
+    /// File content travels in `input` and is referenced by the API's `$INPUT`
+    /// placeholder; `standardInput` carries secret input separately.
     nonisolated func jsonResult<T: Decodable & Sendable>(
         _ type: T.Type,
         arguments: [String],
-        standardInput: String? = nil
+        standardInput: String? = nil,
+        input: String? = nil,
+        confirmsMutation: Bool = false,
+        destination: Destination = .selected
     ) async throws -> StadoCLIJSONResult<T> {
-        let executable = try await executableURL()
-        let completion = try await Self.capture(
-            executable: executable, arguments: arguments, standardInput: standardInput
+        let completion = try await capture(
+            arguments: arguments, confirmsMutation: confirmsMutation,
+            input: input, standardInput: standardInput, destination: destination
         )
         do {
             return StadoCLIJSONResult(
@@ -59,10 +65,10 @@ extension StadoCLI {
     /// `credentials token mint --raw-token`. Unlike `json`, a non-zero exit can
     /// never be a decodable state, so the CLI's refusal is thrown immediately.
     nonisolated func text(
-        arguments: [String]
+        arguments: [String],
+        confirmsMutation: Bool = false
     ) async throws -> String {
-        let executable = try await executableURL()
-        let completion = try await Self.capture(executable: executable, arguments: arguments)
+        let completion = try await capture(arguments: arguments, confirmsMutation: confirmsMutation)
         if let refusal = completion.refusal { throw refusal }
         let value = String(data: completion.output, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

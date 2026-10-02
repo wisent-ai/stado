@@ -49,9 +49,24 @@ extension DeploymentSetupView {
     }
 
     func provision(deployment: StadoDeployment, target: InfrastructureTarget) async throws {
+        var installer = ""
+        if target.provider != .local {
+            let address = try OperationsDashboardAddress(installerEndpoint)
+            let receipt = try await fleetStore.client.run(
+                arguments: ["bootstrap", "--print-install-script"],
+                confirmsMutation: false, at: address,
+                authorizationToken: fleetStore.authorizationToken
+            )
+            guard receipt.ok, receipt.exitCode == 0,
+                  !receipt.standardOutputTruncated, !receipt.standardErrorTruncated else {
+                throw BackendProvisioningError.commandFailed("\(address.displayString): \(receipt.message)")
+            }
+            installer = receipt.standardOutput
+        }
         let backend = try await provisioner.provision(
             deployment: deployment,
             target: target,
+            installer: installer,
             onUpdate: { value in
                 await MainActor.run { update = value }
             }
@@ -65,6 +80,7 @@ extension DeploymentSetupView {
         try operationsStore.saveDashboardURL(backend.endpoint)
         try cleanupStore.saveDashboardURL(backend.endpoint)
         fleetStore.configureEndpoint(backend.endpoint)
+        StadoCLI.configureEndpoint(backend.endpoint)
         await operationsStore.refresh()
         await fleetStore.refresh()
     }

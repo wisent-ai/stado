@@ -52,7 +52,8 @@ final class HostDeclarationStore: ObservableObject {
                     ssh: ssh,
                     kind: kind,
                     releasePlatform: releasePlatform
-                )
+                ),
+                confirmsMutation: true
             )
             mutation = .succeeded(
                 receipt.changed.isEmpty
@@ -72,7 +73,8 @@ final class HostDeclarationStore: ObservableObject {
         do {
             let receipt = try await cli.json(
                 RemoveReceipt.self,
-                arguments: Self.removeArguments(host: host)
+                arguments: Self.removeArguments(host: host),
+                confirmsMutation: true
             )
             mutation = .succeeded(
                 "\(receipt.target) is removed from \(receipt.registry). Registry generation \(receipt.generation)."

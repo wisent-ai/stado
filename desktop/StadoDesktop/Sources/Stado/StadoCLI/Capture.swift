@@ -1,127 +1,39 @@
 import Foundation
 
 extension StadoCLI {
-    /// Everything the stderr reader thread hands back, behind a lock.
-    private final class ErrorOutput: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-
-        func store(_ value: Data) {
-            lock.withLock { data = value }
-        }
-
-        var value: Data {
-            lock.withLock { data }
-        }
-    }
-
-    /// Run `stado` until it exits. Its exit code, stdout and stderr are the
-    /// answer; no timer stops it. `standardInput`, when given, is written to
-    /// the command's stdin and closed, for a secret the CLI reads from there.
-    static func capture(
-        executable: URL,
+    /// Use the selected service's existing operator API. A local executable is
+    /// neither searched for nor started, including when the service refuses.
+    func capture(
         arguments: [String],
-        standardInput: String? = nil
+        confirmsMutation: Bool,
+        input: String? = nil,
+        standardInput: String? = nil,
+        destination: Destination = .selected
     ) async throws -> Completion {
-        try await Task.detached(priority: .userInitiated) {
-            try runToCompletion(
-                executable: executable, arguments: arguments, standardInput: standardInput
-            )
-        }.value
-    }
-
-    /// The blocking half, deliberately synchronous.
-    ///
-    /// It waits on a pipe and on a process, and a blocking wait is unavailable
-    /// from an async context for a reason: it would hold a cooperative thread
-    /// that every other concurrent read is sharing. One detached task calls
-    /// this plain function, which states where the blocking happens instead of
-    /// hiding it behind a timed wait.
-    private static func runToCompletion(
-        executable: URL,
-        arguments: [String],
-        standardInput: String?
-    ) throws -> Completion {
-        let process = Process()
-        let output = Pipe()
-        let errors = Pipe()
-        let input = standardInput.map { _ in Pipe() }
-        process.executableURL = executable
-        process.arguments = arguments
-        process.standardInput = input ?? FileHandle.nullDevice
-        process.standardOutput = output
-        process.standardError = errors
-
-        // stderr is drained on a queue of its own. A refusal longer than the
-        // pipe buffer would otherwise block the CLI mid-write while this
-        // thread waits on stdout, and neither side would move again.
-        let collected = ErrorOutput()
-        let drained = DispatchSemaphore(
-            value:
-                0
-        )
-        DispatchQueue.global(qos: .userInitiated).async {
-            collected.store(errors.fileHandleForReading.readDataToEndOfFile())
-            drained.signal()
-        }
-
+        let source = try await Self.source(for: destination)
+        let result: OperatorCommandResult
         do {
-            try process.run()
+            result = try await client.run(
+                arguments: arguments, confirmsMutation: confirmsMutation,
+                at: source.address, authorizationToken: source.authorizationToken,
+                input: input, standardInput: standardInput
+            )
         } catch {
-            drained.signal()
-            throw StadoCLIError.failed(
-                exitCode:
-                    -1,
-                message: "\(commandLine(arguments)) could not be started: \(error.localizedDescription)"
+            throw StadoCLIError.response(
+                exitCode: nil, stdout: Data(), stderr: Data(),
+                message: "\(source.address.displayString): \(Self.commandLine(arguments)) — \(error.localizedDescription)"
             )
         }
-        if let input, let standardInput {
-            input.fileHandleForWriting.write(Data(standardInput.utf8))
-            try input.fileHandleForWriting.close()
-        }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        drained.wait()
-
-        let exitCode = process.terminationStatus
-        let errorData = collected.value
-        guard exitCode == 0 else {
-            return Completion(
-                output: data,
-                errors: errorData,
-                refusal: refusal(
-                    arguments: arguments,
-                    exitCode: exitCode,
-                    stdout: data,
-                    stderr: String(data: errorData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                ),
-                exitCode: exitCode
-            )
-        }
-        return Completion(
-            output: data,
-            errors: errorData,
-            refusal: nil,
-            exitCode: exitCode
-        )
-    }
-
-    /// The sentence a non-zero exit refused with, in the CLI's own words.
-    private static func refusal(
-        arguments: [String],
-        exitCode: Int32,
-        stdout: Data,
-        stderr: String
-    ) -> StadoCLIError {
-        let stdoutText = String(data: stdout, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let message = stderr.isEmpty ? stdoutText : stderr
-        return .failed(
-            exitCode: exitCode,
-            message: message.isEmpty
-                ? "\(commandLine(arguments)) exited \(exitCode) and said nothing."
-                : message
-        )
+        guard await Self.isCurrent(source) else { throw CancellationError() }
+        let output = Data(result.standardOutput.utf8)
+        let errors = Data(result.standardError.utf8)
+        let incomplete = result.standardOutputTruncated || result.standardErrorTruncated
+        let refused = !result.ok || result.exitCode != 0 || result.standardInputError != nil || incomplete
+        let refusal: StadoCLIError? = refused ? .response(
+            exitCode: result.exitCode, stdout: output, stderr: errors,
+            message: "\(source.address.displayString): \(result.message)"
+        ) : nil
+        if incomplete || result.exitCode == nil, let refusal { throw refusal }
+        return Completion(output: output, errors: errors, refusal: refusal, exitCode: result.exitCode)
     }
 }

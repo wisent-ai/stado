@@ -72,11 +72,14 @@ struct StadoFirstUseRoot: View {
     }
 
     private func configureRegistryImportSource() {
+        StadoCLI.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
         if let deployment = deploymentStore.selectedDeployment {
             fleetStore.configureEndpoint(deployment.endpoint)
+            StadoCLI.configureEndpoint(deployment.endpoint)
         } else {
             fleetStore.configureEndpoint(operationsStore.dashboardURLString)
+            StadoCLI.configureEndpoint(operationsStore.dashboardURLString)
         }
     }
 

@@ -71,6 +71,14 @@ extension DeploymentSetupView {
                 }
             }
 
+            if let target = selectedTarget, target.provider != .local {
+                WisentSectionBox(title: "Installer API", detail: "An existing Stado service supplies its exact release installer. The new deployment does not need a Stado command installed on this Mac.") {
+                    TextField("Stado API endpoint", text: $installerEndpoint)
+                        .textFieldStyle(.roundedBorder)
+                        .font(WisentTypeScale.body())
+                }
+            }
+
             if let identity {
                 WisentSectionBox(
                     title: "Organization ownership",

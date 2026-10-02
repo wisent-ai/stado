@@ -133,6 +133,7 @@ final class ScratchStore: ObservableObject {
         guard let receipt = await perform(
             ScratchLeaseReceipt.self,
             arguments: createArguments(host: host),
+            confirmsMutation: true,
             working: "Leasing a \(form.profile) scratch target on \(host)",
             summary: Self.createSummary
         ) else { return }
@@ -145,6 +146,7 @@ final class ScratchStore: ObservableObject {
         guard let receipt = await perform(
             ScratchDestroyReceipt.self,
             arguments: Self.destroyArguments(name: name, host: host),
+            confirmsMutation: true,
             working: "Destroying the scratch lease \(name) on \(host)",
             summary: Self.destroySummary
         ) else { return }
@@ -157,6 +159,7 @@ final class ScratchStore: ObservableObject {
         guard let report = await perform(
             ScratchReapReport.self,
             arguments: Self.reapArguments(host: host, apply: apply),
+            confirmsMutation: apply,
             working: apply
                 ? "Destroying every expired scratch lease on \(host)"
                 : "Reading which scratch leases on \(host) have expired",
@@ -185,15 +188,16 @@ final class ScratchStore: ObservableObject {
     private func perform<T: Decodable & Sendable>(
         _ type: T.Type,
         arguments: [String],
+        confirmsMutation: Bool,
         working: String,
         summary: (T) -> String
     ) async -> T? {
         guard !mutation.isWorking else { return nil }
         mutation = .working(working)
         do {
-            let answer = try await cli.jsonResult(type, arguments: arguments)
+            let answer = try await cli.jsonResult(type, arguments: arguments, confirmsMutation: confirmsMutation)
             refusal = answer.refusal
-            if let refused = answer.refusal, answer.exitCode != 0 {
+            if let refused = answer.refusal {
                 mutation = .failed(refused)
             } else {
                 mutation = .succeeded(summary(answer.value))

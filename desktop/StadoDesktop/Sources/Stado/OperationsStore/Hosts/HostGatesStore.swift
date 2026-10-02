@@ -154,7 +154,8 @@ final class HostGatesStore: ObservableObject {
         do {
             let pass = try await cli.json(
                 HostReclaimPass.self,
-                arguments: Self.applyArguments(host: host, reason: reason)
+                arguments: Self.applyArguments(host: host, reason: reason),
+                confirmsMutation: true
             )
             applied = pass
             // The dry run described a host that no longer exists in that

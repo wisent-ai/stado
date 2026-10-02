@@ -21,7 +21,7 @@ enum BackendProvisioningError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .cliUnavailable:
-            "Stado CLI is not installed. Install the stado package, then retry."
+            "Hosting Stado on this Mac requires the Stado service executable. Install the Stado release before creating a local backend. Remote API operations do not require a local command."
         case let .unsupportedProvider(provider):
             "Automatic provisioning for \(provider) is not available in this build."
         case let .commandFailed(detail):
@@ -50,17 +50,18 @@ actor BackendProvisioner {
     func provision(
         deployment: StadoDeployment,
         target: InfrastructureTarget,
+        installer: String,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         switch target.provider {
         case .local:
             return try await provisionLocal(deployment: deployment, onUpdate: onUpdate)
         case .gcp:
-            return try await provisionGCP(deployment: deployment, target: target, onUpdate: onUpdate)
+            return try await provisionGCP(deployment: deployment, target: target, installer: installer, onUpdate: onUpdate)
         case .azure:
-            return try await provisionAzure(deployment: deployment, target: target, onUpdate: onUpdate)
+            return try await provisionAzure(deployment: deployment, target: target, installer: installer, onUpdate: onUpdate)
         case .aws:
-            return try await provisionAWS(deployment: deployment, target: target, onUpdate: onUpdate)
+            return try await provisionAWS(deployment: deployment, target: target, installer: installer, onUpdate: onUpdate)
         }
     }
 }

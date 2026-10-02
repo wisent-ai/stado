@@ -15,6 +15,6 @@ extension StadoCLI {
         let output: Data
         let errors: Data
         let refusal: StadoCLIError?
-        let exitCode: Int32
+        let exitCode: Int?
     }
 }

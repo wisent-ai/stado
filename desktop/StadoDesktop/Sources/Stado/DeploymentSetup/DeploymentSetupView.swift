@@ -16,6 +16,7 @@ struct DeploymentSetupView: View {
 
     @State var name = "My Stado"
     @State var selectedTargetID: String?
+    @State var installerEndpoint = DashboardEndpointPreference.localURL
     @State var update: ProvisioningUpdate?
     @State var errorMessage: String?
     @State var isProvisioning = false

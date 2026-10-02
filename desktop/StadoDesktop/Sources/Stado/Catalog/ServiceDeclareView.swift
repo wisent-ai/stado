@@ -245,7 +245,8 @@ struct ServiceDeclareView: View {
                     "--host", host,
                     "--reason", "deployed from the Wisent catalog by the operator",
                     "--json",
-                ]
+                ],
+                confirmsMutation: true
             )
             onDeclared()
             dismiss()
@@ -259,11 +260,11 @@ struct ServiceDeclareView: View {
         errorMessage = nil
         defer { isDeclaring = false }
         do {
-            let path = try writeDeclarationFile()
-            defer { try? FileManager.default.removeItem(atPath: path) }
             let outcome = try await cli.json(
                 DeclareOutcome.self,
-                arguments: ["service", "declare", "--file", path, "--json"]
+                arguments: ["service", "declare", "--file", "$INPUT", "--json"],
+                input: declarationBody,
+                confirmsMutation: true
             )
             _ = outcome
             onDeclared()
@@ -273,13 +274,4 @@ struct ServiceDeclareView: View {
         }
     }
 
-    /// The declaration rides to the CLI as a file, because that is the
-    /// contract's transport: `stado service declare --file`. Written next to
-    /// the system's scratch area and deleted on every path out.
-    private func writeDeclarationFile() throws -> String {
-        let path = NSTemporaryDirectory()
-            .appending("stado-declare-\(UUID().uuidString).json")
-        try declarationBody.write(toFile: path, atomically: true, encoding: .utf8)
-        return path
-    }
 }

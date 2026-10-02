@@ -19,6 +19,7 @@ pub(super) const ALLOWED_FAMILIES: &[&str] = &[
     "config",
     "cost",
     "credentials",
+    "database",
     "disk-cleanup",
     "doctor",
     "fleet",
@@ -76,6 +77,10 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     let family = args.first().map(String::as_str).unwrap_or("");
     let operation = args.get(1).map(String::as_str).unwrap_or("");
     let detail = args.get(2).map(String::as_str).unwrap_or("");
+    if family == "bootstrap" {
+        // Printing the immutable installer does not provision a host.
+        return args.len() == 2 && operation == "--print-install-script";
+    }
     if family == "workload" {
         return matches!(operation, "list" | "status");
     }
@@ -84,6 +89,15 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
     }
     if family == "route" {
         return matches!(operation, "list" | "capability");
+    }
+    if family == "database" {
+        return operation == "list";
+    }
+    if family == "tunnel" {
+        return matches!(operation, "list" | "status");
+    }
+    if family == "registry" && operation == "host" && detail == "path" {
+        return args.get(3).is_some_and(|value| value == "list");
     }
     if family == "scratch" {
         return matches!(operation, "profiles" | "hosts" | "list")
@@ -109,6 +123,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             "status" | "provenance" | "logs" | "doctor" | "active-binary"
         ) || (operation == "host-state" && !args.iter().any(|arg| arg == "--apply"))
             || (operation == "catalog" && detail == "audit")
+            || (operation == "quarantine" && detail == "list")
             || (operation == "destinations" && matches!(detail, "list" | "show"));
     }
     if family == "build" {
@@ -172,7 +187,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
             )
             | (
                 "host",
-                "health" | "inventory" | "uptime" | "ping" | "vaults"
+                "health" | "inventory" | "uptime" | "ping" | "vaults" | "gates" | "link"
             )
             | ("identity", "list" | "verify")
             | (
@@ -200,6 +215,7 @@ pub(super) fn is_read_only(args: &[String]) -> bool {
                 "service",
                 "directory"
                     | "list"
+                    | "catalog"
                     | "onboarding-catalog"
                     | "status"
                     | "show"

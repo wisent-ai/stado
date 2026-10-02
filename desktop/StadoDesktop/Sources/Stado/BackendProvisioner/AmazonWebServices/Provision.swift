@@ -6,6 +6,7 @@ extension BackendProvisioner {
     func provisionAWS(
         deployment: StadoDeployment,
         target: InfrastructureTarget,
+        installer: String,
         onUpdate: UpdateHandler
     ) async throws -> ProvisionedBackend {
         let aws = try locateExecutable(named: "aws", fixed: [
@@ -16,7 +17,6 @@ extension BackendProvisioner {
             "/usr/local/bin/docker",
             "/opt/homebrew/bin/docker"
         ])
-        let stado = try locateStadoCLI()
         let region = target.metadata["region"] ?? "us-east-1"
         var account = (try? await runCapture(aws.path, [
             "sts", "get-caller-identity", "--query", "Account", "--output", "text"
@@ -51,7 +51,7 @@ extension BackendProvisioner {
         let controlRole = "stado-\(short)-control"
         let agentRole = "stado-\(short)-agent"
         let agentProfile = agentRole
-        let context = try await prepareContainerContext(stadoExecutable: stado)
+        let context = try prepareContainerContext(installer: installer)
         defer { try? fileManager.removeItem(at: context) }
 
         let writeJSON = AWSArtifactWriter(directory: context)

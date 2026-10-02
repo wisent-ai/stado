@@ -237,7 +237,8 @@ final class ReleaseEvidenceStore: ObservableObject {
         do {
             let result = try await cli.json(
                 ReleaseQuarantineClearance.self,
-                arguments: Self.clearArguments(pair: pair, digest: digest, reason: reason)
+                arguments: Self.clearArguments(pair: pair, digest: digest, reason: reason),
+                confirmsMutation: true
             )
             clearance = result
             mutation = .succeeded(Self.summary(of: result))

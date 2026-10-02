@@ -115,3 +115,7 @@ path = "../tests/release_destinations/journey.rs"
 [[test]]
 name = "database"
 path = "../tests/database/lifecycle.rs"
+
+[[test]]
+name = "desktop-api-journey"
+path = "../tests/desktop_api/journey.rs"

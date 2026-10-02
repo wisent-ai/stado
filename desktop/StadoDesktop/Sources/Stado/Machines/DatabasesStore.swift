@@ -135,9 +135,9 @@ final class DatabasesStore: ObservableObject {
         }
     }
 
-    /// One configuration change through the plane's own CLI. A refusal keeps
-    /// the previous list on screen and carries the CLI's sentence.
-    private func mutate(_ arguments: [String], standardInput: String? = nil) async -> Bool {
+    /// One configuration change through the selected service API. A refusal
+    /// keeps the previous list and the operation's own diagnostic.
+    private func mutate(_ arguments: [String], standardInput: String? = nil, input: String? = nil) async -> Bool {
         guard !isRefreshing else { return false }
         let generation = refreshGeneration
         isRefreshing = true
@@ -148,8 +148,10 @@ final class DatabasesStore: ObservableObject {
         }
         do {
             _ = try await cli.json(
-                MutationReceipt.self, arguments: arguments, standardInput: standardInput
+                MutationReceipt.self, arguments: arguments, standardInput: standardInput,
+                input: input, confirmsMutation: true
             )
+            isRefreshing = false
             await refresh()
             return true
         } catch {
@@ -179,6 +181,17 @@ final class DatabasesStore: ObservableObject {
         connectionURL: String
     ) async -> Bool {
         let url = connectionURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let certificate: String?
+        if provider == "external", !caCertificatePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            do {
+                certificate = try String(contentsOfFile: caCertificatePath, encoding: .utf8)
+            } catch {
+                problem = "Reading the certificate at \(caCertificatePath): \(error.localizedDescription)"
+                return false
+            }
+        } else {
+            certificate = nil
+        }
         return await mutate(
             Self.createArguments(
                 name: name,
@@ -186,10 +199,11 @@ final class DatabasesStore: ObservableObject {
                 provider: provider,
                 engine: engine,
                 host: host,
-                caCertificatePath: caCertificatePath,
+                caCertificatePath: certificate == nil ? caCertificatePath : "$INPUT",
                 acceptMonthlyUSD: acceptMonthlyUSD
             ),
-            standardInput: provider == "external" ? url : nil
+            standardInput: provider == "external" ? url : nil,
+            input: certificate
         )
     }
 
@@ -225,7 +239,8 @@ final class DatabasesStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            let rows = try await cli.json([AdoptionRow].self, arguments: Self.adoptArguments(name: name))
+            let rows = try await cli.json([AdoptionRow].self, arguments: Self.adoptArguments(name: name),
+                                          confirmsMutation: true)
             adoption = rows.map { "\($0.item): \($0.status)" }
             problem = nil
         } catch {

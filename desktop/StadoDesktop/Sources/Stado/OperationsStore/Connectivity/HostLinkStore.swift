@@ -81,7 +81,8 @@ final class HostLinkStore: ObservableObject {
         do {
             let receipt = try await cli.json(
                 RepairReport.self,
-                arguments: Self.repairArguments(host: host)
+                arguments: Self.repairArguments(host: host),
+                confirmsMutation: true
             )
             let detail = receipt.steps.first?.observation.text
                 ?? "The declared link repair completed without a step report."
