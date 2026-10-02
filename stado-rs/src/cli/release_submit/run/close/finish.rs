@@ -9,7 +9,7 @@
 //! walks each one through the same `finish_run` that `stado release resume`
 //! uses by hand.
 
-use crate::cli::release_submit::builds::jobs::terminal::read_terminal_job;
+use crate::cli::release_submit::builds::jobs::terminal::terminal;
 use crate::cli::release_submit::run::reports::recent_runs;
 use crate::cli::release_submit::run::resume::finish_run;
 use crate::queue::storage::JobStorage;
@@ -56,8 +56,12 @@ pub async fn finish_ready_runs() -> Result<Vec<String>, String> {
     Ok(finished)
 }
 
-/// Every platform this run submitted has a job the queue calls terminal.
-/// A platform still failed from an earlier attempt has nothing to wait for.
+/// Every platform this run submitted has a job that ended: a record the
+/// queue calls terminal, or — once the run reaper has retired that record on
+/// its own cadence — the receipt the worker wrote, which is what publishing
+/// verifies. A platform still failed from an earlier attempt has nothing to
+/// wait for. A job still queued or running answers an error from
+/// [`terminal`], which here means "not yet".
 async fn builds_terminal(store: &JobStorage, run: &serde_json::Value) -> Result<bool, String> {
     let Some(platforms) = run["platforms"].as_object() else {
         return Ok(false);
@@ -69,11 +73,7 @@ async fn builds_terminal(store: &JobStorage, run: &serde_json::Value) -> Result<
         let Some(job_id) = platform["job_id"].as_str() else {
             return Ok(false);
         };
-        if read_terminal_job(store, job_id)
-            .await
-            .map_err(|error| error.to_string())?
-            .is_none()
-        {
+        if terminal(store, job_id).await.is_err() {
             return Ok(false);
         }
     }
