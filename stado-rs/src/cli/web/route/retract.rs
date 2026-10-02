@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use super::cloudflare::cloudflare_unavailable;
-use super::{CmdError, RECORD_TYPE, REGISTRAR_CREDENTIAL};
+use super::{registrar_credential, CmdError, RECORD_TYPE};
 use crate::config::WebApiProduct;
 
 /// Drop the hostname's record and stop the edge terminating it.
@@ -67,28 +67,17 @@ pub(crate) async fn retract(name: &str, declared: &WebApiProduct) -> Result<Valu
                     "edge": edge_report,
                 }));
             }
+            // The registrar item is declared beside the edge, so the edge
+            // declaration is read before the record can be removed.
+            let edge = super::super::edge::declared()?;
             let record = crate::cli::dns::remove_record(
                 declared.hostname(),
                 RECORD_TYPE,
                 None,
-                REGISTRAR_CREDENTIAL,
+                registrar_credential(edge)?,
             )
             .await?;
             let removed = record["removed"].as_u64().unwrap_or_default() > 0;
-            // An undeclared edge is not a failed retraction: the record is
-            // already gone, so the hostname is unpublished, and there is no
-            // proxy configuration for it to still appear in.
-            let edge = match crate::config::web_api_edge() {
-                Ok(edge) => edge,
-                Err(_) => {
-                    return Ok(json!({
-                        "hostname": declared.hostname(),
-                        "change": if removed { "removed" } else { "unchanged" },
-                        "record": record,
-                        "edge": Value::Null,
-                    }))
-                }
-            };
             let routes: Vec<(String, Vec<String>)> = super::super::edge::stado_routes()
                 .await?
                 .into_iter()

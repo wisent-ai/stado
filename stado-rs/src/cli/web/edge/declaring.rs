@@ -28,9 +28,24 @@ pub(in crate::cli::web) fn declared() -> Result<&'static WebApiEdge, CmdError> {
 ///
 /// `map.clear()` first: the plane's parser refuses an unsupported key, so a
 /// leftover one from an earlier shape would make every later read of the
-/// section fail rather than be ignored.
-pub(super) fn record(target: &str, address: &str, contact: &str) -> Result<&'static str, CmdError> {
-    let existed = crate::config_file::get("web_api.edge").is_some();
+/// section fail rather than be ignored. The registrar credential is the one
+/// field carried over when the caller names none, because re-provisioning a
+/// host does not change which registrar item writes its records.
+pub(super) fn record(
+    target: &str,
+    address: &str,
+    contact: &str,
+    registrar_credential: Option<&str>,
+) -> Result<(&'static str, Option<String>), CmdError> {
+    let existing = crate::config_file::get("web_api.edge");
+    let existed = existing.is_some();
+    let registrar_credential = registrar_credential.map(str::to_string).or_else(|| {
+        existing
+            .as_ref()
+            .and_then(|edge| edge.get("registrar_credential"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    });
     let target = target.to_string();
     let address = address.to_string();
     let contact = contact.to_string();
@@ -39,9 +54,13 @@ pub(super) fn record(target: &str, address: &str, contact: &str) -> Result<&'sta
         map.insert("target".to_string(), json!(target));
         map.insert("address".to_string(), json!(address));
         map.insert("contact".to_string(), json!(contact));
+        if let Some(item) = &registrar_credential {
+            map.insert("registrar_credential".to_string(), json!(item));
+        }
         Ok(())
     })?;
-    Ok(if existed { "replaced" } else { "declared" })
+    let change = if existed { "replaced" } else { "declared" };
+    Ok((change, registrar_credential))
 }
 
 /// The name and contact checks that happen before Azure is touched.
@@ -71,6 +90,7 @@ pub(super) fn declare(
     target: &str,
     address: &str,
     contact: &str,
+    registrar_credential: Option<&str>,
     json_output: bool,
 ) -> Result<(), CmdError> {
     checked_declaration(target, contact)?;
@@ -80,11 +100,17 @@ pub(super) fn declare(
              hostname's A record is written to point at it"
         )));
     }
-    let change = record(target, address, contact)?;
+    if registrar_credential.is_some_and(|item| item.trim().is_empty()) {
+        return Err(CmdError::usage(
+            "--registrar-credential must name a Skarbiec item".to_string(),
+        ));
+    }
+    let (change, registrar_credential) = record(target, address, contact, registrar_credential)?;
     let report = json!({
         "target": target,
         "address": address,
         "contact": contact,
+        "registrar_credential": registrar_credential,
         "change": change,
     });
     if json_output {

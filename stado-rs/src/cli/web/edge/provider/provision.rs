@@ -207,7 +207,7 @@ pub(in crate::cli::web::edge) async fn provision(
         ));
     }
 
-    let change = record(name, &address, contact)?;
+    let (change, _) = record(name, &address, contact, None)?;
     let report = json!({
         "target": name,
         "address": address,

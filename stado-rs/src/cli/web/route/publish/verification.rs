@@ -24,6 +24,10 @@ use crate::config::WebApiProduct;
 /// again asks again.
 pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> {
     let url = verify_url(declared);
+    let registrar = crate::config::web_api_edge()
+        .ok()
+        .and_then(|edge| edge.registrar_credential())
+        .unwrap_or("<registrar item>");
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
@@ -32,7 +36,7 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
             "{url} could not be fetched: {error}. The record was written; read the zone with \
              `stado dns list {} --credential {}`.",
             zone_of(declared.hostname()),
-            super::super::REGISTRAR_CREDENTIAL,
+            registrar,
         ))
     })?;
     let status = response.status();
@@ -64,7 +68,7 @@ pub(super) async fn verify(declared: &WebApiProduct) -> Result<Value, CmdError> 
              --credential {}`.",
             declared.hostname(),
             zone_of(declared.hostname()),
-            super::super::REGISTRAR_CREDENTIAL,
+            registrar,
         )));
     }
     Err(CmdError::click(format!(

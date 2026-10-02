@@ -12,6 +12,7 @@ pub struct WebApiEdge {
     target: String,
     address: String,
     contact: String,
+    registrar_credential: Option<String>,
 }
 
 impl WebApiEdge {
@@ -28,6 +29,12 @@ impl WebApiEdge {
     pub fn contact(&self) -> &str {
         &self.contact
     }
+
+    /// The Skarbiec item holding the registrar's `api_user`, `api_key`,
+    /// `username` and `client_ip`, through which the A records are written.
+    pub fn registrar_credential(&self) -> Option<&str> {
+        self.registrar_credential.as_deref()
+    }
 }
 
 pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Vec<String>> {
@@ -38,7 +45,7 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
     };
     let mut problems = Vec::new();
     for key in entry.keys() {
-        if !matches!(key.as_str(), "target" | "address" | "contact") {
+        if !matches!(key.as_str(), "target" | "address" | "contact" | "registrar_credential") {
             problems.push(format!("web_api.edge contains unsupported key {key:?}"));
         }
     }
@@ -54,11 +61,22 @@ pub(crate) fn parse_web_api_edge(value: Option<&Value>) -> Result<WebApiEdge, Ve
     if !contact.contains('@') || contact.chars().any(char::is_whitespace) {
         problems.push("web_api.edge.contact is required and must be a mail address".to_string());
     }
+    let registrar_credential = match entry.get("registrar_credential") {
+        None => None,
+        Some(Value::String(item)) if !item.trim().is_empty() => Some(item.clone()),
+        Some(_) => {
+            problems.push(
+                "web_api.edge.registrar_credential must name a Skarbiec item".to_string(),
+            );
+            None
+        }
+    };
     if problems.is_empty() {
         Ok(WebApiEdge {
             target: target.to_string(),
             address: address.to_string(),
             contact: contact.to_string(),
+            registrar_credential,
         })
     } else {
         Err(problems)

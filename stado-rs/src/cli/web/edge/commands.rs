@@ -41,6 +41,11 @@ pub(crate) enum EdgeCommands {
         /// Address Let's Encrypt sends certificate-expiry mail to.
         #[arg(long)]
         contact: String,
+        /// Skarbiec item holding the registrar's api_user, api_key, username
+        /// and client_ip; `stado web route` writes the A records through it.
+        /// Kept from the earlier declaration when omitted.
+        #[arg(long)]
+        registrar_credential: Option<String>,
         /// Emit machine-readable output.
         #[arg(long)]
         json: bool,

@@ -66,10 +66,21 @@ const RECORD_TYPE: &str = "A";
 const RECORD_TTL: &str = "1800";
 
 /// The Skarbiec item holding the registrar's `api_user`, `api_key`, `username`
-/// and `client_ip`. The same default `stado dns` uses, because a product's
-/// hostname and an operator's hand-typed record must take one path through the
-/// registrar.
-const REGISTRAR_CREDENTIAL: &str = "namecheap_auto";
+/// and `client_ip`, as the edge declaration names it. A product's hostname and
+/// an operator's hand-typed `stado dns set` take one path through the
+/// registrar; the item is declared once, beside the edge whose address the
+/// records carry, and never built in.
+fn registrar_credential(edge: &crate::config::WebApiEdge) -> Result<&str, CmdError> {
+    edge.registrar_credential().ok_or_else(|| {
+        CmdError::click(
+            "web_api.edge declares no registrar_credential, so no Skarbiec item can write this \
+             hostname's record; name the item holding the registrar's api_user, api_key, username \
+             and client_ip with `stado web edge declare --target <host> --address <ipv4> \
+             --contact <mail> --registrar-credential <item>`"
+                .to_string(),
+        )
+    })
+}
 
 /// The header a Vercel edge stamps on every response it serves. Its presence
 /// is the one unambiguous proof that a hostname has not moved to the fleet.
