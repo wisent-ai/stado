@@ -171,6 +171,7 @@ pub async fn dispatch(target: &str, path: Option<&str>, json: bool) -> Result<()
     }
 
     entry.insert("work_root".to_string(), Value::String(path.to_string()));
+    crate::targets::strip_retired_resource_declarations(&mut document);
     crate::targets::validate_registry(&document)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);

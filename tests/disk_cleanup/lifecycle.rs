@@ -1,6 +1,7 @@
 //! Native cleanup against real local storage and kernel locks, with no builds
 //! or clock-driven pacing performed by the test itself.
 
+mod migration;
 mod native;
 
 use std::fs::{self, FileTimes, OpenOptions};

@@ -113,6 +113,7 @@ pub async fn record_fleet_queue_namespace(namespace: &str) -> Result<bool, Strin
             FLEET_QUEUE_NAMESPACE_KEY.to_string(),
             Value::String(namespace.to_string()),
         );
+    crate::targets::strip_retired_resource_declarations(&mut document);
     let payload = format!(
         "{}\n",
         serde_json::to_string_pretty(&document)

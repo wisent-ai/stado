@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::targets::*;
 
 // ---------------------------------------------------------------------------
@@ -91,33 +93,71 @@ fn name_is_truthy(value: &Value) -> bool {
         .is_some_and(|name| !name.is_empty())
 }
 
-fn strip_legacy_capacity_from_target(target: &mut Value) {
-    let Value::Object(fields) = target else {
-        return;
+fn strip_retired_target_fields(target: &mut Value) -> bool {
+    let Some(fields) = target.as_object_mut() else {
+        return false;
     };
-    fields.remove("slots");
-    fields.remove("max_concurrent");
-    if let Some(Value::Object(overrides)) = fields.get_mut("env_overrides") {
-        overrides.remove("WC_LOCAL_SLOTS");
+    let mut changed = fields.remove("slots").is_some();
+    changed |= fields.remove("max_concurrent").is_some();
+    if let Some(overrides) = fields
+        .get_mut("env_overrides")
+        .and_then(Value::as_object_mut)
+    {
+        changed |= overrides.remove("WC_LOCAL_SLOTS").is_some();
     }
+    if let Some(policy) = fields
+        .get_mut("disk_cleanup")
+        .and_then(Value::as_object_mut)
+    {
+        changed |= policy.remove("max_pass_seconds").is_some();
+    }
+    changed
 }
 
-/// Remove the fixed worker-count declarations retired by live capacity.
-///
-/// Readers call the target-level half while accepting an old generation.
-/// Registry writers call this document-level half so the next ordinary
-/// compare-and-swap completes the cutover without hand-editing registry JSON.
-pub fn strip_legacy_capacity_declarations(document: &mut Value) {
-    let raw = match document {
-        Value::Object(map) => map.get_mut("targets"),
-        Value::Array(_) => Some(document),
+/// Remove retired resource declarations on the next ordinary registry write.
+/// Memory policy and the remaining cleanup limits are preserved.
+pub fn strip_retired_resource_declarations(document: &mut Value) -> bool {
+    let targets = match document {
+        Value::Object(map) => map.get_mut("targets").and_then(Value::as_array_mut),
+        Value::Array(targets) => Some(targets),
         _ => None,
     };
-    if let Some(Value::Array(targets)) = raw {
+    let mut changed = false;
+    if let Some(targets) = targets {
         for target in targets {
-            strip_legacy_capacity_from_target(target);
+            changed |= strip_retired_target_fields(target);
         }
     }
+    changed
+}
+
+/// Borrow current documents; copy only when an immutable input needs migration.
+pub fn canonical_registry_document(document: &Value) -> Cow<'_, Value> {
+    let targets = match document {
+        Value::Object(map) => map.get("targets").and_then(Value::as_array),
+        Value::Array(targets) => Some(targets),
+        _ => None,
+    };
+    let needs_migration = targets.is_some_and(|targets| {
+        targets.iter().any(|target| {
+            target.get("slots").is_some()
+                || target.get("max_concurrent").is_some()
+                || target
+                    .get("env_overrides")
+                    .and_then(|fields| fields.get("WC_LOCAL_SLOTS"))
+                    .is_some()
+                || target
+                    .get("disk_cleanup")
+                    .and_then(|fields| fields.get("max_pass_seconds"))
+                    .is_some()
+        })
+    });
+    if !needs_migration {
+        return Cow::Borrowed(document);
+    }
+    let mut migrated = document.clone();
+    strip_retired_resource_declarations(&mut migrated);
+    Cow::Owned(migrated)
 }
 
 fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
@@ -133,11 +173,8 @@ fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
                 continue;
             }
             let mut normalized = item.clone();
-            // Fixed worker counts were never capacity: they were operator
-            // guesses copied into every agent process. Accept old registry
-            // documents during the rolling upgrade while presenting only the
-            // live-capacity model to every reader.
-            strip_legacy_capacity_from_target(&mut normalized);
+            // Retired fields are accepted only as input to the one-way migration.
+            strip_retired_target_fields(&mut normalized);
             targets.push(
                 serde_json::from_value(normalized)
                     .map_err(|exc| RegistryError::InvalidEntry(exc.to_string()))?,

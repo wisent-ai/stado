@@ -215,6 +215,7 @@ pub(crate) async fn set_policy(request: &Request) -> Response {
         entry.insert("memory_reclaim".to_string(), policy);
     }
 
+    crate::targets::strip_retired_resource_declarations(&mut document);
     if let Err(error) = crate::targets::validate_registry(&document) {
         return send_json(
             http_status(reqwest::StatusCode::BAD_REQUEST),

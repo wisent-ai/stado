@@ -63,7 +63,7 @@ pub async fn push(
              file's path, or `-` to read stdin deliberately.",
         ));
     }
-    let (source, payload) = if from_stdin {
+    let (source, mut payload) = if from_stdin {
         let mut body = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
         (PathBuf::from("<stdin>"), body)
@@ -72,8 +72,11 @@ pub async fn push(
         let payload = std::fs::read_to_string(&source)?;
         (source, payload)
     };
-    let document: Value = serde_json::from_str(&payload)
+    let mut document: Value = serde_json::from_str(&payload)
         .map_err(|exc| CmdError::click(format!("{}: {exc}", source.display())))?;
+    if targets::strip_retired_resource_declarations(&mut document) {
+        payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    }
     // Ahead of every store call, as it has always been: a document that would
     // not validate never reaches the registry, whatever token it carries.
     warn_scoped_validation(validate_for_write(&document).await?);

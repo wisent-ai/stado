@@ -17,12 +17,28 @@ pub(crate) fn validate_disk_cleanup(
         "mode",
         "target_free_gb",
     ];
-    let keys: HashSet<&str> = map.keys().map(String::as_str).collect();
-    let required: HashSet<&str> = REQUIRED.into_iter().collect();
-    if keys != required {
+    // Stored generations may still carry the removed pass clock. Readers
+    // discard it and every canonical writer removes it; it is never a limit.
+    let retired = usize::from(map.contains_key("max_pass_seconds"));
+    if map.len() != REQUIRED.len() + retired || !REQUIRED.iter().all(|key| map.contains_key(*key)) {
+        let missing: Vec<_> = REQUIRED
+            .iter()
+            .copied()
+            .filter(|key| !map.contains_key(*key))
+            .collect();
+        let mut unexpected: Vec<_> = map
+            .keys()
+            .map(String::as_str)
+            .filter(|key| !REQUIRED.contains(key) && *key != "max_pass_seconds")
+            .collect();
+        unexpected.sort_unstable();
         return Err(verr(
             location,
-            &format!("must contain exactly {}", py_list_repr(&REQUIRED)),
+            &format!(
+                "missing keys {}; unexpected keys {}",
+                py_list_repr(&missing),
+                py_list_repr(&unexpected)
+            ),
         ));
     }
     let mode_location = format!("{location}.mode");

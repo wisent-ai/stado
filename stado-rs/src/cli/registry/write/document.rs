@@ -41,7 +41,8 @@ where
 {
     for _ in 0..COMMIT_ROUNDS {
         let (document, expected_generation) = fetch_versioned_document().await?;
-        let next = transform(&document)?;
+        let mut next = transform(&document)?;
+        targets::strip_retired_resource_declarations(&mut next);
         if next == document {
             return Ok(expected_generation);
         }
@@ -107,8 +108,9 @@ pub async fn push_document_if(
     document: &Value,
     expected_generation: &str,
 ) -> Result<String, CmdError> {
-    warn_scoped_validation(validate_for_write(document).await?);
-    let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
+    let document = targets::canonical_registry_document(document);
+    warn_scoped_validation(validate_for_write(&document).await?);
+    let payload = format!("{}\n", serde_json::to_string_pretty(document.as_ref())?);
     let store = RegistryStore::open().await?;
     let generation = match store.compare_and_swap(expected_generation, &payload).await {
         Ok(generation) => generation,

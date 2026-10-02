@@ -131,19 +131,25 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
         },
     };
     let replacement = parsed(value);
-    if previous == replacement {
+    *leaf(&mut document, path)? = replacement;
+    targets::strip_retired_resource_declarations(&mut document);
+    let replacement = select(&document, path).map_err(|_| {
+        CmdError::usage(format!(
+            "{path} is a retired declaration and cannot be set; the registry was not changed"
+        ))
+    })?;
+    if &previous == replacement {
         return report(
             json_output,
             "unchanged",
             path,
             &previous,
-            &replacement,
+            replacement,
             &blob.version,
             None,
             store.location(),
         );
     }
-    *leaf(&mut document, path)? = replacement.clone();
     // A service directory that changed and kept its generation is a document
     // every resolver believes it has already read: the validator refuses it,
     // and rightly. The number belongs to the change, so it moves with it here
@@ -161,6 +167,7 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
             );
         }
     }
+    let replacement = select(&document, path)?;
     let payload = serde_json::to_string_pretty(&document)?;
     // The same gate `push` runs: a document that would not validate never
     // reaches the registry, whatever field was changed.
@@ -175,7 +182,7 @@ pub async fn set(path: &str, value: &str, json_output: bool) -> Result<(), CmdEr
             "set",
             path,
             &previous,
-            &replacement,
+            replacement,
             &blob.version,
             Some(&generation),
             &location,

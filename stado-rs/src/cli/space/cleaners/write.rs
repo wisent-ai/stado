@@ -25,6 +25,7 @@ pub(super) async fn write_cleaner(
         .await?
         .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
     let mut document: Value = serde_json::from_str(&current.content)?;
+    crate::targets::strip_retired_resource_declarations(&mut document);
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)

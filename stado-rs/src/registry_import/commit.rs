@@ -33,10 +33,11 @@ async fn verify_write(
 /// registry. Semantic conflicts and invalid inputs are receipts, not partial
 /// failures; storage failures are operational errors.
 pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, RegistryImportError> {
-    let source = match decode_source(bytes) {
+    let mut source = match decode_source(bytes) {
         Ok(source) => source,
         Err(reason) => return Ok(source_rejection(bytes, reason)),
     };
+    targets::strip_retired_resource_declarations(&mut source);
     let source_sha256 = format!("{:x}", Sha256::digest(bytes));
     let store = RegistryStore::open().await?;
     let mut last_generation = None;
@@ -81,8 +82,9 @@ pub async fn import_bytes(bytes: &[u8]) -> Result<RegistryImportReceipt, Registr
             reason,
         })?;
 
-        let (candidate, mut summary) =
+        let (mut candidate, mut summary) =
             merge_documents(&canonical, &source).map_err(RegistryImportError::Storage)?;
+        targets::strip_retired_resource_declarations(&mut candidate);
         if !summary.conflicts.is_empty() {
             summary.discard_pending_imports();
             return Ok(summary.into_receipt(

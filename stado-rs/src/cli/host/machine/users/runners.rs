@@ -45,6 +45,7 @@ async fn declare_power_cap(target: &str, watts: Option<u32>, json: bool) -> Resu
             entry.remove("gpu_power_limit_watts");
         }
     }
+    crate::targets::strip_retired_resource_declarations(&mut document);
     crate::targets::validate_registry(&document)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
